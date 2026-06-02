@@ -1,0 +1,153 @@
+{
+  "mindmapTitle": "RSI指标知识图谱",
+  "notebookTitle": "RSI指标知识图谱",
+  "roots": [
+    {
+      "title": "RSI指标",
+      "level": 1,
+      "geometry": {
+        "transformX": 400,
+        "transformY": 50,
+        "bboxWidth": 180,
+        "bboxHeight": 55,
+        "parentAnchorX": 580,
+        "childAnchorX": 382
+      },
+      "children": [
+        {
+          "title": "定义",
+          "level": 2,
+          "geometry": {
+            "transformX": 150,
+            "transformY": 150,
+            "bboxWidth": 120,
+            "bboxHeight": 48,
+            "parentAnchorX": 270,
+            "childAnchorX": 132
+          },
+          "children": [
+            {
+              "title": "相对强弱指标",
+              "level": 3,
+              "geometry": {
+                "transformX": 20,
+                "transformY": 250,
+                "bboxWidth": 140,
+                "bboxHeight": 48,
+                "parentAnchorX": 160,
+                "childAnchorX": 2
+              },
+              "children": []
+            },
+            {
+              "title": "取值范围 0-100",
+              "level": 3,
+              "geometry": {
+                "transformX": 20,
+                "transformY": 320,
+                "bboxWidth": 140,
+                "bboxHeight": 48,
+                "parentAnchorX": 160,
+                "childAnchorX": 2
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "title": "计算方法",
+          "level": 2,
+          "geometry": {
+            "transformX": 350,
+            "transformY": 150,
+            "bboxWidth": 120,
+            "bboxHeight": 48,
+            "parentAnchorX": 470,
+            "childAnchorX": 332
+          },
+          "children": [
+            {
+              "title": "14日默认周期",
+              "level": 3,
+              "geometry": {
+                "transformX": 280,
+                "transformY": 250,
+                "bboxWidth": 140,
+                "bboxHeight": 48,
+                "parentAnchorX": 420,
+                "childAnchorX": 262
+              },
+              "children": []
+            },
+            {
+              "title": "RS = 平均涨幅/平均跌幅",
+              "level": 3,
+              "geometry": {
+                "transformX": 250,
+                "transformY": 320,
+                "bboxWidth": 200,
+                "bboxHeight": 48,
+                "parentAnchorX": 450,
+                "childAnchorX": 232
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "title": "应用方法",
+          "level": 2,
+          "geometry": {
+            "transformX": 600,
+            "transformY": 150,
+            "bboxWidth": 120,
+            "bboxHeight": 48,
+            "parentAnchorX": 720,
+            "childAnchorX": 582
+          },
+          "children": [
+            {
+              "title": "超买 (>70)",
+              "level": 3,
+              "geometry": {
+                "transformX": 550,
+                "transformY": 250,
+                "bboxWidth": 120,
+                "bboxHeight": 48,
+                "parentAnchorX": 670,
+                "childAnchorX": 532
+              },
+              "children": []
+            },
+            {
+              "title": "超卖 (<30)",
+              "level": 3,
+              "geometry": {
+                "transformX": 550,
+                "transformY": 320,
+                "bboxWidth": 120,
+                "bboxHeight": 48,
+                "parentAnchorX": 670,
+                "childAnchorX": 532
+              },
+              "children": []
+            },
+            {
+              "title": "背离信号",
+              "level": 3,
+              "geometry": {
+                "transformX": 550,
+                "transformY": 390,
+                "bboxWidth": 120,
+                "bboxHeight": 48,
+                "parentAnchorX": 670,
+                "childAnchorX": 532
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

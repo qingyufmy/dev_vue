@@ -1,0 +1,20 @@
+{
+  "name": "华尔街没有技术-街哥课堂",
+  "short_name": "街哥课堂",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F6F8FB",
+  "theme_color": "#F6F8FB",
+  "icons": [
+    {
+      "src": "/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon-16x16.png",
+      "sizes": "16x16",
+      "type": "image/png"
+    }
+  ]
+}

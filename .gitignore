@@ -1,0 +1,12 @@
+node_modules/
+server/data.db
+server/data.db-shm
+server/data.db-wal
+server/uploads/
+*.db
+*.db-shm
+*.db-wal
+.env
+_*.js
+_*.mjs
+_*.css
