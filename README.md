@@ -1,6 +1,6 @@
 # 华尔街没有技术 - 街哥课堂
 
-wall-street-skill.com 本地克隆版本。完整的金融教育平台，包含课程管理、视频播放、答题测验、思维导图、社区论坛等功能。
+wall-street-skill.com 本地克隆版本。完整的金融教育平台，包含课程管理、视频播放、答题测验、思维导图、社区论坛、审计日志等功能。
 
 ## 技术栈
 
@@ -11,27 +11,29 @@ wall-street-skill.com 本地克隆版本。完整的金融教育平台，包含�
 | 数据库 | SQLite (better-sqlite3) |
 | 认证 | JWT (jsonwebtoken) |
 | 文件上传 | Multer |
-| 富文本 | Quill (CDN) |
+| 富文本 | Quill (本地化) |
 | 视频源 | B站嵌入 / YouTube IFrame API / 本地上传 |
 
 ## 功能概览
 
 ### 用户端
 - 📺 **视频课程** — 分类浏览、搜索、排序（默认/最新）
-- 🎬 **视频播放** — B站 / YouTube / 本地视频，自动记录进度（3秒防抖，60%完成阈值）
+- 🎬 **视频播放** — B站 / YouTube / 本地视频，自动记录进度
 - 📝 **答题测验** — 每题单选，2次机会，即时反馈
 - 🧠 **思维导图** — 结构化 SVG 可视化，支持缩放拖拽
 - 📊 **知识点** — 信息图卡片展示
 - 💬 **社区论坛** — Quill 富文本发帖、评论、点赞、置顶、加精
-- 📈 **历史战绩** — 月度盈亏图表 + 详细交易记录
-- 🧰 **金融工具箱** — 策略回测工具
+- 📈 **历史战绩** — 交易时间线 + MT5 实盘报告
+- 🧰 **金融工具箱** — 可配置的交易工具链接
 - ⚙️ **个人设置** — 头像、昵称、密码修改
 
 ### 管理后台
 - 📚 **课程管理** — 新增/编辑/删除课程，支持 B站BV号、YouTube、本地视频上传
 - 📦 **资源上传** — 答题 JSON、思维导图 JSON、信息图图片批量上传
-- 👥 **用户管理** — 用户列表、计划调整、状态管理
+- 👥 **用户管理** — 用户列表、编辑用户（邮箱/昵称/密码/套餐/到期时间）、订单查看
 - 💰 **返佣系统** — 邀请规则配置、佣金记录
+- 📋 **审计日志** — 登录/注册/操作记录，支持按时间/类型/关键词筛选
+- ⚙️ **系统配置** — SMTP 邮箱、七牛云存储、金融工具箱、股票研究菜单
 
 ### 角色权限
 | 角色 | 权限 |
@@ -95,37 +97,35 @@ npm start
 
 ```
 wall-street-skill-local/
-├── public/                    # 前端静态文件
-│   ├── index.html             # SPA 入口
-│   ├── style.css              # 主样式（含暗色模式）
-│   ├── admin-extras.css       # 管理后台毛玻璃样式
+├── public/                        # 前端静态文件
+│   ├── index.html                 # SPA 入口
+│   ├── admin-extras.css           # 管理后台毛玻璃样式
 │   ├── src/
-│   │   ├── main.js            # 核心 SPA 逻辑（路由、渲染、交互）
-│   │   ├── data/              # 课程数据
-│   │   └── lib/               # 工具库（API封装、课程内容缓存）
-│   └── trades/                # 交易报告图片
-├── server/                    # 后端
-│   ├── index.js               # Express 入口
-│   ├── db.js                  # SQLite 数据库初始化 + 种子数据
-│   ├── package.json           # 依赖配置
+│   │   ├── main.js                # 核心 SPA 逻辑
+│   │   ├── style.css              # 主样式（含暗色模式）
+│   │   ├── quill.snow.css         # Quill 编辑器样式（本地化）
+│   │   ├── data/                  # 课程数据
+│   │   └── lib/                   # 工具库（API封装）
+│   └── trades/                    # 交易报告图片
+├── server/                        # 后端
+│   ├── index.js                   # Express 入口 + 心跳更新
+│   ├── db.js                      # SQLite 数据库 + 审计日志辅助
+│   ├── package.json               # 依赖配置
 │   ├── middleware/
-│   │   └── auth.js            # JWT 认证中间件
+│   │   └── auth.js                # JWT 认证中间件
 │   ├── routes/
-│   │   ├── auth.js            # 登录/注册/验证码
-│   │   ├── user.js            # 用户资料/通知/返佣
-│   │   ├── courses.js         # 课程列表/资源/答题
-│   │   ├── video.js           # 视频流/进度/上传
-│   │   ├── posts.js           # 社区帖子/点赞
-│   │   ├── comments.js        # 评论系统
-│   │   ├── trades.js          # 历史战绩
-│   │   ├── payment.js         # 支付/会员
-│   │   └── admin.js           # 管理后台全部接口
-│   └── uploads/               # 用户上传文件（git忽略）
-├── test_resources/            # 测试用课程资源
-│   ├── quiz_第1期.json         # 答题测试数据
-│   ├── mindmap_第1期.json      # 思维导图测试数据
-│   └── infographic_第1期.png   # 信息图测试图片
-└── .gitignore
+│   │   ├── auth.js                # 登录/注册/验证码
+│   │   ├── user.js                # 用户资料/通知/订单
+│   │   ├── courses.js             # 课程列表/资源/答题
+│   │   ├── video.js               # 视频流/进度/上传
+│   │   ├── posts.js               # 社区帖子/点赞
+│   │   ├── comments.js            # 评论系统
+│   │   ├── trades.js              # 历史战绩
+│   │   ├── payment.js             # 支付/会员
+│   │   ├── config.js              # 系统配置（SMTP/七牛/工具箱/菜单）
+│   │   └── admin.js               # 管理后台（用户/课程/审计日志）
+│   └── uploads/                   # 用户上传文件
+└── README.md
 ```
 
 ## API 接口
@@ -164,84 +164,55 @@ wall-street-skill-local/
 | PATCH | /api/posts/:id/pin | 置顶（管理员） |
 | PATCH | /api/posts/:id/feature | 加精（管理员） |
 | PATCH | /api/posts/:id/lock | 锁定（管理员） |
-| GET | /api/posts/:id/comments | 评论列表 |
-| POST | /api/posts/:id/comments | 发评论 |
 
 ### 用户
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /api/profile | 个人资料 |
-| PATCH | /api/profile | 更新资料 |
+| PUT | /api/profile | 更新资料 |
+| GET | /api/orders | 订单列表 |
 | GET | /api/notifications | 通知列表 |
-| POST | /api/referrals/track | 记录邀请 |
+
+### 系统配置
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/system-config/:category | 获取配置（管理员） |
+| PUT | /api/system-config/:category | 更新配置（管理员） |
+| GET | /api/system-config-public/toolbox | 金融工具箱（公开） |
+| GET | /api/system-config-public/market_menu | 股票研究菜单（公开） |
 
 ### 管理后台
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /api/admin-users | 用户列表+统计 |
-| GET | /api/admin/referrals | 邀请规则+统计 |
-| PATCH | /api/admin/referrals/rules | 更新邀请规则 |
+| PUT | /api/admin-users | 编辑用户 |
+| GET | /api/admin-audit | 审计日志 |
+| POST | /api/admin-course-items | 新增/编辑课程 |
+| DELETE | /api/admin-course-items | 删除课程 |
 | POST | /api/admin-course-resources | 上传课程资源 |
-| DELETE | /api/admin-course-items | 删除课程资源 |
 | GET | /api/trades | 历史战绩数据 |
 
-## 课程资源上传
+## 数据库表
 
-### 答题 JSON 格式
-
-```json
-[
-  {
-    "question": "RSI指标的取值范围是多少？",
-    "options": ["0-50", "0-100", "-100到100", "0-200"],
-    "answer": 1,
-    "explanation": "RSI的取值范围是0到100"
-  }
-]
-```
-
-字段说明：
-- `question` — 题目（必填）
-- `options` — 选项数组（必填）
-- `answer` / `correctIndex` / `correct_index` — 正确答案索引，从0开始
-- `explanation` — 解析（可选）
-- `explanations` — 每个选项的解析数组（可选）
-
-### 思维导图 JSON 格式
-
-```json
-{
-  "mindmapTitle": "标题",
-  "roots": [{
-    "title": "根节点",
-    "level": 1,
-    "geometry": {
-      "transformX": 400,
-      "transformY": 50,
-      "bboxWidth": 180,
-      "bboxHeight": 55,
-      "parentAnchorX": 580,
-      "childAnchorX": 382
-    },
-    "children": [
-      {
-        "title": "子节点",
-        "level": 2,
-        "geometry": { "..." },
-        "children": []
-      }
-    ]
-  }]
-}
-```
-
-### 信息图
-
-支持 PNG / JPG / GIF / WebP 格式，直接上传图片文件。
-
-### 上传方式
-
-管理后台 → 课程资源 → 点击「编辑」→ 勾选对应资源类型 → 选择文件 → 保存
+| 表名 | 说明 |
+|------|------|
+| users | 用户账号（含UID、last_seen_at） |
+| courses | 课程数据 |
+| quiz_questions | 答题题目 |
+| course_resources | 课程资源（导图/知识点） |
+| video_streams | 视频流配置 |
+| progress | 学习进度 |
+| posts | 社区帖子 |
+| comments | 评论 |
+| post_replies | 帖子回复 |
+| post_likes | 点赞记录 |
+| notifications | 通知 |
+| referrals | 邀请记录 |
+| orders | 订单记录 |
+| trades | 交易记录 |
+| system_config | 系统配置（SMTP/七牛/工具箱/菜单） |
+| audit_logs | 审计日志 |
+| user_notices | 用户通知 |
 
 ## 前端路由
 
@@ -259,29 +230,6 @@ wall-street-skill-local/
 | /post/:id | 帖子详情 | 公开 |
 | /settings | 个人设置 | 登录 |
 | /admin | 管理后台 | Admin |
-
-## 数据库
-
-首次启动自动创建 `server/data.db`，包含以下表：
-
-| 表名 | 说明 |
-|------|------|
-| users | 用户账号 |
-| courses | 课程数据 |
-| quiz_questions | 答题题目 |
-| course_resources | 课程资源（导图/知识点） |
-| video_streams | 视频流配置 |
-| progress | 学习进度 |
-| posts | 社区帖子 |
-| comments | 评论 |
-| post_likes | 点赞记录 |
-| notifications | 通知 |
-| referrals | 邀请记录 |
-| referral_rules | 邀请规则 |
-| payments | 支付记录 |
-| trades | 交易记录 |
-
-种子数据包含 10 门课程、3 个用户、交易历史等。
 
 ## 常见问题
 
