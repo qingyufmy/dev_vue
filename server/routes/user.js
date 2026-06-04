@@ -200,10 +200,14 @@ router.get('/orders', authMiddleware, (req, res) => {
   try {
     const { uid } = req.query
     const db = getDB()
-    const userId = uid || req.user.id
+    let userId = req.user.id
 
     // Admin can view any user's orders
-    if (uid && req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
+    if (uid) {
+      if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
+      const user = db.prepare('SELECT id FROM users WHERE uid = ?').get(uid)
+      if (user) userId = user.id
+    }
 
     const orders = db.prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC').all(userId)
 
