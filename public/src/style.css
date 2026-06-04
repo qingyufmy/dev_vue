@@ -6072,7 +6072,6 @@ button { cursor: pointer; font-family: inherit; }
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  min-width: 700px;
 }
 
 .admin-table th {
@@ -6090,14 +6089,6 @@ button { cursor: pointer; font-family: inherit; }
   padding: 8px 5px;
   border-bottom: 1px solid rgba(0,0,0,0.04);
   vertical-align: middle;
-}
-
-.admin-table th:last-child,
-.admin-table td:last-child {
-  white-space: nowrap;
-  width: 80px;
-  min-width: 80px;
-  max-width: 80px;
 }
 
 .admin-table tbody tr:hover {
@@ -6227,13 +6218,8 @@ button { cursor: pointer; font-family: inherit; }
 
 .admin-actions {
   display: flex;
-  gap: 4px;
-  flex-wrap: nowrap;
-  align-items: center;
-}
-.admin-actions .btn {
-  flex-shrink: 0;
-  white-space: nowrap;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .admin-paid-time {
