@@ -284,11 +284,34 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, (req, res)
     const params = []
     if (status) { where += ' AND r.status = ?'; params.push(status) }
 
-    const commissions = db.prepare(`
-      SELECT r.*, u.nickname as referrer_name, u2.nickname as referred_name
-      FROM referrals r LEFT JOIN users u ON r.referrer_id = u.id LEFT JOIN users u2 ON r.referred_id = u2.id
+    const rows = db.prepare(`
+      SELECT r.*, 
+        u.nickname as referrer_name, u.email as referrer_email, u.uid as referrer_uid,
+        u2.nickname as referred_name, u2.email as referred_email, u2.uid as referred_uid,
+        o.order_id as order_id, o.plan as order_plan, o.plan_label as order_plan_label,
+        o.period as order_period, o.period_label as order_period_label,
+        o.amount_confirmed as order_amount_confirmed
+      FROM referrals r 
+      LEFT JOIN users u ON r.referrer_id = u.id 
+      LEFT JOIN users u2 ON r.referred_id = u2.id
+      LEFT JOIN orders o ON o.user_id = r.referred_id AND o.status = 'paid'
       WHERE ${where} ORDER BY r.created_at DESC LIMIT 100
     `).all(...params)
+
+    const commissions = rows.map(r => ({
+      id: r.id,
+      referrer: { name: r.referrer_name, email: r.referrer_email, uid: r.referrer_uid },
+      invited_user: { name: r.referred_name, email: r.referred_email, uid: r.referred_uid },
+      order_id: r.order_id || null,
+      plan: r.order_plan_label || r.plan_label || '',
+      period: r.order_period_label || '',
+      source_cash_amount_cents: r.order_amount_confirmed || r.amount_cents || 0,
+      amount_cents: r.commission || 0,
+      rate_bps: r.amount_cents > 0 ? Math.round((r.commission / r.amount_cents) * 10000) : 500,
+      status: r.status,
+      available_at: r.attributed_at || r.created_at,
+      created_at: r.created_at,
+    }))
 
     res.json({ ok: true, commissions })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
