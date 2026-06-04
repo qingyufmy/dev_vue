@@ -405,6 +405,10 @@
   border-radius: var(--radius-sm);
   padding: 16px;
   backdrop-filter: blur(12px);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: nowrap;
 }
 .audit-filters .form-select,
 .audit-filters .form-input {
@@ -425,6 +429,11 @@
 .audit-filters .form-select {
   cursor: pointer;
   min-width: 120px;
+  flex-shrink: 0;
+}
+.audit-filters .form-input {
+  flex: 1;
+  min-width: 0;
 }
 .audit-filters .btn-primary {
   background: var(--accent);
