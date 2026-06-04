@@ -3403,6 +3403,7 @@ function renderAdminContent(data) {
                     <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? escapeHtml(u.lastActivity.substring(5, 16)) : '-'}</td>
                     <td>
                       <div class="admin-actions">
+                        <button class="btn btn-ghost btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}" data-avatar="${escapeHtml(u.avatar || '')}">编辑</button>
                         <button class="btn btn-primary btn-xs admin-edit-plan" data-user-id="${u.id}" data-name="${escapeHtml(u.name || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">套餐</button>
                         <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
                       </div>
@@ -3437,6 +3438,7 @@ function renderAdminContent(data) {
                       <td>${u.totalPaid > 0 ? '<strong>$' + u.totalPaid.toLocaleString() + '</strong>' : '-'}</td>
                       <td>
                         <div class="admin-actions">
+                          <button class="btn btn-ghost btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}" data-avatar="${escapeHtml(u.avatar || '')}">编辑</button>
                           <button class="btn btn-primary btn-xs admin-edit-plan" data-user-id="${u.id}" data-name="${escapeHtml(u.name || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">套餐</button>
                           <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
                         </div>
@@ -8103,6 +8105,120 @@ function setupGlobalEvents() {
       const targetId = statCard.dataset.scrollTo
       const el = document.getElementById(targetId)
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    // 管理后台：打开编辑用户弹窗
+    const editUserBtn = target.closest('.admin-edit-user')
+    if (editUserBtn) {
+      const userId = Number(editUserBtn.dataset.userId)
+      const userUid = editUserBtn.dataset.uid
+      const userName = editUserBtn.dataset.name
+      const userEmail = editUserBtn.dataset.email
+      const currentPlan = editUserBtn.dataset.plan || 'free'
+      const currentExpires = editUserBtn.dataset.expires || ''
+      const currentAvatar = editUserBtn.dataset.avatar || ''
+      const modal = document.getElementById('adminOrderModal')
+      const modalBody = document.getElementById('adminOrderModalBody')
+      const modalTitle = document.getElementById('adminOrderModalTitle')
+      if (!modal) return
+      modalTitle.textContent = `编辑用户 - ${userName} (${userUid})`
+      const defaultExpiry = new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0]
+      modalBody.innerHTML = `
+        <div class="admin-plan-form" style="display:flex;flex-direction:column;gap:14px;">
+          <div class="admin-plan-field">
+            <label>UID：</label>
+            <span style="font-family:monospace;">${escapeHtml(userUid)}</span>
+          </div>
+          <div class="admin-plan-field">
+            <label for="editUserEmail">邮箱：</label>
+            <input type="email" id="editUserEmail" class="admin-plan-input" value="${escapeHtml(userEmail)}">
+          </div>
+          <div class="admin-plan-field">
+            <label for="editUserNickname">昵称：</label>
+            <input type="text" id="editUserNickname" class="admin-plan-input" value="${escapeHtml(userName)}">
+          </div>
+          <div class="admin-plan-field">
+            <label for="editUserPassword">新密码（留空不修改）：</label>
+            <input type="password" id="editUserPassword" class="admin-plan-input" placeholder="留空则不修改">
+          </div>
+          <div class="admin-plan-field">
+            <label for="editUserAvatar">头像URL：</label>
+            <input type="text" id="editUserAvatar" class="admin-plan-input" value="${escapeHtml(currentAvatar)}" placeholder="https://...">
+          </div>
+          <div class="admin-plan-field">
+            <label for="editUserPlan">套餐：</label>
+            <select id="editUserPlan" class="admin-plan-select">
+              <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>免费 (Free)</option>
+              <option value="plus" ${currentPlan === 'plus' ? 'selected' : ''}>Plus 会员</option>
+              <option value="pro" ${currentPlan === 'pro' ? 'selected' : ''}>Pro 会员</option>
+            </select>
+          </div>
+          <div class="admin-plan-field" id="editUserExpiresField">
+            <label for="editUserExpires">到期日期：</label>
+            <input type="date" id="editUserExpires" class="admin-plan-input" value="${currentExpires || defaultExpiry}">
+            <div class="admin-plan-shortcuts">
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="30">+1个月</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="90">+3个月</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="180">+半年</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="365">+1年</button>
+            </div>
+          </div>
+          <div class="admin-plan-actions">
+            <button class="btn btn-primary" id="adminEditUserSaveBtn" data-user-id="${userId}">保存</button>
+            <button class="btn btn-ghost" id="adminEditUserCancelBtn">取消</button>
+          </div>
+          <div id="adminEditUserResult" style="display:none"></div>
+        </div>
+      `
+      modal.classList.add('admin-modal-visible')
+
+      document.getElementById('adminEditUserCancelBtn')?.addEventListener('click', () => modal.classList.remove('admin-modal-visible'))
+      document.getElementById('adminEditUserSaveBtn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('adminEditUserSaveBtn')
+        btn.disabled = true; btn.textContent = '保存中...'
+        const resultEl = document.getElementById('adminEditUserResult')
+        try {
+          const payload = { userId }
+          const email = document.getElementById('editUserEmail').value.trim()
+          const nickname = document.getElementById('editUserNickname').value.trim()
+          const password = document.getElementById('editUserPassword').value
+          const avatar = document.getElementById('editUserAvatar').value.trim()
+          const plan = document.getElementById('editUserPlan').value
+          const expiresAt = document.getElementById('editUserExpires').value
+          if (email) payload.email = email
+          if (nickname) payload.nickname = nickname
+          if (password) payload.password = password
+          if (avatar !== undefined) payload.avatar = avatar
+          payload.plan = plan
+          if (plan !== 'free') payload.expiresAt = expiresAt
+          const r = await api.put('/api/admin-users', payload)
+          if (r.ok) {
+            resultEl.style.display = 'block'
+            resultEl.innerHTML = '<div class="stream-result-success">保存成功</div>'
+            setTimeout(() => { modal.classList.remove('admin-modal-visible'); activateAdminUserTab('all') }, 800)
+          } else {
+            resultEl.style.display = 'block'
+            resultEl.innerHTML = `<div class="stream-result-success error">${escapeHtml(r.error || '保存失败')}</div>`
+          }
+        } catch (e) {
+          resultEl.style.display = 'block'
+          resultEl.innerHTML = `<div class="stream-result-success error">请求失败</div>`
+        }
+        btn.disabled = false; btn.textContent = '保存'
+      })
+
+      // Expiry shortcuts
+      modal.querySelectorAll('.admin-expires-shortcut').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const targetId = btn.dataset.target || 'adminExpiresInput'
+          const input = document.getElementById(targetId)
+          if (input) {
+            const d = new Date(Date.now() + Number(btn.dataset.days) * 86400000)
+            input.value = d.toISOString().split('T')[0]
+          }
+        })
+      })
       return
     }
 

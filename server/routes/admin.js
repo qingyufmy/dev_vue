@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import bcrypt from 'bcryptjs'
 import multer from 'multer'
 import { join, dirname, extname } from 'path'
 import { fileURLToPath } from 'url'
@@ -195,13 +196,34 @@ router.post('/admin-users', authMiddleware, adminOnly, (req, res) => {
 
 router.put('/admin-users', authMiddleware, adminOnly, (req, res) => {
   try {
-    const { id, role, plan, nickname } = req.body
+    const { id, userId, role, plan, nickname, email, password, avatar, expiresAt } = req.body
+    const uid = id || userId
+    if (!uid) return res.json({ ok: false, error: '缺少用户ID' })
     const db = getDB()
-    if (role) db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, id)
-    if (plan) db.prepare("UPDATE users SET plan = ? WHERE id = ?").run(plan, id)
-    if (nickname) db.prepare("UPDATE users SET nickname = ? WHERE id = ?").run(nickname, id)
+    const updates = []
+    const params = []
+    if (email) { updates.push('email = ?'); params.push(email) }
+    if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
+    if (password && password.length >= 6) { updates.push('password = ?'); params.push(bcrypt.hashSync(password, 10)) }
+    if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar) }
+    if (role) { updates.push('role = ?'); params.push(role) }
+    if (plan) {
+      updates.push('plan = ?'); params.push(plan)
+      if (plan === 'free') {
+        updates.push('plan_expires_at = NULL')
+      } else if (expiresAt) {
+        updates.push('plan_expires_at = ?'); params.push(expiresAt)
+      }
+    }
+    if (updates.length === 0) return res.json({ ok: false, error: '没有需要更新的字段' })
+    updates.push("updated_at = datetime('now')")
+    params.push(uid)
+    db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...params)
     res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
+  } catch (err) {
+    console.error('Admin update user error:', err)
+    res.json({ ok: false, error: '更新失败' })
+  }
 })
 
 router.get('/admin-audit', authMiddleware, adminOnly, (req, res) => {
