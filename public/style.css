@@ -6221,10 +6221,17 @@ button { cursor: pointer; font-family: inherit; }
   gap: 4px;
   flex-wrap: nowrap;
   white-space: nowrap;
+  align-items: center;
 }
 .admin-actions .btn {
   padding: 3px 8px;
   font-size: 11px;
+  flex-shrink: 0;
+}
+.admin-table th:last-child,
+.admin-table td:last-child {
+  white-space: nowrap;
+  min-width: 100px;
 }
 
 .admin-paid-time {
