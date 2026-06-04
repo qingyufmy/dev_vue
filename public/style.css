@@ -6110,7 +6110,7 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 .admin-table td {
-  padding: 8px 6px;
+  padding: 8px 5px;
   border-bottom: 1px solid rgba(0,0,0,0.04);
   vertical-align: middle;
 }
