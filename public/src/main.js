@@ -8171,9 +8171,9 @@ function setupGlobalEvents() {
           <div id="adminEditUserResult" style="display:none"></div>
         </div>
       `
-      modal.classList.add('admin-modal-visible')
+      modal.style.display = 'flex'
 
-      document.getElementById('adminEditUserCancelBtn')?.addEventListener('click', () => modal.classList.remove('admin-modal-visible'))
+      document.getElementById('adminEditUserCancelBtn')?.addEventListener('click', () => modal.style.display = 'none')
       document.getElementById('adminEditUserSaveBtn')?.addEventListener('click', async () => {
         const btn = document.getElementById('adminEditUserSaveBtn')
         btn.disabled = true; btn.textContent = '保存中...'
@@ -8196,7 +8196,7 @@ function setupGlobalEvents() {
           if (r.ok) {
             resultEl.style.display = 'block'
             resultEl.innerHTML = '<div class="stream-result-success">保存成功</div>'
-            setTimeout(() => { modal.classList.remove('admin-modal-visible'); activateAdminUserTab('all') }, 800)
+            setTimeout(() => { modal.style.display = 'none'; activateAdminUserTab('all') }, 800)
           } else {
             resultEl.style.display = 'block'
             resultEl.innerHTML = `<div class="stream-result-success error">${escapeHtml(r.error || '保存失败')}</div>`

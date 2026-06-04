@@ -6218,8 +6218,13 @@ button { cursor: pointer; font-family: inherit; }
 
 .admin-actions {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.admin-actions .btn {
+  padding: 3px 8px;
+  font-size: 11px;
 }
 
 .admin-paid-time {
