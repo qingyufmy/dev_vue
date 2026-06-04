@@ -1559,7 +1559,7 @@ const modalBody = $('#modalBody')
 let authModalBackdropPress = false
 
 function normalizeReferralDisplayCode(code) {
-  return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12)
+  return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10)
 }
 
 async function handleReferralQueryParam(urlParams) {

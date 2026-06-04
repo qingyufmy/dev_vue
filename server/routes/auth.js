@@ -7,6 +7,15 @@ import nodemailer from 'nodemailer'
 
 const router = Router()
 
+function generateReferralCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let code = ''
+  for (let i = 0; i < 10; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)]
+  }
+  return code
+}
+
 router.post('/register', (req, res) => {
   try {
     const { email, password, nickname, referral, referralCode } = req.body
@@ -18,7 +27,7 @@ router.post('/register', (req, res) => {
     if (existing) return res.json({ ok: false, error: '该邮箱已注册' })
 
     const hash = bcrypt.hashSync(password, 10)
-    const code = referralCode || uuidv4().slice(0, 8).toUpperCase()
+    const code = referralCode || generateReferralCode()
     const ref = referral || null
 
     let referredBy = null
