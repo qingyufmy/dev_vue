@@ -6072,11 +6072,12 @@ button { cursor: pointer; font-family: inherit; }
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  min-width: 700px;
 }
 
 .admin-table th {
   background: rgba(124, 101, 246, 0.08);
-  padding: 10px 8px;
+  padding: 8px 5px;
   text-align: left;
   font-weight: 600;
   color: var(--text-2);
@@ -6086,9 +6087,17 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 .admin-table td {
-  padding: 10px 8px;
+  padding: 8px 5px;
   border-bottom: 1px solid rgba(0,0,0,0.04);
   vertical-align: middle;
+}
+
+.admin-table th:last-child,
+.admin-table td:last-child {
+  white-space: nowrap;
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
 }
 
 .admin-table tbody tr:hover {
@@ -6218,8 +6227,13 @@ button { cursor: pointer; font-family: inherit; }
 
 .admin-actions {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.admin-actions .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .admin-paid-time {
@@ -7189,7 +7203,7 @@ button { cursor: pointer; font-family: inherit; }
   .admin-presence-card { padding: 16px; }
   .admin-dashboard { padding: 12px 14px 40px; }
   .admin-table { font-size: 12px; }
-  .admin-table th, .admin-table td { padding: 10px 8px; }
+  .admin-table th, .admin-table td { padding: 8px 5px; }
   .admin-payment-item { flex-wrap: wrap; gap: 8px; }
   .stream-video-card { flex-direction: column; }
   .stream-video-thumb { width: 100%; height: auto; aspect-ratio: 16/9; }
