@@ -18,6 +18,23 @@ export function getDB() {
   return db
 }
 
+export function logAudit({ userId, action, targetType, targetId, detail, ip, userAgent }) {
+  try {
+    const db = getDB()
+    let userEmail = '', userNickname = ''
+    if (userId) {
+      const user = db.prepare('SELECT email, nickname FROM users WHERE id = ?').get(userId)
+      if (user) { userEmail = user.email; userNickname = user.nickname }
+    }
+    db.prepare(`
+      INSERT INTO audit_logs (user_id, user_email, user_nickname, action, target_type, target_id, detail, ip, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(userId || null, userEmail, userNickname, action, targetType || '', targetId || null, detail || '', ip || '', userAgent || '')
+  } catch (err) {
+    console.error('logAudit error:', err)
+  }
+}
+
 export function initDB() {
   const db = getDB()
 
@@ -475,6 +492,19 @@ function migrateDB(db) {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(category, key)
+    );
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      user_email TEXT DEFAULT '',
+      user_nickname TEXT DEFAULT '',
+      action TEXT NOT NULL,
+      target_type TEXT DEFAULT '',
+      target_id INTEGER,
+      detail TEXT DEFAULT '',
+      ip TEXT DEFAULT '',
+      user_agent TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
     );
   `)
 }

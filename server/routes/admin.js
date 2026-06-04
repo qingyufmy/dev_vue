@@ -205,7 +205,32 @@ router.put('/admin-users', authMiddleware, adminOnly, (req, res) => {
 })
 
 router.get('/admin-audit', authMiddleware, adminOnly, (req, res) => {
-  res.json({ ok: true, logs: [], total: 0 })
+  try {
+    const { page = 1, limit = 30, action, search, days } = req.query
+    const db = getDB()
+    const offset = (Number(page) - 1) * Number(limit)
+
+    let where = '1=1'
+    const params = []
+    if (action && action !== 'all') { where += ' AND a.action = ?'; params.push(action) }
+    if (search) { where += ' AND (a.user_email LIKE ? OR a.user_nickname LIKE ? OR a.detail LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`) }
+    if (days && days !== 'all') {
+      where += " AND a.created_at >= datetime('now', ?)"
+      params.push(`-${Number(days)} days`)
+    }
+
+    const total = db.prepare(`SELECT COUNT(*) as c FROM audit_logs a WHERE ${where}`).get(...params).c
+    const logs = db.prepare(`
+      SELECT a.id, a.user_id, a.user_email, a.user_nickname, a.action, a.target_type, a.target_id,
+             a.detail, a.ip, a.created_at
+      FROM audit_logs a WHERE ${where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?
+    `).all(...params, Number(limit), offset)
+
+    res.json({ ok: true, logs, total, page: Number(page), totalPages: Math.ceil(total / Number(limit)) })
+  } catch (err) {
+    console.error('Admin audit error:', err)
+    res.json({ ok: false, error: '获取日志失败' })
+  }
 })
 
 // Admin: referrals

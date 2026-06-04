@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { v4 as uuidv4 } from 'uuid'
-import { getDB } from '../db.js'
+import { getDB, logAudit } from '../db.js'
 import { generateToken, authMiddleware } from '../middleware/auth.js'
 import nodemailer from 'nodemailer'
 
@@ -42,6 +42,8 @@ router.post('/register', (req, res) => {
 
     db.prepare('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)').run(result.lastInsertRowid, 'system', '欢迎加入街哥课堂', '您的账户已创建成功，开始学习吧！')
 
+    logAudit({ userId: result.lastInsertRowid, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
+
     res.json({ ok: true, token, user })
   } catch (err) {
     console.error('Register error:', err)
@@ -74,6 +76,8 @@ router.post('/login', (req, res) => {
     safeUser.name = user.nickname
     safeUser.isAdmin = user.role === 'admin'
     safeUser.telegramBinding = getTelegramBinding(user)
+
+    logAudit({ userId: user.id, action: 'login', ip: req.ip, userAgent: req.get('user-agent') })
 
     res.json({ ok: true, token, user: safeUser })
   } catch (err) {

@@ -3522,10 +3522,30 @@ function renderAdminContent(data) {
       <div class="admin-section">
         <div class="admin-section-header">
           <h2>📋 审计日志</h2>
-          <button class="btn btn-ghost btn-xs" id="loadAuditLogs">加载日志</button>
+        </div>
+        <div class="audit-filters" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+          <select id="auditDays" class="form-select" style="width:auto;">
+            <option value="all">All time</option>
+            <option value="1">最近1天</option>
+            <option value="7">最近7天</option>
+            <option value="30">最近30天</option>
+          </select>
+          <select id="auditActionType" class="form-select" style="width:auto;">
+            <option value="all">全部类型</option>
+            <option value="login">登录</option>
+            <option value="register">注册</option>
+            <option value="profile_update">修改资料</option>
+            <option value="comment_create">发表评论</option>
+            <option value="post_create">发帖</option>
+            <option value="reply_create">回复</option>
+            <option value="admin_change_plan">管理套餐</option>
+            <option value="trade_create">添加战绩</option>
+          </select>
+          <input type="text" id="auditSearch" class="form-input" placeholder="搜索用户邮箱、昵称、详情..." style="flex:1;min-width:200px;">
+          <button class="btn btn-primary btn-xs" id="loadAuditLogs">查询</button>
         </div>
         <div id="auditLogContainer" class="admin-audit-container">
-          <p style="color:var(--text-3);padding:12px 0;">点击「加载日志」查看用户操作记录</p>
+          <p style="color:var(--text-3);padding:12px 0;">点击「查询」查看操作记录</p>
         </div>
       </div>
       </div>
@@ -3554,7 +3574,10 @@ function renderAdminContent(data) {
       const container = document.getElementById('auditLogContainer')
       if (!container) return
       container.innerHTML = '<div class="loading-spinner">加载中...</div>'
-      const r = await api.get(`/api/admin-audit?page=${page}&limit=30`)
+      const days = document.getElementById('auditDays')?.value || 'all'
+      const action = document.getElementById('auditActionType')?.value || 'all'
+      const search = document.getElementById('auditSearch')?.value || ''
+      const r = await api.get(`/api/admin-audit?page=${page}&limit=30&days=${days}&action=${action}&search=${encodeURIComponent(search)}`)
       if (!r.logs) {
         container.innerHTML = `<p style="color:var(--text-3);padding:12px 0;">${escapeHtml(r.error || '加载失败')}</p>`
         return
@@ -3575,14 +3598,14 @@ function renderAdminContent(data) {
       }
       container.innerHTML = `
         <table class="admin-table" style="font-size:13px;">
-          <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>目标</th><th>IP</th><th>详情</th></tr></thead>
-          <tbody>${r.logs.map(l => `<tr>
-            <td style="white-space:nowrap;">${escapeHtml(l.createdAt)}</td>
-            <td>${escapeHtml(l.userName || '-')}${l.userId ? ` <span class="admin-uid">#${l.userId}</span>` : ''}</td>
-            <td>${escapeHtml(actionLabels[l.action] || l.action)}</td>
-            <td>${l.targetType ? escapeHtml(l.targetType) + (l.targetId ? ':' + escapeHtml(l.targetId) : '') : '-'}</td>
+          <thead><tr><th>#</th><th>时间</th><th>操作者</th><th>IP</th><th>操作</th><th>详情</th></tr></thead>
+          <tbody>${r.logs.map((l, i) => `<tr>
+            <td>${(page - 1) * 30 + i + 1}</td>
+            <td style="white-space:nowrap;">${escapeHtml(l.created_at || '-')}</td>
+            <td>${escapeHtml(l.user_nickname || l.user_email || '-')}<br><span style="font-size:11px;color:var(--text-3);">${escapeHtml(l.user_email || '')}</span></td>
             <td style="font-family:monospace;font-size:11px;">${escapeHtml(l.ip || '-')}</td>
-            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;">${l.detail ? escapeHtml(JSON.stringify(l.detail)) : '-'}</td>
+            <td>${escapeHtml(actionLabels[l.action] || l.action)}</td>
+            <td><button class="btn btn-ghost btn-xs audit-detail" data-id="${l.id}">详情</button></td>
           </tr>`).join('')}</tbody>
         </table>
         <div style="display:flex;gap:8px;padding:12px 0;justify-content:center;">
@@ -3593,6 +3616,14 @@ function renderAdminContent(data) {
       `
       container.querySelectorAll('.audit-page').forEach(btn => {
         btn.addEventListener('click', () => loadAudit(Number(btn.dataset.page)))
+      })
+      container.querySelectorAll('.audit-detail').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const log = r.logs.find(l => l.id === Number(btn.dataset.id))
+          if (log) {
+            alert(`操作: ${actionLabels[log.action] || log.action}\n用户: ${log.user_nickname || log.user_email}\nIP: ${log.ip || '-'}\n时间: ${log.created_at}\n详情: ${log.detail || '-'}`)
+          }
+        })
       })
     }
     auditBtn.addEventListener('click', () => loadAudit(1))
