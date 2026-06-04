@@ -40,18 +40,13 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
     const todayNewUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE date(created_at) = date('now')").get().c
 
     // Get online stats (based on last_seen_at)
-    const now = new Date()
-    const fiveMinAgo = new Date(now - 5 * 60 * 1000).toISOString()
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
-    const weekStart = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString()
-
     let realtimeOnlineUsers = 0
     let todayOnlineUsers = 0
     let weekOnlineUsers = 0
     try {
-      realtimeOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE last_seen_at >= ?").get(fiveMinAgo).c
-      todayOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE last_seen_at >= ?").get(todayStart).c
-      weekOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE last_seen_at >= ?").get(weekStart).c
+      realtimeOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE datetime(last_seen_at) >= datetime('now', '-5 minutes')").get().c
+      todayOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE datetime(last_seen_at) >= datetime('now', 'start of day')").get().c
+      weekOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE datetime(last_seen_at) >= datetime('now', '-7 days')").get().c
     } catch {}
 
     // Get total revenue
@@ -74,7 +69,7 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
     // Get users with pagination
     const userCount = db.prepare(`SELECT COUNT(*) as c FROM users u WHERE ${where}`).get(...params).c
     const users = db.prepare(`
-      SELECT u.id, u.email, u.nickname, u.avatar, u.role, u.plan, u.plan_period, u.plan_expires_at,
+      SELECT u.id, u.uid, u.email, u.nickname, u.avatar, u.role, u.plan, u.plan_period, u.plan_expires_at,
              u.referral_code, u.referral_credit, u.telegram_id, u.created_at, u.last_seen_at
       FROM users u WHERE ${where} ORDER BY u.created_at DESC LIMIT ? OFFSET ?
     `).all(...params, Number(limit), offset)
@@ -133,7 +128,7 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
 
       return {
         id: u.id,
-        uid: String(u.id),
+        uid: u.uid || ('WS' + String(u.id).padStart(6, '0')),
         email: u.email,
         name: u.nickname || u.email.split('@')[0],
         nickname: u.nickname,

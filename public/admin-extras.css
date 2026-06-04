@@ -268,3 +268,132 @@
 /* ===== Admin Board/Panel Toggle ===== */
 .admin-user-panel { display: none; }
 .admin-user-panel-active { display: block; }
+
+/* ===== System Config ===== */
+.admin-config-subtabs {
+  margin-bottom: 20px;
+}
+
+.admin-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.admin-config-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-config-row label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.admin-config-row .admin-plan-input,
+.admin-config-row .admin-plan-select {
+  width: 100%;
+  max-width: 480px;
+}
+
+.admin-config-actions {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.admin-config-test-result {
+  font-size: 14px;
+  padding: 8px 0;
+  min-height: 24px;
+}
+
+.admin-config-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.admin-config-header-row h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+/* Toolbox Config */
+.admin-toolbox-category {
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  background: var(--glass-light);
+}
+
+.admin-toolbox-cat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.admin-toolbox-cat-header .admin-plan-input {
+  flex: 1;
+  max-width: 300px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.admin-toolbox-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-toolbox-item {
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--glass);
+  position: relative;
+}
+
+.admin-toolbox-item-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.admin-toolbox-item .btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+/* Market Menu Config */
+.admin-market-menu-item {
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--glass-light);
+  position: relative;
+}
+
+.admin-market-menu-item .btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+@media (max-width: 600px) {
+  .admin-toolbox-item-grid {
+    grid-template-columns: 1fr;
+  }
+  .admin-config-row .admin-plan-input {
+    max-width: 100%;
+  }
+}

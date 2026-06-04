@@ -1657,6 +1657,7 @@ async function init() {
   updateAuthUI()
   setupGlobalEvents()
   startPresenceHeartbeat()
+  loadMarketMenu()
   if (await handleAuthGateRedirect(authGateNext) === 'redirect') return
   if (!authGateNext && initialLoginNext) {
     showLoginRequiredModal(initialLoginNext)
@@ -3272,6 +3273,7 @@ function renderAdminContent(data) {
         <button class="admin-board-tab active" type="button" data-admin-board="resources">课程资源</button>
         <button class="admin-board-tab" type="button" data-admin-board="users">用户会员</button>
         <button class="admin-board-tab" type="button" data-admin-board="referrals">返佣邀请</button>
+        <button class="admin-board-tab" type="button" data-admin-board="config">系统配置</button>
       </div>
 
       <div class="admin-presence-grid" aria-label="在线人数统计">
@@ -3531,6 +3533,10 @@ function renderAdminContent(data) {
       <div class="admin-board" id="adminReferralsBoard" hidden>
         ${renderAdminReferralsSection()}
       </div>
+
+      <div class="admin-board" id="adminConfigBoard" hidden>
+        ${renderAdminConfigSection()}
+      </div>
     </div>
   `
 
@@ -3538,6 +3544,7 @@ function renderAdminContent(data) {
   setupAdminUserTabs()
   setupAdminCourseManager()
   loadAdminReferrals()
+  loadAdminConfig()
 
   // Audit log handler
   const auditBtn = document.getElementById('loadAuditLogs')
@@ -3765,12 +3772,458 @@ async function loadAdminReferrals() {
   }
 }
 
+// ===== System Config Section =====
+let adminConfigData = {}
+let adminConfigSubTab = 'smtp'
+
+function renderAdminConfigSection() {
+  return `
+    <div class="admin-section">
+      <div class="admin-section-header">
+        <h2>系统配置</h2>
+        <button class="btn btn-ghost btn-xs" id="adminConfigRefresh">刷新</button>
+      </div>
+      <div class="admin-board-tabs admin-config-subtabs" role="tablist" aria-label="系统配置板块">
+        <button class="admin-board-tab active" type="button" data-config-tab="smtp">发件邮箱</button>
+        <button class="admin-board-tab" type="button" data-config-tab="qiniu">七牛云存储</button>
+        <button class="admin-board-tab" type="button" data-config-tab="toolbox">金融工具箱</button>
+        <button class="admin-board-tab" type="button" data-config-tab="market_menu">股票研究菜单</button>
+      </div>
+      <div id="adminConfigContent" class="admin-config-content">
+        <div class="loading-spinner">加载中...</div>
+      </div>
+    </div>
+  `
+}
+
+async function loadAdminConfig() {
+  try {
+    const res = await api.get('/api/system-config')
+    if (!res.ok) {
+      console.error('Load config error:', res.error)
+      return
+    }
+    adminConfigData = res.config || {}
+    renderAdminConfigContent()
+    setupAdminConfigTabs()
+  } catch (err) {
+    console.error('Load config error:', err)
+  }
+}
+
+function setupAdminConfigTabs() {
+  const tabs = [...document.querySelectorAll('[data-config-tab]')]
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      adminConfigSubTab = tab.dataset.configTab
+      tabs.forEach(t => t.classList.toggle('active', t === tab))
+      renderAdminConfigContent()
+    })
+  })
+  document.getElementById('adminConfigRefresh')?.addEventListener('click', loadAdminConfig)
+}
+
+function renderAdminConfigContent() {
+  const container = document.getElementById('adminConfigContent')
+  if (!container) return
+
+  switch (adminConfigSubTab) {
+    case 'smtp':
+      renderSmtpConfig(container)
+      break
+    case 'qiniu':
+      renderQiniuConfig(container)
+      break
+    case 'toolbox':
+      renderToolboxConfig(container)
+      break
+    case 'market_menu':
+      renderMarketMenuConfig(container)
+      break
+  }
+}
+
+function renderSmtpConfig(container) {
+  const items = adminConfigData.smtp || []
+  const getVal = (key) => items.find(i => i.key === key)?.value || ''
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <div class="admin-config-row">
+        <label>SMTP 服务器</label>
+        <input type="text" class="admin-plan-input" id="smtpHost" value="${escapeHtml(getVal('host'))}" placeholder="smtp.qq.com">
+      </div>
+      <div class="admin-config-row">
+        <label>端口</label>
+        <input type="text" class="admin-plan-input" id="smtpPort" value="${escapeHtml(getVal('port'))}" placeholder="587">
+      </div>
+      <div class="admin-config-row">
+        <label>用户名</label>
+        <input type="text" class="admin-plan-input" id="smtpUser" value="${escapeHtml(getVal('user'))}" placeholder="your@email.com">
+      </div>
+      <div class="admin-config-row">
+        <label>密码</label>
+        <input type="password" class="admin-plan-input" id="smtpPass" value="${escapeHtml(getVal('pass'))}" placeholder="授权码">
+      </div>
+      <div class="admin-config-row">
+        <label>发件人邮箱</label>
+        <input type="text" class="admin-plan-input" id="smtpFrom" value="${escapeHtml(getVal('from'))}" placeholder="noreply@yourdomain.com">
+      </div>
+      <div class="admin-config-row">
+        <label>发件人名称</label>
+        <input type="text" class="admin-plan-input" id="smtpFromName" value="${escapeHtml(getVal('from_name') || '街哥课堂')}" placeholder="街哥课堂">
+      </div>
+      <div class="admin-config-row">
+        <label>SSL/TLS</label>
+        <select class="admin-plan-select" id="smtpSecure">
+          <option value="false" ${getVal('secure') === 'false' ? 'selected' : ''}>否 (STARTTLS)</option>
+          <option value="true" ${getVal('secure') === 'true' ? 'selected' : ''}>是 (SSL)</option>
+        </select>
+      </div>
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="saveSmtpConfig">保存配置</button>
+        <button class="btn btn-ghost" id="testSmtpConfig">发送测试邮件</button>
+      </div>
+      <div id="smtpTestResult" class="admin-config-test-result"></div>
+    </div>
+  `
+
+  document.getElementById('saveSmtpConfig')?.addEventListener('click', async () => {
+    const items = [
+      { key: 'host', value: document.getElementById('smtpHost').value, label: 'SMTP 服务器', sort_order: 0 },
+      { key: 'port', value: document.getElementById('smtpPort').value, label: '端口', sort_order: 1 },
+      { key: 'user', value: document.getElementById('smtpUser').value, label: '用户名', sort_order: 2 },
+      { key: 'pass', value: document.getElementById('smtpPass').value, label: '密码', sort_order: 3 },
+      { key: 'from', value: document.getElementById('smtpFrom').value, label: '发件人邮箱', sort_order: 4 },
+      { key: 'from_name', value: document.getElementById('smtpFromName').value, label: '发件人名称', sort_order: 5 },
+      { key: 'secure', value: document.getElementById('smtpSecure').value, label: 'SSL/TLS', sort_order: 6 },
+    ]
+    const res = await api.put('/api/system-config/smtp', { items })
+    if (res.ok) {
+      alert('SMTP 配置已保存')
+      loadAdminConfig()
+    } else {
+      alert(res.error || '保存失败')
+    }
+  })
+
+  document.getElementById('testSmtpConfig')?.addEventListener('click', async () => {
+    const resultEl = document.getElementById('smtpTestResult')
+    const testEmail = prompt('请输入测试收件邮箱：')
+    if (!testEmail) return
+    resultEl.innerHTML = '<span style="color:var(--text-3)">发送中...</span>'
+    const res = await api.post('/api/system-config/smtp/test', { to: testEmail })
+    if (res.ok) {
+      resultEl.innerHTML = '<span style="color:#10b981">✓ 测试邮件已发送，请检查收件箱</span>'
+    } else {
+      resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
+    }
+  })
+}
+
+function renderQiniuConfig(container) {
+  const items = adminConfigData.qiniu || []
+  const getVal = (key) => items.find(i => i.key === key)?.value || ''
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <div class="admin-config-row">
+        <label>Access Key</label>
+        <input type="text" class="admin-plan-input" id="qiniuAK" value="${escapeHtml(getVal('access_key'))}" placeholder="Access Key">
+      </div>
+      <div class="admin-config-row">
+        <label>Secret Key</label>
+        <input type="password" class="admin-plan-input" id="qiniuSK" value="${escapeHtml(getVal('secret_key'))}" placeholder="Secret Key">
+      </div>
+      <div class="admin-config-row">
+        <label>存储桶名称</label>
+        <input type="text" class="admin-plan-input" id="qiniuBucket" value="${escapeHtml(getVal('bucket'))}" placeholder="my-bucket">
+      </div>
+      <div class="admin-config-row">
+        <label>访问域名</label>
+        <input type="text" class="admin-plan-input" id="qiniuDomain" value="${escapeHtml(getVal('domain'))}" placeholder="https://cdn.example.com">
+      </div>
+      <div class="admin-config-row">
+        <label>区域</label>
+        <select class="admin-plan-select" id="qiniuRegion">
+          <option value="z0" ${getVal('region') === 'z0' ? 'selected' : ''}>华东 (z0)</option>
+          <option value="cn-east" ${getVal('region') === 'cn-east' ? 'selected' : ''}>华东 (cn-east)</option>
+          <option value="cn-south" ${getVal('region') === 'cn-south' ? 'selected' : ''}>华南 (cn-south)</option>
+          <option value="cn-north" ${getVal('region') === 'cn-north' ? 'selected' : ''}>华北 (cn-north)</option>
+          <option value="us-north" ${getVal('region') === 'us-north' ? 'selected' : ''}>北美 (us-north)</option>
+          <option value="ap-southeast" ${getVal('region') === 'ap-southeast' ? 'selected' : ''}>东南亚 (ap-southeast)</option>
+        </select>
+      </div>
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="saveQiniuConfig">保存配置</button>
+      </div>
+    </div>
+  `
+
+  document.getElementById('saveQiniuConfig')?.addEventListener('click', async () => {
+    const items = [
+      { key: 'access_key', value: document.getElementById('qiniuAK').value, label: 'Access Key', sort_order: 0 },
+      { key: 'secret_key', value: document.getElementById('qiniuSK').value, label: 'Secret Key', sort_order: 1 },
+      { key: 'bucket', value: document.getElementById('qiniuBucket').value, label: '存储桶名称', sort_order: 2 },
+      { key: 'domain', value: document.getElementById('qiniuDomain').value, label: '访问域名', sort_order: 3 },
+      { key: 'region', value: document.getElementById('qiniuRegion').value, label: '区域', sort_order: 4 },
+    ]
+    const res = await api.put('/api/system-config/qiniu', { items })
+    if (res.ok) {
+      alert('七牛云配置已保存')
+      loadAdminConfig()
+    } else {
+      alert(res.error || '保存失败')
+    }
+  })
+}
+
+function renderToolboxConfig(container) {
+  const items = adminConfigData.toolbox || []
+  const toolboxItem = items.find(i => i.key === 'items')
+  let categories = []
+  try { categories = JSON.parse(toolboxItem?.value || '[]') } catch {}
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <div class="admin-config-header-row">
+        <h3>金融工具箱配置</h3>
+        <button class="btn btn-primary btn-sm" id="addToolCategory">+ 添加分类</button>
+      </div>
+      <div id="toolboxCategories">
+        ${categories.map((cat, ci) => renderToolboxCategory(cat, ci)).join('')}
+      </div>
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="saveToolboxConfig">保存全部</button>
+      </div>
+    </div>
+  `
+
+  setupToolboxEvents(categories)
+}
+
+function renderToolboxCategory(cat, ci) {
+  return `
+    <div class="admin-toolbox-category" data-cat-index="${ci}">
+      <div class="admin-toolbox-cat-header">
+        <input type="text" class="admin-plan-input admin-toolbox-cat-name" value="${escapeHtml(cat.category)}" placeholder="分类名称">
+        <button class="btn btn-ghost btn-xs admin-toolbox-cat-delete" data-ci="${ci}">删除分类</button>
+      </div>
+      <div class="admin-toolbox-items">
+        ${(cat.items || []).map((item, ii) => renderToolboxItem(item, ci, ii)).join('')}
+      </div>
+      <button class="btn btn-ghost btn-xs admin-toolbox-add-item" data-ci="${ci}">+ 添加工具</button>
+    </div>
+  `
+}
+
+function renderToolboxItem(item, ci, ii) {
+  return `
+    <div class="admin-toolbox-item" data-ci="${ci}" data-ii="${ii}">
+      <div class="admin-toolbox-item-grid">
+        <div class="admin-config-row">
+          <label>名称</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="name" value="${escapeHtml(item.name || '')}">
+        </div>
+        <div class="admin-config-row">
+          <label>图标</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="🪙">
+        </div>
+        <div class="admin-config-row">
+          <label>链接</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="url" value="${escapeHtml(item.url || '')}">
+        </div>
+        <div class="admin-config-row">
+          <label>描述</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="desc" value="${escapeHtml(item.desc || '')}">
+        </div>
+        <div class="admin-config-row">
+          <label>标签</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="tag" value="${escapeHtml(item.tag || '')}" placeholder="可选">
+        </div>
+        <div class="admin-config-row">
+          <label>标签颜色</label>
+          <input type="color" class="admin-plan-input toolbox-field" data-field="tagColor" value="${escapeHtml(item.tagColor || '#2563eb')}" style="height:36px;padding:2px 4px;">
+        </div>
+        <div class="admin-config-row">
+          <label>邀请码</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="code" value="${escapeHtml(item.code || '')}" placeholder="可选">
+        </div>
+        <div class="admin-config-row">
+          <label>返佣</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="rebate" value="${escapeHtml(item.rebate || '')}" placeholder="可选">
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-xs admin-toolbox-delete-item" data-ci="${ci}" data-ii="${ii}">删除</button>
+    </div>
+  `
+}
+
+function setupToolboxEvents(categories) {
+  const getCategories = () => {
+    const cats = []
+    document.querySelectorAll('.admin-toolbox-category').forEach(catEl => {
+      const catName = catEl.querySelector('.admin-toolbox-cat-name')?.value || ''
+      const items = []
+      catEl.querySelectorAll('.admin-toolbox-item').forEach(itemEl => {
+        const item = {}
+        itemEl.querySelectorAll('.toolbox-field').forEach(f => {
+          item[f.dataset.field] = f.value
+        })
+        items.push(item)
+      })
+      cats.push({ category: catName, items })
+    })
+    return cats
+  }
+
+  document.getElementById('addToolCategory')?.addEventListener('click', () => {
+    categories.push({ category: '新分类', items: [] })
+    document.getElementById('toolboxCategories').innerHTML = categories.map((cat, ci) => renderToolboxCategory(cat, ci)).join('')
+    setupToolboxEvents(categories)
+  })
+
+  document.getElementById('toolboxCategories')?.addEventListener('click', (e) => {
+    const addBtn = e.target.closest('.admin-toolbox-add-item')
+    if (addBtn) {
+      const ci = Number(addBtn.dataset.ci)
+      categories = getCategories()
+      categories[ci].items.push({ name: '', icon: '', url: '', desc: '', tag: '', tagColor: '#2563eb', code: '', rebate: '' })
+      document.getElementById('toolboxCategories').innerHTML = categories.map((cat, i) => renderToolboxCategory(cat, i)).join('')
+      setupToolboxEvents(categories)
+      return
+    }
+    const delItem = e.target.closest('.admin-toolbox-delete-item')
+    if (delItem) {
+      categories = getCategories()
+      const ci = Number(delItem.dataset.ci)
+      const ii = Number(delItem.dataset.ii)
+      categories[ci].items.splice(ii, 1)
+      document.getElementById('toolboxCategories').innerHTML = categories.map((cat, i) => renderToolboxCategory(cat, i)).join('')
+      setupToolboxEvents(categories)
+      return
+    }
+    const delCat = e.target.closest('.admin-toolbox-cat-delete')
+    if (delCat) {
+      categories = getCategories()
+      const ci = Number(delCat.dataset.ci)
+      categories.splice(ci, 1)
+      document.getElementById('toolboxCategories').innerHTML = categories.map((cat, i) => renderToolboxCategory(cat, i)).join('')
+      setupToolboxEvents(categories)
+      return
+    }
+  })
+
+  document.getElementById('saveToolboxConfig')?.addEventListener('click', async () => {
+    categories = getCategories()
+    const items = [{ key: 'items', value: JSON.stringify(categories), label: '金融工具箱', sort_order: 0 }]
+    const res = await api.put('/api/system-config/toolbox', { items })
+    if (res.ok) {
+      alert('金融工具箱配置已保存')
+      loadAdminConfig()
+    } else {
+      alert(res.error || '保存失败')
+    }
+  })
+}
+
+function renderMarketMenuConfig(container) {
+  const items = adminConfigData.market_menu || []
+  const menuItem = items.find(i => i.key === 'items')
+  let menuItems = []
+  try { menuItems = JSON.parse(menuItem?.value || '[]') } catch {}
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <div class="admin-config-header-row">
+        <h3>股票市场研究菜单</h3>
+        <button class="btn btn-primary btn-sm" id="addMenuItem">+ 添加菜单项</button>
+      </div>
+      <div id="marketMenuItems">
+        ${menuItems.map((item, i) => renderMarketMenuItem(item, i)).join('')}
+      </div>
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="saveMarketMenuConfig">保存全部</button>
+      </div>
+    </div>
+  `
+
+  setupMarketMenuEvents(menuItems)
+}
+
+function renderMarketMenuItem(item, i) {
+  return `
+    <div class="admin-market-menu-item" data-index="${i}">
+      <div class="admin-toolbox-item-grid">
+        <div class="admin-config-row">
+          <label>名称</label>
+          <input type="text" class="admin-plan-input menu-field" data-field="name" value="${escapeHtml(item.name || '')}">
+        </div>
+        <div class="admin-config-row">
+          <label>图标</label>
+          <input type="text" class="admin-plan-input menu-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="📅">
+        </div>
+        <div class="admin-config-row">
+          <label>链接</label>
+          <input type="text" class="admin-plan-input menu-field" data-field="url" value="${escapeHtml(item.url || '')}">
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-xs admin-menu-delete-item" data-i="${i}">删除</button>
+    </div>
+  `
+}
+
+function setupMarketMenuEvents(menuItems) {
+  const getItems = () => {
+    const items = []
+    document.querySelectorAll('.admin-market-menu-item').forEach(el => {
+      const item = {}
+      el.querySelectorAll('.menu-field').forEach(f => {
+        item[f.dataset.field] = f.value
+      })
+      items.push(item)
+    })
+    return items
+  }
+
+  document.getElementById('addMenuItem')?.addEventListener('click', () => {
+    menuItems = getItems()
+    menuItems.push({ name: '', icon: '', url: '' })
+    document.getElementById('marketMenuItems').innerHTML = menuItems.map((item, i) => renderMarketMenuItem(item, i)).join('')
+    setupMarketMenuEvents(menuItems)
+  })
+
+  document.getElementById('marketMenuItems')?.addEventListener('click', (e) => {
+    const delBtn = e.target.closest('.admin-menu-delete-item')
+    if (delBtn) {
+      menuItems = getItems()
+      const i = Number(delBtn.dataset.i)
+      menuItems.splice(i, 1)
+      document.getElementById('marketMenuItems').innerHTML = menuItems.map((item, idx) => renderMarketMenuItem(item, idx)).join('')
+      setupMarketMenuEvents(menuItems)
+    }
+  })
+
+  document.getElementById('saveMarketMenuConfig')?.addEventListener('click', async () => {
+    menuItems = getItems()
+    const items = [{ key: 'items', value: JSON.stringify(menuItems), label: '股票市场研究菜单', sort_order: 0 }]
+    const res = await api.put('/api/system-config/market_menu', { items })
+    if (res.ok) {
+      alert('菜单配置已保存')
+      loadAdminConfig()
+    } else {
+      alert(res.error || '保存失败')
+    }
+  })
+}
+
 function setupAdminBoardTabs() {
   const tabs = [...document.querySelectorAll('[data-admin-board]')]
   const boards = {
     resources: document.getElementById('adminResourcesBoard'),
     users: document.getElementById('adminUsersBoard'),
     referrals: document.getElementById('adminReferralsBoard'),
+    config: document.getElementById('adminConfigBoard'),
   }
   tabs.forEach(tab => {
     tab.addEventListener('click', () => {
@@ -3782,6 +4235,10 @@ function setupAdminBoardTabs() {
         board.hidden = !active
         board.classList.toggle('admin-board-active', active)
       })
+      // Auto-activate first sub-tab when switching to users board
+      if (target === 'users') {
+        activateAdminUserTab('all')
+      }
     })
   })
 }
@@ -5067,8 +5524,20 @@ function renderTos() {
 }
 
 // ===== Tools Page =====
-function renderTools() {
-  const tools = [
+async function renderTools() {
+  // Try to load from system config, fallback to hardcoded
+  let tools = []
+  try {
+    const res = await api.get('/api/system-config-public/toolbox')
+    if (res.ok && res.items) {
+      const toolboxItem = res.items.find(i => i.key === 'items')
+      if (toolboxItem) tools = JSON.parse(toolboxItem.value || '[]')
+    }
+  } catch {}
+
+  // Fallback to hardcoded if config empty
+  if (!tools.length) {
+    tools = [
     {
       category: '交易所',
       items: [
@@ -5168,6 +5637,7 @@ function renderTools() {
       ],
     },
   ]
+  }
 
   mainContent.innerHTML = `
     <div class="tools-page fade-in">
@@ -6186,7 +6656,7 @@ async function handleCodeVerify(code) {
       purpose: meta.codePurpose,
     })
 
-    if (res.ok && res.success) {
+    if (res.ok) {
       state._emailVerified = true
       state._verifyToken = res.token
       if (codeStatus) { codeStatus.textContent = '✓'; codeStatus.className = 'code-status code-status-ok' }
@@ -6262,6 +6732,12 @@ function showAuthModal(mode, options = {}) {
           <input type="email" class="form-input" name="email" id="authEmail" required placeholder="请输入邮箱" value="${escapeHtml(prefillEmail)}">
         `}
       </div>
+      ${mode === 'register' ? `
+        <div class="form-group">
+          <label class="form-label">昵称</label>
+          <input type="text" class="form-input" name="nickname" id="authNickname" placeholder="给自己取个名字（选填）">
+        </div>
+      ` : ''}
       ${meta.codePurpose ? `
         <div class="form-group" id="codeGroup" style="display:none">
           <label class="form-label">验证码</label>
@@ -7117,6 +7593,29 @@ async function renderPost() {
   }
 }
 
+// ===== Load Market Menu from Config =====
+async function loadMarketMenu() {
+  const menu = document.getElementById('marketResearchMenu')
+  if (!menu) return
+  try {
+    const res = await api.get('/api/system-config-public/market_menu')
+    if (res.ok && res.items) {
+      const menuItem = res.items.find(i => i.key === 'items')
+      if (menuItem) {
+        const items = JSON.parse(menuItem.value || '[]')
+        menu.innerHTML = items.map((item, i) => `
+          <a class="header-market-item" href="${escapeHtml(item.url)}" role="menuitem" tabindex="-1">
+            <span class="header-market-icon" aria-hidden="true">${escapeHtml(item.icon)}</span>
+            <span class="header-market-label">${escapeHtml(item.name)}</span>
+          </a>
+        `).join('')
+      }
+    }
+  } catch (err) {
+    console.error('Load market menu error:', err)
+  }
+}
+
 // ===== Event Handling =====
 function setupGlobalEvents() {
   const userMenuWrap = $('#userMenuWrap')
@@ -7378,7 +7877,7 @@ function setupGlobalEvents() {
       try {
         const result = await api.post('/api/register', {
           email: data.email,
-          name: '街家军',
+          nickname: data.nickname || '',
           password: data.password,
           verifyToken: state._verifyToken,
           tosAgree: true,

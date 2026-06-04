@@ -1,10 +1,11 @@
 import express from 'express'
 import cors from 'cors'
 import multer from 'multer'
+import jwt from 'jsonwebtoken'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync } from 'fs'
-import { initDB } from './db.js'
+import { initDB, getDB } from './db.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
 import commentRoutes from './routes/comments.js'
@@ -14,6 +15,7 @@ import adminRoutes from './routes/admin.js'
 import tradeRoutes from './routes/trades.js'
 import paymentRoutes from './routes/payment.js'
 import videoRoutes from './routes/video.js'
+import configRoutes from './routes/config.js'
 import { authMiddleware } from './middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -66,9 +68,21 @@ app.use('/api', adminRoutes)
 app.use('/api', tradeRoutes)
 app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
+app.use('/api', configRoutes)
 
-// Presence heartbeat (no auth needed)
+// Presence heartbeat
 app.post('/api/presence', (req, res) => {
+  try {
+    const auth = req.headers.authorization
+    if (auth && auth.startsWith('Bearer ')) {
+      const token = auth.slice(7)
+      const payload = jwt.verify(token, 'wall-street-skill-secret')
+      if (payload && payload.userId) {
+        const db = getDB()
+        db.prepare("UPDATE users SET last_seen_at = datetime('now') WHERE id = ?").run(payload.userId)
+      }
+    }
+  } catch {}
   res.json({ ok: true })
 })
 

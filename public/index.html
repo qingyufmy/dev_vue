@@ -67,7 +67,9 @@
           <div class="user-menu-wrap" id="userMenuWrap">
             <div class="user-menu-trigger" id="userMenuTrigger">
               <span class="user-avatar" id="userAvatar">U</span>
-              <span class="user-name" id="userName"></span>
+              <span class="user-name-wrap">
+                <span class="user-name" id="userName"></span>
+              </span>
             </div>
             <div class="user-dropdown" id="userDropdown">
               <a class="dropdown-item" id="dropdownProfile">⚙️ 设置和账单</a>
@@ -90,22 +92,7 @@
         </div>
       </div>
       <div class="header-market-panel" id="marketResearchMenu" role="menu" aria-label="股票市场研究菜单" aria-hidden="true">
-        <a class="header-market-item" id="navEarnings" href="/earnings/" role="menuitem" tabindex="-1">
-          <span class="header-market-icon" aria-hidden="true">📅</span>
-          <span class="header-market-label">美股财报日</span>
-        </a>
-        <a class="header-market-item" id="navAiBubble" href="/ai泡沫周报/" role="menuitem" tabindex="-1">
-          <span class="header-market-icon" aria-hidden="true">📉</span>
-          <span class="header-market-label">AI泡沫周期监控</span>
-        </a>
-        <a class="header-market-item" id="navAiWeekly" href="/weekly/" role="menuitem" tabindex="-1">
-          <span class="header-market-icon" aria-hidden="true">📰</span>
-          <span class="header-market-label">AI 转折点月度报告</span>
-        </a>
-        <a class="header-market-item" id="navResearch" href="/research/" role="menuitem" tabindex="-1">
-          <span class="header-market-icon" aria-hidden="true">📈</span>
-          <span class="header-market-label">全球市场股票深度研究</span>
-        </a>
+        <!-- Dynamic menu items loaded from system config -->
       </div>
     </header>
 

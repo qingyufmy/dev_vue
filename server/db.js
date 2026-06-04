@@ -24,6 +24,7 @@ export function initDB() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uid TEXT UNIQUE,
       email TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       nickname TEXT DEFAULT '',
@@ -315,6 +316,18 @@ export function initDB() {
       last_notified_reply_id INTEGER DEFAULT 0,
       UNIQUE(user_id, post_id)
     );
+
+    CREATE TABLE IF NOT EXISTS system_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT DEFAULT '',
+      label TEXT DEFAULT '',
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(category, key)
+    );
   `)
 
   // Seed demo data if empty
@@ -343,6 +356,16 @@ function migrateDB(db) {
   if (!columns.includes('telegram_last_invite_sent_at')) addCol('users', 'telegram_last_invite_sent_at', "TEXT")
   if (!columns.includes('last_seen_at')) addCol('users', 'last_seen_at', "TEXT")
   if (!columns.includes('current_view')) addCol('users', 'current_view', "TEXT DEFAULT ''")
+  if (!columns.includes('uid')) addCol('users', 'uid', "TEXT")
+
+  // Generate UIDs for existing users without one
+  try {
+    const usersWithoutUid = db.prepare('SELECT id FROM users WHERE uid IS NULL OR uid = ""').all()
+    const updateUid = db.prepare('UPDATE users SET uid = ? WHERE id = ?')
+    for (const u of usersWithoutUid) {
+      updateUid.run('WS' + String(u.id).padStart(6, '0'), u.id)
+    }
+  } catch {}
 
   const postCols = db.prepare("PRAGMA table_info(posts)").all().map(c => c.name)
   if (!postCols.includes('board')) addCol('posts', 'board', "TEXT DEFAULT 'ideas'")
@@ -442,6 +465,17 @@ function migrateDB(db) {
       last_notified_reply_id INTEGER DEFAULT 0,
       UNIQUE(user_id, post_id)
     );
+    CREATE TABLE IF NOT EXISTS system_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT DEFAULT '',
+      label TEXT DEFAULT '',
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(category, key)
+    );
   `)
 }
 
@@ -508,6 +542,62 @@ function seedData(db) {
   db.prepare("INSERT OR IGNORE INTO post_tags (slug, label, count) VALUES (?, ?, ?)").run('spy', 'SPY', 2)
   db.prepare("INSERT OR IGNORE INTO post_tags (slug, label, count) VALUES (?, ?, ?)").run('short-term', '短线', 4)
   db.prepare("INSERT OR IGNORE INTO post_tags (slug, label, count) VALUES (?, ?, ?)").run('options', '期权', 1)
+
+  // Seed system config
+  const insertConfig = db.prepare(`
+    INSERT OR IGNORE INTO system_config (category, key, value, label, sort_order) VALUES (?, ?, ?, ?, ?)
+  `)
+  // SMTP email config
+  insertConfig.run('smtp', 'host', '', 'SMTP 服务器', 0)
+  insertConfig.run('smtp', 'port', '587', '端口', 1)
+  insertConfig.run('smtp', 'user', '', '用户名', 2)
+  insertConfig.run('smtp', 'pass', '', '密码', 3)
+  insertConfig.run('smtp', 'from', '', '发件人邮箱', 4)
+  insertConfig.run('smtp', 'from_name', '街哥课堂', '发件人名称', 5)
+  insertConfig.run('smtp', 'secure', 'false', 'SSL/TLS', 6)
+
+  // Qiniu cloud storage config
+  insertConfig.run('qiniu', 'access_key', '', 'Access Key', 0)
+  insertConfig.run('qiniu', 'secret_key', '', 'Secret Key', 1)
+  insertConfig.run('qiniu', 'bucket', '', '存储桶名称', 2)
+  insertConfig.run('qiniu', 'domain', '', '访问域名', 3)
+  insertConfig.run('qiniu', 'region', 'z0', '区域 (z0/cn-east/cn-south)', 4)
+
+  // Financial toolbox items (stored as JSON array)
+  insertConfig.run('toolbox', 'items', JSON.stringify([
+    {
+      category: '交易所',
+      items: [
+        { name: 'Binance（币安）', desc: '全球最大的交易所，交易量和流动性充沛，首选', icon: '🪙', url: 'https://www.bsmkweb.cc/join?ref=WSBNONAME', tag: '首选', tagColor: '#f0b90b', code: 'WSBNONAME', rebate: '返佣 20%' },
+        { name: 'OKX（欧易）', desc: '仅次于币安的交易所，合约流动性好，期权功能完善', icon: '🔵', url: 'https://www.promooboost.com/join/CRYPTO618', code: 'CRYPTO618', rebate: '返佣 20%' },
+        { name: 'Bybit', desc: '适合交易黄金白银外汇，TradFi 板块手续费低', icon: '🟡', url: 'https://partner.bybit.com/b/CRYPTO618', code: 'CRYPTO618', rebate: '返佣 33%' },
+        { name: 'Bitget', desc: '跟单交易平台，一键跟随优质交易员策略', icon: '🟢', url: 'https://partner.hdmune.cn/bg/v8ju2ccn', code: 'WallStreet', rebate: '返佣 40%' },
+        { name: 'BIT 美股交易所', desc: '美股交易所开户链接，适合美股相关交易使用', icon: '🇺🇸', url: 'https://bit.bshareweb.com/newRegister/cn?invite_code=CY3DKV', tag: '美股', tagColor: '#2563eb', code: 'CY3DKV' }
+      ]
+    },
+    {
+      category: '看盘工具',
+      items: [
+        { name: 'TradingView', desc: '街哥自用的专业看盘软件，支持技术指标、画线工具、多图表布局，新手必备', icon: '📊', url: 'https://cn.tradingview.com/?aff_id=158703', tag: '街哥自用', tagColor: '#f7931a' }
+      ]
+    },
+    {
+      category: '数据工具',
+      items: [
+        { name: 'CoinAnk', desc: '专业加密货币数据分析平台，链上数据、资金流向、市场情绪分析', icon: '📊', url: 'https://coinank.com/zh/invite/register?referral=1458068', code: '1458068' },
+        { name: 'CoinGlass', desc: '合约数据看板，爆仓数据、资金费率、持仓量一目了然', icon: '📈', url: 'https://www.coinglass.com/?ref_code=YDHYYF' },
+        { name: 'CoinMarketCap', desc: '加密货币市值排名、价格追踪、项目信息查询', icon: '💹', url: 'https://coinmarketcap.com/' }
+      ]
+    }
+  ]), '金融工具箱', 0)
+
+  // Stock market research menu items
+  insertConfig.run('market_menu', 'items', JSON.stringify([
+    { name: '美股财报日', icon: '📅', url: '/earnings/' },
+    { name: 'AI泡沫周期监控', icon: '📉', url: '/ai泡沫周报/' },
+    { name: 'AI 转折点月度报告', icon: '📰', url: '/weekly/' },
+    { name: '全球市场股票深度研究', icon: '📈', url: '/research/' }
+  ]), '股票市场研究菜单', 0)
 
   console.log('Demo data seeded')
 }

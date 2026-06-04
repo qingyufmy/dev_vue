@@ -8,13 +8,14 @@ router.get('/profile', authMiddleware, (req, res) => {
   try {
     const db = getDB()
     const user = db.prepare(`
-      SELECT id, email, nickname, avatar, role, plan, plan_period, plan_expires_at,
+      SELECT id, uid, email, nickname, avatar, role, plan, plan_period, plan_expires_at,
              referral_code, referral_credit, telegram_id, telegram_username, telegram_name,
              telegram_chat_id, telegram_group_status, telegram_bot_started_at,
-             telegram_joined_at, telegram_last_invite_sent_at, created_at
+             telegram_joined_at, telegram_last_invite_sent_at, created_at, last_seen_at
       FROM users WHERE id = ?
     `).get(req.user.id)
 
+    user.name = user.nickname
     user.isAdmin = user.role === 'admin'
     user.telegramBinding = user.telegram_id || user.telegram_username ? {
       username: user.telegram_username || '',
@@ -45,13 +46,14 @@ router.put('/profile', authMiddleware, (req, res) => {
     }
 
     const user = db.prepare(`
-      SELECT id, email, nickname, avatar, role, plan, plan_period, plan_expires_at,
+      SELECT id, uid, email, nickname, avatar, role, plan, plan_period, plan_expires_at,
              referral_code, referral_credit, telegram_id, telegram_username, telegram_name,
              telegram_group_status, telegram_bot_started_at, telegram_joined_at,
              telegram_last_invite_sent_at, created_at
       FROM users WHERE id = ?
     `).get(req.user.id)
 
+    user.name = user.nickname
     user.isAdmin = user.role === 'admin'
     user.telegramBinding = user.telegram_id || user.telegram_username ? {
       username: user.telegram_username || '',
