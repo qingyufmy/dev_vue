@@ -6072,7 +6072,7 @@ button { cursor: pointer; font-family: inherit; }
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  min-width: 800px;
+  table-layout: auto;
 }
 .admin-table th,
 .admin-table td {
@@ -6082,10 +6082,16 @@ button { cursor: pointer; font-family: inherit; }
 .admin-table th:last-child,
 .admin-table td:last-child {
   white-space: nowrap;
+  width: 90px;
 }
 .admin-table td:last-child .admin-actions {
-  display: inline-flex;
+  display: flex;
   gap: 4px;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.admin-table td:last-child .admin-actions .btn {
+  flex-shrink: 0;
 }
 
 .admin-table th {
@@ -6249,11 +6255,11 @@ button { cursor: pointer; font-family: inherit; }
 }
 .admin-table th:first-child,
 .admin-table td:first-child {
-  min-width: 140px;
+  min-width: 100px;
 }
 .admin-table th:nth-child(2),
 .admin-table td:nth-child(2) {
-  min-width: 160px;
+  min-width: 120px;
 }
 .admin-table th:nth-child(5),
 .admin-table td:nth-child(5) {
