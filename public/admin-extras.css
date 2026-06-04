@@ -397,3 +397,47 @@
     max-width: 100%;
   }
 }
+
+/* ===== Audit Log Filters ===== */
+.audit-filters {
+  background: var(--glass-light);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  backdrop-filter: blur(12px);
+}
+.audit-filters .form-select,
+.audit-filters .form-input {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-1);
+  transition: var(--transition);
+}
+.audit-filters .form-select:focus,
+.audit-filters .form-input:focus {
+  outline: none;
+  border-color: rgba(147, 197, 253, 0.5);
+  box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.1);
+}
+.audit-filters .form-select {
+  cursor: pointer;
+  min-width: 120px;
+}
+.audit-filters .btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-xs);
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.audit-filters .btn-primary:hover {
+  background: var(--accent-hover, #1d4ed8);
+  transform: translateY(-1px);
+}

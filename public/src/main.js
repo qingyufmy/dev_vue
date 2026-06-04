@@ -3523,14 +3523,14 @@ function renderAdminContent(data) {
         <div class="admin-section-header">
           <h2>📋 审计日志</h2>
         </div>
-        <div class="audit-filters" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-          <select id="auditDays" class="form-select" style="width:auto;">
-            <option value="all">All time</option>
+        <div class="audit-filters">
+          <select id="auditDays" class="form-select">
+            <option value="all">全部时间</option>
             <option value="1">最近1天</option>
             <option value="7">最近7天</option>
             <option value="30">最近30天</option>
           </select>
-          <select id="auditActionType" class="form-select" style="width:auto;">
+          <select id="auditActionType" class="form-select">
             <option value="all">全部类型</option>
             <option value="login">登录</option>
             <option value="register">注册</option>
@@ -3541,8 +3541,8 @@ function renderAdminContent(data) {
             <option value="admin_change_plan">管理套餐</option>
             <option value="trade_create">添加战绩</option>
           </select>
-          <input type="text" id="auditSearch" class="form-input" placeholder="搜索用户邮箱、昵称、详情..." style="flex:1;min-width:200px;">
-          <button class="btn btn-primary btn-xs" id="loadAuditLogs">查询</button>
+          <input type="text" id="auditSearch" class="form-input" placeholder="搜索用户邮箱、昵称、详情...">
+          <button class="btn btn-primary" id="loadAuditLogs">查询</button>
         </div>
         <div id="auditLogContainer" class="admin-audit-container">
           <p style="color:var(--text-3);padding:12px 0;">点击「查询」查看操作记录</p>
