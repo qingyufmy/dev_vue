@@ -3403,8 +3403,7 @@ function renderAdminContent(data) {
                     <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? escapeHtml(u.lastActivity.substring(5, 16)) : '-'}</td>
                     <td>
                       <div class="admin-actions">
-                        <button class="btn btn-ghost btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}" data-avatar="${escapeHtml(u.avatar || '')}">编辑</button>
-                        <button class="btn btn-primary btn-xs admin-edit-plan" data-user-id="${u.id}" data-name="${escapeHtml(u.name || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">套餐</button>
+                        <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
                         <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
                       </div>
                     </td>
@@ -3438,8 +3437,7 @@ function renderAdminContent(data) {
                       <td>${u.totalPaid > 0 ? '<strong>$' + u.totalPaid.toLocaleString() + '</strong>' : '-'}</td>
                       <td>
                         <div class="admin-actions">
-                          <button class="btn btn-ghost btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}" data-avatar="${escapeHtml(u.avatar || '')}">编辑</button>
-                          <button class="btn btn-primary btn-xs admin-edit-plan" data-user-id="${u.id}" data-name="${escapeHtml(u.name || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">套餐</button>
+                          <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
                           <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
                         </div>
                       </td>
@@ -8143,10 +8141,6 @@ function setupGlobalEvents() {
             <input type="password" id="editUserPassword" class="admin-plan-input" placeholder="留空则不修改">
           </div>
           <div class="admin-plan-field">
-            <label for="editUserAvatar">头像URL：</label>
-            <input type="text" id="editUserAvatar" class="admin-plan-input" value="${escapeHtml(currentAvatar)}" placeholder="https://...">
-          </div>
-          <div class="admin-plan-field">
             <label for="editUserPlan">套餐：</label>
             <select id="editUserPlan" class="admin-plan-select">
               <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>免费 (Free)</option>
@@ -8189,7 +8183,6 @@ function setupGlobalEvents() {
           if (email) payload.email = email
           if (nickname) payload.nickname = nickname
           if (password) payload.password = password
-          if (avatar !== undefined) payload.avatar = avatar
           payload.plan = plan
           if (plan !== 'free') payload.expiresAt = expiresAt
           const r = await api.put('/api/admin-users', payload)
