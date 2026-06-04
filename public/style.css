@@ -6066,13 +6066,14 @@ button { cursor: pointer; font-family: inherit; }
 .admin-table-wrapper {
   overflow-x: auto;
   border-radius: 12px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .admin-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  table-layout: auto;
+  min-width: 700px;
 }
 .admin-table th,
 .admin-table td {
@@ -6082,7 +6083,9 @@ button { cursor: pointer; font-family: inherit; }
 .admin-table th:last-child,
 .admin-table td:last-child {
   white-space: nowrap;
-  width: 90px;
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
 }
 .admin-table td:last-child .admin-actions {
   display: flex;
@@ -6092,6 +6095,7 @@ button { cursor: pointer; font-family: inherit; }
 }
 .admin-table td:last-child .admin-actions .btn {
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .admin-table th {

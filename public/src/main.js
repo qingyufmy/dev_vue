@@ -8177,7 +8177,6 @@ function setupGlobalEvents() {
           const email = document.getElementById('editUserEmail').value.trim()
           const nickname = document.getElementById('editUserNickname').value.trim()
           const password = document.getElementById('editUserPassword').value
-          const avatar = document.getElementById('editUserAvatar').value.trim()
           const plan = document.getElementById('editUserPlan').value
           const expiresAt = document.getElementById('editUserExpires').value
           if (email) payload.email = email
