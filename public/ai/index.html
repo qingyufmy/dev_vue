@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -21,17 +21,16 @@
           </div>
         </div>
         <label>
-          <span>用户名</span>
+          <span>鐢ㄦ埛鍚?/span>
           <input id="loginUsername" autocomplete="username" value="eamon" />
         </label>
         <label>
-          <span>密码</span>
+          <span>瀵嗙爜</span>
           <input id="loginPassword" type="password" autocomplete="current-password" value="Asd6688" />
         </label>
         <button type="submit" class="btn btn-primary">
           <i data-lucide="log-in" size="16"></i>
-          进入控制台
-        </button>
+          杩涘叆鎺у埗鍙?        </button>
         <div id="loginError" class="form-error"></div>
       </form>
     </div>
@@ -48,64 +47,63 @@
         </div>
 
         <div class="topbar-badges">
-          <span id="gatewayMode" class="status-badge status-neutral clickable-badge" title="点击连接/断开MT5">
-            <span class="badge-dot"></span>模拟数据-未连接MT5
+          <span id="gatewayMode" class="status-badge status-neutral clickable-badge" title="鐐瑰嚮杩炴帴/鏂紑MT5">
+            <span class="badge-dot"></span>妯℃嫙鏁版嵁-鏈繛鎺T5
           </span>
-          <span id="tradeMode" class="status-badge status-neutral clickable-badge" title="点击切换交易发送">
-            <span class="badge-dot"></span>交易发送 --
+          <span id="tradeMode" class="status-badge status-neutral clickable-badge" title="鐐瑰嚮鍒囨崲浜ゆ槗鍙戦€?>
+            <span class="badge-dot"></span>浜ゆ槗鍙戦€?--
           </span>
-          <span id="autoAnalyzeMode" class="status-badge status-neutral clickable-badge" title="点击配置自动推理">
-            <span class="badge-dot"></span>自动推理 --
+          <span id="autoAnalyzeMode" class="status-badge status-neutral clickable-badge" title="鐐瑰嚮閰嶇疆鑷姩鎺ㄧ悊">
+            <span class="badge-dot"></span>鑷姩鎺ㄧ悊 --
           </span>
-          <span id="mt5Server" class="status-badge status-neutral">服务器 --</span>
+          <span id="mt5Server" class="status-badge status-neutral">鏈嶅姟鍣?--</span>
         </div>
 
         <div class="topbar-actions">
-          <button id="refreshAllBtn" class="icon-btn" title="刷新数据" aria-label="刷新数据">
+          <button id="refreshAllBtn" class="icon-btn" title="鍒锋柊鏁版嵁" aria-label="鍒锋柊鏁版嵁">
             <i data-lucide="refresh-cw" size="16"></i>
           </button>
-          <button id="logoutBtn" class="icon-btn icon-btn-danger" title="退出">
+          <button id="logoutBtn" class="icon-btn icon-btn-danger" title="閫€鍑?>
             <i data-lucide="log-out" size="16"></i>
-            退出
-          </button>
+            閫€鍑?          </button>
         </div>
       </header>
 
       <aside class="sidebar">
         <div class="nav-group">
-          <span class="nav-group-label">监控</span>
-          <button class="nav-item active" data-tab="dashboard" data-title="概览">
-            <i data-lucide="layout-dashboard" size="16"></i>概览
+          <span class="nav-group-label">鐩戞帶</span>
+          <button class="nav-item active" data-tab="dashboard" data-title="姒傝">
+            <i data-lucide="layout-dashboard" size="16"></i>姒傝
           </button>
-          <button class="nav-item" data-tab="signals" data-title="信号">
-            <i data-lucide="zap" size="16"></i>信号
-          </button>
-        </div>
-
-        <div class="nav-group">
-          <span class="nav-group-label">策略</span>
-          <button class="nav-item" data-tab="ai-config" data-title="模型">
-            <i data-lucide="brain" size="16"></i>模型
-          </button>
-          <button class="nav-item" data-tab="ai-analyze" data-title="推理">
-            <i data-lucide="git-branch" size="16"></i>推理
+          <button class="nav-item" data-tab="signals" data-title="淇″彿">
+            <i data-lucide="zap" size="16"></i>淇″彿
           </button>
         </div>
 
         <div class="nav-group">
-          <span class="nav-group-label">执行</span>
-          <button class="nav-item" data-tab="trading" data-title="交易">
-            <i data-lucide="trending-up" size="16"></i>交易
+          <span class="nav-group-label">绛栫暐</span>
+          <button class="nav-item" data-tab="ai-config" data-title="妯″瀷">
+            <i data-lucide="brain" size="16"></i>妯″瀷
           </button>
-          <button class="nav-item" data-tab="history" data-title="历史">
-            <i data-lucide="clock" size="16"></i>历史
+          <button class="nav-item" data-tab="ai-analyze" data-title="鎺ㄧ悊">
+            <i data-lucide="git-branch" size="16"></i>鎺ㄧ悊
           </button>
         </div>
 
         <div class="nav-group">
-          <span class="nav-group-label">管理</span>
-          <button class="nav-item" data-tab="audit" data-title="审计">
-            <i data-lucide="shield-check" size="16"></i>审计
+          <span class="nav-group-label">鎵ц</span>
+          <button class="nav-item" data-tab="trading" data-title="浜ゆ槗">
+            <i data-lucide="trending-up" size="16"></i>浜ゆ槗
+          </button>
+          <button class="nav-item" data-tab="history" data-title="鍘嗗彶">
+            <i data-lucide="clock" size="16"></i>鍘嗗彶
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <span class="nav-group-label">绠＄悊</span>
+          <button class="nav-item" data-tab="audit" data-title="瀹¤">
+            <i data-lucide="shield-check" size="16"></i>瀹¤
           </button>
         </div>
       </aside>
@@ -115,44 +113,44 @@
           <div class="dashboard-grid">
             <div class="card grid-area-account">
               <div class="card-header">
-                <span class="card-title">账户状态 · <span id="accountServerName">--</span></span>
+                <span class="card-title">璐︽埛鐘舵€?路 <span id="accountServerName">--</span></span>
                 <button class="card-action-btn" data-action="refresh-account">
-                  <i data-lucide="refresh-cw" size="12"></i>刷新
+                  <i data-lucide="refresh-cw" size="12"></i>鍒锋柊
                 </button>
               </div>
               <div class="account-stats-row">
                 <div class="stat-item">
-                  <span class="stat-label">余额</span>
+                  <span class="stat-label">浣欓</span>
                   <span id="accountBalance" class="stat-value num">--</span>
                   <span id="accountCurrency" class="stat-unit">USD</span>
                 </div>
                 <div class="stat-divider"></div>
                 <div class="stat-item">
-                  <span class="stat-label">净值</span>
+                  <span class="stat-label">鍑€鍊?/span>
                   <span id="accountEquity" class="stat-value num">--</span>
                   <span class="stat-unit account-currency-unit">USD</span>
                 </div>
                 <div class="stat-divider"></div>
                 <div class="stat-item">
-                  <span class="stat-label">浮动盈亏</span>
+                  <span class="stat-label">娴姩鐩堜簭</span>
                   <span id="accountFloatPnl" class="stat-value num pnl zero">--</span>
                   <span class="stat-unit account-currency-unit">USD</span>
                 </div>
                 <div class="stat-divider"></div>
                 <div class="stat-item">
-                  <span class="stat-label">可用保证金</span>
+                  <span class="stat-label">鍙敤淇濊瘉閲?/span>
                   <span id="accountMarginFree" class="stat-value num">--</span>
                   <span class="stat-unit account-currency-unit">USD</span>
                 </div>
                 <div class="stat-divider"></div>
                 <div class="stat-item">
-                  <span class="stat-label">已用保证金</span>
+                  <span class="stat-label">宸茬敤淇濊瘉閲?/span>
                   <span id="accountMargin" class="stat-value num">--</span>
                   <span class="stat-unit account-currency-unit">USD</span>
                 </div>
                 <div class="stat-divider"></div>
                 <div class="stat-item">
-                  <span class="stat-label">杠杆</span>
+                  <span class="stat-label">鏉犳潌</span>
                   <span class="stat-value num">1:<span id="accountLeverage">--</span></span>
                 </div>
               </div>
@@ -160,37 +158,37 @@
 
             <div class="card card-gold grid-area-quote">
               <div class="card-header">
-                <span class="card-title">实时报价</span>
+                <span class="card-title">瀹炴椂鎶ヤ环</span>
                 <select id="quoteSymbolSelect" class="instrument-select"></select>
               </div>
               <div class="quote-main">
                 <div class="quote-side">
-                  <span class="quote-label">买入价</span>
+                  <span class="quote-label">涔板叆浠?/span>
                   <span id="quoteBid" class="quote-price num price">--</span>
                   <span id="quoteBidDir" class="quote-change hidden"></span>
-                  <span class="quote-side-hint">做多入场参考</span>
+                  <span class="quote-side-hint">鍋氬鍏ュ満鍙傝€?/span>
                 </div>
                 <div class="quote-spread-col">
                   <span class="spread-chip">
-                    <span class="spread-label">点差</span>
+                    <span class="spread-label">鐐瑰樊</span>
                     <span id="quoteSpread" class="spread-value num">--</span>
                   </span>
                   <span class="quote-change-block">
-                  <span id="quoteDelta" class="change-val num muted">—</span>
-                  <span id="quoteDeltaPct" class="change-pct muted">涨跌幅暂无</span>
+                  <span id="quoteDelta" class="change-val num muted">鈥?/span>
+                  <span id="quoteDeltaPct" class="change-pct muted">娑ㄨ穼骞呮殏鏃?/span>
                   </span>
                 </div>
                 <div class="quote-side quote-side-ask">
-                  <span class="quote-label">卖出价</span>
+                  <span class="quote-label">鍗栧嚭浠?/span>
                   <span id="quoteAsk" class="quote-price num price">--</span>
                   <span id="quoteAskDir" class="quote-change hidden"></span>
-                  <span class="quote-side-hint">做空入场参考</span>
+                  <span class="quote-side-hint">鍋氱┖鍏ュ満鍙傝€?/span>
                 </div>
               </div>
               <div class="quote-footer">
-                <span>单位：美元 / 盎司</span>
+                <span>鍗曚綅锛氱編鍏?/ 鐩庡徃</span>
                 <span class="quote-divider">|</span>
-                <span>MT5服务器时间</span>
+                <span>MT5鏈嶅姟鍣ㄦ椂闂?/span>
                 <span id="quoteTime" class="num">--</span>
               </div>
             </div>
@@ -198,17 +196,17 @@
             <div id="signalCard" class="card card-signal grid-area-signal" data-direction="hold">
               <div class="card-header">
                 <div class="signal-header-left">
-                  <span class="card-title">AI 信号</span>
+                  <span class="card-title">AI 淇″彿</span>
                   <span id="signalLiveBadge" class="signal-live-badge"><span class="badge-dot"></span>LIVE</span>
                 </div>
                 <button class="card-action-btn" data-tab-jump="signals">
-                  <i data-lucide="external-link" size="12"></i>打开
+                  <i data-lucide="external-link" size="12"></i>鎵撳紑
                 </button>
               </div>
               <div id="signalExpiredMask" class="signal-expired-mask">
                 <i data-lucide="clock-3" size="30"></i>
-                <p>此信号已过期，等待新一轮 AI 推理</p>
-                <button class="btn btn-primary" data-tab-jump="ai-analyze">查看推理页</button>
+                <p>姝や俊鍙峰凡杩囨湡锛岀瓑寰呮柊涓€杞?AI 鎺ㄧ悊</p>
+                <button class="btn btn-primary" data-tab-jump="ai-analyze">鏌ョ湅鎺ㄧ悊椤?/button>
               </div>
               <div id="latestSignal" class="signal-body">
                 <div class="signal-meta-row">
@@ -218,44 +216,44 @@
                 <div class="signal-direction-row">
                   <div class="signal-direction-main">
                     <span id="sigDirection" class="signal-direction hold">HOLD</span>
-                    <span id="sigDirectionText" class="signal-direction-text hold">观望</span>
+                    <span id="sigDirectionText" class="signal-direction-text hold">瑙傛湜</span>
                   </div>
                   <div class="signal-confidence-block">
-                    <span class="signal-confidence-label">置信度</span>
+                    <span class="signal-confidence-label">缃俊搴?/span>
                     <span id="sigConfidence" class="signal-confidence-value num">--</span>
                   </div>
                 </div>
                 <div class="signal-price-grid">
                   <div class="signal-price-item primary">
-                    <span>参考价</span>
+                    <span>鍙傝€冧环</span>
                     <strong id="sigReferencePrice" class="num">--</strong>
                   </div>
                   <div class="signal-price-item">
-                    <span>当前价</span>
+                    <span>褰撳墠浠?/span>
                     <strong id="sigCurrentPrice" class="num">--</strong>
                   </div>
                   <div class="signal-price-item">
-                    <span>止损</span>
+                    <span>姝㈡崯</span>
                     <strong id="sigStopLoss" class="num">--</strong>
                   </div>
                   <div class="signal-price-item">
-                    <span>目标价</span>
+                    <span>鐩爣浠?/span>
                     <strong id="sigTakeProfit" class="num">--</strong>
                   </div>
                   <div class="signal-price-item">
-                    <span>建议手数</span>
+                    <span>寤鸿鎵嬫暟</span>
                     <strong id="sigVolume" class="num">--</strong>
                   </div>
                   <div class="signal-price-item">
-                    <span>状态</span>
+                    <span>鐘舵€?/span>
                     <strong id="sigExecutionState">--</strong>
                   </div>
                   <div class="signal-price-item">
-                    <span>生成时间(MT5)</span>
+                    <span>鐢熸垚鏃堕棿(MT5)</span>
                     <strong id="sigGeneratedAt" class="num">--</strong>
                   </div>
                   <div class="signal-price-item">
-                    <span>有效期</span>
+                    <span>鏈夋晥鏈?/span>
                     <strong id="sigValidWindow" class="num">--</strong>
                   </div>
                 </div>
@@ -266,7 +264,7 @@
                   <div class="signal-bar-labels"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
                 </div>
                 <div class="signal-last-summary" id="signalLastSummary">
-                  <span>上次信号摘要</span>
+                  <span>涓婃淇″彿鎽樿</span>
                   <strong id="lastSigDirection">--</strong>
                   <strong id="lastSigTimeframe" class="num">--</strong>
                   <strong id="lastSigConfidence" class="num">--</strong>
@@ -275,26 +273,26 @@
               </div>
               <div class="signal-footer">
                 <i data-lucide="clock" size="11"></i>
-                <span>生成于(MT5)</span>
-                <span id="sigTime" class="num">等待新信号</span>
+                <span>鐢熸垚浜?MT5)</span>
+                <span id="sigTime" class="num">绛夊緟鏂颁俊鍙?/span>
               </div>
             </div>
 
             <div class="card grid-area-positions">
               <div class="card-header">
-                <span class="card-title">当前持仓</span>
+                <span class="card-title">褰撳墠鎸佷粨</span>
                 <button class="card-action-btn" data-action="refresh-positions">
-                  <i data-lucide="refresh-cw" size="12"></i>刷新
+                  <i data-lucide="refresh-cw" size="12"></i>鍒锋柊
                 </button>
               </div>
               <div id="positionsEmpty" class="positions-empty">
                 <div class="empty-icon"><i data-lucide="inbox" size="28"></i></div>
-                <p class="empty-title">当前无持仓</p>
-                <p class="empty-sub">账户空仓，等待入场信号</p>
+                <p class="empty-title">褰撳墠鏃犳寔浠?/p>
+                <p class="empty-sub">璐︽埛绌轰粨锛岀瓑寰呭叆鍦轰俊鍙?/p>
               </div>
               <div id="dashboardPositionsTable" class="positions-table-wrap hidden">
                 <table class="positions-table">
-                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th>开仓时间(MT5)</th><th>浮盈</th></tr></thead>
+                  <thead><tr><th>绁ㄥ彿</th><th>鍝佺</th><th>鏂瑰悜</th><th>鎵嬫暟</th><th>寮€浠撲环</th><th>鐜颁环</th><th>寮€浠撴椂闂?MT5)</th><th>娴泩</th></tr></thead>
                   <tbody id="dashboardPositionsBody"></tbody>
                 </table>
               </div>
@@ -305,12 +303,12 @@
         <section id="ai-config" class="tab-panel">
           <div class="card content-card">
             <div class="card-header">
-              <span class="card-title">模型与执行约束</span>
+              <span class="card-title">妯″瀷涓庢墽琛岀害鏉?/span>
             </div>
             <div class="config-section">
-              <div class="config-section-title">AI 推理引擎</div>
+              <div class="config-section-title">AI 鎺ㄧ悊寮曟搸</div>
               <div class="config-grid">
-                <label><span>模型供应商</span><select id="apiProvider">
+                <label><span>妯″瀷渚涘簲鍟?/span><select id="apiProvider">
                   <option value="deepseek">DeepSeek</option>
                   <option value="gpt">GPT</option>
                   <option value="kimi">Kimi</option>
@@ -320,43 +318,42 @@
                   <option value="claude">Claude</option>
                   <option value="gemini">Gemini</option>
                 </select></label>
-                <label><span>模型名称</span><input id="modelName" value="deepseek-chat" /></label>
-                <label><span>API Key</span><input id="apiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
-                <label><span>API 地址</span><input id="apiBaseUrl" placeholder="OpenAI-compatible endpoint" /></label>
-                <label><span>推理温度 Temperature</span><input id="temperature" class="num" type="number" min="0" max="2" step="0.1" value="0.7" /><small class="field-help">数值越低越稳定，建议 0.2-0.7</small></label>
-                <label><span>最大输出 Max Tokens</span><input id="maxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /><small class="field-help">控制推理输出长度，建议 1200-2500</small></label>
+                <label><span>妯″瀷鍚嶇О</span><input id="modelName" value="deepseek-chat" /></label>
+                <label><span>API Key</span><input id="apiKey" type="password" placeholder="鐣欑┖鍒欎笉鏇存柊瀵嗛挜" autocomplete="off" /></label>
+                <label><span>API 鍦板潃</span><input id="apiBaseUrl" placeholder="OpenAI-compatible endpoint" /></label>
+                <label><span>鎺ㄧ悊娓╁害 Temperature</span><input id="temperature" class="num" type="number" min="0" max="2" step="0.1" value="0.7" /><small class="field-help">鏁板€艰秺浣庤秺绋冲畾锛屽缓璁?0.2-0.7</small></label>
+                <label><span>鏈€澶ц緭鍑?Max Tokens</span><input id="maxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /><small class="field-help">鎺у埗鎺ㄧ悊杈撳嚭闀垮害锛屽缓璁?1200-2500</small></label>
               </div>
             </div>
             <div class="config-section">
-              <div class="config-section-title">交易约束</div>
+              <div class="config-section-title">浜ゆ槗绾︽潫</div>
               <div class="config-grid">
-                <label><span>风险等级</span><select id="riskLevel">
-                  <option value="low">低风险</option>
-                  <option value="medium" selected>中风险</option>
-                  <option value="high">高风险</option>
+                <label><span>椋庨櫓绛夌骇</span><select id="riskLevel">
+                  <option value="low">浣庨闄?/option>
+                  <option value="medium" selected>涓闄?/option>
+                  <option value="high">楂橀闄?/option>
                 </select></label>
-                <label><span>单次最大手数</span><span class="unit-field"><input id="maxPositionSize" class="num" type="number" min="0.01" max="0.05" step="0.01" value="0.05" /><span class="input-unit">手</span></span></label>
-                <label><span>默认止盈方案</span><select id="selectedTakeProfit">
-                  <option value="1">TP1 - 保守止盈</option>
-                  <option value="2" selected>TP2 - 标准止盈</option>
-                  <option value="3">TP3 - 激进止盈</option>
+                <label><span>鍗曟鏈€澶ф墜鏁?/span><span class="unit-field"><input id="maxPositionSize" class="num" type="number" min="0.01" max="0.05" step="0.01" value="0.05" /><span class="input-unit">鎵?/span></span></label>
+                <label><span>榛樿姝㈢泩鏂规</span><select id="selectedTakeProfit">
+                  <option value="1">TP1 - 淇濆畧姝㈢泩</option>
+                  <option value="2" selected>TP2 - 鏍囧噯姝㈢泩</option>
+                  <option value="3">TP3 - 婵€杩涙鐩?/option>
                 </select></label>
                 <div id="autoExecuteRow" class="auto-execute-row">
-                  <label class="check-row auto-execute-label"><input id="enableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
+                  <label class="check-row auto-execute-label"><input id="enableAutoTrade" type="checkbox" /><span>鑷姩鎵ц淇″彿</span></label>
                   <div id="autoExecuteWarning" class="auto-execute-warning">
-                    已开启自动执行：系统会按后台风控、信号有效期、最大手数和持仓约束判断是否发送交易。
-                  </div>
+                    宸插紑鍚嚜鍔ㄦ墽琛岋細绯荤粺浼氭寜鍚庡彴椋庢帶銆佷俊鍙锋湁鏁堟湡銆佹渶澶ф墜鏁板拰鎸佷粨绾︽潫鍒ゆ柇鏄惁鍙戦€佷氦鏄撱€?                  </div>
                 </div>
-                <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>期货手数模式</span></label>
+                <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>鏈熻揣鎵嬫暟妯″紡</span></label>
               </div>
             </div>
             <div class="config-section">
-              <div class="config-section-title">系统提示词</div>
-              <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
+              <div class="config-section-title">绯荤粺鎻愮ず璇?/div>
+              <label class="prompt-box"><span>鍙戦€佺粰 AI 妯″瀷鐨勮鑹茶瀹氫笌椋庢帶瑙勫垯</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
             </div>
-            <div id="configStatus" class="inline-status">正在读取配置</div>
+            <div id="configStatus" class="inline-status">姝ｅ湪璇诲彇閰嶇疆</div>
             <div class="config-actions">
-              <button id="saveConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
+              <button id="saveConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>淇濆瓨閰嶇疆</button>
             </div>
           </div>
         </section>
@@ -365,84 +362,84 @@
           <div class="analysis-grid">
             <div class="card">
               <div class="card-header">
-                <span class="card-title">信号生成</span>
-                <button id="runAnalysisBtn" class="btn btn-primary"><i data-lucide="play" size="16"></i>生成信号</button>
+                <span class="card-title">淇″彿鐢熸垚</span>
+                <button id="runAnalysisBtn" class="btn btn-primary"><i data-lucide="play" size="16"></i>鐢熸垚淇″彿</button>
               </div>
-              <label><span>品种</span><select id="analyzeSymbol"></select></label>
+              <label><span>鍝佺</span><select id="analyzeSymbol"></select></label>
               <div class="timeframe-grid">
-                <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1分钟</span></label>
-                <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5分钟</span></label>
-                <label><input type="checkbox" value="M15" checked /><span class="tf-card-code">M15</span><span class="tf-card-name">15分钟</span></label>
-                <label><input type="checkbox" value="M30" checked /><span class="tf-card-code">M30</span><span class="tf-card-name">30分钟</span></label>
-                <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1小时</span></label>
-                <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4小时</span></label>
-                <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">日线</span></label>
+                <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1鍒嗛挓</span></label>
+                <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5鍒嗛挓</span></label>
+                <label><input type="checkbox" value="M15" checked /><span class="tf-card-code">M15</span><span class="tf-card-name">15鍒嗛挓</span></label>
+                <label><input type="checkbox" value="M30" checked /><span class="tf-card-code">M30</span><span class="tf-card-name">30鍒嗛挓</span></label>
+                <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1灏忔椂</span></label>
+                <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4灏忔椂</span></label>
+                <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">鏃ョ嚎</span></label>
               </div>
-              <label><span>K线数量</span><input id="klineCount" type="number" value="100" min="10" max="500" step="10" /></label>
+              <label><span>K绾挎暟閲?/span><input id="klineCount" type="number" value="100" min="10" max="500" step="10" /></label>
               <div class="latency-box">
-                <div><span>最近耗时</span><strong id="analysisLatency" class="num">--</strong></div>
-                <div><span>信号状态</span><strong id="signalFreshness" class="num">--</strong></div>
+                <div><span>鏈€杩戣€楁椂</span><strong id="analysisLatency" class="num">--</strong></div>
+                <div><span>淇″彿鐘舵€?/span><strong id="signalFreshness" class="num">--</strong></div>
               </div>
               <div class="analysis-history-panel">
                 <div class="analysis-history-head">
-                  <span class="card-title">历史推理</span>
+                  <span class="card-title">鍘嗗彶鎺ㄧ悊</span>
                   <button class="card-action-btn" data-action="refresh-analysis-history">
-                    <i data-lucide="refresh-cw" size="12"></i>刷新
+                    <i data-lucide="refresh-cw" size="12"></i>鍒锋柊
                   </button>
                 </div>
                 <div id="analysisHistoryBody" class="analysis-history-list">
-                  <div class="history-empty">暂无推理记录</div>
+                  <div class="history-empty">鏆傛棤鎺ㄧ悊璁板綍</div>
                 </div>
               </div>
             </div>
             <div class="card analysis-result-card">
               <div class="card-header">
-                <span class="card-title">推理结果</span>
-                <button id="executeSignalBtn" class="btn btn-success" disabled><i data-lucide="send" size="16"></i>复核执行</button>
+                <span class="card-title">鎺ㄧ悊缁撴灉</span>
+                <button id="executeSignalBtn" class="btn btn-success" disabled><i data-lucide="send" size="16"></i>澶嶆牳鎵ц</button>
               </div>
-              <div id="analysisResult" class="analysis-result muted-block">选择品种和周期后生成信号</div>
+              <div id="analysisResult" class="analysis-result muted-block">閫夋嫨鍝佺鍜屽懆鏈熷悗鐢熸垚淇″彿</div>
             </div>
           </div>
         </section>
 
         <section id="trading" class="tab-panel">
           <div class="account-snapshot-row">
-            <div><span>余额</span><strong id="tradeAccountBalance" class="num">--</strong></div>
-            <div><span>净值</span><strong id="tradeAccountEquity" class="num">--</strong></div>
-            <div><span>浮动盈亏</span><strong id="tradeAccountProfit" class="num pnl zero">--</strong></div>
-            <div><span>可用保证金</span><strong id="tradeAccountFreeMargin" class="num">--</strong></div>
-            <button class="card-action-btn" data-action="refresh-trading-page"><i data-lucide="refresh-cw" size="12"></i>刷新账户</button>
+            <div><span>浣欓</span><strong id="tradeAccountBalance" class="num">--</strong></div>
+            <div><span>鍑€鍊?/span><strong id="tradeAccountEquity" class="num">--</strong></div>
+            <div><span>娴姩鐩堜簭</span><strong id="tradeAccountProfit" class="num pnl zero">--</strong></div>
+            <div><span>鍙敤淇濊瘉閲?/span><strong id="tradeAccountFreeMargin" class="num">--</strong></div>
+            <button class="card-action-btn" data-action="refresh-trading-page"><i data-lucide="refresh-cw" size="12"></i>鍒锋柊璐︽埛</button>
           </div>
           <div class="trading-grid">
             <div class="card">
               <div class="card-header">
-                <span class="card-title">手动交易</span>
-                <button class="card-action-btn" data-action="refresh-quote"><i data-lucide="refresh-cw" size="12"></i>报价</button>
+                <span class="card-title">鎵嬪姩浜ゆ槗</span>
+                <button class="card-action-btn" data-action="refresh-quote"><i data-lucide="refresh-cw" size="12"></i>鎶ヤ环</button>
               </div>
-              <label><span>品种</span><select id="tradeSymbolSelect"></select></label>
+              <label><span>鍝佺</span><select id="tradeSymbolSelect"></select></label>
               <div class="trading-quote-row">
-                <div><span>卖出成交参考</span><strong id="tradeBidPrice" class="num">--</strong></div>
-                <div><span>点差</span><strong id="tradeSpread" class="num">--</strong></div>
-                <div><span>买入成交参考</span><strong id="tradeAskPrice" class="num">--</strong></div>
+                <div><span>鍗栧嚭鎴愪氦鍙傝€?/span><strong id="tradeBidPrice" class="num">--</strong></div>
+                <div><span>鐐瑰樊</span><strong id="tradeSpread" class="num">--</strong></div>
+                <div><span>涔板叆鎴愪氦鍙傝€?/span><strong id="tradeAskPrice" class="num">--</strong></div>
               </div>
-              <label><span>交易手数</span><span class="unit-field"><input id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05" step="0.01" /><span class="input-unit">手</span></span></label>
+              <label><span>浜ゆ槗鎵嬫暟</span><span class="unit-field"><input id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05" step="0.01" /><span class="input-unit">鎵?/span></span></label>
               <div class="two-fields">
-                <label><span>止盈价格</span><input id="takeProfitPoints" class="num" type="number" min="0" step="0.01" placeholder="如：4500.00" /><small class="field-help">填写目标价格，留空不设置</small></label>
-                <label><span>止损价格</span><input id="stopLossPoints" class="num" type="number" min="0" step="0.01" placeholder="如：4420.00" /><small class="field-help">填写风控价格，留空不设置</small></label>
+                <label><span>姝㈢泩浠锋牸</span><input id="takeProfitPoints" class="num" type="number" min="0" step="0.01" placeholder="濡傦細4500.00" /><small class="field-help">濉啓鐩爣浠锋牸锛岀暀绌轰笉璁剧疆</small></label>
+                <label><span>姝㈡崯浠锋牸</span><input id="stopLossPoints" class="num" type="number" min="0" step="0.01" placeholder="濡傦細4420.00" /><small class="field-help">濉啓椋庢帶浠锋牸锛岀暀绌轰笉璁剧疆</small></label>
               </div>
               <div class="trade-button-row">
-                <button id="buyBtn" class="btn btn-buy"><span><i data-lucide="arrow-up-right" size="16"></i>买入</span><strong id="buyBtnPrice" class="order-btn-price num">--</strong></button>
-                <button id="sellBtn" class="btn btn-sell"><span><i data-lucide="arrow-down-right" size="16"></i>卖出</span><strong id="sellBtnPrice" class="order-btn-price num">--</strong></button>
+                <button id="buyBtn" class="btn btn-buy"><span><i data-lucide="arrow-up-right" size="16"></i>涔板叆</span><strong id="buyBtnPrice" class="order-btn-price num">--</strong></button>
+                <button id="sellBtn" class="btn btn-sell"><span><i data-lucide="arrow-down-right" size="16"></i>鍗栧嚭</span><strong id="sellBtnPrice" class="order-btn-price num">--</strong></button>
               </div>
             </div>
             <div class="card">
               <div class="card-header">
-                <span class="card-title">持仓管理</span>
-                <button class="card-action-btn" data-action="refresh-positions"><i data-lucide="refresh-cw" size="12"></i>持仓</button>
+                <span class="card-title">鎸佷粨绠＄悊</span>
+                <button class="card-action-btn" data-action="refresh-positions"><i data-lucide="refresh-cw" size="12"></i>鎸佷粨</button>
               </div>
               <div class="table-wrap">
                 <table class="data-table">
-                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th>开仓时间(MT5)</th><th>SL</th><th>TP</th><th>盈亏</th><th>操作</th></tr></thead>
+                  <thead><tr><th>绁ㄥ彿</th><th>鍝佺</th><th>鏂瑰悜</th><th>鎵嬫暟</th><th>寮€浠撲环</th><th>鐜颁环</th><th>寮€浠撴椂闂?MT5)</th><th>SL</th><th>TP</th><th>鐩堜簭</th><th>鎿嶄綔</th></tr></thead>
                   <tbody id="positionsBody"></tbody>
                 </table>
               </div>
@@ -453,18 +450,18 @@
         <section id="signals" class="tab-panel">
           <div class="card content-card">
             <div class="card-header">
-              <span class="card-title">交易信号</span>
-              <button class="card-action-btn" data-action="refresh-signals"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+              <span class="card-title">浜ゆ槗淇″彿</span>
+              <button class="card-action-btn" data-action="refresh-signals"><i data-lucide="refresh-cw" size="12"></i>鍒锋柊</button>
             </div>
             <div class="table-toolbar">
-              <select id="signalFilterDirection" class="filter-select" aria-label="筛选信号方向">
-                <option value="">全部方向</option>
-                <option value="buy">买入</option>
-                <option value="sell">卖出</option>
-                <option value="hold">观望</option>
+              <select id="signalFilterDirection" class="filter-select" aria-label="绛涢€変俊鍙锋柟鍚?>
+                <option value="">鍏ㄩ儴鏂瑰悜</option>
+                <option value="buy">涔板叆</option>
+                <option value="sell">鍗栧嚭</option>
+                <option value="hold">瑙傛湜</option>
               </select>
-              <select id="signalFilterTimeframe" class="filter-select" aria-label="筛选周期">
-                <option value="">全部周期</option>
+              <select id="signalFilterTimeframe" class="filter-select" aria-label="绛涢€夊懆鏈?>
+                <option value="">鍏ㄩ儴鍛ㄦ湡</option>
                 <option value="M1">M1</option>
                 <option value="M5">M5</option>
                 <option value="M15">M15</option>
@@ -477,7 +474,7 @@
             </div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th>ID</th><th>时间(MT5)</th><th>品种</th><th>周期</th><th>信号</th><th>置信度</th><th>手数</th><th>状态</th><th>止损</th><th>TP1</th><th>TP2 / TP3</th></tr></thead>
+                <thead><tr><th>ID</th><th>鏃堕棿(MT5)</th><th>鍝佺</th><th>鍛ㄦ湡</th><th>淇″彿</th><th>缃俊搴?/th><th>鎵嬫暟</th><th>鐘舵€?/th><th>姝㈡崯</th><th>TP1</th><th>TP2 / TP3</th></tr></thead>
                 <tbody id="signalsBody"></tbody>
               </table>
             </div>
@@ -488,19 +485,19 @@
         <section id="history" class="tab-panel">
           <div class="card content-card">
             <div class="card-header">
-              <span class="card-title">交易历史</span>
-              <button class="card-action-btn" data-action="refresh-history-page"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+              <span class="card-title">浜ゆ槗鍘嗗彶</span>
+              <button class="card-action-btn" data-action="refresh-history-page"><i data-lucide="refresh-cw" size="12"></i>鍒锋柊</button>
             </div>
             <div class="history-stats">
-              <div><span>盈利</span><strong id="historyProfit" class="num">--</strong></div>
-              <div><span>信用</span><strong id="historyCredit" class="num">--</strong></div>
-              <div><span>入金</span><strong id="historyDeposit" class="num">--</strong></div>
-              <div><span>提款</span><strong id="historyWithdrawal" class="num">--</strong></div>
-              <div><span>结余</span><strong id="historyNetResult" class="num">--</strong></div>
+              <div><span>鐩堝埄</span><strong id="historyProfit" class="num">--</strong></div>
+              <div><span>淇＄敤</span><strong id="historyCredit" class="num">--</strong></div>
+              <div><span>鍏ラ噾</span><strong id="historyDeposit" class="num">--</strong></div>
+              <div><span>鎻愭</span><strong id="historyWithdrawal" class="num">--</strong></div>
+              <div><span>缁撲綑</span><strong id="historyNetResult" class="num">--</strong></div>
             </div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th>订单号</th><th>品种</th><th>方向</th><th>手数</th><th>入场价</th><th>平仓价</th><th>盈点</th><th>盈亏</th><th>开仓时间(MT5)</th><th>平仓时间(MT5)</th><th>备注</th></tr></thead>
+                <thead><tr><th>璁㈠崟鍙?/th><th>鍝佺</th><th>鏂瑰悜</th><th>鎵嬫暟</th><th>鍏ュ満浠?/th><th>骞充粨浠?/th><th>鐩堢偣</th><th>鐩堜簭</th><th>寮€浠撴椂闂?MT5)</th><th>骞充粨鏃堕棿(MT5)</th><th>澶囨敞</th></tr></thead>
                 <tbody id="historyBody"></tbody>
               </table>
             </div>
@@ -510,28 +507,28 @@
         <section id="audit" class="tab-panel">
           <div class="card content-card">
             <div class="card-header">
-              <span class="card-title">风控审计 · 中文追踪</span>
-              <button class="card-action-btn" data-action="refresh-audit"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+              <span class="card-title">椋庢帶瀹¤ 路 涓枃杩借釜</span>
+              <button class="card-action-btn" data-action="refresh-audit"><i data-lucide="refresh-cw" size="12"></i>鍒锋柊</button>
             </div>
             <div class="table-toolbar">
-              <select id="auditFilterStatus" class="filter-select" aria-label="筛选审计状态">
-                <option value="">全部状态</option>
-                <option value="success">成功</option>
-                <option value="skipped">已跳过</option>
-                <option value="rejected">风控拒绝</option>
-                <option value="error">错误</option>
-                <option value="needs_confirmation">需要确认</option>
+              <select id="auditFilterStatus" class="filter-select" aria-label="绛涢€夊璁＄姸鎬?>
+                <option value="">鍏ㄩ儴鐘舵€?/option>
+                <option value="success">鎴愬姛</option>
+                <option value="skipped">宸茶烦杩?/option>
+                <option value="rejected">椋庢帶鎷掔粷</option>
+                <option value="error">閿欒</option>
+                <option value="needs_confirmation">闇€瑕佺‘璁?/option>
               </select>
-              <select id="auditFilterType" class="filter-select" aria-label="筛选动作类型">
-                <option value="">全部动作</option>
+              <select id="auditFilterType" class="filter-select" aria-label="绛涢€夊姩浣滅被鍨?>
+                <option value="">鍏ㄩ儴鍔ㄤ綔</option>
                 <option value="ai">AI</option>
-                <option value="manual">手动</option>
+                <option value="manual">鎵嬪姩</option>
               </select>
               <span id="auditCount" class="record-count">--</span>
             </div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th>时间(MT5)</th><th>动作</th><th>品种</th><th>状态</th><th>中文结果</th><th>原始原因</th></tr></thead>
+                <thead><tr><th>鏃堕棿(MT5)</th><th>鍔ㄤ綔</th><th>鍝佺</th><th>鐘舵€?/th><th>涓枃缁撴灉</th><th>鍘熷鍘熷洜</th></tr></thead>
                 <tbody id="auditBody"></tbody>
               </table>
             </div>
@@ -544,26 +541,26 @@
     <div id="autoConfigModal" class="auto-config-overlay hidden" role="dialog" aria-modal="true">
       <div class="auto-config-dialog">
         <div class="auto-config-head">
-          <strong>配置自动推理</strong>
-          <button id="autoConfigClose" class="icon-btn" title="关闭"><i data-lucide="x" size="16"></i></button>
+          <strong>閰嶇疆鑷姩鎺ㄧ悊</strong>
+          <button id="autoConfigClose" class="icon-btn" title="鍏抽棴"><i data-lucide="x" size="16"></i></button>
         </div>
         <div class="auto-config-body">
-          <label class="auto-field"><span>品种</span><select id="autoSymbolSelect"></select></label>
+          <label class="auto-field"><span>鍝佺</span><select id="autoSymbolSelect"></select></label>
           <div class="auto-field">
-            <span>分析周期（不选则关闭）</span>
+            <span>鍒嗘瀽鍛ㄦ湡锛堜笉閫夊垯鍏抽棴锛?/span>
             <div class="timeframe-grid" id="autoTfGrid">
-              <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1分钟</span></label>
-              <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5分钟</span></label>
-              <label><input type="checkbox" value="M15" /><span class="tf-card-code">M15</span><span class="tf-card-name">15分钟</span></label>
-              <label><input type="checkbox" value="M30" /><span class="tf-card-code">M30</span><span class="tf-card-name">30分钟</span></label>
-              <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1小时</span></label>
-              <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4小时</span></label>
-              <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">日线</span></label>
+              <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1鍒嗛挓</span></label>
+              <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5鍒嗛挓</span></label>
+              <label><input type="checkbox" value="M15" /><span class="tf-card-code">M15</span><span class="tf-card-name">15鍒嗛挓</span></label>
+              <label><input type="checkbox" value="M30" /><span class="tf-card-code">M30</span><span class="tf-card-name">30鍒嗛挓</span></label>
+              <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1灏忔椂</span></label>
+              <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4灏忔椂</span></label>
+              <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">鏃ョ嚎</span></label>
             </div>
           </div>
         </div>
         <div class="auto-config-foot">
-          <button id="autoConfigConfirm" class="btn btn-primary">确认开启</button>
+          <button id="autoConfigConfirm" class="btn btn-primary">纭寮€鍚?/button>
         </div>
       </div>
     </div>
@@ -571,20 +568,20 @@
     <div id="orderConfirmModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="orderConfirmTitle">
       <div class="order-confirm-dialog">
         <div class="order-confirm-head">
-          <strong id="orderConfirmTitle">确认下单</strong>
-          <button id="orderConfirmClose" class="icon-btn" type="button" aria-label="关闭">
+          <strong id="orderConfirmTitle">纭涓嬪崟</strong>
+          <button id="orderConfirmClose" class="icon-btn" type="button" aria-label="鍏抽棴">
             <i data-lucide="x" size="16"></i>
           </button>
         </div>
         <div id="orderConfirmBody" class="order-confirm-body"></div>
         <div class="order-confirm-actions">
-          <button id="orderConfirmCancel" class="btn" type="button">取消</button>
-          <button id="orderConfirmSubmit" class="btn btn-primary" type="button">确认发送</button>
+          <button id="orderConfirmCancel" class="btn" type="button">鍙栨秷</button>
+          <button id="orderConfirmSubmit" class="btn btn-primary" type="button">纭鍙戦€?/button>
         </div>
       </div>
     </div>
     <div id="toastHost" class="toast-host"></div>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script src="lucide.js"></script>
     <script src="/ai/app.js?v=20260606-ux-p0p3f"></script>
   </body>
 </html>
