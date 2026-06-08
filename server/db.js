@@ -326,14 +326,6 @@ export function initDB() {
       count INTEGER DEFAULT 0
     );
 
-    CREATE TABLE IF NOT EXISTS forum_notification_prefs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      post_id INTEGER NOT NULL,
-      last_notified_reply_id INTEGER DEFAULT 0,
-      UNIQUE(user_id, post_id)
-    );
-
     CREATE TABLE IF NOT EXISTS system_config (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       category TEXT NOT NULL,
@@ -553,13 +545,6 @@ function migrateDB(db) {
       slug TEXT UNIQUE NOT NULL,
       label TEXT NOT NULL,
       count INTEGER DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS forum_notification_prefs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      post_id INTEGER NOT NULL,
-      last_notified_reply_id INTEGER DEFAULT 0,
-      UNIQUE(user_id, post_id)
     );
     CREATE TABLE IF NOT EXISTS system_config (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
