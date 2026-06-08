@@ -345,6 +345,67 @@ export function initDB() {
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(category, key)
     );
+
+    CREATE TABLE IF NOT EXISTS ai_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL DEFAULT 'default',
+      api_provider TEXT NOT NULL DEFAULT 'deepseek',
+      api_key_encrypted TEXT,
+      api_base_url TEXT,
+      model_name TEXT NOT NULL DEFAULT 'deepseek-chat',
+      temperature REAL NOT NULL DEFAULT 0.7,
+      max_tokens INTEGER NOT NULL DEFAULT 2000,
+      enable_auto_trade INTEGER NOT NULL DEFAULT 0,
+      enable_futures_trading INTEGER NOT NULL DEFAULT 0,
+      risk_level TEXT NOT NULL DEFAULT 'medium',
+      max_position_size REAL NOT NULL DEFAULT 0.05,
+      selected_take_profit INTEGER NOT NULL DEFAULT 1,
+      system_prompt TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(user_id, session_id, api_provider)
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      config_id INTEGER REFERENCES ai_configs(id) ON DELETE SET NULL,
+      session_id TEXT NOT NULL DEFAULT 'default',
+      symbol TEXT NOT NULL,
+      timeframe TEXT NOT NULL,
+      signal_type TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      recommended_volume REAL NOT NULL,
+      analysis TEXT NOT NULL,
+      reasoning TEXT NOT NULL,
+      stop_loss_price REAL,
+      take_profit_1_price REAL,
+      take_profit_2_price REAL,
+      take_profit_3_price REAL,
+      market_data_json TEXT NOT NULL,
+      is_executed INTEGER NOT NULL DEFAULT 0,
+      execution_result TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS trade_audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      symbol TEXT,
+      request_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ui_configs (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      theme TEXT NOT NULL DEFAULT 'theme2',
+      updated_at TEXT NOT NULL
+    );
   `)
 
   // Seed demo data if empty
@@ -456,6 +517,11 @@ function migrateDB(db) {
   if (!streamCols.includes('bilibili_id')) addCol('video_streams', 'bilibili_id', "TEXT DEFAULT ''")
   if (!streamCols.includes('local_path')) addCol('video_streams', 'local_path', "TEXT DEFAULT ''")
   if (!streamCols.includes('qiniu_key')) addCol('video_streams', 'qiniu_key', "TEXT DEFAULT ''")
+
+  // AI tables migration
+  const aiSignalCols = db.prepare("PRAGMA table_info(ai_signals)").all().map(c => c.name)
+  if (!aiSignalCols.includes('config_id')) addCol('ai_signals', 'config_id', 'INTEGER')
+  if (!aiSignalCols.includes('session_id')) addCol('ai_signals', 'session_id', "TEXT NOT NULL DEFAULT 'default'")
 
   // Create tables that may not exist
   db.exec(`

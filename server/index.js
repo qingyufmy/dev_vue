@@ -17,6 +17,7 @@ import tradeRoutes from './routes/trades.js'
 import paymentRoutes from './routes/payment.js'
 import videoRoutes from './routes/video.js'
 import configRoutes from './routes/config.js'
+import aiRoutes from './routes/ai.js'
 import { authMiddleware } from './middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -70,6 +71,7 @@ app.use('/api', tradeRoutes)
 app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
 app.use('/api', configRoutes)
+app.use('/api', aiRoutes)
 
 // Proxy AURUM AI API requests to port 8765
 app.use('/aurum-api', (req, res) => {
