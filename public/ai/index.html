@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AURUM AI MT5 Control Panel</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260606-ux-p0p3e" />
+  </head>
+  <body>
+    <div id="loginView" class="login-view hidden">
+      <form id="loginForm" class="login-panel">
+        <div class="login-brand">
+          <svg class="brand-icon" width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+            <rect x="5" y="11" width="18" height="11" rx="2" fill="var(--gold-primary)"></rect>
+            <rect x="8" y="6" width="12" height="7" rx="2" fill="var(--gold-light)"></rect>
+          </svg>
+          <div>
+            <div class="login-brand-name">AURUM</div>
+            <div class="login-brand-sub">AI MT5 Control Panel</div>
+          </div>
+        </div>
+        <label>
+          <span>用户名</span>
+          <input id="loginUsername" autocomplete="username" value="eamon" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="loginPassword" type="password" autocomplete="current-password" value="Asd6688" />
+        </label>
+        <button type="submit" class="btn btn-primary">
+          <i data-lucide="log-in" size="16"></i>
+          进入控制台
+        </button>
+        <div id="loginError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="appView" class="app-layout hidden">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <svg class="brand-icon" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <rect x="2" y="7" width="16" height="10" rx="2" fill="var(--gold-primary)"></rect>
+            <rect x="5" y="4" width="10" height="5" rx="1.5" fill="var(--gold-light)"></rect>
+          </svg>
+          <span class="brand-name">AURUM</span>
+          <span class="brand-subtitle">AI</span>
+        </div>
+
+        <div class="topbar-badges">
+          <span id="gatewayMode" class="status-badge status-neutral">
+            <span class="badge-dot"></span>数据源 --
+          </span>
+          <span id="tradeMode" class="status-badge status-neutral">
+            <span class="badge-dot"></span>交易发送关闭
+          </span>
+          <span id="autoAnalyzeMode" class="status-badge status-neutral">
+            <span class="badge-dot"></span>自动推理 --
+          </span>
+          <span id="mt5Server" class="status-badge status-neutral">服务器 --</span>
+        </div>
+
+        <div class="topbar-actions">
+          <button id="refreshAllBtn" class="icon-btn" title="刷新数据" aria-label="刷新数据">
+            <i data-lucide="refresh-cw" size="16"></i>
+          </button>
+          <button id="logoutBtn" class="icon-btn icon-btn-danger" title="退出">
+            <i data-lucide="log-out" size="16"></i>
+            退出
+          </button>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <div class="nav-group">
+          <span class="nav-group-label">监控</span>
+          <button class="nav-item active" data-tab="dashboard" data-title="概览">
+            <i data-lucide="layout-dashboard" size="16"></i>概览
+          </button>
+          <button class="nav-item" data-tab="signals" data-title="信号">
+            <i data-lucide="zap" size="16"></i>信号
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <span class="nav-group-label">策略</span>
+          <button class="nav-item" data-tab="ai-config" data-title="模型">
+            <i data-lucide="brain" size="16"></i>模型
+          </button>
+          <button class="nav-item" data-tab="ai-analyze" data-title="推理">
+            <i data-lucide="git-branch" size="16"></i>推理
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <span class="nav-group-label">执行</span>
+          <button class="nav-item" data-tab="trading" data-title="交易">
+            <i data-lucide="trending-up" size="16"></i>交易
+          </button>
+          <button class="nav-item" data-tab="history" data-title="历史">
+            <i data-lucide="clock" size="16"></i>历史
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <span class="nav-group-label">管理</span>
+          <button class="nav-item" data-tab="audit" data-title="审计">
+            <i data-lucide="shield-check" size="16"></i>审计
+          </button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section id="dashboard" class="tab-panel active">
+          <div class="dashboard-grid">
+            <div class="card grid-area-account">
+              <div class="card-header">
+                <span class="card-title">账户状态 · <span id="accountServerName">--</span></span>
+                <button class="card-action-btn" data-action="refresh-account">
+                  <i data-lucide="refresh-cw" size="12"></i>刷新
+                </button>
+              </div>
+              <div class="account-stats-row">
+                <div class="stat-item">
+                  <span class="stat-label">余额</span>
+                  <span id="accountBalance" class="stat-value num">--</span>
+                  <span id="accountCurrency" class="stat-unit">USD</span>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                  <span class="stat-label">净值</span>
+                  <span id="accountEquity" class="stat-value num">--</span>
+                  <span class="stat-unit account-currency-unit">USD</span>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                  <span class="stat-label">浮动盈亏</span>
+                  <span id="accountFloatPnl" class="stat-value num pnl zero">--</span>
+                  <span class="stat-unit account-currency-unit">USD</span>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                  <span class="stat-label">可用保证金</span>
+                  <span id="accountMarginFree" class="stat-value num">--</span>
+                  <span class="stat-unit account-currency-unit">USD</span>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                  <span class="stat-label">已用保证金</span>
+                  <span id="accountMargin" class="stat-value num">--</span>
+                  <span class="stat-unit account-currency-unit">USD</span>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                  <span class="stat-label">杠杆</span>
+                  <span class="stat-value num">1:<span id="accountLeverage">--</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card card-gold grid-area-quote">
+              <div class="card-header">
+                <span class="card-title">实时报价</span>
+                <select id="quoteSymbolSelect" class="instrument-select"></select>
+              </div>
+              <div class="quote-main">
+                <div class="quote-side">
+                  <span class="quote-label">买入价</span>
+                  <span id="quoteBid" class="quote-price num price">--</span>
+                  <span id="quoteBidDir" class="quote-change hidden"></span>
+                  <span class="quote-side-hint">做多入场参考</span>
+                </div>
+                <div class="quote-spread-col">
+                  <span class="spread-chip">
+                    <span class="spread-label">点差</span>
+                    <span id="quoteSpread" class="spread-value num">--</span>
+                  </span>
+                  <span class="quote-change-block">
+                  <span id="quoteDelta" class="change-val num muted">—</span>
+                  <span id="quoteDeltaPct" class="change-pct muted">涨跌幅暂无</span>
+                  </span>
+                </div>
+                <div class="quote-side quote-side-ask">
+                  <span class="quote-label">卖出价</span>
+                  <span id="quoteAsk" class="quote-price num price">--</span>
+                  <span id="quoteAskDir" class="quote-change hidden"></span>
+                  <span class="quote-side-hint">做空入场参考</span>
+                </div>
+              </div>
+              <div class="quote-footer">
+                <span>单位：美元 / 盎司</span>
+                <span class="quote-divider">|</span>
+                <span>MT5服务器时间</span>
+                <span id="quoteTime" class="num">--</span>
+              </div>
+            </div>
+
+            <div id="signalCard" class="card card-signal grid-area-signal" data-direction="hold">
+              <div class="card-header">
+                <div class="signal-header-left">
+                  <span class="card-title">AI 信号</span>
+                  <span id="signalLiveBadge" class="signal-live-badge"><span class="badge-dot"></span>LIVE</span>
+                </div>
+                <button class="card-action-btn" data-tab-jump="signals">
+                  <i data-lucide="external-link" size="12"></i>打开
+                </button>
+              </div>
+              <div id="signalExpiredMask" class="signal-expired-mask">
+                <i data-lucide="clock-3" size="30"></i>
+                <p>此信号已过期，等待新一轮 AI 推理</p>
+                <button class="btn btn-primary" data-tab-jump="ai-analyze">查看推理页</button>
+              </div>
+              <div id="latestSignal" class="signal-body">
+                <div class="signal-meta-row">
+                  <span id="sigSymbol" class="signal-symbol num">--</span>
+                  <span id="sigTimeframe" class="signal-tf-badge">--</span>
+                </div>
+                <div class="signal-direction-row">
+                  <div class="signal-direction-main">
+                    <span id="sigDirection" class="signal-direction hold">HOLD</span>
+                    <span id="sigDirectionText" class="signal-direction-text hold">观望</span>
+                  </div>
+                  <div class="signal-confidence-block">
+                    <span class="signal-confidence-label">置信度</span>
+                    <span id="sigConfidence" class="signal-confidence-value num">--</span>
+                  </div>
+                </div>
+                <div class="signal-price-grid">
+                  <div class="signal-price-item primary">
+                    <span>参考价</span>
+                    <strong id="sigReferencePrice" class="num">--</strong>
+                  </div>
+                  <div class="signal-price-item">
+                    <span>当前价</span>
+                    <strong id="sigCurrentPrice" class="num">--</strong>
+                  </div>
+                  <div class="signal-price-item">
+                    <span>止损</span>
+                    <strong id="sigStopLoss" class="num">--</strong>
+                  </div>
+                  <div class="signal-price-item">
+                    <span>目标价</span>
+                    <strong id="sigTakeProfit" class="num">--</strong>
+                  </div>
+                  <div class="signal-price-item">
+                    <span>建议手数</span>
+                    <strong id="sigVolume" class="num">--</strong>
+                  </div>
+                  <div class="signal-price-item">
+                    <span>状态</span>
+                    <strong id="sigExecutionState">--</strong>
+                  </div>
+                  <div class="signal-price-item">
+                    <span>生成时间(MT5)</span>
+                    <strong id="sigGeneratedAt" class="num">--</strong>
+                  </div>
+                  <div class="signal-price-item">
+                    <span>有效期</span>
+                    <strong id="sigValidWindow" class="num">--</strong>
+                  </div>
+                </div>
+                <div class="signal-bar-container">
+                  <div class="signal-bar-track">
+                    <div id="sigBar" class="signal-bar-fill" style="width: 0%"></div>
+                  </div>
+                  <div class="signal-bar-labels"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+                </div>
+                <div class="signal-last-summary" id="signalLastSummary">
+                  <span>上次信号摘要</span>
+                  <strong id="lastSigDirection">--</strong>
+                  <strong id="lastSigTimeframe" class="num">--</strong>
+                  <strong id="lastSigConfidence" class="num">--</strong>
+                  <strong id="lastSigTime" class="num">--</strong>
+                </div>
+              </div>
+              <div class="signal-footer">
+                <i data-lucide="clock" size="11"></i>
+                <span>生成于(MT5)</span>
+                <span id="sigTime" class="num">等待新信号</span>
+              </div>
+            </div>
+
+            <div class="card grid-area-positions">
+              <div class="card-header">
+                <span class="card-title">当前持仓</span>
+                <button class="card-action-btn" data-action="refresh-positions">
+                  <i data-lucide="refresh-cw" size="12"></i>刷新
+                </button>
+              </div>
+              <div id="positionsEmpty" class="positions-empty">
+                <div class="empty-icon"><i data-lucide="inbox" size="28"></i></div>
+                <p class="empty-title">当前无持仓</p>
+                <p class="empty-sub">账户空仓，等待入场信号</p>
+              </div>
+              <div id="dashboardPositionsTable" class="positions-table-wrap hidden">
+                <table class="positions-table">
+                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th>开仓时间(MT5)</th><th>浮盈</th></tr></thead>
+                  <tbody id="dashboardPositionsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="ai-config" class="tab-panel">
+          <div class="card content-card">
+            <div class="card-header">
+              <span class="card-title">模型与执行约束</span>
+            </div>
+            <div class="config-section">
+              <div class="config-section-title">AI 推理引擎</div>
+              <div class="config-grid">
+                <label><span>模型供应商</span><select id="apiProvider">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="gpt">GPT</option>
+                  <option value="kimi">Kimi</option>
+                  <option value="qwen">Qwen</option>
+                  <option value="zhipu">Zhipu</option>
+                  <option value="doubao">DouBao</option>
+                  <option value="claude">Claude</option>
+                  <option value="gemini">Gemini</option>
+                </select></label>
+                <label><span>模型名称</span><input id="modelName" value="deepseek-chat" /></label>
+                <label><span>API Key</span><input id="apiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
+                <label><span>API 地址</span><input id="apiBaseUrl" placeholder="OpenAI-compatible endpoint" /></label>
+                <label><span>推理温度 Temperature</span><input id="temperature" class="num" type="number" min="0" max="2" step="0.1" value="0.7" /><small class="field-help">数值越低越稳定，建议 0.2-0.7</small></label>
+                <label><span>最大输出 Max Tokens</span><input id="maxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /><small class="field-help">控制推理输出长度，建议 1200-2500</small></label>
+              </div>
+            </div>
+            <div class="config-section">
+              <div class="config-section-title">交易约束</div>
+              <div class="config-grid">
+                <label><span>风险等级</span><select id="riskLevel">
+                  <option value="low">低风险</option>
+                  <option value="medium" selected>中风险</option>
+                  <option value="high">高风险</option>
+                </select></label>
+                <label><span>单次最大手数</span><span class="unit-field"><input id="maxPositionSize" class="num" type="number" min="0.01" max="0.05" step="0.01" value="0.05" /><span class="input-unit">手</span></span></label>
+                <label><span>默认止盈方案</span><select id="selectedTakeProfit">
+                  <option value="1">TP1 - 保守止盈</option>
+                  <option value="2" selected>TP2 - 标准止盈</option>
+                  <option value="3">TP3 - 激进止盈</option>
+                </select></label>
+                <div id="autoExecuteRow" class="auto-execute-row">
+                  <label class="check-row auto-execute-label"><input id="enableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
+                  <div id="autoExecuteWarning" class="auto-execute-warning">
+                    已开启自动执行：系统会按后台风控、信号有效期、最大手数和持仓约束判断是否发送交易。
+                  </div>
+                </div>
+                <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>期货手数模式</span></label>
+              </div>
+            </div>
+            <div class="config-section">
+              <div class="config-section-title">系统提示词</div>
+              <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
+            </div>
+            <div id="configStatus" class="inline-status">正在读取配置</div>
+            <div class="config-actions">
+              <button id="saveConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="ai-analyze" class="tab-panel">
+          <div class="analysis-grid">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">信号生成</span>
+                <button id="runAnalysisBtn" class="btn btn-primary"><i data-lucide="play" size="16"></i>生成信号</button>
+              </div>
+              <label><span>品种</span><select id="analyzeSymbol"></select></label>
+              <div class="timeframe-grid">
+                <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1分钟</span></label>
+                <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5分钟</span></label>
+                <label><input type="checkbox" value="M15" checked /><span class="tf-card-code">M15</span><span class="tf-card-name">15分钟</span></label>
+                <label><input type="checkbox" value="M30" checked /><span class="tf-card-code">M30</span><span class="tf-card-name">30分钟</span></label>
+                <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1小时</span></label>
+                <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4小时</span></label>
+                <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">日线</span></label>
+              </div>
+              <label><span>K线数量</span><input id="klineCount" type="number" value="100" min="10" max="500" step="10" /></label>
+              <div class="latency-box">
+                <div><span>最近耗时</span><strong id="analysisLatency" class="num">--</strong></div>
+                <div><span>信号状态</span><strong id="signalFreshness" class="num">--</strong></div>
+              </div>
+              <div class="analysis-history-panel">
+                <div class="analysis-history-head">
+                  <span class="card-title">历史推理</span>
+                  <button class="card-action-btn" data-action="refresh-analysis-history">
+                    <i data-lucide="refresh-cw" size="12"></i>刷新
+                  </button>
+                </div>
+                <div id="analysisHistoryBody" class="analysis-history-list">
+                  <div class="history-empty">暂无推理记录</div>
+                </div>
+              </div>
+            </div>
+            <div class="card analysis-result-card">
+              <div class="card-header">
+                <span class="card-title">推理结果</span>
+                <button id="executeSignalBtn" class="btn btn-success" disabled><i data-lucide="send" size="16"></i>复核执行</button>
+              </div>
+              <div id="analysisResult" class="analysis-result muted-block">选择品种和周期后生成信号</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="trading" class="tab-panel">
+          <div class="account-snapshot-row">
+            <div><span>余额</span><strong id="tradeAccountBalance" class="num">--</strong></div>
+            <div><span>净值</span><strong id="tradeAccountEquity" class="num">--</strong></div>
+            <div><span>浮动盈亏</span><strong id="tradeAccountProfit" class="num pnl zero">--</strong></div>
+            <div><span>可用保证金</span><strong id="tradeAccountFreeMargin" class="num">--</strong></div>
+            <button class="card-action-btn" data-action="refresh-trading-page"><i data-lucide="refresh-cw" size="12"></i>刷新账户</button>
+          </div>
+          <div class="trading-grid">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">手动交易</span>
+                <button class="card-action-btn" data-action="refresh-quote"><i data-lucide="refresh-cw" size="12"></i>报价</button>
+              </div>
+              <label><span>品种</span><select id="tradeSymbolSelect"></select></label>
+              <div class="trading-quote-row">
+                <div><span>卖出成交参考</span><strong id="tradeBidPrice" class="num">--</strong></div>
+                <div><span>点差</span><strong id="tradeSpread" class="num">--</strong></div>
+                <div><span>买入成交参考</span><strong id="tradeAskPrice" class="num">--</strong></div>
+              </div>
+              <label><span>交易手数</span><span class="unit-field"><input id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05" step="0.01" /><span class="input-unit">手</span></span></label>
+              <div class="two-fields">
+                <label><span>止盈价格</span><input id="takeProfitPoints" class="num" type="number" min="0" step="0.01" placeholder="如：4500.00" /><small class="field-help">填写目标价格，留空不设置</small></label>
+                <label><span>止损价格</span><input id="stopLossPoints" class="num" type="number" min="0" step="0.01" placeholder="如：4420.00" /><small class="field-help">填写风控价格，留空不设置</small></label>
+              </div>
+              <div class="trade-button-row">
+                <button id="buyBtn" class="btn btn-buy"><span><i data-lucide="arrow-up-right" size="16"></i>买入</span><strong id="buyBtnPrice" class="order-btn-price num">--</strong></button>
+                <button id="sellBtn" class="btn btn-sell"><span><i data-lucide="arrow-down-right" size="16"></i>卖出</span><strong id="sellBtnPrice" class="order-btn-price num">--</strong></button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">持仓管理</span>
+                <button class="card-action-btn" data-action="refresh-positions"><i data-lucide="refresh-cw" size="12"></i>持仓</button>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th>开仓时间(MT5)</th><th>SL</th><th>TP</th><th>盈亏</th><th>操作</th></tr></thead>
+                  <tbody id="positionsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="signals" class="tab-panel">
+          <div class="card content-card">
+            <div class="card-header">
+              <span class="card-title">交易信号</span>
+              <button class="card-action-btn" data-action="refresh-signals"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+            </div>
+            <div class="table-toolbar">
+              <select id="signalFilterDirection" class="filter-select" aria-label="筛选信号方向">
+                <option value="">全部方向</option>
+                <option value="buy">买入</option>
+                <option value="sell">卖出</option>
+                <option value="hold">观望</option>
+              </select>
+              <select id="signalFilterTimeframe" class="filter-select" aria-label="筛选周期">
+                <option value="">全部周期</option>
+                <option value="M1">M1</option>
+                <option value="M5">M5</option>
+                <option value="M15">M15</option>
+                <option value="M30">M30</option>
+                <option value="H1">H1</option>
+                <option value="H4">H4</option>
+                <option value="D1">D1</option>
+              </select>
+              <span id="signalCount" class="record-count">--</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>ID</th><th>时间(MT5)</th><th>品种</th><th>周期</th><th>信号</th><th>置信度</th><th>手数</th><th>状态</th><th>止损</th><th>TP1</th><th>TP2 / TP3</th></tr></thead>
+                <tbody id="signalsBody"></tbody>
+              </table>
+            </div>
+            <div id="signalPager" class="pager"></div>
+          </div>
+        </section>
+
+        <section id="history" class="tab-panel">
+          <div class="card content-card">
+            <div class="card-header">
+              <span class="card-title">交易历史</span>
+              <button class="card-action-btn" data-action="refresh-history-page"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+            </div>
+            <div class="history-stats">
+              <div><span>盈利</span><strong id="historyProfit" class="num">--</strong></div>
+              <div><span>信用</span><strong id="historyCredit" class="num">--</strong></div>
+              <div><span>入金</span><strong id="historyDeposit" class="num">--</strong></div>
+              <div><span>提款</span><strong id="historyWithdrawal" class="num">--</strong></div>
+              <div><span>结余</span><strong id="historyNetResult" class="num">--</strong></div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>订单号</th><th>品种</th><th>方向</th><th>手数</th><th>入场价</th><th>平仓价</th><th>盈点</th><th>盈亏</th><th>开仓时间(MT5)</th><th>平仓时间(MT5)</th><th>备注</th></tr></thead>
+                <tbody id="historyBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="audit" class="tab-panel">
+          <div class="card content-card">
+            <div class="card-header">
+              <span class="card-title">风控审计 · 中文追踪</span>
+              <button class="card-action-btn" data-action="refresh-audit"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+            </div>
+            <div class="table-toolbar">
+              <select id="auditFilterStatus" class="filter-select" aria-label="筛选审计状态">
+                <option value="">全部状态</option>
+                <option value="success">成功</option>
+                <option value="skipped">已跳过</option>
+                <option value="rejected">风控拒绝</option>
+                <option value="error">错误</option>
+                <option value="needs_confirmation">需要确认</option>
+              </select>
+              <select id="auditFilterType" class="filter-select" aria-label="筛选动作类型">
+                <option value="">全部动作</option>
+                <option value="ai">AI</option>
+                <option value="manual">手动</option>
+              </select>
+              <span id="auditCount" class="record-count">--</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>时间(MT5)</th><th>动作</th><th>品种</th><th>状态</th><th>中文结果</th><th>原始原因</th></tr></thead>
+                <tbody id="auditBody"></tbody>
+              </table>
+            </div>
+            <div id="auditPager" class="pager"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="orderConfirmModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="orderConfirmTitle">
+      <div class="order-confirm-dialog">
+        <div class="order-confirm-head">
+          <strong id="orderConfirmTitle">确认下单</strong>
+          <button id="orderConfirmClose" class="icon-btn" type="button" aria-label="关闭">
+            <i data-lucide="x" size="16"></i>
+          </button>
+        </div>
+        <div id="orderConfirmBody" class="order-confirm-body"></div>
+        <div class="order-confirm-actions">
+          <button id="orderConfirmCancel" class="btn" type="button">取消</button>
+          <button id="orderConfirmSubmit" class="btn btn-primary" type="button">确认发送</button>
+        </div>
+      </div>
+    </div>
+    <div id="toastHost" class="toast-host"></div>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script src="/ai/app.js?v=20260606-ux-p0p3f"></script>
+  </body>
+</html>

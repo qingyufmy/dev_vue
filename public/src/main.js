@@ -7731,7 +7731,7 @@ function setupGlobalEvents() {
     if (!requireLogin()) return
     e.preventDefault()
     const token = localStorage.getItem('ws_token')
-    const url = `http://127.0.0.1:8765/ai?token=${encodeURIComponent(token)}`
+    const url = `/ai?token=${encodeURIComponent(token)}`
     window.open(url, '_blank')
   })
 
