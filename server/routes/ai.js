@@ -760,8 +760,21 @@ router.post('/ui/config', authMiddleware, (req, res) => {
 })
 
 // Health check
-router.get('/ai/health', (req, res) => {
+router.get('/health', (req, res) => {
   res.json({ status: 'healthy', service: 'AURUM AI' })
+})
+
+// Auth/me endpoint for frontend compatibility
+router.get('/auth/me', authMiddleware, (req, res) => {
+  const db = getDB()
+  const user = db.prepare('SELECT id, email, nickname, role, plan FROM users WHERE id = ?').get(req.userId)
+  if (!user) return res.status(404).json({ status: 'error', message: 'User not found' })
+  res.json({ id: user.id, username: user.email, nickname: user.nickname, role: user.role, plan: user.plan, is_active: 1, source: 'wss' })
+})
+
+// Auto status endpoint
+router.get('/auto/status', authMiddleware, (req, res) => {
+  res.json({ status: 'success', scheduler: { enabled: false, status: 'disabled', running: false } })
 })
 
 export default router

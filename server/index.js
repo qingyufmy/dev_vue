@@ -72,6 +72,7 @@ app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
 app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
+app.use('/aurum-api', aiRoutes)
 
 // Proxy AURUM AI API requests to port 8765
 app.use('/aurum-api', (req, res) => {
