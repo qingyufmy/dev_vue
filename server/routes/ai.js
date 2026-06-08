@@ -1,4 +1,4 @@
-import { Router } from 'express'
+﻿import { Router } from 'express'
 import { getDB } from '../db.js'
 import jwt from 'jsonwebtoken'
 import http from 'http'
@@ -852,6 +852,7 @@ async function runAutoCycle(userId) {
   const timeframes = JSON.parse(cfg.timeframes || '[]')
   const config = getActiveConfig(db, userId, 'default')
 
+
   for (const symbol of symbols) {
     for (const timeframe of timeframes) {
       try {
@@ -862,8 +863,8 @@ async function runAutoCycle(userId) {
           market = { quote }
           // Get candles
           try {
-            const candles = await mt5BridgeRequest('GET', `/candles/${symbol}?timeframe=${timeframe}&count=100`)
-            market.candles = candles.candles || candles
+            const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=100`)
+            market.candles = Array.isArray(rates) ? rates : (rates.candles || rates.rates || [])
           } catch {}
         } catch {}
 
@@ -904,7 +905,8 @@ ${candleSummary || '  (暂无K线数据)'}
         const temperature = (config || {}).temperature || 0.7
         const maxTokens = (config || {}).max_tokens || 2000
 
-        const resp = await fetch(`${providerUrl}/v1/chat/completions`, {
+        const apiUrl = providerUrl.replace(/\/$/, '') + (providerUrl.includes('openai') ? '/v1/chat/completions' : '/chat/completions')
+        const resp = await fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
           body: JSON.stringify({
@@ -920,6 +922,7 @@ ${candleSummary || '  (暂无K线数据)'}
         })
         if (!resp.ok) continue
         const data = await resp.json()
+
         const raw = data.choices?.[0]?.message?.content || '{}'
         let signal
         try { signal = JSON.parse(raw) } catch { continue }
@@ -932,7 +935,7 @@ ${candleSummary || '  (暂无K线数据)'}
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
         `)
         const result = stmt.run(
-          userId, config?.id || null, 'auto', symbol, timeframe.toUpperCase(),
+          userId, config?.id || null, 'default', symbol, timeframe.toUpperCase(),
           signal.signal_type, signal.confidence, signal.recommended_volume,
           signal.analysis, signal.reasoning, signal.stop_loss_price,
           signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
