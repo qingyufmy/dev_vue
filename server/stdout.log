@@ -1,6 +1,0 @@
-Database initialized
-Wall Street Skill server running on http://localhost:3000
-[2026-06-08T11:14:08.926Z] POST /api/login content-type=application/json
-[2026-06-08T11:14:09.061Z] POST /api/mt5/close content-type=application/json
-Close request body: {"ticket":90000001,"confirm":true}
-ticket: 90000001 confirm: true type: number
