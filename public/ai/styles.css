@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+﻿@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
 
 :root {
   --bg-base: #080b14;
@@ -2848,4 +2848,196 @@ textarea:focus {
 .mt5-connect-btn.connecting {
   opacity: 0.7;
   cursor: wait;
+}
+
+/* Clickable badge */
+.clickable-badge {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* Glow underline on hover */
+.clickable-badge::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, currentColor, transparent);
+  transform: translateX(-50%);
+  transition: width 0.3s ease;
+  opacity: 0.6;
+}
+.clickable-badge:hover::after {
+  width: 80%;
+}
+.clickable-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.3);
+  filter: brightness(1.15);
+}
+.clickable-badge:active {
+  transform: translateY(0) scale(0.97);
+  filter: brightness(0.95);
+}
+/* Connected state glow */
+.clickable-badge.status-connected:hover {
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.2), 0 2px 8px rgba(0, 0, 0, 0.3);
+  border-color: rgba(16, 185, 129, 0.5);
+}
+/* Danger (trade active) glow */
+.clickable-badge.status-danger:hover {
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.2), 0 2px 8px rgba(0, 0, 0, 0.3);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+/* Active (auto analyze) glow */
+.clickable-badge.status-active:hover {
+  box-shadow: 0 0 14px rgba(212, 175, 55, 0.2), 0 2px 8px rgba(0, 0, 0, 0.3);
+  border-color: rgba(212, 175, 55, 0.5);
+}
+/* Neutral hover highlight */
+.clickable-badge.status-neutral:hover {
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.04), 0 2px 8px rgba(0, 0, 0, 0.3);
+  border-color: var(--border-emphasis, rgba(255, 255, 255, 0.15));
+  color: var(--text-primary);
+}
+
+/* Auto config modal */
+.auto-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.auto-field > span {
+  font-weight: 500;
+}
+.auto-field select {
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm, 6px);
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.auto-config-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s ease;
+}
+.auto-config-overlay.hidden {
+  display: none;
+}
+.auto-config-dialog {
+  width: 380px;
+  max-width: 92vw;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.25s ease;
+}
+.auto-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-size: 15px;
+}
+.auto-config-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.auto-section-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.auto-symbol-pills {
+  display: flex;
+  gap: 8px;
+}
+.auto-symbol-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-default);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.auto-symbol-pill .pill-emoji {
+  font-size: 16px;
+}
+.auto-symbol-pill.active {
+  background: var(--gold-wash);
+  border-color: var(--border-gold);
+  color: var(--gold-primary);
+}
+.auto-tf-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.auto-tf-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.auto-tf-btn:hover {
+  border-color: var(--gold-primary);
+  color: var(--gold-primary);
+}
+.auto-tf-btn.active {
+  background: linear-gradient(135deg, var(--gold-primary), var(--gold-dark));
+  border-color: var(--gold-primary);
+  color: #000;
+}
+.auto-config-foot {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  justify-content: flex-end;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }

@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || "",
   user: null,
   symbols: [],
@@ -203,7 +203,9 @@ function setText(id, value) {
 function setBadge(id, text, type, withDot = true) {
   const el = $(id);
   if (!el) return;
-  el.className = `status-badge status-${type}`;
+  // Preserve clickable-badge class if present
+  const extra = el.classList.contains("clickable-badge") ? " clickable-badge" : "";
+  el.className = `status-badge status-${type}${extra}`;
   el.innerHTML = `${withDot ? '<span class="badge-dot"></span>' : ""}${escapeHtml(text)}`;
 }
 
@@ -503,24 +505,11 @@ async function loadStatus() {
   const health = await api("/health");
   const gateway = health.gateway || {};
   const isLive = gateway.mode === "live";
-  setBadge("gatewayMode", isLive ? "MT5 直连" : "模拟数据", isLive ? "connected" : "neutral");
-  
-  // Update MT5 connect button
-  const connectBtn = document.getElementById("mt5ConnectBtn");
-  const connectText = document.getElementById("mt5ConnectText");
-  if (connectBtn && connectText) {
-    if (isLive) {
-      connectBtn.classList.add("connected");
-      connectBtn.classList.remove("connecting");
-      connectText.textContent = "MT5已连接";
-      connectBtn.title = "点击断开MT5";
-    } else {
-      connectBtn.classList.remove("connected", "connecting");
-      connectText.textContent = "未连接MT5";
-      connectBtn.title = "点击连接MT5";
-    }
-  }
-  
+
+  // Gateway badge — MT5 connection (clickable to connect/disconnect)
+  setBadge("gatewayMode", isLive ? "MT5 已连接" : "模拟数据-未连接MT5", isLive ? "connected" : "neutral");
+
+  // Trade mode badge — separate clickable toggle
   const mt5TradeBlocked = isLive
     && gateway.live_trading_enabled
     && (gateway.terminal_trade_allowed === false || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
@@ -528,64 +517,134 @@ async function loadStatus() {
     ? "MT5 自动交易关闭"
     : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
+
   try {
     const auto = await api("/api/auto/status");
     const scheduler = auto.scheduler || {};
-    const interval = Number(scheduler.interval_seconds || 0);
-    const intervalText = interval >= 60 && interval % 60 === 0 ? `${interval / 60}分钟` : `${interval || "--"}秒`;
-    const label = scheduler.enabled
-      ? scheduler.running ? "自动推理运行中" : `${intervalText}自动推理开启`
+    const enabled = scheduler.enabled;
+    const running = scheduler.running;
+    const tfs = (scheduler.timeframes || []).join(", ");
+    const label = enabled
+      ? running ? `自动推理运行中 ${tfs}` : `自动推理 ${tfs}`
       : "自动推理关闭";
-    const type = scheduler.enabled
-      ? scheduler.status === "error" || scheduler.status === "partial_error" ? "warning" : "active"
+    const type = enabled
+      ? running ? "active" : "connected"
       : "neutral";
     setBadge("autoAnalyzeMode", label, type);
+
+    // Store current auto config for the modal
+    state.autoConfig = {
+      symbols: scheduler.symbols || ["XAUUSD"],
+      timeframes: scheduler.timeframes || [],
+      interval_seconds: scheduler.interval_seconds || 900,
+    };
   } catch {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
   }
 }
 
-async function handleMT5Connect() {
-  const connectBtn = document.getElementById("mt5ConnectBtn");
-  const connectText = document.getElementById("mt5ConnectText");
-  if (!connectBtn || !connectText) return;
-
-  // Check if already connected
-  const isCurrentlyConnected = connectBtn.classList.contains("connected");
-
-  if (isCurrentlyConnected) {
-    // Show disconnect confirmation
-    const confirmed = confirm("MT5已连接，是否断开连接？");
-    if (!confirmed) return;
-
-    connectBtn.classList.add("connecting");
-    connectText.textContent = "断开中...";
-    try {
+// ============ Gateway Badge Click ============
+// ============ Gateway Badge Click — MT5 connect/disconnect ============
+async function handleGatewayModeClick() {
+  const health = await api("/health").catch(() => null);
+  const isLive = health?.gateway?.mode === "live";
+  try {
+    if (isLive) {
+      // Confirm before disconnecting
+      if (!confirm("确认断开 MT5 连接？")) return;
       await api("/aurum-api/mt5/disconnect", { method: "POST" });
-      await loadStatus();
-      await Promise.allSettled([loadAccount(), loadPositions()]);
-    } catch (error) {
-      alert("断开失败: " + error.message);
-    } finally {
-      connectBtn.classList.remove("connecting");
+      toast("MT5 已断开", "success");
+    } else {
+      await api("/aurum-api/mt5/connect", { method: "POST" });
+      toast("MT5 已连接", "success");
     }
-  } else {
-    // Connect to MT5
-    connectBtn.classList.add("connecting");
-    connectText.textContent = "连接中...";
-    try {
-      const result = await api("/aurum-api/mt5/connect", { method: "POST" });
-      if (result.status === "success") {
-        await loadStatus();
-        await Promise.allSettled([loadAccount(), loadPositions(), loadSymbols()]);
-      } else {
-        alert("连接失败: " + (result.message || "未知错误"));
-      }
-    } catch (error) {
-      alert("连接失败: " + error.message);
-    } finally {
-      connectBtn.classList.remove("connecting");
-    }
+    await loadStatus();
+  } catch (e) {
+    toast("连接失败: " + e.message, "error");
+  }
+}
+
+// ============ Trade Mode Badge Click — toggle trade sending ============
+async function handleTradeModeClick() {
+  const health = await api("/health").catch(() => null);
+  const gateway = health?.gateway || {};
+  const currentlyEnabled = gateway.live_trading_enabled;
+
+  // Turning ON requires MT5 connection
+  if (!currentlyEnabled && gateway.mode !== "live") {
+    toast("请先连接MT5", "warning");
+    return;
+  }
+
+  try {
+    const result = await api("/aurum-api/mt5/toggle-trade", {
+      method: "POST",
+      body: JSON.stringify({ enable: !currentlyEnabled }),
+    });
+    toast(currentlyEnabled ? "交易发送已关闭" : "交易发送已开启", "success");
+    await loadStatus();
+  } catch (e) {
+    toast("切换失败: " + e.message, "error");
+  }
+}
+
+// ============ Auto Config Modal ============
+function openAutoConfigModal() {
+  const modal = document.getElementById("autoConfigModal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+
+  // Populate symbol select (same as analyzeSymbol)
+  const sel = document.getElementById("autoSymbolSelect");
+  if (sel && sel.options.length === 0) {
+    (state.symbols || []).forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s.name;
+      opt.textContent = s.description ? `${s.name} — ${s.description}` : s.name;
+      sel.appendChild(opt);
+    });
+  }
+
+  // Restore current config
+  const cfg = state.autoConfig || { symbols: ["XAUUSD.s"], timeframes: [] };
+  if (sel) sel.value = cfg.symbols[0] || "XAUUSD.s";
+
+  // Set timeframe checkboxes
+  document.querySelectorAll("#autoTfGrid input[type='checkbox']").forEach(cb => {
+    cb.checked = cfg.timeframes.includes(cb.value);
+  });
+
+  updateAutoConfirmText();
+}
+
+function closeAutoConfigModal() {
+  document.getElementById("autoConfigModal")?.classList.add("hidden");
+}
+
+function updateAutoConfirmText() {
+  const checkedTfs = document.querySelectorAll("#autoTfGrid input[type='checkbox']:checked");
+  const btn = document.getElementById("autoConfigConfirm");
+  if (btn) {
+    btn.textContent = checkedTfs.length > 0 ? "确认开启" : "关闭自动推理";
+  }
+}
+
+async function saveAutoConfig() {
+  const sel = document.getElementById("autoSymbolSelect");
+  const symbols = sel ? [sel.value] : ["XAUUSD.s"];
+  const timeframes = [];
+  document.querySelectorAll("#autoTfGrid input[type='checkbox']:checked").forEach(cb => timeframes.push(cb.value));
+
+  try {
+    const result = await api("/api/auto/config", {
+      method: "POST",
+      body: JSON.stringify({ symbols, timeframes, interval_seconds: state.autoConfig?.interval_seconds || 900 }),
+    });
+    toast(result.enabled ? `自动推理已开启: ${timeframes.join(", ")}` : "自动推理已关闭", "success");
+    closeAutoConfigModal();
+    await loadStatus();
+  } catch (e) {
+    toast("保存失败: " + e.message, "error");
   }
 }
 
@@ -1488,7 +1547,7 @@ function bindEvents() {
   $("loginForm").addEventListener("submit", login);
   $("logoutBtn").addEventListener("click", logout);
   $("refreshAllBtn").addEventListener("click", refreshAll);
-  $("mt5ConnectBtn")?.addEventListener("click", handleMT5Connect);
+  $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
@@ -1524,6 +1583,22 @@ function bindEvents() {
     state.auditFilters.type = event.target.value;
     state.auditFilters.page = 1;
     renderAuditRows();
+  });
+
+  // Gateway badge click — toggle trade sending
+  $("tradeMode")?.addEventListener("click", handleTradeModeClick);
+
+  // Auto config modal
+  $("autoAnalyzeMode")?.addEventListener("click", openAutoConfigModal);
+  $("autoConfigClose")?.addEventListener("click", closeAutoConfigModal);
+  $("autoConfigModal")?.addEventListener("click", (e) => {
+    if (e.target.id === "autoConfigModal") closeAutoConfigModal();
+  });
+  $("autoConfigConfirm")?.addEventListener("click", saveAutoConfig);
+
+  // Timeframe checkbox change → update confirm text
+  document.querySelectorAll("#autoTfGrid input[type='checkbox']").forEach(cb => {
+    cb.addEventListener("change", updateAutoConfirmText);
   });
 
   document.querySelectorAll(".nav-item").forEach((button) => {

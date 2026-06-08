@@ -576,7 +576,6 @@ class MT5Handler(BaseHTTPRequestHandler):
             elif path == "/connect":
                 global MT5_MODE, ALLOW_LIVE_TRADING
                 MT5_MODE = "live"
-                ALLOW_LIVE_TRADING = True
                 try:
                     connect_live()
                     terminal = mt5.terminal_info()
@@ -585,6 +584,7 @@ class MT5Handler(BaseHTTPRequestHandler):
                         "status": "success",
                         "message": "MT5 connected",
                         "mode": "live",
+                        "live_trading_enabled": ALLOW_LIVE_TRADING,
                         "terminal_trade_allowed": terminal.trade_allowed if terminal else None,
                         "account_trade_allowed": account.trade_allowed if account else None,
                         "account_trade_expert": account.trade_expert if account else None,
@@ -592,6 +592,17 @@ class MT5Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     MT5_MODE = "mock"
                     self.send_json({"status": "error", "message": str(exc)}, 500)
+            elif path == "/toggle-trade":
+                if MT5_MODE != "live":
+                    self.send_json({"status": "error", "message": "MT5 not connected"}, 400)
+                else:
+                    enable = body.get("enable", not ALLOW_LIVE_TRADING)
+                    ALLOW_LIVE_TRADING = bool(enable)
+                    self.send_json({
+                        "status": "success",
+                        "live_trading_enabled": ALLOW_LIVE_TRADING,
+                        "message": f"Live trading {'enabled' if ALLOW_LIVE_TRADING else 'disabled'}"
+                    })
             elif path == "/disconnect":
                 MT5_MODE = "mock"
                 ALLOW_LIVE_TRADING = False

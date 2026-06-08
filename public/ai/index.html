@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AURUM AI MT5 Control Panel</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260606-ux-p0p3e" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260608-badges" />
   </head>
   <body>
     <div id="loginView" class="login-view hidden">
@@ -48,17 +48,13 @@
         </div>
 
         <div class="topbar-badges">
-          <span id="gatewayMode" class="status-badge status-neutral">
-            <span class="badge-dot"></span>数据源 --
+          <span id="gatewayMode" class="status-badge status-neutral clickable-badge" title="点击连接/断开MT5">
+            <span class="badge-dot"></span>模拟数据-未连接MT5
           </span>
-          <button id="mt5ConnectBtn" class="mt5-connect-btn" title="连接MT5">
-            <i data-lucide="link" size="14"></i>
-            <span id="mt5ConnectText">未连接MT5</span>
-          </button>
-          <span id="tradeMode" class="status-badge status-neutral">
-            <span class="badge-dot"></span>交易发送关闭
+          <span id="tradeMode" class="status-badge status-neutral clickable-badge" title="点击切换交易发送">
+            <span class="badge-dot"></span>交易发送 --
           </span>
-          <span id="autoAnalyzeMode" class="status-badge status-neutral">
+          <span id="autoAnalyzeMode" class="status-badge status-neutral clickable-badge" title="点击配置自动推理">
             <span class="badge-dot"></span>自动推理 --
           </span>
           <span id="mt5Server" class="status-badge status-neutral">服务器 --</span>
@@ -543,6 +539,33 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div id="autoConfigModal" class="auto-config-overlay hidden" role="dialog" aria-modal="true">
+      <div class="auto-config-dialog">
+        <div class="auto-config-head">
+          <strong>配置自动推理</strong>
+          <button id="autoConfigClose" class="icon-btn" title="关闭"><i data-lucide="x" size="16"></i></button>
+        </div>
+        <div class="auto-config-body">
+          <label class="auto-field"><span>品种</span><select id="autoSymbolSelect"></select></label>
+          <div class="auto-field">
+            <span>分析周期（不选则关闭）</span>
+            <div class="timeframe-grid" id="autoTfGrid">
+              <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1分钟</span></label>
+              <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5分钟</span></label>
+              <label><input type="checkbox" value="M15" /><span class="tf-card-code">M15</span><span class="tf-card-name">15分钟</span></label>
+              <label><input type="checkbox" value="M30" /><span class="tf-card-code">M30</span><span class="tf-card-name">30分钟</span></label>
+              <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1小时</span></label>
+              <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4小时</span></label>
+              <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">日线</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="auto-config-foot">
+          <button id="autoConfigConfirm" class="btn btn-primary">确认开启</button>
+        </div>
+      </div>
     </div>
 
     <div id="orderConfirmModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="orderConfirmTitle">

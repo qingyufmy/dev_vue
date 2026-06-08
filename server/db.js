@@ -406,6 +406,19 @@ export function initDB() {
       theme TEXT NOT NULL DEFAULT 'theme2',
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS auto_scheduler (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      symbols TEXT NOT NULL DEFAULT '["XAUUSD"]',
+      timeframes TEXT NOT NULL DEFAULT '["M15"]',
+      interval_seconds INTEGER NOT NULL DEFAULT 900,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      last_run_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(user_id)
+    );
   `)
 
   // Seed demo data if empty

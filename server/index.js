@@ -18,6 +18,7 @@ import paymentRoutes from './routes/payment.js'
 import videoRoutes from './routes/video.js'
 import configRoutes from './routes/config.js'
 import aiRoutes from './routes/ai.js'
+import { initAutoSchedulers } from './routes/ai.js'
 import { authMiddleware } from './middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -176,6 +177,7 @@ app.get('*', (req, res) => {
 
 // Init DB and start
 initDB()
+initAutoSchedulers()
 app.listen(PORT, () => {
   console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
 })
