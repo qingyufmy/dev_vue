@@ -21,22 +21,22 @@ const $ = (id) => document.getElementById(id);
 
 const REASON_MAP = {
   skipped: "已跳过（未满足执行条件）",
-  "Request executed": "MT5 已执�?,
+  "Request executed": "MT5 已执行",
   "Unsupported filling mode": "MT5 不支持当前成交模式，已自动适配",
   "AutoTrading disabled by client": "MT5 客户端关闭了自动交易",
   mt5_terminal_autotrading_disabled: "MT5 终端自动交易关闭",
   mt5_account_trade_disabled: "MT5 账户禁止交易",
   mt5_account_expert_trading_disabled: "MT5 账户禁止 EA/脚本交易",
-  hold_signal_cannot_execute: "已跳过（HOLD 信号�?,
+  hold_signal_cannot_execute: "已跳过（HOLD 信号）",
   signal_expired: "已跳过（信号已过期）",
   no_active_auto_trade_config: "已跳过（自动交易未开启）",
-  open_position_exists: "已跳过（当前品种已有持仓�?,
+  open_position_exists: "已跳过（当前品种已有持仓）",
   position_check_failed: "已跳过（持仓检查失败）",
   invalid_order_type: "方向无效，已拒绝",
   volume_exceeds_config_limit: "手数超过配置上限，已拒绝",
   max_open_positions_reached: "持仓数量达到上限，已拒绝",
-  signal_price_slippage_exceeded: "信号价与当前价滑点超限，已拒�?,
-  confirmation_required: "需要人工确�?,
+  signal_price_slippage_exceeded: "信号价与当前价滑点超限，已拒绝",
+  confirmation_required: "需要人工确认",
   rejected: "风控拒绝",
   success: "成功",
   error: "错误",
@@ -117,13 +117,13 @@ function setSignalBadge(signal) {
   let label = "等待";
   let stateClass = "expired";
   if (signal?.is_executed) {
-    label = "已执�?;
+    label = "已执行";
     stateClass = "executed";
   } else if (signal && !signal.is_stale) {
     label = "LIVE";
     stateClass = "";
   } else if (signal?.is_stale) {
-    label = "已过�?;
+    label = "已过期";
     stateClass = "expired";
   }
   badge.className = `signal-live-badge ${stateClass}`.trim();
@@ -140,13 +140,13 @@ function directionText(value) {
 }
 
 function directionTextShort(value) {
-  return { buy: "�?, sell: "�?, hold: "观望" }[signalType(value)] || "观望";
+  return { buy: "多", sell: "空", hold: "观望" }[signalType(value)] || "观望";
 }
 
 function volumeText(value) {
   const text = String(value ?? "").trim();
   if (!text || text === "--") return "--";
-  if (text.includes("�?)) return text;
+  if (text.includes("手")) return text;
   const num = Number(text);
   if (!Number.isFinite(num) || num <= 0) return "--";
   return `${fmt(num, 2)} 手`;
@@ -235,18 +235,18 @@ function setQuoteDirection(id, direction) {
   if (!el) return;
   el.className = `quote-change ${direction || ""}`.trim();
   el.classList.toggle("hidden", !direction);
-  el.textContent = direction === "up" ? "�? : direction === "down" ? "�? : "";
+  el.textContent = direction === "up" ? "▲" : direction === "down" ? "▼" : "";
 }
 
 function setQuoteChangeUnavailable() {
   const delta = $("quoteDelta");
   const pct = $("quoteDeltaPct");
   if (delta) {
-    delta.textContent = "�?;
+    delta.textContent = "—";
     delta.className = "change-val num muted";
   }
   if (pct) {
-    pct.textContent = "涨跌幅暂�?;
+    pct.textContent = "涨跌幅暂无";
     pct.className = "change-pct muted";
   }
 }
@@ -276,8 +276,8 @@ function setSignalFieldClass(id, className = "") {
 function signalCurrentPriceText(signal) {
   if (!signal || !state.lastQuote || state.lastQuote.symbol !== signal.symbol) return "--";
   const dir = signalType(signal.signal_type);
-  if (dir === "buy") return `买入成交参�?${priceDisplay(state.lastQuote.ask)}`;
-  if (dir === "sell") return `卖出成交参�?${priceDisplay(state.lastQuote.bid)}`;
+  if (dir === "buy") return `买入成交参考 ${priceDisplay(state.lastQuote.ask)}`;
+  if (dir === "sell") return `卖出成交参考 ${priceDisplay(state.lastQuote.bid)}`;
   return `${priceDisplay(state.lastQuote.bid)} / ${priceDisplay(state.lastQuote.ask)}`;
 }
 
@@ -313,10 +313,10 @@ function renderPager(hostId, page, pageSize, total, kind) {
   if (!host) return;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   host.innerHTML = total > pageSize ? `
-    <button class="pager-btn" type="button" data-pager="${kind}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>上一�?/button>
+    <button class="pager-btn" type="button" data-pager="${kind}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>上一页</button>
     <span class="pager-info">${page} / ${pages}</span>
-    <button class="pager-btn" type="button" data-pager="${kind}" data-page="${page + 1}" ${page >= pages ? "disabled" : ""}>下一�?/button>
-  ` : `<span class="pager-info">�?${total} �?/span>`;
+    <button class="pager-btn" type="button" data-pager="${kind}" data-page="${page + 1}" ${page >= pages ? "disabled" : ""}>下一页</button>
+  ` : `<span class="pager-info">共 ${total} 条</span>`;
 }
 
 function clampPage(page, pageSize, total) {
@@ -443,7 +443,6 @@ async function withBusy(button, task) {
 }
 
 async function login(event) {
-  // Login is handled by wall-street-skill - redirect to main site
   if (event) event.preventDefault();
   window.location.href = "/";
 }
@@ -454,29 +453,23 @@ function logout() {
   state.selectedSignal = null;
   setAuth("");
   showApp(false);
-  // Redirect to main site
   window.location.href = "/";
 }
 
 async function bootstrap() {
   try {
-    // Try to get token from URL or localStorage
     const urlToken = new URLSearchParams(window.location.search).get("token");
     if (urlToken) {
       state.token = urlToken;
       localStorage.setItem("authToken", urlToken);
-      // Clean URL
       const url = new URL(window.location);
       url.searchParams.delete("token");
       window.history.replaceState({}, "", url);
     }
-    
     if (!state.token) {
-      // No token - redirect to main site login
       window.location.href = "/";
       return;
     }
-    
     state.user = await api("/aurum-api/auth/me");
     showApp(true);
     await refreshAll();
@@ -501,7 +494,7 @@ async function refreshAll() {
     ]);
     const rejected = results.find((item) => item.status === "rejected");
     if (rejected && state.token) {
-      toast(`部分数据刷新失败�?{rejected.reason.message || rejected.reason}`, "warning");
+      toast(`部分数据刷新失败：${rejected.reason.message || rejected.reason}`, "warning");
     }
   });
 }
@@ -515,7 +508,7 @@ async function loadStatus() {
     && (gateway.terminal_trade_allowed === false || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
   const tradeText = mt5TradeBlocked
     ? "MT5 自动交易关闭"
-    : gateway.live_trading_enabled ? "交易发送开�? : "交易发送关�?;
+    : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
   try {
     const auto = await api("/api/auto/status");
@@ -523,14 +516,14 @@ async function loadStatus() {
     const interval = Number(scheduler.interval_seconds || 0);
     const intervalText = interval >= 60 && interval % 60 === 0 ? `${interval / 60}分钟` : `${interval || "--"}秒`;
     const label = scheduler.enabled
-      ? scheduler.running ? "自动推理运行�? : `${intervalText}自动推理开启`
+      ? scheduler.running ? "自动推理运行中" : `${intervalText}自动推理开启`
       : "自动推理关闭";
     const type = scheduler.enabled
       ? scheduler.status === "error" || scheduler.status === "partial_error" ? "warning" : "active"
       : "neutral";
     setBadge("autoAnalyzeMode", label, type);
   } catch {
-    setBadge("autoAnalyzeMode", "自动推理状态未�?, "warning");
+    setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
   }
 }
 
@@ -564,7 +557,7 @@ async function loadSymbols() {
 
 async function loadAccount() {
   const data = await api("/api/mt5/account");
-  const server = data.server || data.company || "服务�?--";
+  const server = data.server || data.company || "服务器 --";
   const currency = data.currency || "USD";
   setText("mt5Server", server);
   setText("accountServerName", server);
@@ -633,11 +626,11 @@ async function refreshQuote() {
 
 function renderPositionRows(positions, withAction) {
   if (!positions.length) {
-    return `<tr class="empty-row"><td colspan="${withAction ? 11 : 8}">当前无持�?/td></tr>`;
+    return `<tr class="empty-row"><td colspan="${withAction ? 11 : 8}">当前无持仓</td></tr>`;
   }
   return positions.map((position) => {
     const type = String(position.type || "").toLowerCase();
-    const directionLabel = type === "buy" ? "买入 �? : "卖出 �?;
+    const directionLabel = type === "buy" ? "买入 多" : "卖出 空";
     const directionClass = type === "buy" ? "dir-buy" : "dir-sell";
     const digits = Number(position.digits);
     const priceDigits = Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
@@ -674,8 +667,8 @@ async function loadConfig() {
   if (!cfg) {
     state.currentConfigHasApiKey = false;
     $("systemPrompt").value = "You are a disciplined trading analyst. Return strict JSON.";
-    $("apiKey").placeholder = "输入 API Key 后保�?;
-    setText("configStatus", "未配�?API Key，系统将使用本地规则兜底");
+    $("apiKey").placeholder = "输入 API Key 后保存";
+    setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
     return;
   }
 
@@ -696,15 +689,15 @@ async function loadConfig() {
   $("enableFuturesTrading").checked = Boolean(cfg.enable_futures_trading);
   $("systemPrompt").value = cfg.system_prompt || "";
   $("apiKey").value = "";
-  $("apiKey").placeholder = state.currentConfigHasApiKey ? "已配置；如需保存配置请重新输入密�? : "输入 API Key 后保�?;
-  const keyText = state.currentConfigHasApiKey ? `密钥已配置：${cfg.masked_api_key}` : "未配�?API Key，本地规则兜底可�?;
+  $("apiKey").placeholder = state.currentConfigHasApiKey ? "已配置；如需保存配置请重新输入密钥" : "输入 API Key 后保存";
+  const keyText = state.currentConfigHasApiKey ? `密钥已配置：${cfg.masked_api_key}` : "未配置 API Key，本地规则兜底可用";
   setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · ${keyText}`);
 }
 
 async function saveConfig() {
   const apiKey = $("apiKey").value.trim();
   if (!apiKey && state.currentConfigHasApiKey) {
-    toast("为避免覆盖现有密钥，保存配置时请重新输入 API Key�?, "warning");
+    toast("为避免覆盖现有密钥，保存配置时请重新输入 API Key。", "warning");
     return;
   }
 
@@ -730,7 +723,7 @@ async function saveConfig() {
     await api("/api/ai/config", { method: "POST", body: JSON.stringify(body) });
     $("apiKey").value = "";
     await loadConfig();
-    toast("模型配置已保�?, "success");
+    toast("模型配置已保存", "success");
   } catch (error) {
     toast(error.message, "error");
   }
@@ -760,7 +753,7 @@ function updateSignalDisplay(signal) {
     setText("sigConfidence", "--");
     updateSignalPriceFields(null);
     $("sigBar").style.width = "0%";
-    setText("sigTime", "等待新信�?);
+    setText("sigTime", "等待新信号");
     setText("sigGeneratedAt", "--");
     setText("sigValidWindow", "--");
     setText("lastSigDirection", "--");
@@ -768,7 +761,7 @@ function updateSignalDisplay(signal) {
     setText("lastSigConfidence", "--");
     setText("lastSigTime", "--");
     $("executeSignalBtn").disabled = true;
-    $("executeSignalBtn").title = "暂无可执行信�?;
+    $("executeSignalBtn").title = "暂无可执行信号";
     return;
   }
 
@@ -807,15 +800,15 @@ function updateSignalDisplay(signal) {
   const executable = dir !== "hold" && !signal.is_stale && !signal.is_executed;
   $("executeSignalBtn").disabled = !executable;
   $("executeSignalBtn").title = executable
-    ? "复核后发送执行请�?
+    ? "复核后发送执行请求"
     : signal.is_stale ? "信号已过期，无法执行"
-      : signal.is_executed ? "信号已执�?
-        : "HOLD 观望信号不执�?;
+      : signal.is_executed ? "信号已执行"
+        : "HOLD 观望信号不执行";
 }
 
 function signalFreshness(signal) {
   if (!signal) return "--";
-  if (signal.is_stale) return "已过�?;
+  if (signal.is_stale) return "已过期";
   const age = Number(signal.age_seconds);
   const ttl = Number(signal.ttl_seconds);
   if (Number.isFinite(age) && Number.isFinite(ttl)) return `${Math.round(age)}s / ${ttl}s`;
@@ -825,10 +818,10 @@ function signalFreshness(signal) {
 function executionStatus(signal) {
   const dir = signalType(signal?.signal_type);
   if (!signal) return "--";
-  if (signal.is_executed) return "已执�?;
-  if (signal.is_stale) return "已过�?;
+  if (signal.is_executed) return "已执行";
+  if (signal.is_stale) return "已过期";
   if (dir === "hold") return "观望，不执行";
-  return "可复�?;
+  return "可复核";
 }
 
 function marketValue(market, key, digits = 2) {
@@ -874,16 +867,16 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
     </div>
     <div class="analysis-status-strip">
-      <div><span>置信�?/span><strong>${confidence.label}</strong></div>
+      <div><span>置信度</span><strong>${confidence.label}</strong></div>
       <div><span>建议手数</span><strong>${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
-      <div><span>有效�?/span><strong class="status-tag ${freshnessClass}">${escapeHtml(signalFreshness(signal))}</strong></div>
-      <div><span>执行状�?/span><strong class="status-tag ${freshnessClass}">${escapeHtml(executionStatus(signal))}</strong></div>
+      <div><span>有效期</span><strong class="status-tag ${freshnessClass}">${escapeHtml(signalFreshness(signal))}</strong></div>
+      <div><span>执行状态</span><strong class="status-tag ${freshnessClass}">${escapeHtml(executionStatus(signal))}</strong></div>
     </div>
     <div class="signal-detail-grid">
       <div><span>止损</span><strong>${escapeHtml(signal.stop_loss_price || "--")}</strong></div>
       <div><span>TP1</span><strong>${escapeHtml(signal.take_profit_1_price || "--")}</strong></div>
       <div><span>TP2 / TP3</span><strong>${escapeHtml(signal.take_profit_2_price || "--")} / ${escapeHtml(signal.take_profit_3_price || "--")}</strong></div>
-      <div><span>数据�?/span><strong>${escapeHtml(market.symbol ? "MT5 行情" : "历史信号")}</strong></div>
+      <div><span>数据源</span><strong>${escapeHtml(market.symbol ? "MT5 行情" : "历史信号")}</strong></div>
     </div>
     <div class="analysis-section">
       <div class="analysis-section-title"><i data-lucide="activity" size="14"></i>行情快照</div>
@@ -900,14 +893,14 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
           <span class="market-group-title">波动</span>
           <div class="market-group-cells">
             <div><span>ATR / 平均波动 <em class="market-unit">USD</em></span><strong>${Number.isFinite(Number(atrValue)) ? fmt(atrValue, 2) : "--"}</strong></div>
-            <div><span>涨跌�?<em class="market-unit">%</em></span><strong>${Number.isFinite(Number(market.price_change_pct)) ? signedText(market.price_change_pct, 3, "%") : "--"}</strong></div>
+            <div><span>涨跌幅 <em class="market-unit">%</em></span><strong>${Number.isFinite(Number(market.price_change_pct)) ? signedText(market.price_change_pct, 3, "%") : "--"}</strong></div>
           </div>
         </div>
         <div class="market-group">
           <span class="market-group-title">账户</span>
           <div class="market-group-cells">
-            <div><span>当前持仓�?<em class="market-unit">�?/em></span><strong>${escapeHtml(positions.total_positions ?? "--")}</strong></div>
-            <div><span>同品种持�?<em class="market-unit">�?/em></span><strong>${escapeHtml(positions.symbol_positions ?? "--")}</strong></div>
+            <div><span>当前持仓数 <em class="market-unit">笔</em></span><strong>${escapeHtml(positions.total_positions ?? "--")}</strong></div>
+            <div><span>同品种持仓 <em class="market-unit">笔</em></span><strong>${escapeHtml(positions.symbol_positions ?? "--")}</strong></div>
           </div>
         </div>
       </div>
@@ -929,15 +922,15 @@ async function runAnalysis() {
   const symbol = $("analyzeSymbol").value;
   const frames = selectedTimeframes();
   if (!frames.length) {
-    toast("请至少选择一个周�?, "warning");
+    toast("请至少选择一个周期", "warning");
     return;
   }
 
   $("runAnalysisBtn").disabled = true;
   $("executeSignalBtn").disabled = true;
   $("analysisResult").className = "analysis-result muted-block";
-  $("analysisResult").textContent = "正在合成行情与信�?;
-  setText("analysisLatency", "推理�?);
+  $("analysisResult").textContent = "正在合成行情与信号";
+  setText("analysisLatency", "推理中");
   setText("signalFreshness", "等待结果");
   const started = performance.now();
 
@@ -958,10 +951,10 @@ async function runAnalysis() {
       .map((item) => item.signal)
       .filter(Boolean)
       .sort((a, b) => Number(b.confidence) - Number(a.confidence))[0];
-    if (!best) throw new Error("未返回有效信�?);
+    if (!best) throw new Error("未返回有效信号");
     renderSignal(best, Math.round(performance.now() - started));
     await loadSignals({ skipResultRender: true });
-    toast(`已生�?${results.length} 个周期信号，已选最高置信度结果`, "success");
+    toast(`已生成 ${results.length} 个周期信号，已选最高置信度结果`, "success");
   } catch (error) {
     $("analysisResult").className = "analysis-result muted-block";
     $("analysisResult").textContent = error.message;
@@ -982,7 +975,7 @@ async function executeSignal() {
     return;
   }
   const dir = signalType(state.selectedSignal.signal_type).toUpperCase();
-  const ok = window.confirm(`复核执行 AI 信号 #${state.selectedSignal.id}�?{state.selectedSignal.symbol} ${dir}）？后台会重取报价并检查有效期。`);
+  const ok = window.confirm(`复核执行 AI 信号 #${state.selectedSignal.id}（${state.selectedSignal.symbol} ${dir}）？后台会重取报价并检查有效期。`);
   if (!ok) return;
 
   try {
@@ -990,7 +983,7 @@ async function executeSignal() {
       method: "POST",
       body: JSON.stringify({ session_id: "default", signal_id: state.selectedSignal.id, confirm: true }),
     });
-    toast(result.message || (result.status === "success" ? "执行请求已处�? : `结果�?{result.status}`), result.status === "success" ? "success" : "warning");
+    toast(result.message || (result.status === "success" ? "执行请求已处理" : `结果：${result.status}`), result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadSignals(), loadAudit()]);
   } catch (error) {
     toast(error.message, "error");
@@ -1025,7 +1018,7 @@ function targetPriceToPoints(orderType, targetPrice, targetKind, quote) {
     : orderType === "buy" ? entry - targetPrice : targetPrice - entry;
   if (!Number.isFinite(distance) || distance <= 0) {
     const label = targetKind === "tp" ? "止盈价格" : "止损价格";
-    throw new Error(`${label}�?{orderSideLabel(orderType)}方向不匹配，请检查价格位置`);
+    throw new Error(`${label}与${orderSideLabel(orderType)}方向不匹配，请检查价格位置`);
   }
   return Math.max(1, Math.round(distance / point));
 }
@@ -1050,7 +1043,7 @@ function buildManualOrder(orderType) {
   const volume = Number($("tradeVolume").value);
   if (!symbol) throw new Error("请选择交易品种");
   if (!Number.isFinite(volume) || volume <= 0) throw new Error("交易手数必须大于 0");
-  if (volume > 0.05) throw new Error("交易手数不能超过 0.05 �?);
+  if (volume > 0.05) throw new Error("交易手数不能超过 0.05 手");
   const quote = state.lastQuote;
   if (!quote || quote.symbol !== symbol || !Number.isFinite(quote.bid) || !Number.isFinite(quote.ask)) {
     throw new Error("当前品种报价未就绪，请先刷新报价");
@@ -1108,29 +1101,29 @@ function renderManualOrderModal(order) {
   const body = $("orderConfirmBody");
   const submit = $("orderConfirmSubmit");
   if (!title || !body || !submit) return;
-  title.textContent = meta.orderType === "buy" ? "�?确认买入" : "�?确认卖出";
+  title.textContent = meta.orderType === "buy" ? "↗ 确认买入" : "↘ 确认卖出";
   title.className = meta.orderType === "buy" ? "buy" : "sell";
-  submit.textContent = "确认发�?;
+  submit.textContent = "确认发送";
   submit.disabled = Number(meta.marginShortfall) > 0;
-  submit.title = submit.disabled ? "预估保证金不足，已阻止提�? : "发送前后端会再次执行风控校�?;
+  submit.title = submit.disabled ? "预估保证金不足，已阻止提交" : "发送前后端会再次执行风控校验";
   const marginKnown = Number.isFinite(Number(meta.estimatedMargin)) && Number.isFinite(Number(meta.freeMargin));
   const riskMessage = !marginKnown
-    ? "保证金数据不完整，后台提交时仍会重新校验账户状态�?
+    ? "保证金数据不完整，后台提交时仍会重新校验账户状态。"
     : meta.marginShortfall > 0
-      ? `可用保证金不足，缺口�?${fmt(meta.marginShortfall)} USD。`
-      : "保证金预检通过，最终结果以 MT5 返回为准�?;
+      ? `可用保证金不足，缺口约 ${fmt(meta.marginShortfall)} USD。`
+      : "保证金预检通过，最终结果以 MT5 返回为准。";
   body.innerHTML = `
     <div><span>品种</span><strong>${escapeHtml(meta.symbol)}</strong></div>
     <div><span>方向</span><strong class="${meta.orderType}">${escapeHtml(meta.sideLabel)}</strong></div>
-    <div><span>预估入场�?/span><strong>${priceDisplay(meta.entryPrice)}</strong></div>
+    <div><span>预估入场价</span><strong>${priceDisplay(meta.entryPrice)}</strong></div>
     <div><span>交易手数</span><strong>${escapeHtml(volumeText(meta.volume))}</strong></div>
-    <div><span>止盈价格</span><strong>${meta.takeProfitPrice ? `${priceDisplay(meta.takeProfitPrice)}（约 ${meta.takeProfitPoints} 点）` : "未设�?}</strong></div>
-    <div><span>止损价格</span><strong>${meta.stopLossPrice ? `${priceDisplay(meta.stopLossPrice)}（约 ${meta.stopLossPoints} 点）` : "未设�?}</strong></div>
+    <div><span>止盈价格</span><strong>${meta.takeProfitPrice ? `${priceDisplay(meta.takeProfitPrice)}（约 ${meta.takeProfitPoints} 点）` : "未设置"}</strong></div>
+    <div><span>止损价格</span><strong>${meta.stopLossPrice ? `${priceDisplay(meta.stopLossPrice)}（约 ${meta.stopLossPoints} 点）` : "未设置"}</strong></div>
     <section class="confirm-risk-section">
       <span class="confirm-risk-title">保证金预检</span>
       <div class="confirm-risk-grid">
         <div><span>预估占用</span><strong>${marginKnown ? `${fmt(meta.estimatedMargin)} USD` : "--"}</strong></div>
-        <div><span>可用保证�?/span><strong>${Number.isFinite(Number(meta.freeMargin)) ? `${fmt(meta.freeMargin)} USD` : "--"}</strong></div>
+        <div><span>可用保证金</span><strong>${Number.isFinite(Number(meta.freeMargin)) ? `${fmt(meta.freeMargin)} USD` : "--"}</strong></div>
         <div><span>杠杆</span><strong>1:${escapeHtml(raw(parseDisplayNumber("accountLeverage")))}</strong></div>
       </div>
       <div class="confirm-risk-warning ${Number(meta.marginShortfall) > 0 ? "blocking" : ""}">${escapeHtml(riskMessage)}</div>
@@ -1161,7 +1154,7 @@ async function submitManualOrder() {
   try {
     const result = await api("/api/mt5/open", { method: "POST", body: JSON.stringify(order.payload) });
     closeManualOrderModal();
-    toast(result.message || `结果�?{result.status}`, result.status === "success" ? "success" : "warning");
+    toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
   } catch (error) {
     toast(error.message, "error");
@@ -1174,7 +1167,7 @@ async function closePosition(ticket) {
   if (!window.confirm(`复核平仓 ticket ${ticket}？`)) return;
   try {
     const result = await api("/api/mt5/close", { method: "POST", body: JSON.stringify({ ticket: Number(ticket), confirm: true }) });
-    toast(result.message || `结果�?{result.status}`, result.status === "success" ? "success" : "warning");
+    toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
   } catch (error) {
     toast(error.message, "error");
@@ -1182,10 +1175,10 @@ async function closePosition(ticket) {
 }
 
 function signalStatusLabel(signal) {
-  if (signal.is_executed) return "已执�?;
-  if (signal.is_stale) return "已过�?;
+  if (signal.is_executed) return "已执行";
+  if (signal.is_stale) return "已过期";
   if (signalType(signal.signal_type) === "hold") return "观望";
-  return "待复�?;
+  return "待复核";
 }
 
 function renderAnalysisHistory(signals) {
@@ -1222,7 +1215,7 @@ function highlightActiveAnalysis(signalId) {
 function openAnalysisFromHistory(signalId) {
   const signal = state.signals.find((item) => String(item.id) === String(signalId));
   if (!signal) {
-    toast("未找到对应推理记录，请刷新历�?, "warning");
+    toast("未找到对应推理记录，请刷新历史", "warning");
     return;
   }
   setTab("ai-analyze");
@@ -1340,7 +1333,7 @@ async function refreshHistoryPage() {
 
 function auditActionLabel(action) {
   return {
-    manual_open: "手动开�?,
+    manual_open: "手动开仓",
     manual_close: "手动平仓",
     ai_execute: "AI 信号执行",
     ai_auto_execute: "AI 自动执行",
@@ -1351,10 +1344,10 @@ function auditActionLabel(action) {
 function auditStatusLabel(status) {
   return {
     success: "成功",
-    skipped: "已跳�?,
+    skipped: "已跳过",
     error: "错误",
     rejected: "风控拒绝",
-    needs_confirmation: "需要确�?,
+    needs_confirmation: "需要确认",
   }[status] || status || "--";
 }
 
