@@ -766,8 +766,25 @@ router.post('/ui/config', authMiddleware, (req, res) => {
 })
 
 // Health check
-router.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'AURUM AI' })
+router.get('/health', async (req, res) => {
+  try {
+    const bridgeStatus = await mt5BridgeRequest('GET', '/status')
+    res.json({ status: 'healthy', service: 'AURUM AI', gateway: bridgeStatus })
+  } catch {
+    res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: false } })
+  }
+})
+
+// MT5 Connect
+router.post('/mt5/connect', authMiddleware, async (req, res) => {
+  const result = await mt5BridgeRequest('POST', '/connect')
+  res.json(result)
+})
+
+// MT5 Disconnect
+router.post('/mt5/disconnect', authMiddleware, async (req, res) => {
+  const result = await mt5BridgeRequest('POST', '/disconnect')
+  res.json(result)
 })
 
 // Auth/me endpoint for frontend compatibility

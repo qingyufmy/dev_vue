@@ -502,8 +502,26 @@ async function refreshAll() {
 async function loadStatus() {
   const health = await api("/health");
   const gateway = health.gateway || {};
-  setBadge("gatewayMode", gateway.mode === "live" ? "MT5 直连" : "模拟数据", gateway.mode === "live" ? "connected" : "neutral");
-  const mt5TradeBlocked = gateway.mode === "live"
+  const isLive = gateway.mode === "live";
+  setBadge("gatewayMode", isLive ? "MT5 直连" : "模拟数据", isLive ? "connected" : "neutral");
+  
+  // Update MT5 connect button
+  const connectBtn = document.getElementById("mt5ConnectBtn");
+  const connectText = document.getElementById("mt5ConnectText");
+  if (connectBtn && connectText) {
+    if (isLive) {
+      connectBtn.classList.add("connected");
+      connectBtn.classList.remove("connecting");
+      connectText.textContent = "MT5已连接";
+      connectBtn.title = "点击断开MT5";
+    } else {
+      connectBtn.classList.remove("connected", "connecting");
+      connectText.textContent = "未连接MT5";
+      connectBtn.title = "点击连接MT5";
+    }
+  }
+  
+  const mt5TradeBlocked = isLive
     && gateway.live_trading_enabled
     && (gateway.terminal_trade_allowed === false || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
   const tradeText = mt5TradeBlocked
@@ -524,6 +542,50 @@ async function loadStatus() {
     setBadge("autoAnalyzeMode", label, type);
   } catch {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
+  }
+}
+
+async function handleMT5Connect() {
+  const connectBtn = document.getElementById("mt5ConnectBtn");
+  const connectText = document.getElementById("mt5ConnectText");
+  if (!connectBtn || !connectText) return;
+
+  // Check if already connected
+  const isCurrentlyConnected = connectBtn.classList.contains("connected");
+
+  if (isCurrentlyConnected) {
+    // Show disconnect confirmation
+    const confirmed = confirm("MT5已连接，是否断开连接？");
+    if (!confirmed) return;
+
+    connectBtn.classList.add("connecting");
+    connectText.textContent = "断开中...";
+    try {
+      await api("/aurum-api/mt5/disconnect", { method: "POST" });
+      await loadStatus();
+      await Promise.allSettled([loadAccount(), loadPositions()]);
+    } catch (error) {
+      alert("断开失败: " + error.message);
+    } finally {
+      connectBtn.classList.remove("connecting");
+    }
+  } else {
+    // Connect to MT5
+    connectBtn.classList.add("connecting");
+    connectText.textContent = "连接中...";
+    try {
+      const result = await api("/aurum-api/mt5/connect", { method: "POST" });
+      if (result.status === "success") {
+        await loadStatus();
+        await Promise.allSettled([loadAccount(), loadPositions(), loadSymbols()]);
+      } else {
+        alert("连接失败: " + (result.message || "未知错误"));
+      }
+    } catch (error) {
+      alert("连接失败: " + error.message);
+    } finally {
+      connectBtn.classList.remove("connecting");
+    }
   }
 }
 
@@ -1426,6 +1488,7 @@ function bindEvents() {
   $("loginForm").addEventListener("submit", login);
   $("logoutBtn").addEventListener("click", logout);
   $("refreshAllBtn").addEventListener("click", refreshAll);
+  $("mt5ConnectBtn")?.addEventListener("click", handleMT5Connect);
   $("saveConfigBtn").addEventListener("click", saveConfig);
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);

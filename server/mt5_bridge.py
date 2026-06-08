@@ -548,6 +548,32 @@ class MT5Handler(BaseHTTPRequestHandler):
                     self.send_json({"status": "error", "message": "ticket required"}, 400)
                 else:
                     self.send_json(close_position(ticket))
+            elif path == "/connect":
+                global MT5_MODE
+                MT5_MODE = "live"
+                try:
+                    connect_live()
+                    terminal = mt5.terminal_info()
+                    account = mt5.account_info()
+                    self.send_json({
+                        "status": "success",
+                        "message": "MT5 connected",
+                        "mode": "live",
+                        "terminal_trade_allowed": terminal.trade_allowed if terminal else None,
+                        "account_trade_allowed": account.trade_allowed if account else None,
+                        "account_trade_expert": account.trade_expert if account else None,
+                    })
+                except Exception as exc:
+                    MT5_MODE = "mock"
+                    self.send_json({"status": "error", "message": str(exc)}, 500)
+            elif path == "/disconnect":
+                MT5_MODE = "mock"
+                try:
+                    if mt5:
+                        mt5.shutdown()
+                except:
+                    pass
+                self.send_json({"status": "success", "message": "MT5 disconnected", "mode": "mock"})
             else:
                 self.send_json({"status": "error", "message": "Not found"}, 404)
         except Exception as e:
