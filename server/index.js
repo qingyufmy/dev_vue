@@ -74,6 +74,79 @@ app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
 app.use('/aurum-api', aiRoutes)
 
+// Root-level health check (frontend calls /health directly)
+app.get('/health', async (req, res) => {
+  try {
+    const http = await import('http')
+    const result = await new Promise((resolve) => {
+      const options = {
+        hostname: '127.0.0.1',
+        port: 8766,
+        path: '/status',
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 5000
+      }
+      const request = http.default.request(options, (response) => {
+        let data = ''
+        response.on('data', chunk => data += chunk)
+        response.on('end', () => {
+          try { resolve(JSON.parse(data)) } catch { resolve({ mode: 'mock', mt5_package_available: false }) }
+        })
+      })
+      request.on('error', () => resolve({ mode: 'mock', mt5_package_available: false }))
+      request.on('timeout', () => { request.destroy(); resolve({ mode: 'mock', mt5_package_available: false }) })
+      request.end()
+    })
+    res.json({ status: 'healthy', service: 'AURUM AI', gateway: result })
+  } catch {
+    res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: false } })
+  }
+})
+
+// Root-level MT5 connect/disconnect (frontend calls /aurum-api/mt5/connect)
+app.post('/aurum-api/mt5/connect', async (req, res) => {
+  try {
+    const http = await import('http')
+    const result = await new Promise((resolve) => {
+      const request = http.default.request({
+        hostname: '127.0.0.1', port: 8766, path: '/connect', method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, timeout: 15000
+      }, (response) => {
+        let data = ''
+        response.on('data', chunk => data += chunk)
+        response.on('end', () => { try { resolve(JSON.parse(data)) } catch { resolve({ status: 'error', message: data }) } })
+      })
+      request.on('error', (err) => resolve({ status: 'error', message: err.message }))
+      request.end()
+    })
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message })
+  }
+})
+
+app.post('/aurum-api/mt5/disconnect', async (req, res) => {
+  try {
+    const http = await import('http')
+    const result = await new Promise((resolve) => {
+      const request = http.default.request({
+        hostname: '127.0.0.1', port: 8766, path: '/disconnect', method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, timeout: 10000
+      }, (response) => {
+        let data = ''
+        response.on('data', chunk => data += chunk)
+        response.on('end', () => { try { resolve(JSON.parse(data)) } catch { resolve({ status: 'error', message: data }) } })
+      })
+      request.on('error', (err) => resolve({ status: 'error', message: err.message }))
+      request.end()
+    })
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message })
+  }
+})
+
 // Serve AURUM AI static files at /ai
 app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai')))
 app.get('/ai', (req, res) => {
