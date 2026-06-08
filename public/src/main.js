@@ -7727,6 +7727,13 @@ function setupGlobalEvents() {
     state.communityPage = 1
     navigate('community')
   })
+  $('#navAI').addEventListener('click', (e) => {
+    if (!requireLogin()) return
+    e.preventDefault()
+    const token = localStorage.getItem('ws_token')
+    const url = `http://127.0.0.1:8765/ai?token=${encodeURIComponent(token)}`
+    window.open(url, '_blank')
+  })
 
   $('#loginBtn').addEventListener('click', () => showAuthModal('login_password'))
   $('#registerBtn').addEventListener('click', () => showAuthModal('register'))
