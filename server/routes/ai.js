@@ -99,12 +99,18 @@ function insertAudit(db, userId, action, symbol, request, result, status) {
 // ============ MT5 Bridge Proxy ============
 function mt5BridgeRequest(method, path, body = null) {
   return new Promise((resolve, reject) => {
+    const headers = { 'Content-Type': 'application/json' }
+    let bodyStr = null
+    if (body) {
+      bodyStr = JSON.stringify(body)
+      headers['Content-Length'] = Buffer.byteLength(bodyStr)
+    }
     const options = {
       hostname: MT5_BRIDGE_HOST,
       port: MT5_BRIDGE_PORT,
       path: path,
       method: method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       timeout: 30000,
     }
     const req = http.request(options, (res) => {
@@ -125,7 +131,7 @@ function mt5BridgeRequest(method, path, body = null) {
       req.destroy()
       resolve({ status: 'error', message: 'MT5 bridge timeout' })
     })
-    if (body) req.write(JSON.stringify(body))
+    if (bodyStr) req.write(bodyStr)
     req.end()
   })
 }

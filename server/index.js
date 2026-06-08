@@ -74,29 +74,6 @@ app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
 app.use('/aurum-api', aiRoutes)
 
-// Proxy AURUM AI API requests to port 8765
-app.use('/aurum-api', (req, res) => {
-  const options = {
-    hostname: '127.0.0.1',
-    port: 8765,
-    path: '/api/v1' + req.url,
-    method: req.method,
-    headers: {
-      ...req.headers,
-      host: '127.0.0.1:8765',
-    },
-  }
-  const proxy = http.request(options, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode, proxyRes.headers)
-    proxyRes.pipe(res, { end: true })
-  })
-  proxy.on('error', (err) => {
-    console.error('AURUM AI proxy error:', err.message)
-    res.status(502).json({ ok: false, error: 'AURUM AI 服务未运行' })
-  })
-  req.pipe(proxy, { end: true })
-})
-
 // Serve AURUM AI static files at /ai
 app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai')))
 app.get('/ai', (req, res) => {
