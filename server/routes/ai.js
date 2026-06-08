@@ -50,7 +50,8 @@ function signalTtlSeconds(timeframe) {
 
 function signalAgeSeconds(createdAt) {
   try {
-    const created = new Date(createdAt)
+    // created_at is stored as UTC string (from toISOString), append Z to parse as UTC
+    const created = new Date(createdAt + 'Z')
     return Math.max((Date.now() - created.getTime()) / 1000, 0)
   } catch {
     return 999999

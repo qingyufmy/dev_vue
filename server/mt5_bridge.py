@@ -371,6 +371,23 @@ def get_history(page=1, page_size=20):
     }
 
 
+def live_trade_blocker():
+    """Check MT5 terminal/account permissions before live trading."""
+    terminal = mt5.terminal_info() if mt5 else None
+    account = mt5.account_info() if mt5 else None
+    diag = {
+        "terminal_trade_allowed": getattr(terminal, "trade_allowed", None) if terminal else None,
+        "account_trade_allowed": getattr(account, "trade_allowed", None) if account else None,
+        "account_trade_expert": getattr(account, "trade_expert", None) if account else None,
+    }
+    if diag["terminal_trade_allowed"] is False:
+        return {"status": "error", "dry_run": False, "message": "MT5 终端自动交易已关闭，请在 MT5 顶部打开 Algo Trading / 自动交易后重试。", "retcode": 10027, "reason": "mt5_terminal_autotrading_disabled", "diagnostic": diag}
+    if diag["account_trade_allowed"] is False:
+        return {"status": "error", "dry_run": False, "message": "当前 MT5 账户不允许交易，请检查账号权限或服务器状态。", "reason": "mt5_account_trade_disabled", "diagnostic": diag}
+    if diag["account_trade_expert"] is False:
+        return {"status": "error", "dry_run": False, "message": "当前 MT5 账户禁止 EA/脚本交易，请在账户或服务器权限中开启。", "reason": "mt5_account_expert_trading_disabled", "diagnostic": diag}
+    return None
+
 def open_position(request):
     if not should_use_live() or not ALLOW_LIVE_TRADING:
         return {
@@ -379,6 +396,10 @@ def open_position(request):
             "request": request, "ticket": random.randint(91000000, 91999999),
         }
     connect_live()
+    blocker = live_trade_blocker()
+    if blocker:
+        blocker["request"] = request
+        return blocker
     symbol = resolve_live_symbol(request["symbol"])
     order_type = request["order_type"].lower()
     mt5.symbol_select(symbol, True)
@@ -433,6 +454,10 @@ def close_position(ticket):
     if not should_use_live() or not ALLOW_LIVE_TRADING:
         return {"status": "success", "dry_run": True, "message": "Mock close accepted.", "ticket": ticket}
     connect_live()
+    blocker = live_trade_blocker()
+    if blocker:
+        blocker["ticket"] = ticket
+        return blocker
     positions = mt5.positions_get(ticket=ticket)
     if not positions:
         raise RuntimeError(f"Position ticket not found: {ticket}")
@@ -549,8 +574,9 @@ class MT5Handler(BaseHTTPRequestHandler):
                 else:
                     self.send_json(close_position(ticket))
             elif path == "/connect":
-                global MT5_MODE
+                global MT5_MODE, ALLOW_LIVE_TRADING
                 MT5_MODE = "live"
+                ALLOW_LIVE_TRADING = True
                 try:
                     connect_live()
                     terminal = mt5.terminal_info()
@@ -568,6 +594,7 @@ class MT5Handler(BaseHTTPRequestHandler):
                     self.send_json({"status": "error", "message": str(exc)}, 500)
             elif path == "/disconnect":
                 MT5_MODE = "mock"
+                ALLOW_LIVE_TRADING = False
                 try:
                     if mt5:
                         mt5.shutdown()
