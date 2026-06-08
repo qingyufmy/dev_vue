@@ -843,39 +843,37 @@ function upsertAutoConfig(db, userId, symbols, timeframes, intervalSeconds, enab
   `).run(userId, JSON.stringify(symbols), JSON.stringify(timeframes), intervalSeconds, enabled ? 1 : 0, now, now)
 }
 
-async function runAutoCycle(userId) {
+// Map timeframe to its candle period in ms
+function timeframeIntervalMs(tf) {
+  const map = { 'M1': 60_000, 'M5': 300_000, 'M15': 900_000, 'M30': 1_800_000, 'H1': 3_600_000, 'H4': 14_400_000, 'D1': 86_400_000 }
+  return map[String(tf).toUpperCase()] || 900_000
+}
+
+// Run one cycle for a specific symbol × timeframe
+async function runAutoCycle(userId, symbol, timeframe) {
   const db = getDB()
   const cfg = getAutoConfig(db, userId)
   if (!cfg || !cfg.enabled) return
 
-  const symbols = JSON.parse(cfg.symbols || '[]')
-  const timeframes = JSON.parse(cfg.timeframes || '[]')
   const config = getActiveConfig(db, userId, 'default')
 
+  try {
+    // Get market data from MT5 bridge
+    let market = {}
+    try {
+      const quote = await mt5BridgeRequest('GET', `/quote/${symbol}`)
+      market = { quote }
+      const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=100`)
+      market.candles = Array.isArray(rates) ? rates : (rates.candles || rates.rates || [])
+    } catch {}
 
-  for (const symbol of symbols) {
-    for (const timeframe of timeframes) {
-      try {
-        // Get market data from MT5 bridge
-        let market = {}
-        try {
-          const quote = await mt5BridgeRequest('GET', `/quote/${symbol}`)
-          market = { quote }
-          // Get candles
-          try {
-            const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=100`)
-            market.candles = Array.isArray(rates) ? rates : (rates.candles || rates.rates || [])
-          } catch {}
-        } catch {}
+    if (!market.quote) return
 
-        if (!market.quote) continue
+    const candleSummary = (market.candles || []).slice(-20).map((c, i) =>
+      `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
+    ).join('\n')
 
-        // Build AI prompt (same as manual analyze)
-        const candleSummary = (market.candles || []).slice(-20).map((c, i) =>
-          `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
-        ).join('\n')
-
-        const prompt = `你是专业的黄金(XAUUSD)短线交易AI。请基于以下技术数据给出交易信号。
+    const prompt = `你是专业的黄金(XAUUSD)短线交易AI。请基于以下技术数据给出交易信号。
 
 当前行情:
 - 品种: ${symbol}
@@ -897,70 +895,68 @@ ${candleSummary || '  (暂无K线数据)'}
   "take_profit_3_price": 止盈价3
 }`
 
-        const providerUrl = (config || {}).api_base_url || 'https://api.deepseek.com'
-        const apiKey = (config || {}).api_key_encrypted
-        if (!apiKey) continue
+    const providerUrl = (config || {}).api_base_url || 'https://api.deepseek.com'
+    const apiKey = (config || {}).api_key_encrypted
+    if (!apiKey) return
 
-        const modelName = (config || {}).model_name || 'deepseek-chat'
-        const temperature = (config || {}).temperature || 0.7
-        const maxTokens = (config || {}).max_tokens || 2000
+    const modelName = (config || {}).model_name || 'deepseek-chat'
+    const temperature = (config || {}).temperature || 0.7
+    const maxTokens = (config || {}).max_tokens || 2000
 
-        const apiUrl = providerUrl.replace(/\/$/, '') + (providerUrl.includes('openai') ? '/v1/chat/completions' : '/chat/completions')
-        const resp = await fetch(apiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model: modelName,
-            messages: [
-              { role: 'system', content: '你是专业的量化交易AI分析师。只输出JSON，不要任何其他文字。' },
-              { role: 'user', content: prompt }
-            ],
-            temperature,
-            max_tokens: maxTokens,
-            response_format: { type: 'json_object' }
-          })
-        })
-        if (!resp.ok) continue
-        const data = await resp.json()
+    const apiUrl = providerUrl.replace(/\/$/, '') + (providerUrl.includes('openai') ? '/v1/chat/completions' : '/chat/completions')
+    const resp = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: modelName,
+        messages: [
+          { role: 'system', content: '你是专业的量化交易AI分析师。只输出JSON，不要任何其他文字。' },
+          { role: 'user', content: prompt }
+        ],
+        temperature,
+        max_tokens: maxTokens,
+        response_format: { type: 'json_object' }
+      })
+    })
+    if (!resp.ok) return
+    const data = await resp.json()
 
-        const raw = data.choices?.[0]?.message?.content || '{}'
-        let signal
-        try { signal = JSON.parse(raw) } catch { continue }
+    const raw = data.choices?.[0]?.message?.content || '{}'
+    let signal
+    try { signal = JSON.parse(raw) } catch { return }
 
-        const createdAt = utcNow()
-        const stmt = db.prepare(`
-          INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
-            recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
-            take_profit_2_price, take_profit_3_price, market_data_json, is_executed, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-        `)
-        const result = stmt.run(
-          userId, config?.id || null, 'default', symbol, timeframe.toUpperCase(),
-          signal.signal_type, signal.confidence, signal.recommended_volume,
-          signal.analysis, signal.reasoning, signal.stop_loss_price,
-          signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
-          JSON.stringify(market), createdAt
-        )
-        signal.id = result.lastInsertRowid
-        signal.symbol = symbol
-        signal.timeframe = timeframe.toUpperCase()
-        signal.created_at = createdAt
-        signal.market_data = market
-        signal.is_executed = false
-        attachSignalTiming(signal)
+    const createdAt = utcNow()
+    const stmt = db.prepare(`
+      INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
+        recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
+        take_profit_2_price, take_profit_3_price, market_data_json, is_executed, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `)
+    const result = stmt.run(
+      userId, config?.id || null, 'default', symbol, timeframe.toUpperCase(),
+      signal.signal_type, signal.confidence, signal.recommended_volume,
+      signal.analysis, signal.reasoning, signal.stop_loss_price,
+      signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
+      JSON.stringify(market), createdAt
+    )
+    signal.id = result.lastInsertRowid
+    signal.symbol = symbol
+    signal.timeframe = timeframe.toUpperCase()
+    signal.created_at = createdAt
+    signal.market_data = market
+    signal.is_executed = false
+    attachSignalTiming(signal)
 
-        // Auto-execute if enabled
-        if (config && config.enable_auto_trade && !signal.is_stale) {
-          const order = signalOrderPayload(signal, config, market, true)
-          const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
-          if (execResult.status === 'success') {
-            db.prepare('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?').run(JSON.stringify(execResult), signal.id)
-          }
-        }
-      } catch (err) {
-        console.error(`[AutoScheduler] ${symbol}/${timeframe} error:`, err.message)
+    // Auto-execute if enabled
+    if (config && config.enable_auto_trade && !signal.is_stale) {
+      const order = signalOrderPayload(signal, config, market, true)
+      const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
+      if (execResult.status === 'success') {
+        db.prepare('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?').run(JSON.stringify(execResult), signal.id)
       }
     }
+  } catch (err) {
+    console.error(`[AutoScheduler] ${symbol}/${timeframe} error:`, err.message)
   }
 
   // Update last_run_at
@@ -969,29 +965,41 @@ ${candleSummary || '  (暂无K线数据)'}
 }
 
 function startAutoScheduler(userId) {
-  if (autoSchedulerState[userId]?.timer) return
+  if (autoSchedulerState[userId]?.timers && Object.keys(autoSchedulerState[userId].timers).length) return
   const db = getDB()
   const cfg = getAutoConfig(db, userId)
   if (!cfg || !cfg.enabled) return
 
-  const intervalMs = (cfg.interval_seconds || 900) * 1000
-  autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null }
+  const symbols = JSON.parse(cfg.symbols || '[]')
+  const timeframes = JSON.parse(cfg.timeframes || '[]')
+  autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timers: {} }
 
-  const tick = async () => {
-    if (!autoSchedulerState[userId]?.running) return
-    try { await runAutoCycle(userId) } catch (e) { console.error('[AutoScheduler] tick error:', e.message) }
-    if (autoSchedulerState[userId]?.running) {
-      autoSchedulerState[userId].timer = setTimeout(tick, intervalMs)
+  let count = 0
+  for (const symbol of symbols) {
+    for (const tf of timeframes) {
+      const intervalMs = timeframeIntervalMs(tf)
+      const key = `${symbol}:${tf}`
+      const stagger = Math.random() * 5000 // stagger starts to avoid API bursts
+
+      const tick = async () => {
+        if (!autoSchedulerState[userId]?.running) return
+        try { await runAutoCycle(userId, symbol, tf) } catch (e) { console.error(`[AutoScheduler] ${key} tick error:`, e.message) }
+        if (autoSchedulerState[userId]?.running) {
+          autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
+        }
+      }
+      autoSchedulerState[userId].timers[key] = setTimeout(tick, 5000 + stagger)
+      count++
     }
   }
-  // First run after 5 seconds
-  autoSchedulerState[userId].timer = setTimeout(tick, 5000)
-  console.log(`[AutoScheduler] Started for user ${userId}, interval ${cfg.interval_seconds}s`)
+  console.log(`[AutoScheduler] Started for user ${userId}: ${count} timers (${timeframes.map(t => t + '=' + (timeframeIntervalMs(t)/1000) + 's').join(', ')})`)
 }
 
 function stopAutoScheduler(userId) {
   const state = autoSchedulerState[userId]
-  if (state?.timer) clearTimeout(state.timer)
+  if (state?.timers) {
+    for (const t of Object.values(state.timers)) clearTimeout(t)
+  }
   if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
   autoSchedulerState[userId] = null
   console.log(`[AutoScheduler] Stopped for user ${userId}`)
@@ -1012,6 +1020,8 @@ router.get('/auto/status', authMiddleware, (req, res) => {
       symbols,
       timeframes,
       interval_seconds: cfg?.interval_seconds || 900,
+      intervals: timeframes.reduce((m, tf) => { m[tf] = timeframeIntervalMs(tf) / 1000; return m }, {}),
+      active_timers: state?.timers ? Object.keys(state.timers) : [],
       last_run_at: state?.lastRunAt || cfg?.last_run_at || null,
       status: cfg?.enabled ? (state?.running ? 'running' : 'stopped') : 'disabled',
     }
@@ -1020,18 +1030,19 @@ router.get('/auto/status', authMiddleware, (req, res) => {
 
 // Auto config endpoint — save and start/stop
 router.post('/auto/config', authMiddleware, async (req, res) => {
-  const { symbols = ['XAUUSD'], timeframes = [], interval_seconds = 900 } = req.body
+  const { symbols = ['XAUUSD'], timeframes = [] } = req.body
   const enabled = timeframes.length > 0
+  // Interval is now auto-calculated per timeframe, use shortest as DB value
+  const shortestMs = timeframes.length ? Math.min(...timeframes.map(timeframeIntervalMs)) : 900_000
+  const interval_seconds = Math.round(shortestMs / 1000)
   const db = getDB()
   upsertAutoConfig(db, req.userId, symbols, timeframes, interval_seconds, enabled)
 
-  if (enabled) {
-    startAutoScheduler(req.userId)
-  } else {
-    stopAutoScheduler(req.userId)
-  }
+  // Always stop first to clear old timers, then restart if enabled
+  stopAutoScheduler(req.userId)
+  if (enabled) startAutoScheduler(req.userId)
 
-  res.json({ status: 'success', enabled, symbols, timeframes, interval_seconds })
+  res.json({ status: 'success', enabled, symbols, timeframes, interval_seconds, intervals: timeframes.reduce((m, tf) => { m[tf] = timeframeIntervalMs(tf) / 1000; return m }, {}) })
 })
 
 // On server start, restart schedulers for enabled users

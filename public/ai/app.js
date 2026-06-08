@@ -523,7 +523,14 @@ async function loadStatus() {
     const scheduler = auto.scheduler || {};
     const enabled = scheduler.enabled;
     const running = scheduler.running;
-    const tfs = (scheduler.timeframes || []).join(", ");
+    const intervals = scheduler.intervals || {};
+    const tfs = (scheduler.timeframes || []).map(tf => {
+      const sec = intervals[tf];
+      if (!sec) return tf;
+      if (sec >= 3600) return `${tf}(${Math.round(sec/3600)}h)`;
+      if (sec >= 60) return `${tf}(${Math.round(sec/60)}m)`;
+      return `${tf}(${sec}s)`;
+    }).join(", ");
     const label = enabled
       ? running ? `自动推理运行中 ${tfs}` : `自动推理 ${tfs}`
       : "自动推理关闭";
@@ -536,7 +543,7 @@ async function loadStatus() {
     state.autoConfig = {
       symbols: scheduler.symbols || ["XAUUSD"],
       timeframes: scheduler.timeframes || [],
-      interval_seconds: scheduler.interval_seconds || 900,
+      intervals: scheduler.intervals || {},
     };
   } catch {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
@@ -638,7 +645,7 @@ async function saveAutoConfig() {
   try {
     const result = await api("/api/auto/config", {
       method: "POST",
-      body: JSON.stringify({ symbols, timeframes, interval_seconds: state.autoConfig?.interval_seconds || 900 }),
+      body: JSON.stringify({ symbols, timeframes }),
     });
     toast(result.enabled ? `自动推理已开启: ${timeframes.join(", ")}` : "自动推理已关闭", "success");
     closeAutoConfigModal();
