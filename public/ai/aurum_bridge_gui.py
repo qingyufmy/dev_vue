@@ -7,6 +7,12 @@ import time
 import threading
 import urllib.request
 import urllib.error
+import ssl
+try:
+    import websocket  # websocket-client
+    HAS_WS = True
+except ImportError:
+    HAS_WS = False
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 
@@ -471,6 +477,90 @@ class AurumBridge:
         if info:
             self.root.after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
 
+        # Use WebSocket if available, fallback to HTTP polling
+        if HAS_WS:
+            self._bridge_loop_ws()
+        else:
+            self.root.after(0, self._log, "websocket-client 未安装，回退到HTTP轮询模式")
+            self._bridge_loop_http()
+
+        if self.mt5:
+            self.mt5.shutdown()
+        self.root.after(0, self._log, "MT5 已断开")
+
+    def _bridge_loop_ws(self):
+        """WebSocket bridge loop - zero latency"""
+        server = self.server_var.get().replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
+        ws_url = f"{server}/aurum-api/bridge/ws?token={self.token_var.get()}"
+        self.root.after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
+
+        while self.running:
+            try:
+                ws = websocket.create_connection(ws_url, timeout=10,
+                    header=["Origin: http://localhost"])
+                self.root.after(0, self._log, "WebSocket 已连接")
+                last_hb = 0
+
+                while self.running:
+                    # Send heartbeat every 10s
+                    now = time.time()
+                    if now - last_hb > 10:
+                        try:
+                            account = self.mt5.account_info()
+                            terminal = self.mt5.terminal_info()
+                            ws.send(json.dumps({
+                                "type": "heartbeat",
+                                "account": {
+                                    "login": account.login if account else None,
+                                    "balance": account.balance if account else None,
+                                    "equity": account.equity if account else None,
+                                    "server": account.server if account else None,
+                                },
+                                "terminal": {
+                                    "build": terminal.build if terminal else None,
+                                    "connected": terminal.connected if terminal else None,
+                                },
+                            }))
+                            if account:
+                                self.root.after(0, self._set_status, "已连接", "#22c55e",
+                                               f"{account.login} @ {account.server}  ${account.balance:,.2f}")
+                            last_hb = now
+                        except Exception as e:
+                            self.root.after(0, self._log, f"心跳错误: {e}")
+
+                    # Receive commands (non-blocking with short timeout)
+                    ws.settimeout(0.5)
+                    try:
+                        data = ws.recv()
+                        if data:
+                            msg = json.loads(data)
+                            if msg.get("type") == "command":
+                                cmd = msg
+                                self.root.after(0, self._log, f"执行: {cmd['action']}")
+                                resp = self._process_command(cmd)
+                                ws.send(json.dumps({
+                                    "type": "result",
+                                    "command_id": msg["command_id"],
+                                    "result": resp,
+                                }))
+                                self.root.after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
+                            elif msg.get("type") == "connected":
+                                self.root.after(0, self._log, f"服务端确认: user {msg.get('userId')}")
+                    except websocket.WebSocketTimeoutException:
+                        pass  # No data, loop back for heartbeat
+                    except websocket.WebSocketConnectionClosedException:
+                        self.root.after(0, self._log, "WebSocket 断开，重连中...")
+                        break
+
+            except (websocket.WebSocketException, ConnectionRefusedError, OSError) as e:
+                self.root.after(0, self._log, f"WebSocket 连接失败: {e}，3秒后重连...")
+                time.sleep(3)
+            except Exception as e:
+                self.root.after(0, self._log, f"错误: {e}")
+                time.sleep(3)
+
+    def _bridge_loop_http(self):
+        """HTTP polling fallback (legacy)"""
         last_hb = 0
         while self.running:
             try:
@@ -481,7 +571,6 @@ class AurumBridge:
 
                 result = self._api("GET", "/bridge/poll")
                 if not result or result.get("error"):
-                    self.root.after(0, self._log, f"Poll 错误: {result}")
                     time.sleep(2)
                     continue
                 cmds = result.get("commands", [])
@@ -497,10 +586,6 @@ class AurumBridge:
             except Exception as e:
                 self.root.after(0, self._log, f"错误: {e}")
                 time.sleep(5)
-
-        if self.mt5:
-            self.mt5.shutdown()
-        self.root.after(0, self._log, "MT5 已断开")
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)

@@ -21,6 +21,7 @@ import configRoutes from './routes/config.js'
 import aiRoutes from './routes/ai.js'
 import { initAutoSchedulers } from './routes/ai.js'
 import { authMiddleware } from './middleware/auth.js'
+import { initBridgeWS } from './bridge-ws.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
@@ -269,6 +270,8 @@ startBridge()
 // Init DB and start
 initDB()
 initAutoSchedulers()
-app.listen(PORT, () => {
+const server = http.createServer(app)
+initBridgeWS(server)
+server.listen(PORT, () => {
   console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
 })

@@ -1,7 +1,9 @@
-﻿import { Router } from 'express'
+import { Router } from 'express'
 import { getDB } from '../db.js'
 import jwt from 'jsonwebtoken'
 import http from 'http'
+
+import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges } from '../bridge-ws.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
@@ -92,7 +94,7 @@ function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
   } else {
     row = db.prepare('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1').get(userId, sessionId)
   }
-  // Fallback: if ai_configs has no API key, merge from system_config (金融工具箱)
+  // Fallback: if ai_configs has no API key, merge from system_config (���ڹ�����)
   if (!row || !row.api_key_encrypted) {
     const cfg = {}
     try {
@@ -428,9 +430,8 @@ function signalOrderPayload(signal, config, market, confirm) {
 
 // ============ Execute Order ============
 async function executeOrder(userId, config, request, action) {
-  // Try polling bridge first, fallback to old bridge
-  const hb = bridgeHeartbeats.get(userId)
-  const useBridge = hb && (Date.now() - hb.timestamp < 15000)
+  // Try WebSocket bridge first, fallback to old bridge
+  const useBridge = isBridgeAlive(userId)
 
   let accountResult, positionsResult, quote
   if (useBridge) {
@@ -556,7 +557,7 @@ router.put('/ai/config/prompt', authMiddleware, (req, res) => {
   const { session_id = 'default', system_prompt } = req.body
   const db = getDB()
   const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
-  if (user?.role !== 'admin') return res.status(403).json({ status: 'error', message: '仅管理员可修改系统提示词' })
+  if (user?.role !== 'admin') return res.status(403).json({ status: 'error', message: '������Ա���޸�ϵͳ��ʾ��' })
   const row = getActiveConfig(db, req.userId, session_id)
   if (!row) return res.status(404).json({ status: 'error', message: 'No active config' })
   db.prepare('UPDATE ai_configs SET system_prompt = ?, updated_at = ? WHERE id = ?').run(system_prompt, utcNow(), row.id)
@@ -714,9 +715,8 @@ router.get('/mt5/status', authMiddleware, async (req, res) => {
 
 // MT5 Account
 router.get('/mt5/account', authMiddleware, async (req, res) => {
-  // Try polling bridge first
-  const hb = bridgeHeartbeats.get(req.userId)
-  if (hb && (Date.now() - hb.timestamp < 15000)) {
+  // Try WebSocket bridge first
+  if (isBridgeAlive(req.userId)) {
     const result = await executeViaBridge(req.userId, 'account', {})
     if (result.status !== 'error') return res.json(result)
   }
@@ -727,9 +727,8 @@ router.get('/mt5/account', authMiddleware, async (req, res) => {
 
 // MT5 Symbols
 router.get('/mt5/symbols', authMiddleware, async (req, res) => {
-  // Try polling bridge first
-  const hb = bridgeHeartbeats.get(req.userId)
-  if (hb && (Date.now() - hb.timestamp < 15000)) {
+  // Try WebSocket bridge first
+  if (isBridgeAlive(req.userId)) {
     const result = await executeViaBridge(req.userId, 'symbols', {})
     if (!result.error && result.status !== 'error') return res.json(result)
   }
@@ -739,9 +738,8 @@ router.get('/mt5/symbols', authMiddleware, async (req, res) => {
 
 // MT5 Quote
 router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
-  // Try polling bridge first
-  const hb = bridgeHeartbeats.get(req.userId)
-  if (hb && (Date.now() - hb.timestamp < 15000)) {
+  // Try WebSocket bridge first
+  if (isBridgeAlive(req.userId)) {
     const result = await executeViaBridge(req.userId, 'quote', { symbol: req.params.symbol })
     if (result.status !== 'error') return res.json(result)
   }
@@ -752,9 +750,8 @@ router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
 // MT5 Positions
 router.get('/mt5/positions', authMiddleware, async (req, res) => {
   const { symbol } = req.query
-  // Try polling bridge first
-  const hb = bridgeHeartbeats.get(req.userId)
-  if (hb && (Date.now() - hb.timestamp < 15000)) {
+  // Try WebSocket bridge first
+  if (isBridgeAlive(req.userId)) {
     const result = await executeViaBridge(req.userId, 'positions', { symbol })
     if (!result.error) return res.json(result)
   }
@@ -785,9 +782,8 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
   if (!confirm) {
     result = { status: 'needs_confirmation', message: 'confirmation_required' }
   } else {
-    // Try polling bridge first
-    const hb = bridgeHeartbeats.get(req.userId)
-    if (hb && (Date.now() - hb.timestamp < 15000)) {
+    // Try WebSocket bridge first
+    if (isBridgeAlive(req.userId)) {
       result = await executeViaBridge(req.userId, 'close', { ticket })
     } else {
       result = await mt5BridgeRequest('POST', '/close', { ticket })
@@ -802,9 +798,8 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
 router.get('/mt5/rates', authMiddleware, async (req, res) => {
   const { symbol, timeframe = 'M30', count = 100 } = req.query
   if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
-  // Try polling bridge first
-  const hb = bridgeHeartbeats.get(req.userId)
-  if (hb && (Date.now() - hb.timestamp < 15000)) {
+  // Try WebSocket bridge first
+  if (isBridgeAlive(req.userId)) {
     const result = await executeViaBridge(req.userId, 'rates', { symbol, timeframe, count })
     if (!result.error) return res.json(result)
   }
@@ -856,14 +851,13 @@ router.post('/ui/config', authMiddleware, (req, res) => {
 // Health check
 router.get('/health', async (req, res) => {
   try {
-    // Check if any bridge has sent heartbeat in last 15s
+    // Check if any bridge is connected via WebSocket
     let bridgeAlive = false
     let bridgeAccount = null
-    const now = Date.now()
-    for (const [userId, hb] of bridgeHeartbeats) {
-      if (now - hb.timestamp < 15000) {
+    for (const bridge of getAllBridges()) {
+      if (bridge.alive) {
         bridgeAlive = true
-        bridgeAccount = hb.account
+        bridgeAccount = bridge.account
         break
       }
     }
@@ -889,7 +883,7 @@ router.get('/health', async (req, res) => {
 })
 
 // MT5 Connect
-// MT5 Toggle Trade — enable/disable live trading without disconnecting
+// MT5 Toggle Trade �� enable/disable live trading without disconnecting
 router.post('/mt5/toggle-trade', authMiddleware, async (req, res) => {
   const { enable } = req.body
   const result = await mt5BridgeRequest('POST', '/toggle-trade', { enable })
@@ -929,7 +923,7 @@ function timeframeIntervalMs(tf) {
   return map[String(tf).toUpperCase()] || 900_000
 }
 
-// Run one cycle for a specific symbol × timeframe
+// Run one cycle for a specific symbol �� timeframe
 async function runAutoCycle(userId, symbol, timeframe) {
   const db = getDB()
   const cfg = getAutoConfig(db, userId)
@@ -952,30 +946,30 @@ async function runAutoCycle(userId, symbol, timeframe) {
       `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
     ).join('\n')
 
-    const prompt = `你是专业的黄金(XAUUSD)短线交易AI。请基于以下技术数据给出交易信号。
+    const prompt = `����רҵ�Ļƽ�(XAUUSD)���߽���AI����������¼������ݸ��������źš�
 
-当前行情:
-- 品种: ${symbol}
-- 当前价格: ${market.latest_price}
+��ǰ����:
+- Ʒ��: ${symbol}
+- ��ǰ�۸�: ${market.latest_price}
 - SMA20: ${market.sma_20}
-- 动量(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
-- 波动率: ${market.volatility_pct}%
-- 持仓: 多${market.positions.long_positions} 空${market.positions.short_positions} 盈亏${market.positions.total_profit}
-- 分析周期: ${timeframe}
-- 最近K线数据:
-${candleSummary || '  (暂无K线数据)'}
+- ����(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
+- ������: ${market.volatility_pct}%
+- �ֲ�: ��${market.positions.long_positions} ��${market.positions.short_positions} ӯ��${market.positions.total_profit}
+- ��������: ${timeframe}
+- ���K������:
+${candleSummary || '  (����K������)'}
 
-请用JSON回复，格式严格如下:
+����JSON�ظ�����ʽ�ϸ�����:
 {
-  "signal_type": "buy 或 sell 或 hold",
-  "confidence": 0.0到1.0的置信度,
-  "recommended_volume": 建议手数(数字),
-  "analysis": "简短分析(不超过100字)",
-  "reasoning": "推理过程",
-  "stop_loss_price": 止损价,
-  "take_profit_1_price": 止盈价1,
-  "take_profit_2_price": 止盈价2,
-  "take_profit_3_price": 止盈价3
+  "signal_type": "buy �� sell �� hold",
+  "confidence": 0.0��1.0�����Ŷ�,
+  "recommended_volume": ��������(����),
+  "analysis": "��̷���(������100��)",
+  "reasoning": "��������",
+  "stop_loss_price": ֹ���,
+  "take_profit_1_price": ֹӯ��1,
+  "take_profit_2_price": ֹӯ��2,
+  "take_profit_3_price": ֹӯ��3
 }`
 
     const providerUrl = (config || {}).api_base_url || 'https://api.deepseek.com'
@@ -1111,7 +1105,7 @@ router.get('/auto/status', authMiddleware, (req, res) => {
   })
 })
 
-// Auto config endpoint — save and start/stop
+// Auto config endpoint �� save and start/stop
 router.post('/auto/config', authMiddleware, async (req, res) => {
   const { symbols = ['XAUUSD'], timeframes = [] } = req.body
   const enabled = timeframes.length > 0
@@ -1140,82 +1134,17 @@ export function initAutoSchedulers() {
   } catch {}
 }
 
-// ============ Bridge Polling (Local MT5 Bridge) ============
-const bridgeCommandQueues = new Map()   // userId -> [{id, action, params, timestamp}]
-const bridgeResultStore = new Map()     // commandId -> result
-const bridgeHeartbeats = new Map()      // userId -> { account, terminal, timestamp }
+// ============ Bridge (WebSocket via bridge-ws.js) ============
 
-// Bridge poll: local script calls this to get pending commands
-let bridgePollCount = 0
-router.get('/bridge/poll', authMiddleware, (req, res) => {
-  bridgePollCount++
-  const userId = req.userId
-  const queue = bridgeCommandQueues.get(userId) || []
-  const commands = queue.splice(0, 10) // take up to 10
-  bridgeCommandQueues.set(userId, queue)
-  if (commands.length > 0) console.log(`[Bridge] Poll #${bridgePollCount} by user ${userId}: ${commands.length} command(s)`)
-  res.json({ commands })
-})
-
-// Bridge result: local script reports command results
-router.post('/bridge/result', authMiddleware, (req, res) => {
-  const { command_id, result } = req.body
-  if (command_id) {
-    bridgeResultStore.set(command_id, { result, timestamp: Date.now() })
-    // Clean old results (>5min)
-    for (const [id, v] of bridgeResultStore) {
-      if (Date.now() - v.timestamp > 300000) bridgeResultStore.delete(id)
-    }
-  }
-  res.json({ status: 'ok' })
-})
-
-// Queue a command for user's bridge
-function queueBridgeCommand(userId, action, params) {
-  const id = `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  const queue = bridgeCommandQueues.get(userId) || []
-  queue.push({ id, action, params, timestamp: Date.now() })
-  bridgeCommandQueues.set(userId, queue)
-  return id
-}
-
-// Execute via bridge and wait for result (polling)
-async function executeViaBridge(userId, action, params, timeoutMs = 30000) {
-  const cmdId = queueBridgeCommand(userId, action, params)
-  const start = Date.now()
-  while (Date.now() - start < timeoutMs) {
-    const result = bridgeResultStore.get(cmdId)
-    if (result) {
-      bridgeResultStore.delete(cmdId)
-      return result.result
-    }
-    await new Promise(r => setTimeout(r, 200))
-  }
-  bridgeResultStore.delete(cmdId)
-  return { status: 'error', message: '桥接超时，请确保本地桥接脚本正在运行' }
+// Execute command via WebSocket bridge
+async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
+  return sendBridgeCommand(userId, action, params, timeoutMs)
 }
 
 // Get bridge status for user
 router.get('/bridge/status', authMiddleware, (req, res) => {
-  const queue = bridgeCommandQueues.get(req.userId) || []
-  const hb = bridgeHeartbeats.get(req.userId)
-  const alive = hb && (Date.now() - hb.timestamp < 15000) // 15s timeout
-  res.json({
-    pending_commands: queue.length,
-    has_bridge: alive,
-    heartbeat: alive ? hb : null,
-  })
+  res.json(getBridgeStatus(req.userId))
 })
 
-// Bridge heartbeat: local bridge reports status
-router.post('/bridge/heartbeat', authMiddleware, (req, res) => {
-  bridgeHeartbeats.set(req.userId, {
-    account: req.body.account || null,
-    terminal: req.body.terminal || null,
-    timestamp: Date.now(),
-  })
-  res.json({ status: 'ok', pollCount: bridgePollCount })
-})
-
-export { executeViaBridge, bridgeHeartbeats }
+export { executeViaBridge, isBridgeAlive, getAllBridges }
 export default router
