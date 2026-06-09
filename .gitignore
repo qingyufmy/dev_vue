@@ -18,3 +18,5 @@ _*.py
 *.log
 server/stdout.log
 server/stderr.log
+
+_build/
