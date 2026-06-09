@@ -10,9 +10,11 @@ from datetime import datetime, timezone, timedelta
 _MT5_TZ = timezone(timedelta(hours=3))
 
 def _mt5_time(ts):
+    """Convert MT5 timestamp to readable string.
+    MT5 tick.time is already in broker time (UTC+3), so utcfromtimestamp gives correct display."""
     if not ts:
         return ''
-    return datetime.fromtimestamp(int(ts), tz=_MT5_TZ).strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
 
 import ssl
 try:

@@ -185,10 +185,10 @@ router.post('/admin-users', authMiddleware, adminOnly, (req, res) => {
     const { userId, plan, expiresAt, role, nickname } = req.body
     const db = getDB()
 
-    if (plan) db.prepare("UPDATE users SET plan = ?, updated_at = datetime('now') WHERE id = ?").run(plan, userId)
-    if (expiresAt !== undefined) db.prepare("UPDATE users SET plan_expires_at = ?, updated_at = datetime('now') WHERE id = ?").run(expiresAt, userId)
-    if (role) db.prepare("UPDATE users SET role = ?, updated_at = datetime('now') WHERE id = ?").run(role, userId)
-    if (nickname) db.prepare("UPDATE users SET nickname = ?, updated_at = datetime('now') WHERE id = ?").run(nickname, userId)
+    if (plan) db.prepare("UPDATE users SET plan = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(plan, userId)
+    if (expiresAt !== undefined) db.prepare("UPDATE users SET plan_expires_at = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(expiresAt, userId)
+    if (role) db.prepare("UPDATE users SET role = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(role, userId)
+    if (nickname) db.prepare("UPDATE users SET nickname = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(nickname, userId)
 
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '更新失败' }) }
@@ -216,7 +216,7 @@ router.put('/admin-users', authMiddleware, adminOnly, (req, res) => {
       }
     }
     if (updates.length === 0) return res.json({ ok: false, error: '没有需要更新的字段' })
-    updates.push("updated_at = datetime('now')")
+    updates.push("updated_at = datetime('now', '+8 hours')")
     params.push(uid)
     db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...params)
     res.json({ ok: true })
@@ -385,7 +385,7 @@ router.post('/admin-course-items', authMiddleware, adminOnly, (req, res) => {
       db.prepare(`
         UPDATE courses SET number=?, title=?, description=?, category=?, content_type=?, duration=?,
         youtube_id=?, bilibili_id=?, cover=?, access_level=?, sort_order=?, article_url=?, article_object_key=?,
-        status=?, updated_at=datetime('now') WHERE episode_id=?
+        status=?, updated_at=datetime('now', '+8 hours') WHERE episode_id=?
       `).run(number, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId)
       const course = db.prepare('SELECT * FROM courses WHERE episode_id = ?').get(episodeId)
       res.json({ ok: true, course })

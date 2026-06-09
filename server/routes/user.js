@@ -39,10 +39,10 @@ router.put('/profile', authMiddleware, (req, res) => {
 
     const displayName = name || nickname
     if (displayName !== undefined) {
-      db.prepare("UPDATE users SET nickname = ?, updated_at = datetime('now') WHERE id = ?").run(displayName, req.user.id)
+      db.prepare("UPDATE users SET nickname = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(displayName, req.user.id)
     }
     if (avatar !== undefined) {
-      db.prepare("UPDATE users SET avatar = ?, updated_at = datetime('now') WHERE id = ?").run(avatar, req.user.id)
+      db.prepare("UPDATE users SET avatar = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(avatar, req.user.id)
     }
 
     const user = db.prepare(`
@@ -181,7 +181,7 @@ router.post('/progress', authMiddleware, (req, res) => {
       if (totalDuration !== undefined) { updates.push('total_duration = ?'); params.push(totalDuration) }
       if (completed !== undefined) { updates.push('completed = ?'); params.push(completed ? 1 : 0) }
       if (quizPassed !== undefined) { updates.push('quiz_passed = ?'); params.push(quizPassed ? 1 : 0) }
-      updates.push("updated_at = datetime('now')")
+      updates.push("updated_at = datetime('now', '+8 hours')")
       params.push(req.user.id, episodeId)
       db.prepare(`UPDATE progress SET ${updates.join(', ')} WHERE user_id = ? AND episode_id = ?`).run(...params)
     } else {

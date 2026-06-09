@@ -31,9 +31,7 @@ function utcNow() {
 }
 
 function mt5Now() {
-  const now = new Date()
-  now.setUTCHours(now.getUTCHours() + 3) // MT5 server UTC+3
-  return now.toISOString().replace('T', ' ').substring(0, 19)
+  return new Date().toISOString().replace('T', ' ').substring(0, 19)
 }
 
 function utcToMt5Time(utcStr) {

@@ -163,7 +163,7 @@ router.post('/verify-code', (req, res) => {
     const db = getDB()
     const record = db.prepare(`
       SELECT * FROM verification_codes
-      WHERE email = ? AND code = ? AND purpose = ? AND used = 0 AND expires_at > datetime('now')
+      WHERE email = ? AND code = ? AND purpose = ? AND used = 0 AND expires_at > datetime('now', '+8 hours')
       ORDER BY created_at DESC LIMIT 1
     `).get(targetEmail, code, purpose || 'login')
 
@@ -187,21 +187,21 @@ router.post('/reset-password', (req, res) => {
     // If verifyToken provided (code-based flow), accept it
     if (verifyToken) {
       const hash = bcrypt.hashSync(newPassword, 10)
-      db.prepare("UPDATE users SET password = ?, updated_at = datetime('now') WHERE email = ?").run(hash, email)
+      db.prepare("UPDATE users SET password = ?, updated_at = datetime('now', '+8 hours') WHERE email = ?").run(hash, email)
       return res.json({ ok: true, message: '密码已重置' })
     }
 
     if (!code) return res.json({ ok: false, error: '请输入验证码' })
     const record = db.prepare(`
       SELECT * FROM verification_codes
-      WHERE email = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > datetime('now')
+      WHERE email = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > datetime('now', '+8 hours')
       ORDER BY created_at DESC LIMIT 1
     `).get(email, code)
 
     if (!record) return res.json({ ok: false, error: '验证码无效或已过期' })
 
     const hash = bcrypt.hashSync(newPassword, 10)
-    db.prepare("UPDATE users SET password = ?, updated_at = datetime('now') WHERE email = ?").run(hash, email)
+    db.prepare("UPDATE users SET password = ?, updated_at = datetime('now', '+8 hours') WHERE email = ?").run(hash, email)
     db.prepare('UPDATE verification_codes SET used = 1 WHERE id = ?').run(record.id)
 
     res.json({ ok: true, message: '密码已重置' })
@@ -225,7 +225,7 @@ router.post('/change-password', authMiddleware, (req, res) => {
     }
 
     const hash = bcrypt.hashSync(newPassword, 10)
-    db.prepare("UPDATE users SET password = ?, updated_at = datetime('now') WHERE id = ?").run(hash, req.user.id)
+    db.prepare("UPDATE users SET password = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(hash, req.user.id)
 
     res.json({ ok: true, relogin: true, message: '密码已修改' })
   } catch (err) {
@@ -240,7 +240,7 @@ router.post('/telegram-entry', authMiddleware, (req, res) => {
 
     // Generate a fake bot URL for local dev
     const botUrl = `https://t.me/WallStreetSkillBot?start=${user.referral_code || user.id}`
-    db.prepare("UPDATE users SET telegram_last_invite_sent_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(req.user.id)
+    db.prepare("UPDATE users SET telegram_last_invite_sent_at = datetime('now', '+8 hours'), updated_at = datetime('now', '+8 hours') WHERE id = ?").run(req.user.id)
 
     res.json({ ok: true, success: true, botUrl, expiresInSeconds: 600 })
   } catch (err) {
