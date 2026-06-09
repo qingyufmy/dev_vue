@@ -480,7 +480,11 @@ class AurumBridge:
                     last_hb = now
 
                 result = self._api("GET", "/bridge/poll")
-                cmds = result.get("commands", []) if result else []
+                if not result or result.get("error"):
+                    self.root.after(0, self._log, f"Poll 错误: {result}")
+                    time.sleep(2)
+                    continue
+                cmds = result.get("commands", [])
                 for cmd in cmds:
                     self.root.after(0, self._log, f"执行: {cmd['action']}")
                     resp = self._process_command(cmd)
