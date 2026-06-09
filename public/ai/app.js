@@ -978,12 +978,14 @@ function _updateSignalAge() {
   if (age >= _signalTtlSeconds) {
     setText('sigValidWindow', '已过期');
     setText('signalFreshness', '已过期');
+    setText('analysisValidity', '已过期');
     stopSignalAgeTicker();
     return;
   }
   const text = `${age}s / ${_signalTtlSeconds}s`;
   setText('sigValidWindow', text);
   setText('signalFreshness', text);
+  setText('analysisValidity', text);
 }
 
 
@@ -1042,7 +1044,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-status-strip">
       <div><span>置信度</span><strong>${confidence.label}</strong></div>
       <div><span>建议手数</span><strong>${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
-      <div><span>有效期</span><strong class="status-tag ${freshnessClass}">${escapeHtml(signalFreshness(signal))}</strong></div>
+      <div><span>有效期</span><strong id="analysisValidity" class="status-tag ${freshnessClass}">${escapeHtml(signalFreshness(signal))}</strong></div>
       <div><span>执行状态</span><strong class="status-tag ${freshnessClass}">${escapeHtml(executionStatus(signal))}</strong></div>
     </div>
     <div class="signal-detail-grid">

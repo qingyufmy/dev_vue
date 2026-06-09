@@ -862,16 +862,15 @@ async function runAutoCycle(userId, symbol, timeframe) {
   const config = getActiveConfig(db, userId, 'default')
 
   try {
-    // Get market data from MT5 bridge
-    let market = {}
-    try {
-      const quote = await mt5BridgeRequest('GET', `/quote/${symbol}`)
-      market = { quote }
-      const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=100`)
-      market.candles = Array.isArray(rates) ? rates : (rates.candles || rates.rates || [])
-    } catch {}
+    // Get market data from MT5 bridge (same flow as /ai/analyze)
+    const account = await mt5BridgeRequest('GET', '/account')
+    const positionsData = await mt5BridgeRequest('GET', `/positions?symbol=${symbol}`)
+    const positions = positionsData.positions || []
+    const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=100`)
 
-    if (!market.quote) return
+    if (!rates || rates.status === 'error' || !Array.isArray(rates) || rates.length === 0) return
+
+    const market = calculateMarketData(symbol, timeframe, rates, account, positions)
 
     const candleSummary = (market.candles || []).slice(-20).map((c, i) =>
       `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
@@ -881,7 +880,11 @@ async function runAutoCycle(userId, symbol, timeframe) {
 
 当前行情:
 - 品种: ${symbol}
-- 当前价格: Bid=${market.quote.bid} Ask=${market.quote.ask} Spread=${market.quote.spread}
+- 当前价格: ${market.latest_price}
+- SMA20: ${market.sma_20}
+- 动量(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
+- 波动率: ${market.volatility_pct}%
+- 持仓: 多${market.positions.long_positions} 空${market.positions.short_positions} 盈亏${market.positions.total_profit}
 - 分析周期: ${timeframe}
 - 最近K线数据:
 ${candleSummary || '  (暂无K线数据)'}
