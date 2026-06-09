@@ -5,6 +5,7 @@
   signals: [],
   selectedSignal: null,
   quoteTimer: null,
+  _lastGatewayLive: false,
   liveSyncTimer: null,
   backgroundSyncTimer: null,
   liveSyncInFlight: false,
@@ -486,9 +487,16 @@ async function loadStatus() {
   const health = await api("/health");
   const gateway = health.gateway || {};
   const isLive = gateway.mode === "live";
+  const wasLive = state._lastGatewayLive;
 
   // Gateway badge — bridge connection status
   setBadge("gatewayMode", isLive ? "桥接已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+
+  // Reload symbols when bridge just came online
+  if (isLive && !wasLive) {
+    loadSymbols().catch(() => {});
+  }
+  state._lastGatewayLive = isLive;
 
   // Trade mode badge
   const mt5TradeBlocked = isLive
