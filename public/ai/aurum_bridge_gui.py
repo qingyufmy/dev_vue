@@ -227,6 +227,9 @@ class AurumBridge:
 
     def _toggle_bridge(self):
         if self.running:
+            if not messagebox.askyesno("确认停止", "确定要断开 MT5 桥接连接吗？\n\n停止后将无法自动执行交易信号。",
+                                       icon="warning"):
+                return
             self.running = False
             self.start_btn.config(text="▶  启动桥接", bg="#3b82f6")
             self._set_status("已停止", "#ef4444")
@@ -733,7 +736,11 @@ class AurumBridge:
         self.root.mainloop()
 
     def _on_close(self):
-        self.running = False
+        if self.running:
+            if not messagebox.askyesno("确认退出", "桥接正在运行中，确定要关闭吗？\n\n关闭后 MT5 连接将断开，自动交易将停止。",
+                                       icon="warning"):
+                return
+            self.running = False
         if self.mt5:
             try:
                 self.mt5.shutdown()
