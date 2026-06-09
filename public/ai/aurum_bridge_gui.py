@@ -291,7 +291,7 @@ class AurumBridge:
                 req = {
                     "action": self.mt5.TRADE_ACTION_DEAL,
                     "symbol": symbol,
-                    "volume": float(params.get("lot", 0.01)),
+                    "volume": float(params.get("lot") or params.get("volume") or 0.01),
                     "type": order_type,
                     "magic": 234000,
                     "comment": params.get("comment", "AURUM"),
