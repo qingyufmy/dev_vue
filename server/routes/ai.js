@@ -428,15 +428,28 @@ function signalOrderPayload(signal, config, market, confirm) {
 
 // ============ Execute Order ============
 async function executeOrder(userId, config, request, action) {
-  const accountResult = await mt5BridgeRequest('GET', '/account')
-  const positionsResult = await mt5BridgeRequest('GET', '/positions')
+  // Try polling bridge first, fallback to old bridge
+  const hb = bridgeHeartbeats.get(userId)
+  const useBridge = hb && (Date.now() - hb.timestamp < 15000)
+
+  let accountResult, positionsResult, quote
+  if (useBridge) {
+    accountResult = await executeViaBridge(userId, 'account', {})
+    positionsResult = await executeViaBridge(userId, 'positions', {})
+  } else {
+    accountResult = await mt5BridgeRequest('GET', '/account')
+    positionsResult = await mt5BridgeRequest('GET', '/positions')
+  }
   const positions = positionsResult.positions || []
   const account = accountResult
 
-  let quote = null
   if (request.symbol) {
     try {
-      quote = await mt5BridgeRequest('GET', `/quote/${request.symbol}`)
+      if (useBridge) {
+        quote = await executeViaBridge(userId, 'quote', { symbol: request.symbol })
+      } else {
+        quote = await mt5BridgeRequest('GET', `/quote/${request.symbol}`)
+      }
       request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
     } catch {}
   }
@@ -444,7 +457,12 @@ async function executeOrder(userId, config, request, action) {
   let result
   try {
     const risk = validateTradeRequest(config, account, positions, request)
-    const openResult = await mt5BridgeRequest('POST', '/open', request)
+    let openResult
+    if (useBridge) {
+      openResult = await executeViaBridge(userId, 'open', request)
+    } else {
+      openResult = await mt5BridgeRequest('POST', '/open', request)
+    }
     result = { ...openResult, risk }
     if (quote) result.quote = quote
   } catch (err) {
@@ -696,6 +714,13 @@ router.get('/mt5/status', authMiddleware, async (req, res) => {
 
 // MT5 Account
 router.get('/mt5/account', authMiddleware, async (req, res) => {
+  // Try polling bridge first
+  const hb = bridgeHeartbeats.get(req.userId)
+  if (hb && (Date.now() - hb.timestamp < 15000)) {
+    const result = await executeViaBridge(req.userId, 'account', {})
+    if (!result.error) return res.json({ status: 'success', ...result, source: 'bridge' })
+  }
+  // Fallback to old bridge
   const result = await mt5BridgeRequest('GET', '/account')
   res.json(result)
 })
@@ -708,6 +733,12 @@ router.get('/mt5/symbols', authMiddleware, async (req, res) => {
 
 // MT5 Quote
 router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
+  // Try polling bridge first
+  const hb = bridgeHeartbeats.get(req.userId)
+  if (hb && (Date.now() - hb.timestamp < 15000)) {
+    const result = await executeViaBridge(req.userId, 'quote', { symbol: req.params.symbol })
+    if (!result.error) return res.json(result)
+  }
   const result = await mt5BridgeRequest('GET', `/quote/${req.params.symbol}`)
   res.json(result)
 })
@@ -715,6 +746,12 @@ router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
 // MT5 Positions
 router.get('/mt5/positions', authMiddleware, async (req, res) => {
   const { symbol } = req.query
+  // Try polling bridge first
+  const hb = bridgeHeartbeats.get(req.userId)
+  if (hb && (Date.now() - hb.timestamp < 15000)) {
+    const result = await executeViaBridge(req.userId, 'positions', { symbol })
+    if (!result.error) return res.json(result)
+  }
   const path = symbol ? `/positions?symbol=${symbol}` : '/positions'
   const result = await mt5BridgeRequest('GET', path)
   res.json(result)
@@ -742,7 +779,13 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
   if (!confirm) {
     result = { status: 'needs_confirmation', message: 'confirmation_required' }
   } else {
-    result = await mt5BridgeRequest('POST', '/close', { ticket })
+    // Try polling bridge first
+    const hb = bridgeHeartbeats.get(req.userId)
+    if (hb && (Date.now() - hb.timestamp < 15000)) {
+      result = await executeViaBridge(req.userId, 'close', { ticket })
+    } else {
+      result = await mt5BridgeRequest('POST', '/close', { ticket })
+    }
   }
   const db = getDB()
   insertAudit(db, req.userId, 'manual_close', null, { ticket, confirm }, result, result.status)
@@ -753,6 +796,12 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
 router.get('/mt5/rates', authMiddleware, async (req, res) => {
   const { symbol, timeframe = 'M30', count = 100 } = req.query
   if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
+  // Try polling bridge first
+  const hb = bridgeHeartbeats.get(req.userId)
+  if (hb && (Date.now() - hb.timestamp < 15000)) {
+    const result = await executeViaBridge(req.userId, 'rates', { symbol, timeframe, count })
+    if (!result.error) return res.json(result)
+  }
   const result = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=${count}`)
   res.json(result)
 })
