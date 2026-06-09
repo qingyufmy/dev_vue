@@ -1186,7 +1186,7 @@ async function executeViaBridge(userId, action, params, timeoutMs = 30000) {
       bridgeResultStore.delete(cmdId)
       return result.result
     }
-    await new Promise(r => setTimeout(r, 500))
+    await new Promise(r => setTimeout(r, 200))
   }
   bridgeResultStore.delete(cmdId)
   return { status: 'error', message: '桥接超时，请确保本地桥接脚本正在运行' }

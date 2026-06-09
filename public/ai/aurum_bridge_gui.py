@@ -481,14 +481,13 @@ class AurumBridge:
 
                 result = self._api("GET", "/bridge/poll")
                 cmds = result.get("commands", []) if result else []
-                if cmds:
-                    cmd = cmds[0]
+                for cmd in cmds:
                     self.root.after(0, self._log, f"执行: {cmd['action']}")
                     resp = self._process_command(cmd)
                     self._api("POST", "/bridge/result", {"command_id": cmd["id"], "result": resp})
                     self.root.after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
 
-                time.sleep(2)
+                time.sleep(0.3)
             except KeyboardInterrupt:
                 break
             except Exception as e:
