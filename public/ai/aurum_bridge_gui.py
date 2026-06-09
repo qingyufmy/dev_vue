@@ -187,8 +187,16 @@ class AurumBridge:
             else:
                 self._log(f"MT5 初始化失败: {mt5.last_error()}")
         except ImportError:
-            self._log("MetaTrader5 未安装，正在安装...")
-            threading.Thread(target=self._install_mt5, daemon=True).start()
+            if getattr(sys, 'frozen', False):
+                self._log("错误: MetaTrader5 未安装。请先运行 Setup.bat 安装依赖，或手动执行:")
+                self._log("  pip install MetaTrader5")
+                messagebox.showerror("缺少依赖",
+                    "MetaTrader5 未安装！\n\n"
+                    "请先运行 Setup.bat 自动安装，\n"
+                    "或手动执行: pip install MetaTrader5")
+            else:
+                self._log("MetaTrader5 未安装，正在安装...")
+                threading.Thread(target=self._install_mt5, daemon=True).start()
 
     def _install_mt5(self):
         import subprocess
