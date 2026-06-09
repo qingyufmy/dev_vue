@@ -1523,16 +1523,16 @@ async function loadHistory() {
   const data = await api("/api/mt5/history?page=1&page_size=20");
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
-  setText("historyCredit", fmt(stats.credit));
-  setText("historyDeposit", fmt(stats.deposit));
-  setText("historyWithdrawal", fmt(stats.withdrawal));
-  setText("historyNetResult", fmt(stats.net_result));
+  setText("historyWinRate", (stats.win_rate ?? 0) + "%");
+  setText("historyTradeCount", stats.trade_count ?? 0);
+  setText("historyAvgProfit", stats.avg_profit > 0 ? "+" + fmt(stats.avg_profit) : fmt(stats.avg_profit || 0));
+  setText("historyAvgLoss", stats.avg_loss > 0 ? "-" + fmt(stats.avg_loss) : fmt(stats.avg_loss || 0));
+  setText("historyMaxDD", fmt(stats.max_drawdown));
   $("historyProfit").className = `num ${profitClass(stats.total_profit)}`;
-  $("historyNetResult").className = `num ${profitClass(stats.net_result)}`;
-  ["historyCredit", "historyDeposit", "historyWithdrawal"].forEach((id) => {
-    const key = id.replace("history", "").toLowerCase();
-    setHistoryZeroClass(id, stats[key]);
-  });
+  $("historyWinRate").className = `num ${stats.win_rate >= 50 ? "pos" : "neg"}`;
+  $("historyAvgProfit").className = `num ${stats.avg_profit > 0 ? "pos" : "zero"}`;
+  $("historyAvgLoss").className = `num ${stats.avg_loss > 0 ? "neg" : "zero"}`;
+  $("historyMaxDD").className = `num ${stats.max_drawdown < 0 ? "neg" : "zero"}`;
   const rows = data.orders || [];
   $("historyBody").innerHTML = rows.length ? rows.map((row) => {
     const dir = signalType(row.type);
