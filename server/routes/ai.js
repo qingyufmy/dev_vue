@@ -500,20 +500,22 @@ router.post('/ai/config', authMiddleware, (req, res) => {
   const now = utcNow()
 
   db.prepare('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?').run(req.userId, session_id)
+  const existingKey = cfg.api_key ? cfg.api_key : null
   db.prepare(`
     INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
       temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
       max_position_size, selected_take_profit, system_prompt, is_active, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
     ON CONFLICT(user_id, session_id, api_provider) DO UPDATE SET
-      api_key_encrypted = excluded.api_key_encrypted, api_base_url = excluded.api_base_url,
+      api_key_encrypted = CASE WHEN excluded.api_key_encrypted IS NOT NULL THEN excluded.api_key_encrypted ELSE ai_configs.api_key_encrypted END,
+      api_base_url = excluded.api_base_url,
       model_name = excluded.model_name, temperature = excluded.temperature, max_tokens = excluded.max_tokens,
       enable_auto_trade = excluded.enable_auto_trade, enable_futures_trading = excluded.enable_futures_trading,
       risk_level = excluded.risk_level, max_position_size = excluded.max_position_size,
       selected_take_profit = excluded.selected_take_profit, system_prompt = excluded.system_prompt,
       is_active = 1, updated_at = excluded.updated_at
   `).run(
-    req.userId, session_id, cfg.api_provider || 'deepseek', cfg.api_key || null,
+    req.userId, session_id, cfg.api_provider || 'deepseek', existingKey,
     cfg.api_base_url || null, cfg.model_name || 'deepseek-chat',
     cfg.temperature || 0.7, cfg.max_tokens || 2000,
     cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0,

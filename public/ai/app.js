@@ -824,8 +824,9 @@ async function loadConfig() {
 
 async function saveConfig() {
   const apiKey = $("apiKey").value.trim();
-  if (!apiKey && state.currentConfigHasApiKey) {
-    toast("为避免覆盖现有密钥，保存配置时请重新输入 API Key。", "warning");
+  if (!apiKey && !state.currentConfigHasApiKey) {
+    toast("请先填写 API Key", "warning");
+    $("apiKey").focus();
     return;
   }
 
