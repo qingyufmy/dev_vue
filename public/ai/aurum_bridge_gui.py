@@ -255,6 +255,25 @@ class AurumBridge:
                 return item.name
         raise RuntimeError(f"Symbol not found in MT5: {requested}")
 
+    def _get_filling_mode(self, symbol):
+        """Detect the correct filling mode for a symbol (same logic as mt5_bridge.py)"""
+        info = self.mt5.symbol_info(symbol)
+        if not info:
+            return self.mt5.ORDER_FILLING_IOC
+        filling_mode = int(getattr(info, "filling_mode", 0) or 0)
+        # bit 1 = FOK, bit 2 = IOC
+        candidates = []
+        if filling_mode & 1:
+            candidates.append(self.mt5.ORDER_FILLING_FOK)
+        if filling_mode & 2:
+            candidates.append(self.mt5.ORDER_FILLING_IOC)
+        if not candidates:
+            candidates = [self.mt5.ORDER_FILLING_RETURN, self.mt5.ORDER_FILLING_FOK, self.mt5.ORDER_FILLING_IOC]
+        # Prefer FOK, then IOC, then RETURN
+        if self.mt5.ORDER_FILLING_FOK in candidates:
+            return self.mt5.ORDER_FILLING_FOK
+        return candidates[0]
+
     def _process_command(self, cmd):
         action = cmd.get("action")
         params = cmd.get("params", {})
@@ -277,7 +296,7 @@ class AurumBridge:
                     "magic": 234000,
                     "comment": params.get("comment", "AURUM"),
                     "type_time": self.mt5.ORDER_TIME_GTC,
-                    "type_filling": self.mt5.ORDER_FILLING_IOC,
+                    "type_filling": self._get_filling_mode(symbol),
                 }
                 if params.get("sl"):
                     req["sl"] = float(params["sl"])
@@ -300,7 +319,7 @@ class AurumBridge:
                         "action": self.mt5.TRADE_ACTION_DEAL,
                         "position": pos.ticket, "symbol": pos.symbol,
                         "volume": pos.volume, "type": close_type,
-                        "magic": 234000, "type_filling": self.mt5.ORDER_FILLING_IOC,
+                        "magic": 234000, "type_filling": self._get_filling_mode(pos.symbol),
                     })
                     if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                         return {"status": "success", "ticket": pos.ticket}
@@ -316,7 +335,7 @@ class AurumBridge:
                             "action": self.mt5.TRADE_ACTION_DEAL,
                             "symbol": pos.symbol, "volume": pos.volume,
                             "type": close_type, "position": pos.ticket,
-                            "magic": 234000, "type_filling": self.mt5.ORDER_FILLING_IOC,
+                            "magic": 234000, "type_filling": self._get_filling_mode(pos.symbol),
                         })
                     return {"status": "success", "closed": len(positions)}
 
@@ -330,7 +349,7 @@ class AurumBridge:
                         "action": self.mt5.TRADE_ACTION_DEAL,
                         "symbol": pos.symbol, "volume": pos.volume,
                         "type": close_type, "position": pos.ticket,
-                        "magic": 234000, "type_filling": self.mt5.ORDER_FILLING_IOC,
+                        "magic": 234000, "type_filling": self._get_filling_mode(pos.symbol),
                     })
                 return {"status": "success", "closed": len(positions)}
 
