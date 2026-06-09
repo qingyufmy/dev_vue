@@ -485,45 +485,128 @@ class AurumBridge:
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
 
             elif action == "history":
+                import math
                 page = params.get("page", 1)
                 page_size = params.get("page_size", 20)
                 from datetime import timedelta
-                # Get last 90 days of history
-                date_to = datetime.now()
-                date_from = date_to - timedelta(days=90)
-                all_deals = self.mt5.history_deals_get(date_from, date_to) or []
-                # Filter trading deals only (type 0=buy, 1=sell)
-                trading_deals = [d for d in all_deals if d.type in (0, 1)]
-                # Build statistics from trading deals only
-                total_profit = sum(d.profit + d.commission + d.swap for d in trading_deals)
-                # Build orders list (reverse chronological)
-                orders = []
-                for d in reversed(trading_deals):
-                    time_str = _mt5_time(d.time)
-                    orders.append({
-                        "ticket": d.ticket, "order": d.order, "symbol": d.symbol,
-                        "type": "buy" if d.type == 0 else "sell" if d.type == 1 else "balance",
-                        "entry": d.entry, "volume": d.volume, "price": d.price,
-                        "commission": d.commission, "swap": d.swap, "profit": d.profit,
-                        "comment": d.comment or "",
-                        "entry_price": d.price if d.entry == 0 else None,
-                        "exit_price": d.price if d.entry == 1 else None,
-                        "entry_time": time_str if d.entry == 0 else "",
-                        "close_time": time_str if d.entry == 1 else "",
-                        "time": time_str,
-                        "profit_points": round(d.profit / (d.volume * 100), 1) if d.volume and d.profit else 0,
+                deposit = 0.0
+                withdrawal = 0.0
+                credit = 0.0
+                # Include a small future buffer so newly closed trades appear
+                # immediately in history after execution (matches original).
+                date_to = datetime.utcnow() + timedelta(days=1)
+                date_from = date_to - timedelta(days=31)
+                deals = self.mt5.history_deals_get(date_from, date_to)
+                if deals is None:
+                    return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
+                deal_rows = [d._asdict() for d in deals]
+                deals_by_position = {}
+                symbol_info_cache = {}
+                balance_type = getattr(self.mt5, "DEAL_TYPE_BALANCE", 2)
+                credit_type = getattr(self.mt5, "DEAL_TYPE_CREDIT", 3)
+                for d in deal_rows:
+                    if d.get("type") == balance_type:
+                        amount = float(d.get("profit") or 0)
+                        if amount >= 0:
+                            deposit += amount
+                        else:
+                            withdrawal += abs(amount)
+                    if d.get("type") == credit_type:
+                        credit += float(d.get("profit") or 0)
+                    key = d.get("position_id") or d.get("order") or d.get("ticket")
+                    deals_by_position.setdefault(key, []).append(d)
+
+                def symbol_point(symbol):
+                    if not symbol:
+                        return None
+                    if symbol not in symbol_info_cache:
+                        symbol_info_cache[symbol] = self.mt5.symbol_info(symbol)
+                    info = symbol_info_cache.get(symbol)
+                    point = getattr(info, "point", None) if info else None
+                    return float(point) if point else None
+
+                rows = []
+                entry_out = getattr(self.mt5, "DEAL_ENTRY_OUT", 1)
+                entry_inout = getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)
+                entry_in = getattr(self.mt5, "DEAL_ENTRY_IN", 0)
+                deal_type_buy = getattr(self.mt5, "DEAL_TYPE_BUY", 0)
+                for d in deal_rows:
+                    if d.get("entry") not in (entry_out, entry_inout):
+                        continue
+                    position_id = d.get("position_id") or d.get("order") or d.get("ticket")
+                    group = deals_by_position.get(position_id, [])
+                    entry_deal = next((item for item in group if item.get("entry") == entry_in), None)
+                    side_deal = entry_deal or d
+                    direction = "BUY" if side_deal.get("type") == deal_type_buy else "SELL"
+                    symbol = d.get("symbol") or (entry_deal or {}).get("symbol")
+                    entry_price = (entry_deal or {}).get("price")
+                    exit_price = d.get("price")
+                    point = symbol_point(symbol)
+                    profit_points = None
+                    if entry_price and exit_price and point:
+                        if direction == "BUY":
+                            profit_points = round((float(exit_price) - float(entry_price)) / point, 1)
+                        else:
+                            profit_points = round((float(entry_price) - float(exit_price)) / point, 1)
+                    entry_order = (entry_deal or {}).get("order") or position_id
+                    rows.append({
+                        "ticket": entry_order,
+                        "deal_ticket": d.get("ticket"),
+                        "order": entry_order,
+                        "close_order": d.get("order"),
+                        "position_id": position_id,
+                        "symbol": symbol,
+                        "type": direction,
+                        "volume": d.get("volume"),
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "price": exit_price,
+                        "profit": d.get("profit"),
+                        "swap": d.get("swap"),
+                        "commission": d.get("commission"),
+                        "profit_points": profit_points,
+                        "entry_time": _mt5_time((entry_deal or {}).get("time")),
+                        "close_time": _mt5_time(d.get("time")),
+                        "time": _mt5_time(d.get("time")),
+                        "time_local": datetime.fromtimestamp(d.get("time")).isoformat(timespec="seconds") if d.get("time") else None,
+                        "entry_time_local": datetime.fromtimestamp((entry_deal or {}).get("time")).isoformat(timespec="seconds") if (entry_deal or {}).get("time") else None,
+                        "comment": d.get("comment"),
                     })
-                start = (page - 1) * page_size
-                end = start + page_size
+                rows.sort(key=lambda row: row.get("entry_time") or row.get("close_time") or "")
+                total = len(rows)
+                start_idx = max(page - 1, 0) * page_size
+                page_rows = rows[start_idx : start_idx + page_size]
+                total_profit = sum(float(r.get("profit") or 0) for r in rows)
+                net_result = total_profit + credit + deposit - withdrawal
+                account_balance = 10000.0
+                try:
+                    acc = self.mt5.account_info()
+                    if acc:
+                        account_balance = float(acc.balance)
+                except Exception:
+                    pass
+                account_principal = round(account_balance - net_result, 2)
                 return {
                     "status": "success",
-                    "orders": orders[start:end],
-                    "total": len(trading_deals), "page": page, "page_size": page_size,
+                    "orders": page_rows,
                     "statistics": {
+                        "account_principal": account_principal,
+                        "account_balance": round(account_balance, 2),
                         "total_profit": round(total_profit, 2),
-                        "credit": 0, "deposit": 0, "withdrawal": 0,
-                        "net_result": round(total_profit, 2),
+                        "credit": round(credit, 2),
+                        "deposit": round(deposit, 2),
+                        "withdrawal": round(withdrawal, 2),
+                        "net_result": round(net_result, 2),
+                        "trade_count": total,
+                        "total_volume": round(sum(float(r.get("volume") or 0) for r in rows), 2),
                     },
+                    "pagination": {
+                        "current_page": page,
+                        "page_size": page_size,
+                        "total_count": total,
+                        "total_pages": max(math.ceil(total / page_size), 1),
+                    },
+                    "source": "mt5",
                 }
 
             elif action == "diagnostics":
