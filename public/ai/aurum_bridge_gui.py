@@ -474,8 +474,11 @@ class AurumBridge:
             elif action == "history":
                 page = params.get("page", 1)
                 page_size = params.get("page_size", 20)
-                from datetime import datetime
-                deals = self.mt5.history_deals_get(0, 0) or []
+                from datetime import datetime, timedelta
+                # Get last 90 days of history
+                date_to = datetime.now()
+                date_from = date_to - timedelta(days=90)
+                deals = self.mt5.history_deals_get(date_from, date_to) or []
                 # Build statistics
                 total_profit = sum(d.profit for d in deals)
                 total_commission = sum(d.commission for d in deals)
@@ -483,7 +486,6 @@ class AurumBridge:
                 # Build orders list (reverse chronological)
                 orders = []
                 for d in reversed(deals):
-                    dt = datetime.fromtimestamp(d.time) if d.time else None
                     orders.append({
                         "ticket": d.ticket, "order": d.order, "symbol": d.symbol,
                         "type": "buy" if d.type == 0 else "sell" if d.type == 1 else "balance",

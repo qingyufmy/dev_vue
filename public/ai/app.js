@@ -1488,6 +1488,7 @@ function setHistoryZeroClass(id, value) {
 }
 
 async function loadHistory() {
+  try {
   const data = await api("/api/mt5/history?page=1&page_size=20");
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
@@ -1521,6 +1522,7 @@ async function loadHistory() {
     </tr>
   `;
   }).join("") : `<tr class="empty-row"><td colspan="11">暂无成交记录</td></tr>`;
+  } catch (e) { console.error("loadHistory:", e); }
 }
 
 async function refreshTradingPage() {
