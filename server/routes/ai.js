@@ -1,14 +1,11 @@
 import { Router } from 'express'
 import { getDB } from '../db.js'
 import jwt from 'jsonwebtoken'
-import http from 'http'
 
 import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges } from '../bridge-ws.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
-const MT5_BRIDGE_HOST = '127.0.0.1'
-const MT5_BRIDGE_PORT = 8766
 
 const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
@@ -120,44 +117,9 @@ function insertAudit(db, userId, action, symbol, request, result, status) {
   `).run(userId, action, symbol || null, JSON.stringify(request), JSON.stringify(result), status, utcNow())
 }
 
-// ============ MT5 Bridge Proxy ============
-function mt5BridgeRequest(method, path, body = null) {
-  return new Promise((resolve, reject) => {
-    const headers = { 'Content-Type': 'application/json' }
-    let bodyStr = null
-    if (body) {
-      bodyStr = JSON.stringify(body)
-      headers['Content-Length'] = Buffer.byteLength(bodyStr)
-    }
-    const options = {
-      hostname: MT5_BRIDGE_HOST,
-      port: MT5_BRIDGE_PORT,
-      path: path,
-      method: method,
-      headers: headers,
-      timeout: 30000,
-    }
-    const req = http.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => data += chunk)
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data))
-        } catch {
-          resolve({ status: 'error', message: 'Invalid response from MT5 bridge', raw: data })
-        }
-      })
-    })
-    req.on('error', (err) => {
-      resolve({ status: 'error', message: 'MT5 bridge unavailable: ' + err.message })
-    })
-    req.on('timeout', () => {
-      req.destroy()
-      resolve({ status: 'error', message: 'MT5 bridge timeout' })
-    })
-    if (bodyStr) req.write(bodyStr)
-    req.end()
-  })
+// ============ MT5 Bridge (WebSocket via bridge-ws.js) ============
+async function mt5Bridge(userId, action, params = {}) {
+  return await executeViaBridge(userId, action, params)
 }
 
 // ============ Market Data Calculation ============
@@ -431,26 +393,15 @@ function signalOrderPayload(signal, config, market, confirm) {
 // ============ Execute Order ============
 async function executeOrder(userId, config, request, action) {
   // Try WebSocket bridge first, fallback to old bridge
-  const useBridge = isBridgeAlive(userId)
-
   let accountResult, positionsResult, quote
-  if (useBridge) {
-    accountResult = await executeViaBridge(userId, 'account', {})
-    positionsResult = await executeViaBridge(userId, 'positions', {})
-  } else {
-    accountResult = await mt5BridgeRequest('GET', '/account')
-    positionsResult = await mt5BridgeRequest('GET', '/positions')
-  }
+  accountResult = await mt5Bridge(userId, 'account', {})
+  positionsResult = await mt5Bridge(userId, 'positions', {})
   const positions = positionsResult.positions || []
   const account = accountResult
 
   if (request.symbol) {
     try {
-      if (useBridge) {
-        quote = await executeViaBridge(userId, 'quote', { symbol: request.symbol })
-      } else {
-        quote = await mt5BridgeRequest('GET', `/quote/${request.symbol}`)
-      }
+      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol })
       request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
     } catch {}
   }
@@ -459,11 +410,7 @@ async function executeOrder(userId, config, request, action) {
   try {
     const risk = validateTradeRequest(config, account, positions, request)
     let openResult
-    if (useBridge) {
-      openResult = await executeViaBridge(userId, 'open', request)
-    } else {
-      openResult = await mt5BridgeRequest('POST', '/open', request)
-    }
+    openResult = await mt5Bridge(userId, 'open', request)
     result = { ...openResult, risk }
     if (quote) result.quote = quote
   } catch (err) {
@@ -581,10 +528,10 @@ router.post('/ai/analyze', authMiddleware, async (req, res) => {
     const config = getActiveConfig(db, req.userId, session_id)
 
     // Get market data from MT5 bridge
-    const account = await mt5BridgeRequest('GET', '/account')
-    const positionsData = include_positions ? await mt5BridgeRequest('GET', `/positions?symbol=${symbol}`) : { positions: [] }
+    const account = await mt5Bridge(req.userId, 'account', {})
+    const positionsData = include_positions ? await mt5Bridge(req.userId, 'positions', { symbol }) : { positions: [] }
     const positions = positionsData.positions || []
-    const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=${kline_count}`)
+    const rates = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: kline_count })
 
     if (!rates || rates.status === 'error') {
       return res.status(500).json({ status: 'error', message: rates?.message || 'Failed to get rates' })
@@ -709,61 +656,40 @@ router.post('/ai/execute', authMiddleware, async (req, res) => {
 
 // MT5 Status
 router.get('/mt5/status', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('GET', '/status')
+  if (!isBridgeAlive(req.userId)) return res.json({ status: 'success', mode: 'mock', mt5_package_available: true, live_trading_enabled: false })
+  const result = await mt5Bridge(req.userId, 'status', {})
   res.json({ status: 'success', ...result })
 })
 
 // MT5 Account
 router.get('/mt5/account', authMiddleware, async (req, res) => {
-  // Try WebSocket bridge first
-  if (isBridgeAlive(req.userId)) {
-    const result = await executeViaBridge(req.userId, 'account', {})
-    if (result.status !== 'error') return res.json(result)
-  }
-  // Fallback to old bridge
-  const result = await mt5BridgeRequest('GET', '/account')
+  const result = await mt5Bridge(req.userId, 'account', {})
   res.json(result)
 })
 
 // MT5 Symbols
 router.get('/mt5/symbols', authMiddleware, async (req, res) => {
-  // Try WebSocket bridge first
-  if (isBridgeAlive(req.userId)) {
-    const result = await executeViaBridge(req.userId, 'symbols', {})
-    if (!result.error && result.status !== 'error') return res.json(result)
-  }
-  const result = await mt5BridgeRequest('GET', '/symbols')
+  const result = await mt5Bridge(req.userId, 'symbols', {})
   res.json(result)
 })
 
 // MT5 Quote
 router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
-  // Try WebSocket bridge first
-  if (isBridgeAlive(req.userId)) {
-    const result = await executeViaBridge(req.userId, 'quote', { symbol: req.params.symbol })
-    if (result.status !== 'error') return res.json(result)
-  }
-  const result = await mt5BridgeRequest('GET', `/quote/${req.params.symbol}`)
+  const result = await mt5Bridge(req.userId, 'quote', { symbol: req.params.symbol })
   res.json(result)
 })
 
 // MT5 Positions
 router.get('/mt5/positions', authMiddleware, async (req, res) => {
   const { symbol } = req.query
-  // Try WebSocket bridge first
-  if (isBridgeAlive(req.userId)) {
-    const result = await executeViaBridge(req.userId, 'positions', { symbol })
-    if (!result.error) return res.json(result)
-  }
-  const path = symbol ? `/positions?symbol=${symbol}` : '/positions'
-  const result = await mt5BridgeRequest('GET', path)
+  const result = await mt5Bridge(req.userId, 'positions', { symbol })
   res.json(result)
 })
 
 // MT5 History
 router.get('/mt5/history', authMiddleware, async (req, res) => {
   const { page = 1, page_size = 20 } = req.query
-  const result = await mt5BridgeRequest('GET', `/history?page=${page}&page_size=${page_size}`)
+  const result = await mt5Bridge(req.userId, 'history', { page: Number(page), page_size: Number(page_size) })
   res.json(result)
 })
 
@@ -782,12 +708,7 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
   if (!confirm) {
     result = { status: 'needs_confirmation', message: 'confirmation_required' }
   } else {
-    // Try WebSocket bridge first
-    if (isBridgeAlive(req.userId)) {
-      result = await executeViaBridge(req.userId, 'close', { ticket })
-    } else {
-      result = await mt5BridgeRequest('POST', '/close', { ticket })
-    }
+    result = await mt5Bridge(req.userId, 'close', { ticket })
   }
   const db = getDB()
   insertAudit(db, req.userId, 'manual_close', null, { ticket, confirm }, result, result.status)
@@ -798,18 +719,13 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
 router.get('/mt5/rates', authMiddleware, async (req, res) => {
   const { symbol, timeframe = 'M30', count = 100 } = req.query
   if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
-  // Try WebSocket bridge first
-  if (isBridgeAlive(req.userId)) {
-    const result = await executeViaBridge(req.userId, 'rates', { symbol, timeframe, count })
-    if (!result.error) return res.json(result)
-  }
-  const result = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=${count}`)
+  const result = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: Number(count) })
   res.json(result)
 })
 
 // MT5 Diagnostics
 router.get('/mt5/diagnostics', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('GET', '/diagnostics')
+  const result = await mt5Bridge(req.userId, 'diagnostics', {})
   res.json(result)
 })
 
@@ -873,9 +789,7 @@ router.get('/health', async (req, res) => {
         },
       })
     } else {
-      // Fallback: try old bridge
-      const bridgeStatus = await mt5BridgeRequest('GET', '/status')
-      res.json({ status: 'healthy', service: 'AURUM AI', gateway: bridgeStatus })
+      res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
     }
   } catch {
     res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: false } })
@@ -886,7 +800,7 @@ router.get('/health', async (req, res) => {
 // MT5 Toggle Trade �� enable/disable live trading without disconnecting
 router.post('/mt5/toggle-trade', authMiddleware, async (req, res) => {
   const { enable } = req.body
-  const result = await mt5BridgeRequest('POST', '/toggle-trade', { enable })
+  const result = await mt5Bridge(req.userId, 'toggle_trade', { enable })
   res.json(result)
 })
 
@@ -933,10 +847,10 @@ async function runAutoCycle(userId, symbol, timeframe) {
 
   try {
     // Get market data from MT5 bridge (same flow as /ai/analyze)
-    const account = await mt5BridgeRequest('GET', '/account')
-    const positionsData = await mt5BridgeRequest('GET', `/positions?symbol=${symbol}`)
+    const account = await mt5Bridge(userId, 'account', {})
+    const positionsData = await mt5Bridge(userId, 'positions', { symbol })
     const positions = positionsData.positions || []
-    const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=100`)
+    const rates = await mt5Bridge(userId, 'rates', { symbol, timeframe, count: 100 })
 
     if (!rates || rates.status === 'error' || !Array.isArray(rates) || rates.length === 0) return
 

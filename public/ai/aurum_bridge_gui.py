@@ -5,8 +5,6 @@ import os
 import json
 import time
 import threading
-import urllib.request
-import urllib.error
 import ssl
 try:
     import websocket  # websocket-client
@@ -214,17 +212,6 @@ class AurumBridge:
         except Exception as e:
             self._log(f"安装失败: {e}")
 
-    def _api(self, method, path, body=None):
-        url = self.server_var.get().rstrip("/") + "/aurum-api" + path
-        data = json.dumps(body).encode() if body else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Authorization", "Bearer " + self.token_var.get())
-        try:
-            resp = urllib.request.urlopen(req, timeout=30)
-            return json.loads(resp.read())
-        except Exception as e:
-            return {"error": str(e)}
 
     def _toggle_bridge(self):
         if self.running:
@@ -238,28 +225,6 @@ class AurumBridge:
             self._set_status("连接中...", "#f59e0b")
             self.bridge_thread = threading.Thread(target=self._bridge_loop, daemon=True)
             self.bridge_thread.start()
-
-    def _heartbeat(self):
-        try:
-            account = self.mt5.account_info()
-            terminal = self.mt5.terminal_info()
-            self._api("POST", "/bridge/heartbeat", {
-                "account": {
-                    "login": account.login if account else None,
-                    "balance": account.balance if account else None,
-                    "equity": account.equity if account else None,
-                    "server": account.server if account else None,
-                },
-                "terminal": {
-                    "build": terminal.build if terminal else None,
-                    "connected": terminal.connected if terminal else None,
-                },
-            })
-            if account:
-                self.root.after(0, self._set_status, "已连接", "#22c55e",
-                               f"{account.login} @ {account.server}  ${account.balance:,.2f}")
-        except:
-            pass
 
     def _resolve_symbol(self, symbol):
         """Find actual MT5 symbol name (matches old bridge resolve_live_symbol)"""
@@ -440,6 +405,7 @@ class AurumBridge:
             elif action == "account":
                 acc = self.mt5.account_info()
                 if acc:
+                    terminal = self.mt5.terminal_info()
                     return {
                         "status": "success",
                         "balance": acc.balance, "equity": acc.equity,
@@ -448,9 +414,60 @@ class AurumBridge:
                         "profit": acc.profit, "currency": acc.currency,
                         "leverage": acc.leverage, "server": acc.server,
                         "company": getattr(acc, "company", ""),
+                        "login": acc.login,
+                        "trade_allowed": acc.trade_allowed,
+                        "trade_expert": acc.trade_expert,
+                        "terminal_build": terminal.build if terminal else 0,
+                        "terminal_connected": terminal.connected if terminal else False,
                         "source": "mt5",
                     }
                 return {"status": "error", "message": "no account info"}
+
+            elif action == "status":
+                acc = self.mt5.account_info()
+                terminal = self.mt5.terminal_info()
+                if acc:
+                    return {
+                        "mode": "live", "mt5_package_available": True,
+                        "live_trading_enabled": getattr(self, '_trade_enabled', True),
+                        "terminal_trade_allowed": terminal.trade_allowed if terminal else False,
+                        "account_trade_allowed": acc.trade_allowed,
+                        "account_trade_expert": acc.trade_expert,
+                        "login": acc.login, "server": acc.server,
+                        "balance": acc.balance, "equity": acc.equity,
+                    }
+                return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
+
+            elif action == "history":
+                page = params.get("page", 1)
+                page_size = params.get("page_size", 20)
+                deals = self.mt5.history_deals_get(0, 0) or []
+                start = (page - 1) * page_size
+                end = start + page_size
+                items = []
+                for d in deals[start:end]:
+                    items.append({
+                        "ticket": d.ticket, "order": d.order, "time": d.time,
+                        "type": d.type, "entry": d.entry, "magic": d.magic,
+                        "volume": d.volume, "price": d.price, "commission": d.commission,
+                        "swap": d.swap, "profit": d.profit, "symbol": d.symbol, "comment": d.comment,
+                    })
+                return {"status": "success", "deals": items, "total": len(deals), "page": page, "page_size": page_size}
+
+            elif action == "diagnostics":
+                acc = self.mt5.account_info()
+                terminal = self.mt5.terminal_info()
+                return {
+                    "status": "success",
+                    "mt5_connected": True,
+                    "account": {"login": acc.login, "server": acc.server, "balance": acc.balance} if acc else None,
+                    "terminal": {"build": terminal.build, "connected": terminal.connected, "trade_allowed": terminal.trade_allowed} if terminal else None,
+                }
+
+            elif action == "toggle_trade":
+                enable = params.get("enable", True)
+                self._trade_enabled = enable
+                return {"status": "success", "live_trading_enabled": enable}
 
             else:
                 return {"status": "error", "message": f"unknown action: {action}"}
@@ -477,19 +494,11 @@ class AurumBridge:
         if info:
             self.root.after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
 
-        # Use WebSocket if available, fallback to HTTP polling
-        if HAS_WS:
-            self._bridge_loop_ws()
-        else:
-            self.root.after(0, self._log, "websocket-client 未安装，回退到HTTP轮询模式")
-            self._bridge_loop_http()
+        if not HAS_WS:
+            self.root.after(0, self._log, "错误: websocket-client 未安装，请运行: pip install websocket-client")
+            self.root.after(0, self._toggle_bridge)
+            return
 
-        if self.mt5:
-            self.mt5.shutdown()
-        self.root.after(0, self._log, "MT5 已断开")
-
-    def _bridge_loop_ws(self):
-        """WebSocket bridge loop - zero latency"""
         server = self.server_var.get().replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
         ws_url = f"{server}/aurum-api/bridge/ws?token={self.token_var.get()}"
         self.root.after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
@@ -559,33 +568,9 @@ class AurumBridge:
                 self.root.after(0, self._log, f"错误: {e}")
                 time.sleep(3)
 
-    def _bridge_loop_http(self):
-        """HTTP polling fallback (legacy)"""
-        last_hb = 0
-        while self.running:
-            try:
-                now = time.time()
-                if now - last_hb > 10:
-                    self._heartbeat()
-                    last_hb = now
-
-                result = self._api("GET", "/bridge/poll")
-                if not result or result.get("error"):
-                    time.sleep(2)
-                    continue
-                cmds = result.get("commands", [])
-                for cmd in cmds:
-                    self.root.after(0, self._log, f"执行: {cmd['action']}")
-                    resp = self._process_command(cmd)
-                    self._api("POST", "/bridge/result", {"command_id": cmd["id"], "result": resp})
-                    self.root.after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
-
-                time.sleep(0.3)
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                self.root.after(0, self._log, f"错误: {e}")
-                time.sleep(5)
+        if self.mt5:
+            self.mt5.shutdown()
+        self.root.after(0, self._log, "MT5 已断开")
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)

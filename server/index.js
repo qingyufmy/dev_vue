@@ -6,7 +6,6 @@ import http from 'http'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
-import { spawn } from 'child_process'
 import { initDB, getDB } from './db.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
@@ -76,17 +75,14 @@ app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
 app.use('/aurum-api', aiRoutes)
 
-// Root-level health check — delegates to ai.js which checks bridge heartbeats
+// Root-level health check — uses WebSocket bridge status
 app.get('/health', async (req, res) => {
   try {
-    // Import bridge state from ai.js
     const aiModule = await import('./routes/ai.js')
-    // Try new polling bridge first (check heartbeats)
-    const bridgeHeartbeats = aiModule.bridgeHeartbeats
-    if (bridgeHeartbeats) {
-      const now = Date.now()
-      for (const [userId, hb] of bridgeHeartbeats) {
-        if (now - hb.timestamp < 15000) {
+    const getAllBridges = aiModule.getAllBridges
+    if (getAllBridges) {
+      for (const bridge of getAllBridges()) {
+        if (bridge.alive) {
           return res.json({
             status: 'healthy',
             service: 'AURUM AI',
@@ -94,37 +90,15 @@ app.get('/health', async (req, res) => {
               mode: 'live',
               mt5_package_available: true,
               live_trading_enabled: true,
-              account: hb.account,
+              account: bridge.account,
             },
           })
         }
       }
     }
-    // Fallback: try old bridge on 8766
-    const http = await import('http')
-    const result = await new Promise((resolve) => {
-      const options = {
-        hostname: '127.0.0.1',
-        port: 8766,
-        path: '/status',
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 5000
-      }
-      const request = http.default.request(options, (response) => {
-        let data = ''
-        response.on('data', chunk => data += chunk)
-        response.on('end', () => {
-          try { resolve(JSON.parse(data)) } catch { resolve({ mode: 'mock', mt5_package_available: false }) }
-        })
-      })
-      request.on('error', () => resolve({ mode: 'mock', mt5_package_available: false }))
-      request.on('timeout', () => { request.destroy(); resolve({ mode: 'mock', mt5_package_available: false }) })
-      request.end()
-    })
-    res.json({ status: 'healthy', service: 'AURUM AI', gateway: result })
+    res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
   } catch {
-    res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: false } })
+    res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
   }
 })
 
@@ -247,26 +221,6 @@ app.get('*', (req, res) => {
 })
 
 // Start MT5 Bridge (use venv Python with MetaTrader5 package)
-let bridgeProcess = null
-function startBridge() {
-  const bridgePath = join(__dirname, 'mt5_bridge.py')
-  const venvPython = 'C:\\Users\\Administrator\\Desktop\\黄金AI分析\\.venv\\Scripts\\python.exe'
-  const pythonCmd = existsSync(venvPython) ? venvPython : 'python'
-  bridgeProcess = spawn(pythonCmd, [bridgePath], {
-    cwd: __dirname,
-    stdio: 'pipe',
-    env: { ...process.env, ALLOW_LIVE_TRADING: 'true' }
-  })
-  bridgeProcess.stdout?.on('data', d => { const s = d.toString().trim(); if (s) console.log(`[Bridge] ${s}`) })
-  bridgeProcess.stderr?.on('data', d => { const s = d.toString().trim(); if (s) console.log(`[Bridge] ${s}`) })
-  bridgeProcess.on('exit', code => {
-    console.log(`[Bridge] Exited with code ${code}, restarting in 3s...`)
-    setTimeout(startBridge, 3000)
-  })
-  console.log(`[Bridge] MT5 Bridge starting (python=${pythonCmd})...`)
-}
-startBridge()
-
 // Init DB and start
 initDB()
 initAutoSchedulers()
