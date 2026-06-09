@@ -419,6 +419,18 @@ async function executeOrder(userId, config, request, action) {
     try {
       quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol })
       request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
+      // Convert points to prices for manual orders
+      const pointSize = quote.point || (request.quote_price > 1000 ? 0.01 : 0.0001)
+      if (request.stop_loss_points && !request.sl) {
+        request.sl = request.order_type === 'buy'
+          ? round2(request.quote_price - request.stop_loss_points * pointSize)
+          : round2(request.quote_price + request.stop_loss_points * pointSize)
+      }
+      if (request.take_profit_points && !request.tp) {
+        request.tp = request.order_type === 'buy'
+          ? round2(request.quote_price + request.take_profit_points * pointSize)
+          : round2(request.quote_price - request.take_profit_points * pointSize)
+      }
     } catch {}
   }
 

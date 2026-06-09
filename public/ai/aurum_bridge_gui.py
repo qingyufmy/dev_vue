@@ -287,7 +287,7 @@ class AurumBridge:
                     return {"status": "error", "message": f"Symbol not available: {symbol}"}
                 if not tick:
                     return {"status": "error", "message": f"Invalid live quote for {symbol}"}
-                order_type = self.mt5.ORDER_TYPE_BUY if params.get("type", "buy") == "buy" else self.mt5.ORDER_TYPE_SELL
+                order_type = self.mt5.ORDER_TYPE_BUY if (params.get("type") or params.get("order_type") or "buy").lower() == "buy" else self.mt5.ORDER_TYPE_SELL
                 req = {
                     "action": self.mt5.TRADE_ACTION_DEAL,
                     "symbol": symbol,
