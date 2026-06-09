@@ -54,6 +54,7 @@ class AurumBridge:
         self.mt5 = None
         self.running = False
         self.bridge_thread = None
+        self._trade_enabled = False  # Default: trading OFF
 
         self._build_ui()
         self._check_mt5()
@@ -460,7 +461,7 @@ class AurumBridge:
                 if acc:
                     return {
                         "mode": "live", "mt5_package_available": True,
-                        "live_trading_enabled": getattr(self, '_trade_enabled', True),
+                        "live_trading_enabled": getattr(self, '_trade_enabled', False),
                         "terminal_trade_allowed": terminal.trade_allowed if terminal else False,
                         "account_trade_allowed": acc.trade_allowed,
                         "account_trade_expert": acc.trade_expert,
@@ -496,7 +497,7 @@ class AurumBridge:
                 }
 
             elif action == "toggle_trade":
-                enable = params.get("enable", True)
+                enable = params.get("enable", False)
                 self._trade_enabled = enable
                 return {"status": "success", "live_trading_enabled": enable}
 
@@ -560,9 +561,10 @@ class AurumBridge:
                                     "build": terminal.build if terminal else None,
                                     "connected": terminal.connected if terminal else None,
                                 },
+                                "live_trading_enabled": self._trade_enabled,
                             }))
                             if account:
-                                self.root.after(0, self._set_status, "已连接", "#22c55e",
+                                self.root.after(0, self._set_status, "MT5桥接-已连接", "#22c55e",
                                                f"{account.login} @ {account.server}  ${account.balance:,.2f}")
                             last_hb = now
                         except Exception as e:

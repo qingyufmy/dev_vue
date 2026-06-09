@@ -829,13 +829,14 @@ router.get('/health', async (req, res) => {
       }
     }
     if (bridgeAlive) {
+      const bridgeStatus = getBridgeStatus(req.userId)
       res.json({
         status: 'healthy',
         service: 'AURUM AI',
         gateway: {
           mode: 'live',
           mt5_package_available: true,
-          live_trading_enabled: true,
+          live_trading_enabled: !!bridgeStatus.liveTradingEnabled,
           account: bridgeAccount,
         },
       })

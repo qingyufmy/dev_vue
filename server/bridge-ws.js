@@ -45,7 +45,7 @@ export function initBridgeWS(server) {
     }
 
     // Store bridge connection
-    bridges.set(userId, { ws, account: null, terminal: null, lastSeen: Date.now() })
+    bridges.set(userId, { ws, account: null, terminal: null, lastSeen: Date.now(), liveTradingEnabled: false })
     console.log(`[BridgeWS] User ${userId} connected`)
 
     // Send welcome message
@@ -62,10 +62,15 @@ export function initBridgeWS(server) {
         if (bridge) {
           bridge.account = msg.account || null
           bridge.terminal = msg.terminal || null
+          if (msg.live_trading_enabled !== undefined) bridge.liveTradingEnabled = msg.live_trading_enabled
         }
         ws.send(JSON.stringify({ type: 'heartbeat_ack' }))
 
       } else if (msg.type === 'result') {
+        // Track toggle_trade state changes
+        if (msg.result?.live_trading_enabled !== undefined && bridge) {
+          bridge.liveTradingEnabled = msg.result.live_trading_enabled
+        }
         const pending = pendingCommands.get(msg.command_id)
         if (pending) {
           clearTimeout(pending.timer)
@@ -141,6 +146,7 @@ export function getBridgeStatus(userId) {
     account: bridge.account,
     terminal: bridge.terminal,
     lastSeen: bridge.lastSeen,
+    liveTradingEnabled: bridge.liveTradingEnabled,
   }
 }
 
