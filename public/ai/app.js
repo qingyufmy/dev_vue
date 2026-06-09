@@ -815,6 +815,35 @@ function applyRoleUI() {
   if (promptSection) promptSection.style.display = isAdmin ? "" : "none";
 }
 
+/* ---- Provider presets: model name → API base URL ---- */
+const PROVIDER_PRESETS = {
+  deepseek: { models: ['deepseek-chat', 'deepseek-reasoner'], url: 'https://api.deepseek.com/v1' },
+  gpt:      { models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-mini'], url: 'https://api.openai.com/v1' },
+  kimi:     { models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'], url: 'https://api.moonshot.cn/v1' },
+  qwen:     { models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  zhipu:    { models: ['glm-4-flash', 'glm-4-air', 'glm-4', 'glm-4v'], url: 'https://open.bigmodel.cn/api/paas/v4' },
+  doubao:   { models: ['doubao-1.5-pro-32k', 'doubao-1.5-lite-32k', 'doubao-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
+  claude:   { models: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'], url: 'https://api.anthropic.com/v1' },
+  gemini:   { models: ['gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-1.5-pro'], url: 'https://generativelanguage.googleapis.com/v1beta' },
+};
+
+function applyProviderPreset(provider) {
+  const preset = PROVIDER_PRESETS[provider];
+  if (!preset) return;
+  /* Only auto-fill URL if empty or matches another preset URL */
+  const urlInput = $('apiBaseUrl');
+  const currentUrl = urlInput.value.trim();
+  const isPresetUrl = Object.values(PROVIDER_PRESETS).some(p => p.url === currentUrl);
+  if (!currentUrl || isPresetUrl) urlInput.value = preset.url;
+  /* Only auto-fill model if empty or matches another preset model */
+  const modelInput = $('modelName');
+  const currentModel = modelInput.value.trim();
+  const allModels = Object.values(PROVIDER_PRESETS).flatMap(p => p.models);
+  if (!currentModel || allModels.includes(currentModel)) modelInput.value = preset.models[0];
+}
+
+$('apiProvider').addEventListener('change', e => applyProviderPreset(e.target.value));
+
 async function loadConfig() {
   const data = await api("/api/ai/config");
   const cfg = data.config;
@@ -833,6 +862,7 @@ async function loadConfig() {
   $("apiProvider").value = cfg.api_provider || "deepseek";
   $("modelName").value = cfg.model_name || "deepseek-chat";
   $("apiBaseUrl").value = cfg.api_base_url || "";
+  applyProviderPreset($("apiProvider").value);
   $("temperature").value = cfg.temperature ?? 0.7;
   $("maxTokens").value = cfg.max_tokens ?? 2000;
   $("riskLevel").value = cfg.risk_level || "medium";
