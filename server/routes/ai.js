@@ -878,9 +878,11 @@ async function runAutoCycle(userId, symbol, timeframe) {
     const account = await mt5Bridge(userId, 'account', {})
     const positionsData = await mt5Bridge(userId, 'positions', { symbol })
     const positions = positionsData.positions || []
-    const rates = await mt5Bridge(userId, 'rates', { symbol, timeframe, count: 100 })
+    const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe, count: 100 })
 
-    if (!rates || rates.status === 'error' || !Array.isArray(rates) || rates.length === 0) return
+    if (!ratesResp || ratesResp.status === 'error') return
+    const rates = ratesResp.rates || []
+    if (!Array.isArray(rates) || rates.length === 0) return
 
     const market = calculateMarketData(symbol, timeframe, rates, account, positions)
 
