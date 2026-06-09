@@ -6,7 +6,15 @@ server/uploads/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .env
 _*.js
 _*.mjs
+_*.cjs
 _*.css
+_*.py
+*.log
+server/stdout.log
+server/stderr.log

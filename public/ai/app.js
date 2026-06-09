@@ -95,10 +95,6 @@ function signalDisplayTime(signal) {
   return formatTime(signal?.created_at_mt5 || signal?.created_at);
 }
 
-function auditDisplayTime(row) {
-  return formatTime(row?.created_at_mt5 || row?.created_at);
-}
-
 function profitClass(value) {
   const num = Number(value);
   if (num > 0) return "pnl-positive";
@@ -140,10 +136,6 @@ function directionText(value) {
   return { buy: "买入", sell: "卖出", hold: "观望" }[signalType(value)] || "观望";
 }
 
-function directionTextShort(value) {
-  return { buy: "多", sell: "空", hold: "观望" }[signalType(value)] || "观望";
-}
-
 function volumeText(value) {
   const text = String(value ?? "").trim();
   if (!text || text === "--") return "--";
@@ -161,25 +153,11 @@ function signedText(value, digits = 2, suffix = "") {
   return `${sign}${abs}${suffix}`;
 }
 
-function signedClass(value) {
-  const num = Number(value);
-  if (num > 0) return "pnl-positive";
-  if (num < 0) return "pnl-negative";
-  return "pnl zero";
-}
-
 function confidenceClass(value) {
   const pct = confidenceInfo(value).value;
   if (pct >= 70) return "conf-high";
   if (pct < 50) return "conf-low";
   return "conf-mid";
-}
-
-function setSignedValue(id, value, digits = 2, suffix = "") {
-  const el = $(id);
-  if (!el) return;
-  el.textContent = signedText(value, digits, suffix);
-  el.className = `num ${signedClass(value)}`;
 }
 
 function confidenceInfo(value) {

@@ -802,17 +802,6 @@ router.get('/health', async (req, res) => {
 })
 
 // MT5 Connect
-router.post('/mt5/connect', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('POST', '/connect')
-  res.json(result)
-})
-
-// MT5 Disconnect
-router.post('/mt5/disconnect', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('POST', '/disconnect')
-  res.json(result)
-})
-
 // MT5 Toggle Trade — enable/disable live trading without disconnecting
 router.post('/mt5/toggle-trade', authMiddleware, async (req, res) => {
   const { enable } = req.body
