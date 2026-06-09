@@ -545,6 +545,14 @@ function initBridgeModal() {
   $("mt5BridgeClose")?.addEventListener("click", () => modal.classList.add("hidden"));
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
+  $("downloadExe")?.addEventListener("click", () => {
+    const token = state.token || localStorage.getItem("authToken") || "";
+    const url = `/ai/bridge/setup?token=${encodeURIComponent(token)}`;
+    const a = document.createElement("a");
+    a.href = url; a.download = "AURUM_Bridge_Setup.bat"; a.click();
+    toast("正在下载，首次运行自动配置", "success");
+  });
+
   $("downloadWin")?.addEventListener("click", () => {
     const token = state.token || localStorage.getItem("authToken") || "";
     const url = `/ai/bridge/win?token=${encodeURIComponent(token)}`;

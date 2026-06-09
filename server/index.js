@@ -111,12 +111,46 @@ app.get('/health', async (req, res) => {
 app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai')))
 
 // Bridge script download with embedded auth token
-app.get('/ai/bridge/:platform', (req, res) => {
+app.get('/ai/bridge/:platform', async (req, res) => {
   const platform = req.params.platform
   const token = req.query.token || ''
   const serverUrl = `${req.protocol}://${req.get('host')}`
 
-  if (platform === 'win') {
+  if (platform === 'setup') {
+    // One-click setup: downloads exe + writes config + launches
+    const configData = JSON.stringify({ server_url: serverUrl, token })
+    const lines = [
+      '@echo off',
+      'chcp 65001 >nul 2>&1',
+      'echo ================================',
+      'echo   AURUM MT5 Bridge Setup',
+      'echo ================================',
+      'echo.',
+      'echo Downloading AURUM_Bridge.exe...',
+      'curl -sL -o "%~dp0AURUM_Bridge.exe" "' + serverUrl + '/ai/bridge/exe-file?token=' + encodeURIComponent(token) + '"',
+      'if not exist "%~dp0AURUM_Bridge.exe" (',
+      '  echo Download failed! Check network.',
+      '  pause',
+      '  exit /b 1',
+      ')',
+      'echo Writing config...',
+      'echo ' + configData + ' > "%~dp0config.json"',
+      'echo Starting AURUM Bridge...',
+      'start "" "%~dp0AURUM_Bridge.exe"',
+    ]
+    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Setup.bat"')
+    res.setHeader('Content-Type', 'application/octet-stream')
+    res.send(lines.join('\r\n'))
+  } else if (platform === 'exe' || platform === 'exe-file') {
+    // Serve the EXE directly
+    const exePath = join(__dirname, '..', 'public', 'ai', 'dist', 'AURUM_Bridge.exe')
+    if (!existsSync(exePath)) {
+      return res.status(404).json({ status: 'error', message: 'EXE not found' })
+    }
+    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge.exe"')
+    res.setHeader('Content-Type', 'application/octet-stream')
+    res.sendFile(exePath)
+  } else if (platform === 'win') {
     let vbs = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Win.vbs'), 'utf-8')
     vbs = vbs.replaceAll('{{TOKEN}}', token).replaceAll('{{SERVER_URL}}', serverUrl)
     res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Win.vbs"')
