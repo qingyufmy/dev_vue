@@ -160,6 +160,7 @@ export function getAllBridges() {
       alive: Date.now() - bridge.lastSeen < 15000,
       account: bridge.account,
       lastSeen: bridge.lastSeen,
+      liveTradingEnabled: bridge.liveTradingEnabled,
     })
   }
   return result

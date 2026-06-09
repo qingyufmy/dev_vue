@@ -378,17 +378,19 @@ class AurumBridge:
                 return {"status": "success", "symbol": symbol, "rates": [], "source": "mt5"}
 
             elif action == "quote":
+                from datetime import datetime
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
                 tick = self.mt5.symbol_info_tick(symbol)
                 info = self.mt5.symbol_info(symbol)
                 if not tick:
                     return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
+                time_str = datetime.fromtimestamp(tick.time).strftime("%Y-%m-%d %H:%M:%S") if tick.time else ""
                 return {
                     "status": "success", "symbol": symbol,
                     "bid": tick.bid, "ask": tick.ask,
                     "spread": round(info.spread * info.point, info.digits) if info else 0,
-                    "time": tick.time,
+                    "time": time_str,
                     "digits": info.digits if info else 2,
                     "point": info.point if info else 0.01,
                     "source": "mt5",
@@ -402,10 +404,13 @@ class AurumBridge:
                 else:
                     positions = self.mt5.positions_get()
                 if positions:
+                    from datetime import datetime
                     payload = []
                     for p in positions:
                         d = p._asdict()
                         sym_info = self.mt5.symbol_info(d["symbol"])
+                        time_val = d.get("time", 0)
+                        time_str = datetime.fromtimestamp(time_val).strftime("%Y-%m-%d %H:%M:%S") if time_val else ""
                         payload.append({
                             "ticket": d["ticket"], "symbol": d["symbol"],
                             "type": "buy" if d["type"] == 0 else "sell",
@@ -413,7 +418,7 @@ class AurumBridge:
                             "price_current": d["price_current"],
                             "profit": d["profit"], "sl": d["sl"], "tp": d["tp"],
                             "swap": d["swap"], "magic": d["magic"], "comment": d["comment"],
-                            "time": d.get("time", 0),
+                            "time": time_str,
                             "source": "mt5",
                         })
                     return {"status": "success", "positions": payload, "count": len(payload), "source": "mt5"}
@@ -486,6 +491,7 @@ class AurumBridge:
                 # Build orders list (reverse chronological)
                 orders = []
                 for d in reversed(deals):
+                    time_str = datetime.fromtimestamp(d.time).strftime("%Y-%m-%d %H:%M:%S") if d.time else ""
                     orders.append({
                         "ticket": d.ticket, "order": d.order, "symbol": d.symbol,
                         "type": "buy" if d.type == 0 else "sell" if d.type == 1 else "balance",
@@ -494,9 +500,9 @@ class AurumBridge:
                         "comment": d.comment or "",
                         "entry_price": d.price if d.entry == 0 else None,
                         "exit_price": d.price if d.entry == 1 else None,
-                        "entry_time": d.time if d.entry == 0 else None,
-                        "close_time": d.time if d.entry == 1 else None,
-                        "time": d.time,
+                        "entry_time": time_str if d.entry == 0 else "",
+                        "close_time": time_str if d.entry == 1 else "",
+                        "time": time_str,
                         "profit_points": round(d.profit / (d.volume * 100), 1) if d.volume and d.profit else 0,
                     })
                 start = (page - 1) * page_size
