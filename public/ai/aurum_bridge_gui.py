@@ -572,7 +572,7 @@ class AurumBridge:
                         "entry_time_local": datetime.fromtimestamp((entry_deal or {}).get("time")).isoformat(timespec="seconds") if (entry_deal or {}).get("time") else None,
                         "comment": d.get("comment"),
                     })
-                rows.sort(key=lambda row: row.get("entry_time") or row.get("close_time") or "", reverse=True)
+                rows.sort(key=lambda row: row.get("close_time") or row.get("entry_time") or "", reverse=True)
                 total = len(rows)
                 start_idx = max(page - 1, 0) * page_size
                 page_rows = rows[start_idx : start_idx + page_size]
