@@ -34,12 +34,14 @@ function mt5Now() {
   return new Date().toISOString().replace('T', ' ').substring(0, 19)
 }
 
-function utcToMt5Time(utcStr) {
-  if (!utcStr) return null
-  const d = new Date(utcStr + 'Z') // Parse as UTC
+function utcToMt5Time(beijingStr) {
+  if (!beijingStr) return null
+  // created_at is Beijing time (UTC+8), MT5 is UTC+3, so subtract 5 hours
+  const d = new Date(beijingStr.replace(' ', 'T'))
   if (isNaN(d.getTime())) return null
-  d.setUTCHours(d.getUTCHours() + 3) // UTC+3
-  return d.toISOString().replace('T', ' ').substring(0, 19)
+  d.setHours(d.getHours() - 5) // Beijing(UTC+8) → MT5(UTC+3)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function signalTtlSeconds(timeframe) {
@@ -49,8 +51,8 @@ function signalTtlSeconds(timeframe) {
 
 function signalAgeSeconds(createdAt) {
   try {
-    // created_at is stored as UTC string (from toISOString), append Z to parse as UTC
-    const created = new Date(createdAt + 'Z')
+    // created_at is stored as Beijing time (UTC+8) via datetime('now','+8 hours')
+    const created = new Date(createdAt.replace(' ', 'T'))
     return Math.max((Date.now() - created.getTime()) / 1000, 0)
   } catch {
     return 999999
