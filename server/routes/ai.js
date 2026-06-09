@@ -32,15 +32,15 @@ function utcNow() {
 
 function mt5Now() {
   const now = new Date()
-  now.setHours(now.getHours() + 3) // MT5 server UTC+3
+  now.setUTCHours(now.getUTCHours() + 3) // MT5 server UTC+3
   return now.toISOString().replace('T', ' ').substring(0, 19)
 }
 
 function utcToMt5Time(utcStr) {
   if (!utcStr) return null
-  const d = new Date(utcStr)
+  const d = new Date(utcStr + 'Z') // Parse as UTC
   if (isNaN(d.getTime())) return null
-  d.setHours(d.getHours() + 3)
+  d.setUTCHours(d.getUTCHours() + 3) // UTC+3
   return d.toISOString().replace('T', ' ').substring(0, 19)
 }
 
