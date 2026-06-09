@@ -118,17 +118,24 @@ function insertAudit(db, userId, action, symbol, request, result, status) {
 }
 
 // ============ MT5 Bridge (WebSocket via bridge-ws.js) ============
+const _bridgeLocks = {} // userId -> Promise chain
 async function mt5Bridge(userId, action, params = {}) {
-  let result = await executeViaBridge(userId, action, params)
-  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
-  if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
-    const variants = [params.symbol + '.s', params.symbol + 'm', params.symbol + '.c', params.symbol + '_']
-    for (const v of variants) {
-      result = await executeViaBridge(userId, action, { ...params, symbol: v })
-      if (result?.status !== 'error') break
+  // Serialize bridge commands per user to prevent concurrent conflicts
+  const prev = _bridgeLocks[userId] || Promise.resolve()
+  const current = prev.then(async () => {
+    let result = await executeViaBridge(userId, action, params)
+    // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+    if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
+      const variants = [params.symbol + '.s', params.symbol + 'm', params.symbol + '.c', params.symbol + '_']
+      for (const v of variants) {
+        result = await executeViaBridge(userId, action, { ...params, symbol: v })
+        if (result?.status !== 'error') break
+      }
     }
-  }
-  return result
+    return result
+  }).catch(e => ({ status: 'error', message: e.message }))
+  _bridgeLocks[userId] = current
+  return current
 }
 
 // ============ Market Data Calculation ============
@@ -529,6 +536,8 @@ router.post('/ai/test', authMiddleware, (req, res) => {
 
 // Analyze market
 router.post('/ai/analyze', authMiddleware, async (req, res) => {
+  // Pause auto scheduler during manual analysis
+  if (autoSchedulerState[req.userId]) autoSchedulerState[req.userId].manualBusy = true
   try {
     const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true } = req.body
     if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
@@ -592,6 +601,8 @@ router.post('/ai/analyze', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('[AI Analyze Error]', err.message)
     res.status(500).json({ status: 'error', message: err.message })
+  } finally {
+    if (autoSchedulerState[req.userId]) autoSchedulerState[req.userId].manualBusy = false
   }
 })
 
@@ -841,7 +852,7 @@ router.get('/auth/me', authMiddleware, (req, res) => {
 })
 
 // ============ Auto Scheduler ============
-const autoSchedulerState = {} // userId -> { running, timer, lastRunAt }
+const autoSchedulerState = {} // userId -> { running, timer, lastRunAt, manualBusy }
 
 function getAutoConfig(db, userId) {
   return db.prepare('SELECT * FROM auto_scheduler WHERE user_id = ?').get(userId)
@@ -1004,6 +1015,13 @@ function startAutoScheduler(userId) {
 
       const tick = async () => {
         if (!autoSchedulerState[userId]?.running) return
+        if (autoSchedulerState[userId]?.manualBusy) {
+          // Manual analysis in progress, skip this tick and reschedule
+          if (autoSchedulerState[userId]?.running) {
+            autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
+          }
+          return
+        }
         try { await runAutoCycle(userId, symbol, tf) } catch (e) { console.error(`[AutoScheduler] ${key} tick error:`, e.message) }
         if (autoSchedulerState[userId]?.running) {
           autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
