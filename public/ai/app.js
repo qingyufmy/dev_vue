@@ -1020,7 +1020,8 @@ function startSignalAgeTicker(signal) {
   if (!Number.isFinite(ttl) || ttl <= 0) return;
   const createdStr = signal.created_at;
   if (!createdStr) return;
-  const ms = new Date(createdStr.endsWith('Z') ? createdStr : createdStr + 'Z').getTime();
+  // Server stores Beijing time (UTC+8) via datetime('now','+8 hours'), no 'Z' suffix
+  const ms = new Date(createdStr.replace(' ', 'T')).getTime();
   if (!Number.isFinite(ms)) return;
   _signalCreatedAtMs = ms;
   _signalTtlSeconds = ttl;
