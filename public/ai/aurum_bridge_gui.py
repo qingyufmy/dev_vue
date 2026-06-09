@@ -235,6 +235,18 @@ class AurumBridge:
             self._set_status("已停止", "#ef4444")
             self._log("桥接已停止")
         else:
+            server = self.server_var.get().strip()
+            token = self.token_var.get().strip()
+            if not server or not token:
+                missing = []
+                if not server:
+                    missing.append("服务器地址")
+                if not token:
+                    missing.append("Token")
+                messagebox.showwarning("信息不完整",
+                    f"{' 和 '.join(missing)} 为空！\n\n"
+                    f"请手动填写，或从网站下载 config.json 放到本程序目录。")
+                return
             self.running = True
             self.start_btn.config(text="■  停止桥接", bg="#ef4444")
             self._set_status("连接中...", "#f59e0b")
