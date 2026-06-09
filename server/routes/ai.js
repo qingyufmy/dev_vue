@@ -8,6 +8,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 const MT5_BRIDGE_HOST = '127.0.0.1'
 const MT5_BRIDGE_PORT = 8766
 
+const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
+
 // ============ Auth Middleware ============
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization
@@ -294,7 +296,7 @@ async function maybeAiSignal(config, market) {
       url = baseUrl ? baseUrl.replace(/\/$/, '') + '/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions'
     } else return null
 
-    const prompt = config.system_prompt || 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
+    const prompt = (config || {}).system_prompt || DEFAULT_PROMPT
 
     const body = {
       model: config.model_name || 'deepseek-chat',
@@ -520,7 +522,7 @@ router.post('/ai/config', authMiddleware, (req, res) => {
     cfg.temperature || 0.7, cfg.max_tokens || 2000,
     cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0,
     cfg.risk_level || 'medium', cfg.max_position_size || 0.05,
-    cfg.selected_take_profit || 1, cfg.system_prompt || null, now, now
+    cfg.selected_take_profit || 1, cfg.system_prompt || DEFAULT_PROMPT, now, now
   )
   const row = getActiveConfig(db, req.userId, session_id, cfg.api_provider)
   res.json({ status: 'success', config: configPublic(row) })
@@ -912,7 +914,7 @@ ${candleSummary || '  (暂无K线数据)'}
       body: JSON.stringify({
         model: modelName,
         messages: [
-          { role: 'system', content: '你是专业的量化交易AI分析师。只输出JSON，不要任何其他文字。' },
+          { role: 'system', content: (config || {}).system_prompt || DEFAULT_PROMPT },
           { role: 'user', content: prompt }
         ],
         temperature,

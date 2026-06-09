@@ -811,7 +811,7 @@ async function loadConfig() {
   $("maxTokens").value = cfg.max_tokens ?? 2000;
   $("riskLevel").value = cfg.risk_level || "medium";
   const configuredMaxPosition = Number(cfg.max_position_size ?? 0.05);
-  $("maxPositionSize").value = (Number.isFinite(configuredMaxPosition) ? Math.min(0.05, configuredMaxPosition) : 0.05).toFixed(2);
+  $("maxPositionSize").value = (Number.isFinite(configuredMaxPosition) ? configuredMaxPosition : 0.05).toFixed(2);
   $("selectedTakeProfit").value = String(cfg.selected_take_profit || 1);
   $("enableAutoTrade").checked = Boolean(cfg.enable_auto_trade);
   $("enableFuturesTrading").checked = Boolean(cfg.enable_futures_trading);
@@ -842,7 +842,7 @@ async function saveConfig() {
       enable_auto_trade: $("enableAutoTrade").checked,
       enable_futures_trading: $("enableFuturesTrading").checked,
       risk_level: $("riskLevel").value,
-      max_position_size: Math.min(0.05, Math.max(0.01, Number($("maxPositionSize").value) || 0.01)),
+      max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
       system_prompt: $("systemPrompt").value || null,
     },
