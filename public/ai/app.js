@@ -12,6 +12,8 @@
   lastQuote: null,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
+  signalTickerTimer: null,   // 1s signal freshness ticker
+  signalTickerBase: null,    // { createdAtMs, ttlSeconds } for real-time countdown
   auditRows: [],
   signalFilters: { direction: "", timeframe: "", page: 1, pageSize: 20 },
   auditFilters: { status: "", type: "", page: 1, pageSize: 25 },
@@ -364,6 +366,7 @@ function stopRealtimeSync() {
   if (state.quoteTimer) clearInterval(state.quoteTimer);
   if (state.liveSyncTimer) clearInterval(state.liveSyncTimer);
   if (state.backgroundSyncTimer) clearInterval(state.backgroundSyncTimer);
+  stopSignalTicker();
   state.quoteTimer = null;
   state.liveSyncTimer = null;
   state.backgroundSyncTimer = null;
@@ -868,6 +871,7 @@ function updateSignalDisplay(signal) {
 
   if (!signal) {
     state.selectedSignal = null;
+    stopSignalTicker();
     setSignalBadge(null);
     card.dataset.direction = "hold";
     card.dataset.status = "empty";
@@ -895,6 +899,7 @@ function updateSignalDisplay(signal) {
   }
 
   state.selectedSignal = signal;
+  startSignalTicker(signal);
   setSignalBadge(signal);
   const dir = signalType(signal.signal_type);
   const confidence = confidenceInfo(signal.confidence);
@@ -942,6 +947,71 @@ function signalFreshness(signal) {
   const ttl = Number(signal.ttl_seconds);
   if (Number.isFinite(age) && Number.isFinite(ttl)) return `${Math.round(age)}s / ${ttl}s`;
   return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
+}
+
+// Real-time signal freshness: compute from stored base timestamp
+function signalFreshnessRealtime() {
+  const base = state.signalTickerBase;
+  if (!base) return "--";
+  const age = (Date.now() - base.createdAtMs) / 1000;
+  const ttl = base.ttlSeconds;
+  if (!Number.isFinite(ttl) || ttl <= 0) return "--";
+  if (age >= ttl) return "已过期";
+  const remaining = Math.max(0, Math.ceil(ttl - age));
+  return `${remaining}s / ${ttl}s`;
+}
+
+// Start 1-second ticker for signal validity countdown
+function startSignalTicker(signal) {
+  stopSignalTicker();
+  if (!signal || signal.is_stale || signal.is_executed) return;
+  const ttl = Number(signal.ttl_seconds);
+  if (!Number.isFinite(ttl) || ttl <= 0) return;
+
+  // Compute creation timestamp in ms
+  // created_at is UTC string like "2026-06-08 20:30:00" (append Z for UTC)
+  const createdStr = signal.created_at;
+  let createdAtMs = 0;
+  if (createdStr) {
+    const d = new Date(createdStr.endsWith('Z') ? createdStr : createdStr + 'Z');
+    createdAtMs = d.getTime();
+  }
+  if (!createdAtMs || !Number.isFinite(createdAtMs)) return;
+
+  state.signalTickerBase = { createdAtMs, ttlSeconds: ttl };
+
+  // Update immediately
+  updateSignalTickerDisplay();
+
+  // Tick every second
+  state.signalTickerTimer = setInterval(() => {
+    const base = state.signalTickerBase;
+    if (!base) { stopSignalTicker(); return; }
+    const age = (Date.now() - base.createdAtMs) / 1000;
+    if (age >= base.ttlSeconds) {
+      // Signal expired — mark stale and stop
+      if (state.selectedSignal) state.selectedSignal.is_stale = true;
+      updateSignalTickerDisplay();
+      stopSignalTicker();
+      return;
+    }
+    updateSignalTickerDisplay();
+  }, 1000);
+}
+
+function stopSignalTicker() {
+  if (state.signalTickerTimer) {
+    clearInterval(state.signalTickerTimer);
+    state.signalTickerTimer = null;
+  }
+  state.signalTickerBase = null;
+}
+
+// Update both dashboard sigValidWindow and analysis signalFreshness
+function updateSignalTickerDisplay() {
+  const text = signalFreshnessRealtime();
+  setText("sigValidWindow", text);
+  setText("signalFreshness", text);
 }
 
 function executionStatus(signal) {
