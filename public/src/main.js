@@ -591,6 +591,7 @@ const state = {
   notificationUnread: 0,
   paidVideoEpisodes: [], // episode IDs with CF Stream paid videos
   videoAccessMap: {},    // { episodeId: access_level } — universal access control
+  adminRefreshTimer: null, // admin page auto-refresh timer
   authMode: 'login_password',
   authPrefillEmail: '',
   authRedirectAfterLogin: null,
@@ -1070,6 +1071,23 @@ function stopPresenceHeartbeat() {
     presenceHeartbeatTimer = null
   }
   lastPresenceHeartbeatAt = 0
+}
+
+// ===== Admin Auto-Refresh (60s) =====
+function startAdminAutoRefresh() {
+  stopAdminAutoRefresh()
+  state.adminRefreshTimer = setInterval(() => {
+    if (state.currentView !== 'admin') { stopAdminAutoRefresh(); return }
+    const tasks = [loadAdminCourses(), loadAdminReferrals(), loadAdminConfig()]
+    Promise.allSettled(tasks).catch(() => {})
+  }, 60000)
+}
+
+function stopAdminAutoRefresh() {
+  if (state.adminRefreshTimer) {
+    clearInterval(state.adminRefreshTimer)
+    state.adminRefreshTimer = null
+  }
 }
 
 // ===== Progress Tracking =====
@@ -1883,6 +1901,7 @@ function navigate(view, episode = null, skipPush = false) {
   resetReplyDraftImages()
   releasePostImageObjectUrls()
   closePostImageLightbox()
+  stopAdminAutoRefresh()
   state.currentView = view
   if (episode) {
     state.currentEpisode = episode
@@ -3142,6 +3161,7 @@ function renderAdmin() {
       return
     }
     renderAdminContent(data)
+    startAdminAutoRefresh()
   })
 }
 
