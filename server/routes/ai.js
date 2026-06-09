@@ -119,7 +119,16 @@ function insertAudit(db, userId, action, symbol, request, result, status) {
 
 // ============ MT5 Bridge (WebSocket via bridge-ws.js) ============
 async function mt5Bridge(userId, action, params = {}) {
-  return await executeViaBridge(userId, action, params)
+  let result = await executeViaBridge(userId, action, params)
+  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+  if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
+    const variants = [params.symbol + '.s', params.symbol + 'm', params.symbol + '.c', params.symbol + '_']
+    for (const v of variants) {
+      result = await executeViaBridge(userId, action, { ...params, symbol: v })
+      if (result?.status !== 'error') break
+    }
+  }
+  return result
 }
 
 // ============ Market Data Calculation ============
@@ -531,12 +540,13 @@ router.post('/ai/analyze', authMiddleware, async (req, res) => {
     const account = await mt5Bridge(req.userId, 'account', {})
     const positionsData = include_positions ? await mt5Bridge(req.userId, 'positions', { symbol }) : { positions: [] }
     const positions = positionsData.positions || []
-    const rates = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: kline_count })
+    const ratesResp = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: kline_count })
 
-    if (!rates || rates.status === 'error') {
-      return res.status(500).json({ status: 'error', message: rates?.message || 'Failed to get rates' })
+    if (!ratesResp || ratesResp.status === 'error') {
+      return res.status(500).json({ status: 'error', message: ratesResp?.message || 'Failed to get rates' })
     }
 
+    const rates = ratesResp.rates || []
     const market = calculateMarketData(symbol, timeframe, rates, account, positions)
 
     // Try AI signal first, fallback to rule-based
@@ -580,6 +590,7 @@ router.post('/ai/analyze', authMiddleware, async (req, res) => {
 
     res.json({ status: 'success', signal })
   } catch (err) {
+    console.error('[AI Analyze Error]', err.message)
     res.status(500).json({ status: 'error', message: err.message })
   }
 })
@@ -675,7 +686,16 @@ router.get('/mt5/symbols', authMiddleware, async (req, res) => {
 
 // MT5 Quote
 router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
-  const result = await mt5Bridge(req.userId, 'quote', { symbol: req.params.symbol })
+  const symbol = req.params.symbol
+  let result = await mt5Bridge(req.userId, 'quote', { symbol })
+  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+  if (result?.status === 'error' && result.message?.includes('Symbol not found')) {
+    const variants = [symbol + '.s', symbol + 'm', symbol + '.c', symbol + '_']
+    for (const v of variants) {
+      result = await mt5Bridge(req.userId, 'quote', { symbol: v })
+      if (result?.status !== 'error') break
+    }
+  }
   res.json(result)
 })
 
@@ -719,7 +739,15 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
 router.get('/mt5/rates', authMiddleware, async (req, res) => {
   const { symbol, timeframe = 'M30', count = 100 } = req.query
   if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
-  const result = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: Number(count) })
+  let result = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: Number(count) })
+  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+  if (result?.status === 'error' && result.message?.includes('Symbol not found')) {
+    const variants = [symbol + '.s', symbol + 'm', symbol + '.c', symbol + '_']
+    for (const v of variants) {
+      result = await mt5Bridge(req.userId, 'rates', { symbol: v, timeframe, count: Number(count) })
+      if (result?.status !== 'error') break
+    }
+  }
   res.json(result)
 })
 

@@ -234,12 +234,24 @@ class AurumBridge:
         symbols = self.mt5.symbols_get()
         if symbols is None:
             raise RuntimeError(f"MT5 symbols_get failed")
+        # Exact match
         for item in symbols:
             if item.name == requested:
                 return item.name
+        # Case-insensitive match
         requested_upper = requested.upper()
         for item in symbols:
             if item.name.upper() == requested_upper:
+                return item.name
+        # Fallback variants (XAUUSD -> XAUUSD.s, XAUUSDm, XAUUSD.c, etc.)
+        fallbacks = [requested + ".s", requested + "m", requested + ".c", requested + "_", requested + ".micro"]
+        for fb in fallbacks:
+            for item in symbols:
+                if item.name.upper() == fb.upper():
+                    return item.name
+        # Partial match (XAUUSD matches XAUUSD.s)
+        for item in symbols:
+            if item.name.upper().startswith(requested_upper + ".") or item.name.upper().startswith(requested_upper + "_"):
                 return item.name
         raise RuntimeError(f"Symbol not found in MT5: {requested}")
 
