@@ -6,6 +6,7 @@ import http from 'http'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync } from 'fs'
+import { spawn } from 'child_process'
 import { initDB, getDB } from './db.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
@@ -174,6 +175,21 @@ app.post('/api/presence', (req, res) => {
 app.get('*', (req, res) => {
   res.sendFile(join(publicDir, 'index.html'))
 })
+
+// Start MT5 Bridge
+let bridgeProcess = null
+function startBridge() {
+  const bridgePath = join(__dirname, 'mt5_bridge.py')
+  bridgeProcess = spawn('python', [bridgePath], { cwd: __dirname, stdio: 'pipe' })
+  bridgeProcess.stdout?.on('data', d => { const s = d.toString().trim(); if (s) console.log(`[Bridge] ${s}`) })
+  bridgeProcess.stderr?.on('data', d => { const s = d.toString().trim(); if (s) console.log(`[Bridge] ${s}`) })
+  bridgeProcess.on('exit', code => {
+    console.log(`[Bridge] Exited with code ${code}, restarting in 3s...`)
+    setTimeout(startBridge, 3000)
+  })
+  console.log('[Bridge] MT5 Bridge starting on port 8766...')
+}
+startBridge()
 
 // Init DB and start
 initDB()
