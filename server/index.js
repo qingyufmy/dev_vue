@@ -155,20 +155,19 @@ app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai')))
 app.get('/ai/bridge/:platform', (req, res) => {
   const platform = req.params.platform
   const token = req.query.token || ''
+  const serverUrl = `${req.protocol}://${req.get('host')}`
 
   if (platform === 'win') {
-    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'aurum_bridge_win.py'), 'utf-8')
-    script = script.replace('AUTH_TOKEN = ""', `AUTH_TOKEN = "${token}"`)
-    script = script.replace('SERVER_URL = "http://localhost:3000"', `SERVER_URL = "${req.protocol}://${req.get('host')}"`)
-    res.setHeader('Content-Disposition', 'attachment; filename="aurum_bridge_win.py"')
-    res.setHeader('Content-Type', 'text/x-python; charset=utf-8')
+    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Win.bat'), 'utf-8')
+    script = script.replaceAll('{{TOKEN}}', token).replaceAll('{{SERVER_URL}}', serverUrl)
+    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Win.bat"')
+    res.setHeader('Content-Type', 'application/octet-stream')
     res.send(script)
   } else if (platform === 'mac') {
-    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'aurum_bridge_mac.py'), 'utf-8')
-    script = script.replace('AUTH_TOKEN = ""', `AUTH_TOKEN = "${token}"`)
-    script = script.replace('SERVER_URL = "http://localhost:3000"', `SERVER_URL = "${req.protocol}://${req.get('host')}"`)
-    res.setHeader('Content-Disposition', 'attachment; filename="aurum_bridge_mac.py"')
-    res.setHeader('Content-Type', 'text/x-python; charset=utf-8')
+    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Mac.command'), 'utf-8')
+    script = script.replaceAll('{{TOKEN}}', token).replaceAll('{{SERVER_URL}}', serverUrl)
+    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Mac.command"')
+    res.setHeader('Content-Type', 'application/octet-stream')
     res.send(script)
   } else {
     res.status(400).json({ status: 'error', message: '平台不支持，请使用 win 或 mac' })
