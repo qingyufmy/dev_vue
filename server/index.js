@@ -105,48 +105,7 @@ app.get('/health', async (req, res) => {
   }
 })
 
-// Root-level MT5 connect/disconnect (frontend calls /aurum-api/mt5/connect)
-app.post('/aurum-api/mt5/connect', async (req, res) => {
-  try {
-    const http = await import('http')
-    const result = await new Promise((resolve) => {
-      const request = http.default.request({
-        hostname: '127.0.0.1', port: 8766, path: '/connect', method: 'POST',
-        headers: { 'Content-Type': 'application/json' }, timeout: 15000
-      }, (response) => {
-        let data = ''
-        response.on('data', chunk => data += chunk)
-        response.on('end', () => { try { resolve(JSON.parse(data)) } catch { resolve({ status: 'error', message: data }) } })
-      })
-      request.on('error', (err) => resolve({ status: 'error', message: err.message }))
-      request.end()
-    })
-    res.json(result)
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message })
-  }
-})
 
-app.post('/aurum-api/mt5/disconnect', async (req, res) => {
-  try {
-    const http = await import('http')
-    const result = await new Promise((resolve) => {
-      const request = http.default.request({
-        hostname: '127.0.0.1', port: 8766, path: '/disconnect', method: 'POST',
-        headers: { 'Content-Type': 'application/json' }, timeout: 10000
-      }, (response) => {
-        let data = ''
-        response.on('data', chunk => data += chunk)
-        response.on('end', () => { try { resolve(JSON.parse(data)) } catch { resolve({ status: 'error', message: data }) } })
-      })
-      request.on('error', (err) => resolve({ status: 'error', message: err.message }))
-      request.end()
-    })
-    res.json(result)
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message })
-  }
-})
 
 // Serve AURUM AI static files at /ai
 app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai')))

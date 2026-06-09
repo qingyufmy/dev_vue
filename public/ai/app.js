@@ -487,15 +487,16 @@ async function loadStatus() {
   const gateway = health.gateway || {};
   const isLive = gateway.mode === "live";
 
-  // Gateway badge — MT5 connection (clickable to connect/disconnect)
-  setBadge("gatewayMode", isLive ? "MT5 已连接" : "模拟数据-未连接MT5", isLive ? "connected" : "neutral");
+  // Gateway badge — bridge connection status
+  setBadge("gatewayMode", isLive ? "桥接已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
 
-  // Trade mode badge — separate clickable toggle
+  // Trade mode badge
   const mt5TradeBlocked = isLive
     && gateway.live_trading_enabled
     && (gateway.terminal_trade_allowed === false || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
-  const tradeText = mt5TradeBlocked
-    ? "MT5 自动交易关闭"
+  const tradeText = !isLive
+    ? "请先启动桥接"
+    : mt5TradeBlocked ? "MT5 自动交易关闭"
     : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
@@ -534,21 +535,7 @@ async function loadStatus() {
 // ============ Gateway Badge Click ============
 // ============ Gateway Badge Click — MT5 connect/disconnect ============
 async function handleGatewayModeClick() {
-  const health = await api("/health").catch(() => null);
-  const isLive = health?.gateway?.mode === "live";
-  if (isLive) {
-    try {
-      if (!confirm("确认断开 MT5 连接？")) return;
-      await api("/aurum-api/mt5/disconnect", { method: "POST" });
-      toast("MT5 已断开", "success");
-      await loadStatus();
-    } catch (e) {
-      toast("断开失败: " + e.message, "error");
-    }
-  } else {
-    // Show bridge download modal
-    $("mt5BridgeModal").classList.remove("hidden");
-  }
+  $("mt5BridgeModal").classList.remove("hidden");
 }
 
 function initBridgeModal() {
@@ -562,7 +549,7 @@ function initBridgeModal() {
     const token = state.token || localStorage.getItem("authToken") || "";
     const url = `/ai/bridge/win?token=${encodeURIComponent(token)}`;
     const a = document.createElement("a");
-    a.href = url; a.download = "aurum_bridge_win.py"; a.click();
+    a.href = url; a.download = "AURUM_Bridge_Win.vbs"; a.click();
     toast("Windows 桥接脚本已下载", "success");
   });
 
@@ -570,21 +557,11 @@ function initBridgeModal() {
     const token = state.token || localStorage.getItem("authToken") || "";
     const url = `/ai/bridge/mac?token=${encodeURIComponent(token)}`;
     const a = document.createElement("a");
-    a.href = url; a.download = "aurum_bridge_mac.py"; a.click();
+    a.href = url; a.download = "AURUM_Bridge_Mac.command"; a.click();
     toast("macOS 桥接脚本已下载", "success");
   });
 
-  $("mt5DirectConnect")?.addEventListener("click", async () => {
-    modal.classList.add("hidden");
-    try {
-      await api("/aurum-api/mt5/connect", { method: "POST" });
-      toast("MT5 已连接", "success");
-      await refreshAll();
-      await loadStatus();
-    } catch (e) {
-      toast("连接失败: " + e.message, "error");
-    }
-  });
+
 }
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
@@ -595,7 +572,7 @@ async function handleTradeModeClick() {
 
   // Turning ON requires MT5 connection
   if (!currentlyEnabled && gateway.mode !== "live") {
-    toast("请先连接MT5", "warning");
+    toast("请先启动桥接脚本", "warning");
     return;
   }
 
