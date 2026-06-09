@@ -176,18 +176,24 @@ app.get('*', (req, res) => {
   res.sendFile(join(publicDir, 'index.html'))
 })
 
-// Start MT5 Bridge
+// Start MT5 Bridge (use venv Python with MetaTrader5 package)
 let bridgeProcess = null
 function startBridge() {
   const bridgePath = join(__dirname, 'mt5_bridge.py')
-  bridgeProcess = spawn('python', [bridgePath], { cwd: __dirname, stdio: 'pipe' })
+  const venvPython = 'C:\\Users\\Administrator\\Desktop\\黄金AI分析\\.venv\\Scripts\\python.exe'
+  const pythonCmd = existsSync(venvPython) ? venvPython : 'python'
+  bridgeProcess = spawn(pythonCmd, [bridgePath], {
+    cwd: __dirname,
+    stdio: 'pipe',
+    env: { ...process.env, ALLOW_LIVE_TRADING: 'true' }
+  })
   bridgeProcess.stdout?.on('data', d => { const s = d.toString().trim(); if (s) console.log(`[Bridge] ${s}`) })
   bridgeProcess.stderr?.on('data', d => { const s = d.toString().trim(); if (s) console.log(`[Bridge] ${s}`) })
   bridgeProcess.on('exit', code => {
     console.log(`[Bridge] Exited with code ${code}, restarting in 3s...`)
     setTimeout(startBridge, 3000)
   })
-  console.log('[Bridge] MT5 Bridge starting on port 8766...')
+  console.log(`[Bridge] MT5 Bridge starting (python=${pythonCmd})...`)
 }
 startBridge()
 
