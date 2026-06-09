@@ -89,7 +89,7 @@ app.get('/health', async (req, res) => {
             gateway: {
               mode: 'live',
               mt5_package_available: true,
-              live_trading_enabled: true,
+              live_trading_enabled: !!bridge.liveTradingEnabled,
               account: bridge.account,
             },
           })

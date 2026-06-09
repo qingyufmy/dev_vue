@@ -490,7 +490,7 @@ async function loadStatus() {
   const wasLive = state._lastGatewayLive;
 
   // Gateway badge — bridge connection status
-  setBadge("gatewayMode", isLive ? "桥接已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+  setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
 
   // Reload symbols when bridge just came online
   if (isLive && !wasLive) {
