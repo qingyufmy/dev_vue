@@ -829,14 +829,18 @@ router.get('/health', async (req, res) => {
       }
     }
     if (bridgeAlive) {
-      const bridgeStatus = getBridgeStatus(req.userId)
+      // Find the first alive bridge to get trade status
+      let liveTrading = false
+      for (const bridge of getAllBridges()) {
+        if (bridge.alive) { liveTrading = !!bridge.liveTradingEnabled; break }
+      }
       res.json({
         status: 'healthy',
         service: 'AURUM AI',
         gateway: {
           mode: 'live',
           mt5_package_available: true,
-          live_trading_enabled: !!bridgeStatus.liveTradingEnabled,
+          live_trading_enabled: liveTrading,
           account: bridgeAccount,
         },
       })

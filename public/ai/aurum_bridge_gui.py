@@ -409,10 +409,11 @@ class AurumBridge:
                         payload.append({
                             "ticket": d["ticket"], "symbol": d["symbol"],
                             "type": "buy" if d["type"] == 0 else "sell",
-                            "volume": d["volume"], "open_price": d["price_open"],
+                            "volume": d["volume"], "open_price": d["price_open"], "price_open": d["price_open"],
                             "price_current": d["price_current"],
                             "profit": d["profit"], "sl": d["sl"], "tp": d["tp"],
                             "swap": d["swap"], "magic": d["magic"], "comment": d["comment"],
+                            "time": d.get("time", 0),
                             "source": "mt5",
                         })
                     return {"status": "success", "positions": payload, "count": len(payload), "source": "mt5"}
@@ -473,18 +474,41 @@ class AurumBridge:
             elif action == "history":
                 page = params.get("page", 1)
                 page_size = params.get("page_size", 20)
+                from datetime import datetime
                 deals = self.mt5.history_deals_get(0, 0) or []
+                # Build statistics
+                total_profit = sum(d.profit for d in deals)
+                total_commission = sum(d.commission for d in deals)
+                total_swap = sum(d.swap for d in deals)
+                # Build orders list (reverse chronological)
+                orders = []
+                for d in reversed(deals):
+                    dt = datetime.fromtimestamp(d.time) if d.time else None
+                    orders.append({
+                        "ticket": d.ticket, "order": d.order, "symbol": d.symbol,
+                        "type": "buy" if d.type == 0 else "sell" if d.type == 1 else "balance",
+                        "entry": d.entry, "volume": d.volume, "price": d.price,
+                        "commission": d.commission, "swap": d.swap, "profit": d.profit,
+                        "comment": d.comment or "",
+                        "entry_price": d.price if d.entry == 0 else None,
+                        "exit_price": d.price if d.entry == 1 else None,
+                        "entry_time": d.time if d.entry == 0 else None,
+                        "close_time": d.time if d.entry == 1 else None,
+                        "time": d.time,
+                        "profit_points": round(d.profit / (d.volume * 100), 1) if d.volume and d.profit else 0,
+                    })
                 start = (page - 1) * page_size
                 end = start + page_size
-                items = []
-                for d in deals[start:end]:
-                    items.append({
-                        "ticket": d.ticket, "order": d.order, "time": d.time,
-                        "type": d.type, "entry": d.entry, "magic": d.magic,
-                        "volume": d.volume, "price": d.price, "commission": d.commission,
-                        "swap": d.swap, "profit": d.profit, "symbol": d.symbol, "comment": d.comment,
-                    })
-                return {"status": "success", "deals": items, "total": len(deals), "page": page, "page_size": page_size}
+                return {
+                    "status": "success",
+                    "orders": orders[start:end],
+                    "total": len(deals), "page": page, "page_size": page_size,
+                    "statistics": {
+                        "total_profit": round(total_profit, 2),
+                        "credit": 0, "deposit": 0, "withdrawal": 0,
+                        "net_result": round(total_profit + total_commission + total_swap, 2),
+                    },
+                }
 
             elif action == "diagnostics":
                 acc = self.mt5.account_info()
