@@ -5,6 +5,15 @@ import os
 import json
 import time
 import threading
+# MT5 broker time is UTC+3
+from datetime import datetime, timezone, timedelta
+_MT5_TZ = timezone(timedelta(hours=3))
+
+def _mt5_time(ts):
+    if not ts:
+        return ''
+    return datetime.fromtimestamp(int(ts), tz=_MT5_TZ).strftime('%Y-%m-%d %H:%M:%S')
+
 import ssl
 try:
     import websocket  # websocket-client
@@ -367,10 +376,9 @@ class AurumBridge:
                 count = int(params.get("count", 100))
                 rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, count)
                 if rates is not None and len(rates) > 0:
-                    import datetime
                     out = []
                     for r in rates:
-                        t = datetime.datetime.fromtimestamp(int(r[0])).strftime("%Y-%m-%d %H:%M:%S")
+                        t = _mt5_time(int(r[0]))
                         out.append({"time": t, "open": float(r[1]), "high": float(r[2]),
                                     "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]), "spread": int(r[6]) if len(r) > 6 else 0})
                     return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe", "M30"),
@@ -378,14 +386,13 @@ class AurumBridge:
                 return {"status": "success", "symbol": symbol, "rates": [], "source": "mt5"}
 
             elif action == "quote":
-                from datetime import datetime
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
                 tick = self.mt5.symbol_info_tick(symbol)
                 info = self.mt5.symbol_info(symbol)
                 if not tick:
                     return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
-                time_str = datetime.fromtimestamp(tick.time).strftime("%Y-%m-%d %H:%M:%S") if tick.time else ""
+                time_str = _mt5_time(tick.time)
                 return {
                     "status": "success", "symbol": symbol,
                     "bid": tick.bid, "ask": tick.ask,
@@ -404,13 +411,12 @@ class AurumBridge:
                 else:
                     positions = self.mt5.positions_get()
                 if positions:
-                    from datetime import datetime
                     payload = []
                     for p in positions:
                         d = p._asdict()
                         sym_info = self.mt5.symbol_info(d["symbol"])
                         time_val = d.get("time", 0)
-                        time_str = datetime.fromtimestamp(time_val).strftime("%Y-%m-%d %H:%M:%S") if time_val else ""
+                        time_str = _mt5_time(time_val)
                         payload.append({
                             "ticket": d["ticket"], "symbol": d["symbol"],
                             "type": "buy" if d["type"] == 0 else "sell",
@@ -479,7 +485,7 @@ class AurumBridge:
             elif action == "history":
                 page = params.get("page", 1)
                 page_size = params.get("page_size", 20)
-                from datetime import datetime, timedelta
+                from datetime import timedelta
                 # Get last 90 days of history
                 date_to = datetime.now()
                 date_from = date_to - timedelta(days=90)
@@ -491,7 +497,7 @@ class AurumBridge:
                 # Build orders list (reverse chronological)
                 orders = []
                 for d in reversed(trading_deals):
-                    time_str = datetime.fromtimestamp(d.time).strftime("%Y-%m-%d %H:%M:%S") if d.time else ""
+                    time_str = _mt5_time(d.time)
                     orders.append({
                         "ticket": d.ticket, "order": d.order, "symbol": d.symbol,
                         "type": "buy" if d.type == 0 else "sell" if d.type == 1 else "balance",
