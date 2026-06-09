@@ -578,6 +578,20 @@ function initBridgeModal() {
     modal.classList.add("hidden");
   });
 
+  $("downloadConfig")?.addEventListener("click", () => {
+    const token = state.token || localStorage.getItem("authToken") || "";
+    const serverUrl = location.origin;
+    const cfg = JSON.stringify({ server_url: serverUrl, token }, null, 2);
+    const blob = new Blob([cfg], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "config.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("config.json 已下载，放到 EXE 同目录覆盖即可", "success");
+    modal.classList.add("hidden");
+  });
+
 
 }
 
