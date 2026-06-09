@@ -1146,11 +1146,14 @@ const bridgeResultStore = new Map()     // commandId -> result
 const bridgeHeartbeats = new Map()      // userId -> { account, terminal, timestamp }
 
 // Bridge poll: local script calls this to get pending commands
+let bridgePollCount = 0
 router.get('/bridge/poll', authMiddleware, (req, res) => {
+  bridgePollCount++
   const userId = req.userId
   const queue = bridgeCommandQueues.get(userId) || []
   const commands = queue.splice(0, 10) // take up to 10
   bridgeCommandQueues.set(userId, queue)
+  if (commands.length > 0) console.log(`[Bridge] Poll #${bridgePollCount} by user ${userId}: ${commands.length} command(s)`)
   res.json({ commands })
 })
 
@@ -1211,7 +1214,7 @@ router.post('/bridge/heartbeat', authMiddleware, (req, res) => {
     terminal: req.body.terminal || null,
     timestamp: Date.now(),
   })
-  res.json({ status: 'ok' })
+  res.json({ status: 'ok', pollCount: bridgePollCount })
 })
 
 export { executeViaBridge, bridgeHeartbeats }
