@@ -544,6 +544,7 @@ async function handleGatewayModeClick() {
     } else {
       await api("/aurum-api/mt5/connect", { method: "POST" });
       toast("MT5 已连接", "success");
+      await refreshAll();
     }
     await loadStatus();
   } catch (e) {
