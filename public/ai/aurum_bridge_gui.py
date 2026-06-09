@@ -483,14 +483,14 @@ class AurumBridge:
                 # Get last 90 days of history
                 date_to = datetime.now()
                 date_from = date_to - timedelta(days=90)
-                deals = self.mt5.history_deals_get(date_from, date_to) or []
-                # Build statistics
-                total_profit = sum(d.profit for d in deals)
-                total_commission = sum(d.commission for d in deals)
-                total_swap = sum(d.swap for d in deals)
+                all_deals = self.mt5.history_deals_get(date_from, date_to) or []
+                # Filter trading deals only (type 0=buy, 1=sell)
+                trading_deals = [d for d in all_deals if d.type in (0, 1)]
+                # Build statistics from trading deals only
+                total_profit = sum(d.profit + d.commission + d.swap for d in trading_deals)
                 # Build orders list (reverse chronological)
                 orders = []
-                for d in reversed(deals):
+                for d in reversed(trading_deals):
                     time_str = datetime.fromtimestamp(d.time).strftime("%Y-%m-%d %H:%M:%S") if d.time else ""
                     orders.append({
                         "ticket": d.ticket, "order": d.order, "symbol": d.symbol,
@@ -510,11 +510,11 @@ class AurumBridge:
                 return {
                     "status": "success",
                     "orders": orders[start:end],
-                    "total": len(deals), "page": page, "page_size": page_size,
+                    "total": len(trading_deals), "page": page, "page_size": page_size,
                     "statistics": {
                         "total_profit": round(total_profit, 2),
                         "credit": 0, "deposit": 0, "withdrawal": 0,
-                        "net_result": round(total_profit + total_commission + total_swap, 2),
+                        "net_result": round(total_profit, 2),
                     },
                 }
 
