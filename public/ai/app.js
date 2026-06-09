@@ -569,15 +569,6 @@ function initBridgeModal() {
     modal.classList.add("hidden");
   });
 
-  $("downloadWin")?.addEventListener("click", () => {
-    const token = state.token || localStorage.getItem("authToken") || "";
-    const url = `/ai/bridge/win?token=${encodeURIComponent(token)}`;
-    const a = document.createElement("a");
-    a.href = url; a.download = "AURUM_Bridge_Win.vbs"; a.click();
-    toast("Windows 桥接脚本已下载", "success");
-    modal.classList.add("hidden");
-  });
-
   $("downloadMac")?.addEventListener("click", () => {
     const token = state.token || localStorage.getItem("authToken") || "";
     const url = `/ai/bridge/mac?token=${encodeURIComponent(token)}`;

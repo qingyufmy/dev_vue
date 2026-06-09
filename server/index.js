@@ -179,12 +179,6 @@ app.get('/ai/bridge/:platform', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge.exe"')
     res.setHeader('Content-Type', 'application/octet-stream')
     res.sendFile(exePath)
-  } else if (platform === 'win') {
-    let vbs = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Win.vbs'), 'utf-8')
-    vbs = vbs.replaceAll('{{TOKEN}}', token).replaceAll('{{SERVER_URL}}', serverUrl)
-    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Win.vbs"')
-    res.setHeader('Content-Type', 'application/octet-stream')
-    res.send(vbs)
   } else if (platform === 'mac') {
     let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Mac.command'), 'utf-8')
     script = script.replaceAll('{{TOKEN}}', token).replaceAll('{{SERVER_URL}}', serverUrl)
