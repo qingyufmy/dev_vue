@@ -172,7 +172,7 @@ app.get('/ai/bridge/:platform', async (req, res) => {
       '',
       'REM --- Install dependencies ---',
       'echo Installing dependencies...',
-      '%PYTHON% -m pip install MetaTrader5 requests -q',
+      '%PYTHON% -m pip install MetaTrader5 requests websocket-client -q',
       'echo.',
       '',
       'REM --- Download EXE ---',
