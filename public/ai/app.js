@@ -535,7 +535,14 @@ async function loadStatus() {
 // ============ Gateway Badge Click ============
 // ============ Gateway Badge Click — MT5 connect/disconnect ============
 async function handleGatewayModeClick() {
-  $("mt5BridgeModal").classList.remove("hidden");
+  const modal = $("mt5BridgeModal");
+  if (!modal) return;
+  // Toggle: if already open, close it
+  if (!modal.classList.contains("hidden")) {
+    modal.classList.add("hidden");
+    return;
+  }
+  modal.classList.remove("hidden");
 }
 
 function initBridgeModal() {
@@ -550,7 +557,8 @@ function initBridgeModal() {
     const url = `/ai/bridge/setup?token=${encodeURIComponent(token)}`;
     const a = document.createElement("a");
     a.href = url; a.download = "AURUM_Bridge_Setup.bat"; a.click();
-    toast("正在下载，首次运行自动配置", "success");
+    toast("正在下载 Setup.bat，双击运行即可", "success");
+    modal.classList.add("hidden");
   });
 
   $("downloadWin")?.addEventListener("click", () => {
@@ -559,6 +567,7 @@ function initBridgeModal() {
     const a = document.createElement("a");
     a.href = url; a.download = "AURUM_Bridge_Win.vbs"; a.click();
     toast("Windows 桥接脚本已下载", "success");
+    modal.classList.add("hidden");
   });
 
   $("downloadMac")?.addEventListener("click", () => {
@@ -567,6 +576,7 @@ function initBridgeModal() {
     const a = document.createElement("a");
     a.href = url; a.download = "AURUM_Bridge_Mac.command"; a.click();
     toast("macOS 桥接脚本已下载", "success");
+    modal.classList.add("hidden");
   });
 
 
