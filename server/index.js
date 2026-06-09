@@ -75,9 +75,31 @@ app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
 app.use('/aurum-api', aiRoutes)
 
-// Root-level health check (frontend calls /health directly)
+// Root-level health check — delegates to ai.js which checks bridge heartbeats
 app.get('/health', async (req, res) => {
   try {
+    // Import bridge state from ai.js
+    const aiModule = await import('./routes/ai.js')
+    // Try new polling bridge first (check heartbeats)
+    const bridgeHeartbeats = aiModule.bridgeHeartbeats
+    if (bridgeHeartbeats) {
+      const now = Date.now()
+      for (const [userId, hb] of bridgeHeartbeats) {
+        if (now - hb.timestamp < 15000) {
+          return res.json({
+            status: 'healthy',
+            service: 'AURUM AI',
+            gateway: {
+              mode: 'live',
+              mt5_package_available: true,
+              live_trading_enabled: true,
+              account: hb.account,
+            },
+          })
+        }
+      }
+    }
+    // Fallback: try old bridge on 8766
     const http = await import('http')
     const result = await new Promise((resolve) => {
       const options = {

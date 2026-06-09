@@ -801,8 +801,33 @@ router.post('/ui/config', authMiddleware, (req, res) => {
 // Health check
 router.get('/health', async (req, res) => {
   try {
-    const bridgeStatus = await mt5BridgeRequest('GET', '/status')
-    res.json({ status: 'healthy', service: 'AURUM AI', gateway: bridgeStatus })
+    // Check if any bridge has sent heartbeat in last 15s
+    let bridgeAlive = false
+    let bridgeAccount = null
+    const now = Date.now()
+    for (const [userId, hb] of bridgeHeartbeats) {
+      if (now - hb.timestamp < 15000) {
+        bridgeAlive = true
+        bridgeAccount = hb.account
+        break
+      }
+    }
+    if (bridgeAlive) {
+      res.json({
+        status: 'healthy',
+        service: 'AURUM AI',
+        gateway: {
+          mode: 'live',
+          mt5_package_available: true,
+          live_trading_enabled: true,
+          account: bridgeAccount,
+        },
+      })
+    } else {
+      // Fallback: try old bridge
+      const bridgeStatus = await mt5BridgeRequest('GET', '/status')
+      res.json({ status: 'healthy', service: 'AURUM AI', gateway: bridgeStatus })
+    }
   } catch {
     res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: false } })
   }
@@ -1063,6 +1088,7 @@ export function initAutoSchedulers() {
 // ============ Bridge Polling (Local MT5 Bridge) ============
 const bridgeCommandQueues = new Map()   // userId -> [{id, action, params, timestamp}]
 const bridgeResultStore = new Map()     // commandId -> result
+const bridgeHeartbeats = new Map()      // userId -> { account, terminal, timestamp }
 
 // Bridge poll: local script calls this to get pending commands
 router.get('/bridge/poll', authMiddleware, (req, res) => {
@@ -1114,11 +1140,24 @@ async function executeViaBridge(userId, action, params, timeoutMs = 30000) {
 // Get bridge status for user
 router.get('/bridge/status', authMiddleware, (req, res) => {
   const queue = bridgeCommandQueues.get(req.userId) || []
+  const hb = bridgeHeartbeats.get(req.userId)
+  const alive = hb && (Date.now() - hb.timestamp < 15000) // 15s timeout
   res.json({
     pending_commands: queue.length,
-    has_bridge: queue.length > 0 || bridgeResultStore.size > 0,
+    has_bridge: alive,
+    heartbeat: alive ? hb : null,
   })
 })
 
-export { executeViaBridge }
+// Bridge heartbeat: local bridge reports status
+router.post('/bridge/heartbeat', authMiddleware, (req, res) => {
+  bridgeHeartbeats.set(req.userId, {
+    account: req.body.account || null,
+    terminal: req.body.terminal || null,
+    timestamp: Date.now(),
+  })
+  res.json({ status: 'ok' })
+})
+
+export { executeViaBridge, bridgeHeartbeats }
 export default router
