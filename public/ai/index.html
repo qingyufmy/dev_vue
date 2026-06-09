@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AURUM AI MT5 Control Panel</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260608-badges" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260609-confbar" />
   </head>
   <body>
     <div id="loginView" class="login-view hidden">
@@ -322,7 +322,7 @@
                 </select></label>
                 <label><span>模型名称</span><input id="modelName" value="deepseek-chat" /></label>
                 <label><span>API Key</span><input id="apiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
-                <label><span>API 地址</span><input id="apiBaseUrl" placeholder="OpenAI-compatible endpoint" /></label>
+                <label><span>API 地址</span><input id="apiBaseUrl" value="https://api.deepseek.com" placeholder="OpenAI-compatible endpoint" /></label>
                 <label><span>推理温度 Temperature</span><input id="temperature" class="num" type="number" min="0" max="2" step="0.1" value="0.7" /><small class="field-help">数值越低越稳定，建议 0.2-0.7</small></label>
                 <label><span>最大输出 Max Tokens</span><input id="maxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /><small class="field-help">控制推理输出长度，建议 1200-2500</small></label>
               </div>
@@ -539,6 +539,51 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true">
+      <div class="bridge-dialog">
+        <div class="bridge-head">
+          <strong>连接 MT5 终端</strong>
+          <button id="mt5BridgeClose" class="icon-btn" title="关闭"><i data-lucide="x" size="16"></i></button>
+        </div>
+        <div class="bridge-body">
+          <div class="bridge-intro">
+            <p>下载启动器，双击即可运行桥接服务。</p>
+            <p class="bridge-note">自动检测 Python 环境并安装依赖，无需手动配置。</p>
+          </div>
+          <div class="bridge-options">
+            <button id="downloadExe" class="bridge-option-card" style="border-color: #22c55e;">
+              <div class="bridge-option-icon"><i data-lucide="monitor" size="32"></i></div>
+              <div class="bridge-option-info">
+                <strong>Windows (.exe)</strong>
+                <span>一键下载 · 无需 Python · 自带 GUI</span>
+                <small>推荐 · 双击运行 Setup 自动完成</small>
+              </div>
+              <i data-lucide="download" size="18"></i>
+            </button>
+            <button id="downloadMac" class="bridge-option-card">
+              <div class="bridge-option-icon"><i data-lucide="laptop" size="32"></i></div>
+              <div class="bridge-option-info">
+                <strong>macOS</strong>
+                <span>双击运行 · 支持 MT5 · WebSocket 连接</span>
+                <small>.command 单文件 · 自动安装依赖</small>
+              </div>
+              <i data-lucide="download" size="18"></i>
+            </button>
+            <button id="downloadConfig" class="bridge-option-card">
+              <div class="bridge-option-icon"><i data-lucide="file-json" size="32"></i></div>
+              <div class="bridge-option-info">
+                <strong>config.json</strong>
+                <span>Token 更新后下载覆盖 · 放在 EXE 同目录</span>
+                <small>配置文件 · 服务器地址 + Token</small>
+              </div>
+              <i data-lucide="download" size="18"></i>
+            </button>
+          </div>
+
+        </div>
+      </div>
     </div>
 
     <div id="autoConfigModal" class="auto-config-overlay hidden" role="dialog" aria-modal="true">

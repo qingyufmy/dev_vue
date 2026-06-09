@@ -5,6 +5,7 @@
   signals: [],
   selectedSignal: null,
   quoteTimer: null,
+  _lastGatewayLive: false,
   liveSyncTimer: null,
   backgroundSyncTimer: null,
   liveSyncInFlight: false,
@@ -453,6 +454,7 @@ async function bootstrap() {
       return;
     }
     state.user = await api("/aurum-api/auth/me");
+    applyRoleUI();
     showApp(true);
     await refreshAll();
     startRealtimeSync();
@@ -485,16 +487,24 @@ async function loadStatus() {
   const health = await api("/health");
   const gateway = health.gateway || {};
   const isLive = gateway.mode === "live";
+  const wasLive = state._lastGatewayLive;
 
-  // Gateway badge — MT5 connection (clickable to connect/disconnect)
-  setBadge("gatewayMode", isLive ? "MT5 已连接" : "模拟数据-未连接MT5", isLive ? "connected" : "neutral");
+  // Gateway badge — bridge connection status
+  setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
 
-  // Trade mode badge — separate clickable toggle
+  // Reload symbols when bridge just came online
+  if (isLive && !wasLive) {
+    loadSymbols().catch(() => {});
+  }
+  state._lastGatewayLive = isLive;
+
+  // Trade mode badge
   const mt5TradeBlocked = isLive
     && gateway.live_trading_enabled
     && (gateway.terminal_trade_allowed === false || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
-  const tradeText = mt5TradeBlocked
-    ? "MT5 自动交易关闭"
+  const tradeText = !isLive
+    ? "请先启动桥接"
+    : mt5TradeBlocked ? "MT5 自动交易关闭"
     : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
@@ -533,23 +543,56 @@ async function loadStatus() {
 // ============ Gateway Badge Click ============
 // ============ Gateway Badge Click — MT5 connect/disconnect ============
 async function handleGatewayModeClick() {
-  const health = await api("/health").catch(() => null);
-  const isLive = health?.gateway?.mode === "live";
-  try {
-    if (isLive) {
-      // Confirm before disconnecting
-      if (!confirm("确认断开 MT5 连接？")) return;
-      await api("/aurum-api/mt5/disconnect", { method: "POST" });
-      toast("MT5 已断开", "success");
-    } else {
-      await api("/aurum-api/mt5/connect", { method: "POST" });
-      toast("MT5 已连接", "success");
-      await refreshAll();
-    }
-    await loadStatus();
-  } catch (e) {
-    toast("连接失败: " + e.message, "error");
+  const modal = $("mt5BridgeModal");
+  if (!modal) return;
+  // Toggle: if already open, close it
+  if (!modal.classList.contains("hidden")) {
+    modal.classList.add("hidden");
+    return;
   }
+  modal.classList.remove("hidden");
+}
+
+function initBridgeModal() {
+  const modal = $("mt5BridgeModal");
+  if (!modal) return;
+
+  $("mt5BridgeClose")?.addEventListener("click", () => modal.classList.add("hidden"));
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
+
+  $("downloadExe")?.addEventListener("click", () => {
+    const token = state.token || localStorage.getItem("authToken") || "";
+    const url = `/ai/bridge/setup?token=${encodeURIComponent(token)}`;
+    const a = document.createElement("a");
+    a.href = url; a.download = "AURUM_Bridge_Setup.bat"; a.click();
+    toast("正在下载 Setup.bat，双击运行即可", "success");
+    modal.classList.add("hidden");
+  });
+
+  $("downloadMac")?.addEventListener("click", () => {
+    const token = state.token || localStorage.getItem("authToken") || "";
+    const url = `/ai/bridge/mac?token=${encodeURIComponent(token)}`;
+    const a = document.createElement("a");
+    a.href = url; a.download = "AURUM_Bridge_Mac.command"; a.click();
+    toast("macOS 桥接脚本已下载", "success");
+    modal.classList.add("hidden");
+  });
+
+  $("downloadConfig")?.addEventListener("click", () => {
+    const token = state.token || localStorage.getItem("authToken") || "";
+    const serverUrl = location.origin;
+    const cfg = JSON.stringify({ server_url: serverUrl, token }, null, 2);
+    const blob = new Blob([cfg], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "config.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("config.json 已下载，放到 EXE 同目录覆盖即可", "success");
+    modal.classList.add("hidden");
+  });
+
+
 }
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
@@ -560,7 +603,7 @@ async function handleTradeModeClick() {
 
   // Turning ON requires MT5 connection
   if (!currentlyEnabled && gateway.mode !== "live") {
-    toast("请先连接MT5", "warning");
+    toast("请先启动桥接脚本", "warning");
     return;
   }
 
@@ -770,6 +813,42 @@ async function loadPositions() {
   initIcons();
 }
 
+function applyRoleUI() {
+  const isAdmin = state.user?.role === "admin";
+  // System prompt section: admin only
+  const promptSection = document.querySelector(".config-section:has(#systemPrompt)");
+  if (promptSection) promptSection.style.display = isAdmin ? "" : "none";
+}
+
+/* ---- Provider presets: model name → API base URL ---- */
+const PROVIDER_PRESETS = {
+  deepseek: { models: ['deepseek-chat', 'deepseek-reasoner'], url: 'https://api.deepseek.com' },
+  gpt:      { models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-mini'], url: 'https://api.openai.com/v1' },
+  kimi:     { models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'], url: 'https://api.moonshot.cn/v1' },
+  qwen:     { models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  zhipu:    { models: ['glm-4-flash', 'glm-4-air', 'glm-4', 'glm-4v'], url: 'https://open.bigmodel.cn/api/paas/v4' },
+  doubao:   { models: ['doubao-1.5-pro-32k', 'doubao-1.5-lite-32k', 'doubao-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
+  claude:   { models: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'], url: 'https://api.anthropic.com/v1' },
+  gemini:   { models: ['gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-1.5-pro'], url: 'https://generativelanguage.googleapis.com/v1beta' },
+};
+
+function applyProviderPreset(provider) {
+  const preset = PROVIDER_PRESETS[provider];
+  if (!preset) return;
+  /* Only auto-fill URL if empty or matches another preset URL */
+  const urlInput = $('apiBaseUrl');
+  const currentUrl = urlInput.value.trim();
+  const isPresetUrl = Object.values(PROVIDER_PRESETS).some(p => p.url === currentUrl);
+  if (!currentUrl || isPresetUrl) urlInput.value = preset.url;
+  /* Only auto-fill model if empty or matches another preset model */
+  const modelInput = $('modelName');
+  const currentModel = modelInput.value.trim();
+  const allModels = Object.values(PROVIDER_PRESETS).flatMap(p => p.models);
+  if (!currentModel || allModels.includes(currentModel)) modelInput.value = preset.models[0];
+}
+
+$('apiProvider').addEventListener('change', e => applyProviderPreset(e.target.value));
+
 async function loadConfig() {
   const data = await api("/api/ai/config");
   const cfg = data.config;
@@ -778,6 +857,7 @@ async function loadConfig() {
     $("systemPrompt").value = "You are a disciplined trading analyst. Return strict JSON.";
     $("apiKey").placeholder = "输入 API Key 后保存";
     setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
+    applyProviderPreset("deepseek");
     return;
   }
 
@@ -788,6 +868,7 @@ async function loadConfig() {
   $("apiProvider").value = cfg.api_provider || "deepseek";
   $("modelName").value = cfg.model_name || "deepseek-chat";
   $("apiBaseUrl").value = cfg.api_base_url || "";
+  applyProviderPreset($("apiProvider").value);
   $("temperature").value = cfg.temperature ?? 0.7;
   $("maxTokens").value = cfg.max_tokens ?? 2000;
   $("riskLevel").value = cfg.risk_level || "medium";
@@ -1443,6 +1524,7 @@ function setHistoryZeroClass(id, value) {
 }
 
 async function loadHistory() {
+  try {
   const data = await api("/api/mt5/history?page=1&page_size=20");
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
@@ -1476,6 +1558,7 @@ async function loadHistory() {
     </tr>
   `;
   }).join("") : `<tr class="empty-row"><td colspan="11">暂无成交记录</td></tr>`;
+  } catch (e) { console.error("loadHistory:", e); }
 }
 
 async function refreshTradingPage() {
@@ -1698,6 +1781,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   updateSignalDisplay(null);
   initIcons();
+  initBridgeModal();
   if (state.token) bootstrap();
   else showApp(false);
 });

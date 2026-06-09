@@ -63,8 +63,8 @@ export function initDB() {
       referred_by TEXT,
       last_seen_at TEXT,
       current_view TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS courses (
@@ -92,8 +92,8 @@ export function initDB() {
       structure_count INTEGER DEFAULT 0,
       status TEXT DEFAULT 'published',
       sort_order INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS progress (
@@ -104,7 +104,7 @@ export function initDB() {
       total_duration REAL DEFAULT 0,
       completed INTEGER DEFAULT 0,
       quiz_passed INTEGER DEFAULT 0,
-      updated_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours')),
       UNIQUE(user_id, episode_id)
     );
 
@@ -115,15 +115,15 @@ export function initDB() {
       text TEXT NOT NULL,
       parent_id INTEGER,
       likes INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS comment_likes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       comment_id INTEGER NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
       UNIQUE(user_id, comment_id)
     );
 
@@ -147,8 +147,8 @@ export function initDB() {
       image_count INTEGER DEFAULT 0,
       last_reply_at TEXT,
       last_reply_user_id INTEGER,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS post_replies (
@@ -163,7 +163,7 @@ export function initDB() {
       quote_reply_id INTEGER,
       floor_number INTEGER DEFAULT 0,
       likes INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS post_reports (
@@ -174,7 +174,7 @@ export function initDB() {
       reason TEXT DEFAULT '',
       detail TEXT DEFAULT '',
       status TEXT DEFAULT 'pending',
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS trades (
@@ -195,8 +195,8 @@ export function initDB() {
       screenshot_url TEXT DEFAULT '',
       status TEXT DEFAULT 'open',
       is_public INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS orders (
@@ -215,7 +215,7 @@ export function initDB() {
       status_label TEXT DEFAULT '',
       payment_method TEXT DEFAULT '',
       paid_at TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS notifications (
@@ -230,7 +230,7 @@ export function initDB() {
       meta TEXT DEFAULT '{}',
       is_read INTEGER DEFAULT 0,
       read INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS verification_codes (
@@ -240,7 +240,7 @@ export function initDB() {
       purpose TEXT DEFAULT 'login',
       expires_at TEXT NOT NULL,
       used INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -277,7 +277,7 @@ export function initDB() {
       amount_cents INTEGER DEFAULT 0,
       plan_label TEXT DEFAULT '',
       attributed_at TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS user_notices (
@@ -290,7 +290,7 @@ export function initDB() {
       link TEXT DEFAULT '',
       source TEXT DEFAULT '',
       read INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS video_streams (
@@ -305,7 +305,7 @@ export function initDB() {
       file_size INTEGER DEFAULT 0,
       access_level TEXT DEFAULT 'plus_pro',
       title TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS post_assets (
@@ -316,7 +316,7 @@ export function initDB() {
       file_type TEXT DEFAULT '',
       file_size INTEGER DEFAULT 0,
       url TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
 
     CREATE TABLE IF NOT EXISTS post_tags (
@@ -333,8 +333,8 @@ export function initDB() {
       value TEXT DEFAULT '',
       label TEXT DEFAULT '',
       sort_order INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours')),
       UNIQUE(category, key)
     );
 
@@ -407,8 +407,8 @@ export function initDB() {
       interval_seconds INTEGER NOT NULL DEFAULT 900,
       enabled INTEGER NOT NULL DEFAULT 0,
       last_run_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
       UNIQUE(user_id)
     );
   `)
@@ -538,7 +538,7 @@ function migrateDB(db) {
       file_type TEXT DEFAULT '',
       file_size INTEGER DEFAULT 0,
       url TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
     CREATE TABLE IF NOT EXISTS post_tags (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -553,8 +553,8 @@ function migrateDB(db) {
       value TEXT DEFAULT '',
       label TEXT DEFAULT '',
       sort_order INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours')),
       UNIQUE(category, key)
     );
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -568,7 +568,7 @@ function migrateDB(db) {
       detail TEXT DEFAULT '',
       ip TEXT DEFAULT '',
       user_agent TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
     );
   `)
 }

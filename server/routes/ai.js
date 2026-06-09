@@ -1,12 +1,11 @@
-﻿import { Router } from 'express'
+import { Router } from 'express'
 import { getDB } from '../db.js'
 import jwt from 'jsonwebtoken'
-import http from 'http'
+
+import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges } from '../bridge-ws.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
-const MT5_BRIDGE_HOST = '127.0.0.1'
-const MT5_BRIDGE_PORT = 8766
 
 const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
@@ -32,16 +31,14 @@ function utcNow() {
 }
 
 function mt5Now() {
-  const now = new Date()
-  now.setHours(now.getHours() + 3) // MT5 server UTC+3
-  return now.toISOString().replace('T', ' ').substring(0, 19)
+  return new Date().toISOString().replace('T', ' ').substring(0, 19)
 }
 
 function utcToMt5Time(utcStr) {
   if (!utcStr) return null
-  const d = new Date(utcStr)
+  const d = new Date(utcStr + 'Z') // Parse as UTC
   if (isNaN(d.getTime())) return null
-  d.setHours(d.getHours() + 3)
+  d.setUTCHours(d.getUTCHours() + 3) // UTC+3
   return d.toISOString().replace('T', ' ').substring(0, 19)
 }
 
@@ -92,7 +89,7 @@ function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
   } else {
     row = db.prepare('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1').get(userId, sessionId)
   }
-  // Fallback: if ai_configs has no API key, merge from system_config (金融工具箱)
+  // Fallback: if ai_configs has no API key, merge from system_config (���ڹ�����)
   if (!row || !row.api_key_encrypted) {
     const cfg = {}
     try {
@@ -118,44 +115,25 @@ function insertAudit(db, userId, action, symbol, request, result, status) {
   `).run(userId, action, symbol || null, JSON.stringify(request), JSON.stringify(result), status, utcNow())
 }
 
-// ============ MT5 Bridge Proxy ============
-function mt5BridgeRequest(method, path, body = null) {
-  return new Promise((resolve, reject) => {
-    const headers = { 'Content-Type': 'application/json' }
-    let bodyStr = null
-    if (body) {
-      bodyStr = JSON.stringify(body)
-      headers['Content-Length'] = Buffer.byteLength(bodyStr)
+// ============ MT5 Bridge (WebSocket via bridge-ws.js) ============
+const _bridgeLocks = {} // userId -> Promise chain
+async function mt5Bridge(userId, action, params = {}) {
+  // Serialize bridge commands per user to prevent concurrent conflicts
+  const prev = _bridgeLocks[userId] || Promise.resolve()
+  const current = prev.then(async () => {
+    let result = await executeViaBridge(userId, action, params)
+    // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+    if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
+      const variants = [params.symbol + '.s', params.symbol + 'm', params.symbol + '.c', params.symbol + '_']
+      for (const v of variants) {
+        result = await executeViaBridge(userId, action, { ...params, symbol: v })
+        if (result?.status !== 'error') break
+      }
     }
-    const options = {
-      hostname: MT5_BRIDGE_HOST,
-      port: MT5_BRIDGE_PORT,
-      path: path,
-      method: method,
-      headers: headers,
-      timeout: 30000,
-    }
-    const req = http.request(options, (res) => {
-      let data = ''
-      res.on('data', chunk => data += chunk)
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data))
-        } catch {
-          resolve({ status: 'error', message: 'Invalid response from MT5 bridge', raw: data })
-        }
-      })
-    })
-    req.on('error', (err) => {
-      resolve({ status: 'error', message: 'MT5 bridge unavailable: ' + err.message })
-    })
-    req.on('timeout', () => {
-      req.destroy()
-      resolve({ status: 'error', message: 'MT5 bridge timeout' })
-    })
-    if (bodyStr) req.write(bodyStr)
-    req.end()
-  })
+    return result
+  }).catch(e => ({ status: 'error', message: e.message }))
+  _bridgeLocks[userId] = current
+  return current
 }
 
 // ============ Market Data Calculation ============
@@ -428,23 +406,37 @@ function signalOrderPayload(signal, config, market, confirm) {
 
 // ============ Execute Order ============
 async function executeOrder(userId, config, request, action) {
-  const accountResult = await mt5BridgeRequest('GET', '/account')
-  const positionsResult = await mt5BridgeRequest('GET', '/positions')
+  // Try WebSocket bridge first, fallback to old bridge
+  let accountResult, positionsResult, quote
+  accountResult = await mt5Bridge(userId, 'account', {})
+  positionsResult = await mt5Bridge(userId, 'positions', {})
   const positions = positionsResult.positions || []
   const account = accountResult
 
-  let quote = null
   if (request.symbol) {
     try {
-      quote = await mt5BridgeRequest('GET', `/quote/${request.symbol}`)
+      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol })
       request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
+      // Convert points to prices for manual orders
+      const pointSize = quote.point || (request.quote_price > 1000 ? 0.01 : 0.0001)
+      if (request.stop_loss_points && !request.sl) {
+        request.sl = request.order_type === 'buy'
+          ? round2(request.quote_price - request.stop_loss_points * pointSize)
+          : round2(request.quote_price + request.stop_loss_points * pointSize)
+      }
+      if (request.take_profit_points && !request.tp) {
+        request.tp = request.order_type === 'buy'
+          ? round2(request.quote_price + request.take_profit_points * pointSize)
+          : round2(request.quote_price - request.take_profit_points * pointSize)
+      }
     } catch {}
   }
 
   let result
   try {
     const risk = validateTradeRequest(config, account, positions, request)
-    const openResult = await mt5BridgeRequest('POST', '/open', request)
+    let openResult
+    openResult = await mt5Bridge(userId, 'open', request)
     result = { ...openResult, risk }
     if (quote) result.quote = quote
   } catch (err) {
@@ -470,8 +462,10 @@ async function executeOrder(userId, config, request, action) {
 router.get('/ai/config', authMiddleware, (req, res) => {
   const { session_id = 'default', api_provider } = req.query
   const db = getDB()
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
+  const isAdmin = user?.role === 'admin'
   const row = getActiveConfig(db, req.userId, session_id, api_provider)
-  res.json({ status: 'success', config: configPublic(row) })
+  res.json({ status: 'success', config: configPublic(row, isAdmin) })
 })
 
 // Get all AI configs
@@ -500,6 +494,9 @@ router.post('/ai/config', authMiddleware, (req, res) => {
   if (!cfg) return res.status(400).json({ status: 'error', message: 'config required' })
   const db = getDB()
   const now = utcNow()
+  // Non-admins cannot set system_prompt
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
+  if (user?.role !== 'admin') delete cfg.system_prompt
 
   db.prepare('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?').run(req.userId, session_id)
   const existingKey = cfg.api_key ? cfg.api_key : null
@@ -528,10 +525,12 @@ router.post('/ai/config', authMiddleware, (req, res) => {
   res.json({ status: 'success', config: configPublic(row) })
 })
 
-// Update system prompt
+// Update system prompt (admin only)
 router.put('/ai/config/prompt', authMiddleware, (req, res) => {
   const { session_id = 'default', system_prompt } = req.body
   const db = getDB()
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
+  if (user?.role !== 'admin') return res.status(403).json({ status: 'error', message: '������Ա���޸�ϵͳ��ʾ��' })
   const row = getActiveConfig(db, req.userId, session_id)
   if (!row) return res.status(404).json({ status: 'error', message: 'No active config' })
   db.prepare('UPDATE ai_configs SET system_prompt = ?, updated_at = ? WHERE id = ?').run(system_prompt, utcNow(), row.id)
@@ -547,6 +546,8 @@ router.post('/ai/test', authMiddleware, (req, res) => {
 
 // Analyze market
 router.post('/ai/analyze', authMiddleware, async (req, res) => {
+  // Pause auto scheduler during manual analysis
+  if (autoSchedulerState[req.userId]) autoSchedulerState[req.userId].manualBusy = true
   try {
     const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true } = req.body
     if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
@@ -555,15 +556,16 @@ router.post('/ai/analyze', authMiddleware, async (req, res) => {
     const config = getActiveConfig(db, req.userId, session_id)
 
     // Get market data from MT5 bridge
-    const account = await mt5BridgeRequest('GET', '/account')
-    const positionsData = include_positions ? await mt5BridgeRequest('GET', `/positions?symbol=${symbol}`) : { positions: [] }
+    const account = await mt5Bridge(req.userId, 'account', {})
+    const positionsData = include_positions ? await mt5Bridge(req.userId, 'positions', { symbol }) : { positions: [] }
     const positions = positionsData.positions || []
-    const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=${kline_count}`)
+    const ratesResp = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: kline_count })
 
-    if (!rates || rates.status === 'error') {
-      return res.status(500).json({ status: 'error', message: rates?.message || 'Failed to get rates' })
+    if (!ratesResp || ratesResp.status === 'error') {
+      return res.status(500).json({ status: 'error', message: ratesResp?.message || 'Failed to get rates' })
     }
 
+    const rates = ratesResp.rates || []
     const market = calculateMarketData(symbol, timeframe, rates, account, positions)
 
     // Try AI signal first, fallback to rule-based
@@ -607,7 +609,10 @@ router.post('/ai/analyze', authMiddleware, async (req, res) => {
 
     res.json({ status: 'success', signal })
   } catch (err) {
+    console.error('[AI Analyze Error]', err.message)
     res.status(500).json({ status: 'error', message: err.message })
+  } finally {
+    if (autoSchedulerState[req.userId]) autoSchedulerState[req.userId].manualBusy = false
   }
 })
 
@@ -683,40 +688,49 @@ router.post('/ai/execute', authMiddleware, async (req, res) => {
 
 // MT5 Status
 router.get('/mt5/status', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('GET', '/status')
+  if (!isBridgeAlive(req.userId)) return res.json({ status: 'success', mode: 'mock', mt5_package_available: true, live_trading_enabled: false })
+  const result = await mt5Bridge(req.userId, 'status', {})
   res.json({ status: 'success', ...result })
 })
 
 // MT5 Account
 router.get('/mt5/account', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('GET', '/account')
+  const result = await mt5Bridge(req.userId, 'account', {})
   res.json(result)
 })
 
 // MT5 Symbols
 router.get('/mt5/symbols', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('GET', '/symbols')
+  const result = await mt5Bridge(req.userId, 'symbols', {})
   res.json(result)
 })
 
 // MT5 Quote
 router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('GET', `/quote/${req.params.symbol}`)
+  const symbol = req.params.symbol
+  let result = await mt5Bridge(req.userId, 'quote', { symbol })
+  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+  if (result?.status === 'error' && result.message?.includes('Symbol not found')) {
+    const variants = [symbol + '.s', symbol + 'm', symbol + '.c', symbol + '_']
+    for (const v of variants) {
+      result = await mt5Bridge(req.userId, 'quote', { symbol: v })
+      if (result?.status !== 'error') break
+    }
+  }
   res.json(result)
 })
 
 // MT5 Positions
 router.get('/mt5/positions', authMiddleware, async (req, res) => {
   const { symbol } = req.query
-  const path = symbol ? `/positions?symbol=${symbol}` : '/positions'
-  const result = await mt5BridgeRequest('GET', path)
+  const result = await mt5Bridge(req.userId, 'positions', { symbol })
   res.json(result)
 })
 
 // MT5 History
 router.get('/mt5/history', authMiddleware, async (req, res) => {
   const { page = 1, page_size = 20 } = req.query
-  const result = await mt5BridgeRequest('GET', `/history?page=${page}&page_size=${page_size}`)
+  const result = await mt5Bridge(req.userId, 'history', { page: Number(page), page_size: Number(page_size) })
   res.json(result)
 })
 
@@ -735,7 +749,7 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
   if (!confirm) {
     result = { status: 'needs_confirmation', message: 'confirmation_required' }
   } else {
-    result = await mt5BridgeRequest('POST', '/close', { ticket })
+    result = await mt5Bridge(req.userId, 'close', { ticket })
   }
   const db = getDB()
   insertAudit(db, req.userId, 'manual_close', null, { ticket, confirm }, result, result.status)
@@ -746,13 +760,21 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
 router.get('/mt5/rates', authMiddleware, async (req, res) => {
   const { symbol, timeframe = 'M30', count = 100 } = req.query
   if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
-  const result = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=${count}`)
+  let result = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: Number(count) })
+  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+  if (result?.status === 'error' && result.message?.includes('Symbol not found')) {
+    const variants = [symbol + '.s', symbol + 'm', symbol + '.c', symbol + '_']
+    for (const v of variants) {
+      result = await mt5Bridge(req.userId, 'rates', { symbol: v, timeframe, count: Number(count) })
+      if (result?.status !== 'error') break
+    }
+  }
   res.json(result)
 })
 
 // MT5 Diagnostics
 router.get('/mt5/diagnostics', authMiddleware, async (req, res) => {
-  const result = await mt5BridgeRequest('GET', '/diagnostics')
+  const result = await mt5Bridge(req.userId, 'diagnostics', {})
   res.json(result)
 })
 
@@ -794,18 +816,45 @@ router.post('/ui/config', authMiddleware, (req, res) => {
 // Health check
 router.get('/health', async (req, res) => {
   try {
-    const bridgeStatus = await mt5BridgeRequest('GET', '/status')
-    res.json({ status: 'healthy', service: 'AURUM AI', gateway: bridgeStatus })
+    // Check if any bridge is connected via WebSocket
+    let bridgeAlive = false
+    let bridgeAccount = null
+    for (const bridge of getAllBridges()) {
+      if (bridge.alive) {
+        bridgeAlive = true
+        bridgeAccount = bridge.account
+        break
+      }
+    }
+    if (bridgeAlive) {
+      // Find the first alive bridge to get trade status
+      let liveTrading = false
+      for (const bridge of getAllBridges()) {
+        if (bridge.alive) { liveTrading = !!bridge.liveTradingEnabled; break }
+      }
+      res.json({
+        status: 'healthy',
+        service: 'AURUM AI',
+        gateway: {
+          mode: 'live',
+          mt5_package_available: true,
+          live_trading_enabled: liveTrading,
+          account: bridgeAccount,
+        },
+      })
+    } else {
+      res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
+    }
   } catch {
     res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: false } })
   }
 })
 
 // MT5 Connect
-// MT5 Toggle Trade — enable/disable live trading without disconnecting
+// MT5 Toggle Trade �� enable/disable live trading without disconnecting
 router.post('/mt5/toggle-trade', authMiddleware, async (req, res) => {
   const { enable } = req.body
-  const result = await mt5BridgeRequest('POST', '/toggle-trade', { enable })
+  const result = await mt5Bridge(req.userId, 'toggle_trade', { enable })
   res.json(result)
 })
 
@@ -818,7 +867,7 @@ router.get('/auth/me', authMiddleware, (req, res) => {
 })
 
 // ============ Auto Scheduler ============
-const autoSchedulerState = {} // userId -> { running, timer, lastRunAt }
+const autoSchedulerState = {} // userId -> { running, timer, lastRunAt, manualBusy }
 
 function getAutoConfig(db, userId) {
   return db.prepare('SELECT * FROM auto_scheduler WHERE user_id = ?').get(userId)
@@ -842,7 +891,7 @@ function timeframeIntervalMs(tf) {
   return map[String(tf).toUpperCase()] || 900_000
 }
 
-// Run one cycle for a specific symbol × timeframe
+// Run one cycle for a specific symbol �� timeframe
 async function runAutoCycle(userId, symbol, timeframe) {
   const db = getDB()
   const cfg = getAutoConfig(db, userId)
@@ -852,12 +901,14 @@ async function runAutoCycle(userId, symbol, timeframe) {
 
   try {
     // Get market data from MT5 bridge (same flow as /ai/analyze)
-    const account = await mt5BridgeRequest('GET', '/account')
-    const positionsData = await mt5BridgeRequest('GET', `/positions?symbol=${symbol}`)
+    const account = await mt5Bridge(userId, 'account', {})
+    const positionsData = await mt5Bridge(userId, 'positions', { symbol })
     const positions = positionsData.positions || []
-    const rates = await mt5BridgeRequest('GET', `/rates?symbol=${symbol}&timeframe=${timeframe}&count=100`)
+    const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe, count: 100 })
 
-    if (!rates || rates.status === 'error' || !Array.isArray(rates) || rates.length === 0) return
+    if (!ratesResp || ratesResp.status === 'error') return
+    const rates = ratesResp.rates || []
+    if (!Array.isArray(rates) || rates.length === 0) return
 
     const market = calculateMarketData(symbol, timeframe, rates, account, positions)
 
@@ -865,30 +916,30 @@ async function runAutoCycle(userId, symbol, timeframe) {
       `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
     ).join('\n')
 
-    const prompt = `你是专业的黄金(XAUUSD)短线交易AI。请基于以下技术数据给出交易信号。
+    const prompt = `����רҵ�Ļƽ�(XAUUSD)���߽���AI����������¼������ݸ��������źš�
 
-当前行情:
-- 品种: ${symbol}
-- 当前价格: ${market.latest_price}
+��ǰ����:
+- Ʒ��: ${symbol}
+- ��ǰ�۸�: ${market.latest_price}
 - SMA20: ${market.sma_20}
-- 动量(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
-- 波动率: ${market.volatility_pct}%
-- 持仓: 多${market.positions.long_positions} 空${market.positions.short_positions} 盈亏${market.positions.total_profit}
-- 分析周期: ${timeframe}
-- 最近K线数据:
-${candleSummary || '  (暂无K线数据)'}
+- ����(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
+- ������: ${market.volatility_pct}%
+- �ֲ�: ��${market.positions.long_positions} ��${market.positions.short_positions} ӯ��${market.positions.total_profit}
+- ��������: ${timeframe}
+- ���K������:
+${candleSummary || '  (����K������)'}
 
-请用JSON回复，格式严格如下:
+����JSON�ظ�����ʽ�ϸ�����:
 {
-  "signal_type": "buy 或 sell 或 hold",
-  "confidence": 0.0到1.0的置信度,
-  "recommended_volume": 建议手数(数字),
-  "analysis": "简短分析(不超过100字)",
-  "reasoning": "推理过程",
-  "stop_loss_price": 止损价,
-  "take_profit_1_price": 止盈价1,
-  "take_profit_2_price": 止盈价2,
-  "take_profit_3_price": 止盈价3
+  "signal_type": "buy �� sell �� hold",
+  "confidence": 0.0��1.0�����Ŷ�,
+  "recommended_volume": ��������(����),
+  "analysis": "��̷���(������100��)",
+  "reasoning": "��������",
+  "stop_loss_price": ֹ���,
+  "take_profit_1_price": ֹӯ��1,
+  "take_profit_2_price": ֹӯ��2,
+  "take_profit_3_price": ֹӯ��3
 }`
 
     const providerUrl = (config || {}).api_base_url || 'https://api.deepseek.com'
@@ -979,6 +1030,13 @@ function startAutoScheduler(userId) {
 
       const tick = async () => {
         if (!autoSchedulerState[userId]?.running) return
+        if (autoSchedulerState[userId]?.manualBusy) {
+          // Manual analysis in progress, skip this tick and reschedule
+          if (autoSchedulerState[userId]?.running) {
+            autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
+          }
+          return
+        }
         try { await runAutoCycle(userId, symbol, tf) } catch (e) { console.error(`[AutoScheduler] ${key} tick error:`, e.message) }
         if (autoSchedulerState[userId]?.running) {
           autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
@@ -1024,7 +1082,7 @@ router.get('/auto/status', authMiddleware, (req, res) => {
   })
 })
 
-// Auto config endpoint — save and start/stop
+// Auto config endpoint �� save and start/stop
 router.post('/auto/config', authMiddleware, async (req, res) => {
   const { symbols = ['XAUUSD'], timeframes = [] } = req.body
   const enabled = timeframes.length > 0
@@ -1053,4 +1111,17 @@ export function initAutoSchedulers() {
   } catch {}
 }
 
+// ============ Bridge (WebSocket via bridge-ws.js) ============
+
+// Execute command via WebSocket bridge
+async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
+  return sendBridgeCommand(userId, action, params, timeoutMs)
+}
+
+// Get bridge status for user
+router.get('/bridge/status', authMiddleware, (req, res) => {
+  res.json(getBridgeStatus(req.userId))
+})
+
+export { executeViaBridge, isBridgeAlive, getAllBridges }
 export default router

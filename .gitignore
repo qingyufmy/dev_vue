@@ -18,3 +18,10 @@ _*.py
 *.log
 server/stdout.log
 server/stderr.log
+
+_build/
+
+__pycache__/
+public/ai/build/
+public/ai/dist/
+*.spec
