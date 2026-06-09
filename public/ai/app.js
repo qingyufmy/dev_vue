@@ -453,6 +453,7 @@ async function bootstrap() {
       return;
     }
     state.user = await api("/aurum-api/auth/me");
+    applyRoleUI();
     showApp(true);
     await refreshAll();
     startRealtimeSync();
@@ -535,21 +536,55 @@ async function loadStatus() {
 async function handleGatewayModeClick() {
   const health = await api("/health").catch(() => null);
   const isLive = health?.gateway?.mode === "live";
-  try {
-    if (isLive) {
-      // Confirm before disconnecting
+  if (isLive) {
+    try {
       if (!confirm("确认断开 MT5 连接？")) return;
       await api("/aurum-api/mt5/disconnect", { method: "POST" });
       toast("MT5 已断开", "success");
-    } else {
+      await loadStatus();
+    } catch (e) {
+      toast("断开失败: " + e.message, "error");
+    }
+  } else {
+    // Show bridge download modal
+    $("mt5BridgeModal").classList.remove("hidden");
+  }
+}
+
+function initBridgeModal() {
+  const modal = $("mt5BridgeModal");
+  if (!modal) return;
+
+  $("mt5BridgeClose")?.addEventListener("click", () => modal.classList.add("hidden"));
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
+
+  $("downloadWin")?.addEventListener("click", () => {
+    const token = state.token || localStorage.getItem("authToken") || "";
+    const url = `/ai/bridge/win?token=${encodeURIComponent(token)}`;
+    const a = document.createElement("a");
+    a.href = url; a.download = "aurum_bridge_win.py"; a.click();
+    toast("Windows 桥接脚本已下载", "success");
+  });
+
+  $("downloadMac")?.addEventListener("click", () => {
+    const token = state.token || localStorage.getItem("authToken") || "";
+    const url = `/ai/bridge/mac?token=${encodeURIComponent(token)}`;
+    const a = document.createElement("a");
+    a.href = url; a.download = "aurum_bridge_mac.py"; a.click();
+    toast("macOS 桥接脚本已下载", "success");
+  });
+
+  $("mt5DirectConnect")?.addEventListener("click", async () => {
+    modal.classList.add("hidden");
+    try {
       await api("/aurum-api/mt5/connect", { method: "POST" });
       toast("MT5 已连接", "success");
       await refreshAll();
+      await loadStatus();
+    } catch (e) {
+      toast("连接失败: " + e.message, "error");
     }
-    await loadStatus();
-  } catch (e) {
-    toast("连接失败: " + e.message, "error");
-  }
+  });
 }
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
@@ -768,6 +803,13 @@ async function loadPositions() {
   $("positionsEmpty").classList.toggle("hidden", positions.length > 0);
   $("dashboardPositionsTable").classList.toggle("hidden", positions.length === 0);
   initIcons();
+}
+
+function applyRoleUI() {
+  const isAdmin = state.user?.role === "admin";
+  // System prompt section: admin only
+  const promptSection = document.querySelector(".config-section:has(#systemPrompt)");
+  if (promptSection) promptSection.style.display = isAdmin ? "" : "none";
 }
 
 async function loadConfig() {
@@ -1698,6 +1740,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   updateSignalDisplay(null);
   initIcons();
+  initBridgeModal();
   if (state.token) bootstrap();
   else showApp(false);
 });

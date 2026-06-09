@@ -470,8 +470,10 @@ async function executeOrder(userId, config, request, action) {
 router.get('/ai/config', authMiddleware, (req, res) => {
   const { session_id = 'default', api_provider } = req.query
   const db = getDB()
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
+  const isAdmin = user?.role === 'admin'
   const row = getActiveConfig(db, req.userId, session_id, api_provider)
-  res.json({ status: 'success', config: configPublic(row) })
+  res.json({ status: 'success', config: configPublic(row, isAdmin) })
 })
 
 // Get all AI configs
@@ -500,6 +502,9 @@ router.post('/ai/config', authMiddleware, (req, res) => {
   if (!cfg) return res.status(400).json({ status: 'error', message: 'config required' })
   const db = getDB()
   const now = utcNow()
+  // Non-admins cannot set system_prompt
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
+  if (user?.role !== 'admin') delete cfg.system_prompt
 
   db.prepare('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?').run(req.userId, session_id)
   const existingKey = cfg.api_key ? cfg.api_key : null
@@ -528,10 +533,12 @@ router.post('/ai/config', authMiddleware, (req, res) => {
   res.json({ status: 'success', config: configPublic(row) })
 })
 
-// Update system prompt
+// Update system prompt (admin only)
 router.put('/ai/config/prompt', authMiddleware, (req, res) => {
   const { session_id = 'default', system_prompt } = req.body
   const db = getDB()
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
+  if (user?.role !== 'admin') return res.status(403).json({ status: 'error', message: '仅管理员可修改系统提示词' })
   const row = getActiveConfig(db, req.userId, session_id)
   if (!row) return res.status(404).json({ status: 'error', message: 'No active config' })
   db.prepare('UPDATE ai_configs SET system_prompt = ?, updated_at = ? WHERE id = ?').run(system_prompt, utcNow(), row.id)
@@ -1053,4 +1060,65 @@ export function initAutoSchedulers() {
   } catch {}
 }
 
+// ============ Bridge Polling (Local MT5 Bridge) ============
+const bridgeCommandQueues = new Map()   // userId -> [{id, action, params, timestamp}]
+const bridgeResultStore = new Map()     // commandId -> result
+
+// Bridge poll: local script calls this to get pending commands
+router.get('/bridge/poll', authMiddleware, (req, res) => {
+  const userId = req.userId
+  const queue = bridgeCommandQueues.get(userId) || []
+  const commands = queue.splice(0, 10) // take up to 10
+  bridgeCommandQueues.set(userId, queue)
+  res.json({ commands })
+})
+
+// Bridge result: local script reports command results
+router.post('/bridge/result', authMiddleware, (req, res) => {
+  const { command_id, result } = req.body
+  if (command_id) {
+    bridgeResultStore.set(command_id, { result, timestamp: Date.now() })
+    // Clean old results (>5min)
+    for (const [id, v] of bridgeResultStore) {
+      if (Date.now() - v.timestamp > 300000) bridgeResultStore.delete(id)
+    }
+  }
+  res.json({ status: 'ok' })
+})
+
+// Queue a command for user's bridge
+function queueBridgeCommand(userId, action, params) {
+  const id = `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  const queue = bridgeCommandQueues.get(userId) || []
+  queue.push({ id, action, params, timestamp: Date.now() })
+  bridgeCommandQueues.set(userId, queue)
+  return id
+}
+
+// Execute via bridge and wait for result (polling)
+async function executeViaBridge(userId, action, params, timeoutMs = 30000) {
+  const cmdId = queueBridgeCommand(userId, action, params)
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const result = bridgeResultStore.get(cmdId)
+    if (result) {
+      bridgeResultStore.delete(cmdId)
+      return result.result
+    }
+    await new Promise(r => setTimeout(r, 500))
+  }
+  bridgeResultStore.delete(cmdId)
+  return { status: 'error', message: '桥接超时，请确保本地桥接脚本正在运行' }
+}
+
+// Get bridge status for user
+router.get('/bridge/status', authMiddleware, (req, res) => {
+  const queue = bridgeCommandQueues.get(req.userId) || []
+  res.json({
+    pending_commands: queue.length,
+    has_bridge: queue.length > 0 || bridgeResultStore.size > 0,
+  })
+})
+
+export { executeViaBridge }
 export default router

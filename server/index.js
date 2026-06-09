@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken'
 import http from 'http'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { spawn } from 'child_process'
 import { initDB, getDB } from './db.js'
 import authRoutes from './routes/auth.js'
@@ -26,7 +26,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
 
 // Load .env
-import { readFileSync } from 'fs'
 try {
   const envPath = join(__dirname, '.env')
   if (existsSync(envPath)) {
@@ -151,6 +150,30 @@ app.post('/aurum-api/mt5/disconnect', async (req, res) => {
 
 // Serve AURUM AI static files at /ai
 app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai')))
+
+// Bridge script download with embedded auth token
+app.get('/ai/bridge/:platform', (req, res) => {
+  const platform = req.params.platform
+  const token = req.query.token || ''
+
+  if (platform === 'win') {
+    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'aurum_bridge_win.py'), 'utf-8')
+    script = script.replace('AUTH_TOKEN = ""', `AUTH_TOKEN = "${token}"`)
+    script = script.replace('SERVER_URL = "http://localhost:3000"', `SERVER_URL = "${req.protocol}://${req.get('host')}"`)
+    res.setHeader('Content-Disposition', 'attachment; filename="aurum_bridge_win.py"')
+    res.setHeader('Content-Type', 'text/x-python; charset=utf-8')
+    res.send(script)
+  } else if (platform === 'mac') {
+    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'aurum_bridge_mac.py'), 'utf-8')
+    script = script.replace('AUTH_TOKEN = ""', `AUTH_TOKEN = "${token}"`)
+    script = script.replace('SERVER_URL = "http://localhost:3000"', `SERVER_URL = "${req.protocol}://${req.get('host')}"`)
+    res.setHeader('Content-Disposition', 'attachment; filename="aurum_bridge_mac.py"')
+    res.setHeader('Content-Type', 'text/x-python; charset=utf-8')
+    res.send(script)
+  } else {
+    res.status(400).json({ status: 'error', message: '平台不支持，请使用 win 或 mac' })
+  }
+})
 app.get('/ai', (req, res) => {
   res.sendFile(join(__dirname, '..', 'public', 'ai', 'index.html'))
 })

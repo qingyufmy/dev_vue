@@ -541,6 +541,46 @@
       </main>
     </div>
 
+    <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true">
+      <div class="bridge-dialog">
+        <div class="bridge-head">
+          <strong>连接 MT5 终端</strong>
+          <button id="mt5BridgeClose" class="icon-btn" title="关闭"><i data-lucide="x" size="16"></i></button>
+        </div>
+        <div class="bridge-body">
+          <div class="bridge-intro">
+            <p>下载本地桥接脚本，连接您的 MT5 终端与服务器。</p>
+            <p class="bridge-note">脚本会在您的电脑上运行，直接连接本地 MetaTrader 5。</p>
+          </div>
+          <div class="bridge-options">
+            <button id="downloadWin" class="bridge-option-card">
+              <div class="bridge-option-icon"><i data-lucide="monitor" size="32"></i></div>
+              <div class="bridge-option-info">
+                <strong>Windows</strong>
+                <span>需要 MetaTrader 5 已安装并运行</span>
+                <small>Python 3.8+ · MetaTrader5 库</small>
+              </div>
+              <i data-lucide="download" size="18"></i>
+            </button>
+            <button id="downloadMac" class="bridge-option-card">
+              <div class="bridge-option-icon"><i data-lucide="laptop" size="32"></i></div>
+              <div class="bridge-option-info">
+                <strong>macOS</strong>
+                <span>中继模式：需 Windows 端已运行桥接</span>
+                <small>Python 3.8+ · requests 库</small>
+              </div>
+              <i data-lucide="download" size="18"></i>
+            </button>
+          </div>
+          <div class="bridge-already">
+            <button id="mt5DirectConnect" class="btn btn-secondary btn-sm">
+              <i data-lucide="plug" size="14"></i>我已安装，直接连接
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="autoConfigModal" class="auto-config-overlay hidden" role="dialog" aria-modal="true">
       <div class="auto-config-dialog">
         <div class="auto-config-head">
