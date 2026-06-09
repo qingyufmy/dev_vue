@@ -260,10 +260,17 @@ class AurumBridge:
         params = cmd.get("params", {})
         try:
             if action == "open":
+                sym = params.get("symbol", "XAUUSD.s")
+                # Resolve actual symbol name
+                if not self.mt5.symbol_info_tick(sym):
+                    for v in ["XAUUSD.s", "XAUUSD.s_", "XAUUSDm", "XAUUSD.c", "XAUUSD"]:
+                        if v != sym and self.mt5.symbol_info_tick(v):
+                            sym = v
+                            break
                 order_type = self.mt5.ORDER_TYPE_BUY if params.get("type", "buy") == "buy" else self.mt5.ORDER_TYPE_SELL
                 req = {
                     "action": self.mt5.TRADE_ACTION_DEAL,
-                    "symbol": params.get("symbol", "XAUUSD.s"),
+                    "symbol": sym,
                     "volume": float(params.get("lot", 0.01)),
                     "type": order_type,
                     "magic": 234000,
@@ -321,7 +328,14 @@ class AurumBridge:
                 return {"rates": []}
 
             elif action == "quote":
-                tick = self.mt5.symbol_info_tick(params.get("symbol", "XAUUSD.s"))
+                sym = params.get("symbol", "XAUUSD.s")
+                tick = self.mt5.symbol_info_tick(sym)
+                if not tick:
+                    for v in ["XAUUSD.s", "XAUUSD.s_", "XAUUSDm", "XAUUSD.c", "XAUUSD"]:
+                        if v != sym:
+                            tick = self.mt5.symbol_info_tick(v)
+                            if tick:
+                                break
                 if tick:
                     return {"bid": tick.bid, "ask": tick.ask, "time": tick.time}
                 return {"error": "no tick data"}
