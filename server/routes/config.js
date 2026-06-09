@@ -133,6 +133,9 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
       port: Number(cfg.port) || 587,
       secure: cfg.secure === 'true',
       auth: { user: cfg.user, pass: cfg.pass },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     })
 
     await transporter.sendMail({
