@@ -980,6 +980,7 @@ function _updateSignalAge() {
     setText('signalFreshness', '已过期');
     setText('analysisValidity', '已过期');
     stopSignalAgeTicker();
+    refreshAll();
     return;
   }
   const text = `${age}s / ${_signalTtlSeconds}s`;
