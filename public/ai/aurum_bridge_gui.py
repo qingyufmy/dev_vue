@@ -488,120 +488,41 @@ class AurumBridge:
                 page = params.get("page", 1)
                 page_size = params.get("page_size", 20)
                 from datetime import timedelta
-                import math
+                # Get last 90 days of history
                 date_to = datetime.now()
                 date_from = date_to - timedelta(days=90)
                 all_deals = self.mt5.history_deals_get(date_from, date_to) or []
-
-                # ---- Group deals by position_id ----
-                deals_by_pos = {}
-                deposit_total = 0.0
-                withdrawal_total = 0.0
-                for d in all_deals:
-                    if d.type == self.mt5.DEAL_TYPE_BALANCE:
-                        if d.profit >= 0:
-                            deposit_total += d.profit
-                        else:
-                            withdrawal_total += abs(d.profit)
-                        continue
-                    if d.type not in (0, 1):  # skip non-trading types
-                        continue
-                    pid = d.position_id or d.order or d.ticket
-                    deals_by_pos.setdefault(pid, []).append(d)
-
-                # ---- Build one row per completed position ----
-                symbol_info_cache = {}
+                # Filter trading deals only (type 0=buy, 1=sell)
+                trading_deals = [d for d in all_deals if d.type in (0, 1)]
+                # Build statistics from trading deals only
+                total_profit = sum(d.profit + d.commission + d.swap for d in trading_deals)
+                # Build orders list (reverse chronological)
                 orders = []
-                wins = 0
-                losses = 0
-                profits_list = []
-                losses_list = []
-                running_pnl = 0.0
-                peak_pnl = 0.0
-                max_dd = 0.0
-
-                for pid, group in sorted(deals_by_pos.items(), key=lambda x: max(d.time for d in x[1]), reverse=True):
-                    entry_deal = next((d for d in group if d.entry == self.mt5.DEAL_ENTRY_IN), None)
-                    exit_deal = next((d for d in group if d.entry in (self.mt5.DEAL_ENTRY_OUT, self.mt5.DEAL_ENTRY_INOUT)), None)
-                    if not exit_deal:
-                        continue  # skip open positions
-
-                    side_deal = entry_deal or exit_deal
-                    direction = "buy" if side_deal.type == 0 else "sell"
-                    symbol = exit_deal.symbol or (entry_deal.symbol if entry_deal else None)
-                    entry_price = entry_deal.price if entry_deal else None
-                    exit_price = exit_deal.price
-                    volume = exit_deal.volume
-                    profit = exit_deal.profit + exit_deal.commission + exit_deal.swap
-
-                    # Calculate profit_points from price difference
-                    profit_points = None
-                    if entry_price and exit_price and symbol:
-                        if symbol not in symbol_info_cache:
-                            try:
-                                info = self.mt5.symbol_info(symbol)
-                                symbol_info_cache[symbol] = float(info.point) if info else None
-                            except:
-                                symbol_info_cache[symbol] = None
-                        point = symbol_info_cache.get(symbol)
-                        if point:
-                            if direction == "buy":
-                                profit_points = round((exit_price - entry_price) / point, 1)
-                            else:
-                                profit_points = round((entry_price - exit_price) / point, 1)
-
-                    entry_time_str = _mt5_time(entry_deal.time) if entry_deal else ""
-                    close_time_str = _mt5_time(exit_deal.time)
-
+                for d in reversed(trading_deals):
+                    time_str = _mt5_time(d.time)
                     orders.append({
-                        "ticket": (entry_deal.order if entry_deal else pid),
-                        "deal_ticket": exit_deal.ticket,
-                        "order": (entry_deal.order if entry_deal else pid),
-                        "close_order": exit_deal.order,
-                        "position_id": pid,
-                        "symbol": symbol,
-                        "type": direction,
-                        "volume": volume,
-                        "entry_price": entry_price,
-                        "exit_price": exit_price,
-                        "price": exit_price,
-                        "profit": round(profit, 2),
-                        "commission": exit_deal.commission,
-                        "swap": exit_deal.swap,
-                        "profit_points": profit_points,
-                        "entry_time": entry_time_str,
-                        "close_time": close_time_str,
-                        "time": close_time_str,
-                        "comment": exit_deal.comment or "",
+                        "ticket": d.ticket, "order": d.order, "symbol": d.symbol,
+                        "type": "buy" if d.type == 0 else "sell" if d.type == 1 else "balance",
+                        "entry": d.entry, "volume": d.volume, "price": d.price,
+                        "commission": d.commission, "swap": d.swap, "profit": d.profit,
+                        "comment": d.comment or "",
+                        "entry_price": d.price if d.entry == 0 else None,
+                        "exit_price": d.price if d.entry == 1 else None,
+                        "entry_time": time_str if d.entry == 0 else "",
+                        "close_time": time_str if d.entry == 1 else "",
+                        "time": time_str,
+                        "profit_points": round(d.profit / (d.volume * 100), 1) if d.volume and d.profit else 0,
                     })
-
-                    # Stats accumulation
-                    running_pnl += profit
-                    peak_pnl = max(peak_pnl, running_pnl)
-                    dd = peak_pnl - running_pnl
-                    max_dd = min(max_dd, -dd)
-                    if profit > 0:
-                        wins += 1
-                        profits_list.append(profit)
-                    elif profit < 0:
-                        losses += 1
-                        losses_list.append(abs(profit))
-
-                total_trades = wins + losses
+                start = (page - 1) * page_size
+                end = start + page_size
                 return {
                     "status": "success",
-                    "orders": orders[(page - 1) * page_size : page * page_size],
-                    "total": len(orders), "page": page, "page_size": page_size,
+                    "orders": orders[start:end],
+                    "total": len(trading_deals), "page": page, "page_size": page_size,
                     "statistics": {
-                        "total_profit": round(sum(o["profit"] for o in orders), 2),
-                        "net_result": round(sum(o["profit"] for o in orders), 2),
-                        "trade_count": total_trades,
-                        "win_rate": round(wins / total_trades * 100, 1) if total_trades else 0,
-                        "wins": wins, "losses": losses,
-                        "avg_profit": round(sum(profits_list) / len(profits_list), 2) if profits_list else 0,
-                        "avg_loss": round(sum(losses_list) / len(losses_list), 2) if losses_list else 0,
-                        "max_drawdown": round(max_dd, 2),
-                        "credit": 0, "deposit": round(deposit_total, 2), "withdrawal": round(withdrawal_total, 2),
+                        "total_profit": round(total_profit, 2),
+                        "credit": 0, "deposit": 0, "withdrawal": 0,
+                        "net_result": round(total_profit, 2),
                     },
                 }
 
