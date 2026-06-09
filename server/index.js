@@ -172,7 +172,7 @@ app.get('/ai/bridge/:platform', async (req, res) => {
     res.send(lines.join('\r\n'))
   } else if (platform === 'exe' || platform === 'exe-file') {
     // Serve the EXE directly
-    const exePath = join(__dirname, '..', 'public', 'ai', 'dist', 'AURUM_Bridge.exe')
+    const exePath = join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge.exe')
     if (!existsSync(exePath)) {
       return res.status(404).json({ status: 'error', message: 'EXE not found' })
     }
