@@ -255,22 +255,40 @@ class AurumBridge:
         except:
             pass
 
+    def _resolve_symbol(self, symbol):
+        """Find actual MT5 symbol name (matches old bridge resolve_live_symbol)"""
+        requested = str(symbol or "").strip()
+        if not requested:
+            raise RuntimeError("Symbol is required")
+        symbols = self.mt5.symbols_get()
+        if symbols is None:
+            raise RuntimeError(f"MT5 symbols_get failed")
+        for item in symbols:
+            if item.name == requested:
+                return item.name
+        requested_upper = requested.upper()
+        for item in symbols:
+            if item.name.upper() == requested_upper:
+                return item.name
+        raise RuntimeError(f"Symbol not found in MT5: {requested}")
+
     def _process_command(self, cmd):
         action = cmd.get("action")
         params = cmd.get("params", {})
         try:
             if action == "open":
-                sym = params.get("symbol", "XAUUSD.s")
-                # Resolve actual symbol name
-                if not self.mt5.symbol_info_tick(sym):
-                    for v in ["XAUUSD.s", "XAUUSD.s_", "XAUUSDm", "XAUUSD.c", "XAUUSD"]:
-                        if v != sym and self.mt5.symbol_info_tick(v):
-                            sym = v
-                            break
+                symbol = self._resolve_symbol(params.get("symbol"))
+                self.mt5.symbol_select(symbol, True)
+                info = self.mt5.symbol_info(symbol)
+                tick = self.mt5.symbol_info_tick(symbol)
+                if not info:
+                    return {"status": "error", "message": f"Symbol not available: {symbol}"}
+                if not tick:
+                    return {"status": "error", "message": f"Invalid live quote for {symbol}"}
                 order_type = self.mt5.ORDER_TYPE_BUY if params.get("type", "buy") == "buy" else self.mt5.ORDER_TYPE_SELL
                 req = {
                     "action": self.mt5.TRADE_ACTION_DEAL,
-                    "symbol": sym,
+                    "symbol": symbol,
                     "volume": float(params.get("lot", 0.01)),
                     "type": order_type,
                     "magic": 234000,
@@ -288,18 +306,36 @@ class AurumBridge:
                 return {"status": "error", "message": result.comment if result else "order_send failed"}
 
             elif action == "close":
-                positions = self.mt5.positions_get(symbol=params.get("symbol", "XAUUSD.s"))
-                if not positions:
-                    return {"status": "success", "message": "No positions"}
-                for pos in positions:
+                ticket = params.get("ticket")
+                if ticket:
+                    positions = self.mt5.positions_get(ticket=ticket)
+                    if not positions:
+                        return {"status": "error", "message": f"Position {ticket} not found"}
+                    pos = positions[0]
                     close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                    self.mt5.order_send({
+                    result = self.mt5.order_send({
                         "action": self.mt5.TRADE_ACTION_DEAL,
-                        "symbol": pos.symbol, "volume": pos.volume,
-                        "type": close_type, "position": pos.ticket,
+                        "position": pos.ticket, "symbol": pos.symbol,
+                        "volume": pos.volume, "type": close_type,
                         "magic": 234000, "type_filling": self.mt5.ORDER_FILLING_IOC,
                     })
-                return {"status": "success", "closed": len(positions)}
+                    if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                        return {"status": "success", "ticket": pos.ticket}
+                    return {"status": "error", "message": result.comment if result else "close failed"}
+                else:
+                    symbol = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
+                    positions = self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
+                    if not positions:
+                        return {"status": "success", "message": "No positions"}
+                    for pos in positions:
+                        close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                        self.mt5.order_send({
+                            "action": self.mt5.TRADE_ACTION_DEAL,
+                            "symbol": pos.symbol, "volume": pos.volume,
+                            "type": close_type, "position": pos.ticket,
+                            "magic": 234000, "type_filling": self.mt5.ORDER_FILLING_IOC,
+                        })
+                    return {"status": "success", "closed": len(positions)}
 
             elif action == "close_all":
                 positions = self.mt5.positions_get()
@@ -316,54 +352,104 @@ class AurumBridge:
                 return {"status": "success", "closed": len(positions)}
 
             elif action == "rates":
-                rates = self.mt5.copy_rates_from_pos(params.get("symbol", "XAUUSD.s"), self.mt5.TIMEFRAME_M5, 0, 200)
+                symbol = self._resolve_symbol(params.get("symbol"))
+                self.mt5.symbol_select(symbol, True)
+                tf_map = {
+                    "M1": self.mt5.TIMEFRAME_M1, "M5": self.mt5.TIMEFRAME_M5,
+                    "M15": self.mt5.TIMEFRAME_M15, "M30": self.mt5.TIMEFRAME_M30,
+                    "H1": self.mt5.TIMEFRAME_H1, "H4": self.mt5.TIMEFRAME_H4,
+                    "D1": self.mt5.TIMEFRAME_D1,
+                }
+                tf = tf_map.get(params.get("timeframe", "M30"), self.mt5.TIMEFRAME_M30)
+                count = int(params.get("count", 100))
+                rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, count)
                 if rates is not None and len(rates) > 0:
                     import datetime
                     out = []
                     for r in rates:
                         t = datetime.datetime.fromtimestamp(int(r[0])).strftime("%Y-%m-%d %H:%M:%S")
                         out.append({"time": t, "open": float(r[1]), "high": float(r[2]),
-                                    "low": float(r[3]), "close": float(r[4]), "volume": int(r[5])})
-                    return {"rates": out}
-                return {"rates": []}
+                                    "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]), "spread": int(r[6]) if len(r) > 6 else 0})
+                    return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe", "M30"),
+                            "count": len(out), "rates": out, "source": "mt5"}
+                return {"status": "success", "symbol": symbol, "rates": [], "source": "mt5"}
 
             elif action == "quote":
-                sym = params.get("symbol", "XAUUSD.s")
-                tick = self.mt5.symbol_info_tick(sym)
+                symbol = self._resolve_symbol(params.get("symbol"))
+                self.mt5.symbol_select(symbol, True)
+                tick = self.mt5.symbol_info_tick(symbol)
+                info = self.mt5.symbol_info(symbol)
                 if not tick:
-                    for v in ["XAUUSD.s", "XAUUSD.s_", "XAUUSDm", "XAUUSD.c", "XAUUSD"]:
-                        if v != sym:
-                            tick = self.mt5.symbol_info_tick(v)
-                            if tick:
-                                break
-                if tick:
-                    return {"bid": tick.bid, "ask": tick.ask, "time": tick.time}
-                return {"error": "no tick data"}
+                    return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
+                return {
+                    "status": "success", "symbol": symbol,
+                    "bid": tick.bid, "ask": tick.ask,
+                    "spread": round(info.spread * info.point, info.digits) if info else 0,
+                    "time": tick.time,
+                    "digits": info.digits if info else 2,
+                    "point": info.point if info else 0.01,
+                    "source": "mt5",
+                }
 
             elif action == "positions":
-                positions = self.mt5.positions_get()
+                symbol = params.get("symbol")
+                if symbol:
+                    symbol = self._resolve_symbol(symbol)
+                    positions = self.mt5.positions_get(symbol=symbol)
+                else:
+                    positions = self.mt5.positions_get()
                 if positions:
-                    return {"positions": [
-                        {"ticket": p.ticket, "symbol": p.symbol,
-                         "type": "buy" if p.type == 0 else "sell",
-                         "volume": p.volume, "open_price": p.price_open,
-                         "profit": p.profit, "sl": p.sl, "tp": p.tp}
-                        for p in positions
-                    ]}
-                return {"positions": []}
+                    payload = []
+                    for p in positions:
+                        d = p._asdict()
+                        sym_info = self.mt5.symbol_info(d["symbol"])
+                        payload.append({
+                            "ticket": d["ticket"], "symbol": d["symbol"],
+                            "type": "buy" if d["type"] == 0 else "sell",
+                            "volume": d["volume"], "open_price": d["price_open"],
+                            "price_current": d["price_current"],
+                            "profit": d["profit"], "sl": d["sl"], "tp": d["tp"],
+                            "swap": d["swap"], "magic": d["magic"], "comment": d["comment"],
+                            "source": "mt5",
+                        })
+                    return {"status": "success", "positions": payload, "count": len(payload), "source": "mt5"}
+                return {"status": "success", "positions": [], "count": 0, "source": "mt5"}
+
+            elif action == "symbols":
+                symbols = self.mt5.symbols_get()
+                if symbols is None:
+                    return {"status": "error", "message": "MT5 symbols_get failed"}
+                payload = []
+                for s in symbols:
+                    d = s._asdict()
+                    payload.append({
+                        "name": d.get("name"), "description": d.get("description"),
+                        "currency_base": d.get("currency_base"), "currency_profit": d.get("currency_profit"),
+                        "currency_margin": d.get("currency_margin"), "digits": d.get("digits"),
+                        "trade_mode": d.get("trade_mode"), "trade_stops_level": d.get("trade_stops_level"),
+                        "point": d.get("point"),
+                    })
+                return {"status": "success", "symbols": payload, "source": "mt5"}
 
             elif action == "account":
                 acc = self.mt5.account_info()
                 if acc:
-                    return {"balance": acc.balance, "equity": acc.equity, "margin": acc.margin,
-                            "free_margin": acc.margin_free, "leverage": acc.leverage,
-                            "login": acc.login, "server": acc.server}
-                return {"error": "no account info"}
+                    return {
+                        "status": "success",
+                        "balance": acc.balance, "equity": acc.equity,
+                        "margin": acc.margin, "margin_free": acc.margin_free,
+                        "margin_level": getattr(acc, "margin_level", 0),
+                        "profit": acc.profit, "currency": acc.currency,
+                        "leverage": acc.leverage, "server": acc.server,
+                        "company": getattr(acc, "company", ""),
+                        "source": "mt5",
+                    }
+                return {"status": "error", "message": "no account info"}
 
             else:
-                return {"error": "unknown action: " + str(action)}
+                return {"status": "error", "message": f"unknown action: {action}"}
         except Exception as e:
-            return {"error": str(e)}
+            return {"status": "error", "message": str(e)}
 
     def _bridge_loop(self):
         # Initialize MT5

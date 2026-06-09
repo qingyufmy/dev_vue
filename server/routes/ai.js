@@ -718,7 +718,7 @@ router.get('/mt5/account', authMiddleware, async (req, res) => {
   const hb = bridgeHeartbeats.get(req.userId)
   if (hb && (Date.now() - hb.timestamp < 15000)) {
     const result = await executeViaBridge(req.userId, 'account', {})
-    if (!result.error) return res.json({ status: 'success', ...result, source: 'bridge' })
+    if (result.status !== 'error') return res.json(result)
   }
   // Fallback to old bridge
   const result = await mt5BridgeRequest('GET', '/account')
@@ -727,6 +727,12 @@ router.get('/mt5/account', authMiddleware, async (req, res) => {
 
 // MT5 Symbols
 router.get('/mt5/symbols', authMiddleware, async (req, res) => {
+  // Try polling bridge first
+  const hb = bridgeHeartbeats.get(req.userId)
+  if (hb && (Date.now() - hb.timestamp < 15000)) {
+    const result = await executeViaBridge(req.userId, 'symbols', {})
+    if (!result.error && result.status !== 'error') return res.json(result)
+  }
   const result = await mt5BridgeRequest('GET', '/symbols')
   res.json(result)
 })
@@ -737,7 +743,7 @@ router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
   const hb = bridgeHeartbeats.get(req.userId)
   if (hb && (Date.now() - hb.timestamp < 15000)) {
     const result = await executeViaBridge(req.userId, 'quote', { symbol: req.params.symbol })
-    if (!result.error) return res.json(result)
+    if (result.status !== 'error') return res.json(result)
   }
   const result = await mt5BridgeRequest('GET', `/quote/${req.params.symbol}`)
   res.json(result)
