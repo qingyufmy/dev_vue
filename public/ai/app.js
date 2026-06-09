@@ -817,7 +817,7 @@ function applyRoleUI() {
 
 /* ---- Provider presets: model name → API base URL ---- */
 const PROVIDER_PRESETS = {
-  deepseek: { models: ['deepseek-chat', 'deepseek-reasoner'], url: 'https://api.deepseek.com/v1' },
+  deepseek: { models: ['deepseek-chat', 'deepseek-reasoner'], url: 'https://api.deepseek.com' },
   gpt:      { models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-mini'], url: 'https://api.openai.com/v1' },
   kimi:     { models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'], url: 'https://api.moonshot.cn/v1' },
   qwen:     { models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
@@ -852,6 +852,7 @@ async function loadConfig() {
     $("systemPrompt").value = "You are a disciplined trading analyst. Return strict JSON.";
     $("apiKey").placeholder = "输入 API Key 后保存";
     setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
+    applyProviderPreset("deepseek");
     return;
   }
 
