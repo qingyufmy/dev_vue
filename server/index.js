@@ -158,9 +158,9 @@ app.get('/ai/bridge/:platform', (req, res) => {
   const serverUrl = `${req.protocol}://${req.get('host')}`
 
   if (platform === 'win') {
-    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Win.bat'), 'utf-8')
+    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Win.cmd'), 'utf-8')
     script = script.replaceAll('{{TOKEN}}', token).replaceAll('{{SERVER_URL}}', serverUrl)
-    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Win.bat"')
+    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Win.cmd"')
     res.setHeader('Content-Type', 'application/octet-stream')
     res.send(script)
   } else if (platform === 'mac') {
