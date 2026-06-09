@@ -1010,31 +1010,33 @@ function signalFreshness(signal) {
 
 // Real-time signal age ticker (updates #sigValidWindow every second)
 let _signalAgeTimer = null;
-let _signalCreatedAtMs = 0;
+let _signalBaseAge = 0;
 let _signalTtlSeconds = 0;
+let _signalTickerStartMs = 0;
 
 function startSignalAgeTicker(signal) {
   stopSignalAgeTicker();
   if (!signal || signal.is_stale || signal.is_executed) return;
   const ttl = Number(signal.ttl_seconds);
   if (!Number.isFinite(ttl) || ttl <= 0) return;
-  const createdStr = signal.created_at;
-  if (!createdStr) return;
-  const ms = new Date(createdStr.endsWith('Z') ? createdStr : createdStr + 'Z').getTime();
-  if (!Number.isFinite(ms)) return;
-  _signalCreatedAtMs = ms;
+  const serverAge = Number(signal.age_seconds);
+  if (!Number.isFinite(serverAge) || serverAge < 0) return;
+  // Use server-provided age as baseline, increment by 1s each tick
+  _signalBaseAge = Math.floor(serverAge);
   _signalTtlSeconds = ttl;
-  _updateSignalAge();
-  _signalAgeTimer = setInterval(_updateSignalAge, 1000);
+  _signalTickerStartMs = Date.now();
+  _renderSignalAge();
+  _signalAgeTimer = setInterval(_renderSignalAge, 1000);
 }
 
 function stopSignalAgeTicker() {
   if (_signalAgeTimer) { clearInterval(_signalAgeTimer); _signalAgeTimer = null; }
-  _signalCreatedAtMs = 0;
+  _signalBaseAge = 0;
 }
 
-function _updateSignalAge() {
-  const age = Math.floor((Date.now() - _signalCreatedAtMs) / 1000);
+function _renderSignalAge() {
+  const elapsed = Math.floor((Date.now() - _signalTickerStartMs) / 1000);
+  const age = _signalBaseAge + elapsed;
   if (age >= _signalTtlSeconds) {
     setText('sigValidWindow', '已过期');
     setText('signalFreshness', '已过期');
