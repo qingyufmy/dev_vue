@@ -949,19 +949,17 @@ function signalFreshness(signal) {
   return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
 }
 
-// Real-time signal freshness: compute from stored base timestamp
-function signalFreshnessRealtime() {
+// Real-time signal age: elapsed seconds since creation, ticking up every second
+function signalAgeRealtime() {
   const base = state.signalTickerBase;
   if (!base) return "--";
-  const age = (Date.now() - base.createdAtMs) / 1000;
+  const age = Math.floor((Date.now() - base.createdAtMs) / 1000);
   const ttl = base.ttlSeconds;
-  if (!Number.isFinite(ttl) || ttl <= 0) return "--";
   if (age >= ttl) return "已过期";
-  const remaining = Math.max(0, Math.ceil(ttl - age));
-  return `${remaining}s / ${ttl}s`;
+  return `${age}s / ${ttl}s`;
 }
 
-// Start 1-second ticker for signal validity countdown
+// Start 1-second ticker for signal age (counts up)
 function startSignalTicker(signal) {
   stopSignalTicker();
   if (!signal || signal.is_stale || signal.is_executed) return;
@@ -1009,7 +1007,7 @@ function stopSignalTicker() {
 
 // Update both dashboard sigValidWindow and analysis signalFreshness
 function updateSignalTickerDisplay() {
-  const text = signalFreshnessRealtime();
+  const text = signalAgeRealtime();
   setText("sigValidWindow", text);
   setText("signalFreshness", text);
 }
