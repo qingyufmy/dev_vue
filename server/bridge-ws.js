@@ -89,7 +89,8 @@ function handleBridge(ws, url) {
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
-  bridges.set(userId, { ws, lastSeen: Date.now() }); ws._userId = userId
+  const existing = bridges.get(userId)
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: existing?.tradeEnabled ?? true }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
@@ -184,7 +185,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           gateway: {
             mode: alive ? 'live' : 'mock',
             mt5_package_available: true,
-            live_trading_enabled: alive,
+            live_trading_enabled: alive && (bridge.tradeEnabled !== false),
           },
         }
         break
@@ -211,6 +212,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'toggle_trade': {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
+        // Update local trade state
+        const bridge = bridges.get(userId)
+        if (bridge && result.status === 'success') bridge.tradeEnabled = !!params.enable
         break
       }
       case 'history': {

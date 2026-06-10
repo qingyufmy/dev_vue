@@ -499,40 +499,46 @@ async function _maybeRefreshSignal() {
 
     // No signals at all
     if (!latestSignal) {
-      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; }
+      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.selectedSignal = null; }
       return;
     }
 
-    // New signal detected (ID changed) — full refresh
+    // Update signals list
+    state.signals = signals;
+
+    // Determine which signal to display: user's selection > latest
+    const selectedId = state.selectedSignal?.id;
+    const selectedInList = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
+    const displaySignal = selectedInList || latestSignal;
+
+    // New signal detected (ID changed) — full refresh of lists, but preserve selection
     if (_lastSignalId !== latestSignal.id) {
       _lastSignalId = latestSignal.id;
-      state.signals = signals;
-      updateSignalDisplay(latestSignal);
-      if (latestSignal) setText("signalFreshness", signalFreshness(latestSignal));
+      state.selectedSignal = displaySignal;
+      updateSignalDisplay(displaySignal);
+      setText("signalFreshness", signalFreshness(displaySignal));
       renderAnalysisHistory(signals);
       renderSignalRows();
       return;
     }
 
-    // Same signal — light refresh: only update timing UI
-    const sel = state.selectedSignal;
-    if (!sel || sel.is_executed) return;
-    state.selectedSignal = latestSignal;
-    setText("sigValidWindow", signalFreshness(latestSignal));
-    setText("signalFreshness", signalFreshness(latestSignal));
-    setText("analysisValidity", signalFreshness(latestSignal));
-    setSignalBadge(latestSignal);
+    // Same signal — light refresh: only update timing UI for the DISPLAYED signal
+    state.selectedSignal = displaySignal;
+    setText("sigValidWindow", signalFreshness(displaySignal));
+    setText("signalFreshness", signalFreshness(displaySignal));
+    setText("analysisValidity", signalFreshness(displaySignal));
+    setSignalBadge(displaySignal);
     const card = $("signalCard");
     if (card) {
-      card.dataset.status = latestSignal.is_executed ? "executed" : latestSignal.is_stale ? "expired" : "live";
-      const dir = signalType(latestSignal.signal_type);
+      card.dataset.status = displaySignal.is_executed ? "executed" : displaySignal.is_stale ? "expired" : "live";
+      const dir = signalType(displaySignal.signal_type);
       const colorMap = { buy: "var(--color-positive)", sell: "var(--color-negative)", hold: "var(--color-warning)" };
       card.style.setProperty("--signal-border", colorMap[dir]);
       card.style.setProperty("--signal-glow", colorMap[dir] === "var(--color-positive)" ? "var(--signal-glow-buy)" : colorMap[dir] === "var(--color-negative)" ? "var(--signal-glow-sell)" : "var(--signal-glow-hold)");
     }
     const btn = $("executeSignalBtn");
     if (btn) {
-      const executable = signalType(latestSignal.signal_type) !== "hold" && !latestSignal.is_stale && !latestSignal.is_executed;
+      const executable = signalType(displaySignal.signal_type) !== "hold" && !displaySignal.is_stale && !displaySignal.is_executed;
       btn.disabled = !executable;
     }
   } catch (e) { /* silent */ }
