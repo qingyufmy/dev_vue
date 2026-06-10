@@ -625,10 +625,10 @@ function seedData(db) {
   insertTrade.run(1, '2026-05-15', 'SPY 看多期权策略', 'SPY', 'long', 'win', '580', '592', '+12%', '基于均线偏空逻辑的看多期权操作')
   insertTrade.run(1, '2026-05-20', '黄金短线做空', 'GOLD', 'short', 'win', '242', '238', '+1.6%', '非农数据利空黄金，顺势做空')
 
-  // Seed notifications
+  // Seed notifications (admin only)
   db.prepare(`
-    INSERT INTO notifications (user_id, type, title, message, is_read) VALUES (?, 'system', '欢迎加入街哥课堂', '您的账户已创建成功，开始学习吧！', 0)
-  `).run(2)
+    INSERT INTO notifications (user_id, type, title, message, is_read) VALUES (1, 'system', '系统初始化完成', '后台配置已完成，可以开始使用了！', 0)
+  `).run()
 
   // Seed tags
   db.prepare("INSERT OR IGNORE INTO post_tags (slug, label, count) VALUES (?, ?, ?)").run('gold', '黄金', 5)
