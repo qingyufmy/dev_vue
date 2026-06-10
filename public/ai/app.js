@@ -1011,11 +1011,11 @@ async function loadPositions() {
 
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
-  // System prompt: admin only (hidden from non-admin)
-  const promptSection = document.querySelector(".config-section:has(#systemPrompt)");
-  if (promptSection) promptSection.style.display = isAdmin ? "" : "none";
-  const saveSpBtn = document.getElementById("saveSystemPromptBtn");
-  if (saveSpBtn) saveSpBtn.style.display = isAdmin ? "" : "none";
+  // System prompt: admin sees textarea, non-admin sees upgrade prompt
+  const adminDiv = document.getElementById("systemPromptAdmin");
+  const upgradeDiv = document.getElementById("systemPromptUpgrade");
+  if (adminDiv) adminDiv.style.display = isAdmin ? "" : "none";
+  if (upgradeDiv) upgradeDiv.style.display = isAdmin ? "none" : "";
 }
 
 /* ---- Provider presets: model name → API base URL ---- */

@@ -362,8 +362,14 @@
             </div>
             <div class="config-section">
               <div class="config-section-title">系统提示词</div>
-              <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
-              <button id="saveSystemPromptBtn" class="btn btn-primary" style="margin-top:8px;"><i data-lucide="save" size="16"></i>保存提示词</button>
+              <div id="systemPromptUpgrade" style="display:none; text-align:center; padding: 20px 0;">
+                <p style="color:var(--text-secondary); margin-bottom:16px;">升级到 Pro 会员即可自定义 AI 分析的角色设定和风控规则</p>
+                <a href="/membership" class="btn btn-primary">升级会员</a>
+              </div>
+              <div id="systemPromptAdmin">
+                <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
+                <button id="saveSystemPromptBtn" class="btn btn-primary" style="margin-top:8px;"><i data-lucide="save" size="16"></i>保存提示词</button>
+              </div>
             </div>
             <div id="configStatus" class="inline-status">正在读取配置</div>
             <div class="config-actions">
