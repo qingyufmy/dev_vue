@@ -356,12 +356,35 @@ function stopRealtimeSync() {
   if (state.quoteTimer) clearInterval(state.quoteTimer);
   if (state.liveSyncTimer) clearInterval(state.liveSyncTimer);
   if (state.backgroundSyncTimer) clearInterval(state.backgroundSyncTimer);
+  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopSignalAgeTicker();
   state.quoteTimer = null;
   state.liveSyncTimer = null;
   state.backgroundSyncTimer = null;
   state.liveSyncInFlight = false;
   state.backgroundSyncInFlight = false;
+}
+
+// Real-time bridge status via WebSocket (instant UI update on connect/disconnect)
+function connectBridgeStatusWs() {
+  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
+  const ws = new WebSocket(url);
+  state.bridgeWs = ws;
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'status') {
+        const isLive = msg.connected && msg.alive;
+        setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+        if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
+        state._lastGatewayLive = isLive;
+      }
+    } catch {}
+  };
+  ws.onclose = () => { if (state.bridgeWs === ws) state.bridgeWs = null; };
+  ws.onerror = () => {};
 }
 
 function startRealtimeSync() {
@@ -477,6 +500,7 @@ async function bootstrap() {
     showApp(true);
     await refreshAll();
     startRealtimeSync();
+    connectBridgeStatusWs();
   } catch {
     logout();
   }

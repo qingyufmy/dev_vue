@@ -4,11 +4,14 @@ import { getDB } from './db.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
-// Connected bridges: userId -> { ws, account, terminal, lastSeen }
+// Connected bridges: userId -> { ws, account, terminal, lastSeen, liveTradingEnabled }
 const bridges = new Map()
 
-// Pending commands: commandId -> { resolve, timer }
+// Pending commands: commandId -> { resolve, timer, userId }
 const pendingCommands = new Map()
+
+// Browser WebSocket clients for real-time status push
+const statusClients = new Map() // ws -> { userId }
 
 let cmdCounter = 0
 let wss = null
@@ -21,14 +24,32 @@ export function initBridgeWS(server) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit('connection', ws, req)
       })
-    } else {
-      // Don't interfere with other upgrades
     }
   })
 
   wss.on('connection', (ws, req) => {
-    // Auth from query param: ?token=xxx
     const url = new URL(req.url, 'http://localhost')
+    const clientType = url.searchParams.get('type')
+
+    // === Browser status subscriber ===
+    if (clientType === 'browser') {
+      const token = url.searchParams.get('token')
+      let userId = null
+      if (token) {
+        try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
+      }
+      statusClients.set(ws, { userId })
+      // Send current status immediately
+      if (userId) {
+        const status = getBridgeStatus(userId)
+        ws.send(JSON.stringify({ type: 'status', connected: status.connected, alive: status.alive }))
+      }
+      ws.on('close', () => statusClients.delete(ws))
+      ws.on('error', () => statusClients.delete(ws))
+      return
+    }
+
+    // === MT5 bridge client ===
     const token = url.searchParams.get('token')
     if (!token) {
       ws.close(4001, 'Missing token')
@@ -51,6 +72,9 @@ export function initBridgeWS(server) {
     // Send welcome message
     ws.send(JSON.stringify({ type: 'connected', userId }))
 
+    // Notify browser clients: bridge connected
+    notifyBrowsers(userId, true)
+
     ws.on('message', (data) => {
       let msg
       try { msg = JSON.parse(data) } catch { return }
@@ -67,7 +91,6 @@ export function initBridgeWS(server) {
         ws.send(JSON.stringify({ type: 'heartbeat_ack' }))
 
       } else if (msg.type === 'result') {
-        // Track toggle_trade state changes
         if (msg.result?.live_trading_enabled !== undefined && bridge) {
           bridge.liveTradingEnabled = msg.result.live_trading_enabled
         }
@@ -83,6 +106,8 @@ export function initBridgeWS(server) {
     ws.on('close', () => {
       bridges.delete(userId)
       console.log(`[BridgeWS] User ${userId} disconnected`)
+      // Notify browser clients: bridge disconnected
+      notifyBrowsers(userId, false)
       // Reject all pending commands for this user
       for (const [cmdId, pending] of pendingCommands) {
         if (pending.userId === userId) {
@@ -98,8 +123,30 @@ export function initBridgeWS(server) {
     })
   })
 
+  // Heartbeat for browser connections
+  setInterval(() => {
+    for (const [ws] of statusClients) {
+      if (ws.readyState === 1) {
+        try { ws.ping() } catch {}
+      } else {
+        statusClients.delete(ws)
+      }
+    }
+  }, 30000)
+
   console.log('[BridgeWS] WebSocket bridge initialized on /aurum-api/bridge/ws')
   return wss
+}
+
+// Notify browser clients about bridge status change
+function notifyBrowsers(userId, connected) {
+  for (const [ws, info] of statusClients) {
+    if (ws.readyState !== 1) { statusClients.delete(ws); continue }
+    // Send to the matching user, or to all if userId matches
+    if (info.userId === userId) {
+      try { ws.send(JSON.stringify({ type: 'status', connected, alive: connected })) } catch {}
+    }
+  }
 }
 
 // Send command to bridge and wait for result
@@ -114,9 +161,9 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
     // Fast-fail: if bridge heartbeat is stale (>20s), don't wait for timeout
     const heartbeatAge = Date.now() - bridge.lastSeen
     if (heartbeatAge > 20000) {
-      // Clean up stale bridge
       try { bridge.ws.close() } catch {}
       bridges.delete(userId)
+      notifyBrowsers(userId, false)
       resolve({ status: 'error', error: 'Bridge disconnected (heartbeat timeout)' })
       return
     }
