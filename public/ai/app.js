@@ -1646,6 +1646,7 @@ function openAnalysisFromHistory(signalId) {
     toast("未找到对应推理记录，请刷新历史", "warning");
     return;
   }
+  state.selectedSignal = signal;
   setTab("ai-analyze");
   renderSignal(signal, null);
 }
@@ -1698,11 +1699,18 @@ async function loadSignals(options = {}) {
   const data = await wsApi("signals", { session_id: "default" });
   const signals = data.signals || [];
   state.signals = signals;
-  updateSignalDisplay(signals[0] || null);
-  if (signals[0]) setText("signalFreshness", signalFreshness(signals[0]));
+
+  // Preserve selected signal if it still exists in the new list
+  const selectedId = state.selectedSignal?.id;
+  const stillExists = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
+  const activeSignal = stillExists || signals[0] || null;
+
+  state.selectedSignal = activeSignal;
+  updateSignalDisplay(activeSignal);
+  if (activeSignal) setText("signalFreshness", signalFreshness(activeSignal));
   renderAnalysisHistory(signals);
   if (!options.skipResultRender) {
-    renderSignal(signals[0] || null, null);
+    renderSignal(activeSignal, null);
   }
 
   renderSignalRows();
