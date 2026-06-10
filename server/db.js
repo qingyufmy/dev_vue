@@ -18,6 +18,7 @@ const DB_CONFIG = {
   connectionLimit: 10,
   queueLimit: 0,
   charset: 'utf8mb4',
+  dateStrings: true,  // Return DATE/DATETIME as strings, not Date objects
 }
 
 let pool
@@ -499,6 +500,9 @@ export async function initDB() {
   if (userRows[0].c === 0) {
     await seedData(p)
   }
+
+  // Fix NULL UIDs for seed accounts
+  await p.query("UPDATE users SET uid = CONCAT('WS', LPAD(id, 6, '0')) WHERE uid IS NULL")
 
   console.log('[DB] MySQL initialized')
 }
