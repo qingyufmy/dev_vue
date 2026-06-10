@@ -76,28 +76,48 @@ app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
 
-// Root-level health check — uses WebSocket bridge status
+// Root-level health check — per-user bridge status
 app.get('/health', async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate')
   try {
     const aiModule = await import('./routes/ai.js')
-    const getAllBridges = aiModule.getAllBridges
-    if (getAllBridges) {
-      for (const bridge of getAllBridges()) {
-        if (bridge.alive) {
-          return res.json({
-            status: 'healthy',
-            service: 'AURUM AI',
-            gateway: {
-              mode: 'live',
-              mt5_package_available: true,
-              live_trading_enabled: !!bridge.liveTradingEnabled,
-              account: bridge.account,
-            },
-          })
-        }
-      }
+    const getBridgeStatus = aiModule.getBridgeStatus || aiModule.default?.getBridgeStatus
+
+    // Parse auth to get userId and check Pro status
+    const auth = req.headers.authorization
+    if (!auth || !auth.startsWith('Bearer ')) {
+      return res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
     }
-    res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
+
+    let userId = null
+    let isPro = false
+    try {
+      const payload = jwt.verify(auth.slice(7), process.env.JWT_SECRET || 'wall-street-skill-secret')
+      userId = payload.userId
+      const u = getDB().prepare('SELECT plan, role FROM users WHERE id = ?').get(userId)
+      isPro = u?.role === 'admin' || u?.plan === 'pro'
+    } catch {}
+
+    if (!isPro || !userId || !getBridgeStatus) {
+      return res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
+    }
+
+    // Per-user bridge status
+    const bridgeStatus = getBridgeStatus(userId)
+    if (bridgeStatus.connected && bridgeStatus.alive) {
+      res.json({
+        status: 'healthy',
+        service: 'AURUM AI',
+        gateway: {
+          mode: 'live',
+          mt5_package_available: true,
+          live_trading_enabled: !!bridgeStatus.liveTradingEnabled,
+          account: bridgeStatus.account,
+        },
+      })
+    } else {
+      res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
+    }
   } catch {
     res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
   }
