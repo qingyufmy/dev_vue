@@ -765,10 +765,10 @@ function initBridgeModal() {
 
   $("downloadExe")?.addEventListener("click", () => {
     const token = state.token || localStorage.getItem("authToken") || "";
-    const url = `/ai/bridge/setup?token=${encodeURIComponent(token)}`;
+    const url = `/ai/bridge/exe-file?token=${encodeURIComponent(token)}`;
     const a = document.createElement("a");
-    a.href = url; a.download = "AURUM_Bridge_Setup.bat"; a.click();
-    toast("正在下载 Setup.bat，双击运行即可", "success");
+    a.href = url; a.download = "AURUM_Bridge.exe"; a.click();
+    toast("正在下载 AURUM_Bridge.exe", "success");
     modal.classList.add("hidden");
   });
 
