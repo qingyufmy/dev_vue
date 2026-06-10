@@ -44,7 +44,8 @@ function handleBrowser(ws, url) {
   const token = url.searchParams.get('token')
   let userId = null
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
-  if (!userId) { ws.close(4002, 'Invalid token'); return }
+  if (!userId) { console.log('[BridgeWS] Invalid token, closing'); ws.close(4002, 'Invalid token'); return }
+  console.log([BridgeWS] Bridge token valid, userId: )
 
   // Register
   if (!browsers.has(userId)) browsers.set(userId, new Set())
@@ -87,7 +88,8 @@ function handleBridge(ws, url) {
   const token = url.searchParams.get('token')
   let userId = null
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
-  if (!userId) { ws.close(4002, 'Invalid token'); return }
+  if (!userId) { console.log('[BridgeWS] Invalid token, closing'); ws.close(4002, 'Invalid token'); return }
+  console.log([BridgeWS] Bridge token valid, userId: )
 
   bridges.set(userId, { ws, lastSeen: Date.now() }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
