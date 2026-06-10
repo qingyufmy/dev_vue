@@ -116,6 +116,8 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
       row.api_base_url = row.api_base_url || adminConfig.api_base_url
       row.temperature = row.temperature ?? adminConfig.temperature
       row.max_tokens = row.max_tokens ?? adminConfig.max_tokens
+      row.model_sharing_enabled = adminConfig.model_sharing_enabled
+      if (!row.api_key_encrypted && adminConfig.api_key_encrypted) row.api_key_encrypted = adminConfig.api_key_encrypted
       row._model_shared = true
     }
   }

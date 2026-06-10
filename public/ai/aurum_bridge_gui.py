@@ -712,7 +712,7 @@ class AurumBridge:
                                 "bid": round(tick.bid, 5) if tick else None,
                                 "ask": round(tick.ask, 5) if tick else None,
                                 "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in symbol else 0.001), 1) if tick else None,
-                                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "time": _mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
                             },
                             "positions": [
                                 {

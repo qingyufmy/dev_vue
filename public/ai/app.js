@@ -1129,7 +1129,9 @@ async function loadConfig() {
 
 async function saveConfig() {
   const apiKey = $("apiKey").value.trim();
-  if (!apiKey && !state.currentConfigHasApiKey) {
+  const sharedInfo = $("modelSharedInfo");
+  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
+  if (!apiKey && !state.currentConfigHasApiKey && !isUsingShared) {
     toast("请先填写 API Key", "warning");
     $("apiKey").focus();
     return;
