@@ -89,7 +89,7 @@ function handleBridge(ws, url) {
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
-  bridges.set(userId, { ws, lastSeen: Date.now() })
+  bridges.set(userId, { ws, lastSeen: Date.now() }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
@@ -103,6 +103,7 @@ function handleBridge(ws, url) {
     if (bridge) bridge.lastSeen = Date.now()
 
     if (msg.type === 'data') {
+      if (!bridge._dataLogCount) bridge._dataLogCount = 0; if (++bridge._dataLogCount % 30 === 1) console.log([BridgeWS] User  data #)
       // Bridge data push — relay to browsers as-is
       sendToBrowsers(userId, { type: 'data', ...msg })
     } else if (msg.type === 'hb') {
