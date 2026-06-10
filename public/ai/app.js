@@ -365,26 +365,19 @@ function stopRealtimeSync() {
 }
 
 // Real-time bridge status via WebSocket + command channel
-let _wsConnCounter = 0;
-const _wsActive = new Set();
+
 
 function connectBridgeStatusWs(onReady) {
   if (state.bridgeWs && state.bridgeWs.readyState <= 1) {
     if (typeof onReady === 'function') onReady();
     return;
   }
-  const connId = ++_wsConnCounter;
-  console.warn('[WS:DIAG] connectBridgeStatusWs() call #' + connId + ' | active connections: ' + _wsActive.size + ' | stack:', new Error().stack?.split('\n').slice(1,5).join(' <- '));
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
-  ws._connId = connId;
-  ws._msgCount = 0;
-  _wsActive.add(ws);
-  console.warn('[WS:DIAG] WebSocket #' + connId + ' created, total active: ' + _wsActive.size);
   state.bridgeWs = ws;
   ws.onopen = () => {
-    console.warn('[WS:DIAG] WebSocket #' + connId + ' OPEN, active: ' + _wsActive.size + ', readyState=' + ws.readyState);
+
     state._hbSeq = 0;
     if (state._hbTimer) clearInterval(state._hbTimer);
     state._hbTimer = setInterval(() => {
@@ -395,7 +388,6 @@ function connectBridgeStatusWs(onReady) {
     if (typeof onReady === 'function') onReady();
   };
   ws.onmessage = (e) => {
-    if (++ws._msgCount === 1) console.warn('[WS:DIAG] WebSocket #' + connId + ' FIRST message, len=' + (e.data ? e.data.length : 0));
     try {
       const msg = JSON.parse(e.data);
       if (msg.type === 'data') {
@@ -416,8 +408,6 @@ function connectBridgeStatusWs(onReady) {
     } catch {}
   };
   ws.onclose = (e) => {
-    _wsActive.delete(ws);
-    console.warn('[WS:DIAG] WebSocket #' + connId + ' CLOSE code=' + e.code + ' reason=' + e.reason + ' msgs=' + ws._msgCount + ' remaining active: ' + _wsActive.size);
     if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
     if (state.bridgeWs === ws) state.bridgeWs = null;
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
@@ -426,7 +416,7 @@ function connectBridgeStatusWs(onReady) {
     if (e.code === 4002) { setBadge("gatewayMode", "认证失败，请重新登录", "danger"); return; }
     // Prevent duplicate reconnect timers
     if (state._reconnectTimer) clearTimeout(state._reconnectTimer);
-    console.warn(`[WS] Connection #${ws._connId} closed, reconnecting in 3s`); setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
+    setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
     if (state.token) state._reconnectTimer = setTimeout(() => { state._reconnectTimer = null; connectBridgeStatusWs(); }, 3000);
   };
   ws.onerror = () => {};
