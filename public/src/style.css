@@ -321,7 +321,8 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 .header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.header-ai-link { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 8px; white-space: nowrap; border: none !important; }
+.header-ai-link { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; white-space: nowrap; color: var(--text-2); transition: background 0.15s, color 0.15s; }
+.header-ai-link:hover { background: var(--glass-heavy); color: var(--text-1); }
 .auth-buttons { display: flex; gap: 8px; }
 
 .btn-theme-toggle {
