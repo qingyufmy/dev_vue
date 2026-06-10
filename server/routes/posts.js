@@ -352,7 +352,7 @@ router.post('/post-replies', authMiddleware, (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(postId, req.user.id, contentHtml || contentText || content?.trim() || '', contentHtml || '', contentText || content?.trim() || '', JSON.stringify(assetIds || []), quoteReplyId || null, maxFloor + 1)
 
-    db.prepare("UPDATE posts SET reply_count = reply_count + 1, last_reply_at = datetime('now'), last_reply_user_id = ? WHERE id = ?").run(req.user.id, postId)
+    db.prepare("UPDATE posts SET reply_count = reply_count + 1, last_reply_at = datetime('now', '+8 hours'), last_reply_user_id = ? WHERE id = ?").run(req.user.id, postId)
 
     // Create notification for post author
     const postAuthor = db.prepare('SELECT user_id FROM posts WHERE id = ?').get(postId)

@@ -172,7 +172,7 @@ app.post('/api/presence', (req, res) => {
       const payload = jwt.verify(token, 'wall-street-skill-secret')
       if (payload && payload.userId) {
         const db = getDB()
-        db.prepare("UPDATE users SET last_seen_at = datetime('now') WHERE id = ?").run(payload.userId)
+        db.prepare("UPDATE users SET last_seen_at = datetime('now', '+8 hours') WHERE id = ?").run(payload.userId)
       }
     }
   } catch {}

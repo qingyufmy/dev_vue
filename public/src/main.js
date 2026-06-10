@@ -3265,7 +3265,7 @@ function renderAdminContent(data) {
                     <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? u.createdAt.substring(5, 16) : '-'}</td>
                     <td>${planLabel(u.plan, u.planExpiresAt)}</td>
                     <td style="font-size:12px;">${u.planExpiresAt || '-'}</td>
-                    <td>${u.totalPaid > 0 ? '<strong>$' + u.totalPaid.toLocaleString() + '</strong>' : '-'}</td>
+                    <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
                     <td style="font-size:11px;white-space:nowrap;">
                       ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
                     </td>
@@ -3303,7 +3303,7 @@ function renderAdminContent(data) {
                       <td class="admin-uid">${escapeHtml(u.uid || '-')}</td>
                       <td>${planLabel(u.plan, u.planExpiresAt)}</td>
                       <td style="font-size:12px;">${u.planExpiresAt || '-'}</td>
-                      <td>${u.totalPaid > 0 ? '<strong>$' + u.totalPaid.toLocaleString() + '</strong>' : '-'}</td>
+                      <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
                       <td>
                         <div class="admin-actions">
                           <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
@@ -3334,7 +3334,7 @@ function renderAdminContent(data) {
                       <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}</div></div></div></td>
                       <td class="admin-uid">${escapeHtml((u.uid || '').substring(0, 10))}</td>
                       <td><span class="admin-badge badge-paid">${escapeHtml(orderPlanLabel(o))}</span></td>
-                      <td><strong>$${escapeHtml(String(o.amountConfirmed || o.amount || 0))}</strong></td>
+                      <td><strong>${formatMinorUsd(o.amountConfirmed || o.amount || 0)}</strong></td>
                       <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : 'badge-free'}">${escapeHtml(orderStatusLabel(o.status))}</span></td>
                       <td style="font-size:12px;white-space:nowrap;">${escapeHtml(o.paidAt || o.createdAt || '-')}</td>
                     </tr>`).join('')}
