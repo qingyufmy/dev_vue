@@ -10,9 +10,62 @@ const bridges = new Map()
 const pendingCommands = new Map()
 // Browser WebSocket clients for real-time status push
 const statusClients = new Map() // ws -> { userId }
+// Tick streams: userId -> { interval, symbols, ws }
+const tickStreams = new Map()
 
 let cmdCounter = 0
 let wss = null
+
+// ============ Tick Stream (real-time P&L push) ============
+function startTickStream(userId, ws) {
+  stopTickStream(userId)
+  const interval = setInterval(async () => {
+    try {
+      if (ws.readyState !== 1) { stopTickStream(userId); return }
+      const positions = await sendBridgeCommand(userId, 'positions', {}, 5000)
+      if (positions.status === 'error') return
+      const posList = positions.positions || []
+      const account = await sendBridgeCommand(userId, 'account', {}, 5000)
+      if (account.status === 'error') return
+
+      const contractSizes = { XAUUSD: 100, XAUUSD.s: 100 }
+      const tickData = {
+        type: 'tick_update',
+        timestamp: Date.now(),
+        account: {
+          balance: account.balance,
+          equity: account.equity,
+          margin: account.margin,
+          free_margin: account.free_margin,
+          profit: account.profit,
+        },
+        positions: posList.map(p => {
+          const contract = contractSizes[p.symbol] || 100
+          const direction = p.type === 'buy' ? 1 : -1
+          const pnl = direction * (p.current_price - p.open_price) * p.volume * contract
+          return {
+            ticket: p.ticket,
+            symbol: p.symbol,
+            type: p.type,
+            volume: p.volume,
+            open_price: p.open_price,
+            current_price: p.current_price,
+            profit: Math.round(pnl * 100) / 100,
+            swap: p.swap || 0,
+            commission: p.commission || 0,
+          }
+        }),
+      }
+      if (ws.readyState === 1) ws.send(JSON.stringify(tickData))
+    } catch {}
+  }, 1000)
+  tickStreams.set(userId, { interval, ws })
+}
+
+function stopTickStream(userId) {
+  const stream = tickStreams.get(userId)
+  if (stream) { clearInterval(stream.interval); tickStreams.delete(userId) }
+}
 
 export function initBridgeWS(server) {
   wss = new WebSocketServer({ noServer: true })
@@ -53,8 +106,8 @@ export function initBridgeWS(server) {
         }
       })
 
-      ws.on('close', () => statusClients.delete(ws))
-      ws.on('error', () => statusClients.delete(ws))
+      ws.on('close', () => { statusClients.delete(ws); stopTickStream(userId) })
+      ws.on('error', () => { statusClients.delete(ws); stopTickStream(userId) })
       return
     }
 
@@ -201,6 +254,16 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'analyze':
         result = await ai.handleAnalyze(userId, params)
+        break
+
+      // === Tick Stream ===
+      case 'subscribe_ticks':
+        startTickStream(userId, ws)
+        result = { status: 'success', message: 'Tick stream started' }
+        break
+      case 'unsubscribe_ticks':
+        stopTickStream(userId)
+        result = { status: 'success', message: 'Tick stream stopped' }
         break
 
       // === AI Config ===

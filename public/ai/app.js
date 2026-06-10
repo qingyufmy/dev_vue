@@ -392,6 +392,8 @@ function connectBridgeStatusWs() {
         setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
         if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
         state._lastGatewayLive = isLive;
+      } else if (msg.type === 'tick_update') {
+        handleTickUpdate(msg);
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -412,6 +414,51 @@ function connectBridgeStatusWs() {
     if (state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
   };
   ws.onerror = () => {};
+}
+
+// Real-time P&L update from WebSocket tick stream
+function handleTickUpdate(tick) {
+  // Update account summary
+  if (tick.account) {
+    setText("accountBalance", fmt(tick.account.balance));
+    setText("accountEquity", fmt(tick.account.equity));
+    setText("accountMargin", fmt(tick.account.margin));
+    setText("accountFreeMargin", fmt(tick.account.free_margin));
+    setText("accountFloatPnl", fmt(tick.account.profit));
+    updatePnlStyle("accountFloatPnl", tick.account.profit);
+  }
+  // Update positions table P&L cells
+  if (tick.positions) {
+    for (const pos of tick.positions) {
+      // Main positions table
+      const closeBtn = document.querySelector(`[data-close-ticket="${pos.ticket}"]`);
+      if (closeBtn) {
+        const row = closeBtn.closest('tr');
+        if (row) {
+          const cells = row.querySelectorAll('td');
+          // cells[5] = current price, cells[9] = profit (with action columns)
+          if (cells[5]) cells[5].textContent = fmt(pos.current_price);
+          if (cells[9]) {
+            cells[9].textContent = fmt(pos.profit);
+            cells[9].className = `num ${profitClass(pos.profit)}`;
+          }
+        }
+      }
+      // Dashboard positions table (no action columns)
+      const dashRows = document.querySelectorAll('#dashboardPositionsBody tr');
+      for (const row of dashRows) {
+        const ticketCell = row.querySelector('td:first-child');
+        if (ticketCell && ticketCell.textContent.trim() === String(pos.ticket)) {
+          const cells = row.querySelectorAll('td');
+          if (cells[5]) cells[5].textContent = fmt(pos.current_price);
+          if (cells[7]) {
+            cells[7].textContent = fmt(pos.profit);
+            cells[7].className = `num ${profitClass(pos.profit)}`;
+          }
+        }
+      }
+    }
+  }
 }
 
 function startRealtimeSync() {
@@ -468,6 +515,12 @@ function setTab(tabId) {
 
 async function refreshTabData(tabId) {
   if (!state.token) return;
+  // Tick stream: subscribe on trading/dashboard, unsubscribe otherwise
+  if (tabId === "trading" || tabId === "dashboard") {
+    wsApi("subscribe_ticks").catch(() => {});
+  } else {
+    wsApi("unsubscribe_ticks").catch(() => {});
+  }
   if (tabId === "trading") {
     await Promise.allSettled([loadAccount(), loadPositions(), refreshQuote(), loadStatus()]);
   } else if (tabId === "history") {
@@ -493,6 +546,7 @@ async function login(event) {
 }
 
 function logout() {
+  wsApi("unsubscribe_ticks").catch(() => {});
   stopRealtimeSync();
   state.user = null;
   state.selectedSignal = null;
