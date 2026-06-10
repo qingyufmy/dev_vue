@@ -495,11 +495,11 @@ async function handleAnalyze(userId, params) {
     const now = utcNow()
     const ttlSeconds = timeframe === 'D1' ? 86400 : timeframe === 'H4' ? 14400 : timeframe === 'H1' ? 3600 : 1800
 
-    db.prepare(`INSERT INTO ai_signals(user_id, session_id, symbol, signal_type, confidence, recommended_volume,
+    db.prepare(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
       analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
       market_data_json, ai_model, ttl_seconds, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(userId, session_id, symbol, signal.signal_type, signal.confidence, signal.recommended_volume,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
         signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
         JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', ttlSeconds, now)
