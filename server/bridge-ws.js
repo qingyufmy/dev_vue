@@ -111,6 +111,16 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 10000) {
       return
     }
 
+    // Fast-fail: if bridge heartbeat is stale (>20s), don't wait for timeout
+    const heartbeatAge = Date.now() - bridge.lastSeen
+    if (heartbeatAge > 20000) {
+      // Clean up stale bridge
+      try { bridge.ws.close() } catch {}
+      bridges.delete(userId)
+      resolve({ status: 'error', error: 'Bridge disconnected (heartbeat timeout)' })
+      return
+    }
+
     const cmdId = `cmd_${Date.now()}_${++cmdCounter}`
     const timer = setTimeout(() => {
       pendingCommands.delete(cmdId)

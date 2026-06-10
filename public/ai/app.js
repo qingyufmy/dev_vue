@@ -310,18 +310,30 @@ async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, { ...options, headers });
-  const text = await response.text();
-  let data = {};
+  // AbortController timeout to prevent hanging requests from freezing the UI
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
   try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { detail: text };
+    const response = await fetch(path, { ...options, headers, signal: controller.signal });
+    clearTimeout(timeoutId);
+    const text = await response.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { detail: text };
+    }
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || `HTTP ${response.status}`);
+    }
+    return data;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('请求超时');
+    }
+    throw err;
   }
-  if (!response.ok) {
-    throw new Error(data.detail || data.message || `HTTP ${response.status}`);
-  }
-  return data;
 }
 
 function setAuth(token) {
