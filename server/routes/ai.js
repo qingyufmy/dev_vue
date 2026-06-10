@@ -842,30 +842,27 @@ router.get('/health', async (req, res) => {
       return res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
     }
 
-    // Pro users: real bridge status
-    let bridgeAlive = false
-    let bridgeAccount = null
-    for (const bridge of getAllBridges()) {
-      if (bridge.alive) {
-        bridgeAlive = true
-        bridgeAccount = bridge.account
-        break
-      }
+    // Pro users: real bridge status (per-user, not global)
+    let userId = null
+    try {
+      const payload = jwt.verify(auth.slice(7), JWT_SECRET)
+      userId = payload.userId
+    } catch {}
+
+    if (!userId) {
+      return res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
     }
-    if (bridgeAlive) {
-      // Find the first alive bridge to get trade status
-      let liveTrading = false
-      for (const bridge of getAllBridges()) {
-        if (bridge.alive) { liveTrading = !!bridge.liveTradingEnabled; break }
-      }
+
+    const bridgeStatus = getBridgeStatus(userId)
+    if (bridgeStatus.connected && bridgeStatus.alive) {
       res.json({
         status: 'healthy',
         service: 'AURUM AI',
         gateway: {
           mode: 'live',
           mt5_package_available: true,
-          live_trading_enabled: liveTrading,
-          account: bridgeAccount,
+          live_trading_enabled: !!bridgeStatus.liveTradingEnabled,
+          account: bridgeStatus.account,
         },
       })
     } else {
