@@ -775,7 +775,7 @@ class AurumBridge:
                             pass
                         break
 
-except (websocket.WebSocketException, ConnectionRefusedError, OSError) as e:
+            except (websocket.WebSocketException, ConnectionRefusedError, OSError) as e:
                 self.root.after(0, self._log, f"WebSocket 连接失败: {e}，3秒后重连...")
                 time.sleep(3)
             except Exception as e:

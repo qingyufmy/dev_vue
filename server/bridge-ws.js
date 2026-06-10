@@ -99,16 +99,17 @@ function handleBridge(ws, url) {
 
   ws.on('message', (data) => {
     let msg
-    try { msg = JSON.parse(data) } catch { return }
+    try { msg = JSON.parse(data) } catch(e) { console.log('[BridgeWS] User ' + userId + ' bad msg:', data.toString().substring(0,100)); return }
 
     const bridge = bridges.get(userId)
     if (bridge) bridge.lastSeen = Date.now()
 
     if (msg.type === 'data') {
-      if (!bridge._dataLogCount) bridge._dataLogCount = 0; if (++bridge._dataLogCount % 30 === 1) console.log("[BridgeWS] User " + userId + " data #" + bridge._dataLogCount)
+      if (!bridge._dataLogCount) bridge._dataLogCount = 0; if (++bridge._dataLogCount % 30 === 1) console.log('[BridgeWS] User ' + userId + ' data #' + bridge._dataLogCount)
       // Bridge data push — relay to browsers as-is
       sendToBrowsers(userId, { type: 'data', ...msg })
     } else if (msg.type === 'hb') {
+      if (!bridge._hbLogCount) bridge._hbLogCount = 0; if (++bridge._hbLogCount % 3 === 1) console.log('[BridgeWS] User ' + userId + ' hb #' + bridge._hbLogCount)
       // Bridge heartbeat — just update lastSeen (already done above)
     } else if (msg.type === 'result') {
       // Command result from bridge
@@ -120,6 +121,8 @@ function handleBridge(ws, url) {
           pending.resolve(msg.result)
         }
       }
+    } else {
+      console.log('[BridgeWS] User ' + userId + ' unknown type:', msg.type)
     }
   })
 
