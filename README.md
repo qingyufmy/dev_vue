@@ -1,6 +1,6 @@
-# AURUM AI Trading System v1.0.0
+# AURUM AI Trading System v1.5.0
 
-全自动 MT5 量化交易系统 · AI 驱动决策 · 实时信号执行
+全自动 MT5 量化交易系统 · AI 驱动决策 · WebSocket 纯转发架构 · 实时信号执行
 
 ## 核心功能
 
@@ -76,6 +76,19 @@ node index.js
 - **前端**: 原生 HTML/CSS/JS + Lucide Icons
 - **桥接**: Python + MetaTrader5 + websocket-client
 - **AI**: DeepSeek / GPT / Kimi / Qwen / 智谱 / 豆包 / Claude / Gemini
+
+## 更新日志
+
+### v1.5.0 (2026-06-10)
+- **WebSocket 纯转发架构** — 桥接→服务器→浏览器全链路 WS，1秒实时推送
+- **信号有效期 WS 驱动刷新** — 服务端统一真相源，废弃客户端计时器
+- **自动推理信号实时推送** — 新信号即时到达前端
+- **桥接无限重连修复** — 移除自动重试，PyInstaller 正确打包 MT5 C 扩展
+- **前端双 WS 连接修复** — stopRealtimeSync 不再误关桥接 WebSocket
+- **系统化代码清理** — 移除调试日志、死代码，验证无冗余依赖
+
+### v1.0.0 (2026-06-09)
+- 初始发布：AI 融合交易系统，MT5 桥接，多模型支持
 
 ## 许可证
 
