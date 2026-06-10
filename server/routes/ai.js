@@ -45,21 +45,17 @@ function proOnly(req, res, next) {
 
 // ============ Helper Functions ============
 function utcNow() {
-  // Return Beijing time (UTC+8) for MySQL DATETIME
-  return new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
+  // Return local Beijing time for MySQL DATETIME (server is UTC+8)
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-function mt5Now() {
-  // Return Beijing time (UTC+8) for MySQL DATETIME
-  return new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
-}
+const mt5Now = utcNow
 
-function utcToMt5Time(utcStr) {
-  if (!utcStr) return null
-  const d = new Date(utcStr + 'Z') // Parse as UTC
-  if (isNaN(d.getTime())) return null
-  d.setUTCHours(d.getUTCHours() + 3) // UTC+3
-  return d.toISOString().replace('T', ' ').substring(0, 19)
+function utcToMt5Time(str) {
+  // No timezone conversion — return as-is
+  return str || null
 }
 
 function signalTtlSeconds(timeframe) {
@@ -69,8 +65,7 @@ function signalTtlSeconds(timeframe) {
 
 function signalAgeSeconds(createdAt) {
   try {
-    // created_at is stored as UTC string (from toISOString), append Z to parse as UTC
-    const created = new Date(createdAt + 'Z')
+    const created = new Date(createdAt.replace(' ', 'T'))
     return Math.max((Date.now() - created.getTime()) / 1000, 0)
   } catch {
     return 999999
@@ -83,7 +78,7 @@ function attachSignalTiming(signal) {
   signal.ttl_seconds = ttl
   signal.age_seconds = Math.round(age * 10) / 10
   signal.expires_at = signal.created_at
-    ? new Date(new Date(signal.created_at).getTime() + ttl * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    ? (() => { const d = new Date(signal.created_at.replace(' ', 'T')); d.setSeconds(d.getSeconds() + ttl); const pad = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
     : null
   signal.is_stale = age > ttl
   signal.created_at_mt5 = utcToMt5Time(signal.created_at)

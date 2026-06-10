@@ -2,6 +2,12 @@ import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { getDB, query, queryOne, queryAll, queryRun, logAudit } from './db.js'
 
+function localNow() {
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
 // Per-user state
@@ -242,7 +248,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'save_config': {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
-        const now = new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
+        const now = localNow()
         await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
         await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
@@ -272,7 +278,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (user?.role !== 'admin') return reply({ status: 'error', message: 'Admin only' })
         const prompt = params.prompt
         if (!prompt || typeof prompt !== 'string') return reply({ status: 'error', message: 'prompt required' })
-        const now = new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
+        const now = localNow()
         await queryRun('UPDATE system_prompts SET prompt = ?, updated_by = ?, updated_at = ?', [prompt, userId, now])
         result = { status: 'success', prompt }
         break
@@ -304,7 +310,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
         result = await ai.mt5Bridge(userId, 'open', orderPayload)
         if (result.status === 'success') {
-          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19), result.ticket || null, signal.id])
+          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [localNow(), result.ticket || null, signal.id])
         }
         await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm }, result, result.status)
         break
