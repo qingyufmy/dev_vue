@@ -97,7 +97,7 @@ function handleBridge(ws, url) {
 
   ws.on('message', (data) => {
     let msg
-    } catch(e) { return }
+    try { msg = JSON.parse(data) } catch(e) { return }
 
     const bridge = bridges.get(userId)
     if (bridge) bridge.lastSeen = Date.now()
