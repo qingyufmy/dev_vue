@@ -1237,17 +1237,12 @@ async function runAnalysis() {
   const started = performance.now();
 
   try {
-    const results = await Promise.all(frames.map((timeframe) => api("/api/ai/analyze", {
-      method: "POST",
-      body: JSON.stringify({
-        session_id: "default",
-        symbol,
-        timeframe,
-        kline_count: Number($("klineCount").value) || 100,
-        include_positions: true,
-        data_source: "mt5",
-        language: "zh-CN",
-      }),
+    const results = await Promise.all(frames.map((timeframe) => wsApi("analyze", {
+      session_id: "default",
+      symbol,
+      timeframe,
+      kline_count: Number($("klineCount").value) || 100,
+      include_positions: true,
     })));
     const best = results
       .map((item) => item.signal)

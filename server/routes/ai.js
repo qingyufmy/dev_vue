@@ -466,370 +466,42 @@ async function executeOrder(userId, config, request, action) {
   return result
 }
 
-// ============ API Routes ============
+// Handle analyze request (called from WebSocket command handler)
+async function handleAnalyze(userId, params) {
+  const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true } = params
+  if (!symbol) return { status: 'error', message: 'symbol required' }
 
-// Get AI config
-router.get('/ai/config', authMiddleware, proOnly, (req, res) => {
-  const { session_id = 'default', api_provider } = req.query
   const db = getDB()
-  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
-  const isAdmin = user?.role === 'admin'
-  const row = getActiveConfig(db, req.userId, session_id, api_provider)
-  res.json({ status: 'success', config: configPublic(row, isAdmin) })
-})
+  const config = getActiveConfig(db, userId, session_id)
 
-// Get all AI configs
-router.get('/ai/config/all', authMiddleware, proOnly, (req, res) => {
-  const { session_id = 'default' } = req.query
-  const db = getDB()
-  const rows = db.prepare('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ?').all(req.userId, session_id)
-  const configs = {}
-  for (const row of rows) {
-    const item = configPublic(row, false)
-    configs[item.api_provider] = {
-      api_provider: item.api_provider,
-      has_config: true,
-      is_active: !!item.is_active,
-      model_name: item.model_name,
-      has_api_key: item.has_api_key,
-      masked_api_key: item.masked_api_key,
-    }
+  const account = await mt5Bridge(userId, 'account', {})
+  const positionsData = include_positions ? await mt5Bridge(userId, 'positions', { symbol }) : { positions: [] }
+  const positions = positionsData.positions || []
+  const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe, count: kline_count })
+
+  if (!ratesResp || ratesResp.status === 'error') return { status: 'error', message: 'Failed to get rates' }
+  const rates = ratesResp.rates || []
+  if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
+
+  const market = calculateMarketData(symbol, timeframe, rates, account, positions)
+  const signal = await aiAnalyze(config, market)
+
+  if (signal) {
+    const now = utcNow()
+    const ttlSeconds = timeframe === 'D1' ? 86400 : timeframe === 'H4' ? 14400 : timeframe === 'H1' ? 3600 : 1800
+
+    db.prepare(`INSERT INTO ai_signals(user_id, session_id, symbol, signal_type, confidence, recommended_volume,
+      analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+      market_data_json, ai_model, ttl_seconds, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(userId, session_id, symbol, signal.signal_type, signal.confidence, signal.recommended_volume,
+        signal.analysis, signal.reasoning, signal.stop_loss_price || null,
+        signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
+        JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', ttlSeconds, now)
   }
-  res.json({ status: 'success', configs })
-})
 
-// Create/update AI config
-router.post('/ai/config', authMiddleware, proOnly, (req, res) => {
-  const { session_id = 'default', config: cfg } = req.body
-  if (!cfg) return res.status(400).json({ status: 'error', message: 'config required' })
-  const db = getDB()
-  const now = utcNow()
-  // Non-admins cannot set system_prompt
-  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
-  if (user?.role !== 'admin') delete cfg.system_prompt
-
-  db.prepare('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?').run(req.userId, session_id)
-  const existingKey = cfg.api_key ? cfg.api_key : null
-  db.prepare(`
-    INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
-      temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-      max_position_size, selected_take_profit, system_prompt, is_active, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    ON CONFLICT(user_id, session_id, api_provider) DO UPDATE SET
-      api_key_encrypted = CASE WHEN excluded.api_key_encrypted IS NOT NULL THEN excluded.api_key_encrypted ELSE ai_configs.api_key_encrypted END,
-      api_base_url = excluded.api_base_url,
-      model_name = excluded.model_name, temperature = excluded.temperature, max_tokens = excluded.max_tokens,
-      enable_auto_trade = excluded.enable_auto_trade, enable_futures_trading = excluded.enable_futures_trading,
-      risk_level = excluded.risk_level, max_position_size = excluded.max_position_size,
-      selected_take_profit = excluded.selected_take_profit, system_prompt = excluded.system_prompt,
-      is_active = 1, updated_at = excluded.updated_at
-  `).run(
-    req.userId, session_id, cfg.api_provider || 'deepseek', existingKey,
-    cfg.api_base_url || null, cfg.model_name || 'deepseek-chat',
-    cfg.temperature || 0.7, cfg.max_tokens || 2000,
-    cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0,
-    cfg.risk_level || 'medium', cfg.max_position_size || 0.05,
-    cfg.selected_take_profit || 1, cfg.system_prompt || DEFAULT_PROMPT, now, now
-  )
-  const row = getActiveConfig(db, req.userId, session_id, cfg.api_provider)
-  res.json({ status: 'success', config: configPublic(row) })
-})
-
-// Update system prompt (admin only)
-router.put('/ai/config/prompt', authMiddleware, proOnly, (req, res) => {
-  const { session_id = 'default', system_prompt } = req.body
-  const db = getDB()
-  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
-  if (user?.role !== 'admin') return res.status(403).json({ status: 'error', message: '������Ա���޸�ϵͳ��ʾ��' })
-  const row = getActiveConfig(db, req.userId, session_id)
-  if (!row) return res.status(404).json({ status: 'error', message: 'No active config' })
-  db.prepare('UPDATE ai_configs SET system_prompt = ?, updated_at = ? WHERE id = ?').run(system_prompt, utcNow(), row.id)
-  res.json({ status: 'success' })
-})
-
-// Test AI connection
-router.post('/ai/test', authMiddleware, proOnly, (req, res) => {
-  const { api_key } = req.body
-  if (!api_key) return res.status(400).json({ status: 'error', message: 'api_key required' })
-  res.json({ status: 'success', message: 'Configuration shape is valid.' })
-})
-
-// Analyze market
-router.post('/ai/analyze', authMiddleware, proOnly, async (req, res) => {
-  // Pause auto scheduler during manual analysis
-  if (autoSchedulerState[req.userId]) autoSchedulerState[req.userId].manualBusy = true
-  try {
-    const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true } = req.body
-    if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
-
-    const db = getDB()
-    const config = getActiveConfig(db, req.userId, session_id)
-
-    // Get market data from MT5 bridge
-    const account = await mt5Bridge(req.userId, 'account', {})
-    const positionsData = include_positions ? await mt5Bridge(req.userId, 'positions', { symbol }) : { positions: [] }
-    const positions = positionsData.positions || []
-    const ratesResp = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: kline_count })
-
-    if (!ratesResp || ratesResp.status === 'error') {
-      return res.status(500).json({ status: 'error', message: ratesResp?.message || 'Failed to get rates' })
-    }
-
-    const rates = ratesResp.rates || []
-    const market = calculateMarketData(symbol, timeframe, rates, account, positions)
-
-    // Try AI signal first, fallback to rule-based
-    let signal = await maybeAiSignal(config, market)
-    if (!signal) signal = ruleBasedSignal(config, market)
-
-    const createdAt = utcNow()
-    const stmt = db.prepare(`
-      INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
-        recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
-        take_profit_2_price, take_profit_3_price, market_data_json, is_executed, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-    `)
-    const result = stmt.run(
-      req.userId, config?.id || null, session_id, symbol, timeframe.toUpperCase(),
-      signal.signal_type, signal.confidence, signal.recommended_volume,
-      signal.analysis, signal.reasoning, signal.stop_loss_price,
-      signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
-      JSON.stringify(market), createdAt
-    )
-
-    signal.id = result.lastInsertRowid
-    signal.symbol = symbol
-    signal.timeframe = timeframe.toUpperCase()
-    signal.created_at = createdAt
-    signal.market_data = market
-    signal.is_executed = false
-    attachSignalTiming(signal)
-
-    // Auto-execute if enabled
-    signal.auto_execution = { status: 'skipped', reason: 'auto_trade_disabled' }
-    if (config && config.enable_auto_trade) {
-      const autoResult = await maybeAutoExecuteSignal(req.userId, config, signal, market, 'ai_auto_execute')
-      signal.auto_execution = autoResult
-      if (autoResult.status === 'success') {
-        db.prepare('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?').run(JSON.stringify(autoResult), signal.id)
-        signal.is_executed = true
-        signal.execution_result = autoResult
-      }
-    }
-
-    res.json({ status: 'success', signal })
-  } catch (err) {
-    console.error('[AI Analyze Error]', err.message)
-    res.status(500).json({ status: 'error', message: err.message })
-  } finally {
-    if (autoSchedulerState[req.userId]) autoSchedulerState[req.userId].manualBusy = false
-  }
-})
-
-async function maybeAutoExecuteSignal(userId, config, signal, market, action) {
-  if (signal.is_stale) return { status: 'skipped', reason: 'signal_expired' }
-  if (String(signal.signal_type || '').toLowerCase() === 'hold') return { status: 'skipped', reason: 'hold_signal_cannot_execute' }
-
-  const order = signalOrderPayload(signal, config, market, true)
-  return await executeOrder(userId, config, order, action)
+  return { status: 'success', signal, market }
 }
-
-// Get signals
-router.get('/ai/signals', authMiddleware, proOnly, (req, res) => {
-  const { session_id = 'default' } = req.query
-  const db = getDB()
-  const rows = db.prepare('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100').all(req.userId, session_id)
-  const signals = rows.map(row => {
-    const item = { ...row }
-    try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
-    delete item.market_data_json
-    item.is_executed = !!item.is_executed
-    attachSignalTiming(item)
-    return item
-  })
-  res.json({ status: 'success', signals })
-})
-
-// Get signal detail
-router.get('/ai/signals/:signalId', authMiddleware, proOnly, (req, res) => {
-  const db = getDB()
-  const row = db.prepare('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?').get(req.params.signalId, req.userId)
-  if (!row) return res.status(404).json({ status: 'error', message: 'Signal not found' })
-  const item = { ...row }
-  try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
-  delete item.market_data_json
-  item.is_executed = !!item.is_executed
-  attachSignalTiming(item)
-  res.json({ status: 'success', signal: item })
-})
-
-// Execute signal
-router.post('/ai/execute', authMiddleware, proOnly, async (req, res) => {
-  try {
-    const { session_id = 'default', signal_id, confirm = false } = req.body
-    const db = getDB()
-    const signal = db.prepare('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?').get(signal_id, req.userId)
-    if (!signal) return res.status(404).json({ status: 'error', message: 'Signal not found' })
-
-    const config = getActiveConfig(db, req.userId, session_id)
-    const timedSignal = attachSignalTiming({ ...signal })
-
-    if (timedSignal.is_stale) {
-      const result = {
-        status: 'rejected', message: 'signal_expired',
-        details: { age_seconds: timedSignal.age_seconds, ttl_seconds: timedSignal.ttl_seconds },
-      }
-      insertAudit(db, req.userId, 'ai_execute', signal.symbol, { signal_id, confirm }, result, result.status)
-      return res.json(result)
-    }
-
-    const marketData = JSON.parse(signal.market_data_json || '{}')
-    const order = signalOrderPayload(signal, config, marketData, confirm)
-    const result = await executeOrder(req.userId, config, order, 'ai_execute')
-
-    if (result.status === 'success') {
-      db.prepare('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?').run(JSON.stringify(result), signal.id)
-    }
-    res.json(result)
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message })
-  }
-})
-
-// MT5 Status
-router.get('/mt5/status', authMiddleware, proOnly, async (req, res) => {
-  if (!isBridgeAlive(req.userId)) return res.json({ status: 'success', mode: 'mock', mt5_package_available: true, live_trading_enabled: false })
-  const result = await mt5Bridge(req.userId, 'status', {})
-  res.json({ status: 'success', ...result })
-})
-
-// MT5 Account
-router.get('/mt5/account', authMiddleware, proOnly, async (req, res) => {
-  const result = await mt5Bridge(req.userId, 'account', {})
-  res.json(result)
-})
-
-// MT5 Symbols
-router.get('/mt5/symbols', authMiddleware, proOnly, async (req, res) => {
-  const result = await mt5Bridge(req.userId, 'symbols', {})
-  res.json(result)
-})
-
-// MT5 Quote
-router.get('/mt5/quote/:symbol', authMiddleware, proOnly, async (req, res) => {
-  const symbol = req.params.symbol
-  let result = await mt5Bridge(req.userId, 'quote', { symbol })
-  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
-  if (result?.status === 'error' && result.message?.includes('Symbol not found')) {
-    const variants = [symbol + '.s', symbol + 'm', symbol + '.c', symbol + '_']
-    for (const v of variants) {
-      result = await mt5Bridge(req.userId, 'quote', { symbol: v })
-      if (result?.status !== 'error') break
-    }
-  }
-  res.json(result)
-})
-
-// MT5 Positions
-router.get('/mt5/positions', authMiddleware, proOnly, async (req, res) => {
-  const { symbol } = req.query
-  const result = await mt5Bridge(req.userId, 'positions', { symbol })
-  res.json(result)
-})
-
-// MT5 History
-router.get('/mt5/history', authMiddleware, proOnly, async (req, res) => {
-  const { page = 1, page_size = 20 } = req.query
-  const result = await mt5Bridge(req.userId, 'history', { page: Number(page), page_size: Number(page_size) })
-  res.json(result)
-})
-
-// MT5 Open Position
-router.post('/mt5/open', authMiddleware, proOnly, async (req, res) => {
-  const db = getDB()
-  const config = getActiveConfig(db, req.userId, 'default')
-  const result = await executeOrder(req.userId, config, req.body, 'manual_open')
-  res.json(result)
-})
-
-// MT5 Close Position
-router.post('/mt5/close', authMiddleware, proOnly, async (req, res) => {
-  const { ticket, confirm = false } = req.body
-  let result
-  if (!confirm) {
-    result = { status: 'needs_confirmation', message: 'confirmation_required' }
-  } else {
-    result = await mt5Bridge(req.userId, 'close', { ticket })
-  }
-  const db = getDB()
-  insertAudit(db, req.userId, 'manual_close', null, { ticket, confirm }, result, result.status)
-  res.json(result)
-})
-
-// MT5 Rates (K-line data)
-router.get('/mt5/rates', authMiddleware, proOnly, async (req, res) => {
-  const { symbol, timeframe = 'M30', count = 100 } = req.query
-  if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
-  let result = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: Number(count) })
-  // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
-  if (result?.status === 'error' && result.message?.includes('Symbol not found')) {
-    const variants = [symbol + '.s', symbol + 'm', symbol + '.c', symbol + '_']
-    for (const v of variants) {
-      result = await mt5Bridge(req.userId, 'rates', { symbol: v, timeframe, count: Number(count) })
-      if (result?.status !== 'error') break
-    }
-  }
-  res.json(result)
-})
-
-// MT5 Diagnostics
-router.get('/mt5/diagnostics', authMiddleware, proOnly, async (req, res) => {
-  const result = await mt5Bridge(req.userId, 'diagnostics', {})
-  res.json(result)
-})
-
-// Audit logs
-router.get('/audit/logs', authMiddleware, proOnly, (req, res) => {
-  const db = getDB()
-  const rows = db.prepare('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(req.userId)
-  const logs = rows.map(row => {
-    const item = { ...row }
-    try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
-    try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
-    delete item.request_json
-    delete item.result_json
-    item.created_at_mt5 = utcToMt5Time(item.created_at)
-    return item
-  })
-  res.json({ status: 'success', logs })
-})
-
-// UI Config (theme)
-router.get('/ui/config', authMiddleware, proOnly, (req, res) => {
-  const db = getDB()
-  const row = db.prepare('SELECT theme FROM ui_configs WHERE user_id = ?').get(req.userId)
-  res.json({ status: 'success', theme: (row || {}).theme || 'theme2' })
-})
-
-router.post('/ui/config', authMiddleware, proOnly, (req, res) => {
-  const { theme } = req.body
-  if (!theme || !theme.startsWith('theme')) return res.status(400).json({ status: 'error', message: 'Invalid theme' })
-  const db = getDB()
-  const now = utcNow()
-  db.prepare(`
-    INSERT INTO ui_configs(user_id, theme, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET theme = excluded.theme, updated_at = excluded.updated_at
-  `).run(req.userId, theme, now)
-  res.json({ status: 'success', theme })
-})
-
-// MT5 Connect
-// MT5 Toggle Trade �� enable/disable live trading without disconnecting
-router.post('/mt5/toggle-trade', authMiddleware, proOnly, async (req, res) => {
-  const { enable } = req.body
-  const result = await mt5Bridge(req.userId, 'toggle_trade', { enable })
-  res.json(result)
-})
 
 // Auth/me endpoint for frontend compatibility
 router.get('/auth/me', authMiddleware, (req, res) => {
@@ -1032,47 +704,6 @@ function stopAutoScheduler(userId) {
   console.log(`[AutoScheduler] Stopped for user ${userId}`)
 }
 
-// Auto status endpoint
-router.get('/auto/status', authMiddleware, proOnly, (req, res) => {
-  const db = getDB()
-  const cfg = getAutoConfig(db, req.userId)
-  const state = autoSchedulerState[req.userId]
-  const symbols = cfg ? JSON.parse(cfg.symbols || '[]') : []
-  const timeframes = cfg ? JSON.parse(cfg.timeframes || '[]') : []
-  res.json({
-    status: 'success',
-    scheduler: {
-      enabled: cfg?.enabled ? true : false,
-      running: !!state?.running,
-      symbols,
-      timeframes,
-      interval_seconds: cfg?.interval_seconds || 900,
-      intervals: timeframes.reduce((m, tf) => { m[tf] = timeframeIntervalMs(tf) / 1000; return m }, {}),
-      active_timers: state?.timers ? Object.keys(state.timers) : [],
-      last_run_at: state?.lastRunAt || cfg?.last_run_at || null,
-      status: cfg?.enabled ? (state?.running ? 'running' : 'stopped') : 'disabled',
-    }
-  })
-})
-
-// Auto config endpoint �� save and start/stop
-router.post('/auto/config', authMiddleware, proOnly, async (req, res) => {
-  const { symbols = ['XAUUSD'], timeframes = [] } = req.body
-  const enabled = timeframes.length > 0
-  // Interval is now auto-calculated per timeframe, use shortest as DB value
-  const shortestMs = timeframes.length ? Math.min(...timeframes.map(timeframeIntervalMs)) : 900_000
-  const interval_seconds = Math.round(shortestMs / 1000)
-  const db = getDB()
-  upsertAutoConfig(db, req.userId, symbols, timeframes, interval_seconds, enabled)
-
-  // Always stop first to clear old timers, then restart if enabled
-  stopAutoScheduler(req.userId)
-  if (enabled) startAutoScheduler(req.userId)
-
-  res.json({ status: 'success', enabled, symbols, timeframes, interval_seconds, intervals: timeframes.reduce((m, tf) => { m[tf] = timeframeIntervalMs(tf) / 1000; return m }, {}) })
-})
-
-// On server start, restart schedulers for enabled users
 export function initAutoSchedulers() {
   try {
     const db = getDB()
@@ -1084,20 +715,10 @@ export function initAutoSchedulers() {
   } catch {}
 }
 
-// ============ Bridge (WebSocket via bridge-ws.js) ============
-
-// Execute command via WebSocket bridge
-async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
-  return sendBridgeCommand(userId, action, params, timeoutMs)
-}
-
-// Get bridge status for user
-router.get('/bridge/status', authMiddleware, proOnly, (req, res) => {
-  res.json(getBridgeStatus(req.userId))
-})
 
 export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   insertAudit, getActiveConfig, configPublic, mt5Bridge,
   getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,
-  signalOrderPayload, attachSignalTiming }
+  signalOrderPayload, attachSignalTiming, handleAnalyze,
+  timeframeIntervalMs, startAutoScheduler, stopAutoScheduler }
 export default router

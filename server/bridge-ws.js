@@ -199,6 +199,9 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'diagnostics':
         result = await ai.mt5Bridge(userId, 'diagnostics', {})
         break
+      case 'analyze':
+        result = await ai.handleAnalyze(userId, params)
+        break
 
       // === AI Config ===
       case 'ai_config': {
@@ -276,9 +279,15 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'save_auto': {
-        const { symbols = ['XAUUSD'], timeframes = ['M30'], interval_seconds = 900, enabled = false } = params
+        const { symbols = ['XAUUSD'], timeframes = [] } = params
+        const enabled = timeframes.length > 0
+        const shortestMs = timeframes.length ? Math.min(...timeframes.map(ai.timeframeIntervalMs)) : 900_000
+        const interval_seconds = Math.round(shortestMs / 1000)
         ai.upsertAutoConfig(db, userId, symbols, timeframes, interval_seconds, enabled)
-        result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭' }
+        // Restart scheduler
+        ai.stopAutoScheduler(userId)
+        if (enabled) ai.startAutoScheduler(userId)
+        result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols, timeframes, interval_seconds }
         break
       }
 
