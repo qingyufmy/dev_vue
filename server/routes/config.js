@@ -1,14 +1,13 @@
 import { Router } from 'express'
-import { getDB } from '../db.js'
+import { getDB, queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 
 const router = Router()
 
 // Public: get config by category (for toolbox and market menu)
-router.get('/system-config-public/:category', (req, res) => {
+router.get('/system-config-public/:category', async (req, res) => {
   try {
-    const db = getDB()
-    const rows = db.prepare('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id').all(req.params.category)
+    const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [req.params.category])
     res.json({ ok: true, items: rows })
   } catch (err) {
     res.json({ ok: false, error: err.message })
@@ -16,10 +15,9 @@ router.get('/system-config-public/:category', (req, res) => {
 })
 
 // Get all config (grouped by category)
-router.get('/system-config', authMiddleware, adminOnly, (req, res) => {
+router.get('/system-config', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
-    const rows = db.prepare('SELECT * FROM system_config ORDER BY category, sort_order, id').all()
+    const rows = await queryAll('SELECT * FROM system_config ORDER BY category, sort_order, id')
     const grouped = {}
     for (const r of rows) {
       if (!grouped[r.category]) grouped[r.category] = []
@@ -32,10 +30,9 @@ router.get('/system-config', authMiddleware, adminOnly, (req, res) => {
 })
 
 // Get config by category
-router.get('/system-config/:category', authMiddleware, adminOnly, (req, res) => {
+router.get('/system-config/:category', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
-    const rows = db.prepare('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id').all(req.params.category)
+    const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [req.params.category])
     res.json({ ok: true, items: rows })
   } catch (err) {
     res.json({ ok: false, error: err.message })
@@ -43,21 +40,20 @@ router.get('/system-config/:category', authMiddleware, adminOnly, (req, res) => 
 })
 
 // Create or update config item
-router.post('/system-config', authMiddleware, adminOnly, (req, res) => {
+router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
     const { category, key, value, label, sort_order } = req.body
     if (!category || !key) return res.json({ ok: false, error: 'category 和 key 必填' })
 
-    const existing = db.prepare('SELECT id FROM system_config WHERE category = ? AND key = ?').get(category, key)
+    const existing = await queryOne('SELECT id FROM system_config WHERE category = ? AND key = ?', [category, key])
     if (existing) {
-      db.prepare('UPDATE system_config SET value = ?, label = ?, sort_order = ?, updated_at = datetime(\'now\') WHERE id = ?')
-        .run(value || '', label || '', sort_order || 0, existing.id)
+      await queryRun('UPDATE system_config SET value = ?, label = ?, sort_order = ?, updated_at = NOW() WHERE id = ?',
+        [value || '', label || '', sort_order || 0, existing.id])
       res.json({ ok: true, id: existing.id, action: 'updated' })
     } else {
-      const result = db.prepare('INSERT INTO system_config (category, key, value, label, sort_order) VALUES (?, ?, ?, ?, ?)')
-        .run(category, key, value || '', label || '', sort_order || 0)
-      res.json({ ok: true, id: result.lastInsertRowid, action: 'created' })
+      const result = await queryRun('INSERT INTO system_config (category, key, value, label, sort_order) VALUES (?, ?, ?, ?, ?)',
+        [category, key, value || '', label || '', sort_order || 0])
+      res.json({ ok: true, id: result.insertId, action: 'created' })
     }
   } catch (err) {
     res.json({ ok: false, error: err.message })
@@ -65,26 +61,20 @@ router.post('/system-config', authMiddleware, adminOnly, (req, res) => {
 })
 
 // Batch update config items
-router.put('/system-config/:category', authMiddleware, adminOnly, (req, res) => {
+router.put('/system-config/:category', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
     const { category } = req.params
     const { items } = req.body
     if (!Array.isArray(items)) return res.json({ ok: false, error: 'items 必须是数组' })
 
-    const upsert = db.prepare(`
-      INSERT INTO system_config (category, key, value, label, sort_order)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(category, key) DO UPDATE SET value = excluded.value, label = excluded.label, sort_order = excluded.sort_order, updated_at = datetime('now')
-    `)
-
-    const tx = db.transaction(() => {
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i]
-        upsert.run(category, item.key, item.value || '', item.label || '', item.sort_order ?? i)
-      }
-    })
-    tx()
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      await queryRun(`
+        INSERT INTO system_config (category, key, value, label, sort_order)
+        VALUES (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE value = VALUES(value), label = VALUES(label), sort_order = VALUES(sort_order), updated_at = NOW()
+      `, [category, item.key, item.value || '', item.label || '', item.sort_order ?? i])
+    }
 
     res.json({ ok: true, count: items.length })
   } catch (err) {
@@ -93,10 +83,9 @@ router.put('/system-config/:category', authMiddleware, adminOnly, (req, res) => 
 })
 
 // Delete config item
-router.delete('/system-config/:id', authMiddleware, adminOnly, (req, res) => {
+router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
-    db.prepare('DELETE FROM system_config WHERE id = ?').run(req.params.id)
+    await queryRun('DELETE FROM system_config WHERE id = ?', [req.params.id])
     res.json({ ok: true })
   } catch (err) {
     res.json({ ok: false, error: err.message })
@@ -104,10 +93,9 @@ router.delete('/system-config/:id', authMiddleware, adminOnly, (req, res) => {
 })
 
 // Delete all config in a category
-router.delete('/system-config/category/:category', authMiddleware, adminOnly, (req, res) => {
+router.delete('/system-config/category/:category', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
-    db.prepare('DELETE FROM system_config WHERE category = ?').run(req.params.category)
+    await queryRun('DELETE FROM system_config WHERE category = ?', [req.params.category])
     res.json({ ok: true })
   } catch (err) {
     res.json({ ok: false, error: err.message })
@@ -120,8 +108,7 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
     const { to } = req.body
     if (!to) return res.json({ ok: false, error: '请输入收件邮箱' })
 
-    const db = getDB()
-    const rows = db.prepare("SELECT key, value FROM system_config WHERE category = 'smtp'").all()
+    const rows = await queryAll("SELECT key, value FROM system_config WHERE category = 'smtp'")
     const cfg = {}
     for (const r of rows) cfg[r.key] = r.value
 

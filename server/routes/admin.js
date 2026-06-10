@@ -4,7 +4,7 @@ import multer from 'multer'
 import { join, dirname, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
-import { getDB } from '../db.js'
+import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -24,10 +24,9 @@ const resourceUpload = multer({
 const router = Router()
 
 // Admin: get users with full stats and enriched data
-router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
+router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { page = 1, limit = 50, search } = req.query
-    const db = getDB()
     const offset = (Number(page) - 1) * Number(limit)
 
     let where = '1=1'
@@ -35,26 +34,26 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
     if (search) { where += ' AND (u.email LIKE ? OR u.nickname LIKE ?)'; params.push(`%${search}%`, `%${search}%`) }
 
     // Get total user count
-    const totalUsers = db.prepare('SELECT COUNT(*) as c FROM users').get().c
+    const totalUsers = (await queryOne('SELECT COUNT(*) as c FROM users')).c
 
     // Get today's new users
-    const todayNewUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE date(created_at) = date('now')").get().c
+    const todayNewUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE DATE(created_at) = CURDATE()')).c
 
     // Get online stats (based on last_seen_at)
     let realtimeOnlineUsers = 0
     let todayOnlineUsers = 0
     let weekOnlineUsers = 0
     try {
-      realtimeOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE datetime(last_seen_at) >= datetime('now', '-5 minutes')").get().c
-      todayOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE datetime(last_seen_at) >= datetime('now', 'start of day')").get().c
-      weekOnlineUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE datetime(last_seen_at) >= datetime('now', '-7 days')").get().c
+      realtimeOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)')).c
+      todayOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= CURDATE()')).c
+      weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)')).c
     } catch {}
 
     // Get total revenue
     let totalRevenue = 0
     let paidOrderCount = 0
     try {
-      const revenueRes = db.prepare("SELECT COALESCE(SUM(amount_confirmed), 0) as total, COUNT(*) as cnt FROM orders WHERE status = 'paid'").get()
+      const revenueRes = await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as total, COUNT(*) as cnt FROM orders WHERE status = 'paid'")
       totalRevenue = Math.round(revenueRes.total / 100)
       paidOrderCount = revenueRes.cnt
     } catch {}
@@ -62,34 +61,36 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
     // Get content stats
     let totalPosts = 0, totalComments = 0, totalReplies = 0
     try {
-      totalPosts = db.prepare('SELECT COUNT(*) as c FROM posts').get().c
-      totalComments = db.prepare('SELECT COUNT(*) as c FROM comments').get().c
-      totalReplies = db.prepare('SELECT COUNT(*) as c FROM post_replies').get().c
+      totalPosts = (await queryOne('SELECT COUNT(*) as c FROM posts')).c
+      totalComments = (await queryOne('SELECT COUNT(*) as c FROM comments')).c
+      totalReplies = (await queryOne('SELECT COUNT(*) as c FROM post_replies')).c
     } catch {}
 
     // Get users with pagination
-    const userCount = db.prepare(`SELECT COUNT(*) as c FROM users u WHERE ${where}`).get(...params).c
-    const users = db.prepare(`
+    const userCount = (await queryOne(`SELECT COUNT(*) as c FROM users u WHERE ${where}`, params)).c
+    const users = await queryAll(`
       SELECT u.id, u.uid, u.email, u.nickname, u.avatar, u.role, u.plan, u.plan_period, u.plan_expires_at,
              u.referral_code, u.referral_credit, u.telegram_id, u.created_at, u.last_seen_at
       FROM users u WHERE ${where} ORDER BY u.created_at DESC LIMIT ? OFFSET ?
-    `).all(...params, Number(limit), offset)
+    `, [...params, Number(limit), offset])
 
     // Enrich each user with progress, orders, and content counts
-    const enrichedUsers = users.map(u => {
+    const enrichedUsers = []
+    for (const u of users) {
       // Get progress stats
       let progressData = { completed: 0, quizPassed: 0, total: 0 }
       try {
-        const completed = db.prepare('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND completed = 1').get(u.id).c
-        const quizPassed = db.prepare('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND quiz_passed = 1').get(u.id).c
-        const total = db.prepare('SELECT COUNT(*) as c FROM progress WHERE user_id = ?').get(u.id).c
+        const completed = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND completed = 1', [u.id])).c
+        const quizPassed = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND quiz_passed = 1', [u.id])).c
+        const total = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ?', [u.id])).c
         progressData = { completed, quizPassed, total }
       } catch {}
 
       // Get orders
       let orders = []
       try {
-        orders = db.prepare("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC").all(u.id).map(o => ({
+        const orderRows = await queryAll('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC', [u.id])
+        orders = orderRows.map(o => ({
           orderId: o.order_id || o.order_no,
           plan: o.plan,
           planLabel: o.plan_label || o.plan,
@@ -107,27 +108,27 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
       // Get total paid
       let totalPaid = 0
       try {
-        totalPaid = db.prepare("SELECT COALESCE(SUM(amount_confirmed), 0) as t FROM orders WHERE user_id = ? AND status = 'paid'").get(u.id).t
+        totalPaid = (await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as t FROM orders WHERE user_id = ? AND status = 'paid'", [u.id])).t
       } catch {}
 
       // Get content counts
       let commentCount = 0, postCount = 0, replyCount = 0
       try {
-        commentCount = db.prepare('SELECT COUNT(*) as c FROM comments WHERE user_id = ?').get(u.id).c
-        postCount = db.prepare('SELECT COUNT(*) as c FROM posts WHERE user_id = ?').get(u.id).c
-        replyCount = db.prepare('SELECT COUNT(*) as c FROM post_replies WHERE user_id = ?').get(u.id).c
+        commentCount = (await queryOne('SELECT COUNT(*) as c FROM comments WHERE user_id = ?', [u.id])).c
+        postCount = (await queryOne('SELECT COUNT(*) as c FROM posts WHERE user_id = ?', [u.id])).c
+        replyCount = (await queryOne('SELECT COUNT(*) as c FROM post_replies WHERE user_id = ?', [u.id])).c
       } catch {}
 
       // Get last activity
       let lastActivity = u.last_seen_at || null
       try {
-        const lastComment = db.prepare('SELECT MAX(created_at) as m FROM comments WHERE user_id = ?').get(u.id).m
-        const lastPost = db.prepare('SELECT MAX(created_at) as m FROM posts WHERE user_id = ?').get(u.id).m
-        const lastReply = db.prepare('SELECT MAX(created_at) as m FROM post_replies WHERE user_id = ?').get(u.id).m
+        const lastComment = (await queryOne('SELECT MAX(created_at) as m FROM comments WHERE user_id = ?', [u.id])).m
+        const lastPost = (await queryOne('SELECT MAX(created_at) as m FROM posts WHERE user_id = ?', [u.id])).m
+        const lastReply = (await queryOne('SELECT MAX(created_at) as m FROM post_replies WHERE user_id = ?', [u.id])).m
         lastActivity = [u.last_seen_at, lastComment, lastPost, lastReply].filter(Boolean).sort().pop() || null
       } catch {}
 
-      return {
+      enrichedUsers.push({
         id: u.id,
         uid: u.uid || ('WS' + String(u.id).padStart(6, '0')),
         email: u.email,
@@ -150,8 +151,8 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
         postCount,
         replyCount,
         lastActivity,
-      }
-    })
+      })
+    }
 
     res.json({
       ok: true,
@@ -180,26 +181,24 @@ router.get('/admin-users', authMiddleware, adminOnly, (req, res) => {
 })
 
 // Admin: update user (plan, role, etc.)
-router.post('/admin-users', authMiddleware, adminOnly, (req, res) => {
+router.post('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { userId, plan, expiresAt, role, nickname } = req.body
-    const db = getDB()
 
-    if (plan) db.prepare("UPDATE users SET plan = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(plan, userId)
-    if (expiresAt !== undefined) db.prepare("UPDATE users SET plan_expires_at = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(expiresAt, userId)
-    if (role) db.prepare("UPDATE users SET role = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(role, userId)
-    if (nickname) db.prepare("UPDATE users SET nickname = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(nickname, userId)
+    if (plan) await queryRun('UPDATE users SET plan = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [plan, userId])
+    if (expiresAt !== undefined) await queryRun('UPDATE users SET plan_expires_at = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [expiresAt, userId])
+    if (role) await queryRun('UPDATE users SET role = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [role, userId])
+    if (nickname) await queryRun('UPDATE users SET nickname = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [nickname, userId])
 
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '更新失败' }) }
 })
 
-router.put('/admin-users', authMiddleware, adminOnly, (req, res) => {
+router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { id, userId, role, plan, nickname, email, password, avatar, expiresAt } = req.body
     const uid = id || userId
     if (!uid) return res.json({ ok: false, error: '缺少用户ID' })
-    const db = getDB()
     const updates = []
     const params = []
     if (email) { updates.push('email = ?'); params.push(email) }
@@ -216,9 +215,9 @@ router.put('/admin-users', authMiddleware, adminOnly, (req, res) => {
       }
     }
     if (updates.length === 0) return res.json({ ok: false, error: '没有需要更新的字段' })
-    updates.push("updated_at = datetime('now', '+8 hours')")
+    updates.push('updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR)')
     params.push(uid)
-    db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+    await queryRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
     res.json({ ok: true })
   } catch (err) {
     console.error('Admin update user error:', err)
@@ -226,10 +225,9 @@ router.put('/admin-users', authMiddleware, adminOnly, (req, res) => {
   }
 })
 
-router.get('/admin-audit', authMiddleware, adminOnly, (req, res) => {
+router.get('/admin-audit', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { page = 1, limit = 30, action, search, days } = req.query
-    const db = getDB()
     const offset = (Number(page) - 1) * Number(limit)
 
     let where = '1=1'
@@ -237,16 +235,16 @@ router.get('/admin-audit', authMiddleware, adminOnly, (req, res) => {
     if (action && action !== 'all') { where += ' AND a.action = ?'; params.push(action) }
     if (search) { where += ' AND (a.user_email LIKE ? OR a.user_nickname LIKE ? OR a.detail LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`) }
     if (days && days !== 'all') {
-      where += " AND a.created_at >= datetime('now', ?)"
-      params.push(`-${Number(days)} days`)
+      where += ' AND a.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)'
+      params.push(Number(days))
     }
 
-    const total = db.prepare(`SELECT COUNT(*) as c FROM audit_logs a WHERE ${where}`).get(...params).c
-    const logs = db.prepare(`
+    const total = (await queryOne(`SELECT COUNT(*) as c FROM audit_logs a WHERE ${where}`, params)).c
+    const logs = await queryAll(`
       SELECT a.id, a.user_id, a.user_email, a.user_nickname, a.action, a.target_type, a.target_id,
              a.detail, a.ip, a.created_at
       FROM audit_logs a WHERE ${where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?
-    `).all(...params, Number(limit), offset)
+    `, [...params, Number(limit), offset])
 
     res.json({ ok: true, logs, total, page: Number(page), totalPages: Math.ceil(total / Number(limit)) })
   } catch (err) {
@@ -256,13 +254,12 @@ router.get('/admin-audit', authMiddleware, adminOnly, (req, res) => {
 })
 
 // Admin: referrals
-router.get('/admin/referrals/overview', authMiddleware, adminOnly, (req, res) => {
+router.get('/admin/referrals/overview', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
-    const total = db.prepare('SELECT COUNT(*) as c FROM referrals').get().c
-    const pending = db.prepare("SELECT COUNT(*) as c FROM referrals WHERE status = 'pending'").get().c
-    const approved = db.prepare("SELECT COUNT(*) as c FROM referrals WHERE status = 'approved'").get().c
-    const totalCommission = db.prepare('SELECT COALESCE(SUM(commission), 0) as c FROM referrals').get().c
+    const total = (await queryOne('SELECT COUNT(*) as c FROM referrals')).c
+    const pending = (await queryOne("SELECT COUNT(*) as c FROM referrals WHERE status = 'pending'")).c
+    const approved = (await queryOne("SELECT COUNT(*) as c FROM referrals WHERE status = 'approved'")).c
+    const totalCommission = (await queryOne('SELECT COALESCE(SUM(commission), 0) as c FROM referrals')).c
     res.json({
       ok: true,
       total, pending, approved, totalCommission,
@@ -276,15 +273,14 @@ router.get('/admin/referrals/overview', authMiddleware, adminOnly, (req, res) =>
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
-router.get('/admin/referrals/commissions', authMiddleware, adminOnly, (req, res) => {
+router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { status } = req.query
-    const db = getDB()
     let where = '1=1'
     const params = []
     if (status) { where += ' AND r.status = ?'; params.push(status) }
 
-    const rows = db.prepare(`
+    const rows = await queryAll(`
       SELECT r.*, 
         u.nickname as referrer_name, u.email as referrer_email, u.uid as referrer_uid,
         u2.nickname as referred_name, u2.email as referred_email, u2.uid as referred_uid,
@@ -296,7 +292,7 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, (req, res)
       LEFT JOIN users u2 ON r.referred_id = u2.id
       LEFT JOIN orders o ON o.user_id = r.referred_id AND o.status = 'paid'
       WHERE ${where} ORDER BY r.created_at DESC LIMIT 100
-    `).all(...params)
+    `, params)
 
     const commissions = rows.map(r => ({
       id: r.id,
@@ -317,22 +313,20 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, (req, res)
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
-router.put('/admin/referrals/commissions/:id', authMiddleware, adminOnly, (req, res) => {
+router.put('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { status, action } = req.body
-    const db = getDB()
     const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : status
-    db.prepare("UPDATE referrals SET status = ?, commission = CASE WHEN ? = 'approved' THEN 500 ELSE 0 END WHERE id = ?").run(finalStatus, finalStatus, req.params.id)
+    await queryRun("UPDATE referrals SET status = ?, commission = CASE WHEN ? = 'approved' THEN 500 ELSE 0 END WHERE id = ?", [finalStatus, finalStatus, req.params.id])
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '操作失败' }) }
 })
 
-router.patch('/admin/referrals/commissions/:id', authMiddleware, adminOnly, (req, res) => {
+router.patch('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { status, action } = req.body
-    const db = getDB()
     const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : status
-    db.prepare("UPDATE referrals SET status = ?, commission = CASE WHEN ? = 'approved' THEN 500 ELSE 0 END WHERE id = ?").run(finalStatus, finalStatus, req.params.id)
+    await queryRun("UPDATE referrals SET status = ?, commission = CASE WHEN ? = 'approved' THEN 500 ELSE 0 END WHERE id = ?", [finalStatus, finalStatus, req.params.id])
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '操作失败' }) }
 })
@@ -358,10 +352,9 @@ router.patch('/admin/referrals/rules', authMiddleware, adminOnly, (req, res) => 
 })
 
 // Admin: course items
-router.get('/admin-course-items', authMiddleware, adminOnly, (req, res) => {
+router.get('/admin-course-items', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
-    const courses = db.prepare('SELECT * FROM courses ORDER BY sort_order').all()
+    const courses = await queryAll('SELECT * FROM courses ORDER BY sort_order')
     res.json({ ok: true, courses: courses.map(c => ({
       id: c.episode_id, episodeId: c.episode_id, number: c.number, title: c.title,
       description: c.description, category: c.category, contentType: c.content_type,
@@ -374,50 +367,49 @@ router.get('/admin-course-items', authMiddleware, adminOnly, (req, res) => {
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
-router.post('/admin-course-items', authMiddleware, adminOnly, (req, res) => {
+router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) => {
   try {
     console.log('[AdminCourse] body:', JSON.stringify(req.body))
     const { episodeId, number, title, description, category, contentType, duration, youtubeId, bilibiliId, cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status } = req.body
     console.log('[AdminCourse] episodeId:', episodeId, 'title:', title)
-    const db = getDB()
 
     if (episodeId) {
-      db.prepare(`
+      await queryRun(`
         UPDATE courses SET number=?, title=?, description=?, category=?, content_type=?, duration=?,
         youtube_id=?, bilibili_id=?, cover=?, access_level=?, sort_order=?, article_url=?, article_object_key=?,
-        status=?, updated_at=datetime('now', '+8 hours') WHERE episode_id=?
-      `).run(number, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId)
-      const course = db.prepare('SELECT * FROM courses WHERE episode_id = ?').get(episodeId)
+        status=?, updated_at=DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE episode_id=?
+      `, [number, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId])
+      const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episodeId])
       res.json({ ok: true, course })
     } else {
-      const maxId = db.prepare('SELECT MAX(episode_id) as m FROM courses').get().m || 0
-      const result = db.prepare(`
+      const maxRow = await queryOne('SELECT MAX(episode_id) as m FROM courses')
+      const maxId = maxRow?.m || 0
+      await queryRun(`
         INSERT INTO courses (episode_id, number, title, description, category, content_type, duration, youtube_id, bilibili_id, cover, access_level, sort_order, article_url, article_object_key, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(maxId + 1, number || maxId + 1, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status || 'published')
-      const course = db.prepare('SELECT * FROM courses WHERE episode_id = ?').get(maxId + 1)
+      `, [maxId + 1, number || maxId + 1, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status || 'published'])
+      const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [maxId + 1])
       res.json({ ok: true, course })
     }
   } catch (err) { console.error('[AdminCourse] Error:', err); res.json({ ok: false, error: '保存失败' }) }
 })
 
-router.delete('/admin-course-items', authMiddleware, adminOnly, (req, res) => {
+router.delete('/admin-course-items', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { episode } = req.query
     if (!episode) return res.json({ ok: false, error: '缺少课程ID' })
-    const db = getDB()
 
     // Check if course exists
-    const course = db.prepare('SELECT * FROM courses WHERE episode_id = ?').get(episode)
+    const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episode])
     if (!course) return res.json({ ok: false, error: '课程不存在' })
 
     // Delete related data
-    db.prepare('DELETE FROM quiz_questions WHERE episode_id = ?').run(episode)
-    db.prepare('DELETE FROM course_resources WHERE episode_id = ?').run(episode)
-    db.prepare('DELETE FROM video_streams WHERE episode_id = ?').run(episode)
-    db.prepare('DELETE FROM progress WHERE episode_id = ?').run(episode)
-    db.prepare('DELETE FROM comments WHERE episode_id = ?').run(episode)
-    db.prepare('DELETE FROM courses WHERE episode_id = ?').run(episode)
+    await queryRun('DELETE FROM quiz_questions WHERE episode_id = ?', [episode])
+    await queryRun('DELETE FROM course_resources WHERE episode_id = ?', [episode])
+    await queryRun('DELETE FROM video_streams WHERE episode_id = ?', [episode])
+    await queryRun('DELETE FROM progress WHERE episode_id = ?', [episode])
+    await queryRun('DELETE FROM comments WHERE episode_id = ?', [episode])
+    await queryRun('DELETE FROM courses WHERE episode_id = ?', [episode])
 
     res.json({ ok: true, message: '课程已删除' })
   } catch (err) {
@@ -427,12 +419,11 @@ router.delete('/admin-course-items', authMiddleware, adminOnly, (req, res) => {
 })
 
 // Admin: course resources
-router.get('/admin-course-resources', authMiddleware, adminOnly, (req, res) => {
+router.get('/admin-course-resources', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { episode } = req.query
-    const db = getDB()
-    const resources = db.prepare('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order').all(episode)
-    const quizCount = db.prepare('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?').get(episode).c
+    const resources = await queryAll('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order', [episode])
+    const quizCount = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episode])).c
 
     const assets = resources.map(r => ({
       id: r.id, type: r.type, title: r.title,
@@ -443,14 +434,13 @@ router.get('/admin-course-resources', authMiddleware, adminOnly, (req, res) => {
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
-router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload.array('files', 50), (req, res) => {
+router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload.array('files', 50), async (req, res) => {
   try {
     const episodeId = Number(req.body.episodeId)
     const includeQuiz = req.body.includeQuiz === '1'
     const includeMindmap = req.body.includeMindmap === '1'
     const includeInfographic = req.body.includeInfographic === '1'
     const files = req.files || []
-    const db = getDB()
 
     if (!episodeId) return res.json({ ok: false, error: '缺少课程ID' })
 
@@ -493,10 +483,10 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
             const answer = q.answer ?? q.correctIndex ?? q.correct_index ?? 0
             const explanations = Array.isArray(q.explanations) ? q.explanations : []
 
-            db.prepare(`
+            await queryRun(`
               INSERT INTO quiz_questions (episode_id, question, options, answer, correct_index, explanation, explanations, hint, status, sort_order)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'published', ?)
-            `).run(
+            `, [
               episodeId,
               q.question,
               JSON.stringify(options),
@@ -506,14 +496,14 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
               JSON.stringify(explanations),
               q.hint || '',
               inserted
-            )
+            ])
             inserted++
           }
           if (inserted > 0) {
             quizFiles++
             // Update quiz_count
-            const count = db.prepare('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?').get(episodeId).c
-            db.prepare('UPDATE courses SET quiz_count = ? WHERE episode_id = ?').run(count, episodeId)
+            const count = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episodeId])).c
+            await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [count, episodeId])
           }
         }
         // === MINDMAP ===
@@ -528,10 +518,10 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
             const savePath = join(epDir, baseName)
             writeFileSync(savePath, content, 'utf-8')
 
-            db.prepare(`
+            await queryRun(`
               INSERT INTO course_resources (episode_id, type, title, url, structure, sort_order)
               VALUES (?, 'mindmap', ?, ?, ?, ?)
-            `).run(episodeId, structure.title || baseName, `/uploads/resources/ep${episodeId}/${baseName}`, content, assetFiles)
+            `, [episodeId, structure.title || baseName, `/uploads/resources/ep${episodeId}/${baseName}`, content, assetFiles])
             assetFiles++
           } else if (isImageFile(baseName)) {
             // Mindmap image
@@ -539,10 +529,10 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
             const saveName = `mindmap_${Date.now()}${ext}`
             writeFileSync(join(epDir, saveName), file.buffer)
 
-            db.prepare(`
+            await queryRun(`
               INSERT INTO course_resources (episode_id, type, title, url, sort_order)
               VALUES (?, 'mindmap', ?, ?, ?)
-            `).run(episodeId, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles)
+            `, [episodeId, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles])
             assetFiles++
           } else {
             skipped.push({ name: baseName, reason: '不支持的思维导图格式' })
@@ -555,10 +545,10 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
             const saveName = `info_${Date.now()}${ext}`
             writeFileSync(join(epDir, saveName), file.buffer)
 
-            db.prepare(`
+            await queryRun(`
               INSERT INTO course_resources (episode_id, type, title, url, sort_order)
               VALUES (?, 'knowledge', ?, ?, ?)
-            `).run(episodeId, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles)
+            `, [episodeId, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles])
             assetFiles++
           } else {
             skipped.push({ name: baseName, reason: '信息图仅支持图片格式' })
@@ -578,22 +568,22 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
               if (!q.question || !q.options) continue
               const options = Array.isArray(q.options) ? q.options : [q.options]
               const answer = q.answer ?? 0
-              db.prepare(`
+              await queryRun(`
                 INSERT INTO quiz_questions (episode_id, question, options, answer, correct_index, explanation, explanations, hint, status, sort_order)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'published', ?)
-              `).run(episodeId, q.question, JSON.stringify(options), answer, answer, q.explanation || '', JSON.stringify(q.explanations || []), q.hint || '', inserted)
+              `, [episodeId, q.question, JSON.stringify(options), answer, answer, q.explanation || '', JSON.stringify(q.explanations || []), q.hint || '', inserted])
               inserted++
             }
-            if (inserted > 0) { quizFiles++; const c = db.prepare('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?').get(episodeId).c; db.prepare('UPDATE courses SET quiz_count = ? WHERE episode_id = ?').run(c, episodeId) }
+            if (inserted > 0) { quizFiles++; const c = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episodeId])).c; await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [c, episodeId]) }
           } else if (isImageFile(baseName) && (includeMindmap || includeInfographic)) {
             const ext = extname(baseName) || '.png'
             const saveName = `res_${Date.now()}${ext}`
             writeFileSync(join(epDir, saveName), file.buffer)
             const type = includeMindmap ? 'mindmap' : 'knowledge'
-            db.prepare(`
+            await queryRun(`
               INSERT INTO course_resources (episode_id, type, title, url, sort_order)
               VALUES (?, ?, ?, ?, ?)
-            `).run(episodeId, type, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles)
+            `, [episodeId, type, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles])
             assetFiles++
           } else {
             skipped.push({ name: baseName, reason: '无法识别文件类型' })
@@ -606,9 +596,9 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
     }
 
     // Update course resource counts
-    const mindmapCount = db.prepare("SELECT COUNT(*) as c FROM course_resources WHERE episode_id = ? AND type = 'mindmap'").get(episodeId).c
-    const knowledgeCount = db.prepare("SELECT COUNT(*) as c FROM course_resources WHERE episode_id = ? AND type = 'knowledge'").get(episodeId).c
-    db.prepare('UPDATE courses SET mindmap_count = ?, knowledge_count = ? WHERE episode_id = ?').run(mindmapCount, knowledgeCount, episodeId)
+    const mindmapCount = (await queryOne("SELECT COUNT(*) as c FROM course_resources WHERE episode_id = ? AND type = 'mindmap'", [episodeId])).c
+    const knowledgeCount = (await queryOne("SELECT COUNT(*) as c FROM course_resources WHERE episode_id = ? AND type = 'knowledge'", [episodeId])).c
+    await queryRun('UPDATE courses SET mindmap_count = ?, knowledge_count = ? WHERE episode_id = ?', [mindmapCount, knowledgeCount, episodeId])
 
     res.json({ ok: true, quizFiles, assetFiles, skipped })
   } catch (err) {
@@ -618,11 +608,10 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
 })
 
 // Admin: quiz
-router.get('/admin-quiz', authMiddleware, adminOnly, (req, res) => {
+router.get('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { episode } = req.query
-    const db = getDB()
-    const questions = db.prepare('SELECT * FROM quiz_questions WHERE episode_id = ? ORDER BY sort_order').all(episode)
+    const questions = await queryAll('SELECT * FROM quiz_questions WHERE episode_id = ? ORDER BY sort_order', [episode])
     res.json({ ok: true, questions: questions.map(q => ({
       id: q.id, question: q.question, options: JSON.parse(q.options || '[]'),
       answer: q.answer ?? q.correct_index, explanation: q.explanation,
@@ -632,59 +621,56 @@ router.get('/admin-quiz', authMiddleware, adminOnly, (req, res) => {
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
-router.post('/admin-quiz', authMiddleware, adminOnly, (req, res) => {
+router.post('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { id, episodeId, question, options, answer, correctIndex, explanation, explanations, hint, status, sortOrder } = req.body
-    const db = getDB()
 
     // If id is provided, update existing question
     if (id) {
-      db.prepare(`
+      await queryRun(`
         UPDATE quiz_questions SET question=?, options=?, answer=?, correct_index=?, explanation=?, explanations=?, hint=?, status=?, sort_order=? WHERE id=?
-      `).run(question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id)
+      `, [question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id])
 
       // Update course quiz_count
-      const q = db.prepare('SELECT episode_id FROM quiz_questions WHERE id = ?').get(id)
+      const q = await queryOne('SELECT episode_id FROM quiz_questions WHERE id = ?', [id])
       if (q) {
-        const count = db.prepare('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?').get(q.episode_id).c
-        db.prepare('UPDATE courses SET quiz_count = ? WHERE episode_id = ?').run(count, q.episode_id)
+        const count = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [q.episode_id])).c
+        await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [count, q.episode_id])
       }
 
       return res.json({ ok: true, id })
     }
 
     // Create new question
-    const result = db.prepare(`
+    const result = await queryRun(`
       INSERT INTO quiz_questions (episode_id, question, options, answer, correct_index, explanation, explanations, hint, status, sort_order)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(episodeId, question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0)
+    `, [episodeId, question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0])
 
-    const count = db.prepare('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?').get(episodeId).c
-    db.prepare('UPDATE courses SET quiz_count = ? WHERE episode_id = ?').run(count, episodeId)
+    const count = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episodeId])).c
+    await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [count, episodeId])
 
-    res.json({ ok: true, id: result.lastInsertRowid })
+    res.json({ ok: true, id: result.insertId })
   } catch (err) { res.json({ ok: false, error: '保存失败' }) }
 })
 
-router.put('/admin-quiz', authMiddleware, adminOnly, (req, res) => {
+router.put('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { id, question, options, answer, correctIndex, explanation, explanations, hint, status, sortOrder } = req.body
-    const db = getDB()
-    db.prepare(`
+    await queryRun(`
       UPDATE quiz_questions SET question=?, options=?, answer=?, correct_index=?, explanation=?, explanations=?, hint=?, status=?, sort_order=? WHERE id=?
-    `).run(question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id)
+    `, [question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id])
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '更新失败' }) }
 })
 
-router.delete('/admin-quiz', authMiddleware, adminOnly, (req, res) => {
+router.delete('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const db = getDB()
-    const q = db.prepare('SELECT episode_id FROM quiz_questions WHERE id = ?').get(req.query.id)
-    db.prepare('DELETE FROM quiz_questions WHERE id = ?').run(req.query.id)
+    const q = await queryOne('SELECT episode_id FROM quiz_questions WHERE id = ?', [req.query.id])
+    await queryRun('DELETE FROM quiz_questions WHERE id = ?', [req.query.id])
     if (q) {
-      const count = db.prepare('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?').get(q.episode_id).c
-      db.prepare('UPDATE courses SET quiz_count = ? WHERE episode_id = ?').run(count, q.episode_id)
+      const count = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [q.episode_id])).c
+      await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [count, q.episode_id])
     }
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '删除失败' }) }

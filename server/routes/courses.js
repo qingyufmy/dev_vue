@@ -1,16 +1,15 @@
 import { Router } from 'express'
-import { getDB } from '../db.js'
+import { getDB, queryAll } from '../db.js'
 import { optionalAuth, authMiddleware } from '../middleware/auth.js'
 
 const router = Router()
 
 // Get course items
-router.get('/course-items', optionalAuth, (req, res) => {
+router.get('/course-items', optionalAuth, async (req, res) => {
   try {
-    const db = getDB()
-    const courses = db.prepare(`
+    const courses = await queryAll(`
       SELECT *, bilibili_id as bilibiliId FROM courses WHERE status = 'published' ORDER BY sort_order ASC
-    `).all()
+    `)
 
     res.json({
       ok: true,
@@ -48,10 +47,9 @@ router.get('/course-items', optionalAuth, (req, res) => {
 })
 
 // Get quiz for episode
-router.get('/course-items/:id/quiz', authMiddleware, (req, res) => {
+router.get('/course-items/:id/quiz', authMiddleware, async (req, res) => {
   try {
-    const db = getDB()
-    const rows = db.prepare('SELECT * FROM quiz_questions WHERE episode_id = ? ORDER BY sort_order').all(req.params.id)
+    const rows = await queryAll('SELECT * FROM quiz_questions WHERE episode_id = ? ORDER BY sort_order', [req.params.id])
     const questions = rows.map(q => ({
       id: q.id,
       question: q.question,
@@ -70,10 +68,9 @@ router.get('/course-items/:id/quiz', authMiddleware, (req, res) => {
 })
 
 // Get resources for episode
-router.get('/course-items/:id/resources', authMiddleware, (req, res) => {
+router.get('/course-items/:id/resources', authMiddleware, async (req, res) => {
   try {
-    const db = getDB()
-    const resources = db.prepare('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order').all(req.params.id)
+    const resources = await queryAll('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order', [req.params.id])
 
     const knowledgePoints = resources.filter(r => r.type === 'knowledge').map(r => ({
       id: r.id, title: r.title, content: r.content, url: r.url

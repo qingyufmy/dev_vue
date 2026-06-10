@@ -3,7 +3,7 @@ import multer from 'multer'
 import { join, dirname, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, renameSync, unlinkSync, statSync, createReadStream } from 'fs'
-import { getDB } from '../db.js'
+import { getDB, queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth } from '../middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -35,17 +35,16 @@ const upload = multer({
 const router = Router()
 
 // ===== Get video info for an episode =====
-router.get('/video-stream', optionalAuth, (req, res) => {
+router.get('/video-stream', optionalAuth, async (req, res) => {
   try {
     const { episode, list } = req.query
-    const db = getDB()
 
     // Return access map for all episodes
     if (!episode) {
-      const courses = db.prepare(`
+      const courses = await queryAll(`
         SELECT episode_id, access_level, has_stream_video, bilibili_id, youtube_id
         FROM courses WHERE has_stream_video = 1 OR access_level != 'free' OR bilibili_id != '' OR youtube_id != ''
-      `).all()
+      `)
       return res.json({
         ok: true,
         episodes: courses.map(c => ({
@@ -59,8 +58,8 @@ router.get('/video-stream', optionalAuth, (req, res) => {
     }
 
     // Get video info for specific episode
-    const stream = db.prepare('SELECT * FROM video_streams WHERE episode_id = ?').get(episode)
-    const course = db.prepare('SELECT youtube_id, bilibili_id, local_video_path, access_level FROM courses WHERE episode_id = ?').get(episode)
+    const stream = await queryOne('SELECT * FROM video_streams WHERE episode_id = ?', [episode])
+    const course = await queryOne('SELECT youtube_id, bilibili_id, local_video_path, access_level FROM courses WHERE episode_id = ?', [episode])
 
     if (stream) {
       return res.json({
@@ -154,18 +153,17 @@ router.get('/video-file/:filename', (req, res) => {
 })
 
 // ===== Save video info (after upload or bilibili set) =====
-router.post('/video-stream', authMiddleware, (req, res) => {
+router.post('/video-stream', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
 
     const { episodeId, bilibiliId, localPath, qiniuKey, youtubeId, title, accessLevel, duration } = req.body
-    const db = getDB()
 
     // Check if stream already exists for this episode
-    const existing = db.prepare('SELECT id FROM video_streams WHERE episode_id = ?').get(episodeId)
+    const existing = await queryOne('SELECT id FROM video_streams WHERE episode_id = ?', [episodeId])
 
     if (existing) {
-      db.prepare(`
+      await queryRun(`
         UPDATE video_streams SET
           bilibili_id = COALESCE(?, bilibili_id),
           local_path = COALESCE(?, local_path),
@@ -174,12 +172,12 @@ router.post('/video-stream', authMiddleware, (req, res) => {
           title = COALESCE(?, title),
           duration = COALESCE(?, duration)
         WHERE episode_id = ?
-      `).run(bilibiliId || '', localPath || '', qiniuKey || '', accessLevel || 'plus_pro', title || '', duration || 0, episodeId)
+      `, [bilibiliId || '', localPath || '', qiniuKey || '', accessLevel || 'plus_pro', title || '', duration || 0, episodeId])
     } else {
-      db.prepare(`
+      await queryRun(`
         INSERT INTO video_streams (episode_id, bilibili_id, local_path, qiniu_key, video_key, access_level, title, duration)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(episodeId, bilibiliId || '', localPath || '', qiniuKey || '', `ep${episodeId}`, accessLevel || 'plus_pro', title || '', duration || 0)
+      `, [episodeId, bilibiliId || '', localPath || '', qiniuKey || '', `ep${episodeId}`, accessLevel || 'plus_pro', title || '', duration || 0])
     }
 
     // Update course record
@@ -190,13 +188,13 @@ router.post('/video-stream', authMiddleware, (req, res) => {
     if (youtubeId) { updates.push('youtube_id = ?'); params.push(youtubeId) }
     if (accessLevel) { updates.push('access_level = ?'); params.push(accessLevel) }
     updates.push('has_stream_video = 1')
-    updates.push("updated_at = datetime('now')")
+    updates.push('updated_at = NOW()')
     params.push(episodeId)
 
     if (updates.length > 2) {
-      db.prepare(`UPDATE courses SET ${updates.join(', ')} WHERE episode_id = ?`).run(...params)
+      await queryRun(`UPDATE courses SET ${updates.join(', ')} WHERE episode_id = ?`, params)
     } else {
-      db.prepare("UPDATE courses SET has_stream_video = 1, updated_at = datetime('now') WHERE episode_id = ?").run(episodeId)
+      await queryRun("UPDATE courses SET has_stream_video = 1, updated_at = NOW() WHERE episode_id = ?", [episodeId])
     }
 
     res.json({ ok: true })
@@ -207,16 +205,15 @@ router.post('/video-stream', authMiddleware, (req, res) => {
 })
 
 // ===== Update video access level =====
-router.patch('/video-stream', authMiddleware, (req, res) => {
+router.patch('/video-stream', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
     const { episode } = req.query
     const { accessLevel } = req.body
-    const db = getDB()
 
     if (accessLevel) {
-      db.prepare('UPDATE video_streams SET access_level = ? WHERE episode_id = ?').run(accessLevel, episode)
-      db.prepare('UPDATE courses SET access_level = ? WHERE episode_id = ?').run(accessLevel, episode)
+      await queryRun('UPDATE video_streams SET access_level = ? WHERE episode_id = ?', [accessLevel, episode])
+      await queryRun('UPDATE courses SET access_level = ? WHERE episode_id = ?', [accessLevel, episode])
     }
 
     res.json({ ok: true })
@@ -227,16 +224,15 @@ router.patch('/video-stream', authMiddleware, (req, res) => {
 })
 
 // ===== Delete video =====
-router.delete('/video-stream', authMiddleware, (req, res) => {
+router.delete('/video-stream', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
-    const db = getDB()
 
     // Get video info before deleting
-    const stream = db.prepare('SELECT * FROM video_streams WHERE episode_id = ?').get(req.query.episode)
+    const stream = await queryOne('SELECT * FROM video_streams WHERE episode_id = ?', [req.query.episode])
 
-    db.prepare('DELETE FROM video_streams WHERE episode_id = ?').run(req.query.episode)
-    db.prepare("UPDATE courses SET has_stream_video = 0, bilibili_id = '', local_video_path = '' WHERE episode_id = ?").run(req.query.episode)
+    await queryRun('DELETE FROM video_streams WHERE episode_id = ?', [req.query.episode])
+    await queryRun("UPDATE courses SET has_stream_video = 0, bilibili_id = '', local_video_path = '' WHERE episode_id = ?", [req.query.episode])
 
     // Delete local file if exists
     if (stream?.local_path) {
@@ -273,20 +269,19 @@ router.get('/qiniu-token', authMiddleware, (req, res) => {
 })
 
 // ===== Qiniu callback =====
-router.post('/qiniu-callback', authMiddleware, (req, res) => {
+router.post('/qiniu-callback', authMiddleware, async (req, res) => {
   try {
     const { episodeId, key, size } = req.body
-    const db = getDB()
 
     // Save video stream info
-    const existing = db.prepare('SELECT id FROM video_streams WHERE episode_id = ?').get(episodeId)
+    const existing = await queryOne('SELECT id FROM video_streams WHERE episode_id = ?', [episodeId])
     if (existing) {
-      db.prepare("UPDATE video_streams SET qiniu_key = ?, file_size = ? WHERE episode_id = ?").run(key, size || 0, episodeId)
+      await queryRun("UPDATE video_streams SET qiniu_key = ?, file_size = ? WHERE episode_id = ?", [key, size || 0, episodeId])
     } else {
-      db.prepare("INSERT INTO video_streams (episode_id, qiniu_key, video_key, file_size) VALUES (?, ?, ?, ?)").run(episodeId, key, `ep${episodeId}`, size || 0)
+      await queryRun("INSERT INTO video_streams (episode_id, qiniu_key, video_key, file_size) VALUES (?, ?, ?, ?)", [episodeId, key, `ep${episodeId}`, size || 0])
     }
 
-    db.prepare("UPDATE courses SET has_stream_video = 1, updated_at = datetime('now') WHERE episode_id = ?").run(episodeId)
+    await queryRun("UPDATE courses SET has_stream_video = 1, updated_at = NOW() WHERE episode_id = ?", [episodeId])
 
     res.json({ ok: true })
   } catch (err) {

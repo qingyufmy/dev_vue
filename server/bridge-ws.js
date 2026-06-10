@@ -1,6 +1,6 @@
-﻿import { WebSocketServer } from 'ws'
+import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { getDB } from './db.js'
+import { getDB, query, queryOne, queryAll, queryRun, logAudit } from './db.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
@@ -169,8 +169,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
   try {
     const ai = await import('./routes/ai.js')
-    const db = getDB()
-    const user = db.prepare('SELECT plan, role FROM users WHERE id = ?').get(userId)
+    const user = await queryOne('SELECT plan, role FROM users WHERE id = ?', [userId])
     const isPro = user?.role === 'admin' || user?.plan === 'pro'
     if (!isPro) return reply({ status: 'error', message: '需要Pro会员' })
 
@@ -204,11 +203,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'open':
         result = await ai.mt5Bridge(userId, 'open', params)
-        ai.insertAudit(db, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
+        await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
         break
       case 'close':
         result = await ai.mt5Bridge(userId, 'close', params)
-        ai.insertAudit(db, userId, 'manual_close', null, params, result, result?.status || 'unknown')
+        await ai.insertAudit(null, userId, 'manual_close', null, params, result, result?.status || 'unknown')
         break
       case 'toggle_trade': {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
@@ -236,7 +235,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.handleAnalyze(userId, params)
         break
       case 'ai_config': {
-        const row = ai.getActiveConfig(db, userId, params.session_id || 'default')
+        const row = await ai.getActiveConfig(null, userId, params.session_id || 'default')
         result = { status: 'success', config: ai.configPublic(row) }
         break
       }
@@ -244,28 +243,28 @@ async function handleBrowserCommand(ws, userId, msg) {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
         const now = new Date().toISOString()
-        db.prepare('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?').run(userId, params.session_id || 'default')
-        db.prepare(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
+        await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
+        await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
           max_position_size, selected_take_profit, model_sharing_enabled, is_active, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-          ON CONFLICT(user_id, session_id, api_provider) DO UPDATE SET
-            api_key_encrypted = CASE WHEN excluded.api_key_encrypted IS NOT NULL THEN excluded.api_key_encrypted ELSE ai_configs.api_key_encrypted END,
-            api_base_url = excluded.api_base_url, model_name = excluded.model_name, temperature = excluded.temperature,
-            max_tokens = excluded.max_tokens, enable_auto_trade = excluded.enable_auto_trade,
-            enable_futures_trading = excluded.enable_futures_trading, risk_level = excluded.risk_level,
-            max_position_size = excluded.max_position_size, selected_take_profit = excluded.selected_take_profit,
-            model_sharing_enabled = excluded.model_sharing_enabled, is_active = 1, updated_at = excluded.updated_at`
-        ).run(userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
-          cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
-          cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-          cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0, now, now)
-        const row = ai.getActiveConfig(db, userId, params.session_id || 'default', cfg.api_provider)
+          ON DUPLICATE KEY UPDATE
+            api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
+            api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
+            max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
+            enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
+            max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
+            model_sharing_enabled = VALUES(model_sharing_enabled), is_active = 1, updated_at = VALUES(updated_at)`,
+          [userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
+            cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
+            cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
+            cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0, now, now])
+        const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
         break
       }
       case 'get_system_prompt': {
-        const prompt = ai.getSystemPrompt(db)
+        const prompt = await ai.getSystemPrompt(null)
         result = { status: 'success', prompt }
         break
       }
@@ -274,12 +273,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         const prompt = params.prompt
         if (!prompt || typeof prompt !== 'string') return reply({ status: 'error', message: 'prompt required' })
         const now = new Date().toISOString()
-        db.prepare('UPDATE system_prompts SET prompt = ?, updated_by = ?, updated_at = ?').run(prompt, userId, now)
+        await queryRun('UPDATE system_prompts SET prompt = ?, updated_by = ?, updated_at = ?', [prompt, userId, now])
         result = { status: 'success', prompt }
         break
       }
       case 'signals': {
-        const rows = db.prepare('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100').all(userId, params.session_id || 'default')
+        const rows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [userId, params.session_id || 'default'])
         const signals = rows.map(row => {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
@@ -292,26 +291,26 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'execute': {
-        const signal = db.prepare('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?').get(params.signal_id, userId)
+        const signal = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [params.signal_id, userId])
         if (!signal) return reply({ status: 'error', message: 'Signal not found' })
-        const config = ai.getActiveConfig(db, userId, params.session_id || 'default')
+        const config = await ai.getActiveConfig(null, userId, params.session_id || 'default')
         const timedSignal = ai.attachSignalTiming({ ...signal })
         if (timedSignal.is_stale) {
           result = { status: 'rejected', message: 'signal_expired', details: { age_seconds: timedSignal.age_seconds, ttl_seconds: timedSignal.ttl_seconds } }
-          ai.insertAudit(db, userId, 'ai_execute', signal.symbol, params, result, result.status)
+          await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, result.status)
           break
         }
         const marketData = JSON.parse(signal.market_data_json || '{}')
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
         result = await ai.mt5Bridge(userId, 'open', orderPayload)
         if (result.status === 'success') {
-          db.prepare('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?').run(new Date().toISOString(), result.ticket || null, signal.id)
+          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [new Date().toISOString(), result.ticket || null, signal.id])
         }
-        ai.insertAudit(db, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm }, result, result.status)
+        await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm }, result, result.status)
         break
       }
       case 'auto_status': {
-        const cfg = ai.getAutoConfig(db, userId)
+        const cfg = await ai.getAutoConfig(null, userId)
         const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : []
         const timeframes = cfg?.timeframes ? JSON.parse(cfg.timeframes) : []
         result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, timeframes, interval_seconds: cfg?.interval_seconds || 900, running: !!cfg?.enabled } }
@@ -322,14 +321,14 @@ async function handleBrowserCommand(ws, userId, msg) {
         const enabled = timeframes.length > 0
         const shortestMs = timeframes.length ? Math.min(...timeframes.map(ai.timeframeIntervalMs)) : 900_000
         const interval_seconds = Math.round(shortestMs / 1000)
-        ai.upsertAutoConfig(db, userId, symbols, timeframes, interval_seconds, enabled)
+        await ai.upsertAutoConfig(null, userId, symbols, timeframes, interval_seconds, enabled)
         ai.stopAutoScheduler(userId)
-        if (enabled) ai.startAutoScheduler(userId)
+        if (enabled) await ai.startAutoScheduler(userId)
         result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols, timeframes, interval_seconds }
         break
       }
       case 'audit_logs': {
-        const rows = db.prepare('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(userId)
+        const rows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
         const logs = rows.map(row => {
           const item = { ...row }
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }

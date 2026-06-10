@@ -6,7 +6,7 @@ import http from 'http'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
-import { initDB, getDB } from './db.js'
+import { initDB, queryRun } from './db.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
 import commentRoutes from './routes/comments.js'
@@ -164,15 +164,14 @@ app.get('/ai', (req, res) => {
 })
 
 // Presence heartbeat
-app.post('/api/presence', (req, res) => {
+app.post('/api/presence', async (req, res) => {
   try {
     const auth = req.headers.authorization
     if (auth && auth.startsWith('Bearer ')) {
       const token = auth.slice(7)
       const payload = jwt.verify(token, 'wall-street-skill-secret')
       if (payload && payload.userId) {
-        const db = getDB()
-        db.prepare("UPDATE users SET last_seen_at = datetime('now', '+8 hours') WHERE id = ?").run(payload.userId)
+        await queryRun("UPDATE users SET last_seen_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [payload.userId])
       }
     }
   } catch {}
@@ -186,10 +185,13 @@ app.get('*', (req, res) => {
 
 // Start MT5 Bridge (use venv Python with MetaTrader5 package)
 // Init DB and start
-initDB()
 initAutoSchedulers()
 const server = http.createServer(app)
 initBridgeWS(server)
-server.listen(PORT, () => {
-  console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
-})
+
+;(async () => {
+  await initDB()
+  server.listen(PORT, () => {
+    console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
+  })
+})()

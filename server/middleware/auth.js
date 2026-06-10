@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken'
-import { getDB } from '../db.js'
+import { queryOne } from '../db.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
@@ -12,13 +12,15 @@ export function authMiddleware(req, res, next) {
   const token = authHeader.slice(7)
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    const db = getDB()
-    const user = db.prepare('SELECT id, email, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit, telegram_id FROM users WHERE id = ?').get(decoded.userId)
-    if (!user) {
-      return res.status(401).json({ ok: false, error: '用户不存在' })
-    }
-    req.user = user
-    next()
+    queryOne('SELECT id, email, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit, telegram_id FROM users WHERE id = ?', [decoded.userId])
+      .then(user => {
+        if (!user) {
+          return res.status(401).json({ ok: false, error: '用户不存在' })
+        }
+        req.user = user
+        next()
+      })
+      .catch(() => res.status(401).json({ ok: false, error: 'Token无效或已过期' }))
   } catch (err) {
     return res.status(401).json({ ok: false, error: 'Token无效或已过期' })
   }
@@ -30,11 +32,13 @@ export function optionalAuth(req, res, next) {
     try {
       const token = authHeader.slice(7)
       const decoded = jwt.verify(token, JWT_SECRET)
-      const db = getDB()
-      req.user = db.prepare('SELECT id, email, nickname, avatar, role, plan, referral_code, referral_credit FROM users WHERE id = ?').get(decoded.userId)
-    } catch {}
+      queryOne('SELECT id, email, nickname, avatar, role, plan, referral_code, referral_credit FROM users WHERE id = ?', [decoded.userId])
+        .then(user => { req.user = user; next() })
+        .catch(() => next())
+    } catch { next() }
+  } else {
+    next()
   }
-  next()
 }
 
 export function adminOnly(req, res, next) {
