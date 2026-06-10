@@ -127,7 +127,7 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
   if (!row || !row.api_key_encrypted) {
     const cfg = {}
     try {
-      const rows = await queryAll("SELECT key, value FROM system_config WHERE category = 'ai_provider' AND value != ''")
+      const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''")
       for (const r of rows) cfg[r.key] = r.value
     } catch {}
     const sysKey = cfg.deepseek_api_key || cfg.openai_api_key

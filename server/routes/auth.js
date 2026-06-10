@@ -111,7 +111,7 @@ router.post('/send-code', async (req, res) => {
     const targetEmail = email || req.user?.email
     if (!targetEmail) return res.json({ ok: false, error: '请输入邮箱' })
     const code = String(Math.floor(100000 + Math.random() * 900000))
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
 
     await queryRun('INSERT INTO verification_codes (email, code, purpose, expires_at) VALUES (?, ?, ?, ?)', [targetEmail, code, purpose || 'login', expiresAt])
 
@@ -119,7 +119,7 @@ router.post('/send-code', async (req, res) => {
     let emailSent = false
     try {
       const smtpConfig = {}
-      const rows = await queryAll("SELECT key, value FROM system_config WHERE category = 'smtp'")
+      const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'smtp'")
       for (const r of rows) smtpConfig[r.key] = r.value
 
       if (smtpConfig.host && smtpConfig.user) {
@@ -148,6 +148,7 @@ router.post('/send-code', async (req, res) => {
     if (!emailSent) console.log(`[验证码] ${targetEmail}: ${code}`)
     res.json({ ok: true, message: emailSent ? '验证码已发送到您的邮箱' : '验证码已发送（本地开发模式请查看控制台）' })
   } catch (err) {
+    console.error('[send-code]', err.message)
     res.json({ ok: false, error: '发送验证码失败' })
   }
 })
