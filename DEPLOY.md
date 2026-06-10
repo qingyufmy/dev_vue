@@ -81,6 +81,12 @@ location /aurum-api/bridge/ws {
 
 ## 九、更新部署
 
+> **首次拉取前设置凭证自动保存**（只需执行一次）：
+> ```bash
+> git config --global credential.helper store
+> ```
+> 执行后，第一次 `git pull` 会提示输入用户名和密码，之后自动保存、不再重复输入。
+
 ```bash
 cd /www/wwwroot/aurum-ai
 git pull origin main
