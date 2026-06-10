@@ -1,4 +1,4 @@
-# AURUM AI Trading System v1.5.0
+# AURUM AI Trading System v1.5.1
 
 全自动 MT5 量化交易系统 · AI 驱动决策 · WebSocket 纯转发架构 · 实时信号执行
 
@@ -78,6 +78,11 @@ node index.js
 - **AI**: DeepSeek / GPT / Kimi / Qwen / 智谱 / 豆包 / Claude / Gemini
 
 ## 更新日志
+
+### v1.5.1 (2026-06-10)
+- **共享系统提示词** — 管理员统一设置系统提示词，所有用户推理时自动使用
+- **system_prompts 表** — 独立存储，启动自动迁移，无需手动建表
+- **权限隔离** — 普通用户完全隐藏系统提示词区域
 
 ### v1.5.0 (2026-06-10)
 - **WebSocket 纯转发架构** — 桥接→服务器→浏览器全链路 WS，1秒实时推送
