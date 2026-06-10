@@ -407,13 +407,17 @@ function connectBridgeStatusWs(onReady) {
       }
     } catch {}
   };
-  ws.onclose = () => {
+  ws.onclose = (e) => {
     if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
     if (state.bridgeWs === ws) state.bridgeWs = null;
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
+    // Auth failure (server closed with 4002) -> don't retry
+    if (e.code === 4002) { setBadge("gatewayMode", "认证失败，请重新登录", "danger"); return; }
+    // Prevent duplicate reconnect timers
+    if (state._reconnectTimer) clearTimeout(state._reconnectTimer);
     console.warn(`[WS] Connection #${ws._connId} closed, reconnecting in 3s`); setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
-    if (state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
+    if (state.token) state._reconnectTimer = setTimeout(() => { state._reconnectTimer = null; connectBridgeStatusWs(); }, 3000);
   };
   ws.onerror = () => {};
 }
