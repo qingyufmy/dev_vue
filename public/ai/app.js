@@ -881,6 +881,15 @@ async function saveAutoConfig() {
   const timeframes = [];
   document.querySelectorAll("#autoTfGrid input[type='checkbox']:checked").forEach(cb => timeframes.push(cb.value));
 
+  // Enabling auto-reasoning requires bridge connection
+  if (timeframes.length > 0) {
+    const health = await wsApi("health").catch(() => null);
+    if (!health?.gateway?.mode || health.gateway.mode !== "live") {
+      toast("请先启动桥接脚本，再开启自动推理", "warning");
+      return;
+    }
+  }
+
   try {
     const result = await wsApi("save_auto", { symbols, timeframes });
     toast(result.enabled ? `自动推理已开启: ${timeframes.join(", ")}` : "自动推理已关闭", "success");
