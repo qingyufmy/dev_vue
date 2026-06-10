@@ -377,6 +377,8 @@ export function initDB() {
       take_profit_2_price REAL,
       take_profit_3_price REAL,
       market_data_json TEXT NOT NULL,
+      ai_model TEXT NOT NULL DEFAULT 'deepseek-chat',
+      ttl_seconds INTEGER,
       is_executed INTEGER NOT NULL DEFAULT 0,
       execution_result TEXT,
       created_at TEXT NOT NULL
@@ -527,6 +529,8 @@ function migrateDB(db) {
   const aiSignalCols = db.prepare("PRAGMA table_info(ai_signals)").all().map(c => c.name)
   if (!aiSignalCols.includes('config_id')) addCol('ai_signals', 'config_id', 'INTEGER')
   if (!aiSignalCols.includes('session_id')) addCol('ai_signals', 'session_id', "TEXT NOT NULL DEFAULT 'default'")
+  if (!aiSignalCols.includes('ai_model')) addCol('ai_signals', 'ai_model', "TEXT NOT NULL DEFAULT 'deepseek-chat'")
+  if (!aiSignalCols.includes('ttl_seconds')) addCol('ai_signals', 'ttl_seconds', 'INTEGER')
 
   // Create tables that may not exist
   db.exec(`

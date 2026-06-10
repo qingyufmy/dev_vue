@@ -663,6 +663,8 @@ class AurumBridge:
         info = self.mt5.account_info()
         if info:
             self.root.after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
+        else:
+            self.root.after(0, self._log, "警告: MT5 account_info() 返回 None，请检查MT5是否已登录")
 
         if not HAS_WS:
             self.root.after(0, self._log, "错误: websocket-client 未安装，请运行: pip install websocket-client")
@@ -670,74 +672,124 @@ class AurumBridge:
             return
 
         server = self.server_var.get().replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
-        ws_url = f"{server}/aurum-api/bridge/ws?token={self.token_var.get()}"
+        ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token_var.get()}"
         self.root.after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
-        while self.running:
-            try:
-                ws = websocket.create_connection(ws_url, timeout=10,
-                    header=["Origin: http://localhost"])
-                self.root.after(0, self._log, "WebSocket 已连接")
-                last_hb = 0
+        # Single connection, no auto retry. Disconnect = stop, user clicks to reconnect.
+        try:
+            ws = websocket.create_connection(ws_url, timeout=10,
+                header=["Origin: http://localhost"])
+            self.root.after(0, self._log, "WebSocket 已连接")
+            self._ws = ws
+            self._resolved_symbol = self._resolve_symbol("XAUUSD") if self.mt5 else "XAUUSD"
+            last_hb = 0
+            last_data_push = 0
 
-                while self.running:
-                    # Send heartbeat every 10s
-                    now = time.time()
-                    if now - last_hb > 10:
-                        try:
-                            account = self.mt5.account_info()
-                            terminal = self.mt5.terminal_info()
-                            ws.send(json.dumps({
-                                "type": "heartbeat",
-                                "account": {
-                                    "login": account.login if account else None,
-                                    "balance": account.balance if account else None,
-                                    "equity": account.equity if account else None,
-                                    "server": account.server if account else None,
-                                },
-                                "terminal": {
-                                    "build": terminal.build if terminal else None,
-                                    "connected": terminal.connected if terminal else None,
-                                },
-                                "live_trading_enabled": self._trade_enabled,
-                            }))
-                            if account:
-                                self.root.after(0, self._set_status, "MT5桥接-已连接", "#22c55e",
-                                               f"{account.login} @ {account.server}  ${account.balance:,.2f}")
-                            last_hb = now
-                        except Exception as e:
-                            self.root.after(0, self._log, f"心跳错误: {e}")
+            while self.running:
+                now = time.time()
 
-                    # Receive commands (non-blocking with short timeout)
-                    ws.settimeout(0.5)
+                # Push data every 1s
+                if now - last_data_push >= 1.0:
                     try:
-                        data = ws.recv()
-                        if data:
-                            msg = json.loads(data)
-                            if msg.get("type") == "command":
-                                cmd = msg
-                                self.root.after(0, self._log, f"执行: {cmd['action']}")
-                                resp = self._process_command(cmd)
-                                ws.send(json.dumps({
-                                    "type": "result",
-                                    "command_id": msg["command_id"],
-                                    "result": resp,
-                                }))
-                                self.root.after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
-                            elif msg.get("type") == "connected":
-                                self.root.after(0, self._log, f"服务端确认: user {msg.get('userId')}")
-                    except websocket.WebSocketTimeoutException:
-                        pass  # No data, loop back for heartbeat
-                    except websocket.WebSocketConnectionClosedException:
-                        self.root.after(0, self._log, "WebSocket 断开，重连中...")
-                        break
+                        account = self.mt5.account_info()
+                        symbol = getattr(self, '_resolved_symbol', 'XAUUSD')
+                        tick = self.mt5.symbol_info_tick(symbol)
+                        positions = self.mt5.positions_get() or []
 
-            except (websocket.WebSocketException, ConnectionRefusedError, OSError) as e:
-                self.root.after(0, self._log, f"WebSocket 连接失败: {e}，3秒后重连...")
-                time.sleep(3)
-            except Exception as e:
-                self.root.after(0, self._log, f"错误: {e}")
-                time.sleep(3)
+                        data_msg = {
+                            "type": "data",
+                            "account": {
+                                "login": account.login if account else None,
+                                "balance": round(account.balance, 2) if account else None,
+                                "equity": round(account.equity, 2) if account else None,
+                                "margin": round(account.margin, 2) if account else None,
+                                "free_margin": round(account.margin_free, 2) if account else None,
+                                "profit": round(account.profit, 2) if account else None,
+                                "server": account.server if account else None,
+                            },
+                            "quote": {
+                                "symbol": symbol,
+                                "bid": round(tick.bid, 5) if tick else None,
+                                "ask": round(tick.ask, 5) if tick else None,
+                                "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in symbol else 0.001), 1) if tick else None,
+                                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                            "positions": [
+                                {
+                                    "ticket": p.ticket,
+                                    "symbol": p.symbol,
+                                    "type": "buy" if p.type == 0 else "sell",
+                                    "volume": p.volume,
+                                    "open_price": p.price_open,
+                                    "current_price": p.price_current,
+                                    "profit": round(p.profit, 2),
+                                    "sl": p.sl,
+                                    "tp": p.tp,
+                                    "swap": p.swap,
+                                    "commission": getattr(p, 'commission', 0),
+                                }
+                                for p in positions
+                            ],
+                            "live_trading_enabled": self._trade_enabled,
+                        }
+                        ws.send(json.dumps(data_msg))
+                        if account:
+                            self.root.after(0, self._set_status, "MT5桥接-已连接", "#22c55e",
+                                           f"{account.login} @ {account.server}  ${account.balance:,.2f}")
+                        last_data_push = now
+                    except Exception as e:
+                        self.root.after(0, self._log, f"数据推送错误: {e}")
+
+                # Heartbeat every 10s
+                if now - last_hb > 10:
+                    try:
+                        ws.send(json.dumps({"type": "hb"}))
+                        last_hb = now
+                    except Exception as e:
+                        self.root.after(0, self._log, f"心跳错误: {e}")
+
+                # Receive commands (non-blocking)
+                ws.settimeout(0.3)
+                try:
+                    data = ws.recv()
+                    if data:
+                        msg = json.loads(data)
+                        if msg.get("type") == "command":
+                            cmd = msg
+                            self.root.after(0, self._log, f"执行: {cmd['action']}")
+                            try:
+                                resp = self._process_command(cmd)
+                            except Exception as cmd_err:
+                                resp = {"status": "error", "message": str(cmd_err)}
+                            ws.send(json.dumps({
+                                "type": "result",
+                                "command_id": msg["command_id"],
+                                "result": resp,
+                            }))
+                            self.root.after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
+                except websocket.WebSocketTimeoutException:
+                    pass
+                except websocket.WebSocketConnectionClosedException:
+                    self.root.after(0, self._log, "WebSocket 连接已断开")
+                    break
+
+        except (websocket.WebSocketException, ConnectionRefusedError, OSError) as e:
+            self.root.after(0, self._log, f"WebSocket 连接失败: {e}")
+        except Exception as e:
+            self.root.after(0, self._log, f"错误: {e}")
+        finally:
+            # Clean disconnect - no retry
+            try:
+                if self._ws and self._ws.connected:
+                    self._ws.send(json.dumps({"type": "disconnect", "reason": "client_shutdown"}))
+                    self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+            if self.running:
+                self.root.after(0, self._log, "桥接已断开，请手动重新连接")
+                self.root.after(0, self._set_status, "MT5桥接-已断开", "#ef4444", "")
+                self.root.after(0, self._toggle_bridge)
 
         if self.mt5:
             self.mt5.shutdown()
@@ -753,6 +805,12 @@ class AurumBridge:
                                        icon="warning"):
                 return
             self.running = False
+            # Send disconnect to server
+            try:
+                if hasattr(self, "_ws") and self._ws and self._ws.connected:
+                    self._ws.send(json.dumps({"type": "disconnect", "reason": "user_close"}))
+            except Exception:
+                pass
         if self.mt5:
             try:
                 self.mt5.shutdown()

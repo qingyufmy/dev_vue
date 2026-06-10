@@ -1,15 +1,11 @@
-﻿const state = {
+const state = {
   token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || "",
   user: null,
   symbols: [],
   signals: [],
   selectedSignal: null,
-  quoteTimer: null,
   _lastGatewayLive: false,
-  liveSyncTimer: null,
   backgroundSyncTimer: null,
-  liveSyncInFlight: false,
-  backgroundSyncInFlight: false,
   lastQuote: null,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
@@ -310,7 +306,6 @@ async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  // AbortController timeout to prevent hanging requests from freezing the UI
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
   try {
@@ -318,22 +313,35 @@ async function api(path, options = {}) {
     clearTimeout(timeoutId);
     const text = await response.text();
     let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = { detail: text };
-    }
-    if (!response.ok) {
-      throw new Error(data.detail || data.message || `HTTP ${response.status}`);
-    }
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
+    if (!response.ok) throw new Error(data.detail || data.message || `HTTP ${response.status}`);
     return data;
   } catch (err) {
     clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      throw new Error('请求超时');
-    }
+    if (err.name === 'AbortError') throw new Error('请求超时');
     throw err;
   }
+}
+
+// WebSocket API — primary channel for all MT5/AI data
+let _wsCmdId = 0;
+const _wsPending = new Map();
+
+function wsApi(action, params = {}) {
+  return new Promise((resolve, reject) => {
+    const ws = state.bridgeWs;
+    if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
+    const cmdId = `ws_${++_wsCmdId}`;
+    const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, 10000);
+    _wsPending.set(cmdId, { resolve, reject, timer });
+    try {
+      ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }));
+    } catch (err) {
+      clearTimeout(timer);
+      _wsPending.delete(cmdId);
+      reject(err);
+    }
+  });
 }
 
 function setAuth(token) {
@@ -353,77 +361,231 @@ function activeTabId() {
 }
 
 function stopRealtimeSync() {
-  if (state.quoteTimer) clearInterval(state.quoteTimer);
-  if (state.liveSyncTimer) clearInterval(state.liveSyncTimer);
-  if (state.backgroundSyncTimer) clearInterval(state.backgroundSyncTimer);
-  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
-  stopSignalAgeTicker();
-  state.quoteTimer = null;
-  state.liveSyncTimer = null;
-  state.backgroundSyncTimer = null;
-  state.liveSyncInFlight = false;
-  state.backgroundSyncInFlight = false;
+  if (state.backgroundSyncTimer) { clearInterval(state.backgroundSyncTimer); state.backgroundSyncTimer = null; }
 }
 
-// Real-time bridge status via WebSocket (instant UI update on connect/disconnect)
-function connectBridgeStatusWs() {
-  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} }
+// Real-time bridge status via WebSocket + command channel
+let _wsConnCounter = 0;
+const _wsActive = new Set();
+
+function connectBridgeStatusWs(onReady) {
+  if (state.bridgeWs && state.bridgeWs.readyState <= 1) {
+    if (typeof onReady === 'function') onReady();
+    return;
+  }
+  const connId = ++_wsConnCounter;
+  console.warn('[WS:DIAG] connectBridgeStatusWs() call #' + connId + ' | active connections: ' + _wsActive.size + ' | stack:', new Error().stack?.split('\n').slice(1,5).join(' <- '));
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
+  ws._connId = connId;
+  ws._msgCount = 0;
+  _wsActive.add(ws);
+  console.warn('[WS:DIAG] WebSocket #' + connId + ' created, total active: ' + _wsActive.size);
   state.bridgeWs = ws;
+  ws.onopen = () => {
+    console.warn('[WS:DIAG] WebSocket #' + connId + ' OPEN, active: ' + _wsActive.size + ', readyState=' + ws.readyState);
+    state._hbSeq = 0;
+    if (state._hbTimer) clearInterval(state._hbTimer);
+    state._hbTimer = setInterval(() => {
+      if (ws.readyState === 1) {
+        try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq })); } catch {}
+      }
+    }, 1000);
+    if (typeof onReady === 'function') onReady();
+  };
   ws.onmessage = (e) => {
+    if (++ws._msgCount === 1) console.warn('[WS:DIAG] WebSocket #' + connId + ' FIRST message, len=' + (e.data ? e.data.length : 0));
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'status') {
-        const isLive = msg.connected && msg.alive;
-        setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
-        if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
-        state._lastGatewayLive = isLive;
+      if (msg.type === 'data') {
+        handleBridgeData(msg);
+      } else if (msg.type === 'hb') {
+        handleHeartbeat(msg);
+      } else if (msg.type === 'disconnect') {
+        handleDisconnect(msg);
+      } else if (msg.type === 'result' && msg.command_id) {
+        const pending = _wsPending.get(msg.command_id);
+        if (pending) {
+          clearTimeout(pending.timer);
+          _wsPending.delete(msg.command_id);
+          if (msg.status === 'error') pending.reject(new Error(msg.message || 'Command failed'));
+          else pending.resolve(msg);
+        }
       }
     } catch {}
   };
-  ws.onclose = () => { if (state.bridgeWs === ws) state.bridgeWs = null; };
+  ws.onclose = (e) => {
+    _wsActive.delete(ws);
+    console.warn('[WS:DIAG] WebSocket #' + connId + ' CLOSE code=' + e.code + ' reason=' + e.reason + ' msgs=' + ws._msgCount + ' remaining active: ' + _wsActive.size);
+    if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
+    if (state.bridgeWs === ws) state.bridgeWs = null;
+    for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
+    _wsPending.clear();
+    // Auth failure (server closed with 4002) -> don't retry
+    if (e.code === 4002) { setBadge("gatewayMode", "认证失败，请重新登录", "danger"); return; }
+    // Prevent duplicate reconnect timers
+    if (state._reconnectTimer) clearTimeout(state._reconnectTimer);
+    console.warn(`[WS] Connection #${ws._connId} closed, reconnecting in 3s`); setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
+    if (state.token) state._reconnectTimer = setTimeout(() => { state._reconnectTimer = null; connectBridgeStatusWs(); }, 3000);
+  };
   ws.onerror = () => {};
+}
+
+// Handle data push from bridge (account + quote + positions)
+function handleBridgeData(msg) {
+  if (msg.quote) {
+    const q = msg.quote;
+    const prev = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
+    let bidDir = "", askDir = "";
+    if (prev) {
+      if (Number(q.bid) > prev.bid) bidDir = "up";
+      if (Number(q.bid) < prev.bid) bidDir = "down";
+      if (Number(q.ask) > prev.ask) askDir = "up";
+      if (Number(q.ask) < prev.ask) askDir = "down";
+    }
+    setText("quoteBid", q.bid);
+    setText("quoteAsk", q.ask);
+    setText("quoteSpread", q.spread);
+    setText("quoteTime", formatTime(q.time));
+    setQuoteDirection("quoteBidDir", bidDir);
+    setQuoteDirection("quoteAskDir", askDir);
+    flashPrice("quoteBid", bidDir);
+    flashPrice("quoteAsk", askDir);
+    if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
+      state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
+      updateTradingQuotePreview(state.lastQuote);
+    }
+  }
+  if (msg.account) {
+    setText("accountBalance", fmt(msg.account.balance));
+    setText("accountEquity", fmt(msg.account.equity));
+    setText("accountMargin", fmt(msg.account.margin));
+    setText("accountFreeMargin", fmt(msg.account.free_margin));
+    setText("accountFloatPnl", fmt(msg.account.profit));
+    updatePnlStyle("accountFloatPnl", msg.account.profit);
+  }
+  if (msg.positions) {
+    for (const pos of msg.positions) {
+      const closeBtn = document.querySelector(`[data-close-ticket="${pos.ticket}"]`);
+      if (closeBtn) {
+        const row = closeBtn.closest('tr');
+        if (row) {
+          const cells = row.querySelectorAll('td');
+          if (cells[5]) cells[5].textContent = fmt(pos.current_price);
+          if (cells[9]) {
+            cells[9].textContent = fmt(pos.profit);
+            cells[9].className = `num ${profitClass(pos.profit)}`;
+          }
+        }
+      }
+      const dashRows = document.querySelectorAll('#dashboardPositionsBody tr');
+      for (const row of dashRows) {
+        const ticketCell = row.querySelector('td:first-child');
+        if (ticketCell && ticketCell.textContent.trim() === String(pos.ticket)) {
+          const cells = row.querySelectorAll('td');
+          if (cells[5]) cells[5].textContent = fmt(pos.current_price);
+          if (cells[7]) {
+            cells[7].textContent = fmt(pos.profit);
+            cells[7].className = `num ${profitClass(pos.profit)}`;
+          }
+        }
+      }
+    }
+  }
+  _maybeRefreshSignal();
+}
+
+let _lastSignalRefreshTs = 0;
+let _lastSignalId = null;
+async function _maybeRefreshSignal() {
+  const now = Date.now();
+  if (now - _lastSignalRefreshTs < 1000) return;
+  _lastSignalRefreshTs = now;
+  try {
+    const data = await wsApi("signals", { session_id: "default" });
+    const signals = data.signals || [];
+    const latestSignal = signals[0] || null;
+
+    // No signals at all
+    if (!latestSignal) {
+      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; }
+      return;
+    }
+
+    // New signal detected (ID changed) — full refresh
+    if (_lastSignalId !== latestSignal.id) {
+      _lastSignalId = latestSignal.id;
+      state.signals = signals;
+      updateSignalDisplay(latestSignal);
+      if (latestSignal) setText("signalFreshness", signalFreshness(latestSignal));
+      renderAnalysisHistory(signals);
+      renderSignalRows();
+      return;
+    }
+
+    // Same signal — light refresh: only update timing UI
+    const sel = state.selectedSignal;
+    if (!sel || sel.is_executed) return;
+    state.selectedSignal = latestSignal;
+    setText("sigValidWindow", signalFreshness(latestSignal));
+    setText("signalFreshness", signalFreshness(latestSignal));
+    setText("analysisValidity", signalFreshness(latestSignal));
+    setSignalBadge(latestSignal);
+    const card = $("signalCard");
+    if (card) {
+      card.dataset.status = latestSignal.is_executed ? "executed" : latestSignal.is_stale ? "expired" : "live";
+      const dir = signalType(latestSignal.signal_type);
+      const colorMap = { buy: "var(--color-positive)", sell: "var(--color-negative)", hold: "var(--color-warning)" };
+      card.style.setProperty("--signal-border", colorMap[dir]);
+      card.style.setProperty("--signal-glow", colorMap[dir] === "var(--color-positive)" ? "var(--signal-glow-buy)" : colorMap[dir] === "var(--color-negative)" ? "var(--signal-glow-sell)" : "var(--signal-glow-hold)");
+    }
+    const btn = $("executeSignalBtn");
+    if (btn) {
+      const executable = signalType(latestSignal.signal_type) !== "hold" && !latestSignal.is_stale && !latestSignal.is_executed;
+      btn.disabled = !executable;
+    }
+  } catch (e) { /* silent */ }
+}
+
+// Handle heartbeat reply — MT5 connection status
+function handleHeartbeat(msg) {
+  const isLive = msg.mt5_connected && msg.mt5_alive;
+  const wasLive = state._lastGatewayLive;
+  setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+  if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
+  state._lastGatewayLive = isLive;
+  if (isLive !== wasLive) {
+    if (isLive) { refreshAll().catch(() => {}); }
+    else {
+      state.positions = [];
+      renderPositionRows();
+    }
+  }
+}
+
+// Handle bridge disconnect notification
+function handleDisconnect(msg) {
+  setBadge("gatewayMode", "未连接-请启动桥接脚本", "neutral");
+  setBadge("tradeMode", "请先启动桥接", "neutral");
+  state._lastGatewayLive = false;
 }
 
 function startRealtimeSync() {
   stopRealtimeSync();
-  state.quoteTimer = setInterval(() => {
-    refreshQuote().catch(() => {});
+  // Delay first background sync by 5s to let bridge connect
+  setTimeout(() => {
+    if (!state.token) return;
+    state.backgroundSyncTimer = setInterval(() => {
+      if (!state.token || state.backgroundSyncInFlight) return;
+      state.backgroundSyncInFlight = true;
+      const tab = activeTabId();
+      const tasks = [loadSignals()];
+      if (tab === "history") tasks.push(loadHistory());
+      if (tab === "audit" || tab === "trading" || tab === "dashboard") tasks.push(loadAudit());
+      Promise.allSettled(tasks).finally(() => { state.backgroundSyncInFlight = false; });
+    }, 30000);
   }, 5000);
-  state.liveSyncTimer = setInterval(() => {
-    syncLiveMt5State().catch(() => {});
-  }, 5000);
-  state.backgroundSyncTimer = setInterval(() => {
-    syncBackgroundState().catch(() => {});
-  }, 30000);
-}
-
-async function syncLiveMt5State() {
-  if (!state.token || state.liveSyncInFlight) return;
-  state.liveSyncInFlight = true;
-  try {
-    const tasks = [loadStatus(), loadAccount(), loadPositions()];
-    if (activeTabId() === "history") tasks.push(loadHistory());
-    await Promise.allSettled(tasks);
-  } finally {
-    state.liveSyncInFlight = false;
-  }
-}
-
-async function syncBackgroundState() {
-  if (!state.token || state.backgroundSyncInFlight) return;
-  state.backgroundSyncInFlight = true;
-  try {
-    const tab = activeTabId();
-    const tasks = [loadSignals()];
-    if (tab === "history") tasks.push(loadHistory());
-    if (tab === "audit" || tab === "trading" || tab === "dashboard") tasks.push(loadAudit());
-    await Promise.allSettled(tasks);
-  } finally {
-    state.backgroundSyncInFlight = false;
-  }
 }
 
 function setTab(tabId) {
@@ -442,7 +604,9 @@ function setTab(tabId) {
 async function refreshTabData(tabId) {
   if (!state.token) return;
   if (tabId === "trading") {
-    await Promise.allSettled([loadAccount(), loadPositions(), refreshQuote(), loadStatus()]);
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
+  } else if (tabId === "dashboard") {
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
   } else if (tabId === "history") {
     await Promise.allSettled([loadAccount(), loadHistory()]);
   } else if (tabId === "audit") {
@@ -466,6 +630,7 @@ async function login(event) {
 }
 
 function logout() {
+  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopRealtimeSync();
   state.user = null;
   state.selectedSignal = null;
@@ -498,9 +663,14 @@ async function bootstrap() {
     }
     applyRoleUI();
     showApp(true);
+    // Connect WebSocket FIRST — all data flows through it
+    await new Promise((resolve) => {
+      connectBridgeStatusWs(resolve);
+    });
     await refreshAll();
     startRealtimeSync();
-    connectBridgeStatusWs();
+    // Activate tick stream for current tab (stops old polling)
+    refreshTabData(activeTabId());
   } catch {
     logout();
   }
@@ -527,7 +697,7 @@ async function refreshAll() {
 }
 
 async function loadStatus() {
-  const health = await api("/health");
+  const health = await wsApi("health");
   const gateway = health.gateway || {};
   const isLive = gateway.mode === "live";
   const wasLive = state._lastGatewayLive;
@@ -552,7 +722,7 @@ async function loadStatus() {
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
   try {
-    const auto = await api("/api/auto/status");
+    const auto = await wsApi("auto_status");
     const scheduler = auto.scheduler || {};
     const enabled = scheduler.enabled;
     const running = scheduler.running;
@@ -640,7 +810,7 @@ function initBridgeModal() {
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
 async function handleTradeModeClick() {
-  const health = await api("/health").catch(() => null);
+  const health = await wsApi("health").catch(() => null);
   const gateway = health?.gateway || {};
   const currentlyEnabled = gateway.live_trading_enabled;
 
@@ -651,10 +821,7 @@ async function handleTradeModeClick() {
   }
 
   try {
-    const result = await api("/aurum-api/mt5/toggle-trade", {
-      method: "POST",
-      body: JSON.stringify({ enable: !currentlyEnabled }),
-    });
+    const result = await wsApi("toggle_trade", { enable: !currentlyEnabled });
     toast(currentlyEnabled ? "交易发送已关闭" : "交易发送已开启", "success");
     await loadStatus();
   } catch (e) {
@@ -710,10 +877,7 @@ async function saveAutoConfig() {
   document.querySelectorAll("#autoTfGrid input[type='checkbox']:checked").forEach(cb => timeframes.push(cb.value));
 
   try {
-    const result = await api("/api/auto/config", {
-      method: "POST",
-      body: JSON.stringify({ symbols, timeframes }),
-    });
+    const result = await wsApi("save_auto", { symbols, timeframes });
     toast(result.enabled ? `自动推理已开启: ${timeframes.join(", ")}` : "自动推理已关闭", "success");
     closeAutoConfigModal();
     await loadStatus();
@@ -723,7 +887,7 @@ async function saveAutoConfig() {
 }
 
 async function loadSymbols() {
-  const data = await api("/api/mt5/symbols");
+  const data = await wsApi("symbols");
   state.symbols = Array.isArray(data.symbols) && data.symbols.length
     ? data.symbols
     : [{ name: "XAUUSD", description: "Gold vs US Dollar" }];
@@ -746,12 +910,11 @@ async function loadSymbols() {
       ? previous
       : preferred?.name || state.symbols[0]?.name || "";
   }
-
-  await refreshQuote();
+  // Don't call refreshQuote here — tick stream handles it at 1s
 }
 
 async function loadAccount() {
-  const data = await api("/api/mt5/account");
+  const data = await wsApi("account");
   const server = data.server || data.company || "服务器 --";
   const currency = data.currency || "USD";
   setText("mt5Server", server);
@@ -788,7 +951,7 @@ function updateTradingQuotePreview(quote) {
 async function refreshQuote() {
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   if (!symbol) return;
-  const data = await api(`/api/mt5/quote/${encodeURIComponent(symbol)}`);
+  const data = await wsApi("quote", { symbol });
   const bid = Number(data.bid);
   const ask = Number(data.ask);
   const previousQuote = state.lastQuote && state.lastQuote.symbol === symbol ? state.lastQuote : null;
@@ -847,7 +1010,7 @@ function renderPositionRows(positions, withAction) {
 }
 
 async function loadPositions() {
-  const data = await api("/api/mt5/positions");
+  const data = await wsApi("positions");
   const positions = data.positions || [];
   $("positionsBody").innerHTML = renderPositionRows(positions, true);
   $("dashboardPositionsBody").innerHTML = renderPositionRows(positions, false);
@@ -893,7 +1056,7 @@ function applyProviderPreset(provider) {
 $('apiProvider').addEventListener('change', e => applyProviderPreset(e.target.value));
 
 async function loadConfig() {
-  const data = await api("/api/ai/config");
+  const data = await wsApi("ai_config");
   const cfg = data.config;
   if (!cfg) {
     state.currentConfigHasApiKey = false;
@@ -954,7 +1117,7 @@ async function saveConfig() {
   };
 
   try {
-    await api("/api/ai/config", { method: "POST", body: JSON.stringify(body) });
+    await wsApi("save_config", { config: body.config, session_id: body.session_id });
     $("apiKey").value = "";
     await loadConfig();
     toast("模型配置已保存", "success");
@@ -973,7 +1136,6 @@ function updateSignalDisplay(signal) {
 
   if (!signal) {
     state.selectedSignal = null;
-    stopSignalAgeTicker();
     setSignalBadge(null);
     card.dataset.direction = "hold";
     card.dataset.status = "empty";
@@ -1026,7 +1188,6 @@ function updateSignalDisplay(signal) {
   setText("sigTime", signalDisplayTime(signal));
   setText("sigGeneratedAt", signalDisplayTime(signal));
   setText("sigValidWindow", signalFreshness(signal));
-  startSignalAgeTicker(signal);
   setText("lastSigDirection", directionText(dir));
   setText("lastSigTimeframe", signal.timeframe || "--");
   setText("lastSigConfidence", confidence.label);
@@ -1050,51 +1211,6 @@ function signalFreshness(signal) {
   if (Number.isFinite(age) && Number.isFinite(ttl)) return `${Math.round(age)}s / ${ttl}s`;
   return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
 }
-
-// Real-time signal age ticker (updates #sigValidWindow every second)
-let _signalAgeTimer = null;
-let _signalBaseAge = 0;
-let _signalTtlSeconds = 0;
-let _signalTickerStartMs = 0;
-
-function startSignalAgeTicker(signal) {
-  stopSignalAgeTicker();
-  if (!signal || signal.is_stale || signal.is_executed) return;
-  const ttl = Number(signal.ttl_seconds);
-  if (!Number.isFinite(ttl) || ttl <= 0) return;
-  const serverAge = Number(signal.age_seconds);
-  if (!Number.isFinite(serverAge) || serverAge < 0) return;
-  // Use server-provided age as baseline, increment by 1s each tick
-  _signalBaseAge = Math.floor(serverAge);
-  _signalTtlSeconds = ttl;
-  _signalTickerStartMs = Date.now();
-  _renderSignalAge();
-  _signalAgeTimer = setInterval(_renderSignalAge, 1000);
-}
-
-function stopSignalAgeTicker() {
-  if (_signalAgeTimer) { clearInterval(_signalAgeTimer); _signalAgeTimer = null; }
-  _signalBaseAge = 0;
-}
-
-function _renderSignalAge() {
-  const elapsed = Math.floor((Date.now() - _signalTickerStartMs) / 1000);
-  const age = _signalBaseAge + elapsed;
-  if (age >= _signalTtlSeconds) {
-    setText('sigValidWindow', '已过期');
-    setText('signalFreshness', '已过期');
-    setText('analysisValidity', '已过期');
-    stopSignalAgeTicker();
-    refreshAll();
-    return;
-  }
-  const text = `${age}s / ${_signalTtlSeconds}s`;
-  setText('sigValidWindow', text);
-  setText('signalFreshness', text);
-  setText('analysisValidity', text);
-}
-
-
 
 function executionStatus(signal) {
   const dir = signalType(signal?.signal_type);
@@ -1216,17 +1332,12 @@ async function runAnalysis() {
   const started = performance.now();
 
   try {
-    const results = await Promise.all(frames.map((timeframe) => api("/api/ai/analyze", {
-      method: "POST",
-      body: JSON.stringify({
-        session_id: "default",
-        symbol,
-        timeframe,
-        kline_count: Number($("klineCount").value) || 100,
-        include_positions: true,
-        data_source: "mt5",
-        language: "zh-CN",
-      }),
+    const results = await Promise.all(frames.map((timeframe) => wsApi("analyze", {
+      session_id: "default",
+      symbol,
+      timeframe,
+      kline_count: Number($("klineCount").value) || 100,
+      include_positions: true,
     })));
     const best = results
       .map((item) => item.signal)
@@ -1260,10 +1371,7 @@ async function executeSignal() {
   if (!ok) return;
 
   try {
-    const result = await api("/api/ai/execute", {
-      method: "POST",
-      body: JSON.stringify({ session_id: "default", signal_id: state.selectedSignal.id, confirm: true }),
-    });
+    const result = await wsApi("execute", { session_id: "default", signal_id: state.selectedSignal.id, confirm: true });
     toast(result.message || (result.status === "success" ? "执行请求已处理" : `结果：${result.status}`), result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadSignals(), loadAudit()]);
   } catch (error) {
@@ -1433,7 +1541,7 @@ async function submitManualOrder() {
   const submit = $("orderConfirmSubmit");
   if (submit) submit.disabled = true;
   try {
-    const result = await api("/api/mt5/open", { method: "POST", body: JSON.stringify(order.payload) });
+    const result = await wsApi("open", order.payload);
     closeManualOrderModal();
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
@@ -1447,7 +1555,7 @@ async function submitManualOrder() {
 async function closePosition(ticket) {
   if (!window.confirm(`复核平仓 ticket ${ticket}？`)) return;
   try {
-    const result = await api("/api/mt5/close", { method: "POST", body: JSON.stringify({ ticket: Number(ticket), confirm: true }) });
+    const result = await wsApi("close", { ticket: Number(ticket), confirm: true });
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
   } catch (error) {
@@ -1548,7 +1656,7 @@ function renderSignalRows() {
 }
 
 async function loadSignals(options = {}) {
-  const data = await api("/api/ai/signals?session_id=default");
+  const data = await wsApi("signals", { session_id: "default" });
   const signals = data.signals || [];
   state.signals = signals;
   updateSignalDisplay(signals[0] || null);
@@ -1570,7 +1678,7 @@ function setHistoryZeroClass(id, value) {
 
 async function loadHistory() {
   try {
-  const data = await api("/api/mt5/history?page=1&page_size=20");
+  const data = await wsApi("history", { page: 1, page_size: 20 });
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
   setText("historyCredit", fmt(stats.credit));
@@ -1700,7 +1808,7 @@ function renderAuditRows() {
 }
 
 async function loadAudit() {
-  const data = await api("/api/audit/logs");
+  const data = await wsApi("audit_logs");
   state.auditRows = data.logs || [];
   renderAuditRows();
 }
