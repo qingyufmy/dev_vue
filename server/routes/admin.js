@@ -185,10 +185,10 @@ router.post('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { userId, plan, expiresAt, role, nickname } = req.body
 
-    if (plan) await queryRun('UPDATE users SET plan = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [plan, userId])
-    if (expiresAt !== undefined) await queryRun('UPDATE users SET plan_expires_at = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [expiresAt, userId])
-    if (role) await queryRun('UPDATE users SET role = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [role, userId])
-    if (nickname) await queryRun('UPDATE users SET nickname = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?', [nickname, userId])
+    if (plan) await queryRun('UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?', [plan, userId])
+    if (expiresAt !== undefined) await queryRun('UPDATE users SET plan_expires_at = ?, updated_at = NOW() WHERE id = ?', [expiresAt, userId])
+    if (role) await queryRun('UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?', [role, userId])
+    if (nickname) await queryRun('UPDATE users SET nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, userId])
 
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '更新失败' }) }
@@ -215,7 +215,7 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
       }
     }
     if (updates.length === 0) return res.json({ ok: false, error: '没有需要更新的字段' })
-    updates.push('updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR)')
+    updates.push('updated_at = NOW()')
     params.push(uid)
     await queryRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
     res.json({ ok: true })
@@ -377,7 +377,7 @@ router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) =
       await queryRun(`
         UPDATE courses SET number=?, title=?, description=?, category=?, content_type=?, duration=?,
         youtube_id=?, bilibili_id=?, cover=?, access_level=?, sort_order=?, article_url=?, article_object_key=?,
-        status=?, updated_at=DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE episode_id=?
+        status=?, updated_at=NOW() WHERE episode_id=?
       `, [number, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId])
       const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episodeId])
       res.json({ ok: true, course })

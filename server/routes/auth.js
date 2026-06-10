@@ -111,7 +111,7 @@ router.post('/send-code', async (req, res) => {
     const targetEmail = email || req.user?.email
     if (!targetEmail) return res.json({ ok: false, error: '请输入邮箱' })
     const code = String(Math.floor(100000 + Math.random() * 900000))
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
 
     await queryRun('INSERT INTO verification_codes (email, code, purpose, expires_at) VALUES (?, ?, ?, ?)', [targetEmail, code, purpose || 'login', expiresAt])
 
@@ -160,7 +160,7 @@ router.post('/verify-code', async (req, res) => {
     if (!targetEmail) return res.json({ ok: false, error: '请输入邮箱' })
     const record = await queryOne(`
       SELECT * FROM verification_codes
-      WHERE email = ? AND code = ? AND purpose = ? AND used = 0 AND expires_at > DATE_ADD(NOW(), INTERVAL 8 HOUR)
+      WHERE email = ? AND code = ? AND purpose = ? AND used = 0 AND expires_at > NOW()
       ORDER BY created_at DESC LIMIT 1
     `, [targetEmail, code, purpose || 'login'])
 
@@ -183,21 +183,21 @@ router.post('/reset-password', async (req, res) => {
     // If verifyToken provided (code-based flow), accept it
     if (verifyToken) {
       const hash = bcrypt.hashSync(newPassword, 10)
-      await queryRun("UPDATE users SET password = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE email = ?", [hash, email])
+      await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, email])
       return res.json({ ok: true, message: '密码已重置' })
     }
 
     if (!code) return res.json({ ok: false, error: '请输入验证码' })
     const record = await queryOne(`
       SELECT * FROM verification_codes
-      WHERE email = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > DATE_ADD(NOW(), INTERVAL 8 HOUR)
+      WHERE email = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > NOW()
       ORDER BY created_at DESC LIMIT 1
     `, [email, code])
 
     if (!record) return res.json({ ok: false, error: '验证码无效或已过期' })
 
     const hash = bcrypt.hashSync(newPassword, 10)
-    await queryRun("UPDATE users SET password = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE email = ?", [hash, email])
+    await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, email])
     await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [record.id])
 
     res.json({ ok: true, message: '密码已重置' })
@@ -220,7 +220,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
     }
 
     const hash = bcrypt.hashSync(newPassword, 10)
-    await queryRun("UPDATE users SET password = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [hash, req.user.id])
+    await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", [hash, req.user.id])
 
     res.json({ ok: true, relogin: true, message: '密码已修改' })
   } catch (err) {
@@ -234,7 +234,7 @@ router.post('/telegram-entry', authMiddleware, async (req, res) => {
 
     // Generate a fake bot URL for local dev
     const botUrl = `https://t.me/WallStreetSkillBot?start=${user.referral_code || user.id}`
-    await queryRun("UPDATE users SET telegram_last_invite_sent_at = DATE_ADD(NOW(), INTERVAL 8 HOUR), updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [req.user.id])
+    await queryRun("UPDATE users SET telegram_last_invite_sent_at = NOW(), updated_at = NOW() WHERE id = ?", [req.user.id])
 
     res.json({ ok: true, success: true, botUrl, expiresInSeconds: 600 })
   } catch (err) {

@@ -45,11 +45,13 @@ function proOnly(req, res, next) {
 
 // ============ Helper Functions ============
 function utcNow() {
-  return new Date().toISOString().replace('T', ' ').substring(0, 19)
+  // Return Beijing time (UTC+8) for MySQL DATETIME
+  return new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
 }
 
 function mt5Now() {
-  return new Date().toISOString().replace('T', ' ').substring(0, 19)
+  // Return Beijing time (UTC+8) for MySQL DATETIME
+  return new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
 }
 
 function utcToMt5Time(utcStr) {

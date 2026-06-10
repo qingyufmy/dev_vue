@@ -171,7 +171,7 @@ app.post('/api/presence', async (req, res) => {
       const token = auth.slice(7)
       const payload = jwt.verify(token, 'wall-street-skill-secret')
       if (payload && payload.userId) {
-        await queryRun("UPDATE users SET last_seen_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [payload.userId])
+        await queryRun("UPDATE users SET last_seen_at = NOW() WHERE id = ?", [payload.userId])
       }
     }
   } catch {}

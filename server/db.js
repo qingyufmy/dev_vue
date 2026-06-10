@@ -1,6 +1,12 @@
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
 import { v4 as uuidv4 } from 'uuid'
+/** Get current Beijing time as 'YYYY-MM-DD HH:MM:SS' for MySQL DATETIME */
+export function beijingNow() {
+  const d = new Date(Date.now() + 8 * 3600_000)
+  return d.toISOString().replace('T', ' ').substring(0, 19)
+}
+
 
 const DB_CONFIG = {
   host: process.env.MYSQL_HOST || '192.168.1.254',
@@ -91,8 +97,8 @@ export async function initDB() {
       referred_by VARCHAR(50),
       last_seen_at DATETIME,
       current_view VARCHAR(100) DEFAULT '',
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW()),
+      updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS courses (
@@ -120,8 +126,8 @@ export async function initDB() {
       structure_count INT DEFAULT 0,
       status VARCHAR(20) DEFAULT 'published',
       sort_order INT DEFAULT 0,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW()),
+      updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS progress (
@@ -132,7 +138,7 @@ export async function initDB() {
       total_duration DOUBLE DEFAULT 0,
       completed TINYINT DEFAULT 0,
       quiz_passed TINYINT DEFAULT 0,
-      updated_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
+      updated_at DATETIME DEFAULT (NOW()),
       UNIQUE KEY uq_user_episode (user_id, episode_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -143,15 +149,15 @@ export async function initDB() {
       text TEXT NOT NULL,
       parent_id INT,
       likes INT DEFAULT 0,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW()),
+      updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS comment_likes (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
       comment_id INT NOT NULL,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
+      created_at DATETIME DEFAULT (NOW()),
       UNIQUE KEY uq_user_comment (user_id, comment_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -175,8 +181,8 @@ export async function initDB() {
       image_count INT DEFAULT 0,
       last_reply_at DATETIME,
       last_reply_user_id INT,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW()),
+      updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS post_replies (
@@ -191,7 +197,7 @@ export async function initDB() {
       quote_reply_id INT,
       floor_number INT DEFAULT 0,
       likes INT DEFAULT 0,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS post_reports (
@@ -202,7 +208,7 @@ export async function initDB() {
       reason VARCHAR(2000) DEFAULT '',
       detail VARCHAR(5000) DEFAULT '',
       status VARCHAR(20) DEFAULT 'pending',
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS trades (
@@ -223,8 +229,8 @@ export async function initDB() {
       screenshot_url VARCHAR(500) DEFAULT '',
       status VARCHAR(20) DEFAULT 'open',
       is_public TINYINT DEFAULT 1,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW()),
+      updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS orders (
@@ -243,7 +249,7 @@ export async function initDB() {
       status_label VARCHAR(50) DEFAULT '',
       payment_method VARCHAR(50) DEFAULT '',
       paid_at DATETIME,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS notifications (
@@ -258,7 +264,7 @@ export async function initDB() {
       meta VARCHAR(2000) DEFAULT '{}',
       is_read TINYINT DEFAULT 0,
       \`read\` TINYINT DEFAULT 0,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS verification_codes (
@@ -268,7 +274,7 @@ export async function initDB() {
       purpose VARCHAR(20) DEFAULT 'login',
       expires_at DATETIME NOT NULL,
       used TINYINT DEFAULT 0,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -305,7 +311,7 @@ export async function initDB() {
       amount_cents INT DEFAULT 0,
       plan_label VARCHAR(50) DEFAULT '',
       attributed_at DATETIME,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS user_notices (
@@ -318,7 +324,7 @@ export async function initDB() {
       link VARCHAR(500) DEFAULT '',
       source VARCHAR(100) DEFAULT '',
       \`read\` TINYINT DEFAULT 0,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS video_streams (
@@ -333,7 +339,7 @@ export async function initDB() {
       file_size INT DEFAULT 0,
       access_level VARCHAR(20) DEFAULT 'plus_pro',
       title VARCHAR(500) DEFAULT '',
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS post_assets (
@@ -344,7 +350,7 @@ export async function initDB() {
       file_type VARCHAR(50) DEFAULT '',
       file_size INT DEFAULT 0,
       url VARCHAR(500) DEFAULT '',
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS post_tags (
@@ -361,8 +367,8 @@ export async function initDB() {
       value MEDIUMTEXT,
       label VARCHAR(255) DEFAULT '',
       sort_order INT DEFAULT 0,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
+      created_at DATETIME DEFAULT (NOW()),
+      updated_at DATETIME DEFAULT (NOW()),
       UNIQUE KEY uq_category_key (category, \`key\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -384,8 +390,8 @@ export async function initDB() {
       system_prompt TEXT,
       model_sharing_enabled TINYINT NOT NULL DEFAULT 0,
       is_active TINYINT NOT NULL DEFAULT 1,
-      created_at DATETIME NOT NULL DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME NOT NULL DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
+      created_at DATETIME NOT NULL DEFAULT (NOW()),
+      updated_at DATETIME NOT NULL DEFAULT (NOW()),
       UNIQUE KEY uq_user_session_provider (user_id, session_id, api_provider)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -440,16 +446,16 @@ export async function initDB() {
       interval_seconds INT NOT NULL DEFAULT 900,
       enabled TINYINT NOT NULL DEFAULT 0,
       last_run_at DATETIME,
-      created_at DATETIME NOT NULL DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME NOT NULL DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME NOT NULL DEFAULT (NOW()),
+      updated_at DATETIME NOT NULL DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS system_prompts (
       id INT AUTO_INCREMENT PRIMARY KEY,
       prompt TEXT NOT NULL,
       updated_by INT,
-      created_at DATETIME NOT NULL DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR)),
-      updated_at DATETIME NOT NULL DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME NOT NULL DEFAULT (NOW()),
+      updated_at DATETIME NOT NULL DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS audit_logs (
@@ -463,7 +469,7 @@ export async function initDB() {
       detail VARCHAR(5000) DEFAULT '',
       ip VARCHAR(50) DEFAULT '',
       user_agent VARCHAR(500) DEFAULT '',
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS broadcast_messages (
@@ -473,7 +479,7 @@ export async function initDB() {
       nickname VARCHAR(100) DEFAULT '',
       group_name VARCHAR(100) DEFAULT '',
       message TEXT NOT NULL,
-      created_at DATETIME DEFAULT (DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ]
 

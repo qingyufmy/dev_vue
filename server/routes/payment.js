@@ -95,16 +95,16 @@ router.post('/payment', authMiddleware, async (req, res) => {
     // Create order
     await queryRun(`
       INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, paid_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', DATE_ADD(NOW(), INTERVAL 8 HOUR))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', NOW())
     `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
 
     // Update user plan
-    const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000).toISOString().split('T')[0]
-    await queryRun("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
+    const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
+    await queryRun("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
 
     // Deduct referral credit if used
     if (referralCredit > 0) {
-      await queryRun("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [referralCredit, req.user.id])
+      await queryRun("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
     }
 
     // If paid fully with credit

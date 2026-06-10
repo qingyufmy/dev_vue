@@ -341,7 +341,7 @@ router.post('/post-replies', authMiddleware, async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [postId, req.user.id, contentHtml || contentText || content?.trim() || '', contentHtml || '', contentText || content?.trim() || '', JSON.stringify(assetIds || []), quoteReplyId || null, maxFloor + 1])
 
-    await queryRun('UPDATE posts SET reply_count = reply_count + 1, last_reply_at = DATE_ADD(NOW(), INTERVAL 8 HOUR), last_reply_user_id = ? WHERE id = ?', [req.user.id, postId])
+    await queryRun('UPDATE posts SET reply_count = reply_count + 1, last_reply_at = NOW(), last_reply_user_id = ? WHERE id = ?', [req.user.id, postId])
 
     // Create notification for post author
     const postAuthor = await queryOne('SELECT user_id FROM posts WHERE id = ?', [postId])

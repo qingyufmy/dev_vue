@@ -37,10 +37,10 @@ router.put('/profile', authMiddleware, async (req, res) => {
 
     const displayName = name || nickname
     if (displayName !== undefined) {
-      await queryRun("UPDATE users SET nickname = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [displayName, req.user.id])
+      await queryRun("UPDATE users SET nickname = ?, updated_at = NOW() WHERE id = ?", [displayName, req.user.id])
     }
     if (avatar !== undefined) {
-      await queryRun("UPDATE users SET avatar = ?, updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR) WHERE id = ?", [avatar, req.user.id])
+      await queryRun("UPDATE users SET avatar = ?, updated_at = NOW() WHERE id = ?", [avatar, req.user.id])
     }
 
     const user = await queryOne(`
@@ -174,7 +174,7 @@ router.post('/progress', authMiddleware, async (req, res) => {
       if (totalDuration !== undefined) { updates.push('total_duration = ?'); params.push(totalDuration) }
       if (completed !== undefined) { updates.push('completed = ?'); params.push(completed ? 1 : 0) }
       if (quizPassed !== undefined) { updates.push('quiz_passed = ?'); params.push(quizPassed ? 1 : 0) }
-      updates.push("updated_at = DATE_ADD(NOW(), INTERVAL 8 HOUR)")
+      updates.push("updated_at = NOW()")
       params.push(req.user.id, episodeId)
       await queryRun(`UPDATE progress SET ${updates.join(', ')} WHERE user_id = ? AND episode_id = ?`, params)
     } else {
