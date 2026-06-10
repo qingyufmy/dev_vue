@@ -824,7 +824,11 @@ function getTelegramBindingHint(binding) {
 }
 
 function getPlanExpiresAt(user = state.user) {
-  return user?.planExpiresAt || user?.plan_expires_at || ''
+  const raw = user?.planExpiresAt || user?.plan_expires_at || ''
+  // mysql2 may return Date objects; extract YYYY-MM-DD portion
+  if (raw && typeof raw === 'string' && raw.length >= 10) return raw.substring(0, 10)
+  if (raw instanceof Date) return raw.toISOString().substring(0, 10)
+  return String(raw)
 }
 
 function isPlanActiveClient(user = state.user) {
@@ -3262,14 +3266,14 @@ function renderAdminContent(data) {
                       </div>
                     </td>
                     <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
-                    <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? u.createdAt.substring(5, 16) : '-'}</td>
+                    <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
                     <td>${planLabel(u.plan, u.planExpiresAt)}</td>
                     <td style="font-size:12px;">${u.planExpiresAt || '-'}</td>
                     <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
                     <td style="font-size:11px;white-space:nowrap;">
                       ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
                     </td>
-                    <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? escapeHtml(u.lastActivity.substring(5, 16)) : '-'}</td>
+                    <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
                     <td>
                       <div class="admin-actions">
                         <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
@@ -3336,7 +3340,7 @@ function renderAdminContent(data) {
                       <td><span class="admin-badge badge-paid">${escapeHtml(orderPlanLabel(o))}</span></td>
                       <td><strong>${formatMinorUsd(o.amountConfirmed || o.amount || 0)}</strong></td>
                       <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : 'badge-free'}">${escapeHtml(orderStatusLabel(o.status))}</span></td>
-                      <td style="font-size:12px;white-space:nowrap;">${escapeHtml(o.paidAt || o.createdAt || '-')}</td>
+                      <td style="font-size:12px;white-space:nowrap;">${o.paidAt || o.createdAt ? formatDateTime(o.paidAt || o.createdAt) : '-'}</td>
                     </tr>`).join('')}
                 </tbody>
               </table>
@@ -3470,7 +3474,7 @@ function renderAdminContent(data) {
           <thead><tr><th>#</th><th>时间</th><th>操作者</th><th>IP</th><th>操作</th><th>详情</th></tr></thead>
           <tbody>${r.logs.map((l, i) => `<tr>
             <td>${(page - 1) * 30 + i + 1}</td>
-            <td style="white-space:nowrap;">${escapeHtml(l.created_at || '-')}</td>
+            <td style="white-space:nowrap;">${l.created_at ? formatDateTime(l.created_at) : '-'}</td>
             <td>${escapeHtml(l.user_nickname || l.user_email || '-')}<br><span style="font-size:11px;color:var(--text-3);">${escapeHtml(l.user_email || '')}</span></td>
             <td style="font-family:monospace;font-size:11px;">${escapeHtml(l.ip || '-')}</td>
             <td>${escapeHtml(actionLabels[l.action] || l.action)}</td>
@@ -3490,7 +3494,7 @@ function renderAdminContent(data) {
         btn.addEventListener('click', () => {
           const log = r.logs.find(l => l.id === Number(btn.dataset.id))
           if (log) {
-            alert(`操作: ${actionLabels[log.action] || log.action}\n用户: ${log.user_nickname || log.user_email}\nIP: ${log.ip || '-'}\n时间: ${log.created_at}\n详情: ${log.detail || '-'}`)
+            alert(`操作: ${actionLabels[log.action] || log.action}\n用户: ${log.user_nickname || log.user_email}\nIP: ${log.ip || '-'}\n时间: ${formatDateTime(log.created_at)}\n详情: ${log.detail || '-'}`)
           }
         })
       })
@@ -5753,7 +5757,7 @@ function renderProfile() {
                   <div>
                     <div class="sub-current-plan">${planNames[currentPlan] || '体验版'}</div>
                     <div class="sub-current-desc">${currentPlan === 'free' ? '公开视频 + 语录' : currentPlan === 'plus' ? '新视频即时解锁 + 图解 + 测验' : '全部权限 + AI信号'}</div>
-                    ${state.user?.planExpiresAt ? `<div class="sub-expires">到期时间：${state.user.planExpiresAt}</div>` : ''}
+                    ${state.user?.planExpiresAt ? `<div class="sub-expires">到期时间：${formatDateTime(state.user.planExpiresAt)}</div>` : ''}
                   </div>
                   <span class="sub-current-badge sub-badge-${currentPlan}">${currentPlan === 'free' ? '免费' : currentPlan === 'plus' ? 'Plus' : 'Pro'}</span>
                 </div>
@@ -6143,7 +6147,7 @@ async function loadBillingHistory(container) {
     container.innerHTML = data.orders.map(o => {
       const s = statusMap[o.status] || { label: o.status, cls: '' }
       const date = o.paidAt || o.createdAt || ''
-      const displayDate = date.substring(0, 16)
+      const displayDate = formatDateTime(date)
       const paidAmount = o.amountConfirmed || o.amount
       const amountDiff = o.amountConfirmed && o.amountConfirmed !== o.amount
         ? ` <span class="billing-diff">(${formatMinorUsd(o.amount)})</span>` : ''
@@ -6225,11 +6229,11 @@ async function loadSubscriptionCreditCenter(container) {
       </div>
       <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近返佣记录</h3>
         ${recent.length ? `<div class="subscription-credit-list">${recent.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${escapeHtml(item.created_at || '')} · ${escapeHtml(item.invited_user?.email_masked || '已邀请用户')}</div></div><div class="subscription-credit-row-right"><span>${formatMinorUsd(item.amount_cents)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无返佣记录</div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${formatDateTime(item.created_at) || ''} · ${escapeHtml(item.invited_user?.email_masked || '已邀请用户')}</div></div><div class="subscription-credit-row-right"><span>${formatMinorUsd(item.amount_cents)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无返佣记录</div>'}
       </div>
       <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近邀请用户</h3>
         ${invited.length ? `<div class="subscription-credit-list">${invited.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '已邀请用户')}</strong><div class="billing-date">${escapeHtml(item.attributed_at || '')}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '已订阅' : '未订阅'}</span><em>${formatMinorUsd(item.credit_cents)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无邀请用户</div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '已邀请用户')}</strong><div class="billing-date">${formatDateTime(item.attributed_at) || ''}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '已订阅' : '未订阅'}</span><em>${formatMinorUsd(item.credit_cents)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无邀请用户</div>'}
       </div>`
     container.querySelector('#copyReferralLink')?.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(res.referral_link); showFormMsgProfile('邀请链接已复制', 'ok') }
@@ -8003,7 +8007,7 @@ function setupGlobalEvents() {
       const modalTitle = document.getElementById('adminOrderModalTitle')
       if (!modal) return
       modalTitle.textContent = `编辑用户 - ${userName} (${userUid})`
-      const defaultExpiry = new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0]
+      const defaultExpiry = new Date(Date.now() + 365 * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
       modalBody.innerHTML = `
         <div class="admin-plan-form" style="display:flex;flex-direction:column;gap:14px;">
           <div class="admin-plan-field">
@@ -8089,7 +8093,7 @@ function setupGlobalEvents() {
           const input = document.getElementById(targetId)
           if (input) {
             const d = new Date(Date.now() + Number(btn.dataset.days) * 86400000)
-            input.value = d.toISOString().split('T')[0]
+            input.value = new Date(d.getTime() + 8 * 3600_000).toISOString().split('T')[0]
           }
         })
       })
@@ -8109,7 +8113,7 @@ function setupGlobalEvents() {
       if (!modal) return
       modalTitle.textContent = `管理套餐 - ${userName} (ID: ${userId})`
       // Default expiry: 1 year from now
-      const defaultExpiry = new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0]
+      const defaultExpiry = new Date(Date.now() + 365 * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
       modalBody.innerHTML = `
         <div class="admin-plan-form">
           <div class="admin-plan-field">
@@ -8157,7 +8161,7 @@ function setupGlobalEvents() {
       const input = document.getElementById('adminExpiresInput')
       if (input) {
         const d = new Date(Date.now() + days * 86400000)
-        input.value = d.toISOString().split('T')[0]
+        input.value = new Date(d.getTime() + 8 * 3600_000).toISOString().split('T')[0]
       }
       return
     }

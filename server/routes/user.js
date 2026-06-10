@@ -25,6 +25,12 @@ router.get('/profile', authMiddleware, async (req, res) => {
       lastInviteSentAt: user.telegram_last_invite_sent_at || '',
     } : null
 
+    // camelCase aliases for frontend
+    user.planExpiresAt = user.plan_expires_at || ''
+    user.planPeriod = user.plan_period || ''
+    user.createdAt = user.created_at || ''
+    user.lastSeenAt = user.last_seen_at || ''
+
     res.json({ ok: true, user })
   } catch (err) {
     res.json({ ok: false, error: '获取资料失败' })
