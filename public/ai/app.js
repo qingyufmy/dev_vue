@@ -4,12 +4,8 @@ const state = {
   symbols: [],
   signals: [],
   selectedSignal: null,
-  quoteTimer: null,
   _lastGatewayLive: false,
-  liveSyncTimer: null,
   backgroundSyncTimer: null,
-  liveSyncInFlight: false,
-  backgroundSyncInFlight: false,
   lastQuote: null,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
@@ -365,21 +361,14 @@ function activeTabId() {
 }
 
 function stopRealtimeSync() {
-  if (state.quoteTimer) clearInterval(state.quoteTimer);
-  if (state.liveSyncTimer) clearInterval(state.liveSyncTimer);
-  if (state.backgroundSyncTimer) clearInterval(state.backgroundSyncTimer);
+  if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
+  if (state.backgroundSyncTimer) { clearInterval(state.backgroundSyncTimer); state.backgroundSyncTimer = null; }
   if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopSignalAgeTicker();
-  state.quoteTimer = null;
-  state.liveSyncTimer = null;
-  state.backgroundSyncTimer = null;
-  state.liveSyncInFlight = false;
-  state.backgroundSyncInFlight = false;
 }
 
 // Real-time bridge status via WebSocket + command channel
 function connectBridgeStatusWs(onReady) {
-  // Only one connection at a time
   if (state.bridgeWs && state.bridgeWs.readyState <= 1) {
     if (typeof onReady === 'function') onReady();
     return;
@@ -388,27 +377,25 @@ function connectBridgeStatusWs(onReady) {
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
-  ws.onopen = () => { if (typeof onReady === 'function') onReady(); };
+  ws.onopen = () => {
+    state._hbSeq = 0;
+    if (state._hbTimer) clearInterval(state._hbTimer);
+    state._hbTimer = setInterval(() => {
+      if (ws.readyState === 1) {
+        try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq })); } catch {}
+      }
+    }, 1000);
+    if (typeof onReady === 'function') onReady();
+  };
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'status') {
-        const isLive = msg.connected && msg.alive;
-        const wasLive = state._lastGatewayLive;
-        setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
-        if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
-        state._lastGatewayLive = isLive;
-        if (isLive !== wasLive) {
-          if (isLive) { refreshAll().catch(() => {}); }
-          else {
-            setBadge("tradeMode", "请先启动桥接", "neutral");
-            state.positions = [];
-            renderPositionRows();
-            if (state.activeTab === "trading" || state.activeTab === "dashboard") refreshTabData(state.activeTab).catch(() => {});
-          }
-        }
-      } else if (msg.type === 'tick_update') {
-        handleTickUpdate(msg);
+      if (msg.type === 'data') {
+        handleBridgeData(msg);
+      } else if (msg.type === 'hb') {
+        handleHeartbeat(msg);
+      } else if (msg.type === 'disconnect') {
+        handleDisconnect(msg);
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -421,25 +408,27 @@ function connectBridgeStatusWs(onReady) {
     } catch {}
   };
   ws.onclose = () => {
+    if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
     if (state.bridgeWs === ws) state.bridgeWs = null;
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
+    setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
     if (state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
   };
   ws.onerror = () => {};
 }
-// Real-time P&L update from WebSocket tick stream
-function handleTickUpdate(tick) {
-  // Update quote
-  if (tick.quote) {
-    const q = tick.quote;
-    const previousQuote = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
+
+// Handle data push from bridge (account + quote + positions)
+function handleBridgeData(msg) {
+  if (msg.quote) {
+    const q = msg.quote;
+    const prev = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
     let bidDir = "", askDir = "";
-    if (previousQuote) {
-      if (Number.isFinite(Number(q.bid)) && Number(q.bid) > previousQuote.bid) bidDir = "up";
-      if (Number.isFinite(Number(q.bid)) && Number(q.bid) < previousQuote.bid) bidDir = "down";
-      if (Number.isFinite(Number(q.ask)) && Number(q.ask) > previousQuote.ask) askDir = "up";
-      if (Number.isFinite(Number(q.ask)) && Number(q.ask) < previousQuote.ask) askDir = "down";
+    if (prev) {
+      if (Number(q.bid) > prev.bid) bidDir = "up";
+      if (Number(q.bid) < prev.bid) bidDir = "down";
+      if (Number(q.ask) > prev.ask) askDir = "up";
+      if (Number(q.ask) < prev.ask) askDir = "down";
     }
     setText("quoteBid", q.bid);
     setText("quoteAsk", q.ask);
@@ -454,25 +443,21 @@ function handleTickUpdate(tick) {
       updateTradingQuotePreview(state.lastQuote);
     }
   }
-  // Update account summary
-  if (tick.account) {
-    setText("accountBalance", fmt(tick.account.balance));
-    setText("accountEquity", fmt(tick.account.equity));
-    setText("accountMargin", fmt(tick.account.margin));
-    setText("accountFreeMargin", fmt(tick.account.free_margin));
-    setText("accountFloatPnl", fmt(tick.account.profit));
-    updatePnlStyle("accountFloatPnl", tick.account.profit);
+  if (msg.account) {
+    setText("accountBalance", fmt(msg.account.balance));
+    setText("accountEquity", fmt(msg.account.equity));
+    setText("accountMargin", fmt(msg.account.margin));
+    setText("accountFreeMargin", fmt(msg.account.free_margin));
+    setText("accountFloatPnl", fmt(msg.account.profit));
+    updatePnlStyle("accountFloatPnl", msg.account.profit);
   }
-  // Update positions table P&L cells
-  if (tick.positions) {
-    for (const pos of tick.positions) {
-      // Main positions table
+  if (msg.positions) {
+    for (const pos of msg.positions) {
       const closeBtn = document.querySelector(`[data-close-ticket="${pos.ticket}"]`);
       if (closeBtn) {
         const row = closeBtn.closest('tr');
         if (row) {
           const cells = row.querySelectorAll('td');
-          // cells[5] = current price, cells[9] = profit (with action columns)
           if (cells[5]) cells[5].textContent = fmt(pos.current_price);
           if (cells[9]) {
             cells[9].textContent = fmt(pos.profit);
@@ -480,7 +465,6 @@ function handleTickUpdate(tick) {
           }
         }
       }
-      // Dashboard positions table (no action columns)
       const dashRows = document.querySelectorAll('#dashboardPositionsBody tr');
       for (const row of dashRows) {
         const ticketCell = row.querySelector('td:first-child');
@@ -497,43 +481,40 @@ function handleTickUpdate(tick) {
   }
 }
 
-function startRealtimeSync() {
-  stopRealtimeSync();
-  state.quoteTimer = setInterval(() => {
-    refreshQuote().catch(() => {});
-  }, 5000);
-  state.liveSyncTimer = setInterval(() => {
-    syncLiveMt5State().catch(() => {});
-  }, 5000);
-  state.backgroundSyncTimer = setInterval(() => {
-    syncBackgroundState().catch(() => {});
-  }, 30000);
-}
-
-async function syncLiveMt5State() {
-  if (!state.token || state.liveSyncInFlight) return;
-  state.liveSyncInFlight = true;
-  try {
-    const tasks = [loadStatus(), loadAccount(), loadPositions()];
-    if (activeTabId() === "history") tasks.push(loadHistory());
-    await Promise.allSettled(tasks);
-  } finally {
-    state.liveSyncInFlight = false;
+// Handle heartbeat reply — MT5 connection status
+function handleHeartbeat(msg) {
+  const isLive = msg.mt5_connected && msg.mt5_alive;
+  const wasLive = state._lastGatewayLive;
+  setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+  if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
+  state._lastGatewayLive = isLive;
+  if (isLive !== wasLive) {
+    if (isLive) { refreshAll().catch(() => {}); }
+    else {
+      state.positions = [];
+      renderPositionRows();
+    }
   }
 }
 
-async function syncBackgroundState() {
-  if (!state.token || state.backgroundSyncInFlight) return;
-  state.backgroundSyncInFlight = true;
-  try {
+// Handle bridge disconnect notification
+function handleDisconnect(msg) {
+  setBadge("gatewayMode", "未连接-请启动桥接脚本", "neutral");
+  setBadge("tradeMode", "请先启动桥接", "neutral");
+  state._lastGatewayLive = false;
+}
+
+function startRealtimeSync() {
+  stopRealtimeSync();
+  state.backgroundSyncTimer = setInterval(() => {
+    if (!state.token || state.backgroundSyncInFlight) return;
+    state.backgroundSyncInFlight = true;
     const tab = activeTabId();
     const tasks = [loadSignals()];
     if (tab === "history") tasks.push(loadHistory());
     if (tab === "audit" || tab === "trading" || tab === "dashboard") tasks.push(loadAudit());
-    await Promise.allSettled(tasks);
-  } finally {
-    state.backgroundSyncInFlight = false;
-  }
+    Promise.allSettled(tasks).finally(() => { state.backgroundSyncInFlight = false; });
+  }, 30000);
 }
 
 function setTab(tabId) {
@@ -551,25 +532,9 @@ function setTab(tabId) {
 
 async function refreshTabData(tabId) {
   if (!state.token) return;
-  // Tick stream: subscribe on trading/dashboard, unsubscribe otherwise
-  if (tabId === "trading" || tabId === "dashboard") {
-    const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
-    wsApi("subscribe_ticks", { symbol }).catch(() => {});
-    // Stop ALL old polling — tick stream handles everything at 1s
-    if (state.quoteTimer) { clearInterval(state.quoteTimer); state.quoteTimer = null; }
-    if (state.liveSyncTimer) { clearInterval(state.liveSyncTimer); state.liveSyncTimer = null; }
-  } else {
-    wsApi("unsubscribe_ticks").catch(() => {});
-    // Restart old polling when not on trading tab
-    if (!state.quoteTimer) {
-      state.quoteTimer = setInterval(() => { refreshQuote().catch(() => {}); }, 5000);
-    }
-    if (!state.liveSyncTimer) {
-      state.liveSyncTimer = setInterval(() => { syncLiveMt5State().catch(() => {}); }, 5000);
-    }
-  }
   if (tabId === "trading") {
-    // Don't call refreshQuote — tick stream handles it at 1s
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
+  } else if (tabId === "dashboard") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
   } else if (tabId === "history") {
     await Promise.allSettled([loadAccount(), loadHistory()]);
@@ -594,7 +559,6 @@ async function login(event) {
 }
 
 function logout() {
-  wsApi("unsubscribe_ticks").catch(() => {});
   stopRealtimeSync();
   state.user = null;
   state.selectedSignal = null;

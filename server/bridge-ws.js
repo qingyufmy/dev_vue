@@ -4,72 +4,13 @@ import { getDB } from './db.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
-// Connected bridges: userId -> { ws, account, terminal, lastSeen, liveTradingEnabled }
-const bridges = new Map()
-// Pending commands: commandId -> { resolve, timer, userId }
-const pendingCommands = new Map()
-// Browser WebSocket clients for real-time status push
-const statusClients = new Map() // ws -> { userId }
-// Tick streams: userId -> { interval, symbols, ws }
-const tickStreams = new Map()
+// Per-user state
+const bridges = new Map()       // userId -> { ws, lastSeen }
+const browsers = new Map()      // userId -> Set<ws>
+const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
 
 let cmdCounter = 0
 let wss = null
-
-// ============ Tick Stream (real-time P&L push) ============
-function startTickStream(userId, ws, symbol = 'XAUUSD') {
-  stopTickStream(userId)
-  let ticking = false
-  const interval = setInterval(async () => {
-    if (ticking) return
-    ticking = true
-    try {
-      if (ws.readyState !== 1) { stopTickStream(userId); return }
-      const positions = await sendBridgeCommand(userId, 'positions', {}, 3000).catch(() => null)
-      const posList = (positions && positions.status !== 'error') ? (positions.positions || []) : []
-      const account = await sendBridgeCommand(userId, 'account', {}, 3000).catch(() => null)
-      const acct = (account && account.status !== 'error') ? account : {}
-      const quote = await sendBridgeCommand(userId, 'quote', { symbol }, 3000).catch(() => null)
-
-      const contractSizes = { XAUUSD: 100, 'XAUUSD.s': 100 }
-      const tickData = {
-        type: 'tick_update',
-        timestamp: Date.now(),
-        quote: quote.status === 'success' ? { symbol, bid: quote.bid, ask: quote.ask, spread: quote.spread, time: quote.time } : null,
-        account: {
-          balance: account.balance,
-          equity: account.equity,
-          margin: account.margin,
-          free_margin: account.free_margin,
-          profit: account.profit,
-        },
-        positions: posList.map(p => {
-          const contract = contractSizes[p.symbol] || 100
-          const direction = p.type === 'buy' ? 1 : -1
-          const pnl = direction * (p.current_price - p.open_price) * p.volume * contract
-          return {
-            ticket: p.ticket,
-            symbol: p.symbol,
-            type: p.type,
-            volume: p.volume,
-            open_price: p.open_price,
-            current_price: p.current_price,
-            profit: Math.round(pnl * 100) / 100,
-            swap: p.swap || 0,
-            commission: p.commission || 0,
-          }
-        }),
-      }
-      if (ws.readyState === 1) ws.send(JSON.stringify(tickData))
-    } catch {} finally { ticking = false }
-  }, 2000)
-  tickStreams.set(userId, { interval, ws })
-}
-
-function stopTickStream(userId) {
-  const stream = tickStreams.get(userId)
-  if (stream) { clearInterval(stream.interval); tickStreams.delete(userId) }
-}
 
 export function initBridgeWS(server) {
   wss = new WebSocketServer({ noServer: true })
@@ -79,121 +20,142 @@ export function initBridgeWS(server) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit('connection', ws, req)
       })
+    } else {
+      socket.destroy()
     }
   })
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, 'http://localhost')
-    const clientType = url.searchParams.get('type')
+    const type = url.searchParams.get('type')
 
-    // === Browser status subscriber + command channel ===
-    if (clientType === 'browser') {
-      const token = url.searchParams.get('token')
-      let userId = null
-      if (token) {
-        try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
-      }
-      if (!userId) { ws.close(4002, 'Invalid token'); return }
-
-      statusClients.set(ws, { userId })
-
-      // Send current bridge status immediately
-      const status = getBridgeStatus(userId)
-      ws.send(JSON.stringify({ type: 'status', connected: status.connected, alive: status.alive }))
-
-      // Handle commands from browser
-      ws.on('message', (data) => {
-        let msg
-        try { msg = JSON.parse(data) } catch { return }
-        if (msg.type === 'command' && msg.action) {
-          handleBrowserCommand(ws, userId, msg)
-        }
-      })
-
-      ws.on('close', () => { statusClients.delete(ws); stopTickStream(userId) })
-      ws.on('error', () => { statusClients.delete(ws); stopTickStream(userId) })
-      return
-    }
-
-    // === MT5 bridge client ===
-    const token = url.searchParams.get('token')
-    if (!token) { ws.close(4001, 'Missing token'); return }
-
-    let userId
-    try {
-      userId = jwt.verify(token, JWT_SECRET).userId
-    } catch { ws.close(4002, 'Invalid token'); return }
-
-    bridges.set(userId, { ws, account: null, terminal: null, lastSeen: Date.now(), liveTradingEnabled: false })
-    console.log(`[BridgeWS] User ${userId} connected`)
-    ws.send(JSON.stringify({ type: 'connected', userId }))
-    notifyBrowsers(userId, true)
-
-    ws.on('message', (data) => {
-      let msg
-      try { msg = JSON.parse(data) } catch { return }
-      const bridge = bridges.get(userId)
-      if (bridge) bridge.lastSeen = Date.now()
-
-      if (msg.type === 'heartbeat') {
-        if (bridge) {
-          bridge.account = msg.account || null
-          bridge.terminal = msg.terminal || null
-          if (msg.live_trading_enabled !== undefined) bridge.liveTradingEnabled = msg.live_trading_enabled
-        }
-        ws.send(JSON.stringify({ type: 'heartbeat_ack' }))
-      } else if (msg.type === 'result') {
-        if (msg.result?.live_trading_enabled !== undefined && bridge) {
-          bridge.liveTradingEnabled = msg.result.live_trading_enabled
-        }
-        const pending = pendingCommands.get(msg.command_id)
-        if (pending) {
-          clearTimeout(pending.timer)
-          pending.resolve(msg.result)
-          pendingCommands.delete(msg.command_id)
-        }
-      }
-    })
-
-    ws.on('close', () => {
-      bridges.delete(userId)
-      console.log(`[BridgeWS] User ${userId} disconnected`)
-      notifyBrowsers(userId, false)
-      for (const [cmdId, pending] of pendingCommands) {
-        if (pending.userId === userId) {
-          clearTimeout(pending.timer)
-          pending.resolve({ status: 'error', error: 'Bridge disconnected' })
-          pendingCommands.delete(cmdId)
-        }
-      }
-    })
-
-    ws.on('error', (err) => console.error(`[BridgeWS] Error for user ${userId}:`, err.message))
+    if (type === 'browser') return handleBrowser(ws, url)
+    if (type === 'bridge') return handleBridge(ws, url)
+    ws.close(4000, 'Unknown type')
   })
-
-  // Heartbeat for browser connections
-  setInterval(() => {
-    for (const [ws] of statusClients) {
-      if (ws.readyState === 1) { try { ws.ping() } catch {} }
-      else statusClients.delete(ws)
-    }
-  }, 30000)
 
   console.log('[BridgeWS] WebSocket bridge initialized on /aurum-api/bridge/ws')
   return wss
 }
 
-// Notify browser clients about bridge status change
-function notifyBrowsers(userId, connected) {
-  for (const [ws, info] of statusClients) {
-    if (ws.readyState !== 1) { statusClients.delete(ws); continue }
-    if (info.userId === userId) {
-      try { ws.send(JSON.stringify({ type: 'status', connected, alive: connected })) } catch {}
+// ============ Browser Connection ============
+
+function handleBrowser(ws, url) {
+  const token = url.searchParams.get('token')
+  let userId = null
+  try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
+  if (!userId) { ws.close(4002, 'Invalid token'); return }
+
+  // Register
+  if (!browsers.has(userId)) browsers.set(userId, new Set())
+  browsers.get(userId).add(ws)
+
+  // Handle messages from browser
+  ws.on('message', (data) => {
+    let msg
+    try { msg = JSON.parse(data) } catch { return }
+
+    if (msg.type === 'hb') {
+      // Heartbeat — reply with MT5 connection status
+      const bridge = bridges.get(userId)
+      const connected = !!(bridge && bridge.ws.readyState === 1)
+      const alive = connected && (Date.now() - bridge.lastSeen < 20000)
+      ws.send(JSON.stringify({
+        type: 'hb',
+        seq: msg.seq,
+        mt5_connected: connected,
+        mt5_alive: alive,
+      }))
+    } else if (msg.type === 'command' && msg.action) {
+      handleBrowserCommand(ws, userId, msg)
+    }
+  })
+
+  ws.on('close', () => {
+    const set = browsers.get(userId)
+    if (set) { set.delete(ws); if (set.size === 0) browsers.delete(userId) }
+  })
+  ws.on('error', () => {
+    const set = browsers.get(userId)
+    if (set) { set.delete(ws); if (set.size === 0) browsers.delete(userId) }
+  })
+}
+
+// ============ Bridge Connection ============
+
+function handleBridge(ws, url) {
+  const token = url.searchParams.get('token')
+  let userId = null
+  try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
+  if (!userId) { ws.close(4002, 'Invalid token'); return }
+
+  bridges.set(userId, { ws, lastSeen: Date.now() })
+  console.log(`[BridgeWS] User ${userId} bridge connected`)
+
+  // Notify browsers
+  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true })
+
+  ws.on('message', (data) => {
+    let msg
+    try { msg = JSON.parse(data) } catch { return }
+
+    const bridge = bridges.get(userId)
+    if (bridge) bridge.lastSeen = Date.now()
+
+    if (msg.type === 'data') {
+      // Bridge data push — relay to browsers as-is
+      sendToBrowsers(userId, { type: 'data', ...msg })
+    } else if (msg.type === 'hb') {
+      // Bridge heartbeat — just update lastSeen (already done above)
+    } else if (msg.type === 'result') {
+      // Command result from bridge
+      if (msg.command_id) {
+        const pending = pendingCommands.get(msg.command_id)
+        if (pending) {
+          clearTimeout(pending.timer)
+          pendingCommands.delete(msg.command_id)
+          pending.resolve(msg.result)
+        }
+      }
+    }
+  })
+
+  ws.on('close', () => {
+    bridges.delete(userId)
+    console.log(`[BridgeWS] User ${userId} bridge disconnected`)
+    // Notify browsers
+    sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
+    // Reject pending commands
+    for (const [cmdId, pending] of pendingCommands) {
+      if (pending.userId === userId) {
+        clearTimeout(pending.timer)
+        pendingCommands.delete(cmdId)
+        pending.resolve({ status: 'error', error: 'Bridge disconnected' })
+      }
+    }
+  })
+
+  ws.on('error', (err) => {
+    console.error(`[BridgeWS] Bridge error for user ${userId}:`, err.message)
+  })
+}
+
+// ============ Helpers ============
+
+function sendToBrowsers(userId, data) {
+  const set = browsers.get(userId)
+  if (!set) return
+  const json = JSON.stringify(data)
+  for (const ws of set) {
+    if (ws.readyState === 1) {
+      try { ws.send(json) } catch {}
+    } else {
+      set.delete(ws)
     }
   }
 }
 
-// Handle browser WebSocket commands — route to existing business logic
+// Handle browser commands — route to bridge
 async function handleBrowserCommand(ws, userId, msg) {
   const { command_id, action, params = {} } = msg
   const reply = (data) => {
@@ -203,7 +165,6 @@ async function handleBrowserCommand(ws, userId, msg) {
   }
 
   try {
-    // Dynamic import to avoid circular dependency issues (module is already cached)
     const ai = await import('./routes/ai.js')
     const db = getDB()
     const user = db.prepare('SELECT plan, role FROM users WHERE id = ?').get(userId)
@@ -212,13 +173,17 @@ async function handleBrowserCommand(ws, userId, msg) {
 
     let result
     switch (action) {
-      // === MT5 Bridge commands ===
       case 'health': {
-        const bridgeStatus = getBridgeStatus(userId)
-        if (bridgeStatus.connected && bridgeStatus.alive) {
-          result = { status: 'success', gateway: { mode: 'live', mt5_package_available: true, live_trading_enabled: !!bridgeStatus.liveTradingEnabled, account: bridgeStatus.account } }
-        } else {
-          result = { status: 'success', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } }
+        const bridge = bridges.get(userId)
+        const connected = !!(bridge && bridge.ws.readyState === 1)
+        const alive = connected && (Date.now() - bridge.lastSeen < 20000)
+        result = {
+          status: 'success',
+          gateway: {
+            mode: alive ? 'live' : 'mock',
+            mt5_package_available: true,
+            live_trading_enabled: alive,
+          },
         }
         break
       }
@@ -243,8 +208,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         ai.insertAudit(db, userId, 'manual_close', null, params, result, result?.status || 'unknown')
         break
       case 'toggle_trade': {
-        const enable = !!params.enable
-        result = await ai.mt5Bridge(userId, 'toggle_trade', { enable })
+        result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
         break
       }
       case 'history':
@@ -259,18 +223,6 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'analyze':
         result = await ai.handleAnalyze(userId, params)
         break
-
-      // === Tick Stream ===
-      case 'subscribe_ticks':
-        startTickStream(userId, ws, params.symbol || 'XAUUSD')
-        result = { status: 'success', message: 'Tick stream started' }
-        break
-      case 'unsubscribe_ticks':
-        stopTickStream(userId)
-        result = { status: 'success', message: 'Tick stream stopped' }
-        break
-
-      // === AI Config ===
       case 'ai_config': {
         const row = ai.getActiveConfig(db, userId, params.session_id || 'default')
         const isAdmin = user?.role === 'admin'
@@ -302,8 +254,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', config: ai.configPublic(row) }
         break
       }
-
-      // === AI Signals ===
       case 'signals': {
         const rows = db.prepare('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100').all(userId, params.session_id || 'default')
         const signals = rows.map(row => {
@@ -336,8 +286,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         ai.insertAudit(db, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm }, result, result.status)
         break
       }
-
-      // === Auto Scheduler ===
       case 'auto_status': {
         const cfg = ai.getAutoConfig(db, userId)
         const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : []
@@ -351,14 +299,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         const shortestMs = timeframes.length ? Math.min(...timeframes.map(ai.timeframeIntervalMs)) : 900_000
         const interval_seconds = Math.round(shortestMs / 1000)
         ai.upsertAutoConfig(db, userId, symbols, timeframes, interval_seconds, enabled)
-        // Restart scheduler
         ai.stopAutoScheduler(userId)
         if (enabled) ai.startAutoScheduler(userId)
         result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols, timeframes, interval_seconds }
         break
       }
-
-      // === Audit ===
       case 'audit_logs': {
         const rows = db.prepare('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(userId)
         const logs = rows.map(row => {
@@ -372,7 +317,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', logs }
         break
       }
-
       default:
         result = { status: 'error', message: `Unknown action: ${action}` }
     }
@@ -391,15 +335,6 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
       return
     }
 
-    const heartbeatAge = Date.now() - bridge.lastSeen
-    if (heartbeatAge > 30000) {
-      try { bridge.ws.close() } catch {}
-      bridges.delete(userId)
-      notifyBrowsers(userId, false)
-      resolve({ status: 'error', error: 'Bridge disconnected (heartbeat timeout)' })
-      return
-    }
-
     const cmdId = `cmd_${Date.now()}_${++cmdCounter}`
     const timer = setTimeout(() => {
       pendingCommands.delete(cmdId)
@@ -407,15 +342,20 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
     }, timeoutMs)
 
     pendingCommands.set(cmdId, { resolve, timer, userId })
-
-    bridge.ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }))
+    try {
+      bridge.ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }))
+    } catch {
+      clearTimeout(timer)
+      pendingCommands.delete(cmdId)
+      resolve({ status: 'error', error: 'Bridge send failed' })
+    }
   })
 }
 
 // Check if a user has an active bridge
 export function isBridgeAlive(userId) {
   const bridge = bridges.get(userId)
-  return bridge && bridge.ws.readyState === 1 && (Date.now() - bridge.lastSeen < 15000)
+  return !!(bridge && bridge.ws.readyState === 1 && (Date.now() - bridge.lastSeen < 20000))
 }
 
 // Get bridge status for a user
@@ -424,11 +364,8 @@ export function getBridgeStatus(userId) {
   if (!bridge || bridge.ws.readyState !== 1) return { connected: false }
   return {
     connected: true,
-    alive: Date.now() - bridge.lastSeen < 15000,
-    account: bridge.account,
-    terminal: bridge.terminal,
+    alive: Date.now() - bridge.lastSeen < 20000,
     lastSeen: bridge.lastSeen,
-    liveTradingEnabled: bridge.liveTradingEnabled,
   }
 }
 
@@ -439,10 +376,8 @@ export function getAllBridges() {
     result.push({
       userId,
       connected: bridge.ws.readyState === 1,
-      alive: Date.now() - bridge.lastSeen < 15000,
-      account: bridge.account,
+      alive: Date.now() - bridge.lastSeen < 20000,
       lastSeen: bridge.lastSeen,
-      liveTradingEnabled: bridge.liveTradingEnabled,
     })
   }
   return result

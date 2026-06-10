@@ -677,7 +677,7 @@ class AurumBridge:
             try:
                 ws = websocket.create_connection(ws_url, timeout=10,
                     header=["Origin: http://localhost"])
-                self.root.after(0, self._log, "WebSocket 已连接")
+                self.root.after(0, self._log, "WebSocket 已连接")\n                self._ws = ws\n                self._resolved_symbol = self._resolve_symbol("XAUUSD") if self.mt5 else "XAUUSD"
                 last_hb = 0
 
                 while self.running:
