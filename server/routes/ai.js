@@ -1149,5 +1149,5 @@ router.get('/bridge/status', authMiddleware, proOnly, (req, res) => {
   res.json(getBridgeStatus(req.userId))
 })
 
-export { executeViaBridge, isBridgeAlive, getAllBridges }
+export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges }
 export default router
