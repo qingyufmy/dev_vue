@@ -601,8 +601,6 @@ const state = {
 
 const AUTH_COOKIE_NAME = 'ws_token'
 const AUTH_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
-const PUBLIC_ALPHA_GROUP_URL = 'https://t.me/+Y6g4eA6DkXllOGNl'
-const PUBLIC_ALPHA_NOTICE_ID = 'public-alpha-group-2026-05-28'
 const LOGIN_REQUIRED_STATIC_PREFIXES = ['/research', '/earnings', '/ai泡沫周报', '/weekly']
 const LOGIN_REQUIRED_APP_PREFIXES = [
   '/article',
@@ -748,150 +746,6 @@ async function handleAuthGateRedirect(nextPath) {
   return true
 }
 
-let publicAlphaNoticeVisible = false
-let publicAlphaNoticeChecking = false
-
-function getPublicAlphaNoticeStorageKey(user = state.user) {
-  const identity = user?.uid || user?.email || user?.id
-  if (!identity) return ''
-  return `ws_notice_${PUBLIC_ALPHA_NOTICE_ID}:${identity}`
-}
-
-function hasSeenPublicAlphaNotice(user = state.user) {
-  const key = getPublicAlphaNoticeStorageKey(user)
-  return Boolean(key && localStorage.getItem(key) === '1')
-}
-
-function markPublicAlphaNoticeSeen(user = state.user) {
-  const key = getPublicAlphaNoticeStorageKey(user)
-  if (key) localStorage.setItem(key, '1')
-}
-
-function syncPublicAlphaNoticeSeenToServer(source = 'local-sync') {
-  if (!hasClientAuth()) return
-  api.post('/api/user-notices', {
-    noticeId: PUBLIC_ALPHA_NOTICE_ID,
-    source,
-  }).catch(() => {})
-}
-
-async function consumePublicAlphaNotice() {
-  if (!hasClientAuth()) return false
-
-  if (hasSeenPublicAlphaNotice()) {
-    syncPublicAlphaNoticeSeenToServer('local-sync')
-    return false
-  }
-
-  try {
-    const result = await api.post('/api/user-notices', {
-      noticeId: PUBLIC_ALPHA_NOTICE_ID,
-      source: 'popup',
-    })
-
-    if (result?.ok && result.shouldShow === true) {
-      markPublicAlphaNoticeSeen()
-      return true
-    }
-
-    if (result?.ok && result.shouldShow === false) {
-      markPublicAlphaNoticeSeen()
-      return false
-    }
-  } catch (err) {
-    console.warn('Public alpha notice server state unavailable:', err)
-  }
-
-  // Fail closed for repeat spam: if the API is temporarily unavailable, still
-  // mark this browser as consumed before showing the announcement once.
-  markPublicAlphaNoticeSeen()
-  return true
-}
-
-async function copyTextToClipboard(text) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
-    return
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', '')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.top = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
-  document.execCommand('copy')
-  textarea.remove()
-}
-
-function closePublicAlphaNotice() {
-  const overlay = document.getElementById('publicAlphaNoticeOverlay')
-  if (!overlay) return
-  overlay.classList.remove('active')
-  setTimeout(() => {
-    overlay.remove()
-    publicAlphaNoticeVisible = false
-  }, 220)
-}
-
-async function maybeShowPublicAlphaNotice() {
-  if (!hasClientAuth() || publicAlphaNoticeVisible || publicAlphaNoticeChecking) return
-
-  publicAlphaNoticeChecking = true
-  const shouldShow = await consumePublicAlphaNotice()
-  publicAlphaNoticeChecking = false
-
-  if (!shouldShow || !hasClientAuth() || publicAlphaNoticeVisible) return
-  publicAlphaNoticeVisible = true
-
-  const overlay = document.createElement('div')
-  overlay.className = 'alpha-notice-overlay'
-  overlay.id = 'publicAlphaNoticeOverlay'
-  overlay.setAttribute('role', 'dialog')
-  overlay.setAttribute('aria-modal', 'true')
-  overlay.setAttribute('aria-labelledby', 'publicAlphaNoticeTitle')
-  overlay.innerHTML = `
-    <div class="alpha-notice-card">
-      <div class="alpha-notice-kicker">公开群聊提醒</div>
-      <h2 id="publicAlphaNoticeTitle">华尔街没有名字公开alpha群聊</h2>
-      <p class="alpha-notice-copy">公开 Alpha 群用于同步公开市场观察、站内更新和群聊讨论。你可以复制链接保存，也可以直接跳转加入。</p>
-      <div class="alpha-notice-link" aria-label="Telegram 群链接">${escapeHtml(PUBLIC_ALPHA_GROUP_URL)}</div>
-      <div class="alpha-notice-actions">
-        <button type="button" class="btn btn-ghost alpha-copy-btn" id="publicAlphaCopyBtn">点击复制链接</button>
-        <button type="button" class="btn btn-primary alpha-join-btn" id="publicAlphaJoinBtn">点击加入群聊</button>
-      </div>
-    </div>
-  `
-  document.body.appendChild(overlay)
-
-  const copyBtn = overlay.querySelector('#publicAlphaCopyBtn')
-  const joinBtn = overlay.querySelector('#publicAlphaJoinBtn')
-
-  copyBtn?.addEventListener('click', async () => {
-    try {
-      await copyTextToClipboard(PUBLIC_ALPHA_GROUP_URL)
-      markPublicAlphaNoticeSeen()
-      syncPublicAlphaNoticeSeenToServer('copy')
-      copyBtn.textContent = '已复制'
-      setTimeout(closePublicAlphaNotice, 450)
-    } catch {
-      copyBtn.textContent = '复制失败，请长按链接复制'
-    }
-  })
-
-  joinBtn?.addEventListener('click', () => {
-    markPublicAlphaNoticeSeen()
-    syncPublicAlphaNoticeSeenToServer('join')
-    closePublicAlphaNotice()
-    const opened = window.open(PUBLIC_ALPHA_GROUP_URL, '_blank')
-    if (opened) opened.opener = null
-    if (!opened) window.location.href = PUBLIC_ALPHA_GROUP_URL
-  })
-
-  requestAnimationFrame(() => overlay.classList.add('active'))
-}
 
 // ===== Course Content Loader =====
 const courseContent = createCourseContent(api)
@@ -989,7 +843,7 @@ function getEffectivePlan(user = state.user) {
   return plan
 }
 
-async function refreshCurrentUserProfile({ rerender = false, syncTelegram = false, showPublicAlphaNotice = false } = {}) {
+async function refreshCurrentUserProfile({ rerender = false, syncTelegram = false } = {}) {
   if (!localStorage.getItem('ws_token')) return null
 
   try {
@@ -1009,7 +863,6 @@ async function refreshCurrentUserProfile({ rerender = false, syncTelegram = fals
       refreshNotificationUnread()
       startPresenceHeartbeat()
       if (rerender || state.paymentStatus === 'success' || planChanged || adminChanged || bindingChanged) renderView()
-      if (showPublicAlphaNotice) setTimeout(maybeShowPublicAlphaNotice, 320)
       return r.user
     }
 
@@ -1701,7 +1554,7 @@ async function init() {
 
   // Validate token on app startup & sync plan from server
   if (localStorage.getItem('ws_token')) {
-    refreshCurrentUserProfile({ showPublicAlphaNotice: true }).catch(() => {})
+    refreshCurrentUserProfile().catch(() => {})
   }
 }
 
@@ -6858,7 +6711,7 @@ function persistAuthSession(result, { syncProgress = false } = {}) {
   if (state.currentView === 'home') {
     renderHome()
   }
-  setTimeout(maybeShowPublicAlphaNotice, 320)
+
 }
 
 // ===== Trade Records View =====
