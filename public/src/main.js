@@ -3118,7 +3118,8 @@ function renderAdminContent(data) {
   function planLabel(plan, expiresAt) {
     if (!plan || plan === 'free') return '<span class="admin-badge badge-free">免费</span>'
     const label = plan === 'pro' ? 'PRO' : 'Plus'
-    const expired = expiresAt && new Date(expiresAt + 'T23:59:59+08:00') < new Date()
+    const expStr = expiresAt instanceof Date ? expiresAt.toISOString().substring(0, 10) : String(expiresAt || '').substring(0, 10)
+const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
     if (expired) return `<span class="admin-badge badge-expired">${label} (已过期)</span>`
     return `<span class="admin-badge badge-paid">${label}</span>`
   }
@@ -3268,7 +3269,7 @@ function renderAdminContent(data) {
                     <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
                     <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
                     <td>${planLabel(u.plan, u.planExpiresAt)}</td>
-                    <td style="font-size:12px;">${u.planExpiresAt || '-'}</td>
+                    <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
                     <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
                     <td style="font-size:11px;white-space:nowrap;">
                       ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
@@ -3306,7 +3307,7 @@ function renderAdminContent(data) {
                       <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
                       <td class="admin-uid">${escapeHtml(u.uid || '-')}</td>
                       <td>${planLabel(u.plan, u.planExpiresAt)}</td>
-                      <td style="font-size:12px;">${u.planExpiresAt || '-'}</td>
+                      <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
                       <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
                       <td>
                         <div class="admin-actions">
@@ -8224,7 +8225,7 @@ function setupGlobalEvents() {
                 <td>${formatMinorUsd(o.amount)}</td>
                 <td>${o.amountConfirmed ? formatMinorUsd(o.amountConfirmed) : '-'}</td>
                 <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : 'badge-free'}">${escapeHtml(o.statusLabel)}</span></td>
-                <td>${escapeHtml(o.paidAt || o.createdAt)}</td>
+                <td>${formatDateTime(o.paidAt || o.createdAt) || '-'}</td>
               </tr>`).join('')}
             </tbody>
           </table>
