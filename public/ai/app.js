@@ -11,7 +11,6 @@ const state = {
   liveSyncInFlight: false,
   backgroundSyncInFlight: false,
   lastQuote: null,
-  _wsConnecting: false,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
 
@@ -335,15 +334,7 @@ const _wsPending = new Map();
 function wsApi(action, params = {}) {
   return new Promise((resolve, reject) => {
     const ws = state.bridgeWs;
-    if (!ws || ws.readyState !== 1) {
-      // Try to reconnect once before failing
-      if (state.token && action !== '_reconnect') {
-        connectBridgeStatusWs();
-        setTimeout(() => wsApi(action, params).then(resolve).catch(reject), 500);
-        return;
-      }
-      return reject(new Error('WebSocket未连接'));
-    }
+    if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
     const cmdId = `ws_${++_wsCmdId}`;
     const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, 10000);
     _wsPending.set(cmdId, { resolve, reject, timer });
@@ -377,7 +368,7 @@ function stopRealtimeSync() {
   if (state.quoteTimer) clearInterval(state.quoteTimer);
   if (state.liveSyncTimer) clearInterval(state.liveSyncTimer);
   if (state.backgroundSyncTimer) clearInterval(state.backgroundSyncTimer);
-  if (state.bridgeWs) { state._wsIntentionalClose = true; try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
+  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopSignalAgeTicker();
   state.quoteTimer = null;
   state.liveSyncTimer = null;
@@ -388,19 +379,16 @@ function stopRealtimeSync() {
 
 // Real-time bridge status via WebSocket + command channel
 function connectBridgeStatusWs(onReady) {
-  // Guard: don't create duplicate connections
-  if (state._wsConnecting && state.bridgeWs && state.bridgeWs.readyState <= 1) return;
-  state._wsConnecting = true;
-  // Close old connection without triggering reconnect
-  if (state.bridgeWs) {
-    state._wsIntentionalClose = true;
-    try { state.bridgeWs.close() } catch {}
+  // Only one connection at a time
+  if (state.bridgeWs && state.bridgeWs.readyState <= 1) {
+    if (typeof onReady === 'function') onReady();
+    return;
   }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
-  ws.onopen = () => { state._wsConnecting = false; if (typeof onReady === 'function') onReady(); };
+  ws.onopen = () => { if (typeof onReady === 'function') onReady(); };
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
@@ -410,13 +398,9 @@ function connectBridgeStatusWs(onReady) {
         setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
         if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
         state._lastGatewayLive = isLive;
-        // Auto-refresh when bridge state changes
         if (isLive !== wasLive) {
-          if (isLive) {
-            // Bridge just came online — reload everything
-            refreshAll().catch(() => {});
-          } else {
-            // Bridge just went offline — clear live data
+          if (isLive) { refreshAll().catch(() => {}); }
+          else {
             setBadge("tradeMode", "请先启动桥接", "neutral");
             state.positions = [];
             renderPositionRows();
@@ -436,18 +420,14 @@ function connectBridgeStatusWs(onReady) {
       }
     } catch {}
   };
-  ws.onclose = () => { state._wsConnecting = false;
+  ws.onclose = () => {
     if (state.bridgeWs === ws) state.bridgeWs = null;
-    // Reject all pending commands
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
-    // Only auto-reconnect if not intentionally closed
-    if (!state._wsIntentionalClose && state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
-    state._wsIntentionalClose = false;
+    if (state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
   };
   ws.onerror = () => {};
 }
-
 // Real-time P&L update from WebSocket tick stream
 function handleTickUpdate(tick) {
   // Update quote
