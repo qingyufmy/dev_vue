@@ -765,10 +765,19 @@ function initBridgeModal() {
 
   $("downloadExe")?.addEventListener("click", () => {
     const token = state.token || localStorage.getItem("authToken") || "";
+    // Download EXE
     const url = `/ai/bridge/exe-file?token=${encodeURIComponent(token)}`;
     const a = document.createElement("a");
     a.href = url; a.download = "AURUM_Bridge.exe"; a.click();
-    toast("正在下载 AURUM_Bridge.exe", "success");
+    // Auto download config.json
+    const serverUrl = location.origin;
+    const cfg = JSON.stringify({ server_url: serverUrl, token }, null, 2);
+    const blob = new Blob([cfg], { type: "application/json" });
+    const a2 = document.createElement("a");
+    a2.href = URL.createObjectURL(blob);
+    a2.download = "config.json";
+    setTimeout(() => { a2.click(); URL.revokeObjectURL(a2.href); }, 500);
+    toast("正在下载 EXE 和 config.json", "success");
     modal.classList.add("hidden");
   });
 
