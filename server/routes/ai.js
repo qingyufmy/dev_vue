@@ -823,59 +823,6 @@ router.post('/ui/config', authMiddleware, proOnly, (req, res) => {
   res.json({ status: 'success', theme })
 })
 
-// Health check
-router.get('/health', async (req, res) => {
-  // Prevent browser from caching health responses across user sessions
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate')
-  res.set('Pragma', 'no-cache')
-  try {
-    // Optional auth: Pro users get real bridge status, others see mock
-    let isPro = false
-    const auth = req.headers.authorization
-    if (auth && auth.startsWith('Bearer ')) {
-      try {
-        const payload = jwt.verify(auth.slice(7), JWT_SECRET)
-        const db = getDB()
-        const u = db.prepare('SELECT plan, role FROM users WHERE id = ?').get(payload.userId)
-        isPro = u?.role === 'admin' || u?.plan === 'pro'
-      } catch {}
-    }
-
-    if (!isPro) {
-      return res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
-    }
-
-    // Pro users: real bridge status (per-user, not global)
-    let userId = null
-    try {
-      const payload = jwt.verify(auth.slice(7), JWT_SECRET)
-      userId = payload.userId
-    } catch {}
-
-    if (!userId) {
-      return res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
-    }
-
-    const bridgeStatus = getBridgeStatus(userId)
-    if (bridgeStatus.connected && bridgeStatus.alive) {
-      res.json({
-        status: 'healthy',
-        service: 'AURUM AI',
-        gateway: {
-          mode: 'live',
-          mt5_package_available: true,
-          live_trading_enabled: !!bridgeStatus.liveTradingEnabled,
-          account: bridgeStatus.account,
-        },
-      })
-    } else {
-      res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
-    }
-  } catch {
-    res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: false } })
-  }
-})
-
 // MT5 Connect
 // MT5 Toggle Trade �� enable/disable live trading without disconnecting
 router.post('/mt5/toggle-trade', authMiddleware, proOnly, async (req, res) => {
