@@ -28,7 +28,7 @@ function startTickStream(userId, ws) {
       const account = await sendBridgeCommand(userId, 'account', {}, 5000)
       if (account.status === 'error') return
 
-      const contractSizes = { XAUUSD: 100, XAUUSD.s: 100 }
+      const contractSizes = { XAUUSD: 100, 'XAUUSD.s': 100 }
       const tickData = {
         type: 'tick_update',
         timestamp: Date.now(),
