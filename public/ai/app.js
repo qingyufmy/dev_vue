@@ -440,6 +440,7 @@ function handleTickUpdate(tick) {
     flashPrice("quoteAsk", askDir);
     if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
       state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
+      updateTradingQuotePreview(state.lastQuote);
     }
   }
   // Update account summary
@@ -543,17 +544,22 @@ async function refreshTabData(tabId) {
   if (tabId === "trading" || tabId === "dashboard") {
     const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
     wsApi("subscribe_ticks", { symbol }).catch(() => {});
-    // Stop 5s polling — tick stream handles positions + account
+    // Stop ALL old polling — tick stream handles everything at 1s
+    if (state.quoteTimer) { clearInterval(state.quoteTimer); state.quoteTimer = null; }
     if (state.liveSyncTimer) { clearInterval(state.liveSyncTimer); state.liveSyncTimer = null; }
   } else {
     wsApi("unsubscribe_ticks").catch(() => {});
-    // Restart 5s polling when not on trading tab
+    // Restart old polling when not on trading tab
+    if (!state.quoteTimer) {
+      state.quoteTimer = setInterval(() => { refreshQuote().catch(() => {}); }, 5000);
+    }
     if (!state.liveSyncTimer) {
       state.liveSyncTimer = setInterval(() => { syncLiveMt5State().catch(() => {}); }, 5000);
     }
   }
   if (tabId === "trading") {
-    await Promise.allSettled([loadAccount(), loadPositions(), refreshQuote(), loadStatus()]);
+    // Don't call refreshQuote — tick stream handles it at 1s
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
   } else if (tabId === "history") {
     await Promise.allSettled([loadAccount(), loadHistory()]);
   } else if (tabId === "audit") {
@@ -616,6 +622,8 @@ async function bootstrap() {
     });
     await refreshAll();
     startRealtimeSync();
+    // Activate tick stream for current tab (stops old polling)
+    refreshTabData(activeTabId());
   } catch {
     logout();
   }
@@ -855,8 +863,7 @@ async function loadSymbols() {
       ? previous
       : preferred?.name || state.symbols[0]?.name || "";
   }
-
-  await refreshQuote();
+  // Don't call refreshQuote here — tick stream handles it at 1s
 }
 
 async function loadAccount() {
