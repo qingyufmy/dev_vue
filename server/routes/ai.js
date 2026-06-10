@@ -466,6 +466,11 @@ async function executeOrder(userId, config, request, action) {
   return result
 }
 
+// Execute command via WebSocket bridge
+async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
+  return sendBridgeCommand(userId, action, params, timeoutMs)
+}
+
 // Handle analyze request (called from WebSocket command handler)
 async function handleAnalyze(userId, params) {
   const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true } = params
