@@ -45,7 +45,7 @@ function handleBrowser(ws, url) {
   let userId = null
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { console.log('[BridgeWS] Invalid token, closing'); ws.close(4002, 'Invalid token'); return }
-  console.log([BridgeWS] Bridge token valid, userId: )
+  console.log("[BridgeWS] Bridge token valid, userId:" + userId)
 
   // Register
   if (!browsers.has(userId)) browsers.set(userId, new Set())
@@ -89,7 +89,7 @@ function handleBridge(ws, url) {
   let userId = null
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { console.log('[BridgeWS] Invalid token, closing'); ws.close(4002, 'Invalid token'); return }
-  console.log([BridgeWS] Bridge token valid, userId: )
+  console.log("[BridgeWS] Bridge token valid, userId:" + userId)
 
   bridges.set(userId, { ws, lastSeen: Date.now() }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
@@ -105,7 +105,7 @@ function handleBridge(ws, url) {
     if (bridge) bridge.lastSeen = Date.now()
 
     if (msg.type === 'data') {
-      if (!bridge._dataLogCount) bridge._dataLogCount = 0; if (++bridge._dataLogCount % 30 === 1) console.log([BridgeWS] User  data #)
+      if (!bridge._dataLogCount) bridge._dataLogCount = 0; if (++bridge._dataLogCount % 30 === 1) console.log("[BridgeWS] User " + userId + " data #" + bridge._dataLogCount)
       // Bridge data push — relay to browsers as-is
       sendToBrowsers(userId, { type: 'data', ...msg })
     } else if (msg.type === 'hb') {
