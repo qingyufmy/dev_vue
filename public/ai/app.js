@@ -361,23 +361,31 @@ function activeTabId() {
 }
 
 function stopRealtimeSync() {
-  if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
   if (state.backgroundSyncTimer) { clearInterval(state.backgroundSyncTimer); state.backgroundSyncTimer = null; }
-  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopSignalAgeTicker();
 }
 
 // Real-time bridge status via WebSocket + command channel
+let _wsConnCounter = 0;
+const _wsActive = new Set();
+
 function connectBridgeStatusWs(onReady) {
   if (state.bridgeWs && state.bridgeWs.readyState <= 1) {
     if (typeof onReady === 'function') onReady();
     return;
   }
+  const connId = ++_wsConnCounter;
+  console.warn('[WS:DIAG] connectBridgeStatusWs() call #' + connId + ' | active connections: ' + _wsActive.size + ' | stack:', new Error().stack?.split('\n').slice(1,5).join(' <- '));
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
+  ws._connId = connId;
+  ws._msgCount = 0;
+  _wsActive.add(ws);
+  console.warn('[WS:DIAG] WebSocket #' + connId + ' created, total active: ' + _wsActive.size);
   state.bridgeWs = ws;
   ws.onopen = () => {
+    console.warn('[WS:DIAG] WebSocket #' + connId + ' OPEN, active: ' + _wsActive.size + ', readyState=' + ws.readyState);
     state._hbSeq = 0;
     if (state._hbTimer) clearInterval(state._hbTimer);
     state._hbTimer = setInterval(() => {
@@ -388,6 +396,7 @@ function connectBridgeStatusWs(onReady) {
     if (typeof onReady === 'function') onReady();
   };
   ws.onmessage = (e) => {
+    if (++ws._msgCount === 1) console.warn('[WS:DIAG] WebSocket #' + connId + ' FIRST message, len=' + (e.data ? e.data.length : 0));
     try {
       const msg = JSON.parse(e.data);
       if (msg.type === 'data') {
@@ -408,6 +417,8 @@ function connectBridgeStatusWs(onReady) {
     } catch {}
   };
   ws.onclose = (e) => {
+    _wsActive.delete(ws);
+    console.warn('[WS:DIAG] WebSocket #' + connId + ' CLOSE code=' + e.code + ' reason=' + e.reason + ' msgs=' + ws._msgCount + ' remaining active: ' + _wsActive.size);
     if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
     if (state.bridgeWs === ws) state.bridgeWs = null;
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
@@ -567,6 +578,7 @@ async function login(event) {
 }
 
 function logout() {
+  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopRealtimeSync();
   state.user = null;
   state.selectedSignal = null;
