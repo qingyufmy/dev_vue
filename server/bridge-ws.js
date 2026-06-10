@@ -1,4 +1,4 @@
-import { WebSocketServer } from 'ws'
+﻿import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { getDB } from './db.js'
 
@@ -251,7 +251,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             max_tokens = excluded.max_tokens, enable_auto_trade = excluded.enable_auto_trade,
             enable_futures_trading = excluded.enable_futures_trading, risk_level = excluded.risk_level,
             max_position_size = excluded.max_position_size, selected_take_profit = excluded.selected_take_profit,
-            is_active = 1, updated_at = excluded.updated_at`
+            model_sharing_enabled = excluded.model_sharing_enabled, is_active = 1, updated_at = excluded.updated_at`
         ).run(userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
           cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
           cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',

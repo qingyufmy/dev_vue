@@ -1093,6 +1093,23 @@ async function loadConfig() {
     const spData = await wsApi("get_system_prompt");
     if (spData.prompt) $("systemPrompt").value = spData.prompt;
   } catch {}
+
+  // Model sharing toggle (admin only)
+  const isAdmin = state.user?.role === "admin";
+  const sharingWrap = $("modelSharingWrap");
+  const sharedInfo = $("modelSharedInfo");
+  if (sharingWrap) sharingWrap.style.display = isAdmin ? "" : "none";
+  if (isAdmin && $("modelSharingEnabled")) {
+    $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
+  }
+  if (sharedInfo) {
+    if (!isAdmin && cfg._model_shared) {
+      sharedInfo.style.display = "";
+      setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 使用管理员共享模型`);
+    } else {
+      sharedInfo.style.display = "none";
+    }
+  }
 }
 
 async function saveConfig() {
@@ -1117,6 +1134,7 @@ async function saveConfig() {
       risk_level: $("riskLevel").value,
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
+      model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
     },
   };
 
@@ -1333,6 +1351,14 @@ async function runAnalysis() {
   const frames = selectedTimeframes();
   if (!frames.length) {
     toast("请至少选择一个周期", "warning");
+    return;
+  }
+
+  // Check: non-admin without own config and model sharing is off
+  const sharedInfo = $("modelSharedInfo");
+  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
+  if (!state.currentConfigHasApiKey && !isUsingShared) {
+    toast("请先在模型设置中配置 API Key，或联系管理员开启模型共享", "warning");
     return;
   }
 

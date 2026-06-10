@@ -319,6 +319,20 @@
             </div>
             <div class="config-section">
               <div class="config-section-title">AI 推理引擎</div>
+              <label class="model-sharing-toggle" id="modelSharingWrap" style="display:none">
+                <div class="model-sharing-row">
+                  <span>共享模型给其他用户</span>
+                  <label class="switch">
+                    <input type="checkbox" id="modelSharingEnabled">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <small class="field-help">开启后，未配置模型的用户将自动使用您的模型设置</small>
+              </label>
+              <div id="modelSharedInfo" class="model-shared-info" style="display:none">
+                <i data-lucide="info" size="14"></i>
+                <span>当前使用管理员共享的模型设置，请自行配置模型以使用自定义设置</span>
+              </div>
               <div class="config-grid">
                 <label><span>模型供应商</span><select id="apiProvider">
                   <option value="deepseek">DeepSeek</option>
