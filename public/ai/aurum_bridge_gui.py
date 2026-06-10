@@ -717,7 +717,10 @@ class AurumBridge:
                             if msg.get("type") == "command":
                                 cmd = msg
                                 self.root.after(0, self._log, f"执行: {cmd['action']}")
-                                resp = self._process_command(cmd)
+                                try:
+                                    resp = self._process_command(cmd)
+                                except Exception as cmd_err:
+                                    resp = {"status": "error", "message": str(cmd_err)}
                                 ws.send(json.dumps({
                                     "type": "result",
                                     "command_id": msg["command_id"],

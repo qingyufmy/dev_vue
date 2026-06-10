@@ -489,7 +489,7 @@ async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const market = calculateMarketData(symbol, timeframe, rates, account, positions)
-  const signal = await aiAnalyze(config, market)
+  const signal = await maybeAiSignal(config, market)
 
   if (signal) {
     const now = utcNow()

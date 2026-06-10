@@ -25,12 +25,11 @@ function startTickStream(userId, ws, symbol = 'XAUUSD') {
     ticking = true
     try {
       if (ws.readyState !== 1) { stopTickStream(userId); return }
-      const positions = await sendBridgeCommand(userId, 'positions', {}, 5000)
-      if (positions.status === 'error') return
-      const posList = positions.positions || []
-      const account = await sendBridgeCommand(userId, 'account', {}, 5000)
-      if (account.status === 'error') return
-      const quote = await sendBridgeCommand(userId, 'quote', { symbol }, 5000)
+      const positions = await sendBridgeCommand(userId, 'positions', {}, 3000).catch(() => null)
+      const posList = (positions && positions.status !== 'error') ? (positions.positions || []) : []
+      const account = await sendBridgeCommand(userId, 'account', {}, 3000).catch(() => null)
+      const acct = (account && account.status !== 'error') ? account : {}
+      const quote = await sendBridgeCommand(userId, 'quote', { symbol }, 3000).catch(() => null)
 
       const contractSizes = { XAUUSD: 100, 'XAUUSD.s': 100 }
       const tickData = {
@@ -63,7 +62,7 @@ function startTickStream(userId, ws, symbol = 'XAUUSD') {
       }
       if (ws.readyState === 1) ws.send(JSON.stringify(tickData))
     } catch {} finally { ticking = false }
-  }, 1000)
+  }, 2000)
   tickStreams.set(userId, { interval, ws })
 }
 
@@ -393,7 +392,7 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
     }
 
     const heartbeatAge = Date.now() - bridge.lastSeen
-    if (heartbeatAge > 20000) {
+    if (heartbeatAge > 30000) {
       try { bridge.ws.close() } catch {}
       bridges.delete(userId)
       notifyBrowsers(userId, false)

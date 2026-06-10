@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || "",
   user: null,
   symbols: [],
@@ -11,6 +11,7 @@
   liveSyncInFlight: false,
   backgroundSyncInFlight: false,
   lastQuote: null,
+  _wsConnecting: false,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
 
@@ -387,6 +388,9 @@ function stopRealtimeSync() {
 
 // Real-time bridge status via WebSocket + command channel
 function connectBridgeStatusWs(onReady) {
+  // Guard: don't create duplicate connections
+  if (state._wsConnecting && state.bridgeWs && state.bridgeWs.readyState <= 1) return;
+  state._wsConnecting = true;
   // Close old connection without triggering reconnect
   if (state.bridgeWs) {
     state._wsIntentionalClose = true;
@@ -396,7 +400,7 @@ function connectBridgeStatusWs(onReady) {
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
-  ws.onopen = () => { if (typeof onReady === 'function') onReady(); };
+  ws.onopen = () => { state._wsConnecting = false; if (typeof onReady === 'function') onReady(); };
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
@@ -432,7 +436,7 @@ function connectBridgeStatusWs(onReady) {
       }
     } catch {}
   };
-  ws.onclose = () => {
+  ws.onclose = () => { state._wsConnecting = false;
     if (state.bridgeWs === ws) state.bridgeWs = null;
     // Reject all pending commands
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
