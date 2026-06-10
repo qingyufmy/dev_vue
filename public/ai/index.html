@@ -363,6 +363,7 @@
             <div class="config-section">
               <div class="config-section-title">系统提示词</div>
               <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
+              <button id="saveSystemPromptBtn" class="btn btn-primary" style="margin-top:8px;"><i data-lucide="save" size="16"></i>保存提示词</button>
             </div>
             <div id="configStatus" class="inline-status">正在读取配置</div>
             <div class="config-actions">
@@ -640,6 +641,6 @@
     </div>
     <div id="toastHost" class="toast-host"></div>
     <script src="lucide.js"></script>
-    <script src="/ai/app.js?v=20260610-cleanup-logs"></script>
+    <script src="/ai/app.js?v=20260610-sysprompt"></script>
   </body>
 </html>

@@ -233,33 +233,45 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'ai_config': {
         const row = ai.getActiveConfig(db, userId, params.session_id || 'default')
-        const isAdmin = user?.role === 'admin'
-        result = { status: 'success', config: ai.configPublic(row, isAdmin) }
+        result = { status: 'success', config: ai.configPublic(row) }
         break
       }
       case 'save_config': {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
         const now = new Date().toISOString()
-        if (user?.role !== 'admin') delete cfg.system_prompt
         db.prepare('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?').run(userId, params.session_id || 'default')
         db.prepare(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, system_prompt, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          max_position_size, selected_take_profit, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           ON CONFLICT(user_id, session_id, api_provider) DO UPDATE SET
             api_key_encrypted = CASE WHEN excluded.api_key_encrypted IS NOT NULL THEN excluded.api_key_encrypted ELSE ai_configs.api_key_encrypted END,
             api_base_url = excluded.api_base_url, model_name = excluded.model_name, temperature = excluded.temperature,
             max_tokens = excluded.max_tokens, enable_auto_trade = excluded.enable_auto_trade,
             enable_futures_trading = excluded.enable_futures_trading, risk_level = excluded.risk_level,
             max_position_size = excluded.max_position_size, selected_take_profit = excluded.selected_take_profit,
-            system_prompt = excluded.system_prompt, is_active = 1, updated_at = excluded.updated_at`
+            is_active = 1, updated_at = excluded.updated_at`
         ).run(userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
           cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
           cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-          cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.system_prompt || ai.DEFAULT_PROMPT, now, now)
+          cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, now, now)
         const row = ai.getActiveConfig(db, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
+        break
+      }
+      case 'get_system_prompt': {
+        const prompt = ai.getSystemPrompt(db)
+        result = { status: 'success', prompt }
+        break
+      }
+      case 'save_system_prompt': {
+        if (user?.role !== 'admin') return reply({ status: 'error', message: 'Admin only' })
+        const prompt = params.prompt
+        if (!prompt || typeof prompt !== 'string') return reply({ status: 'error', message: 'prompt required' })
+        const now = new Date().toISOString()
+        db.prepare('UPDATE system_prompts SET prompt = ?, updated_by = ?, updated_at = ?').run(prompt, userId, now)
+        result = { status: 'success', prompt }
         break
       }
       case 'signals': {

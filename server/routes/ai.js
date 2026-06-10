@@ -9,6 +9,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
 const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
+function getSystemPrompt(db) {
+  try {
+    const row = db.prepare('SELECT prompt FROM system_prompts ORDER BY id LIMIT 1').get()
+    return row?.prompt || DEFAULT_PROMPT
+  } catch {
+    return DEFAULT_PROMPT
+  }
+}
+
 // ============ Auth Middleware ============
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization
@@ -81,14 +90,14 @@ function attachSignalTiming(signal) {
   return signal
 }
 
-function configPublic(row, includePrompt = true) {
+function configPublic(row) {
   if (!row) return null
   const data = { ...row }
   const hasApiKey = !!data.api_key_encrypted
   data.has_api_key = hasApiKey
   data.masked_api_key = hasApiKey ? '****' : null
   delete data.api_key_encrypted
-  if (!includePrompt) delete data.system_prompt
+  delete data.system_prompt
   return data
 }
 
@@ -269,7 +278,7 @@ function ruleBasedSignal(config, market) {
 }
 
 // ============ AI Signal (DeepSeek/GPT) ============
-async function maybeAiSignal(config, market) {
+async function maybeAiSignal(db, config, market) {
   try {
     if (!config || !config.api_key_encrypted) return null
     const apiKey = config.api_key_encrypted
@@ -284,7 +293,7 @@ async function maybeAiSignal(config, market) {
       url = baseUrl ? baseUrl.replace(/\/$/, '') + '/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions'
     } else return null
 
-    const prompt = (config || {}).system_prompt || DEFAULT_PROMPT
+    const prompt = getSystemPrompt(db)
 
     const body = {
       model: config.model_name || 'deepseek-chat',
@@ -489,7 +498,7 @@ async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const market = calculateMarketData(symbol, timeframe, rates, account, positions)
-  const signal = await maybeAiSignal(config, market)
+  const signal = await maybeAiSignal(db, config, market)
 
   if (signal) {
     const now = utcNow()
@@ -607,7 +616,7 @@ ${candleSummary || '  (����K������)'}
       body: JSON.stringify({
         model: modelName,
         messages: [
-          { role: 'system', content: (config || {}).system_prompt || DEFAULT_PROMPT },
+          { role: 'system', content: getSystemPrompt(db) },
           { role: 'user', content: prompt }
         ],
         temperature,
@@ -725,5 +734,6 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   insertAudit, getActiveConfig, configPublic, mt5Bridge,
   getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,
   signalOrderPayload, attachSignalTiming, handleAnalyze,
-  timeframeIntervalMs, startAutoScheduler, stopAutoScheduler }
+  timeframeIntervalMs, startAutoScheduler, stopAutoScheduler,
+  getSystemPrompt }
 export default router
