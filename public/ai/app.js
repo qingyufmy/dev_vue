@@ -1011,12 +1011,9 @@ async function loadPositions() {
 
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
-  // System prompt: visible to all, editable by admin only
-  const promptInput = $("systemPrompt");
-  if (promptInput) {
-    promptInput.readOnly = !isAdmin;
-    promptInput.style.opacity = isAdmin ? "" : "0.7";
-  }
+  // System prompt: admin only (hidden from non-admin)
+  const promptSection = document.querySelector(".config-section:has(#systemPrompt)");
+  if (promptSection) promptSection.style.display = isAdmin ? "" : "none";
   const saveSpBtn = document.getElementById("saveSystemPromptBtn");
   if (saveSpBtn) saveSpBtn.style.display = isAdmin ? "" : "none";
 }
