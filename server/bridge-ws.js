@@ -211,9 +211,15 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
         break
       }
-      case 'history':
-        result = await ai.mt5Bridge(userId, 'history', { page: params.page || 1, page_size: params.page_size || 20 })
+      case 'history': {
+        const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
+        if (bridgeOk) {
+          result = await ai.mt5Bridge(userId, 'history', { page: params.page || 1, page_size: params.page_size || 20 })
+        } else {
+          result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
+        }
         break
+      }
       case 'rates':
         result = await ai.mt5Bridge(userId, 'rates', { symbol: params.symbol, timeframe: params.timeframe || 'M30', count: params.count || 100 })
         break

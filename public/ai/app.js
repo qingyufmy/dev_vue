@@ -506,15 +506,19 @@ function handleDisconnect(msg) {
 
 function startRealtimeSync() {
   stopRealtimeSync();
-  state.backgroundSyncTimer = setInterval(() => {
-    if (!state.token || state.backgroundSyncInFlight) return;
-    state.backgroundSyncInFlight = true;
-    const tab = activeTabId();
-    const tasks = [loadSignals()];
-    if (tab === "history") tasks.push(loadHistory());
-    if (tab === "audit" || tab === "trading" || tab === "dashboard") tasks.push(loadAudit());
-    Promise.allSettled(tasks).finally(() => { state.backgroundSyncInFlight = false; });
-  }, 30000);
+  // Delay first background sync by 5s to let bridge connect
+  setTimeout(() => {
+    if (!state.token) return;
+    state.backgroundSyncTimer = setInterval(() => {
+      if (!state.token || state.backgroundSyncInFlight) return;
+      state.backgroundSyncInFlight = true;
+      const tab = activeTabId();
+      const tasks = [loadSignals()];
+      if (tab === "history") tasks.push(loadHistory());
+      if (tab === "audit" || tab === "trading" || tab === "dashboard") tasks.push(loadAudit());
+      Promise.allSettled(tasks).finally(() => { state.backgroundSyncInFlight = false; });
+    }, 30000);
+  }, 5000);
 }
 
 function setTab(tabId) {
