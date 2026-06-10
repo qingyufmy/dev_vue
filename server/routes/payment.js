@@ -98,16 +98,16 @@ router.post('/payment', authMiddleware, (req, res) => {
     // Create order
     db.prepare(`
       INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, paid_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', datetime('now', '+8 hours'))
     `).run(orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount)
 
     // Update user plan
     const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000).toISOString().split('T')[0]
-    db.prepare("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = datetime('now') WHERE id = ?").run(plan, periodKey, expiresAt, req.user.id)
+    db.prepare("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(plan, periodKey, expiresAt, req.user.id)
 
     // Deduct referral credit if used
     if (referralCredit > 0) {
-      db.prepare("UPDATE users SET referral_credit = MAX(0, referral_credit - ?), updated_at = datetime('now') WHERE id = ?").run(referralCredit, req.user.id)
+      db.prepare("UPDATE users SET referral_credit = MAX(0, referral_credit - ?), updated_at = datetime('now', '+8 hours') WHERE id = ?").run(referralCredit, req.user.id)
     }
 
     // If paid fully with credit

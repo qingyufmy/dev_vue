@@ -1,4 +1,4 @@
-import { WebSocketServer } from 'ws'
+﻿import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { getDB } from './db.js'
 
@@ -89,7 +89,8 @@ function handleBridge(ws, url) {
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
-  bridges.set(userId, { ws, lastSeen: Date.now() }); ws._userId = userId
+  const existing = bridges.get(userId)
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: existing?.tradeEnabled ?? true }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
@@ -184,7 +185,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           gateway: {
             mode: alive ? 'live' : 'mock',
             mt5_package_available: true,
-            live_trading_enabled: alive,
+            live_trading_enabled: alive && (bridge.tradeEnabled !== false),
           },
         }
         break
@@ -211,6 +212,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'toggle_trade': {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
+        // Update local trade state
+        const bridge = bridges.get(userId)
+        if (bridge && result.status === 'success') bridge.tradeEnabled = !!params.enable
         break
       }
       case 'history': {
@@ -243,19 +247,19 @@ async function handleBrowserCommand(ws, userId, msg) {
         db.prepare('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?').run(userId, params.session_id || 'default')
         db.prepare(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          max_position_size, selected_take_profit, model_sharing_enabled, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           ON CONFLICT(user_id, session_id, api_provider) DO UPDATE SET
             api_key_encrypted = CASE WHEN excluded.api_key_encrypted IS NOT NULL THEN excluded.api_key_encrypted ELSE ai_configs.api_key_encrypted END,
             api_base_url = excluded.api_base_url, model_name = excluded.model_name, temperature = excluded.temperature,
             max_tokens = excluded.max_tokens, enable_auto_trade = excluded.enable_auto_trade,
             enable_futures_trading = excluded.enable_futures_trading, risk_level = excluded.risk_level,
             max_position_size = excluded.max_position_size, selected_take_profit = excluded.selected_take_profit,
-            is_active = 1, updated_at = excluded.updated_at`
+            model_sharing_enabled = excluded.model_sharing_enabled, is_active = 1, updated_at = excluded.updated_at`
         ).run(userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
           cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
           cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-          cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, now, now)
+          cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0, now, now)
         const row = ai.getActiveConfig(db, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
         break

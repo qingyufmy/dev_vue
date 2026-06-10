@@ -1,4 +1,4 @@
-import { Router } from 'express'
+﻿import { Router } from 'express'
 import { getDB } from '../db.js'
 import jwt from 'jsonwebtoken'
 
@@ -108,7 +108,23 @@ function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
   } else {
     row = db.prepare('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1').get(userId, sessionId)
   }
-  // Fallback: if ai_configs has no API key, merge from system_config (���ڹ�����)
+
+  // Model sharing: if user has no custom config, fall back to admin's model settings
+  const userHasOwnConfig = row && row.api_key_encrypted
+  if (!userHasOwnConfig) {
+    const adminConfig = db.prepare('SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = \'admin\') LIMIT 1').get()
+    if (adminConfig) {
+      if (!row) row = {}
+      row.api_provider = row.api_provider || adminConfig.api_provider
+      row.model_name = row.model_name || adminConfig.model_name
+      row.api_base_url = row.api_base_url || adminConfig.api_base_url
+      row.temperature = row.temperature ?? adminConfig.temperature
+      row.max_tokens = row.max_tokens ?? adminConfig.max_tokens
+      row._model_shared = true
+    }
+  }
+
+  // Fallback: if ai_configs has no API key, merge from system_config
   if (!row || !row.api_key_encrypted) {
     const cfg = {}
     try {

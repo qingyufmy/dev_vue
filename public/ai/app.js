@@ -499,40 +499,46 @@ async function _maybeRefreshSignal() {
 
     // No signals at all
     if (!latestSignal) {
-      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; }
+      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.selectedSignal = null; }
       return;
     }
 
-    // New signal detected (ID changed) — full refresh
+    // Update signals list
+    state.signals = signals;
+
+    // Determine which signal to display: user's selection > latest
+    const selectedId = state.selectedSignal?.id;
+    const selectedInList = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
+    const displaySignal = selectedInList || latestSignal;
+
+    // New signal detected (ID changed) — full refresh of lists, but preserve selection
     if (_lastSignalId !== latestSignal.id) {
       _lastSignalId = latestSignal.id;
-      state.signals = signals;
-      updateSignalDisplay(latestSignal);
-      if (latestSignal) setText("signalFreshness", signalFreshness(latestSignal));
+      state.selectedSignal = displaySignal;
+      updateSignalDisplay(displaySignal);
+      setText("signalFreshness", signalFreshness(displaySignal));
       renderAnalysisHistory(signals);
       renderSignalRows();
       return;
     }
 
-    // Same signal — light refresh: only update timing UI
-    const sel = state.selectedSignal;
-    if (!sel || sel.is_executed) return;
-    state.selectedSignal = latestSignal;
-    setText("sigValidWindow", signalFreshness(latestSignal));
-    setText("signalFreshness", signalFreshness(latestSignal));
-    setText("analysisValidity", signalFreshness(latestSignal));
-    setSignalBadge(latestSignal);
+    // Same signal — light refresh: only update timing UI for the DISPLAYED signal
+    state.selectedSignal = displaySignal;
+    setText("sigValidWindow", signalFreshness(displaySignal));
+    setText("signalFreshness", signalFreshness(displaySignal));
+    setText("analysisValidity", signalFreshness(displaySignal));
+    setSignalBadge(displaySignal);
     const card = $("signalCard");
     if (card) {
-      card.dataset.status = latestSignal.is_executed ? "executed" : latestSignal.is_stale ? "expired" : "live";
-      const dir = signalType(latestSignal.signal_type);
+      card.dataset.status = displaySignal.is_executed ? "executed" : displaySignal.is_stale ? "expired" : "live";
+      const dir = signalType(displaySignal.signal_type);
       const colorMap = { buy: "var(--color-positive)", sell: "var(--color-negative)", hold: "var(--color-warning)" };
       card.style.setProperty("--signal-border", colorMap[dir]);
       card.style.setProperty("--signal-glow", colorMap[dir] === "var(--color-positive)" ? "var(--signal-glow-buy)" : colorMap[dir] === "var(--color-negative)" ? "var(--signal-glow-sell)" : "var(--signal-glow-hold)");
     }
     const btn = $("executeSignalBtn");
     if (btn) {
-      const executable = signalType(latestSignal.signal_type) !== "hold" && !latestSignal.is_stale && !latestSignal.is_executed;
+      const executable = signalType(displaySignal.signal_type) !== "hold" && !displaySignal.is_stale && !displaySignal.is_executed;
       btn.disabled = !executable;
     }
   } catch (e) { /* silent */ }
@@ -765,10 +771,19 @@ function initBridgeModal() {
 
   $("downloadExe")?.addEventListener("click", () => {
     const token = state.token || localStorage.getItem("authToken") || "";
-    const url = `/ai/bridge/setup?token=${encodeURIComponent(token)}`;
+    // Download EXE
+    const url = `/ai/bridge/exe-file?token=${encodeURIComponent(token)}`;
     const a = document.createElement("a");
-    a.href = url; a.download = "AURUM_Bridge_Setup.bat"; a.click();
-    toast("正在下载 Setup.bat，双击运行即可", "success");
+    a.href = url; a.download = "AURUM_Bridge.exe"; a.click();
+    // Auto download config.json
+    const serverUrl = location.origin;
+    const cfg = JSON.stringify({ server_url: serverUrl, token }, null, 2);
+    const blob = new Blob([cfg], { type: "application/json" });
+    const a2 = document.createElement("a");
+    a2.href = URL.createObjectURL(blob);
+    a2.download = "config.json";
+    setTimeout(() => { a2.click(); URL.revokeObjectURL(a2.href); }, 500);
+    toast("正在下载 EXE 和 config.json", "success");
     modal.classList.add("hidden");
   });
 
@@ -1084,6 +1099,23 @@ async function loadConfig() {
     const spData = await wsApi("get_system_prompt");
     if (spData.prompt) $("systemPrompt").value = spData.prompt;
   } catch {}
+
+  // Model sharing toggle (admin only)
+  const isAdmin = state.user?.role === "admin";
+  const sharingWrap = $("modelSharingWrap");
+  const sharedInfo = $("modelSharedInfo");
+  if (sharingWrap) sharingWrap.style.display = isAdmin ? "" : "none";
+  if (isAdmin && $("modelSharingEnabled")) {
+    $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
+  }
+  if (sharedInfo) {
+    if (!isAdmin && cfg._model_shared) {
+      sharedInfo.style.display = "";
+      setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 使用管理员共享模型`);
+    } else {
+      sharedInfo.style.display = "none";
+    }
+  }
 }
 
 async function saveConfig() {
@@ -1108,6 +1140,7 @@ async function saveConfig() {
       risk_level: $("riskLevel").value,
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
+      model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
     },
   };
 
@@ -1324,6 +1357,14 @@ async function runAnalysis() {
   const frames = selectedTimeframes();
   if (!frames.length) {
     toast("请至少选择一个周期", "warning");
+    return;
+  }
+
+  // Check: non-admin without own config and model sharing is off
+  const sharedInfo = $("modelSharedInfo");
+  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
+  if (!state.currentConfigHasApiKey && !isUsingShared) {
+    toast("请先在模型设置中配置 API Key，或联系管理员开启模型共享", "warning");
     return;
   }
 
@@ -1611,6 +1652,7 @@ function openAnalysisFromHistory(signalId) {
     toast("未找到对应推理记录，请刷新历史", "warning");
     return;
   }
+  state.selectedSignal = signal;
   setTab("ai-analyze");
   renderSignal(signal, null);
 }
@@ -1663,11 +1705,18 @@ async function loadSignals(options = {}) {
   const data = await wsApi("signals", { session_id: "default" });
   const signals = data.signals || [];
   state.signals = signals;
-  updateSignalDisplay(signals[0] || null);
-  if (signals[0]) setText("signalFreshness", signalFreshness(signals[0]));
+
+  // Preserve selected signal if it still exists in the new list
+  const selectedId = state.selectedSignal?.id;
+  const stillExists = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
+  const activeSignal = stillExists || signals[0] || null;
+
+  state.selectedSignal = activeSignal;
+  updateSignalDisplay(activeSignal);
+  if (activeSignal) setText("signalFreshness", signalFreshness(activeSignal));
   renderAnalysisHistory(signals);
   if (!options.skipResultRender) {
-    renderSignal(signals[0] || null, null);
+    renderSignal(activeSignal, null);
   }
 
   renderSignalRows();

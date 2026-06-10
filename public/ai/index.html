@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AURUM AI MT5 Control Panel</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260609-confbar" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260610-model-sharing" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -14,7 +14,7 @@
         <div class="pro-overlay-icon">🔒</div>
         <h2>Pro 会员专属功能</h2>
         <p>AURUM AI 交易系统仅限 Pro 会员使用</p>
-        <a href="/" class="pro-overlay-btn">返回首页升级会员</a>
+        <a href="/membership" class="pro-overlay-btn">升级会员</a>
       </div>
     </div>
 
@@ -319,6 +319,20 @@
             </div>
             <div class="config-section">
               <div class="config-section-title">AI 推理引擎</div>
+              <label class="model-sharing-toggle" id="modelSharingWrap" style="display:none">
+                <div class="model-sharing-row">
+                  <span>共享模型给其他用户</span>
+                  <label class="switch">
+                    <input type="checkbox" id="modelSharingEnabled">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <small class="field-help">开启后，未配置模型的用户将自动使用您的模型设置</small>
+              </label>
+              <div id="modelSharedInfo" class="model-shared-info" style="display:none">
+                <i data-lucide="info" size="14"></i>
+                <span>当前使用管理员共享的模型设置，请自行配置模型以使用自定义设置</span>
+              </div>
               <div class="config-grid">
                 <label><span>模型供应商</span><select id="apiProvider">
                   <option value="deepseek">DeepSeek</option>
@@ -560,16 +574,16 @@
         </div>
         <div class="bridge-body">
           <div class="bridge-intro">
-            <p>下载启动器，双击即可运行桥接服务。</p>
-            <p class="bridge-note">自动检测 Python 环境并安装依赖，无需手动配置。</p>
+            <p>下载 EXE 和配置文件，双击 EXE 即可运行。</p>
+            <p class="bridge-note">同时自动下载 config.json，放到同一文件夹即可。</p>
           </div>
           <div class="bridge-options">
             <button id="downloadExe" class="bridge-option-card" style="border-color: #22c55e;">
               <div class="bridge-option-icon"><i data-lucide="monitor" size="32"></i></div>
               <div class="bridge-option-info">
                 <strong>Windows (.exe)</strong>
-                <span>一键下载 · 无需 Python · 自带 GUI</span>
-                <small>推荐 · 双击运行 Setup 自动完成</small>
+                <span>无需 Python · 自带 GUI · 双击运行</span>
+                <small>推荐 · 同时下载 EXE + config.json</small>
               </div>
               <i data-lucide="download" size="18"></i>
             </button>
@@ -586,8 +600,8 @@
               <div class="bridge-option-icon"><i data-lucide="file-json" size="32"></i></div>
               <div class="bridge-option-info">
                 <strong>config.json</strong>
-                <span>Token 更新后下载覆盖 · 放在 EXE 同目录</span>
-                <small>配置文件 · 服务器地址 + Token</small>
+                <span>放到 EXE 同目录 · Token 变更后重新下载</span>
+                <small>配置文件 · 包含服务器地址和登录凭证</small>
               </div>
               <i data-lucide="download" size="18"></i>
             </button>

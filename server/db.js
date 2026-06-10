@@ -546,6 +546,11 @@ function migrateDB(db) {
   if (!aiSignalCols.includes('session_id')) addCol('ai_signals', 'session_id', "TEXT NOT NULL DEFAULT 'default'")
   if (!aiSignalCols.includes('ai_model')) addCol('ai_signals', 'ai_model', "TEXT NOT NULL DEFAULT 'deepseek-chat'")
   if (!aiSignalCols.includes('ttl_seconds')) addCol('ai_signals', 'ttl_seconds', 'INTEGER')
+  if (!aiSignalCols.includes('executed_at')) addCol('ai_signals', 'executed_at', 'TEXT')
+  if (!aiSignalCols.includes('trade_ticket')) addCol('ai_signals', 'trade_ticket', 'TEXT')
+
+  const aiConfigCols = db.prepare("PRAGMA table_info(ai_configs)").all().map(c => c.name)
+  if (!aiConfigCols.includes('model_sharing_enabled')) addCol('ai_configs', 'model_sharing_enabled', 'INTEGER NOT NULL DEFAULT 0')
 
   // Create tables that may not exist
   db.exec(`
