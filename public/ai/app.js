@@ -412,7 +412,7 @@ function connectBridgeStatusWs(onReady) {
     if (state.bridgeWs === ws) state.bridgeWs = null;
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
-    setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
+    console.warn(`[WS] Connection #${ws._connId} closed, reconnecting in 3s`); setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
     if (state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
   };
   ws.onerror = () => {};
