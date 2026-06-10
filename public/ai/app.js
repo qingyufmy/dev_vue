@@ -368,7 +368,7 @@ function stopRealtimeSync() {
   if (state.quoteTimer) clearInterval(state.quoteTimer);
   if (state.liveSyncTimer) clearInterval(state.liveSyncTimer);
   if (state.backgroundSyncTimer) clearInterval(state.backgroundSyncTimer);
-  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
+  if (state.bridgeWs) { state._wsIntentionalClose = true; try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopSignalAgeTicker();
   state.quoteTimer = null;
   state.liveSyncTimer = null;
@@ -379,7 +379,11 @@ function stopRealtimeSync() {
 
 // Real-time bridge status via WebSocket + command channel
 function connectBridgeStatusWs(onReady) {
-  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} }
+  // Close old connection without triggering reconnect
+  if (state.bridgeWs) {
+    state._wsIntentionalClose = true;
+    try { state.bridgeWs.close() } catch {}
+  }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
@@ -411,8 +415,9 @@ function connectBridgeStatusWs(onReady) {
     // Reject all pending commands
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
-    // Auto-reconnect after 3s
-    if (state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
+    // Only auto-reconnect if not intentionally closed
+    if (!state._wsIntentionalClose && state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
+    state._wsIntentionalClose = false;
   };
   ws.onerror = () => {};
 }
