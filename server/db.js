@@ -504,6 +504,18 @@ export async function initDB() {
   // Fix NULL UIDs for seed accounts
   await p.query("UPDATE users SET uid = CONCAT('WS', LPAD(id, 6, '0')) WHERE uid IS NULL")
 
+  // Fix DATETIME columns that still have +8h defaults (from old schema)
+  const [badCols] = await p.query(`
+    SELECT TABLE_NAME, COLUMN_NAME
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+    AND COLUMN_DEFAULT LIKE '%interval 8 hour%'
+  `)
+  for (const col of badCols) {
+    await p.query(`ALTER TABLE \`${col.TABLE_NAME}\` ALTER COLUMN \`${col.COLUMN_NAME}\` SET DEFAULT (NOW())`)
+  }
+  if (badCols.length) console.log(`[DB] Fixed ${badCols.length} columns with +8h defaults`)
+
   console.log('[DB] MySQL initialized')
 }
 
