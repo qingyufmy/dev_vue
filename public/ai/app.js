@@ -362,7 +362,6 @@ function activeTabId() {
 
 function stopRealtimeSync() {
   if (state.backgroundSyncTimer) { clearInterval(state.backgroundSyncTimer); state.backgroundSyncTimer = null; }
-  stopSignalAgeTicker();
 }
 
 // Real-time bridge status via WebSocket + command channel
@@ -494,6 +493,40 @@ function handleBridgeData(msg) {
       }
     }
   }
+  _maybeRefreshSignal();
+}
+
+let _lastSignalRefreshTs = 0;
+async function _maybeRefreshSignal() {
+  if (!state.selectedSignal || state.selectedSignal.is_stale || state.selectedSignal.is_executed) return;
+  const now = Date.now();
+  if (now - _lastSignalRefreshTs < 1000) return;
+  _lastSignalRefreshTs = now;
+  try {
+    const data = await wsApi("signals", { session_id: "default" });
+    const signals = data.signals || [];
+    const fresh = signals.find(s => s.id === state.selectedSignal.id);
+    if (fresh) {
+      state.selectedSignal = fresh;
+      setText("sigValidWindow", signalFreshness(fresh));
+      setText("signalFreshness", signalFreshness(fresh));
+      setText("analysisValidity", signalFreshness(fresh));
+      setSignalBadge(fresh);
+      const card = $("signalCard");
+      if (card) {
+        card.dataset.status = fresh.is_executed ? "executed" : fresh.is_stale ? "expired" : "live";
+        const dir = signalType(fresh.signal_type);
+        const colorMap = { buy: "var(--color-positive)", sell: "var(--color-negative)", hold: "var(--color-warning)" };
+        card.style.setProperty("--signal-border", colorMap[dir]);
+        card.style.setProperty("--signal-glow", colorMap[dir] === "var(--color-positive)" ? "var(--signal-glow-buy)" : colorMap[dir] === "var(--color-negative)" ? "var(--signal-glow-sell)" : "var(--signal-glow-hold)");
+      }
+      const btn = $("executeSignalBtn");
+      if (btn) {
+        const executable = signalType(fresh.signal_type) !== "hold" && !fresh.is_stale && !fresh.is_executed;
+        btn.disabled = !executable;
+      }
+    }
+  } catch (e) { /* silent */ }
 }
 
 // Handle heartbeat reply — MT5 connection status
@@ -1084,7 +1117,6 @@ function updateSignalDisplay(signal) {
 
   if (!signal) {
     state.selectedSignal = null;
-    stopSignalAgeTicker();
     setSignalBadge(null);
     card.dataset.direction = "hold";
     card.dataset.status = "empty";
@@ -1137,7 +1169,6 @@ function updateSignalDisplay(signal) {
   setText("sigTime", signalDisplayTime(signal));
   setText("sigGeneratedAt", signalDisplayTime(signal));
   setText("sigValidWindow", signalFreshness(signal));
-  startSignalAgeTicker(signal);
   setText("lastSigDirection", directionText(dir));
   setText("lastSigTimeframe", signal.timeframe || "--");
   setText("lastSigConfidence", confidence.label);
@@ -1161,51 +1192,6 @@ function signalFreshness(signal) {
   if (Number.isFinite(age) && Number.isFinite(ttl)) return `${Math.round(age)}s / ${ttl}s`;
   return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
 }
-
-// Real-time signal age ticker (updates #sigValidWindow every second)
-let _signalAgeTimer = null;
-let _signalBaseAge = 0;
-let _signalTtlSeconds = 0;
-let _signalTickerStartMs = 0;
-
-function startSignalAgeTicker(signal) {
-  stopSignalAgeTicker();
-  if (!signal || signal.is_stale || signal.is_executed) return;
-  const ttl = Number(signal.ttl_seconds);
-  if (!Number.isFinite(ttl) || ttl <= 0) return;
-  const serverAge = Number(signal.age_seconds);
-  if (!Number.isFinite(serverAge) || serverAge < 0) return;
-  // Use server-provided age as baseline, increment by 1s each tick
-  _signalBaseAge = Math.floor(serverAge);
-  _signalTtlSeconds = ttl;
-  _signalTickerStartMs = Date.now();
-  _renderSignalAge();
-  _signalAgeTimer = setInterval(_renderSignalAge, 1000);
-}
-
-function stopSignalAgeTicker() {
-  if (_signalAgeTimer) { clearInterval(_signalAgeTimer); _signalAgeTimer = null; }
-  _signalBaseAge = 0;
-}
-
-function _renderSignalAge() {
-  const elapsed = Math.floor((Date.now() - _signalTickerStartMs) / 1000);
-  const age = _signalBaseAge + elapsed;
-  if (age >= _signalTtlSeconds) {
-    setText('sigValidWindow', '已过期');
-    setText('signalFreshness', '已过期');
-    setText('analysisValidity', '已过期');
-    stopSignalAgeTicker();
-    refreshAll();
-    return;
-  }
-  const text = `${age}s / ${_signalTtlSeconds}s`;
-  setText('sigValidWindow', text);
-  setText('signalFreshness', text);
-  setText('analysisValidity', text);
-}
-
-
 
 function executionStatus(signal) {
   const dir = signalType(signal?.signal_type);
