@@ -1096,5 +1096,8 @@ router.get('/bridge/status', authMiddleware, proOnly, (req, res) => {
   res.json(getBridgeStatus(req.userId))
 })
 
-export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges }
+export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
+  insertAudit, getActiveConfig, configPublic, mt5Bridge,
+  getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,
+  signalOrderPayload, attachSignalTiming }
 export default router

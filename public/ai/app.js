@@ -310,7 +310,6 @@ async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  // AbortController timeout to prevent hanging requests from freezing the UI
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
   try {
@@ -318,22 +317,35 @@ async function api(path, options = {}) {
     clearTimeout(timeoutId);
     const text = await response.text();
     let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = { detail: text };
-    }
-    if (!response.ok) {
-      throw new Error(data.detail || data.message || `HTTP ${response.status}`);
-    }
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
+    if (!response.ok) throw new Error(data.detail || data.message || `HTTP ${response.status}`);
     return data;
   } catch (err) {
     clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      throw new Error('请求超时');
-    }
+    if (err.name === 'AbortError') throw new Error('请求超时');
     throw err;
   }
+}
+
+// WebSocket API — primary channel for all MT5/AI data
+let _wsCmdId = 0;
+const _wsPending = new Map();
+
+function wsApi(action, params = {}) {
+  return new Promise((resolve, reject) => {
+    const ws = state.bridgeWs;
+    if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
+    const cmdId = `ws_${++_wsCmdId}`;
+    const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, 10000);
+    _wsPending.set(cmdId, { resolve, reject, timer });
+    try {
+      ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }));
+    } catch (err) {
+      clearTimeout(timer);
+      _wsPending.delete(cmdId);
+      reject(err);
+    }
+  });
 }
 
 function setAuth(token) {
@@ -365,7 +377,7 @@ function stopRealtimeSync() {
   state.backgroundSyncInFlight = false;
 }
 
-// Real-time bridge status via WebSocket (instant UI update on connect/disconnect)
+// Real-time bridge status via WebSocket + command channel
 function connectBridgeStatusWs() {
   if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -380,10 +392,25 @@ function connectBridgeStatusWs() {
         setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
         if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
         state._lastGatewayLive = isLive;
+      } else if (msg.type === 'result' && msg.command_id) {
+        const pending = _wsPending.get(msg.command_id);
+        if (pending) {
+          clearTimeout(pending.timer);
+          _wsPending.delete(msg.command_id);
+          if (msg.status === 'error') pending.reject(new Error(msg.message || 'Command failed'));
+          else pending.resolve(msg);
+        }
       }
     } catch {}
   };
-  ws.onclose = () => { if (state.bridgeWs === ws) state.bridgeWs = null; };
+  ws.onclose = () => {
+    if (state.bridgeWs === ws) state.bridgeWs = null;
+    // Reject all pending commands
+    for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
+    _wsPending.clear();
+    // Auto-reconnect after 3s
+    if (state.token) setTimeout(() => connectBridgeStatusWs(), 3000);
+  };
   ws.onerror = () => {};
 }
 
@@ -527,7 +554,7 @@ async function refreshAll() {
 }
 
 async function loadStatus() {
-  const health = await api("/health");
+  const health = await wsApi("health");
   const gateway = health.gateway || {};
   const isLive = gateway.mode === "live";
   const wasLive = state._lastGatewayLive;
@@ -552,7 +579,7 @@ async function loadStatus() {
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
   try {
-    const auto = await api("/api/auto/status");
+    const auto = await wsApi("auto_status");
     const scheduler = auto.scheduler || {};
     const enabled = scheduler.enabled;
     const running = scheduler.running;
@@ -640,7 +667,7 @@ function initBridgeModal() {
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
 async function handleTradeModeClick() {
-  const health = await api("/health").catch(() => null);
+  const health = await wsApi("health").catch(() => null);
   const gateway = health?.gateway || {};
   const currentlyEnabled = gateway.live_trading_enabled;
 
@@ -651,10 +678,7 @@ async function handleTradeModeClick() {
   }
 
   try {
-    const result = await api("/aurum-api/mt5/toggle-trade", {
-      method: "POST",
-      body: JSON.stringify({ enable: !currentlyEnabled }),
-    });
+    const result = await wsApi("toggle_trade", { enable: !currentlyEnabled });
     toast(currentlyEnabled ? "交易发送已关闭" : "交易发送已开启", "success");
     await loadStatus();
   } catch (e) {
@@ -710,10 +734,7 @@ async function saveAutoConfig() {
   document.querySelectorAll("#autoTfGrid input[type='checkbox']:checked").forEach(cb => timeframes.push(cb.value));
 
   try {
-    const result = await api("/api/auto/config", {
-      method: "POST",
-      body: JSON.stringify({ symbols, timeframes }),
-    });
+    const result = await wsApi("save_auto", { symbols, timeframes });
     toast(result.enabled ? `自动推理已开启: ${timeframes.join(", ")}` : "自动推理已关闭", "success");
     closeAutoConfigModal();
     await loadStatus();
@@ -723,7 +744,7 @@ async function saveAutoConfig() {
 }
 
 async function loadSymbols() {
-  const data = await api("/api/mt5/symbols");
+  const data = await wsApi("symbols");
   state.symbols = Array.isArray(data.symbols) && data.symbols.length
     ? data.symbols
     : [{ name: "XAUUSD", description: "Gold vs US Dollar" }];
@@ -751,7 +772,7 @@ async function loadSymbols() {
 }
 
 async function loadAccount() {
-  const data = await api("/api/mt5/account");
+  const data = await wsApi("account");
   const server = data.server || data.company || "服务器 --";
   const currency = data.currency || "USD";
   setText("mt5Server", server);
@@ -788,7 +809,7 @@ function updateTradingQuotePreview(quote) {
 async function refreshQuote() {
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   if (!symbol) return;
-  const data = await api(`/api/mt5/quote/${encodeURIComponent(symbol)}`);
+  const data = await wsApi("quote", { symbol });
   const bid = Number(data.bid);
   const ask = Number(data.ask);
   const previousQuote = state.lastQuote && state.lastQuote.symbol === symbol ? state.lastQuote : null;
@@ -847,7 +868,7 @@ function renderPositionRows(positions, withAction) {
 }
 
 async function loadPositions() {
-  const data = await api("/api/mt5/positions");
+  const data = await wsApi("positions");
   const positions = data.positions || [];
   $("positionsBody").innerHTML = renderPositionRows(positions, true);
   $("dashboardPositionsBody").innerHTML = renderPositionRows(positions, false);
@@ -893,7 +914,7 @@ function applyProviderPreset(provider) {
 $('apiProvider').addEventListener('change', e => applyProviderPreset(e.target.value));
 
 async function loadConfig() {
-  const data = await api("/api/ai/config");
+  const data = await wsApi("ai_config");
   const cfg = data.config;
   if (!cfg) {
     state.currentConfigHasApiKey = false;
@@ -954,7 +975,7 @@ async function saveConfig() {
   };
 
   try {
-    await api("/api/ai/config", { method: "POST", body: JSON.stringify(body) });
+    await wsApi("save_config", { config: body.config, session_id: body.session_id });
     $("apiKey").value = "";
     await loadConfig();
     toast("模型配置已保存", "success");
@@ -1260,10 +1281,7 @@ async function executeSignal() {
   if (!ok) return;
 
   try {
-    const result = await api("/api/ai/execute", {
-      method: "POST",
-      body: JSON.stringify({ session_id: "default", signal_id: state.selectedSignal.id, confirm: true }),
-    });
+    const result = await wsApi("execute", { session_id: "default", signal_id: state.selectedSignal.id, confirm: true });
     toast(result.message || (result.status === "success" ? "执行请求已处理" : `结果：${result.status}`), result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadSignals(), loadAudit()]);
   } catch (error) {
@@ -1433,7 +1451,7 @@ async function submitManualOrder() {
   const submit = $("orderConfirmSubmit");
   if (submit) submit.disabled = true;
   try {
-    const result = await api("/api/mt5/open", { method: "POST", body: JSON.stringify(order.payload) });
+    const result = await wsApi("open", order.payload);
     closeManualOrderModal();
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
@@ -1447,7 +1465,7 @@ async function submitManualOrder() {
 async function closePosition(ticket) {
   if (!window.confirm(`复核平仓 ticket ${ticket}？`)) return;
   try {
-    const result = await api("/api/mt5/close", { method: "POST", body: JSON.stringify({ ticket: Number(ticket), confirm: true }) });
+    const result = await wsApi("close", { ticket: Number(ticket), confirm: true });
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
   } catch (error) {
@@ -1548,7 +1566,7 @@ function renderSignalRows() {
 }
 
 async function loadSignals(options = {}) {
-  const data = await api("/api/ai/signals?session_id=default");
+  const data = await wsApi("signals", { session_id: "default" });
   const signals = data.signals || [];
   state.signals = signals;
   updateSignalDisplay(signals[0] || null);
@@ -1570,7 +1588,7 @@ function setHistoryZeroClass(id, value) {
 
 async function loadHistory() {
   try {
-  const data = await api("/api/mt5/history?page=1&page_size=20");
+  const data = await wsApi("history", { page: 1, page_size: 20 });
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
   setText("historyCredit", fmt(stats.credit));
@@ -1700,7 +1718,7 @@ function renderAuditRows() {
 }
 
 async function loadAudit() {
-  const data = await api("/api/audit/logs");
+  const data = await wsApi("audit_logs");
   state.auditRows = data.logs || [];
   renderAuditRows();
 }
