@@ -6248,6 +6248,12 @@ function getNotificationText(notification) {
       subtitle: notification.meta?.excerpt || notification.postTitle || '去看看新的引用内容',
     }
   }
+  if (notification.type === 'system') {
+    return {
+      title: notification.title || '系统通知',
+      subtitle: notification.message || '',
+    }
+  }
   return {
     title: '你的帖子有了新回复',
     subtitle: notification.meta?.excerpt || notification.postTitle || '去看看新的讨论内容',
