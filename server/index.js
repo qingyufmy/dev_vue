@@ -61,8 +61,9 @@ app.use('/uploads', express.static(join(__dirname, uploadDir)))
 const publicDir = join(__dirname, '..', 'public')
 app.use(express.static(publicDir))
 
-// API routes
-app.use('/api', authRoutes)
+// API routes — no-cache to prevent stale responses across user sessions
+const noCache = (req, res, next) => { res.set('Cache-Control', 'no-store, no-cache, must-revalidate'); res.set('Pragma', 'no-cache'); next() }
+app.use('/api', noCache, authRoutes)
 app.use('/api', courseRoutes)
 app.use('/api', commentRoutes)
 app.use('/api', postRoutes)
@@ -73,7 +74,7 @@ app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
 app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
-app.use('/aurum-api', aiRoutes)
+app.use('/aurum-api', noCache, aiRoutes)
 
 // Root-level health check — uses WebSocket bridge status
 app.get('/health', async (req, res) => {
