@@ -334,7 +334,15 @@ const _wsPending = new Map();
 function wsApi(action, params = {}) {
   return new Promise((resolve, reject) => {
     const ws = state.bridgeWs;
-    if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
+    if (!ws || ws.readyState !== 1) {
+      // Try to reconnect once before failing
+      if (state.token && action !== '_reconnect') {
+        connectBridgeStatusWs();
+        setTimeout(() => wsApi(action, params).then(resolve).catch(reject), 500);
+        return;
+      }
+      return reject(new Error('WebSocket未连接'));
+    }
     const cmdId = `ws_${++_wsCmdId}`;
     const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, 10000);
     _wsPending.set(cmdId, { resolve, reject, timer });
@@ -394,9 +402,23 @@ function connectBridgeStatusWs(onReady) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'status') {
         const isLive = msg.connected && msg.alive;
+        const wasLive = state._lastGatewayLive;
         setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
         if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
         state._lastGatewayLive = isLive;
+        // Auto-refresh when bridge state changes
+        if (isLive !== wasLive) {
+          if (isLive) {
+            // Bridge just came online — reload everything
+            refreshAll().catch(() => {});
+          } else {
+            // Bridge just went offline — clear live data
+            setBadge("tradeMode", "请先启动桥接", "neutral");
+            state.positions = [];
+            renderPositionRows();
+            if (state.activeTab === "trading" || state.activeTab === "dashboard") refreshTabData(state.activeTab).catch(() => {});
+          }
+        }
       } else if (msg.type === 'tick_update') {
         handleTickUpdate(msg);
       } else if (msg.type === 'result' && msg.command_id) {
