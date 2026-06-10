@@ -1400,7 +1400,6 @@ function fetchBiliDuration(bvid, epId) {
 }
 
 function initBiliPlayer(bvid) {
-  console.log('[Progress] initBiliPlayer called with bvid=', bvid)
   const ep = state.currentEpisode
   if (ep) {
     const p = progress.get(ep.id)
@@ -1482,19 +1481,17 @@ function parseDuration(str) {
 
 function getEpisodeDuration() {
   const ep = state.currentEpisode
-  if (!ep) { console.log('[Progress] getEpisodeDuration: no currentEpisode'); return 0 }
+  if (!ep) return 0;
   // Check Bilibili duration cache first
   if (biliDurationCache[ep.id]) return biliDurationCache[ep.id]
   // Try to get duration from course catalog
   const course = courseCatalog.getById(ep.id)
   const dur = parseDuration(course?.duration) || parseDuration(ep.duration) || 0
-  console.log('[Progress] getEpisodeDuration: ep.id=', ep.id, 'course=', !!course, 'course.duration=', course?.duration, 'result=', dur)
   return dur
 }
 
 function startWatchTimer() {
   if (watchTimer) return
-  console.log('[Progress] startWatchTimer called, biliPlayer=', !!biliPlayer)
   watchTimer = setInterval(() => {
     accumulatedTime++
     const ep = state.currentEpisode
@@ -1502,7 +1499,6 @@ function startWatchTimer() {
     // YouTube or CF Stream has native duration; Bilibili uses episode duration
     const nativeDuration = ytPlayer?.getDuration?.() || 0
     const duration = nativeDuration || getEpisodeDuration()
-    console.log('[Progress] tick:', accumulatedTime, 'duration:', duration, 'ep.id:', ep.id)
     if (duration > 0) {
       const entry = progress.update(ep.id, accumulatedTime, duration)
       updateProgressUI(entry, duration)

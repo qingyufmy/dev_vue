@@ -424,7 +424,6 @@ export function initDB() {
     migrateDB(db)
   }
 
-  console.log('Database initialized')
 }
 
 function migrateDB(db) {
@@ -697,5 +696,4 @@ function seedData(db) {
     { name: '全球市场股票深度研究', icon: '📈', url: '/research/' }
   ]), '股票市场研究菜单', 0)
 
-  console.log('Demo data seeded')
 }
