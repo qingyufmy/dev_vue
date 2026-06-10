@@ -378,12 +378,13 @@ function stopRealtimeSync() {
 }
 
 // Real-time bridge status via WebSocket + command channel
-function connectBridgeStatusWs() {
+function connectBridgeStatusWs(onReady) {
   if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
+  ws.onopen = () => { if (typeof onReady === 'function') onReady(); };
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
@@ -418,6 +419,29 @@ function connectBridgeStatusWs() {
 
 // Real-time P&L update from WebSocket tick stream
 function handleTickUpdate(tick) {
+  // Update quote
+  if (tick.quote) {
+    const q = tick.quote;
+    const previousQuote = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
+    let bidDir = "", askDir = "";
+    if (previousQuote) {
+      if (Number.isFinite(Number(q.bid)) && Number(q.bid) > previousQuote.bid) bidDir = "up";
+      if (Number.isFinite(Number(q.bid)) && Number(q.bid) < previousQuote.bid) bidDir = "down";
+      if (Number.isFinite(Number(q.ask)) && Number(q.ask) > previousQuote.ask) askDir = "up";
+      if (Number.isFinite(Number(q.ask)) && Number(q.ask) < previousQuote.ask) askDir = "down";
+    }
+    setText("quoteBid", q.bid);
+    setText("quoteAsk", q.ask);
+    setText("quoteSpread", q.spread);
+    setText("quoteTime", formatTime(q.time));
+    setQuoteDirection("quoteBidDir", bidDir);
+    setQuoteDirection("quoteAskDir", askDir);
+    flashPrice("quoteBid", bidDir);
+    flashPrice("quoteAsk", askDir);
+    if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
+      state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
+    }
+  }
   // Update account summary
   if (tick.account) {
     setText("accountBalance", fmt(tick.account.balance));
@@ -517,9 +541,16 @@ async function refreshTabData(tabId) {
   if (!state.token) return;
   // Tick stream: subscribe on trading/dashboard, unsubscribe otherwise
   if (tabId === "trading" || tabId === "dashboard") {
-    wsApi("subscribe_ticks").catch(() => {});
+    const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+    wsApi("subscribe_ticks", { symbol }).catch(() => {});
+    // Stop 5s polling — tick stream handles positions + account
+    if (state.liveSyncTimer) { clearInterval(state.liveSyncTimer); state.liveSyncTimer = null; }
   } else {
     wsApi("unsubscribe_ticks").catch(() => {});
+    // Restart 5s polling when not on trading tab
+    if (!state.liveSyncTimer) {
+      state.liveSyncTimer = setInterval(() => { syncLiveMt5State().catch(() => {}); }, 5000);
+    }
   }
   if (tabId === "trading") {
     await Promise.allSettled([loadAccount(), loadPositions(), refreshQuote(), loadStatus()]);
@@ -579,9 +610,12 @@ async function bootstrap() {
     }
     applyRoleUI();
     showApp(true);
+    // Connect WebSocket FIRST — all data flows through it
+    await new Promise((resolve) => {
+      connectBridgeStatusWs(resolve);
+    });
     await refreshAll();
     startRealtimeSync();
-    connectBridgeStatusWs();
   } catch {
     logout();
   }

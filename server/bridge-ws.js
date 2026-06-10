@@ -17,7 +17,7 @@ let cmdCounter = 0
 let wss = null
 
 // ============ Tick Stream (real-time P&L push) ============
-function startTickStream(userId, ws) {
+function startTickStream(userId, ws, symbol = 'XAUUSD') {
   stopTickStream(userId)
   const interval = setInterval(async () => {
     try {
@@ -27,11 +27,13 @@ function startTickStream(userId, ws) {
       const posList = positions.positions || []
       const account = await sendBridgeCommand(userId, 'account', {}, 5000)
       if (account.status === 'error') return
+      const quote = await sendBridgeCommand(userId, 'quote', { symbol }, 5000)
 
       const contractSizes = { XAUUSD: 100, 'XAUUSD.s': 100 }
       const tickData = {
         type: 'tick_update',
         timestamp: Date.now(),
+        quote: quote.status === 'success' ? { symbol, bid: quote.bid, ask: quote.ask, spread: quote.spread, time: quote.time } : null,
         account: {
           balance: account.balance,
           equity: account.equity,
@@ -258,7 +260,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
       // === Tick Stream ===
       case 'subscribe_ticks':
-        startTickStream(userId, ws)
+        startTickStream(userId, ws, params.symbol || 'XAUUSD')
         result = { status: 'success', message: 'Tick stream started' }
         break
       case 'unsubscribe_ticks':
