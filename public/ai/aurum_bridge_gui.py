@@ -675,7 +675,7 @@ class AurumBridge:
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token_var.get()}"
         self.root.after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
-        # 单次连接，不自动重连。断开后需手动点"连接"按钮
+        # Single connection, no auto retry. Disconnect = stop, user clicks to reconnect.
         try:
             ws = websocket.create_connection(ws_url, timeout=10,
                 header=["Origin: http://localhost"])
@@ -771,10 +771,6 @@ class AurumBridge:
                     pass
                 except websocket.WebSocketConnectionClosedException:
                     self.root.after(0, self._log, "WebSocket 连接已断开")
-                    try:
-                        ws.send(json.dumps({"type": "disconnect", "reason": "connection_closed"}))
-                    except Exception:
-                        pass
                     break
 
         except (websocket.WebSocketException, ConnectionRefusedError, OSError) as e:
@@ -782,7 +778,7 @@ class AurumBridge:
         except Exception as e:
             self.root.after(0, self._log, f"错误: {e}")
         finally:
-            # 断开后自动关闭，不重连
+            # Clean disconnect - no retry
             try:
                 if self._ws and self._ws.connected:
                     self._ws.send(json.dumps({"type": "disconnect", "reason": "client_shutdown"}))
