@@ -413,7 +413,23 @@ export function initDB() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
       UNIQUE(user_id)
     );
+
+    CREATE TABLE IF NOT EXISTS system_prompts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      prompt TEXT NOT NULL,
+      updated_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
+    );
   `)
+
+  // Seed system prompt if empty
+  const spCount = db.prepare('SELECT COUNT(*) as c FROM system_prompts').get().c
+  if (spCount === 0) {
+    db.prepare('INSERT INTO system_prompts (prompt) VALUES (?)').run(
+      'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
+    )
+  }
 
   // Seed demo data if empty
   const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get().c

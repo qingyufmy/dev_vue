@@ -1011,9 +1011,14 @@ async function loadPositions() {
 
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
-  // System prompt section: admin only
-  const promptSection = document.querySelector(".config-section:has(#systemPrompt)");
-  if (promptSection) promptSection.style.display = isAdmin ? "" : "none";
+  // System prompt: visible to all, editable by admin only
+  const promptInput = $("systemPrompt");
+  if (promptInput) {
+    promptInput.readOnly = !isAdmin;
+    promptInput.style.opacity = isAdmin ? "" : "0.7";
+  }
+  const saveSpBtn = document.getElementById("saveSystemPromptBtn");
+  if (saveSpBtn) saveSpBtn.style.display = isAdmin ? "" : "none";
 }
 
 /* ---- Provider presets: model name → API base URL ---- */
@@ -1073,11 +1078,15 @@ async function loadConfig() {
   $("selectedTakeProfit").value = String(cfg.selected_take_profit || 1);
   $("enableAutoTrade").checked = Boolean(cfg.enable_auto_trade);
   $("enableFuturesTrading").checked = Boolean(cfg.enable_futures_trading);
-  $("systemPrompt").value = cfg.system_prompt || "";
-  $("apiKey").value = "";
   $("apiKey").placeholder = state.currentConfigHasApiKey ? "已配置；如需保存配置请重新输入密钥" : "输入 API Key 后保存";
   const keyText = state.currentConfigHasApiKey ? `密钥已配置：${cfg.masked_api_key}` : "未配置 API Key，本地规则兜底可用";
   setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · ${keyText}`);
+
+  // Load system prompt separately (shared across all users)
+  try {
+    const spData = await wsApi("get_system_prompt");
+    if (spData.prompt) $("systemPrompt").value = spData.prompt;
+  } catch {}
 }
 
 async function saveConfig() {
@@ -1102,7 +1111,6 @@ async function saveConfig() {
       risk_level: $("riskLevel").value,
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
-      system_prompt: $("systemPrompt").value || null,
     },
   };
 
@@ -1114,6 +1122,15 @@ async function saveConfig() {
   } catch (error) {
     toast(error.message, "error");
   }
+}
+
+async function saveSystemPrompt() {
+  const prompt = $("systemPrompt").value.trim();
+  if (!prompt) { toast("系统提示词不能为空", "warning"); return; }
+  try {
+    await wsApi("save_system_prompt", { prompt });
+    toast("系统提示词已保存", "success");
+  } catch (e) { toast(e.message, "error"); }
 }
 
 function selectedTimeframes() {
@@ -1809,6 +1826,7 @@ function bindEvents() {
   $("refreshAllBtn").addEventListener("click", refreshAll);
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
+  document.getElementById("saveSystemPromptBtn")?.addEventListener("click", saveSystemPrompt);
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
   $("buyBtn").addEventListener("click", () => openManual("buy"));
