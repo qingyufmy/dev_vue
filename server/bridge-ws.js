@@ -103,7 +103,7 @@ export function initBridgeWS(server) {
 }
 
 // Send command to bridge and wait for result
-export function sendBridgeCommand(userId, action, params, timeoutMs = 10000) {
+export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
   return new Promise((resolve) => {
     const bridge = bridges.get(userId)
     if (!bridge || bridge.ws.readyState !== 1) {
