@@ -825,6 +825,9 @@ router.post('/ui/config', authMiddleware, proOnly, (req, res) => {
 
 // Health check
 router.get('/health', async (req, res) => {
+  // Prevent browser from caching health responses across user sessions
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate')
+  res.set('Pragma', 'no-cache')
   try {
     // Optional auth: Pro users get real bridge status, others see mock
     let isPro = false
