@@ -454,6 +454,13 @@ async function bootstrap() {
       return;
     }
     state.user = await api("/aurum-api/auth/me");
+    // Pro membership check
+    const isPro = state.user?.role === 'admin' || state.user?.plan === 'pro';
+    if (!isPro) {
+      document.getElementById('proOverlay')?.classList.remove('hidden');
+      showApp(false);
+      return;
+    }
     applyRoleUI();
     showApp(true);
     await refreshAll();

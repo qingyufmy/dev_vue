@@ -19,10 +19,20 @@ function authMiddleware(req, res, next) {
     const payload = jwt.verify(auth.slice(7), JWT_SECRET)
     req.userId = payload.userId
     req.userEmail = payload.email
+    // Load user plan for Pro guard
+    const db = getDB()
+    const u = db.prepare('SELECT plan, role FROM users WHERE id = ?').get(payload.userId)
+    req.userPlan = u?.plan || 'free'
+    req.userRole = u?.role || 'user'
     next()
   } catch {
     res.status(401).json({ status: 'error', message: 'Invalid or expired token' })
   }
+}
+
+function proOnly(req, res, next) {
+  if (req.userRole === 'admin' || req.userPlan === 'pro') return next()
+  return res.status(403).json({ status: 'error', message: '此功能仅�?Pro 会员使用' })
 }
 
 // ============ Helper Functions ============
@@ -459,7 +469,7 @@ async function executeOrder(userId, config, request, action) {
 // ============ API Routes ============
 
 // Get AI config
-router.get('/ai/config', authMiddleware, (req, res) => {
+router.get('/ai/config', authMiddleware, proOnly, (req, res) => {
   const { session_id = 'default', api_provider } = req.query
   const db = getDB()
   const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
@@ -469,7 +479,7 @@ router.get('/ai/config', authMiddleware, (req, res) => {
 })
 
 // Get all AI configs
-router.get('/ai/config/all', authMiddleware, (req, res) => {
+router.get('/ai/config/all', authMiddleware, proOnly, (req, res) => {
   const { session_id = 'default' } = req.query
   const db = getDB()
   const rows = db.prepare('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ?').all(req.userId, session_id)
@@ -489,7 +499,7 @@ router.get('/ai/config/all', authMiddleware, (req, res) => {
 })
 
 // Create/update AI config
-router.post('/ai/config', authMiddleware, (req, res) => {
+router.post('/ai/config', authMiddleware, proOnly, (req, res) => {
   const { session_id = 'default', config: cfg } = req.body
   if (!cfg) return res.status(400).json({ status: 'error', message: 'config required' })
   const db = getDB()
@@ -526,7 +536,7 @@ router.post('/ai/config', authMiddleware, (req, res) => {
 })
 
 // Update system prompt (admin only)
-router.put('/ai/config/prompt', authMiddleware, (req, res) => {
+router.put('/ai/config/prompt', authMiddleware, proOnly, (req, res) => {
   const { session_id = 'default', system_prompt } = req.body
   const db = getDB()
   const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId)
@@ -538,14 +548,14 @@ router.put('/ai/config/prompt', authMiddleware, (req, res) => {
 })
 
 // Test AI connection
-router.post('/ai/test', authMiddleware, (req, res) => {
+router.post('/ai/test', authMiddleware, proOnly, (req, res) => {
   const { api_key } = req.body
   if (!api_key) return res.status(400).json({ status: 'error', message: 'api_key required' })
   res.json({ status: 'success', message: 'Configuration shape is valid.' })
 })
 
 // Analyze market
-router.post('/ai/analyze', authMiddleware, async (req, res) => {
+router.post('/ai/analyze', authMiddleware, proOnly, async (req, res) => {
   // Pause auto scheduler during manual analysis
   if (autoSchedulerState[req.userId]) autoSchedulerState[req.userId].manualBusy = true
   try {
@@ -625,7 +635,7 @@ async function maybeAutoExecuteSignal(userId, config, signal, market, action) {
 }
 
 // Get signals
-router.get('/ai/signals', authMiddleware, (req, res) => {
+router.get('/ai/signals', authMiddleware, proOnly, (req, res) => {
   const { session_id = 'default' } = req.query
   const db = getDB()
   const rows = db.prepare('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100').all(req.userId, session_id)
@@ -641,7 +651,7 @@ router.get('/ai/signals', authMiddleware, (req, res) => {
 })
 
 // Get signal detail
-router.get('/ai/signals/:signalId', authMiddleware, (req, res) => {
+router.get('/ai/signals/:signalId', authMiddleware, proOnly, (req, res) => {
   const db = getDB()
   const row = db.prepare('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?').get(req.params.signalId, req.userId)
   if (!row) return res.status(404).json({ status: 'error', message: 'Signal not found' })
@@ -654,7 +664,7 @@ router.get('/ai/signals/:signalId', authMiddleware, (req, res) => {
 })
 
 // Execute signal
-router.post('/ai/execute', authMiddleware, async (req, res) => {
+router.post('/ai/execute', authMiddleware, proOnly, async (req, res) => {
   try {
     const { session_id = 'default', signal_id, confirm = false } = req.body
     const db = getDB()
@@ -687,26 +697,26 @@ router.post('/ai/execute', authMiddleware, async (req, res) => {
 })
 
 // MT5 Status
-router.get('/mt5/status', authMiddleware, async (req, res) => {
+router.get('/mt5/status', authMiddleware, proOnly, async (req, res) => {
   if (!isBridgeAlive(req.userId)) return res.json({ status: 'success', mode: 'mock', mt5_package_available: true, live_trading_enabled: false })
   const result = await mt5Bridge(req.userId, 'status', {})
   res.json({ status: 'success', ...result })
 })
 
 // MT5 Account
-router.get('/mt5/account', authMiddleware, async (req, res) => {
+router.get('/mt5/account', authMiddleware, proOnly, async (req, res) => {
   const result = await mt5Bridge(req.userId, 'account', {})
   res.json(result)
 })
 
 // MT5 Symbols
-router.get('/mt5/symbols', authMiddleware, async (req, res) => {
+router.get('/mt5/symbols', authMiddleware, proOnly, async (req, res) => {
   const result = await mt5Bridge(req.userId, 'symbols', {})
   res.json(result)
 })
 
 // MT5 Quote
-router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
+router.get('/mt5/quote/:symbol', authMiddleware, proOnly, async (req, res) => {
   const symbol = req.params.symbol
   let result = await mt5Bridge(req.userId, 'quote', { symbol })
   // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
@@ -721,21 +731,21 @@ router.get('/mt5/quote/:symbol', authMiddleware, async (req, res) => {
 })
 
 // MT5 Positions
-router.get('/mt5/positions', authMiddleware, async (req, res) => {
+router.get('/mt5/positions', authMiddleware, proOnly, async (req, res) => {
   const { symbol } = req.query
   const result = await mt5Bridge(req.userId, 'positions', { symbol })
   res.json(result)
 })
 
 // MT5 History
-router.get('/mt5/history', authMiddleware, async (req, res) => {
+router.get('/mt5/history', authMiddleware, proOnly, async (req, res) => {
   const { page = 1, page_size = 20 } = req.query
   const result = await mt5Bridge(req.userId, 'history', { page: Number(page), page_size: Number(page_size) })
   res.json(result)
 })
 
 // MT5 Open Position
-router.post('/mt5/open', authMiddleware, async (req, res) => {
+router.post('/mt5/open', authMiddleware, proOnly, async (req, res) => {
   const db = getDB()
   const config = getActiveConfig(db, req.userId, 'default')
   const result = await executeOrder(req.userId, config, req.body, 'manual_open')
@@ -743,7 +753,7 @@ router.post('/mt5/open', authMiddleware, async (req, res) => {
 })
 
 // MT5 Close Position
-router.post('/mt5/close', authMiddleware, async (req, res) => {
+router.post('/mt5/close', authMiddleware, proOnly, async (req, res) => {
   const { ticket, confirm = false } = req.body
   let result
   if (!confirm) {
@@ -757,7 +767,7 @@ router.post('/mt5/close', authMiddleware, async (req, res) => {
 })
 
 // MT5 Rates (K-line data)
-router.get('/mt5/rates', authMiddleware, async (req, res) => {
+router.get('/mt5/rates', authMiddleware, proOnly, async (req, res) => {
   const { symbol, timeframe = 'M30', count = 100 } = req.query
   if (!symbol) return res.status(400).json({ status: 'error', message: 'symbol required' })
   let result = await mt5Bridge(req.userId, 'rates', { symbol, timeframe, count: Number(count) })
@@ -773,13 +783,13 @@ router.get('/mt5/rates', authMiddleware, async (req, res) => {
 })
 
 // MT5 Diagnostics
-router.get('/mt5/diagnostics', authMiddleware, async (req, res) => {
+router.get('/mt5/diagnostics', authMiddleware, proOnly, async (req, res) => {
   const result = await mt5Bridge(req.userId, 'diagnostics', {})
   res.json(result)
 })
 
 // Audit logs
-router.get('/audit/logs', authMiddleware, (req, res) => {
+router.get('/audit/logs', authMiddleware, proOnly, (req, res) => {
   const db = getDB()
   const rows = db.prepare('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(req.userId)
   const logs = rows.map(row => {
@@ -795,13 +805,13 @@ router.get('/audit/logs', authMiddleware, (req, res) => {
 })
 
 // UI Config (theme)
-router.get('/ui/config', authMiddleware, (req, res) => {
+router.get('/ui/config', authMiddleware, proOnly, (req, res) => {
   const db = getDB()
   const row = db.prepare('SELECT theme FROM ui_configs WHERE user_id = ?').get(req.userId)
   res.json({ status: 'success', theme: (row || {}).theme || 'theme2' })
 })
 
-router.post('/ui/config', authMiddleware, (req, res) => {
+router.post('/ui/config', authMiddleware, proOnly, (req, res) => {
   const { theme } = req.body
   if (!theme || !theme.startsWith('theme')) return res.status(400).json({ status: 'error', message: 'Invalid theme' })
   const db = getDB()
@@ -816,7 +826,23 @@ router.post('/ui/config', authMiddleware, (req, res) => {
 // Health check
 router.get('/health', async (req, res) => {
   try {
-    // Check if any bridge is connected via WebSocket
+    // Optional auth: Pro users get real bridge status, others see mock
+    let isPro = false
+    const auth = req.headers.authorization
+    if (auth && auth.startsWith('Bearer ')) {
+      try {
+        const payload = jwt.verify(auth.slice(7), JWT_SECRET)
+        const db = getDB()
+        const u = db.prepare('SELECT plan, role FROM users WHERE id = ?').get(payload.userId)
+        isPro = u?.role === 'admin' || u?.plan === 'pro'
+      } catch {}
+    }
+
+    if (!isPro) {
+      return res.json({ status: 'healthy', service: 'AURUM AI', gateway: { mode: 'mock', mt5_package_available: true, live_trading_enabled: false } })
+    }
+
+    // Pro users: real bridge status
     let bridgeAlive = false
     let bridgeAccount = null
     for (const bridge of getAllBridges()) {
@@ -852,7 +878,7 @@ router.get('/health', async (req, res) => {
 
 // MT5 Connect
 // MT5 Toggle Trade �� enable/disable live trading without disconnecting
-router.post('/mt5/toggle-trade', authMiddleware, async (req, res) => {
+router.post('/mt5/toggle-trade', authMiddleware, proOnly, async (req, res) => {
   const { enable } = req.body
   const result = await mt5Bridge(req.userId, 'toggle_trade', { enable })
   res.json(result)
@@ -916,7 +942,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
       `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
     ).join('\n')
 
-    const prompt = `����רҵ�Ļƽ�(XAUUSD)���߽���AI����������¼������ݸ��������źš�
+    const prompt = `����רҵ�Ļƽ�(XAUUSD)���߽���AI����������¼������ݸ��������źš�?
 
 ��ǰ����:
 - Ʒ��: ${symbol}
@@ -934,9 +960,9 @@ ${candleSummary || '  (����K������)'}
   "signal_type": "buy �� sell �� hold",
   "confidence": 0.0��1.0�����Ŷ�,
   "recommended_volume": ��������(����),
-  "analysis": "��̷���(������100��)",
+  "analysis": "��̷���?������100��)",
   "reasoning": "��������",
-  "stop_loss_price": ֹ���,
+  "stop_loss_price": ֹ���?
   "take_profit_1_price": ֹӯ��1,
   "take_profit_2_price": ֹӯ��2,
   "take_profit_3_price": ֹӯ��3
@@ -1060,7 +1086,7 @@ function stopAutoScheduler(userId) {
 }
 
 // Auto status endpoint
-router.get('/auto/status', authMiddleware, (req, res) => {
+router.get('/auto/status', authMiddleware, proOnly, (req, res) => {
   const db = getDB()
   const cfg = getAutoConfig(db, req.userId)
   const state = autoSchedulerState[req.userId]
@@ -1083,7 +1109,7 @@ router.get('/auto/status', authMiddleware, (req, res) => {
 })
 
 // Auto config endpoint �� save and start/stop
-router.post('/auto/config', authMiddleware, async (req, res) => {
+router.post('/auto/config', authMiddleware, proOnly, async (req, res) => {
   const { symbols = ['XAUUSD'], timeframes = [] } = req.body
   const enabled = timeframes.length > 0
   // Interval is now auto-calculated per timeframe, use shortest as DB value
@@ -1119,7 +1145,7 @@ async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
 }
 
 // Get bridge status for user
-router.get('/bridge/status', authMiddleware, (req, res) => {
+router.get('/bridge/status', authMiddleware, proOnly, (req, res) => {
   res.json(getBridgeStatus(req.userId))
 })
 
