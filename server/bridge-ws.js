@@ -19,7 +19,10 @@ let wss = null
 // ============ Tick Stream (real-time P&L push) ============
 function startTickStream(userId, ws, symbol = 'XAUUSD') {
   stopTickStream(userId)
+  let ticking = false
   const interval = setInterval(async () => {
+    if (ticking) return
+    ticking = true
     try {
       if (ws.readyState !== 1) { stopTickStream(userId); return }
       const positions = await sendBridgeCommand(userId, 'positions', {}, 5000)
@@ -59,7 +62,7 @@ function startTickStream(userId, ws, symbol = 'XAUUSD') {
         }),
       }
       if (ws.readyState === 1) ws.send(JSON.stringify(tickData))
-    } catch {}
+    } catch {} finally { ticking = false }
   }, 1000)
   tickStreams.set(userId, { interval, ws })
 }
