@@ -8217,8 +8217,8 @@ function setupGlobalEvents() {
               ${r.orders.map(o => `<tr>
                 <td style="font-size:12px;">${escapeHtml(o.orderId || '-')}</td>
                 <td>${escapeHtml(o.planLabel)} ${escapeHtml(o.periodLabel)}</td>
-                <td>$${escapeHtml(String(o.amount))}</td>
-                <td>${o.amountConfirmed ? '$' + escapeHtml(String(o.amountConfirmed)) : '-'}</td>
+                <td>${formatMinorUsd(o.amount)}</td>
+                <td>${o.amountConfirmed ? formatMinorUsd(o.amountConfirmed) : '-'}</td>
                 <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : 'badge-free'}">${escapeHtml(o.statusLabel)}</span></td>
                 <td>${escapeHtml(o.paidAt || o.createdAt)}</td>
               </tr>`).join('')}
