@@ -6297,7 +6297,7 @@ async function loadBillingHistory(container) {
       const displayDate = date.substring(0, 16)
       const paidAmount = o.amountConfirmed || o.amount
       const amountDiff = o.amountConfirmed && o.amountConfirmed !== o.amount
-        ? ` <span class="billing-diff">(订单 $${o.amount})</span>` : ''
+        ? ` <span class="billing-diff">(${formatMinorUsd(o.amount)})</span>` : ''
       const orderIdShort = o.orderId ? o.orderId.substring(0, 8) : ''
       return `
         <div class="billing-row">
@@ -6306,7 +6306,7 @@ async function loadBillingHistory(container) {
             <div class="billing-date">${displayDate}${orderIdShort ? ` · <span class="billing-oid" title="${o.orderId}">#${orderIdShort}</span>` : ''}</div>
           </div>
           <div class="billing-right">
-            <span class="billing-amount">$${paidAmount}${amountDiff}</span>
+            <span class="billing-amount">${formatMinorUsd(paidAmount)}${amountDiff}</span>
             <span class="billing-status ${s.cls}">${s.label}</span>
           </div>
         </div>`
