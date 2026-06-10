@@ -561,11 +561,11 @@ async function seedData(p) {
     ['qiniu', 'region', 'z0', '区域 (z0/cn-east/cn-south)', 4],
   ]
   for (const [cat, key, val, label, order] of sysConfigs) {
-    await p.query("INSERT IGNORE INTO system_config (category, `key`, value, label, sort_order) VALUES (?, ?, ?, ?, ?)", [cat, key, val, label, order])
+    await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [cat, key, val, label, order])
   }
 
   // Financial toolbox
-  await p.query("INSERT IGNORE INTO system_config (category, `key`, value, label, sort_order) VALUES (?, ?, ?, ?, ?)", [
+  await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [
     'toolbox', 'items', JSON.stringify([
       { category: '交易所', items: [
         { name: 'Binance（币安）', desc: '全球最大的交易所，交易量和流动性充沛，首选', icon: '🪙', url: 'https://www.bsmkweb.cc/join?ref=WSBNONAME', tag: '首选', tagColor: '#f0b90b', code: 'WSBNONAME', rebate: '返佣 20%' },
@@ -586,7 +586,7 @@ async function seedData(p) {
   ])
 
   // Market menu
-  await p.query("INSERT IGNORE INTO system_config (category, `key`, value, label, sort_order) VALUES (?, ?, ?, ?, ?)", [
+  await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [
     'market_menu', 'items', JSON.stringify([
       { name: '美股财报日', icon: '📅', url: '/earnings/' },
       { name: 'AI泡沫周期监控', icon: '📉', url: '/ai%E6%B3%A1%E6%B2%AB%E5%91%A8%E6%8A%A5/' },

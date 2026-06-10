@@ -45,13 +45,13 @@ router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
     const { category, key, value, label, sort_order } = req.body
     if (!category || !key) return res.json({ ok: false, error: 'category 和 key 必填' })
 
-    const existing = await queryOne('SELECT id FROM system_config WHERE category = ? AND key = ?', [category, key])
+    const existing = await queryOne('SELECT id FROM system_config WHERE category = ? AND `key` = ?', [category, key])
     if (existing) {
-      await queryRun('UPDATE system_config SET value = ?, label = ?, sort_order = ?, updated_at = NOW() WHERE id = ?',
+      await queryRun('UPDATE system_config SET `value` = ?, label = ?, sort_order = ?, updated_at = NOW() WHERE id = ?',
         [value || '', label || '', sort_order || 0, existing.id])
       res.json({ ok: true, id: existing.id, action: 'updated' })
     } else {
-      const result = await queryRun('INSERT INTO system_config (category, key, value, label, sort_order) VALUES (?, ?, ?, ?, ?)',
+      const result = await queryRun('INSERT INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
         [category, key, value || '', label || '', sort_order || 0])
       res.json({ ok: true, id: result.insertId, action: 'created' })
     }
@@ -70,9 +70,9 @@ router.put('/system-config/:category', authMiddleware, adminOnly, async (req, re
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
       await queryRun(`
-        INSERT INTO system_config (category, key, value, label, sort_order)
+        INSERT INTO system_config (category, \`key\`, \`value\`, label, sort_order)
         VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE value = VALUES(value), label = VALUES(label), sort_order = VALUES(sort_order), updated_at = NOW()
+        ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), label = VALUES(label), sort_order = VALUES(sort_order), updated_at = NOW()
       `, [category, item.key, item.value || '', item.label || '', item.sort_order ?? i])
     }
 
@@ -108,7 +108,7 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
     const { to } = req.body
     if (!to) return res.json({ ok: false, error: '请输入收件邮箱' })
 
-    const rows = await queryAll("SELECT key, value FROM system_config WHERE category = 'smtp'")
+    const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'smtp'")
     const cfg = {}
     for (const r of rows) cfg[r.key] = r.value
 
