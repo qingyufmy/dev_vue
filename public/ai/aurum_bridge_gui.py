@@ -681,8 +681,7 @@ class AurumBridge:
                 self._ws = ws
                 self._resolved_symbol = self._resolve_symbol("XAUUSD") if self.mt5 else "XAUUSD"
                 last_hb = 0
-
-                                last_data_push = 0
+                last_data_push = 0
                 while self.running:
                     now = time.time()
 
