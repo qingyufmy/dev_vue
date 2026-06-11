@@ -8,6 +8,17 @@ function localNow() {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+function toMt5Time(str) {
+  // Beijing time (UTC+8) → MT5 broker time (UTC+3): subtract 5 hours
+  if (!str) return null
+  try {
+    const d = new Date(str.replace(' ', 'T'))
+    d.setHours(d.getHours() - 5)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  } catch { return str }
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
 // Per-user state
@@ -337,6 +348,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const rows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
         const logs = rows.map(row => {
           const item = { ...row }
+          item.created_at_mt5 = toMt5Time(item.created_at)
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
           try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
           delete item.request_json
