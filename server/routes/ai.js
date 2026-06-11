@@ -1105,16 +1105,10 @@ async function runAutoCycle(userId, symbol, timeframe) {
       if (!bridgeAlive) {
         console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: bridge not alive`)
       } else {
-        // Check no existing position
-        const currentPositions = await mt5Bridge(userId, 'positions', { symbol })
-        if ((currentPositions.positions || []).length > 0) {
-          console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: open position exists`)
-        } else {
-          const order = signalOrderPayload(signal, config, market, true)
-          const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
-          if (execResult.status === 'success') {
-            await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?', [JSON.stringify(execResult), signal.id])
-          }
+        const order = signalOrderPayload(signal, config, market, true)
+        const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
+        if (execResult.status === 'success') {
+          await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?', [JSON.stringify(execResult), signal.id])
         }
       }
     } else if (market.inference_source !== 'ai') {
