@@ -228,22 +228,106 @@ function calculateMarketData(symbol, timeframe, rates, account, positions) {
   const closes = rates.map(r => parseFloat(r.close))
   const highs = rates.map(r => parseFloat(r.high))
   const lows = rates.map(r => parseFloat(r.low))
-  const latest = closes[closes.length - 1]
+  const opens = rates.map(r => parseFloat(r.open))
+  const volumes = rates.map(r => parseInt(r.tick_volume || 0))
+  const n = closes.length
+  const latest = closes[n - 1]
   const first = closes[0]
-  const smaWindow = closes.length >= 20 ? closes.slice(-20) : closes
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+
+  // --- SMA ---
+  const smaWindow = n >= 20 ? closes.slice(-20) : closes
   const sma20 = smaWindow.reduce((a, b) => a + b, 0) / smaWindow.length
-  const ranges = highs.map((h, i) => h - lows[i])
-  const avgVolatility = ranges.reduce((a, b) => a + b, 0) / ranges.length
-  const recentHigh = highs.length >= 20 ? Math.max(...highs.slice(-20)) : Math.max(...highs)
-  const recentLow = lows.length >= 20 ? Math.min(...lows.slice(-20)) : Math.min(...lows)
+  const sma50Window = n >= 50 ? closes.slice(-50) : closes
+  const sma50 = sma50Window.reduce((a, b) => a + b, 0) / sma50Window.length
+
+  // --- EMA helper ---
+  function ema(data, period) {
+    if (data.length < period) return data[data.length - 1]
+    const k = 2 / (period + 1)
+    let e = data.slice(0, period).reduce((a, b) => a + b, 0) / period
+    for (let i = period; i < data.length; i++) e = data[i] * k + e * (1 - k)
+    return e
+  }
+
+  // --- MACD (12, 26, 9) ---
+  const ema12 = ema(closes, 12)
+  const ema26 = ema(closes, 26)
+  const macdLine = ema12 - ema26
+  // Signal line: EMA9 of MACD line (approximate from recent values)
+  const macdHistory = []
+  if (n >= 26) {
+    const k12 = 2 / 13, k26 = 2 / 27
+    let e12 = closes.slice(0, 12).reduce((a, b) => a + b, 0) / 12
+    let e26 = closes.slice(0, 26).reduce((a, b) => a + b, 0) / 26
+    for (let i = 12; i < n; i++) {
+      e12 = closes[i] * k12 + e12 * (1 - k12)
+      if (i >= 26) {
+        e26 = closes[i] * k26 + e26 * (1 - k26)
+        macdHistory.push(e12 - e26)
+      }
+    }
+  }
+  const macdSignal = macdHistory.length >= 9 ? ema(macdHistory, 9) : macdLine
+  const macdHistogram = macdLine - macdSignal
+
+  // --- RSI (14) ---
+  function calcRsi(data, period) {
+    if (data.length < period + 1) return 50
+    let gain = 0, loss = 0
+    for (let i = data.length - period; i < data.length; i++) {
+      const diff = data[i] - data[i - 1]
+      if (diff > 0) gain += diff; else loss -= diff
+    }
+    const avgGain = gain / period
+    const avgLoss = loss / period
+    if (avgLoss === 0) return 100
+    const rs = avgGain / avgLoss
+    return 100 - 100 / (1 + rs)
+  }
+  const rsi14 = calcRsi(closes, 14)
+
+  // --- Bollinger Bands (20, 2) ---
+  const bbStd = Math.sqrt(smaWindow.reduce((sum, v) => sum + (v - sma20) ** 2, 0) / smaWindow.length)
+  const bbUpper = sma20 + 2 * bbStd
+  const bbLower = sma20 - 2 * bbStd
+  const bbWidth = bbUpper - bbLower
+  const bbPosition = bbWidth > 0 ? (latest - bbLower) / bbWidth : 0.5
+
+  // --- ATR (14) ---
+  const trueRanges = []
+  for (let i = 1; i < n; i++) {
+    trueRanges.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])))
+  }
+  const atrWindow = trueRanges.length >= 14 ? trueRanges.slice(-14) : trueRanges
+  const atr14 = atrWindow.length > 0 ? atrWindow.reduce((a, b) => a + b, 0) / atrWindow.length : 0
+
+  // --- Support / Resistance levels ---
+  const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
+  const recentLows = lows.length >= 20 ? lows.slice(-20) : lows
+  const recentHigh = Math.max(...recentHighs)
+  const recentLow = Math.min(...recentLows)
   const recentRange = Math.max(recentHigh - recentLow, 0.00001)
   const rangePosition = (latest - recentLow) / recentRange
-  const momentum3 = closes.length >= 4 ? ((latest - closes[closes.length - 4]) / closes[closes.length - 4]) * 100 : 0
-  const momentum10 = closes.length >= 11 ? ((latest - closes[closes.length - 11]) / closes[closes.length - 11]) * 100 : 0
-  const momentum20 = closes.length >= 21 ? ((latest - closes[closes.length - 21]) / closes[closes.length - 21]) * 100 : 0
+
+  // Pivot points (classic)
+  const prevH = highs[n - 2] || latest, prevL = lows[n - 2] || latest, prevC = closes[n - 2] || latest
+  const pivot = (prevH + prevL + prevC) / 3
+  const r1 = 2 * pivot - prevL
+  const s1 = 2 * pivot - prevH
+  const r2 = pivot + (prevH - prevL)
+  const s2 = pivot - (prevH - prevL)
+
+  // --- Momentum ---
+  const momentum3 = n >= 4 ? ((latest - closes[n - 4]) / closes[n - 4]) * 100 : 0
+  const momentum10 = n >= 11 ? ((latest - closes[n - 11]) / closes[n - 11]) * 100 : 0
+  const momentum20 = n >= 21 ? ((latest - closes[n - 21]) / closes[n - 21]) * 100 : 0
   const smaDistancePct = latest ? ((latest - sma20) / latest) * 100 : 0
+  const ranges = highs.map((h, i) => h - lows[i])
+  const avgVolatility = ranges.reduce((a, b) => a + b, 0) / ranges.length
   const volatilityPct = latest ? (avgVolatility / latest) * 100 : 0
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+
+  // --- Trend strength & strategy score ---
   const trendStrength = clamp(Math.abs(smaDistancePct) / Math.max(volatilityPct * 0.8, 0.0001), 0, 1)
   let momentumAlignment = 0
   if (momentum3 > 0 && momentum10 > 0) momentumAlignment = 1
@@ -251,6 +335,26 @@ function calculateMarketData(symbol, timeframe, rates, account, positions) {
   const edgeScore = clamp(0.35 + trendStrength * 0.35 + Math.min(Math.abs(momentum10) / Math.max(volatilityPct * 4, 0.0001), 0.25), 0.2, 0.9)
   const noisePenalty = clamp(volatilityPct / 0.45, 0, 0.18)
   const dataConfidence = clamp(Math.round((edgeScore - noisePenalty) * 100) / 100, 0.05, 0.95)
+
+  // --- K-line pattern hints ---
+  const lastBody = Math.abs(closes[n - 1] - opens[n - 1])
+  const lastRange = Math.max(highs[n - 1] - lows[n - 1], 0.00001)
+  const lastUpperWick = highs[n - 1] - Math.max(closes[n - 1], opens[n - 1])
+  const lastLowerWick = Math.min(closes[n - 1], opens[n - 1]) - lows[n - 1]
+  const isDoji = lastBody < lastRange * 0.1
+  const isHammer = lastLowerWick > lastBody * 2 && lastUpperWick < lastBody * 0.5
+  const isShootingStar = lastUpperWick > lastBody * 2 && lastLowerWick < lastBody * 0.5
+  const isEngulfing = n >= 2 && (
+    (closes[n - 1] > opens[n - 1] && closes[n - 2] < opens[n - 2] && closes[n - 1] > opens[n - 2] && opens[n - 1] < closes[n - 2]) ||
+    (closes[n - 1] < opens[n - 1] && closes[n - 2] > opens[n - 2] && closes[n - 1] < opens[n - 2] && opens[n - 1] > closes[n - 2])
+  )
+
+  // --- Volume analysis ---
+  const avgVolume = volumes.length > 0 ? volumes.reduce((a, b) => a + b, 0) / volumes.length : 0
+  const lastVolume = volumes[n - 1] || 0
+  const volumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 1
+
+  // --- Positions ---
   const longPositions = positions.filter(p => p.type === 'buy')
   const shortPositions = positions.filter(p => p.type === 'sell')
   const totalProfit = positions.reduce((sum, p) => sum + parseFloat(p.profit || 0), 0)
@@ -262,6 +366,9 @@ function calculateMarketData(symbol, timeframe, rates, account, positions) {
     price_change: round5(latest - first),
     price_change_pct: first ? round3(((latest - first) / first) * 100) : 0,
     sma_20: round5(sma20),
+    sma_50: round5(sma50),
+    ema_12: round5(ema12),
+    ema_26: round5(ema26),
     avg_volatility: round5(avgVolatility),
     recent_high_20: round5(recentHigh),
     recent_low_20: round5(recentLow),
@@ -271,13 +378,57 @@ function calculateMarketData(symbol, timeframe, rates, account, positions) {
     momentum_10_pct: round3(momentum10),
     momentum_20_pct: round3(momentum20),
     volatility_pct: round3(volatilityPct),
+    macd: {
+      line: round5(macdLine),
+      signal: round5(macdSignal),
+      histogram: round5(macdHistogram),
+      trend: macdHistogram > 0 ? 'bullish' : macdHistogram < 0 ? 'bearish' : 'neutral',
+    },
+    rsi_14: round2(rsi14),
+    bollinger: {
+      upper: round5(bbUpper),
+      middle: round5(sma20),
+      lower: round5(bbLower),
+      width: round5(bbWidth),
+      position: round3(bbPosition),
+    },
+    atr_14: round5(atr14),
+    support_resistance: {
+      pivot: round5(pivot),
+      r1: round5(r1),
+      r2: round5(r2),
+      s1: round5(s1),
+      s2: round5(s2),
+      recent_high: round5(recentHigh),
+      recent_low: round5(recentLow),
+    },
+    kline_patterns: {
+      last_candle: {
+        is_doji: isDoji,
+        is_hammer: isHammer,
+        is_shooting_star: isShootingStar,
+        is_engulfing: isEngulfing,
+        body_ratio: round3(lastBody / lastRange),
+        upper_wick_ratio: round3(lastUpperWick / lastRange),
+        lower_wick_ratio: round3(lastLowerWick / lastRange),
+      },
+      trend_candles: {
+        bullish_count: closes.slice(-5).filter((c, i) => i > 0 && c > opens[opens.length - 5 + i]).length,
+        bearish_count: closes.slice(-5).filter((c, i) => i > 0 && c < opens[opens.length - 5 + i]).length,
+      },
+    },
+    volume: {
+      current: lastVolume,
+      average: Math.round(avgVolume),
+      ratio: round2(volumeRatio),
+    },
     strategy_score: {
       trend_strength: round3(trendStrength),
       momentum_alignment: momentumAlignment,
       data_confidence: dataConfidence,
       noise_penalty: round3(noisePenalty),
     },
-    kline_count: rates.length,
+    kline_count: n,
     positions: {
       total_positions: positions.length,
       long_positions: longPositions.length,
