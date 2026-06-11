@@ -16,6 +16,100 @@ const state = {
   signalTickets: {},
 };
 
+// ===== Global Symbol Management =====
+const SYMBOL_STORAGE_KEY = "aurum_selected_symbol";
+const _symSelectors = []; // registered selector IDs
+
+function getGlobalSymbol() {
+  return localStorage.getItem(SYMBOL_STORAGE_KEY) || "XAUUSD";
+}
+
+function setGlobalSymbol(symbol) {
+  localStorage.setItem(SYMBOL_STORAGE_KEY, symbol);
+  for (const id of _symSelectors) {
+    const el = document.getElementById(id);
+    if (el && el._symSet) el._symSet(symbol);
+  }
+  wsApi("set_quote_symbol", { symbol }).catch(() => {});
+  refreshQuote().catch(() => {});
+}
+
+// ===== Searchable Symbol Selector =====
+function createSymbolSelector(inputId, options) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const wrapper = document.createElement("div");
+  wrapper.className = "sym-selector";
+  input.parentNode.insertBefore(wrapper, input);
+  wrapper.appendChild(input);
+  input.className = "sym-input";
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("placeholder", "搜索品种...");
+
+  const dropdown = document.createElement("div");
+  dropdown.className = "sym-dropdown";
+  wrapper.appendChild(dropdown);
+
+  let currentSymbol = getGlobalSymbol();
+  let filtered = [...options];
+  let highlightIdx = -1;
+
+  function render(filter) {
+    const q = (filter || "").toUpperCase();
+    filtered = q ? options.filter(s => s.toUpperCase().includes(q)) : [...options];
+    highlightIdx = -1;
+    if (!filtered.length) {
+      dropdown.innerHTML = `<div class="sym-empty">未找到匹配品种</div>`;
+      return;
+    }
+    dropdown.innerHTML = filtered.map((s, i) =>
+      `<div class="sym-option${s === currentSymbol ? " active" : ""}" data-symbol="${s}" data-idx="${i}">${s}</div>`
+    ).join("");
+  }
+
+  function open() { render(input.value); dropdown.classList.add("open"); }
+  function close() { dropdown.classList.remove("open"); }
+
+  input.addEventListener("focus", () => { open(); input.select(); });
+  input.addEventListener("input", () => { render(input.value); dropdown.classList.add("open"); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { close(); input.blur(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); highlightIdx = Math.min(highlightIdx + 1, filtered.length - 1); updateHighlight(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); highlightIdx = Math.max(highlightIdx - 1, 0); updateHighlight(); }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (highlightIdx >= 0 && highlightIdx < filtered.length) selectSymbol(filtered[highlightIdx]);
+      else if (filtered.length === 1) selectSymbol(filtered[0]);
+    }
+  });
+  dropdown.addEventListener("mousedown", (e) => {
+    const opt = e.target.closest(".sym-option");
+    if (opt) selectSymbol(opt.dataset.symbol);
+  });
+  document.addEventListener("click", (e) => { if (!wrapper.contains(e.target)) close(); });
+
+  function updateHighlight() {
+    dropdown.querySelectorAll(".sym-option").forEach((el, i) => {
+      el.classList.toggle("active", i === highlightIdx);
+    });
+    if (highlightIdx >= 0) {
+      const el = dropdown.children[highlightIdx];
+      if (el) el.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function selectSymbol(sym) {
+    currentSymbol = sym;
+    input.value = sym;
+    close();
+    setGlobalSymbol(sym);
+  }
+
+  input.value = currentSymbol;
+  input._symSet = (sym) => { currentSymbol = sym; input.value = sym; };
+  _symSelectors.push(inputId);
+}
+
 const $ = (id) => document.getElementById(id);
 
 const REASON_MAP = {
@@ -844,20 +938,11 @@ function openAutoConfigModal() {
   if (!modal) return;
   modal.classList.remove("hidden");
 
-  // Populate symbol select (same as analyzeSymbol)
-  const sel = document.getElementById("autoSymbolSelect");
-  if (sel && sel.options.length === 0) {
-    (state.symbols || []).forEach(s => {
-      const opt = document.createElement("option");
-      opt.value = s.name;
-      opt.textContent = s.description ? `${s.name} — ${s.description}` : s.name;
-      sel.appendChild(opt);
-    });
-  }
-
   // Restore current config
   const cfg = state.autoConfig || { symbols: ["XAUUSD.s"], timeframes: [] };
-  if (sel) sel.value = cfg.symbols[0] || "XAUUSD.s";
+  const sel = document.getElementById("autoSymbolSelect");
+  if (sel && sel._symSet) sel._symSet(cfg.symbols[0] || "XAUUSD.s");
+  else if (sel) sel.value = cfg.symbols[0] || "XAUUSD.s";
 
   // Set timeframe checkboxes
   document.querySelectorAll("#autoTfGrid input[type='checkbox']").forEach(cb => {
@@ -910,24 +995,22 @@ async function loadSymbols() {
     ? data.symbols
     : [{ name: "XAUUSD", description: "Gold vs US Dollar" }];
 
-  const preferred = state.symbols.find((symbol) => String(symbol.name).toUpperCase() === "XAUUSD")
+  const symbolNames = state.symbols.map(s => s.name);
+  const globalSym = getGlobalSymbol();
+  const preferred = state.symbols.find((symbol) => String(symbol.name).toUpperCase() === globalSym.toUpperCase())
+    || state.symbols.find((symbol) => String(symbol.name).toUpperCase() === "XAUUSD")
     || state.symbols.find((symbol) => String(symbol.name).toUpperCase().startsWith("XAUUSD"))
     || state.symbols.find((symbol) => String(symbol.name).toUpperCase().includes("XAU"))
     || state.symbols[0];
 
   for (const id of ["quoteSymbolSelect", "analyzeSymbol", "tradeSymbolSelect"]) {
-    const select = $(id);
-    if (!select) continue;
-    const previous = select.value || preferred?.name || "XAUUSD";
-    select.innerHTML = state.symbols.map((symbol) => {
-      const name = raw(symbol.name);
-      const description = symbol.description ? ` - ${symbol.description}` : "";
-      return `<option value="${escapeHtml(name)}">${escapeHtml(name + description)}</option>`;
-    }).join("");
-    select.value = state.symbols.some((symbol) => symbol.name === previous)
-      ? previous
-      : preferred?.name || state.symbols[0]?.name || "";
+    createSymbolSelector(id, symbolNames);
   }
+  // Auto symbol selector is separate (not globally synced)
+  createSymbolSelector("autoSymbolSelect", symbolNames);
+
+  // Set initial value
+  if (preferred) setGlobalSymbol(preferred.name);
   // Don't call refreshQuote here — tick stream handles it at 1s
 }
 
@@ -1921,11 +2004,7 @@ function bindEvents() {
   $("orderConfirmModal")?.addEventListener("click", (event) => {
     if (event.target === $("orderConfirmModal")) closeManualOrderModal();
   });
-  $("quoteSymbolSelect").addEventListener("change", refreshQuote);
-  $("tradeSymbolSelect").addEventListener("change", () => {
-    $("quoteSymbolSelect").value = $("tradeSymbolSelect").value;
-    refreshQuote().catch((error) => toast(error.message, "error"));
-  });
+  // Symbol change is handled by searchable selector + setGlobalSymbol
   $("signalFilterDirection")?.addEventListener("change", (event) => {
     state.signalFilters.direction = event.target.value;
     state.signalFilters.page = 1;

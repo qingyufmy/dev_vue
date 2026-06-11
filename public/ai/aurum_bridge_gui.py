@@ -641,6 +641,12 @@ class AurumBridge:
                 self._trade_enabled = enable
                 return {"status": "success", "live_trading_enabled": enable}
 
+            elif action == "set_quote_symbol":
+                symbol = params.get("symbol", "XAUUSD")
+                resolved = self._resolve_symbol(symbol)
+                self._resolved_symbol = resolved
+                return {"status": "success", "symbol": resolved}
+
             else:
                 return {"status": "error", "message": f"unknown action: {action}"}
         except Exception as e:

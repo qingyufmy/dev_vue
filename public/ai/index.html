@@ -149,7 +149,7 @@
             <div class="card card-gold grid-area-quote">
               <div class="card-header">
                 <span class="card-title">实时报价</span>
-                <select id="quoteSymbolSelect" class="instrument-select"></select>
+                <input id="quoteSymbolSelect" class="instrument-select" />
               </div>
               <div class="quote-main">
                 <div class="quote-side">
@@ -371,7 +371,7 @@
                 <span class="card-title">信号生成</span>
                 <button id="runAnalysisBtn" class="btn btn-primary"><i data-lucide="play" size="16"></i>生成信号</button>
               </div>
-              <label><span>品种</span><select id="analyzeSymbol"></select></label>
+              <label><span>品种</span><input id="analyzeSymbol" /></label>
               <div class="timeframe-grid">
                 <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1分钟</span></label>
                 <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5分钟</span></label>
@@ -422,7 +422,7 @@
                 <span class="card-title">手动交易</span>
                 <button class="card-action-btn" data-action="refresh-quote"><i data-lucide="refresh-cw" size="12"></i>报价</button>
               </div>
-              <label><span>品种</span><select id="tradeSymbolSelect"></select></label>
+              <label><span>品种</span><input id="tradeSymbolSelect" /></label>
               <div class="trading-quote-row">
                 <div><span>卖出成交参考</span><strong id="tradeBidPrice" class="num">--</strong></div>
                 <div><span>点差</span><strong id="tradeSpread" class="num">--</strong></div>
@@ -596,7 +596,7 @@
           <button id="autoConfigClose" class="icon-btn" title="关闭"><i data-lucide="x" size="16"></i></button>
         </div>
         <div class="auto-config-body">
-          <label class="auto-field"><span>品种</span><select id="autoSymbolSelect"></select></label>
+          <label class="auto-field"><span>品种</span><input id="autoSymbolSelect" /></label>
           <div class="auto-field">
             <span>分析周期（不选则关闭）</span>
             <div class="timeframe-grid" id="autoTfGrid">

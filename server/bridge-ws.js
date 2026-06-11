@@ -233,6 +233,20 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (bridge && result.status === 'success') bridge.tradeEnabled = !!params.enable
         break
       }
+      case 'set_quote_symbol': {
+        const symbol = params.symbol || 'XAUUSD'
+        result = await ai.mt5Bridge(userId, 'set_quote_symbol', { symbol })
+        // Persist to user config so bridge reconnects with this symbol
+        if (result.status === 'success') {
+          await queryRun('UPDATE ai_configs SET session_id = session_id WHERE user_id = ?', [userId]) // touch config
+          // Store in system_config for this user
+          const key = `quote_symbol_${userId}`
+          const existing = await queryOne('SELECT id FROM system_config WHERE `key` = ?', [key])
+          if (existing) await queryRun('UPDATE system_config SET `value` = ? WHERE `key` = ?', [symbol, key])
+          else await queryRun('INSERT INTO system_config (`key`, `value`) VALUES (?, ?)', [key, symbol])
+        }
+        break
+      }
       case 'history': {
         const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
         if (bridgeOk) {
