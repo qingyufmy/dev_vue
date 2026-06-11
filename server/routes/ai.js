@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { getDB, query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
+import { query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import jwt from 'jsonwebtoken'
 
 import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges } from '../bridge-ws.js'

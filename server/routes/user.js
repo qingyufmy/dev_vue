@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { getDB, queryOne, queryAll, queryRun } from '../db.js'
+import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 
 const router = Router()

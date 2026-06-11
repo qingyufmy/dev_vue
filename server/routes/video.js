@@ -2,8 +2,8 @@ import { Router } from 'express'
 import multer from 'multer'
 import { join, dirname, extname } from 'path'
 import { fileURLToPath } from 'url'
-import { existsSync, mkdirSync, renameSync, unlinkSync, statSync, createReadStream } from 'fs'
-import { getDB, queryOne, queryAll, queryRun } from '../db.js'
+import { existsSync, mkdirSync, unlinkSync, statSync, createReadStream } from 'fs'
+import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth } from '../middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -242,30 +242,6 @@ router.delete('/video-stream', authMiddleware, async (req, res) => {
 
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '删除失败' }) }
-})
-
-// ===== Qiniu upload token (placeholder) =====
-router.get('/qiniu-token', authMiddleware, (req, res) => {
-  try {
-    if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
-
-    // TODO: Replace with real Qiniu SDK integration
-    // const qiniu = require('qiniu')
-    // const mac = new qiniu.auth.digest.Mac(accessKey, secretKey)
-    // const putPolicy = new qiniu.rs.PutPolicy({ scope: bucket })
-    // const uploadToken = putPolicy.uploadToken(mac)
-
-    res.json({
-      ok: true,
-      uploadToken: 'placeholder-token',
-      uploadUrl: 'https://upload.qiniup.com',
-      bucket: process.env.QINIU_BUCKET || 'your-bucket',
-      domain: process.env.QINIU_DOMAIN || 'https://your-cdn.example.com',
-      message: '七牛云上传 Token（需配置 .env 中的 QINIU_ACCESS_KEY, QINIU_SECRET_KEY, QINIU_BUCKET, QINIU_DOMAIN）',
-    })
-  } catch (err) {
-    res.json({ ok: false, error: '获取上传凭证失败' })
-  }
 })
 
 // ===== Qiniu callback =====

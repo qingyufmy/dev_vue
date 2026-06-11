@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { getDB, query, queryOne, queryAll, queryRun, logAudit } from './db.js'
+import { query, queryOne, queryAll, queryRun, logAudit } from './db.js'
 
 function localNow() {
   const d = new Date()
