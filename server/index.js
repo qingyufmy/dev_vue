@@ -43,6 +43,7 @@ if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
 const upload = multer({ dest: join(__dirname, uploadDir), limits: { fileSize: 10 * 1024 * 1024 } })
 
 const app = express()
+app.set('trust proxy', true)
 
 // Debug: log all requests
 app.use(cors())
