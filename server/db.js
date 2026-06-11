@@ -9,7 +9,7 @@ export function beijingNow() {
 
 
 const DB_CONFIG = {
-  host: process.env.MYSQL_HOST || '192.168.1.254',
+  host: process.env.MYSQL_HOST || '127.0.0.1',
   port: parseInt(process.env.MYSQL_PORT || '3306'),
   user: process.env.MYSQL_USER || 'huaerjie',
   password: process.env.MYSQL_PASSWORD || '8dn6jbMHNZza3yzP',
