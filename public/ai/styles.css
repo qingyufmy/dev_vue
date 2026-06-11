@@ -3195,3 +3195,15 @@ a.signal-link:hover {
 .sym-selector .sym-option{padding:6px 10px;cursor:pointer;font-size:12px;color:var(--text-secondary,#ccc);transition:background .15s}
 .sym-selector .sym-option:hover,.sym-selector .sym-option.active{background:rgba(212,160,23,.15);color:var(--gold-primary,#d4a017)}
 .sym-selector .sym-empty{padding:6px 10px;font-size:11px;color:var(--text-muted,#666)}
+
+/* Config Sub-Tabs */
+.config-sub-tabs{display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid rgba(212,160,23,.2)}
+.config-sub-tab{padding:10px 20px;background:none;border:none;color:var(--text-secondary,#999);font-size:13px;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
+.config-sub-tab:hover{color:var(--gold-primary,#d4a017)}
+.config-sub-tab.active{color:var(--gold-primary,#d4a017);border-bottom-color:var(--gold-primary,#d4a017)}
+.config-sub-panel{display:none}
+.config-sub-panel.active{display:block}
+.admin-badge{display:inline-block;padding:2px 8px;font-size:10px;background:rgba(212,160,23,.15);color:var(--gold-primary,#d4a017);border-radius:4px;margin-left:8px;font-weight:500}
+.check-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.check-row .field-help{width:100%;margin-top:2px}
+#useManualConfigWrap{margin-top:8px;padding:10px;background:rgba(212,160,23,.05);border-radius:6px;border:1px solid rgba(212,160,23,.15)}

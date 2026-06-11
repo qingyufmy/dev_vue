@@ -342,20 +342,99 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'auto_status': {
         const cfg = await ai.getAutoConfig(null, userId)
-        const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : []
-        const timeframes = cfg?.timeframes ? JSON.parse(cfg.timeframes) : []
-        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, timeframes, interval_seconds: cfg?.interval_seconds || 900, running: !!cfg?.enabled } }
+        const globalCfg = await ai.getGlobalAutoConfig()
+        const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : (globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD'])
+        const timeframes = cfg?.timeframes ? JSON.parse(cfg.timeframes) : (globalCfg?.timeframes ? JSON.parse(globalCfg.timeframes) : ['M15'])
+        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, timeframes, interval_seconds: 300, running: !!cfg?.enabled } }
+        break
+      }
+      case 'toggle_auto': {
+        // Simple toggle: click on/off, run once on enable, 5-min cycle
+        const cfg = await ai.getAutoConfig(null, userId)
+        const currentlyEnabled = !!cfg?.enabled
+        const newEnabled = !currentlyEnabled
+        const globalCfg = await ai.getGlobalAutoConfig()
+        const symbols = globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD']
+        const timeframes = globalCfg?.timeframes ? JSON.parse(globalCfg.timeframes) : ['M15']
+        await ai.upsertAutoConfig(null, userId, symbols, timeframes, 300, newEnabled)
+        ai.stopAutoScheduler(userId)
+        if (newEnabled) {
+          await ai.startAutoScheduler(userId)
+          // Run once immediately
+          for (const symbol of symbols) {
+            for (const tf of timeframes) {
+              try { await ai.runAutoCycle(userId, symbol, tf) } catch (e) { console.error(`[toggle_auto] immediate run error:`, e.message) }
+            }
+          }
+        }
+        result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
+        break
+      }
+      case 'get_auto_config': {
+        // Get global auto config (admin only)
+        const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (user?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+        const globalCfg = await ai.getGlobalAutoConfig()
+        const autoPrompt = globalCfg?.system_prompt || await ai.getSystemPrompt(null)
+        result = {
+          status: 'success',
+          config: {
+            api_provider: globalCfg?.api_provider || 'deepseek',
+            model_name: globalCfg?.model_name || 'deepseek-chat',
+            has_api_key: !!globalCfg?.api_key_encrypted,
+            api_base_url: globalCfg?.api_base_url || 'https://api.deepseek.com',
+            temperature: globalCfg?.temperature ?? 0.3,
+            max_tokens: globalCfg?.max_tokens ?? 2000,
+            risk_level: globalCfg?.risk_level || 'medium',
+            max_position_size: globalCfg?.max_position_size ?? 0.05,
+            selected_take_profit: globalCfg?.selected_take_profit ?? 2,
+            system_prompt: autoPrompt,
+            symbols: globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD'],
+            timeframes: globalCfg?.timeframes ? JSON.parse(globalCfg.timeframes) : ['M15'],
+            use_manual_config: !!globalCfg?.use_manual_config,
+          }
+        }
+        break
+      }
+      case 'save_auto_config': {
+        // Save global auto config (admin only)
+        const user2 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (user2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+        const existing = await ai.getGlobalAutoConfig()
+        const newCfg = {
+          symbols: params.symbols || (existing?.symbols ? JSON.parse(existing.symbols) : ['XAUUSD']),
+          timeframes: params.timeframes || (existing?.timeframes ? JSON.parse(existing.timeframes) : ['M15']),
+          api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
+          model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
+          api_key_encrypted: params.api_key || existing?.api_key_encrypted || null,
+          api_base_url: params.api_base_url ?? existing?.api_base_url ?? 'https://api.deepseek.com',
+          temperature: params.temperature ?? existing?.temperature ?? 0.3,
+          max_tokens: params.max_tokens ?? existing?.max_tokens ?? 2000,
+          system_prompt: params.system_prompt ?? existing?.system_prompt ?? null,
+          risk_level: params.risk_level ?? existing?.risk_level ?? 'medium',
+          max_position_size: params.max_position_size ?? existing?.max_position_size ?? 0.05,
+          selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
+          use_manual_config: params.use_manual_config !== undefined ? params.use_manual_config : (existing?.use_manual_config || false),
+          interval_seconds: 300,
+        }
+        await ai.saveGlobalAutoConfig(newCfg)
+        // Restart schedulers for all enabled users
+        const enabledUsers = await queryAll('SELECT user_id FROM auto_scheduler WHERE enabled = 1 AND user_id != 0')
+        for (const u of enabledUsers) {
+          ai.stopAutoScheduler(u.user_id)
+          await ai.startAutoScheduler(u.user_id)
+        }
+        result = { status: 'success', message: '自动推理配置已保存' }
         break
       }
       case 'save_auto': {
+        // Legacy: save per-user auto scheduler settings
         const { symbols = ['XAUUSD'], timeframes = [] } = params
         const enabled = timeframes.length > 0
-        const shortestMs = timeframes.length ? Math.min(...timeframes.map(ai.timeframeIntervalMs)) : 900_000
-        const interval_seconds = Math.round(shortestMs / 1000)
-        await ai.upsertAutoConfig(null, userId, symbols, timeframes, interval_seconds, enabled)
+        await ai.upsertAutoConfig(null, userId, symbols, timeframes, 300, enabled)
         ai.stopAutoScheduler(userId)
         if (enabled) await ai.startAutoScheduler(userId)
-        result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols, timeframes, interval_seconds }
+        result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols, timeframes }
         break
       }
       case 'audit_logs': {

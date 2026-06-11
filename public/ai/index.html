@@ -293,73 +293,149 @@
         <section id="ai-config" class="tab-panel">
           <div class="card content-card">
             <div class="card-header">
-              <span class="card-title">模型与执行约束</span>
+              <span class="card-title">模型与推理配置</span>
             </div>
-            <div class="config-section">
-              <div class="config-section-title">AI 推理引擎</div>
-              <label class="model-sharing-toggle" id="modelSharingWrap" style="display:none">
-                <div class="model-sharing-row">
-                  <span>共享模型给其他用户</span>
-                  <label class="switch">
-                    <input type="checkbox" id="modelSharingEnabled">
-                    <span class="slider round"></span>
+            <div class="config-sub-tabs">
+              <button class="config-sub-tab active" data-config-tab="manual-config">手动推理配置</button>
+              <button class="config-sub-tab" data-config-tab="auto-config">自动推理配置</button>
+            </div>
+
+            <!-- 手动推理配置 -->
+            <div id="manual-config" class="config-sub-panel active">
+              <div class="config-section">
+                <div class="config-section-title">AI 推理引擎</div>
+                <label class="model-sharing-toggle" id="modelSharingWrap" style="display:none">
+                  <div class="model-sharing-row">
+                    <span>共享模型给其他用户</span>
+                    <label class="switch">
+                      <input type="checkbox" id="modelSharingEnabled">
+                      <span class="slider round"></span>
+                    </label>
+                  </div>
+                  <small class="field-help">开启后，未配置模型的用户将自动使用您的模型设置</small>
+                </label>
+                <div id="modelSharedInfo" class="model-shared-info" style="display:none">
+                  <i data-lucide="info" size="14"></i>
+                  <span>当前使用管理员共享的模型设置，请自行配置模型以使用自定义设置</span>
+                </div>
+                <div class="config-grid">
+                  <label><span>模型供应商</span><select id="apiProvider">
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="gpt">GPT</option>
+                    <option value="kimi">Kimi</option>
+                    <option value="qwen">Qwen</option>
+                    <option value="zhipu">Zhipu</option>
+                    <option value="doubao">DouBao</option>
+                    <option value="claude">Claude</option>
+                    <option value="gemini">Gemini</option>
+                  </select></label>
+                  <label><span>模型名称</span><input id="modelName" value="deepseek-chat" /></label>
+                  <label><span>API Key</span><input id="apiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
+                  <label><span>API 地址</span><input id="apiBaseUrl" value="https://api.deepseek.com" placeholder="OpenAI-compatible endpoint" /></label>
+                  <label><span>推理温度 Temperature</span><input id="temperature" class="num" type="number" min="0" max="2" step="0.1" value="0.7" /><small class="field-help">数值越低越稳定，建议 0.2-0.7</small></label>
+                  <label><span>最大输出 Max Tokens</span><input id="maxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /><small class="field-help">控制推理输出长度，建议 1200-2500</small></label>
+                </div>
+              </div>
+              <div class="config-section">
+                <div class="config-section-title">交易约束</div>
+                <div class="config-grid">
+                  <label><span>风险等级</span><select id="riskLevel">
+                    <option value="low">低风险</option>
+                    <option value="medium" selected>中风险</option>
+                    <option value="high">高风险</option>
+                  </select></label>
+                  <label><span>单次最大手数</span><span class="unit-field"><input id="maxPositionSize" class="num" type="number" min="0.01" step="0.01" value="0.05" /><span class="input-unit">手</span></span></label>
+                  <label><span>默认止盈方案</span><select id="selectedTakeProfit">
+                    <option value="1">TP1 - 保守止盈</option>
+                    <option value="2" selected>TP2 - 标准止盈</option>
+                    <option value="3">TP3 - 激进止盈</option>
+                  </select></label>
+                  <div id="autoExecuteRow" class="auto-execute-row">
+                    <label class="check-row auto-execute-label"><input id="enableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
+                    <div id="autoExecuteWarning" class="auto-execute-warning">
+                      已开启自动执行：系统会按后台风控、信号有效期、最大手数和持仓约束判断是否发送交易。
+                    </div>
+                  </div>
+                  <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>期货手数模式</span></label>
+                </div>
+              </div>
+              <div class="config-section">
+                <div class="config-section-title">系统提示词</div>
+                <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
+                <button id="saveSystemPromptBtn" class="btn btn-primary" style="margin-top:8px;"><i data-lucide="save" size="16"></i>保存提示词</button>
+              </div>
+              <div id="configStatus" class="inline-status">正在读取配置</div>
+              <div class="config-actions">
+                <button id="saveConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
+              </div>
+            </div>
+
+            <!-- 自动推理配置 -->
+            <div id="auto-config" class="config-sub-panel">
+              <div class="config-section">
+                <div class="config-section-title">自动推理引擎 <span class="admin-badge">仅管理员</span></div>
+                <div class="config-grid">
+                  <label><span>模型供应商</span><select id="autoApiProvider">
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="gpt">GPT</option>
+                    <option value="kimi">Kimi</option>
+                    <option value="qwen">Qwen</option>
+                    <option value="zhipu">Zhipu</option>
+                    <option value="doubao">DouBao</option>
+                    <option value="claude">Claude</option>
+                    <option value="gemini">Gemini</option>
+                  </select></label>
+                  <label><span>模型名称</span><input id="autoModelName" value="deepseek-chat" /></label>
+                  <label><span>API Key</span><input id="autoApiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
+                  <label><span>API 地址</span><input id="autoApiBaseUrl" value="https://api.deepseek.com" placeholder="OpenAI-compatible endpoint" /></label>
+                  <label><span>推理温度 Temperature</span><input id="autoTemperature" class="num" type="number" min="0" max="2" step="0.1" value="0.3" /><small class="field-help">自动推理建议低温稳定，0.2-0.4</small></label>
+                  <label><span>最大输出 Max Tokens</span><input id="autoMaxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /></label>
+                </div>
+              </div>
+              <div class="config-section">
+                <div class="config-section-title">交易约束</div>
+                <div class="config-grid">
+                  <label><span>风险等级</span><select id="autoRiskLevel">
+                    <option value="low">低风险</option>
+                    <option value="medium" selected>中风险</option>
+                    <option value="high">高风险</option>
+                  </select></label>
+                  <label><span>单次最大手数</span><span class="unit-field"><input id="autoMaxPositionSize" class="num" type="number" min="0.01" step="0.01" value="0.05" /><span class="input-unit">手</span></span></label>
+                  <label><span>默认止盈方案</span><select id="autoSelectedTakeProfit">
+                    <option value="1">TP1 - 保守止盈</option>
+                    <option value="2" selected>TP2 - 标准止盈</option>
+                    <option value="3">TP3 - 激进止盈</option>
+                  </select></label>
+                </div>
+              </div>
+              <div class="config-section">
+                <div class="config-section-title">推理品种与周期</div>
+                <div class="config-grid">
+                  <label><span>品种</span><input id="autoSymbols" value="XAUUSD" placeholder="逗号分隔，如 XAUUSD,XAUUSD.s" /></label>
+                  <div class="timeframe-grid" id="autoTimeframes">
+                    <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span></label>
+                    <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span></label>
+                    <label><input type="checkbox" value="M15" checked /><span class="tf-card-code">M15</span></label>
+                    <label><input type="checkbox" value="M30" /><span class="tf-card-code">M30</span></label>
+                    <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span></label>
+                    <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span></label>
+                    <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span></label>
+                  </div>
+                  <label class="check-row" id="useManualConfigWrap">
+                    <input id="useManualConfig" type="checkbox" />
+                    <span>自动推理使用手动推理配置</span>
+                    <small class="field-help">开启后，自动推理将使用手动配置中的模型、提示词和约束</small>
                   </label>
                 </div>
-                <small class="field-help">开启后，未配置模型的用户将自动使用您的模型设置</small>
-              </label>
-              <div id="modelSharedInfo" class="model-shared-info" style="display:none">
-                <i data-lucide="info" size="14"></i>
-                <span>当前使用管理员共享的模型设置，请自行配置模型以使用自定义设置</span>
               </div>
-              <div class="config-grid">
-                <label><span>模型供应商</span><select id="apiProvider">
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="gpt">GPT</option>
-                  <option value="kimi">Kimi</option>
-                  <option value="qwen">Qwen</option>
-                  <option value="zhipu">Zhipu</option>
-                  <option value="doubao">DouBao</option>
-                  <option value="claude">Claude</option>
-                  <option value="gemini">Gemini</option>
-                </select></label>
-                <label><span>模型名称</span><input id="modelName" value="deepseek-chat" /></label>
-                <label><span>API Key</span><input id="apiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
-                <label><span>API 地址</span><input id="apiBaseUrl" value="https://api.deepseek.com" placeholder="OpenAI-compatible endpoint" /></label>
-                <label><span>推理温度 Temperature</span><input id="temperature" class="num" type="number" min="0" max="2" step="0.1" value="0.7" /><small class="field-help">数值越低越稳定，建议 0.2-0.7</small></label>
-                <label><span>最大输出 Max Tokens</span><input id="maxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /><small class="field-help">控制推理输出长度，建议 1200-2500</small></label>
+              <div class="config-section">
+                <div class="config-section-title">系统提示词</div>
+                <label class="prompt-box"><span>自动推理专用提示词（留空则使用全局共享提示词）</span><textarea id="autoSystemPrompt" rows="11" spellcheck="false"></textarea></label>
               </div>
-            </div>
-            <div class="config-section">
-              <div class="config-section-title">交易约束</div>
-              <div class="config-grid">
-                <label><span>风险等级</span><select id="riskLevel">
-                  <option value="low">低风险</option>
-                  <option value="medium" selected>中风险</option>
-                  <option value="high">高风险</option>
-                </select></label>
-                <label><span>单次最大手数</span><span class="unit-field"><input id="maxPositionSize" class="num" type="number" min="0.01" step="0.01" value="0.05" /><span class="input-unit">手</span></span></label>
-                <label><span>默认止盈方案</span><select id="selectedTakeProfit">
-                  <option value="1">TP1 - 保守止盈</option>
-                  <option value="2" selected>TP2 - 标准止盈</option>
-                  <option value="3">TP3 - 激进止盈</option>
-                </select></label>
-                <div id="autoExecuteRow" class="auto-execute-row">
-                  <label class="check-row auto-execute-label"><input id="enableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
-                  <div id="autoExecuteWarning" class="auto-execute-warning">
-                    已开启自动执行：系统会按后台风控、信号有效期、最大手数和持仓约束判断是否发送交易。
-                  </div>
-                </div>
-                <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>期货手数模式</span></label>
+              <div id="autoConfigStatus" class="inline-status">正在读取配置</div>
+              <div class="config-actions">
+                <button id="saveAutoConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存自动推理配置</button>
               </div>
-            </div>
-            <div class="config-section">
-              <div class="config-section-title">系统提示词</div>
-              <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
-              <button id="saveSystemPromptBtn" class="btn btn-primary" style="margin-top:8px;"><i data-lucide="save" size="16"></i>保存提示词</button>
-            </div>
-            <div id="configStatus" class="inline-status">正在读取配置</div>
-            <div class="config-actions">
-              <button id="saveConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
             </div>
           </div>
         </section>
@@ -585,33 +661,6 @@
             </button>
           </div>
 
-        </div>
-      </div>
-    </div>
-
-    <div id="autoConfigModal" class="auto-config-overlay hidden" role="dialog" aria-modal="true">
-      <div class="auto-config-dialog">
-        <div class="auto-config-head">
-          <strong>配置自动推理</strong>
-          <button id="autoConfigClose" class="icon-btn" title="关闭"><i data-lucide="x" size="16"></i></button>
-        </div>
-        <div class="auto-config-body">
-          <label class="auto-field"><span>品种</span><input id="autoSymbolSelect" /></label>
-          <div class="auto-field">
-            <span>分析周期（不选则关闭）</span>
-            <div class="timeframe-grid" id="autoTfGrid">
-              <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1分钟</span></label>
-              <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5分钟</span></label>
-              <label><input type="checkbox" value="M15" /><span class="tf-card-code">M15</span><span class="tf-card-name">15分钟</span></label>
-              <label><input type="checkbox" value="M30" /><span class="tf-card-code">M30</span><span class="tf-card-name">30分钟</span></label>
-              <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1小时</span></label>
-              <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4小时</span></label>
-              <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">日线</span></label>
-            </div>
-          </div>
-        </div>
-        <div class="auto-config-foot">
-          <button id="autoConfigConfirm" class="btn btn-primary">确认开启</button>
         </div>
       </div>
     </div>

@@ -1020,6 +1020,77 @@ async function getAutoConfig(db, userId) {
   return await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
 }
 
+// Global auto config (user_id = 0)
+async function getGlobalAutoConfig() {
+  return await queryOne('SELECT * FROM auto_scheduler WHERE user_id = 0')
+}
+
+async function saveGlobalAutoConfig(cfg) {
+  const now = utcNow()
+  await queryRun(`
+    UPDATE auto_scheduler SET
+      symbols = ?, timeframes = ?, interval_seconds = ?,
+      api_provider = ?, model_name = ?, api_key_encrypted = ?, api_base_url = ?,
+      temperature = ?, max_tokens = ?, system_prompt = ?,
+      risk_level = ?, max_position_size = ?, selected_take_profit = ?,
+      use_manual_config = ?, updated_at = ?
+    WHERE user_id = 0
+  `, [
+    JSON.stringify(cfg.symbols || ['XAUUSD']),
+    JSON.stringify(cfg.timeframes || ['M15']),
+    cfg.interval_seconds || 300,
+    cfg.api_provider || null, cfg.model_name || null, cfg.api_key_encrypted || null, cfg.api_base_url || null,
+    cfg.temperature ?? null, cfg.max_tokens ?? null, cfg.system_prompt || null,
+    cfg.risk_level || null, cfg.max_position_size ?? null, cfg.selected_take_profit ?? null,
+    cfg.use_manual_config ? 1 : 0, now
+  ])
+}
+
+// Get the config to use for auto inference
+async function getAutoInferenceConfig(userId) {
+  const globalCfg = await getGlobalAutoConfig()
+  if (!globalCfg) return null
+
+  // If use_manual_config is ON, use admin's manual config
+  if (globalCfg.use_manual_config) {
+    const adminUser = await queryOne('SELECT id FROM users WHERE role = ?', ['admin'])
+    if (adminUser) {
+      const manualConfig = await getActiveConfig(null, adminUser.id, 'default')
+      if (manualConfig && manualConfig.has_api_key) {
+        return {
+          api_provider: manualConfig.api_provider,
+          model_name: manualConfig.model_name,
+          api_key_encrypted: manualConfig.api_key_encrypted,
+          api_base_url: manualConfig.api_base_url,
+          temperature: manualConfig.temperature,
+          max_tokens: manualConfig.max_tokens,
+          risk_level: manualConfig.risk_level,
+          max_position_size: manualConfig.max_position_size,
+          selected_take_profit: manualConfig.selected_take_profit,
+          system_prompt: await getSystemPrompt(null),
+          _source: 'manual'
+        }
+      }
+    }
+  }
+
+  // Otherwise use dedicated auto config
+  const autoPrompt = globalCfg.system_prompt || await getSystemPrompt(null)
+  return {
+    api_provider: globalCfg.api_provider || 'deepseek',
+    model_name: globalCfg.model_name || 'deepseek-chat',
+    api_key_encrypted: globalCfg.api_key_encrypted,
+    api_base_url: globalCfg.api_base_url || 'https://api.deepseek.com',
+    temperature: globalCfg.temperature ?? 0.3,
+    max_tokens: globalCfg.max_tokens ?? 2000,
+    risk_level: globalCfg.risk_level || 'medium',
+    max_position_size: globalCfg.max_position_size ?? 0.05,
+    selected_take_profit: globalCfg.selected_take_profit ?? 2,
+    system_prompt: autoPrompt,
+    _source: 'auto'
+  }
+}
+
 async function upsertAutoConfig(db, userId, symbols, timeframes, intervalSeconds, enabled) {
   const now = utcNow()
   await queryRun(`
@@ -1043,7 +1114,12 @@ async function runAutoCycle(userId, symbol, timeframe) {
   const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) return
 
-  const config = await getActiveConfig(null, userId, 'default')
+  // Use global auto inference config
+  const config = await getAutoInferenceConfig(userId)
+  if (!config || !config.api_key_encrypted) {
+    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: no API key in auto config`)
+    return
+  }
 
   try {
     // Get market data from MT5 bridge
@@ -1138,7 +1214,7 @@ async function startAutoScheduler(userId) {
   let count = 0
   for (const symbol of symbols) {
     for (const tf of timeframes) {
-      const intervalMs = timeframeIntervalMs(tf)
+      const intervalMs = 300000 // Fixed 5 minutes
       const key = `${symbol}:${tf}`
       const stagger = Math.random() * 5000 // stagger starts to avoid API bursts
 
@@ -1160,7 +1236,7 @@ async function startAutoScheduler(userId) {
       count++
     }
   }
-  console.log(`[AutoScheduler] Started for user ${userId}: ${count} timers (${timeframes.map(t => t + '=' + (timeframeIntervalMs(t)/1000) + 's').join(', ')})`)
+  console.log(`[AutoScheduler] Started for user ${userId}: ${count} timers, interval=5m`)
 
   // Also start trade review scheduler
   startTradeReviewScheduler(userId)
@@ -1196,5 +1272,6 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   getSystemPrompt, buildStrategyContext, maybeAiSignal, aiFailureHold,
   reviewTrades, buildTradeReviewContext, runTradeReviewCycle,
   startTradeReviewScheduler, stopTradeReviewScheduler,
+  getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
   EXECUTION_JSON_CONTRACT, TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS }
 export default router

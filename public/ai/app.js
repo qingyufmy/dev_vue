@@ -705,6 +705,8 @@ async function refreshTabData(tabId) {
     await Promise.allSettled([loadAccount(), loadHistory()]);
   } else if (tabId === "audit") {
     await loadAudit();
+  } else if (tabId === "ai-config") {
+    loadAutoConfig();
   }
 }
 
@@ -932,60 +934,14 @@ async function handleTradeModeClick() {
   }
 }
 
-// ============ Auto Config Modal ============
-function openAutoConfigModal() {
-  const modal = document.getElementById("autoConfigModal");
-  if (!modal) return;
-  modal.classList.remove("hidden");
-
-  // Restore current config
-  const cfg = state.autoConfig || { symbols: ["XAUUSD.s"], timeframes: [] };
-  const sel = document.getElementById("autoSymbolSelect");
-  if (sel && sel._symSet) sel._symSet(cfg.symbols[0] || "XAUUSD.s");
-  else if (sel) sel.value = cfg.symbols[0] || "XAUUSD.s";
-
-  // Set timeframe checkboxes
-  document.querySelectorAll("#autoTfGrid input[type='checkbox']").forEach(cb => {
-    cb.checked = cfg.timeframes.includes(cb.value);
-  });
-
-  updateAutoConfirmText();
-}
-
-function closeAutoConfigModal() {
-  document.getElementById("autoConfigModal")?.classList.add("hidden");
-}
-
-function updateAutoConfirmText() {
-  const checkedTfs = document.querySelectorAll("#autoTfGrid input[type='checkbox']:checked");
-  const btn = document.getElementById("autoConfigConfirm");
-  if (btn) {
-    btn.textContent = checkedTfs.length > 0 ? "确认开启" : "关闭自动推理";
-  }
-}
-
-async function saveAutoConfig() {
-  const sel = document.getElementById("autoSymbolSelect");
-  const symbols = sel ? [sel.value] : ["XAUUSD.s"];
-  const timeframes = [];
-  document.querySelectorAll("#autoTfGrid input[type='checkbox']:checked").forEach(cb => timeframes.push(cb.value));
-
-  // Enabling auto-reasoning requires bridge connection
-  if (timeframes.length > 0) {
-    const health = await wsApi("health").catch(() => null);
-    if (!health?.gateway?.mode || health.gateway.mode !== "live") {
-      toast("请先启动桥接脚本，再开启自动推理", "warning");
-      return;
-    }
-  }
-
+// ============ Auto Toggle (Simple) ============
+async function handleAutoToggle() {
   try {
-    const result = await wsApi("save_auto", { symbols, timeframes });
-    toast(result.enabled ? `自动推理已开启: ${timeframes.join(", ")}` : "自动推理已关闭", "success");
-    closeAutoConfigModal();
+    const result = await wsApi('toggle_auto');
+    toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
     await loadStatus();
   } catch (e) {
-    toast("保存失败: " + e.message, "error");
+    toast('切换失败: ' + e.message, 'error');
   }
 }
 
@@ -1282,6 +1238,106 @@ async function saveSystemPrompt() {
 
 function selectedTimeframes() {
   return [...document.querySelectorAll(".timeframe-grid input:checked")].map((node) => node.value).slice(0, 8);
+}
+
+// ============ Config Sub-Tab Switching ============
+function initConfigSubTabs() {
+  document.querySelectorAll('.config-sub-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.config-sub-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.config-sub-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      const target = tab.dataset.configTab;
+      const panel = document.getElementById(target);
+      if (panel) panel.classList.add('active');
+      if (target === 'auto-config') loadAutoConfig();
+    });
+  });
+}
+
+// ============ Auto Config ============
+function applyAutoProviderPreset(provider) {
+  const presets = {
+    deepseek: { url: 'https://api.deepseek.com', model: 'deepseek-chat' },
+    gpt: { url: 'https://api.openai.com/v1', model: 'gpt-4o' },
+    kimi: { url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+    qwen: { url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+    zhipu: { url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+    doubao: { url: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-1.5-pro-256k' },
+    claude: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514' },
+    gemini: { url: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash' },
+  };
+  const p = presets[provider];
+  if (!p) return;
+  const urlEl = document.getElementById('autoApiBaseUrl');
+  const modelEl = document.getElementById('autoModelName');
+  if (urlEl && !urlEl.value) urlEl.value = p.url;
+  if (modelEl && (!modelEl.value || modelEl.value === 'deepseek-chat')) modelEl.value = p.model;
+}
+
+async function loadAutoConfig() {
+  const isAdmin = state.user?.role === 'admin';
+  const autoPanel = document.getElementById('auto-config');
+  if (autoPanel) autoPanel.style.display = isAdmin ? '' : 'none';
+  if (!isAdmin) return;
+
+  try {
+    const data = await wsApi('get_auto_config');
+    if (data.status !== 'success') { setText('autoConfigStatus', data.message || '加载失败'); return; }
+    const cfg = data.config;
+
+    document.getElementById('autoApiProvider').value = cfg.api_provider || 'deepseek';
+    document.getElementById('autoModelName').value = cfg.model_name || 'deepseek-chat';
+    document.getElementById('autoApiBaseUrl').value = cfg.api_base_url || '';
+    document.getElementById('autoTemperature').value = cfg.temperature ?? 0.3;
+    document.getElementById('autoMaxTokens').value = cfg.max_tokens ?? 2000;
+    document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
+    document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
+    document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
+    document.getElementById('autoSymbols').value = (cfg.symbols || ['XAUUSD']).join(',');
+    document.getElementById('autoApiKey').placeholder = cfg.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
+    document.getElementById('autoSystemPrompt').value = cfg.system_prompt || '';
+    document.getElementById('useManualConfig').checked = !!cfg.use_manual_config;
+
+    // Set timeframes
+    const tfs = cfg.timeframes || ['M15'];
+    document.querySelectorAll('#autoTimeframes input').forEach(cb => {
+      cb.checked = tfs.includes(cb.value);
+    });
+
+    applyAutoProviderPreset(cfg.api_provider || 'deepseek');
+    setText('autoConfigStatus', `${cfg.api_provider || 'Provider'} · ${cfg.model_name || 'model'} · ${cfg.has_api_key ? '密钥已配置' : '未配置密钥'} · 品种: ${(cfg.symbols||[]).join(',')} · 周期: ${tfs.join(',')}`);
+  } catch (e) {
+    setText('autoConfigStatus', '加载失败: ' + e.message);
+  }
+}
+
+async function saveAutoConfig() {
+  const symbols = document.getElementById('autoSymbols').value.split(',').map(s => s.trim()).filter(Boolean);
+  const timeframes = [...document.querySelectorAll('#autoTimeframes input:checked')].map(cb => cb.value);
+  const apiKey = document.getElementById('autoApiKey').value.trim();
+
+  try {
+    const payload = {
+      symbols,
+      timeframes,
+      api_provider: document.getElementById('autoApiProvider').value,
+      model_name: document.getElementById('autoModelName').value,
+      api_base_url: document.getElementById('autoApiBaseUrl').value,
+      temperature: parseFloat(document.getElementById('autoTemperature').value) || 0.3,
+      max_tokens: parseInt(document.getElementById('autoMaxTokens').value) || 2000,
+      risk_level: document.getElementById('autoRiskLevel').value,
+      max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
+      selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
+      system_prompt: document.getElementById('autoSystemPrompt').value || null,
+      use_manual_config: document.getElementById('useManualConfig').checked,
+    };
+    if (apiKey) payload.api_key = apiKey;
+    await wsApi('save_auto_config', payload);
+    document.getElementById('autoApiKey').value = '';
+    toast('自动推理配置已保存', 'success');
+    await loadAutoConfig();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function updateSignalDisplay(signal) {
@@ -2029,18 +2085,16 @@ function bindEvents() {
   // Gateway badge click — toggle trade sending
   $("tradeMode")?.addEventListener("click", handleTradeModeClick);
 
-  // Auto config modal
-  $("autoAnalyzeMode")?.addEventListener("click", openAutoConfigModal);
-  $("autoConfigClose")?.addEventListener("click", closeAutoConfigModal);
-  $("autoConfigModal")?.addEventListener("click", (e) => {
-    if (e.target.id === "autoConfigModal") closeAutoConfigModal();
-  });
-  $("autoConfigConfirm")?.addEventListener("click", saveAutoConfig);
+  // Auto analyze badge — simple toggle on/off
+  $("autoAnalyzeMode")?.addEventListener("click", handleAutoToggle);
+
+  // Config sub-tabs
+  initConfigSubTabs();
+  $("saveAutoConfigBtn")?.addEventListener("click", saveAutoConfig);
+  $("autoApiProvider")?.addEventListener("change", (e) => applyAutoProviderPreset(e.target.value));
 
   // Timeframe checkbox change → update confirm text
-  document.querySelectorAll("#autoTfGrid input[type='checkbox']").forEach(cb => {
-    cb.addEventListener("change", updateAutoConfirmText);
-  });
+  // (removed old modal handlers)
 
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => setTab(button.dataset.tab));

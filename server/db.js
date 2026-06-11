@@ -521,6 +521,19 @@ export async function initDB() {
   }
   if (badCols.length) console.log(`[DB] Fixed ${badCols.length} columns with +8h defaults`)
 
+  // Migrate auto_scheduler: add model config columns for global auto config
+  const autoCols = ['api_provider', 'model_name', 'api_key_encrypted', 'api_base_url', 'temperature', 'max_tokens', 'system_prompt', 'risk_level', 'max_position_size', 'selected_take_profit', 'use_manual_config']
+  for (const col of autoCols) {
+    try {
+      await p.query(`ALTER TABLE auto_scheduler ADD COLUMN ${col} VARCHAR(2000) DEFAULT NULL`)
+    } catch {}
+  }
+  // Ensure global auto config row (user_id=0) exists
+  const [globalAuto] = await p.query('SELECT id FROM auto_scheduler WHERE user_id = 0')
+  if (globalAuto.length === 0) {
+    await p.query(`INSERT INTO auto_scheduler (user_id, symbols, timeframes, interval_seconds, enabled) VALUES (0, '["XAUUSD"]', '["M15"]', 300, 0)`)
+  }
+
   console.log('[DB] MySQL initialized')
 }
 
