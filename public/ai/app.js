@@ -424,27 +424,31 @@ function connectBridgeStatusWs(onReady) {
 
 // Handle data push from bridge (account + quote + positions)
 function handleBridgeData(msg) {
+  const selectedSymbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   if (msg.quote) {
     const q = msg.quote;
-    const prev = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
-    let bidDir = "", askDir = "";
-    if (prev) {
-      if (Number(q.bid) > prev.bid) bidDir = "up";
-      if (Number(q.bid) < prev.bid) bidDir = "down";
-      if (Number(q.ask) > prev.ask) askDir = "up";
-      if (Number(q.ask) < prev.ask) askDir = "down";
-    }
-    setText("quoteBid", q.bid);
-    setText("quoteAsk", q.ask);
-    setText("quoteSpread", q.spread);
-    setText("quoteTime", formatTime(q.time));
-    setQuoteDirection("quoteBidDir", bidDir);
-    setQuoteDirection("quoteAskDir", askDir);
-    flashPrice("quoteBid", bidDir);
-    flashPrice("quoteAsk", askDir);
-    if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
-      state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
-      updateTradingQuotePreview(state.lastQuote);
+    // Only update quote display if the pushed symbol matches the selected symbol
+    if (q.symbol && q.symbol === selectedSymbol) {
+      const prev = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
+      let bidDir = "", askDir = "";
+      if (prev) {
+        if (Number(q.bid) > prev.bid) bidDir = "up";
+        if (Number(q.bid) < prev.bid) bidDir = "down";
+        if (Number(q.ask) > prev.ask) askDir = "up";
+        if (Number(q.ask) < prev.ask) askDir = "down";
+      }
+      setText("quoteBid", q.bid);
+      setText("quoteAsk", q.ask);
+      setText("quoteSpread", q.spread);
+      setText("quoteTime", formatTime(q.time));
+      setQuoteDirection("quoteBidDir", bidDir);
+      setQuoteDirection("quoteAskDir", askDir);
+      flashPrice("quoteBid", bidDir);
+      flashPrice("quoteAsk", askDir);
+      if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
+        state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
+        updateTradingQuotePreview(state.lastQuote);
+      }
     }
   }
   if (msg.account) {
