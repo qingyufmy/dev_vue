@@ -7691,6 +7691,7 @@ function setupGlobalEvents() {
     state.notificationUnread = 0
     localStorage.removeItem('ws_user')
     localStorage.removeItem('ws_token')
+    localStorage.removeItem('authToken')
     clearAuthCookie()
     stopPresenceHeartbeat()
     updateAuthUI()

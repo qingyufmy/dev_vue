@@ -351,7 +351,6 @@ function setAuth(token) {
 }
 
 function showApp(show) {
-  $("loginView").classList.toggle("hidden", show);
   $("appView").classList.toggle("hidden", !show);
   initIcons();
 }
@@ -1878,7 +1877,6 @@ async function loadAudit() {
 }
 
 function bindEvents() {
-  $("loginForm").addEventListener("submit", login);
   $("logoutBtn").addEventListener("click", logout);
   $("refreshAllBtn").addEventListener("click", refreshAll);
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
