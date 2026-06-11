@@ -9,6 +9,52 @@ const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
 const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
+const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
+
+const EXECUTION_JSON_CONTRACT = `你必须严格依据系统提示词里的策略框架完成推理，尤其是：
+1. 1H 主判趋势，只有 1H 不清晰时才参考 4H 降级备判。
+2. 15min 用于信号确认，5min 用于精确入场触发。
+3. 逆势信号、模糊结构、条件未满足时必须返回 hold，不得勉强给 buy/sell。
+4. 只允许输出一个 JSON 对象，不要 Markdown，不要代码块，不要额外解释。
+
+JSON 字段必须完整：
+{
+  "signal_type": "buy|sell|hold",
+  "confidence": 0.0,
+  "recommended_volume": 0.0,
+  "analysis": "中文，说明按 1H/4H -> 15min -> 5min 的结构判断",
+  "reasoning": "中文，说明缠论、谐波、裸K共振或放弃原因",
+  "stop_loss_price": null,
+  "take_profit_1_price": null,
+  "take_profit_2_price": null,
+  "take_profit_3_price": null
+}
+
+若 signal_type 为 hold，recommended_volume 必须为 0，止损止盈字段必须为 null。
+若 signal_type 为 buy/sell，必须给出数字型 recommended_volume、stop_loss_price、take_profit_1_price、take_profit_2_price、take_profit_3_price。`
+
+const TRADE_REVIEW_JSON_CONTRACT = `你现在做订单复盘，不是开仓信号。必须严格依据系统提示词里的策略框架复盘订单是否符合：
+1H/4H 趋势过滤、15min 信号确认、5min 入场触发、缠论/谐波/裸K共振、逆势禁止、模糊放弃。
+
+只允许输出一个 JSON 对象，不要 Markdown，不要代码块，不要额外解释。JSON 字段必须完整：
+{
+  "summary": "中文总结本轮复盘",
+  "strategy_compliance": "符合|部分符合|不符合|无订单",
+  "orders_reviewed": 0,
+  "key_findings": ["中文要点"],
+  "mistakes": ["中文问题；没有则空数组"],
+  "lessons": ["中文经验"],
+  "next_cycle_focus": ["下一轮推理需要重点检查的条件"],
+  "order_reviews": [
+    {
+      "ticket": "订单号",
+      "verdict": "符合|部分符合|不符合",
+      "reason": "中文原因",
+      "improvement": "中文改进"
+    }
+  ]
+}`
+
 async function getSystemPrompt(db) {
   try {
     const row = await queryOne('SELECT prompt FROM system_prompts ORDER BY id LIMIT 1')
@@ -247,6 +293,260 @@ function round3(v) { return Math.round(v * 1000) / 1000 }
 function round5(v) { return Math.round(v * 100000) / 100000 }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
 
+function compactRates(rates) {
+  return rates.map(r => ({
+    time: r.time,
+    open: round5(parseFloat(r.open || 0)),
+    high: round5(parseFloat(r.high || 0)),
+    low: round5(parseFloat(r.low || 0)),
+    close: round5(parseFloat(r.close || 0)),
+    tick_volume: parseInt(r.tick_volume || 0),
+  }))
+}
+
+function aiFailureHold(market, reason) {
+  return {
+    signal_type: 'hold',
+    confidence: 0.5,
+    recommended_volume: 0.0,
+    analysis: `${market.symbol} ${market.timeframe}: AI 推理返回未能形成可执行 JSON，系统按保护规则观望。`,
+    reasoning: `DeepSeek 推理失败或输出格式不符合执行合约：${reason}。为确保交易严格按策略提示词执行，本轮不使用本地规则替代开仓。`,
+    stop_loss_price: null,
+    take_profit_1_price: null,
+    take_profit_2_price: null,
+    take_profit_3_price: null,
+    _inference_source: 'ai_error_hold',
+  }
+}
+
+function parseJsonObject(content) {
+  const start = content.indexOf('{')
+  const end = content.lastIndexOf('}')
+  if (start === -1 || end === -1 || end <= start) throw new Error('ai_response_missing_json_object')
+  return JSON.parse(content.substring(start, end + 1))
+}
+
+async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages }) {
+  const body = { model, temperature, max_tokens: maxTokens, messages }
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(45000),
+  })
+  if (!response.ok) throw new Error(`LLM HTTP ${response.status}`)
+  const data = await response.json()
+  const content = data.choices[0].message.content
+  try {
+    return parseJsonObject(content)
+  } catch (exc) {
+    // JSON repair: send back to LLM
+    const repairMessages = [
+      ...messages,
+      { role: 'assistant', content: content.substring(0, 6000) },
+      { role: 'user', content: `上一次输出不是合法 JSON，解析错误为：${exc.message}。请只返回修正后的一个 JSON 对象，不要 Markdown，不要解释。` },
+    ]
+    const repairBody = { model, temperature: 0, max_tokens: maxTokens, messages: repairMessages }
+    const repairResp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(repairBody),
+      signal: AbortSignal.timeout(45000),
+    })
+    if (!repairResp.ok) throw new Error(`LLM repair HTTP ${repairResp.status}`)
+    const repairedData = await repairResp.json()
+    const repaired = repairedData.choices[0].message.content
+    return parseJsonObject(repaired)
+  }
+}
+
+async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
+  const timeframes = {}
+  for (const [tf, count] of Object.entries(STRATEGY_TIMEFRAME_COUNTS)) {
+    let rates
+    if (tf === primaryTimeframe.toUpperCase() && primaryRates.length >= count) {
+      rates = primaryRates
+    } else {
+      const resp = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count })
+      rates = (resp && resp.rates) ? resp.rates : []
+    }
+    const summary = calculateMarketData(symbol, tf, rates, account, positions)
+    timeframes[tf] = { summary, klines: compactRates(rates) }
+  }
+  return {
+    strategy_sequence: '1H trend primary, 4H fallback only if 1H unclear, M15 signal confirmation, M5 precise entry trigger',
+    required_timeframes: Object.keys(STRATEGY_TIMEFRAME_COUNTS),
+    timeframes,
+  }
+}
+
+function parseIsoTime(value) {
+  if (!value) return null
+  try {
+    const d = new Date(String(value).replace('Z', '+00:00').replace(' ', 'T'))
+    return isNaN(d.getTime()) ? null : d
+  } catch { return null }
+}
+
+function closedOrderInWindow(order, windowStartMt5, windowEndMt5) {
+  const closedAt = parseIsoTime(order.close_time || order.time)
+  const start = parseIsoTime(windowStartMt5)
+  const end = parseIsoTime(windowEndMt5)
+  if (!closedAt || !start || !end) return false
+  return start <= closedAt && closedAt <= end
+}
+
+function compactSignalForReview(signal) {
+  const market = JSON.parse(signal.market_data_json || '{}')
+  const execution = signal.execution_result ? JSON.parse(signal.execution_result) : null
+  return {
+    id: signal.id,
+    symbol: signal.symbol,
+    timeframe: signal.timeframe,
+    signal_type: signal.signal_type,
+    confidence: signal.confidence,
+    recommended_volume: signal.recommended_volume,
+    analysis: signal.analysis,
+    reasoning: signal.reasoning,
+    stop_loss_price: signal.stop_loss_price,
+    take_profit_1_price: signal.take_profit_1_price,
+    take_profit_2_price: signal.take_profit_2_price,
+    take_profit_3_price: signal.take_profit_3_price,
+    created_at: signal.created_at,
+    created_at_mt5: utcToMt5Time(signal.created_at),
+    inference_source: market.inference_source,
+    market_data: market,
+    execution_result: execution,
+  }
+}
+
+async function buildTradeReviewContext(userId, symbol, windowStart, windowEnd) {
+  const windowStartMt5 = utcToMt5Time(windowStart)
+  const windowEndMt5 = utcToMt5Time(windowEnd)
+  const history = await mt5Bridge(userId, 'history', { page: 1, page_size: 100 })
+  const recentClosed = (history.orders || []).filter(o => closedOrderInWindow(o, windowStartMt5, windowEndMt5))
+  const positionsData = await mt5Bridge(userId, 'positions', { symbol })
+  const positions = positionsData.positions || []
+  const account = await mt5Bridge(userId, 'account', {})
+  const executedSignals = await queryAll(
+    `SELECT * FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND created_at >= ? AND created_at <= ? ORDER BY id DESC`,
+    [userId, windowStart, windowEnd]
+  )
+  return {
+    symbol,
+    window_start_utc: windowStart,
+    window_end_utc: windowEnd,
+    window_start_mt5: windowStartMt5,
+    window_end_mt5: windowEndMt5,
+    account,
+    open_positions: positions,
+    closed_orders: recentClosed,
+    executed_signals: (executedSignals || []).map(compactSignalForReview),
+    history_statistics: history.statistics,
+    review_rule: 'Review only. Do not open, close, or modify orders. Execution remains controlled by LLM signal plus risk checks.',
+  }
+}
+
+async function reviewTrades(config, reviewContext) {
+  if (!config || !config.api_key_encrypted) return { status: 'skipped', reason: 'no_ai_key_for_trade_review', summary: '未配置 AI Key，跳过订单复盘。' }
+  const apiKey = config.api_key_encrypted
+  if (!apiKey) return { status: 'skipped', reason: 'empty_ai_key_for_trade_review', summary: 'AI Key 为空，跳过订单复盘。' }
+
+  const provider = config.api_provider || 'deepseek'
+  const baseUrl = config.api_base_url
+  let url
+  if (provider === 'deepseek') url = (baseUrl || 'https://api.deepseek.com') + '/chat/completions'
+  else if (provider === 'gpt') url = (baseUrl || 'https://api.openai.com') + '/v1/chat/completions'
+  else return { status: 'skipped', reason: 'unsupported_ai_provider_for_trade_review' }
+
+  const prompt = await getSystemPrompt(null)
+  try {
+    const parsed = await requestJsonObject({
+      url, apiKey,
+      model: config.model_name || 'deepseek-chat',
+      temperature: parseFloat(config.temperature || 0.7),
+      maxTokens: parseInt(config.max_tokens || 2000),
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: TRADE_REVIEW_JSON_CONTRACT + '\n\n订单复盘上下文 JSON：\n' + JSON.stringify(reviewContext) },
+      ],
+    })
+    parsed.status = 'success'
+    return parsed
+  } catch (exc) {
+    return { status: 'error', reason: 'trade_review_ai_failed', message: exc.message, summary: '订单复盘 AI 调用或 JSON 解析失败。' }
+  }
+}
+
+// ============ Trade Review Scheduler ============
+const tradeReviewState = {} // userId -> { running, timer, lastRunAt }
+
+async function runTradeReviewCycle(userId, trigger) {
+  const state = tradeReviewState[userId]
+  if (state?.running) return { status: 'skipped', reason: 'previous_trade_review_running' }
+
+  if (!tradeReviewState[userId]) tradeReviewState[userId] = {}
+  tradeReviewState[userId].running = true
+  tradeReviewState[userId].lastStartedAt = utcNow()
+
+  try {
+    const config = await getActiveConfig(null, userId)
+    const symbol = 'XAUUSD.s'
+    const reviewInterval = 14400
+    const now = new Date()
+    const windowStart = new Date(now.getTime() - reviewInterval * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    const windowEnd = utcNow()
+
+    const context = await buildTradeReviewContext(userId, symbol, windowStart, windowEnd)
+    const review = await reviewTrades(config, context)
+
+    const result = {
+      ...review,
+      trigger,
+      window_start_utc: windowStart,
+      window_end_utc: windowEnd,
+      window_start_mt5: context.window_start_mt5,
+      window_end_mt5: context.window_end_mt5,
+      closed_orders_count: (context.closed_orders || []).length,
+      open_positions_count: (context.open_positions || []).length,
+      executed_signals_count: (context.executed_signals || []).length,
+    }
+    const status = result.status || 'success'
+    await insertAudit(null, userId, 'ai_trade_review', symbol, { trigger, window_start: windowStart, window_end: windowEnd }, result, status)
+
+    tradeReviewState[userId].running = false
+    tradeReviewState[userId].lastFinishedAt = utcNow()
+    tradeReviewState[userId].lastResult = result
+    return { status, summary: result.summary, closed_orders_count: result.closed_orders_count, executed_signals_count: result.executed_signals_count }
+  } catch (exc) {
+    tradeReviewState[userId].running = false
+    tradeReviewState[userId].lastError = exc.message
+    return { status: 'error', message: exc.message }
+  }
+}
+
+function startTradeReviewScheduler(userId) {
+  if (tradeReviewState[userId]?.timer) return
+  const intervalMs = 14400 * 1000 // 4 hours
+  tradeReviewState[userId] = { running: false, timer: null, lastRunAt: null }
+
+  const tick = async () => {
+    if (!tradeReviewState[userId]) return
+    try { await runTradeReviewCycle(userId, 'timer') } catch (e) { console.error(`[TradeReview] ${userId} error:`, e.message) }
+    if (tradeReviewState[userId]) {
+      tradeReviewState[userId].timer = setTimeout(tick, intervalMs)
+    }
+  }
+  tradeReviewState[userId].timer = setTimeout(tick, 30000) // first run after 30s
+  console.log(`[TradeReview] Started for user ${userId} (interval=14400s)`)
+}
+
+function stopTradeReviewScheduler(userId) {
+  if (tradeReviewState[userId]?.timer) clearTimeout(tradeReviewState[userId].timer)
+  tradeReviewState[userId] = null
+  console.log(`[TradeReview] Stopped for user ${userId}`)
+}
+
 // ============ Rule-Based Signal ============
 function ruleBasedSignal(config, market) {
   const latest = parseFloat(market.latest_price)
@@ -301,53 +601,38 @@ function ruleBasedSignal(config, market) {
 
 // ============ AI Signal (DeepSeek/GPT) ============
 async function maybeAiSignal(db, config, market) {
+  if (!config || !config.api_key_encrypted) return aiFailureHold(market, 'missing_ai_configuration_or_key')
+  const apiKey = config.api_key_encrypted
+  const provider = config.api_provider || 'deepseek'
+  const baseUrl = config.api_base_url
+  if (!apiKey) return aiFailureHold(market, 'empty_ai_key')
+
+  let url
+  if (provider === 'deepseek') url = (baseUrl || 'https://api.deepseek.com') + '/chat/completions'
+  else if (provider === 'gpt') url = (baseUrl || 'https://api.openai.com') + '/v1/chat/completions'
+  else return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
+
   try {
-    if (!config || !config.api_key_encrypted) return null
-    const apiKey = config.api_key_encrypted
-    const provider = config.api_provider || 'deepseek'
-    const baseUrl = config.api_base_url
-    if (!apiKey) return null
-
-    let url
-    if (provider === 'deepseek') {
-      url = baseUrl ? baseUrl.replace(/\/$/, '') + '/chat/completions' : 'https://api.deepseek.com/chat/completions'
-    } else if (provider === 'gpt') {
-      url = baseUrl ? baseUrl.replace(/\/$/, '') + '/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions'
-    } else return null
-
     const prompt = await getSystemPrompt(db)
-
-    const body = {
+    const parsed = await requestJsonObject({
+      url, apiKey,
       model: config.model_name || 'deepseek-chat',
       temperature: parseFloat(config.temperature || 0.7),
-      max_tokens: parseInt(config.max_tokens || 2000),
+      maxTokens: parseInt(config.max_tokens || 2000),
       messages: [
         { role: 'system', content: prompt },
-        { role: 'user', content: 'Analyze this market snapshot and return strict JSON only:\n' + JSON.stringify(market) },
+        { role: 'user', content: EXECUTION_JSON_CONTRACT + '\n\n市场数据 JSON：\n' + JSON.stringify(market) },
       ],
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(45000),
     })
-
-    if (!response.ok) return null
-    const data = await response.json()
-    const content = data.choices[0].message.content
-    const start = content.indexOf('{')
-    const end = content.lastIndexOf('}')
-    if (start === -1 || end === -1 || end <= start) return null
-
-    const parsed = JSON.parse(content.substring(start, end + 1))
     const required = ['signal_type', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
-    if (!required.every(k => k in parsed)) return null
-
+    if (!required.every(k => k in parsed)) {
+      const missing = required.filter(k => !(k in parsed))
+      throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
+    }
+    parsed._inference_source = 'ai'
     return normalizeAiSignal(parsed, config, market)
-  } catch {
-    return null
+  } catch (exc) {
+    return aiFailureHold(market, exc.message)
   }
 }
 
@@ -518,21 +803,20 @@ async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const market = calculateMarketData(symbol, timeframe, rates, account, positions)
+  market.strategy_context = await buildStrategyContext(userId, symbol, account, positions, timeframe, rates)
   const signal = await maybeAiSignal(null, config, market)
+  market.inference_source = signal._inference_source || 'unknown'
+  delete signal._inference_source
 
-  if (signal) {
-    const now = utcNow()
-    const ttlSeconds = timeframe === 'D1' ? 86400 : timeframe === 'H4' ? 14400 : timeframe === 'H1' ? 3600 : 1800
-
-    await queryRun(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
-      analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
-      market_data_json, ai_model, ttl_seconds, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
-        signal.analysis, signal.reasoning, signal.stop_loss_price || null,
-        signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
-        JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', ttlSeconds, now])
-  }
+  const createdAt = utcNow()
+  await queryRun(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
+    analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+    market_data_json, ai_model, ttl_seconds, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
+      signal.analysis, signal.reasoning, signal.stop_loss_price || null,
+      signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
+      JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt])
 
   return { status: 'success', signal, market }
 }
@@ -542,6 +826,28 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
   const user = await queryOne('SELECT id, email, nickname, role, plan FROM users WHERE id = ?', [req.userId])
   if (!user) return res.status(404).json({ status: 'error', message: 'User not found' })
   res.json({ id: user.id, username: user.email, nickname: user.nickname, role: user.role, plan: user.plan, is_active: 1, source: 'wss' })
+})
+
+// ============ Trade Review API Endpoints ============
+router.get('/review/status', authMiddleware, async (req, res) => {
+  const state = tradeReviewState[req.userId] || {}
+  res.json({ status: 'success', review: {
+    enabled: !!state.timer,
+    running: !!state.running,
+    last_started_at: state.lastStartedAt || null,
+    last_finished_at: state.lastFinishedAt || null,
+    last_error: state.lastError || null,
+    last_result: state.lastResult || null,
+  }})
+})
+
+router.post('/review/run', authMiddleware, async (req, res) => {
+  try {
+    const result = await runTradeReviewCycle(req.userId, 'manual')
+    res.json(result)
+  } catch (exc) {
+    res.status(500).json({ status: 'error', message: exc.message })
+  }
 })
 
 // ============ Auto Scheduler ============
@@ -577,7 +883,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
   const config = await getActiveConfig(null, userId, 'default')
 
   try {
-    // Get market data from MT5 bridge (same flow as /ai/analyze)
+    // Get market data from MT5 bridge
     const account = await mt5Bridge(userId, 'account', {})
     const positionsData = await mt5Bridge(userId, 'positions', { symbol })
     const positions = positionsData.positions || []
@@ -588,66 +894,11 @@ async function runAutoCycle(userId, symbol, timeframe) {
     if (!Array.isArray(rates) || rates.length === 0) return
 
     const market = calculateMarketData(symbol, timeframe, rates, account, positions)
+    market.strategy_context = await buildStrategyContext(userId, symbol, account, positions, timeframe, rates)
 
-    const candleSummary = (market.candles || []).slice(-20).map((c, i) =>
-      `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
-    ).join('\n')
-
-    const prompt = `你是专业的黄金(XAUUSD)短线交易AI分析师。请根据以下市场数据给出交易信号。
-
-当前行情:
-- 品种: ${symbol}
-- 当前价格: ${market.latest_price}
-- SMA20: ${market.sma_20}
-- 动量(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
-- 波动率: ${market.volatility_pct}%
-- 持仓: 多${market.positions.long_positions} 空${market.positions.short_positions} 盈亏${market.positions.total_profit}
-- 时间周期: ${timeframe}
-- 最近K线数据:
-${candleSummary || '  (无K线数据)'}
-
-请JSON回复，格式严格如下:
-{
-  "signal_type": "buy 或 sell 或 hold",
-  "confidence": 0.0到1.0的置信度,
-  "recommended_volume": 建议仓位(手数),
-  "analysis": "简短分析(不超过100字)",
-  "reasoning": "决策理由",
-  "stop_loss_price": 止损价,
-  "take_profit_1_price": 止盈价1,
-  "take_profit_2_price": 止盈价2,
-  "take_profit_3_price": 止盈价3
-}`
-
-    const providerUrl = (config || {}).api_base_url || 'https://api.deepseek.com'
-    const apiKey = (config || {}).api_key_encrypted
-    if (!apiKey) return
-
-    const modelName = (config || {}).model_name || 'deepseek-chat'
-    const temperature = (config || {}).temperature || 0.7
-    const maxTokens = (config || {}).max_tokens || 2000
-
-    const apiUrl = providerUrl.replace(/\/$/, '') + (providerUrl.includes('openai') ? '/v1/chat/completions' : '/chat/completions')
-    const resp = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: modelName,
-        messages: [
-          { role: 'system', content: await getSystemPrompt(null) },
-          { role: 'user', content: prompt }
-        ],
-        temperature,
-        max_tokens: maxTokens,
-        response_format: { type: 'json_object' }
-      })
-    })
-    if (!resp.ok) return
-    const data = await resp.json()
-
-    const raw = data.choices?.[0]?.message?.content || '{}'
-    let signal
-    try { signal = JSON.parse(raw) } catch { return }
+    const signal = await maybeAiSignal(null, config, market)
+    market.inference_source = signal._inference_source || 'unknown'
+    delete signal._inference_source
 
     const createdAt = utcNow()
     const result = await queryRun(`
@@ -670,16 +921,41 @@ ${candleSummary || '  (无K线数据)'}
     signal.is_executed = false
     attachSignalTiming(signal)
 
-    // Auto-execute if enabled
-    if (config && config.enable_auto_trade && !signal.is_stale) {
-      const order = signalOrderPayload(signal, config, market, true)
-      const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
-      if (execResult.status === 'success') {
-        await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?', [JSON.stringify(execResult), signal.id])
+    // Auto-execute if enabled: check inference_source + signal validity + bridge/trade state
+    if (config && config.enable_auto_trade && market.inference_source === 'ai' && !signal.is_stale && signal.signal_type !== 'hold') {
+      // Check bridge alive and trade enabled
+      const bridgeAlive = isBridgeAlive(userId)
+      if (!bridgeAlive) {
+        console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: bridge not alive`)
+      } else {
+        // Check no existing position
+        const currentPositions = await mt5Bridge(userId, 'positions', { symbol })
+        if ((currentPositions.positions || []).length > 0) {
+          console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: open position exists`)
+        } else {
+          const order = signalOrderPayload(signal, config, market, true)
+          const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
+          if (execResult.status === 'success') {
+            await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?', [JSON.stringify(execResult), signal.id])
+          }
+        }
       }
+    } else if (market.inference_source !== 'ai') {
+      console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: non-AI signal (source=${market.inference_source})`)
     }
+
+    // Audit log
+    await insertAudit(null, userId, 'ai_auto_scan', symbol, { trigger: 'timer', symbol, timeframe, signal_id: signal.id }, {
+      status: 'success',
+      signal_id: signal.id,
+      signal_type: signal.signal_type,
+      confidence: signal.confidence,
+      inference_source: market.inference_source,
+      is_executed: signal.is_executed,
+    }, 'success')
   } catch (err) {
     console.error(`[AutoScheduler] ${symbol}/${timeframe} error:`, err.message)
+    await insertAudit(null, userId, 'ai_auto_scan', symbol, { trigger: 'timer', symbol, timeframe }, { status: 'error', message: err.message }, 'error')
   }
 
   // Update last_run_at
@@ -722,6 +998,9 @@ async function startAutoScheduler(userId) {
     }
   }
   console.log(`[AutoScheduler] Started for user ${userId}: ${count} timers (${timeframes.map(t => t + '=' + (timeframeIntervalMs(t)/1000) + 's').join(', ')})`)
+
+  // Also start trade review scheduler
+  startTradeReviewScheduler(userId)
 }
 
 function stopAutoScheduler(userId) {
@@ -732,6 +1011,7 @@ function stopAutoScheduler(userId) {
   if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
   autoSchedulerState[userId] = null
   console.log(`[AutoScheduler] Stopped for user ${userId}`)
+  stopTradeReviewScheduler(userId)
 }
 
 export async function initAutoSchedulers() {
@@ -750,5 +1030,8 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,
   signalOrderPayload, attachSignalTiming, handleAnalyze,
   timeframeIntervalMs, startAutoScheduler, stopAutoScheduler,
-  getSystemPrompt }
+  getSystemPrompt, buildStrategyContext, maybeAiSignal, aiFailureHold,
+  reviewTrades, buildTradeReviewContext, runTradeReviewCycle,
+  startTradeReviewScheduler, stopTradeReviewScheduler,
+  EXECUTION_JSON_CONTRACT, TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS }
 export default router
