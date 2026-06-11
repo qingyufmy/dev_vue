@@ -1327,7 +1327,8 @@ function initAutoSymbolsSelector() {
     const parts = input.value.split(',');
     const typing = (parts[parts.length - 1] || '').trim().toUpperCase();
     const activeSymbols = getSymbols();
-    filtered = q ? state.symbols.filter(s => s.toUpperCase().includes(q)) : [...(state.symbols || [])];
+    const allNames = (state.symbols || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
+    filtered = q ? allNames.filter(s => s.toUpperCase().includes(q)) : [...allNames];
     highlightIdx = -1;
     if (!filtered.length) {
       dropdown.innerHTML = '<div class="sym-empty">未找到匹配品种</div>';
