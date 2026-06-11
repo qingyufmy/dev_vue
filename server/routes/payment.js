@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
-import { getDB } from '../db.js'
+import { queryOne, queryRun } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 
 const router = Router()
@@ -14,7 +14,7 @@ const PLANS = {
 
 const PERIOD_LABELS = { month: '月付', year: '年付', lifetime: '终身' }
 
-router.get('/payment', authMiddleware, (req, res) => {
+router.get('/payment', authMiddleware, async (req, res) => {
   try {
     const { preview, plan, period, use_referral_credit } = req.query
     if (!preview) return res.json({ ok: false, error: '缺少参数' })
@@ -27,8 +27,7 @@ router.get('/payment', authMiddleware, (req, res) => {
 
     // Calculate credit from existing plan
     let credit = 0
-    const db = getDB()
-    const user = db.prepare('SELECT plan, plan_expires_at FROM users WHERE id = ?').get(req.user.id)
+    const user = await queryOne('SELECT plan, plan_expires_at FROM users WHERE id = ?', [req.user.id])
     if (user?.plan && user.plan !== 'free' && user.plan_expires_at) {
       const expiresAt = new Date(user.plan_expires_at + 'T23:59:59+08:00')
       const now = new Date()
@@ -64,7 +63,7 @@ router.get('/payment', authMiddleware, (req, res) => {
   }
 })
 
-router.post('/payment', authMiddleware, (req, res) => {
+router.post('/payment', authMiddleware, async (req, res) => {
   try {
     const { plan, period, use_referral_credit } = req.body
     const planInfo = PLANS[plan]
@@ -73,11 +72,9 @@ router.post('/payment', authMiddleware, (req, res) => {
     const periodKey = period === 'yearly' ? 'year' : period
     const amount = planInfo[periodKey] || planInfo.month
 
-    const db = getDB()
-
     // Calculate credits
     let credit = 0
-    const user = db.prepare('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?').get(req.user.id)
+    const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
     if (user?.plan && user.plan !== 'free' && user.plan_expires_at) {
       const expiresAt = new Date(user.plan_expires_at + 'T23:59:59+08:00')
       if (expiresAt > new Date()) {
@@ -96,18 +93,18 @@ router.post('/payment', authMiddleware, (req, res) => {
     const orderId = uuidv4()
 
     // Create order
-    db.prepare(`
+    await queryRun(`
       INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, paid_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', datetime('now', '+8 hours'))
-    `).run(orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', NOW())
+    `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
 
     // Update user plan
-    const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000).toISOString().split('T')[0]
-    db.prepare("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?").run(plan, periodKey, expiresAt, req.user.id)
+    const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
+    await queryRun("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
 
     // Deduct referral credit if used
     if (referralCredit > 0) {
-      db.prepare("UPDATE users SET referral_credit = MAX(0, referral_credit - ?), updated_at = datetime('now', '+8 hours') WHERE id = ?").run(referralCredit, req.user.id)
+      await queryRun("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
     }
 
     // If paid fully with credit

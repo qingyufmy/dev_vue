@@ -1,5 +1,5 @@
-﻿import { Router } from 'express'
-import { getDB } from '../db.js'
+import { Router } from 'express'
+import { getDB, query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import jwt from 'jsonwebtoken'
 
 import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges } from '../bridge-ws.js'
@@ -9,9 +9,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
 const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
-function getSystemPrompt(db) {
+async function getSystemPrompt(db) {
   try {
-    const row = db.prepare('SELECT prompt FROM system_prompts ORDER BY id LIMIT 1').get()
+    const row = await queryOne('SELECT prompt FROM system_prompts ORDER BY id LIMIT 1')
     return row?.prompt || DEFAULT_PROMPT
   } catch {
     return DEFAULT_PROMPT
@@ -19,7 +19,7 @@ function getSystemPrompt(db) {
 }
 
 // ============ Auth Middleware ============
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const auth = req.headers.authorization
   if (!auth || !auth.startsWith('Bearer ')) {
     return res.status(401).json({ status: 'error', message: 'Missing bearer token' })
@@ -29,8 +29,7 @@ function authMiddleware(req, res, next) {
     req.userId = payload.userId
     req.userEmail = payload.email
     // Load user plan for Pro guard
-    const db = getDB()
-    const u = db.prepare('SELECT plan, role FROM users WHERE id = ?').get(payload.userId)
+    const u = await queryOne('SELECT plan, role FROM users WHERE id = ?', [payload.userId])
     req.userPlan = u?.plan || 'free'
     req.userRole = u?.role || 'user'
     next()
@@ -41,24 +40,30 @@ function authMiddleware(req, res, next) {
 
 function proOnly(req, res, next) {
   if (req.userRole === 'admin' || req.userPlan === 'pro') return next()
-  return res.status(403).json({ status: 'error', message: '此功能仅�?Pro 会员使用' })
+  return res.status(403).json({ status: 'error', message: '此功能仅限 Pro 会员使用' })
 }
 
 // ============ Helper Functions ============
 function utcNow() {
-  return new Date().toISOString().replace('T', ' ').substring(0, 19)
+  // Return local Beijing time for MySQL DATETIME (server is UTC+8)
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-function mt5Now() {
-  return new Date().toISOString().replace('T', ' ').substring(0, 19)
-}
+const mt5Now = utcNow
 
-function utcToMt5Time(utcStr) {
-  if (!utcStr) return null
-  const d = new Date(utcStr + 'Z') // Parse as UTC
-  if (isNaN(d.getTime())) return null
-  d.setUTCHours(d.getUTCHours() + 3) // UTC+3
-  return d.toISOString().replace('T', ' ').substring(0, 19)
+function utcToMt5Time(str) {
+  // Convert Beijing time (UTC+8) to MT5 broker time (UTC+3): subtract 5 hours
+  if (!str) return null
+  try {
+    const d = new Date(str.replace(' ', 'T'))
+    d.setHours(d.getHours() - 5)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  } catch {
+    return str
+  }
 }
 
 function signalTtlSeconds(timeframe) {
@@ -68,8 +73,7 @@ function signalTtlSeconds(timeframe) {
 
 function signalAgeSeconds(createdAt) {
   try {
-    // created_at is stored as UTC string (from toISOString), append Z to parse as UTC
-    const created = new Date(createdAt + 'Z')
+    const created = new Date(createdAt.replace(' ', 'T'))
     return Math.max((Date.now() - created.getTime()) / 1000, 0)
   } catch {
     return 999999
@@ -82,7 +86,7 @@ function attachSignalTiming(signal) {
   signal.ttl_seconds = ttl
   signal.age_seconds = Math.round(age * 10) / 10
   signal.expires_at = signal.created_at
-    ? new Date(new Date(signal.created_at).getTime() + ttl * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    ? (() => { const d = new Date(signal.created_at.replace(' ', 'T')); d.setSeconds(d.getSeconds() + ttl); const pad = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
     : null
   signal.is_stale = age > ttl
   signal.created_at_mt5 = utcToMt5Time(signal.created_at)
@@ -101,18 +105,18 @@ function configPublic(row) {
   return data
 }
 
-function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
+async function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
   let row
   if (provider) {
-    row = db.prepare('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND api_provider = ?').get(userId, sessionId, provider)
+    row = await queryOne('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND api_provider = ?', [userId, sessionId, provider])
   } else {
-    row = db.prepare('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1').get(userId, sessionId)
+    row = await queryOne('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1', [userId, sessionId])
   }
 
   // Model sharing: if user has no custom config, fall back to admin's model settings
   const userHasOwnConfig = row && row.api_key_encrypted
   if (!userHasOwnConfig) {
-    const adminConfig = db.prepare('SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = \'admin\') LIMIT 1').get()
+    const adminConfig = await queryOne('SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = \'admin\') LIMIT 1')
     if (adminConfig) {
       if (!row) row = {}
       row.api_provider = row.api_provider || adminConfig.api_provider
@@ -120,6 +124,8 @@ function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
       row.api_base_url = row.api_base_url || adminConfig.api_base_url
       row.temperature = row.temperature ?? adminConfig.temperature
       row.max_tokens = row.max_tokens ?? adminConfig.max_tokens
+      row.model_sharing_enabled = adminConfig.model_sharing_enabled
+      if (!row.api_key_encrypted && adminConfig.api_key_encrypted) row.api_key_encrypted = adminConfig.api_key_encrypted
       row._model_shared = true
     }
   }
@@ -128,7 +134,7 @@ function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
   if (!row || !row.api_key_encrypted) {
     const cfg = {}
     try {
-      const rows = db.prepare("SELECT key, value FROM system_config WHERE category = 'ai_provider' AND value != ''").all()
+      const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''")
       for (const r of rows) cfg[r.key] = r.value
     } catch {}
     const sysKey = cfg.deepseek_api_key || cfg.openai_api_key
@@ -143,11 +149,11 @@ function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
   return row
 }
 
-function insertAudit(db, userId, action, symbol, request, result, status) {
-  db.prepare(`
+async function insertAudit(db, userId, action, symbol, request, result, status) {
+  await queryRun(`
     INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(userId, action, symbol || null, JSON.stringify(request), JSON.stringify(result), status, utcNow())
+  `, [userId, action, symbol || null, JSON.stringify(request), JSON.stringify(result), status, utcNow()])
 }
 
 // ============ MT5 Bridge (WebSocket via bridge-ws.js) ============
@@ -309,7 +315,7 @@ async function maybeAiSignal(db, config, market) {
       url = baseUrl ? baseUrl.replace(/\/$/, '') + '/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions'
     } else return null
 
-    const prompt = getSystemPrompt(db)
+    const prompt = await getSystemPrompt(db)
 
     const body = {
       model: config.model_name || 'deepseek-chat',
@@ -486,8 +492,7 @@ async function executeOrder(userId, config, request, action) {
     }
   }
 
-  const db = getDB()
-  insertAudit(db, userId, action, request.symbol, request, result, result.status)
+  await insertAudit(null, userId, action, request.symbol, request, result, result.status)
   return result
 }
 
@@ -501,8 +506,7 @@ async function handleAnalyze(userId, params) {
   const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
 
-  const db = getDB()
-  const config = getActiveConfig(db, userId, session_id)
+  const config = await getActiveConfig(null, userId, session_id)
 
   const account = await mt5Bridge(userId, 'account', {})
   const positionsData = include_positions ? await mt5Bridge(userId, 'positions', { symbol }) : { positions: [] }
@@ -514,29 +518,28 @@ async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const market = calculateMarketData(symbol, timeframe, rates, account, positions)
-  const signal = await maybeAiSignal(db, config, market)
+  const signal = await maybeAiSignal(null, config, market)
 
   if (signal) {
     const now = utcNow()
     const ttlSeconds = timeframe === 'D1' ? 86400 : timeframe === 'H4' ? 14400 : timeframe === 'H1' ? 3600 : 1800
 
-    db.prepare(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
+    await queryRun(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
       analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
       market_data_json, ai_model, ttl_seconds, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
         signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
-        JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', ttlSeconds, now)
+        JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', ttlSeconds, now])
   }
 
   return { status: 'success', signal, market }
 }
 
 // Auth/me endpoint for frontend compatibility
-router.get('/auth/me', authMiddleware, (req, res) => {
-  const db = getDB()
-  const user = db.prepare('SELECT id, email, nickname, role, plan FROM users WHERE id = ?').get(req.userId)
+router.get('/auth/me', authMiddleware, async (req, res) => {
+  const user = await queryOne('SELECT id, email, nickname, role, plan FROM users WHERE id = ?', [req.userId])
   if (!user) return res.status(404).json({ status: 'error', message: 'User not found' })
   res.json({ id: user.id, username: user.email, nickname: user.nickname, role: user.role, plan: user.plan, is_active: 1, source: 'wss' })
 })
@@ -544,20 +547,20 @@ router.get('/auth/me', authMiddleware, (req, res) => {
 // ============ Auto Scheduler ============
 const autoSchedulerState = {} // userId -> { running, timer, lastRunAt, manualBusy }
 
-function getAutoConfig(db, userId) {
-  return db.prepare('SELECT * FROM auto_scheduler WHERE user_id = ?').get(userId)
+async function getAutoConfig(db, userId) {
+  return await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
 }
 
-function upsertAutoConfig(db, userId, symbols, timeframes, intervalSeconds, enabled) {
+async function upsertAutoConfig(db, userId, symbols, timeframes, intervalSeconds, enabled) {
   const now = utcNow()
-  db.prepare(`
+  await queryRun(`
     INSERT INTO auto_scheduler (user_id, symbols, timeframes, interval_seconds, enabled, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      symbols = excluded.symbols, timeframes = excluded.timeframes,
-      interval_seconds = excluded.interval_seconds, enabled = excluded.enabled,
-      updated_at = excluded.updated_at
-  `).run(userId, JSON.stringify(symbols), JSON.stringify(timeframes), intervalSeconds, enabled ? 1 : 0, now, now)
+    ON DUPLICATE KEY UPDATE
+      symbols = VALUES(symbols), timeframes = VALUES(timeframes),
+      interval_seconds = VALUES(interval_seconds), enabled = VALUES(enabled),
+      updated_at = VALUES(updated_at)
+  `, [userId, JSON.stringify(symbols), JSON.stringify(timeframes), intervalSeconds, enabled ? 1 : 0, now, now])
 }
 
 // Map timeframe to its candle period in ms
@@ -566,13 +569,12 @@ function timeframeIntervalMs(tf) {
   return map[String(tf).toUpperCase()] || 900_000
 }
 
-// Run one cycle for a specific symbol �� timeframe
+// Run one cycle for a specific symbol × timeframe
 async function runAutoCycle(userId, symbol, timeframe) {
-  const db = getDB()
-  const cfg = getAutoConfig(db, userId)
+  const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) return
 
-  const config = getActiveConfig(db, userId, 'default')
+  const config = await getActiveConfig(null, userId, 'default')
 
   try {
     // Get market data from MT5 bridge (same flow as /ai/analyze)
@@ -591,30 +593,30 @@ async function runAutoCycle(userId, symbol, timeframe) {
       `  ${i + 1}. O=${c.open} H=${c.high} L=${c.low} C=${c.close} V=${c.tick_volume || c.volume || 0}`
     ).join('\n')
 
-    const prompt = `����רҵ�Ļƽ�(XAUUSD)���߽���AI����������¼������ݸ��������źš�?
+    const prompt = `你是专业的黄金(XAUUSD)短线交易AI分析师。请根据以下市场数据给出交易信号。
 
-��ǰ����:
-- Ʒ��: ${symbol}
-- ��ǰ�۸�: ${market.latest_price}
+当前行情:
+- 品种: ${symbol}
+- 当前价格: ${market.latest_price}
 - SMA20: ${market.sma_20}
-- ����(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
-- ������: ${market.volatility_pct}%
-- �ֲ�: ��${market.positions.long_positions} ��${market.positions.short_positions} ӯ��${market.positions.total_profit}
-- ��������: ${timeframe}
-- ���K������:
-${candleSummary || '  (����K������)'}
+- 动量(3/10/20): ${market.momentum_3_pct}% / ${market.momentum_10_pct}% / ${market.momentum_20_pct}%
+- 波动率: ${market.volatility_pct}%
+- 持仓: 多${market.positions.long_positions} 空${market.positions.short_positions} 盈亏${market.positions.total_profit}
+- 时间周期: ${timeframe}
+- 最近K线数据:
+${candleSummary || '  (无K线数据)'}
 
-����JSON�ظ�����ʽ�ϸ�����:
+请JSON回复，格式严格如下:
 {
-  "signal_type": "buy �� sell �� hold",
-  "confidence": 0.0��1.0�����Ŷ�,
-  "recommended_volume": ��������(����),
-  "analysis": "��̷���?������100��)",
-  "reasoning": "��������",
-  "stop_loss_price": ֹ���?
-  "take_profit_1_price": ֹӯ��1,
-  "take_profit_2_price": ֹӯ��2,
-  "take_profit_3_price": ֹӯ��3
+  "signal_type": "buy 或 sell 或 hold",
+  "confidence": 0.0到1.0的置信度,
+  "recommended_volume": 建议仓位(手数),
+  "analysis": "简短分析(不超过100字)",
+  "reasoning": "决策理由",
+  "stop_loss_price": 止损价,
+  "take_profit_1_price": 止盈价1,
+  "take_profit_2_price": 止盈价2,
+  "take_profit_3_price": 止盈价3
 }`
 
     const providerUrl = (config || {}).api_base_url || 'https://api.deepseek.com'
@@ -632,7 +634,7 @@ ${candleSummary || '  (����K������)'}
       body: JSON.stringify({
         model: modelName,
         messages: [
-          { role: 'system', content: getSystemPrompt(db) },
+          { role: 'system', content: await getSystemPrompt(null) },
           { role: 'user', content: prompt }
         ],
         temperature,
@@ -648,20 +650,19 @@ ${candleSummary || '  (����K������)'}
     try { signal = JSON.parse(raw) } catch { return }
 
     const createdAt = utcNow()
-    const stmt = db.prepare(`
+    const result = await queryRun(`
       INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
         recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
         take_profit_2_price, take_profit_3_price, market_data_json, is_executed, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-    `)
-    const result = stmt.run(
+    `, [
       userId, config?.id || null, 'default', symbol, timeframe.toUpperCase(),
       signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price,
       signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
       JSON.stringify(market), createdAt
-    )
-    signal.id = result.lastInsertRowid
+    ])
+    signal.id = result.insertId
     signal.symbol = symbol
     signal.timeframe = timeframe.toUpperCase()
     signal.created_at = createdAt
@@ -674,7 +675,7 @@ ${candleSummary || '  (����K������)'}
       const order = signalOrderPayload(signal, config, market, true)
       const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
       if (execResult.status === 'success') {
-        db.prepare('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?').run(JSON.stringify(execResult), signal.id)
+        await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?', [JSON.stringify(execResult), signal.id])
       }
     }
   } catch (err) {
@@ -682,14 +683,13 @@ ${candleSummary || '  (����K������)'}
   }
 
   // Update last_run_at
-  db.prepare('UPDATE auto_scheduler SET last_run_at = ? WHERE user_id = ?').run(utcNow(), userId)
+  await queryRun('UPDATE auto_scheduler SET last_run_at = ? WHERE user_id = ?', [utcNow(), userId])
   if (autoSchedulerState[userId]) autoSchedulerState[userId].lastRunAt = utcNow()
 }
 
-function startAutoScheduler(userId) {
+async function startAutoScheduler(userId) {
   if (autoSchedulerState[userId]?.timers && Object.keys(autoSchedulerState[userId].timers).length) return
-  const db = getDB()
-  const cfg = getAutoConfig(db, userId)
+  const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) return
 
   const symbols = JSON.parse(cfg.symbols || '[]')
@@ -734,12 +734,11 @@ function stopAutoScheduler(userId) {
   console.log(`[AutoScheduler] Stopped for user ${userId}`)
 }
 
-export function initAutoSchedulers() {
+export async function initAutoSchedulers() {
   try {
-    const db = getDB()
-    const rows = db.prepare('SELECT user_id FROM auto_scheduler WHERE enabled = 1').all()
+    const rows = await queryAll('SELECT user_id FROM auto_scheduler WHERE enabled = 1')
     for (const row of rows) {
-      startAutoScheduler(row.user_id)
+      await startAutoScheduler(row.user_id)
     }
     if (rows.length) console.log(`[AutoScheduler] Restored ${rows.length} scheduler(s)`)
   } catch {}

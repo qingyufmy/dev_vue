@@ -511,12 +511,12 @@ async function _maybeRefreshSignal() {
     const selectedInList = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
     const displaySignal = selectedInList || latestSignal;
 
-    // New signal detected (ID changed) — full refresh of lists, but preserve selection
+    // New signal detected (ID changed) — switch to new signal
     if (_lastSignalId !== latestSignal.id) {
       _lastSignalId = latestSignal.id;
-      state.selectedSignal = displaySignal;
-      updateSignalDisplay(displaySignal);
-      setText("signalFreshness", signalFreshness(displaySignal));
+      state.selectedSignal = latestSignal;
+      updateSignalDisplay(latestSignal);
+      setText("signalFreshness", signalFreshness(latestSignal));
       renderAnalysisHistory(signals);
       renderSignalRows();
       return;
@@ -1129,7 +1129,9 @@ async function loadConfig() {
 
 async function saveConfig() {
   const apiKey = $("apiKey").value.trim();
-  if (!apiKey && !state.currentConfigHasApiKey) {
+  const sharedInfo = $("modelSharedInfo");
+  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
+  if (!apiKey && !state.currentConfigHasApiKey && !isUsingShared) {
     toast("请先填写 API Key", "warning");
     $("apiKey").focus();
     return;
@@ -1715,7 +1717,7 @@ async function loadSignals(options = {}) {
   const signals = data.signals || [];
   state.signals = signals;
 
-  // Preserve selected signal if it still exists in the new list
+  // Preserve selected signal if it still exists, otherwise use latest
   const selectedId = state.selectedSignal?.id;
   const stillExists = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
   const activeSignal = stillExists || signals[0] || null;

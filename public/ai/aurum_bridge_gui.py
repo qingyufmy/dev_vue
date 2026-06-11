@@ -202,16 +202,18 @@ class AurumBridge:
                 mt5.shutdown()
             else:
                 self._log(f"MT5 初始化失败: {mt5.last_error()}")
-        except ImportError:
+        except Exception as e:
             if getattr(sys, 'frozen', False):
-                self._log("错误: MetaTrader5 未安装。请先运行 Setup.bat 安装依赖，或手动执行:")
-                self._log("  pip install MetaTrader5")
+                self._log(f"错误: MetaTrader5 加载失败: {type(e).__name__}: {e}")
+                self._log(f"sys.path: {sys.path}")
+                self._log(f"sys._MEIPASS: {getattr(sys, '_MEIPASS', 'N/A')}")
+                import traceback
+                self._log(traceback.format_exc())
                 messagebox.showerror("缺少依赖",
-                    "MetaTrader5 未安装！\n\n"
-                    "请先运行 Setup.bat 自动安装，\n"
-                    "或手动执行: pip install MetaTrader5")
+                    f"MetaTrader5 加载失败！\n\n{type(e).__name__}: {e}\n\n"
+                    f"临时目录: {getattr(sys, '_MEIPASS', 'N/A')}")
             else:
-                self._log("MetaTrader5 未安装，正在安装...")
+                self._log(f"MetaTrader5 加载失败: {e}，正在尝试安装...")
                 threading.Thread(target=self._install_mt5, daemon=True).start()
 
     def _install_mt5(self):
@@ -712,7 +714,7 @@ class AurumBridge:
                                 "bid": round(tick.bid, 5) if tick else None,
                                 "ask": round(tick.ask, 5) if tick else None,
                                 "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in symbol else 0.001), 1) if tick else None,
-                                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "time": _mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
                             },
                             "positions": [
                                 {
