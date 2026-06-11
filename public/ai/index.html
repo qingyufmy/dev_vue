@@ -3,6 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      (function() {
+        var t = new URLSearchParams(window.location.search).get('token') || localStorage.getItem('authToken');
+        if (!t) { window.location.replace('/'); }
+      })();
+    </script>
     <title>AURUM AI MT5 Control Panel</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/ai/styles.css?v=20260610-model-sharing" />
