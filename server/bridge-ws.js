@@ -107,7 +107,7 @@ function handleBridge(ws, url) {
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
   const existing = bridges.get(userId)
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: existing?.tradeEnabled ?? true }); ws._userId = userId
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: existing?.tradeEnabled ?? false }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
