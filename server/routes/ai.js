@@ -1041,31 +1041,7 @@ async function getAutoInferenceConfig(userId) {
   const globalCfg = await getGlobalAutoConfig()
   if (!globalCfg) return null
 
-  // Check if THIS user has use_manual_config ON
-  const userConfig = await queryOne('SELECT use_manual_config FROM ai_configs WHERE user_id = ? AND session_id = ?', [userId, 'default'])
-  const useManual = userConfig?.use_manual_config || false
-
-  if (useManual) {
-    // Use this user's own manual config
-    const manualConfig = await getActiveConfig(null, userId, 'default')
-    if (manualConfig && manualConfig.has_api_key) {
-      return {
-        api_provider: manualConfig.api_provider,
-        model_name: manualConfig.model_name,
-        api_key_encrypted: manualConfig.api_key_encrypted,
-        api_base_url: manualConfig.api_base_url,
-        temperature: manualConfig.temperature,
-        max_tokens: manualConfig.max_tokens,
-        risk_level: manualConfig.risk_level,
-        max_position_size: manualConfig.max_position_size,
-        selected_take_profit: manualConfig.selected_take_profit,
-        system_prompt: manualConfig.system_prompt || '',
-        _source: 'manual'
-      }
-    }
-  }
-
-  // Otherwise use dedicated auto config
+  // Auto inference always uses global_auto_config (separate from manual config)
   return {
     api_provider: globalCfg.api_provider || 'deepseek',
     model_name: globalCfg.model_name || 'deepseek-chat',
@@ -1077,6 +1053,7 @@ async function getAutoInferenceConfig(userId) {
     max_position_size: globalCfg.max_position_size ?? 0.05,
     selected_take_profit: globalCfg.selected_take_profit ?? 2,
     system_prompt: globalCfg.system_prompt || '',
+    enable_auto_trade: true,
     _source: 'auto'
   }
 }
@@ -1193,41 +1170,26 @@ async function runAutoCycle(userId, symbol, timeframe) {
 }
 
 async function startAutoScheduler(userId) {
-  if (autoSchedulerState[userId]?.timers && Object.keys(autoSchedulerState[userId].timers).length) return
+  if (autoSchedulerState[userId]?.timer) return
   const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) return
 
   const symbols = JSON.parse(cfg.symbols || '[]')
-  const timeframes = JSON.parse(cfg.timeframes || '[]')
-  // Get interval from global auto config
   const globalCfg = await getGlobalAutoConfig()
   const intervalMs = (globalCfg?.interval_minutes || 5) * 60_000
-  autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timers: {} }
+  autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null }
 
-  let count = 0
-  for (const symbol of symbols) {
-    for (const tf of timeframes) {
-      const key = `${symbol}:${tf}`
-      const stagger = Math.random() * 5000 // stagger starts to avoid API bursts
-
-      const tick = async () => {
-        if (!autoSchedulerState[userId]?.running) return
-        if (autoSchedulerState[userId]?.manualBusy) {
-          if (autoSchedulerState[userId]?.running) {
-            autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
-          }
-          return
-        }
-        try { await runAutoCycle(userId, symbol, tf) } catch (e) { console.error(`[AutoScheduler] ${key} tick error:`, e.message) }
-        if (autoSchedulerState[userId]?.running) {
-          autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
-        }
-      }
-      autoSchedulerState[userId].timers[key] = setTimeout(tick, 5000 + stagger)
-      count++
+  const tick = async () => {
+    if (!autoSchedulerState[userId]?.running) return
+    for (const symbol of symbols) {
+      try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler] ${symbol}/M5 tick error:`, e.message) }
+    }
+    if (autoSchedulerState[userId]?.running) {
+      autoSchedulerState[userId].timer = setTimeout(tick, intervalMs)
     }
   }
-  console.log(`[AutoScheduler] Started for user ${userId}: ${count} timers, interval=${intervalMs/1000}s`)
+  autoSchedulerState[userId].timer = setTimeout(tick, 5000)
+  console.log(`[AutoScheduler] Started for user ${userId}: ${symbols.length} symbols, M5, interval=${intervalMs/1000}s`)
 
   // Also start trade review scheduler
   startTradeReviewScheduler(userId)
@@ -1235,9 +1197,7 @@ async function startAutoScheduler(userId) {
 
 function stopAutoScheduler(userId) {
   const state = autoSchedulerState[userId]
-  if (state?.timers) {
-    for (const t of Object.values(state.timers)) clearTimeout(t)
-  }
+  if (state?.timer) clearTimeout(state.timer)
   if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
   autoSchedulerState[userId] = null
   console.log(`[AutoScheduler] Stopped for user ${userId}`)

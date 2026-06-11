@@ -201,7 +201,6 @@
               <div id="latestSignal" class="signal-body">
                 <div class="signal-meta-row">
                   <span id="sigSymbol" class="signal-symbol num">--</span>
-                  <span id="sigTimeframe" class="signal-tf-badge">--</span>
                 </div>
                 <div class="signal-direction-row">
                   <div class="signal-direction-main">
@@ -256,7 +255,6 @@
                 <div class="signal-last-summary" id="signalLastSummary">
                   <span>上次信号摘要</span>
                   <strong id="lastSigDirection">--</strong>
-                  <strong id="lastSigTimeframe" class="num">--</strong>
                   <strong id="lastSigConfidence" class="num">--</strong>
                   <strong id="lastSigTime" class="num">--</strong>
                 </div>
@@ -357,11 +355,7 @@
                     </div>
                   </div>
                   <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>期货手数模式</span></label>
-                  <label class="check-row" id="useManualConfigWrap">
-                    <input id="useManualConfig" type="checkbox" />
-                    <span>自动推理使用手动推理配置</span>
-                    <small class="field-help">开启后，自动推理将使用本页配置的模型、提示词和约束</small>
-                  </label>
+
                 </div>
               </div>
               <div class="config-section">
@@ -413,15 +407,15 @@
                 </div>
               </div>
               <div class="config-section">
-                <div class="config-section-title">推理品种与循环时间</div>
+                <div class="config-section-title">推理品种与循环间隔</div>
                 <div class="config-grid">
                   <label><span>品种</span><input id="autoSymbolSelect" class="instrument-select" placeholder="搜索品种..." /></label>
-                  <label><span>循环间隔</span><span class="unit-field"><input id="autoIntervalMin" class="num" type="number" min="1" max="1440" step="1" value="5" /><span class="input-unit">分钟</span></span><small class="field-help">自动推理每隔多久执行一次，最短1分钟</small></label>
+                  <label><span>循环间隔</span><span class="unit-field"><input id="autoIntervalMin" class="num" type="number" min="1" max="1440" step="1" value="5" /><span class="input-unit">分钟</span></span><small class="field-help">自动推理固定使用 M5 周期，每隔多久执行一次</small></label>
                 </div>
               </div>
               <div class="config-section">
                 <div class="config-section-title">系统提示词</div>
-                <label class="prompt-box"><span>自动推理专用提示词（留空则使用手动配置中的提示词）</span><textarea id="autoSystemPrompt" rows="11" spellcheck="false"></textarea></label>
+                <label class="prompt-box"><span>自动推理专用提示词</span><textarea id="autoSystemPrompt" rows="11" spellcheck="false"></textarea></label>
               </div>
               <div id="autoConfigStatus" class="inline-status">正在读取配置</div>
               <div class="config-actions">
@@ -533,21 +527,11 @@
                 <option value="sell">卖出</option>
                 <option value="hold">观望</option>
               </select>
-              <select id="signalFilterTimeframe" class="filter-select" aria-label="筛选周期">
-                <option value="">全部周期</option>
-                <option value="M1">M1</option>
-                <option value="M5">M5</option>
-                <option value="M15">M15</option>
-                <option value="M30">M30</option>
-                <option value="H1">H1</option>
-                <option value="H4">H4</option>
-                <option value="D1">D1</option>
-              </select>
               <span id="signalCount" class="record-count">--</span>
             </div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th>ID</th><th>时间(MT5)</th><th>品种</th><th>周期</th><th>信号</th><th>置信度</th><th>手数</th><th>状态</th><th>止损</th><th>TP1</th><th>TP2 / TP3</th></tr></thead>
+                <thead><tr><th>ID</th><th>时间(MT5)</th><th>品种</th><th>信号</th><th>置信度</th><th>手数</th><th>状态</th><th>止损</th><th>TP1</th><th>TP2 / TP3</th></tr></thead>
                 <tbody id="signalsBody"></tbody>
               </table>
             </div>

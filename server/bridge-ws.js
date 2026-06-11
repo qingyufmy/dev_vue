@@ -285,22 +285,22 @@ async function handleBrowserCommand(ws, userId, msg) {
         await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
         await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, model_sharing_enabled, use_manual_config, system_prompt, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          max_position_size, selected_take_profit, model_sharing_enabled, system_prompt, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           ON DUPLICATE KEY UPDATE
             api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
             api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
             max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
             enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
             max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
-            model_sharing_enabled = VALUES(model_sharing_enabled), use_manual_config = VALUES(use_manual_config),
+            model_sharing_enabled = VALUES(model_sharing_enabled),
             system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
             is_active = 1, updated_at = VALUES(updated_at)`,
           [userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
             cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
             cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
             cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
-            cfg.use_manual_config ? 1 : 0, cfg.system_prompt || null, now, now])
+            cfg.system_prompt || null, now, now])
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
         break
@@ -340,30 +340,21 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'auto_status': {
         const cfg = await ai.getAutoConfig(null, userId)
         const globalCfg = await ai.getGlobalAutoConfig()
-        const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : parseSymbols(globalCfg?.symbols)
-        const timeframes = cfg?.timeframes ? JSON.parse(cfg.timeframes) : ['M15']
+        const symbols = parseSymbols(globalCfg?.symbols)
         const intervalMin = globalCfg?.interval_minutes || 5
-        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, timeframes, interval_minutes: intervalMin, running: !!cfg?.enabled } }
+        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, interval_minutes: intervalMin, running: !!cfg?.enabled } }
         break
       }
       case 'toggle_auto': {
-        // Simple toggle: click on/off, run once on enable
+        // Simple toggle: immediately return new state, auto uses global config only
         const cfg = await ai.getAutoConfig(null, userId)
-        const currentlyEnabled = !!cfg?.enabled
-        const newEnabled = !currentlyEnabled
+        const newEnabled = !cfg?.enabled
         const globalCfg = await ai.getGlobalAutoConfig()
         const symbols = parseSymbols(globalCfg?.symbols)
-        const timeframes = ['M15']
-        await ai.upsertAutoConfig(null, userId, symbols, timeframes, 300, newEnabled)
+        await ai.upsertAutoConfig(null, userId, symbols, ['M5'], 300, newEnabled)
         ai.stopAutoScheduler(userId)
         if (newEnabled) {
           await ai.startAutoScheduler(userId)
-          // Run once immediately
-          for (const symbol of symbols) {
-            for (const tf of timeframes) {
-              try { await ai.runAutoCycle(userId, symbol, tf) } catch (e) { console.error(`[toggle_auto] immediate run error:`, e.message) }
-            }
-          }
         }
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
         break

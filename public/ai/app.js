@@ -818,31 +818,24 @@ async function loadStatus() {
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
   try {
-    const auto = await wsApi("auto_status");
+    const auto = await wsApi('auto_status');
     const scheduler = auto.scheduler || {};
     const enabled = scheduler.enabled;
     const running = scheduler.running;
-    const intervals = scheduler.intervals || {};
-    const tfs = (scheduler.timeframes || []).map(tf => {
-      const sec = intervals[tf];
-      if (!sec) return tf;
-      if (sec >= 3600) return `${tf}(${Math.round(sec/3600)}h)`;
-      if (sec >= 60) return `${tf}(${Math.round(sec/60)}m)`;
-      return `${tf}(${sec}s)`;
-    }).join(", ");
+    const symbols = (scheduler.symbols || []).join(', ');
+    const intervalMin = scheduler.interval_minutes || 5;
     const label = enabled
-      ? running ? `自动推理运行中 ${tfs}` : `自动推理 ${tfs}`
-      : "自动推理关闭";
+      ? running ? `自动推理运行中 · ${symbols} · ${intervalMin}分钟` : `自动推理 · ${symbols} · ${intervalMin}分钟`
+      : '自动推理关闭';
     const type = enabled
-      ? running ? "active" : "connected"
-      : "neutral";
-    setBadge("autoAnalyzeMode", label, type);
+      ? running ? 'active' : 'connected'
+      : 'neutral';
+    setBadge('autoAnalyzeMode', label, type);
 
-    // Store current auto config for the modal
+    // Store current auto config
     state.autoConfig = {
-      symbols: scheduler.symbols || ["XAUUSD"],
-      timeframes: scheduler.timeframes || [],
-      intervals: scheduler.intervals || {},
+      symbols: scheduler.symbols || ['XAUUSD'],
+      interval_minutes: intervalMin,
     };
   } catch {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
@@ -939,7 +932,16 @@ async function handleAutoToggle() {
   try {
     const result = await wsApi('toggle_auto');
     toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
-    await loadStatus();
+    // Immediately update badge (don't wait for loadStatus)
+    const symbols = state.autoConfig?.symbols || ['XAUUSD'];
+    const intervalMin = state.autoConfig?.interval_minutes || 5;
+    const label = result.enabled
+      ? `自动推理运行中 · ${symbols.join(', ')} · ${intervalMin}分钟`
+      : '自动推理关闭';
+    const type = result.enabled ? 'active' : 'neutral';
+    setBadge('autoAnalyzeMode', label, type);
+    // Also reload full status in background
+    loadStatus().catch(() => {});
   } catch (e) {
     toast('切换失败: ' + e.message, 'error');
   }
@@ -1166,9 +1168,6 @@ async function loadConfig() {
   // Load system prompt from config (per-user in ai_configs)
   if (cfg.system_prompt) $("systemPrompt").value = cfg.system_prompt;
 
-  // use_manual_config toggle
-  if ($("useManualConfig")) $("useManualConfig").checked = Boolean(cfg.use_manual_config);
-
   // Model sharing toggle (admin only)
   const isAdmin = state.user?.role === "admin";
   const sharingWrap = $("modelSharingWrap");
@@ -1212,7 +1211,6 @@ async function saveConfig() {
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
       model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
-      use_manual_config: $("useManualConfig")?.checked ? 1 : 0,
       system_prompt: $("systemPrompt").value.trim() || null,
     },
   };
@@ -1548,7 +1546,6 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-summary-head">
       <div class="analysis-summary-title">
         <span class="analysis-symbol">${escapeHtml(signal.symbol)}</span>
-        <span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span>
         <span class="analysis-direction-badge ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span>
       </div>
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
@@ -1878,7 +1875,7 @@ function renderAnalysisHistory(signals) {
     return `
       <button class="analysis-history-item" data-analysis-id="${escapeHtml(signal.id)}">
         <span class="history-item-top">
-          <span class="history-item-symbol">${escapeHtml(signal.symbol)} · ${escapeHtml(signal.timeframe)}</span>
+          <span class="history-item-symbol">${escapeHtml(signal.symbol)}</span>
           <span class="history-item-dir ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span>
         </span>
         <span class="history-item-meta">
@@ -1933,7 +1930,6 @@ function renderSignalRows() {
         <td class="num">${escapeHtml(signal.id)}</td>
         <td>${compactTimeHtml(signal?.created_at_mt5 || signal?.created_at)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
-        <td><span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span></td>
         <td><span class="tag ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span></td>
         <td>
           <div class="conf-mini ${confidenceClass(signal.confidence)}">
@@ -2142,11 +2138,6 @@ function bindEvents() {
   // Symbol change is handled by searchable selector + setGlobalSymbol
   $("signalFilterDirection")?.addEventListener("change", (event) => {
     state.signalFilters.direction = event.target.value;
-    state.signalFilters.page = 1;
-    renderSignalRows();
-  });
-  $("signalFilterTimeframe")?.addEventListener("change", (event) => {
-    state.signalFilters.timeframe = event.target.value;
     state.signalFilters.page = 1;
     renderSignalRows();
   });
