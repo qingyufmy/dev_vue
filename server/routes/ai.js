@@ -781,6 +781,7 @@ async function maybeAiSignal(db, config, market) {
       throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
     }
     parsed._inference_source = 'ai'
+    console.log(`[AI] ${market.symbol} ${market.timeframe} raw: type=${parsed.signal_type} conf=${parsed.confidence} prompt_len=${prompt.length} data_keys=${Object.keys(market).join(',')}`)
     return normalizeAiSignal(parsed, config, market)
   } catch (exc) {
     return aiFailureHold(market, exc.message)
@@ -808,7 +809,10 @@ function normalizeAiSignal(parsed, config, market) {
     const holdCertainty = 0.50 + (1 - trendStrength) * 0.22 + Math.min(volatilityPct / 0.5, 0.12)
     calibrated = rawConfidence * 0.55 + holdCertainty * 0.45
   } else {
-    calibrated = rawConfidence * 0.6 + dataConfidence * 0.4
+    // LLM confidence is the primary signal — dataConfidence is a soft tie-breaker, not a heavy penalty
+    // Gold (XAUUSD) has inherently high volatility that makes dataConfidence low (~0.3),
+    // so weighting it at 40% crushes real signals. 85/15 split keeps LLM judgment dominant.
+    calibrated = rawConfidence * 0.85 + dataConfidence * 0.15
   }
 
   parsed.signal_type = signalType
