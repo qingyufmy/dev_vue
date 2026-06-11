@@ -170,7 +170,6 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
       row.max_tokens = row.max_tokens ?? adminConfig.max_tokens
       row.model_sharing_enabled = adminConfig.model_sharing_enabled
       if (!row.api_key_encrypted && adminConfig.api_key_encrypted) row.api_key_encrypted = adminConfig.api_key_encrypted
-      if (!row.system_prompt && adminConfig.system_prompt) row.system_prompt = adminConfig.system_prompt
       row._model_shared = true
     }
   }
