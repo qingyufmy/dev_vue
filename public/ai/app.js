@@ -1285,8 +1285,7 @@ async function loadAutoConfig() {
     document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
     document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
-    document.getElementById('autoSymbolsInput').value = '';
-    renderAutoSymbols(cfg.symbols || ['XAUUSD']);
+    document.getElementById('autoSymbolSelect').value = (cfg.symbols || ['XAUUSD']).join(', ');
     document.getElementById('autoApiKey').placeholder = cfg.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
     document.getElementById('autoSystemPrompt').value = cfg.system_prompt || '';
     document.getElementById('autoIntervalMin').value = cfg.interval_minutes || 5;
@@ -1298,79 +1297,104 @@ async function loadAutoConfig() {
   }
 }
 
-// ===== Auto Symbols Multi-Select =====
-state._autoSymbols = ['XAUUSD'];
-
-function renderAutoSymbols(symbols) {
-  state._autoSymbols = [...symbols];
-  const tags = document.getElementById('autoSymbolsTags');
-  if (!tags) return;
-  tags.innerHTML = symbols.map(s =>
-    `<span class="sym-tag">${s}<span class="sym-remove" data-symbol="${s}">×</span></span>`
-  ).join('');
-  tags.querySelectorAll('.sym-remove').forEach(btn => {
-    btn.addEventListener('click', () => {
-      state._autoSymbols = state._autoSymbols.filter(x => x !== btn.dataset.symbol);
-      renderAutoSymbols(state._autoSymbols);
-    });
-  });
-}
-
 function initAutoSymbolsSelector() {
-  const input = document.getElementById('autoSymbolsInput');
-  const dropdown = document.getElementById('autoSymbolsDropdown');
-  if (!input || !dropdown) return;
-  const allSymbols = state.symbols || ['XAUUSD'];
+  // Use the exact same pattern as createSymbolSelector but support multi-select via comma-separated text
+  const input = document.getElementById('autoSymbolSelect');
+  if (!input) return;
+
+  // Wrap in sym-selector just like the overview
+  const wrapper = document.createElement('div');
+  wrapper.className = 'sym-selector';
+  input.parentNode.insertBefore(wrapper, input);
+  wrapper.appendChild(input);
+  input.className = 'sym-input';
+  input.setAttribute('autocomplete', 'off');
+  input.setAttribute('placeholder', '搜索品种...');
+
+  const dropdown = document.createElement('div');
+  dropdown.className = 'sym-dropdown';
+  wrapper.appendChild(dropdown);
+
   let highlightIdx = -1;
+  let filtered = [];
+
+  // Current symbols as array
+  function getSymbols() {
+    return input.value.split(',').map(s => s.trim()).filter(Boolean);
+  }
 
   function render(filter) {
     const q = (filter || '').toUpperCase();
-    const filtered = q ? allSymbols.filter(s => s.toUpperCase().includes(q) && !state._autoSymbols.includes(s)) : allSymbols.filter(s => !state._autoSymbols.includes(s));
+    // Get the text being typed (last segment after comma)
+    const parts = input.value.split(',');
+    const typing = (parts[parts.length - 1] || '').trim().toUpperCase();
+    const activeSymbols = getSymbols();
+    filtered = q ? state.symbols.filter(s => s.toUpperCase().includes(q)) : [...(state.symbols || [])];
     highlightIdx = -1;
-    dropdown.innerHTML = filtered.length ? filtered.map((s, i) =>
-      `<div class="sym-option" data-symbol="${s}" data-idx="${i}">${s}</div>`
-    ).join('') : '<div class="sym-empty">未找到</div>';
+    if (!filtered.length) {
+      dropdown.innerHTML = '<div class="sym-empty">未找到匹配品种</div>';
+      return;
+    }
+    dropdown.innerHTML = filtered.map((s, i) =>
+      `<div class="sym-option${activeSymbols.includes(s) ? ' active' : ''}" data-symbol="${s}" data-idx="${i}">${s}</div>`
+    ).join('');
   }
 
   function open() { render(input.value); dropdown.classList.add('open'); }
   function close() { dropdown.classList.remove('open'); }
 
-  input.addEventListener('focus', () => { open(); input.select(); });
+  input.addEventListener('focus', () => { open(); });
   input.addEventListener('input', () => { render(input.value); dropdown.classList.add('open'); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { close(); input.blur(); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); highlightIdx = Math.min(highlightIdx + 1, dropdown.children.length - 1); updateHL(); }
-    if (e.key === 'ArrowUp') { e.preventDefault(); highlightIdx = Math.max(highlightIdx - 1, 0); updateHL(); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); highlightIdx = Math.min(highlightIdx + 1, filtered.length - 1); updateHighlight(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); highlightIdx = Math.max(highlightIdx - 1, 0); updateHighlight(); }
     if (e.key === 'Enter') {
       e.preventDefault();
-      const opts = dropdown.querySelectorAll('.sym-option');
-      if (highlightIdx >= 0 && highlightIdx < opts.length) addSymbol(opts[highlightIdx].dataset.symbol);
-      else if (opts.length === 1) addSymbol(opts[0].dataset.symbol);
+      if (highlightIdx >= 0 && highlightIdx < filtered.length) addSymbol(filtered[highlightIdx]);
+      else if (filtered.length === 1) addSymbol(filtered[0]);
     }
   });
   dropdown.addEventListener('mousedown', (e) => {
     const opt = e.target.closest('.sym-option');
     if (opt) addSymbol(opt.dataset.symbol);
   });
-  document.addEventListener('click', (e) => { if (!input.parentElement.contains(e.target)) close(); });
+  document.addEventListener('click', (e) => { if (!wrapper.contains(e.target)) close(); });
 
-  function updateHL() {
-    dropdown.querySelectorAll('.sym-option').forEach((el, i) => el.classList.toggle('active', i === highlightIdx));
+  function updateHighlight() {
+    dropdown.querySelectorAll('.sym-option').forEach((el, i) => {
+      el.classList.toggle('active', i === highlightIdx);
+    });
+    if (highlightIdx >= 0) {
+      const el = dropdown.children[highlightIdx];
+      if (el) el.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   function addSymbol(sym) {
-    if (!state._autoSymbols.includes(sym)) {
-      state._autoSymbols.push(sym);
-      renderAutoSymbols(state._autoSymbols);
+    const parts = input.value.split(',').map(s => s.trim()).filter(Boolean);
+    if (!parts.includes(sym)) {
+      parts.push(sym);
+      input.value = parts.join(', ');
+    } else {
+      // Already selected, just close
     }
-    input.value = '';
     close();
-    input.focus();
+    // Keep focus but don't select all
   }
+
+  // Expose for loadAutoConfig to set value
+  input._autoSetSymbols = (symbols) => {
+    input.value = (symbols || []).join(', ');
+  };
+  // Prevent global symbol sync from overwriting multi-select value
+  input._symSet = () => {};
+  // Also push to _symSelectors so loadSymbols can update options
+  _symSelectors.push('autoSymbolSelect');
 }
 
 async function saveAutoConfig() {
-  const symbols = state._autoSymbols || ['XAUUSD'];
+  const symbols = document.getElementById('autoSymbolSelect').value.split(',').map(s => s.trim()).filter(Boolean);
   const intervalMinutes = parseInt(document.getElementById('autoIntervalMin').value) || 5;
   const apiKey = document.getElementById('autoApiKey').value.trim();
 

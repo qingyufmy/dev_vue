@@ -3207,13 +3207,3 @@ a.signal-link:hover {
 .check-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .check-row .field-help{width:100%;margin-top:2px}
 #useManualConfigWrap{margin-top:8px;padding:10px;background:rgba(212,160,23,.05);border-radius:6px;border:1px solid rgba(212,160,23,.15)}
-
-
-/* Auto symbols multi-select */
-.auto-symbols-wrap { position: relative; grid-column: 2 / -1; }
-.auto-symbols-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
-.auto-symbols-tags .sym-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; background: var(--accent-primary, #d4af37); color: #000; border-radius: 4px; font-size: 12px; font-weight: 600; }
-.auto-symbols-tags .sym-tag .sym-remove { cursor: pointer; opacity: 0.7; font-size: 14px; line-height: 1; }
-.auto-symbols-tags .sym-tag .sym-remove:hover { opacity: 1; }
-.auto-symbols-wrap .sym-input { width: 100%; }
-.auto-symbols-wrap .sym-dropdown { max-height: 200px; overflow-y: auto; }
