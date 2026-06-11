@@ -750,7 +750,7 @@ function ruleBasedSignal(config, market) {
 }
 
 // ============ AI Signal (DeepSeek/GPT) ============
-async function maybeAiSignal(db, config, market) {
+async function maybeAiSignal(db, config, market, useContract = true) {
   if (!config || !config.api_key_encrypted) return aiFailureHold(market, 'missing_ai_configuration_or_key')
   const apiKey = config.api_key_encrypted
   const provider = config.api_provider || 'deepseek'
@@ -771,7 +771,7 @@ async function maybeAiSignal(db, config, market) {
       maxTokens: parseInt(config.max_tokens || 2000),
       messages: [
         { role: 'system', content: prompt },
-        { role: 'user', content: EXECUTION_JSON_CONTRACT + '\n\n市场数据 JSON：\n' + JSON.stringify(market) },
+        { role: 'user', content: (useContract ? EXECUTION_JSON_CONTRACT + '\n\n' : '') + '市场数据 JSON：\n' + JSON.stringify(market) },
       ],
     })
     const required = ['signal_type', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
@@ -959,7 +959,7 @@ async function handleAnalyze(userId, params) {
 
   const market = calculateMarketData(symbol, timeframe, rates, account, positions)
   market.strategy_context = await buildStrategyContext(userId, symbol, account, positions, timeframe, rates)
-  const signal = await maybeAiSignal(null, config, market)
+  const signal = await maybeAiSignal(null, config, market, false)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
 
