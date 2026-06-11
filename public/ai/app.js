@@ -1165,11 +1165,11 @@ async function loadConfig() {
   const keyText = state.currentConfigHasApiKey ? `密钥已配置：${cfg.masked_api_key}` : "未配置 API Key，本地规则兜底可用";
   setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · ${keyText}`);
 
-  // Load system prompt separately (shared across all users)
-  try {
-    const spData = await wsApi("get_system_prompt");
-    if (spData.prompt) $("systemPrompt").value = spData.prompt;
-  } catch {}
+  // Load system prompt from config (per-user in ai_configs)
+  if (cfg.system_prompt) $("systemPrompt").value = cfg.system_prompt;
+
+  // use_manual_config toggle
+  if ($("useManualConfig")) $("useManualConfig").checked = Boolean(cfg.use_manual_config);
 
   // Model sharing toggle (admin only)
   const isAdmin = state.user?.role === "admin";
@@ -1214,6 +1214,8 @@ async function saveConfig() {
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
       model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
+      use_manual_config: $("useManualConfig")?.checked ? 1 : 0,
+      system_prompt: $("systemPrompt").value.trim() || null,
     },
   };
 
@@ -1225,15 +1227,6 @@ async function saveConfig() {
   } catch (error) {
     toast(error.message, "error");
   }
-}
-
-async function saveSystemPrompt() {
-  const prompt = $("systemPrompt").value.trim();
-  if (!prompt) { toast("系统提示词不能为空", "warning"); return; }
-  try {
-    await wsApi("save_system_prompt", { prompt });
-    toast("系统提示词已保存", "success");
-  } catch (e) { toast(e.message, "error"); }
 }
 
 function selectedTimeframes() {
@@ -1297,16 +1290,10 @@ async function loadAutoConfig() {
     document.getElementById('autoSymbols').value = (cfg.symbols || ['XAUUSD']).join(',');
     document.getElementById('autoApiKey').placeholder = cfg.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
     document.getElementById('autoSystemPrompt').value = cfg.system_prompt || '';
-    document.getElementById('useManualConfig').checked = !!cfg.use_manual_config;
-
-    // Set timeframes
-    const tfs = cfg.timeframes || ['M15'];
-    document.querySelectorAll('#autoTimeframes input').forEach(cb => {
-      cb.checked = tfs.includes(cb.value);
-    });
+    document.getElementById('autoIntervalMin').value = cfg.interval_minutes || 5;
 
     applyAutoProviderPreset(cfg.api_provider || 'deepseek');
-    setText('autoConfigStatus', `${cfg.api_provider || 'Provider'} · ${cfg.model_name || 'model'} · ${cfg.has_api_key ? '密钥已配置' : '未配置密钥'} · 品种: ${(cfg.symbols||[]).join(',')} · 周期: ${tfs.join(',')}`);
+    setText('autoConfigStatus', `${cfg.api_provider || 'Provider'} · ${cfg.model_name || 'model'} · ${cfg.has_api_key ? '密钥已配置' : '未配置密钥'} · 品种: ${(cfg.symbols||[]).join(',')} · 间隔: ${cfg.interval_minutes || 5}分钟`);
   } catch (e) {
     setText('autoConfigStatus', '加载失败: ' + e.message);
   }
@@ -1314,13 +1301,13 @@ async function loadAutoConfig() {
 
 async function saveAutoConfig() {
   const symbols = document.getElementById('autoSymbols').value.split(',').map(s => s.trim()).filter(Boolean);
-  const timeframes = [...document.querySelectorAll('#autoTimeframes input:checked')].map(cb => cb.value);
+  const intervalMinutes = parseInt(document.getElementById('autoIntervalMin').value) || 5;
   const apiKey = document.getElementById('autoApiKey').value.trim();
 
   try {
     const payload = {
       symbols,
-      timeframes,
+      interval_minutes: intervalMinutes,
       api_provider: document.getElementById('autoApiProvider').value,
       model_name: document.getElementById('autoModelName').value,
       api_base_url: document.getElementById('autoApiBaseUrl').value,
@@ -1330,7 +1317,6 @@ async function saveAutoConfig() {
       max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
       selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
       system_prompt: document.getElementById('autoSystemPrompt').value || null,
-      use_manual_config: document.getElementById('useManualConfig').checked,
     };
     if (apiKey) payload.api_key = apiKey;
     await wsApi('save_auto_config', payload);
@@ -2049,7 +2035,6 @@ function bindEvents() {
   $("refreshAllBtn").addEventListener("click", refreshAll);
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
-  document.getElementById("saveSystemPromptBtn")?.addEventListener("click", saveSystemPrompt);
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
   $("buyBtn").addEventListener("click", () => openManual("buy"));

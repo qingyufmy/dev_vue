@@ -522,12 +522,27 @@ export async function initDB() {
   if (badCols.length) console.log(`[DB] Fixed ${badCols.length} columns with +8h defaults`)
 
   // Migrate auto_scheduler: add model config columns for global auto config
-  const autoCols = ['api_provider', 'model_name', 'api_key_encrypted', 'api_base_url', 'temperature', 'max_tokens', 'system_prompt', 'risk_level', 'max_position_size', 'selected_take_profit', 'use_manual_config']
-  for (const col of autoCols) {
+  const autoMods = [
+    ['api_provider', 'VARCHAR(50)'],
+    ['model_name', 'VARCHAR(100)'],
+    ['api_key_encrypted', 'TEXT'],
+    ['api_base_url', 'VARCHAR(500)'],
+    ['temperature', 'DOUBLE'],
+    ['max_tokens', 'INT'],
+    ['system_prompt', 'TEXT'],
+    ['risk_level', 'VARCHAR(20)'],
+    ['max_position_size', 'DOUBLE'],
+    ['selected_take_profit', 'INT'],
+  ]
+  for (const [col, type] of autoMods) {
     try {
-      await p.query(`ALTER TABLE auto_scheduler ADD COLUMN ${col} VARCHAR(2000) DEFAULT NULL`)
+      await p.query(`ALTER TABLE auto_scheduler ADD COLUMN ${col} ${type} DEFAULT NULL`)
     } catch {}
   }
+  // Add interval_minutes to auto_scheduler
+  try { await p.query('ALTER TABLE auto_scheduler ADD COLUMN interval_minutes INT DEFAULT 5') } catch {}
+  // Add use_manual_config to ai_configs (per-user)
+  try { await p.query('ALTER TABLE ai_configs ADD COLUMN use_manual_config TINYINT NOT NULL DEFAULT 0') } catch {}
   // Ensure global auto config row (user_id=0) exists
   const [globalAuto] = await p.query('SELECT id FROM auto_scheduler WHERE user_id = 0')
   if (globalAuto.length === 0) {

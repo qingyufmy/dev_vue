@@ -1029,20 +1029,19 @@ async function saveGlobalAutoConfig(cfg) {
   const now = utcNow()
   await queryRun(`
     UPDATE auto_scheduler SET
-      symbols = ?, timeframes = ?, interval_seconds = ?,
+      symbols = ?, interval_minutes = ?,
       api_provider = ?, model_name = ?, api_key_encrypted = ?, api_base_url = ?,
       temperature = ?, max_tokens = ?, system_prompt = ?,
       risk_level = ?, max_position_size = ?, selected_take_profit = ?,
-      use_manual_config = ?, updated_at = ?
+      updated_at = ?
     WHERE user_id = 0
   `, [
     JSON.stringify(cfg.symbols || ['XAUUSD']),
-    JSON.stringify(cfg.timeframes || ['M15']),
-    cfg.interval_seconds || 300,
+    cfg.interval_minutes || 5,
     cfg.api_provider || null, cfg.model_name || null, cfg.api_key_encrypted || null, cfg.api_base_url || null,
     cfg.temperature ?? null, cfg.max_tokens ?? null, cfg.system_prompt || null,
     cfg.risk_level || null, cfg.max_position_size ?? null, cfg.selected_take_profit ?? null,
-    cfg.use_manual_config ? 1 : 0, now
+    now
   ])
 }
 
@@ -1051,25 +1050,26 @@ async function getAutoInferenceConfig(userId) {
   const globalCfg = await getGlobalAutoConfig()
   if (!globalCfg) return null
 
-  // If use_manual_config is ON, use admin's manual config
-  if (globalCfg.use_manual_config) {
-    const adminUser = await queryOne('SELECT id FROM users WHERE role = ?', ['admin'])
-    if (adminUser) {
-      const manualConfig = await getActiveConfig(null, adminUser.id, 'default')
-      if (manualConfig && manualConfig.has_api_key) {
-        return {
-          api_provider: manualConfig.api_provider,
-          model_name: manualConfig.model_name,
-          api_key_encrypted: manualConfig.api_key_encrypted,
-          api_base_url: manualConfig.api_base_url,
-          temperature: manualConfig.temperature,
-          max_tokens: manualConfig.max_tokens,
-          risk_level: manualConfig.risk_level,
-          max_position_size: manualConfig.max_position_size,
-          selected_take_profit: manualConfig.selected_take_profit,
-          system_prompt: await getSystemPrompt(null),
-          _source: 'manual'
-        }
+  // Check if THIS user has use_manual_config ON
+  const userConfig = await queryOne('SELECT use_manual_config FROM ai_configs WHERE user_id = ? AND session_id = ?', [userId, 'default'])
+  const useManual = userConfig?.use_manual_config || false
+
+  if (useManual) {
+    // Use this user's own manual config
+    const manualConfig = await getActiveConfig(null, userId, 'default')
+    if (manualConfig && manualConfig.has_api_key) {
+      return {
+        api_provider: manualConfig.api_provider,
+        model_name: manualConfig.model_name,
+        api_key_encrypted: manualConfig.api_key_encrypted,
+        api_base_url: manualConfig.api_base_url,
+        temperature: manualConfig.temperature,
+        max_tokens: manualConfig.max_tokens,
+        risk_level: manualConfig.risk_level,
+        max_position_size: manualConfig.max_position_size,
+        selected_take_profit: manualConfig.selected_take_profit,
+        system_prompt: manualConfig.system_prompt || await getSystemPrompt(null),
+        _source: 'manual'
       }
     }
   }
@@ -1209,19 +1209,20 @@ async function startAutoScheduler(userId) {
 
   const symbols = JSON.parse(cfg.symbols || '[]')
   const timeframes = JSON.parse(cfg.timeframes || '[]')
+  // Get interval from global auto config
+  const globalCfg = await getGlobalAutoConfig()
+  const intervalMs = (globalCfg?.interval_minutes || 5) * 60_000
   autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timers: {} }
 
   let count = 0
   for (const symbol of symbols) {
     for (const tf of timeframes) {
-      const intervalMs = 300000 // Fixed 5 minutes
       const key = `${symbol}:${tf}`
       const stagger = Math.random() * 5000 // stagger starts to avoid API bursts
 
       const tick = async () => {
         if (!autoSchedulerState[userId]?.running) return
         if (autoSchedulerState[userId]?.manualBusy) {
-          // Manual analysis in progress, skip this tick and reschedule
           if (autoSchedulerState[userId]?.running) {
             autoSchedulerState[userId].timers[key] = setTimeout(tick, intervalMs)
           }
@@ -1236,7 +1237,7 @@ async function startAutoScheduler(userId) {
       count++
     }
   }
-  console.log(`[AutoScheduler] Started for user ${userId}: ${count} timers, interval=5m`)
+  console.log(`[AutoScheduler] Started for user ${userId}: ${count} timers, interval=${intervalMs/1000}s`)
 
   // Also start trade review scheduler
   startTradeReviewScheduler(userId)

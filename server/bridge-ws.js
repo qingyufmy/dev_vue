@@ -277,19 +277,22 @@ async function handleBrowserCommand(ws, userId, msg) {
         await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
         await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, model_sharing_enabled, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          max_position_size, selected_take_profit, model_sharing_enabled, use_manual_config, system_prompt, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           ON DUPLICATE KEY UPDATE
             api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
             api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
             max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
             enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
             max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
-            model_sharing_enabled = VALUES(model_sharing_enabled), is_active = 1, updated_at = VALUES(updated_at)`,
+            model_sharing_enabled = VALUES(model_sharing_enabled), use_manual_config = VALUES(use_manual_config),
+            system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
+            is_active = 1, updated_at = VALUES(updated_at)`,
           [userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
             cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
             cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-            cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0, now, now])
+            cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
+            cfg.use_manual_config ? 1 : 0, cfg.system_prompt || null, now, now])
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
         break
@@ -344,12 +347,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         const cfg = await ai.getAutoConfig(null, userId)
         const globalCfg = await ai.getGlobalAutoConfig()
         const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : (globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD'])
-        const timeframes = cfg?.timeframes ? JSON.parse(cfg.timeframes) : (globalCfg?.timeframes ? JSON.parse(globalCfg.timeframes) : ['M15'])
-        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, timeframes, interval_seconds: 300, running: !!cfg?.enabled } }
+        const timeframes = cfg?.timeframes ? JSON.parse(cfg.timeframes) : ['M15']
+        const intervalMin = globalCfg?.interval_minutes || 5
+        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, timeframes, interval_minutes: intervalMin, running: !!cfg?.enabled } }
         break
       }
       case 'toggle_auto': {
-        // Simple toggle: click on/off, run once on enable, 5-min cycle
+        // Simple toggle: click on/off, run once on enable
         const cfg = await ai.getAutoConfig(null, userId)
         const currentlyEnabled = !!cfg?.enabled
         const newEnabled = !currentlyEnabled
@@ -375,7 +379,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (user?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         const globalCfg = await ai.getGlobalAutoConfig()
-        const autoPrompt = globalCfg?.system_prompt || await ai.getSystemPrompt(null)
+        const autoPrompt = globalCfg?.system_prompt || ''
         result = {
           status: 'success',
           config: {
@@ -390,8 +394,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             selected_take_profit: globalCfg?.selected_take_profit ?? 2,
             system_prompt: autoPrompt,
             symbols: globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD'],
-            timeframes: globalCfg?.timeframes ? JSON.parse(globalCfg.timeframes) : ['M15'],
-            use_manual_config: !!globalCfg?.use_manual_config,
+            interval_minutes: globalCfg?.interval_minutes || 5,
           }
         }
         break
@@ -403,7 +406,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const existing = await ai.getGlobalAutoConfig()
         const newCfg = {
           symbols: params.symbols || (existing?.symbols ? JSON.parse(existing.symbols) : ['XAUUSD']),
-          timeframes: params.timeframes || (existing?.timeframes ? JSON.parse(existing.timeframes) : ['M15']),
+          interval_minutes: params.interval_minutes ?? existing?.interval_minutes ?? 5,
           api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
           api_key_encrypted: params.api_key || existing?.api_key_encrypted || null,
@@ -414,8 +417,6 @@ async function handleBrowserCommand(ws, userId, msg) {
           risk_level: params.risk_level ?? existing?.risk_level ?? 'medium',
           max_position_size: params.max_position_size ?? existing?.max_position_size ?? 0.05,
           selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
-          use_manual_config: params.use_manual_config !== undefined ? params.use_manual_config : (existing?.use_manual_config || false),
-          interval_seconds: 300,
         }
         await ai.saveGlobalAutoConfig(newCfg)
         // Restart schedulers for all enabled users

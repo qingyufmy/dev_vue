@@ -357,12 +357,16 @@
                     </div>
                   </div>
                   <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>期货手数模式</span></label>
+                  <label class="check-row" id="useManualConfigWrap">
+                    <input id="useManualConfig" type="checkbox" />
+                    <span>自动推理使用手动推理配置</span>
+                    <small class="field-help">开启后，自动推理将使用本页配置的模型、提示词和约束</small>
+                  </label>
                 </div>
               </div>
               <div class="config-section">
                 <div class="config-section-title">系统提示词</div>
                 <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则</span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
-                <button id="saveSystemPromptBtn" class="btn btn-primary" style="margin-top:8px;"><i data-lucide="save" size="16"></i>保存提示词</button>
               </div>
               <div id="configStatus" class="inline-status">正在读取配置</div>
               <div class="config-actions">
@@ -409,28 +413,15 @@
                 </div>
               </div>
               <div class="config-section">
-                <div class="config-section-title">推理品种与周期</div>
+                <div class="config-section-title">推理品种与循环时间</div>
                 <div class="config-grid">
                   <label><span>品种</span><input id="autoSymbols" value="XAUUSD" placeholder="逗号分隔，如 XAUUSD,XAUUSD.s" /></label>
-                  <div class="timeframe-grid" id="autoTimeframes">
-                    <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span></label>
-                    <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span></label>
-                    <label><input type="checkbox" value="M15" checked /><span class="tf-card-code">M15</span></label>
-                    <label><input type="checkbox" value="M30" /><span class="tf-card-code">M30</span></label>
-                    <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span></label>
-                    <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span></label>
-                    <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span></label>
-                  </div>
-                  <label class="check-row" id="useManualConfigWrap">
-                    <input id="useManualConfig" type="checkbox" />
-                    <span>自动推理使用手动推理配置</span>
-                    <small class="field-help">开启后，自动推理将使用手动配置中的模型、提示词和约束</small>
-                  </label>
+                  <label><span>循环间隔</span><span class="unit-field"><input id="autoIntervalMin" class="num" type="number" min="1" max="1440" step="1" value="5" /><span class="input-unit">分钟</span></span><small class="field-help">自动推理每隔多久执行一次，最短1分钟</small></label>
                 </div>
               </div>
               <div class="config-section">
                 <div class="config-section-title">系统提示词</div>
-                <label class="prompt-box"><span>自动推理专用提示词（留空则使用全局共享提示词）</span><textarea id="autoSystemPrompt" rows="11" spellcheck="false"></textarea></label>
+                <label class="prompt-box"><span>自动推理专用提示词（留空则使用手动配置中的提示词）</span><textarea id="autoSystemPrompt" rows="11" spellcheck="false"></textarea></label>
               </div>
               <div id="autoConfigStatus" class="inline-status">正在读取配置</div>
               <div class="config-actions">
