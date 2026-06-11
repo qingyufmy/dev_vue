@@ -13,6 +13,7 @@ const state = {
   auditRows: [],
   signalFilters: { direction: "", timeframe: "", page: 1, pageSize: 20 },
   auditFilters: { status: "", type: "", page: 1, pageSize: 25 },
+  signalTickets: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -999,6 +1000,7 @@ function renderPositionRows(positions, withAction) {
   if (!positions.length) {
     return `<tr class="empty-row"><td colspan="${withAction ? 11 : 8}">当前无持仓</td></tr>`;
   }
+  const tickets = state.signalTickets || {};
   return positions.map((position) => {
     const type = String(position.type || "").toLowerCase();
     const directionLabel = type === "buy" ? "买入 多" : "卖出 空";
@@ -1007,7 +1009,7 @@ function renderPositionRows(positions, withAction) {
     const priceDigits = Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
     return `
       <tr>
-        <td class="num">${escapeHtml(position.ticket)}</td>
+        ${ticketCell(position.ticket, tickets)}
         <td>${escapeHtml(position.symbol)}</td>
         <td><span class="${directionClass}">${directionLabel}</span></td>
         <td class="num">${escapeHtml(volumeText(position.volume))}</td>
@@ -1022,8 +1024,26 @@ function renderPositionRows(positions, withAction) {
   }).join("");
 }
 
+async function loadSignalTickets() {
+  try {
+    const data = await wsApi("signal_tickets");
+    state.signalTickets = data.tickets || {};
+  } catch { state.signalTickets = {}; }
+}
+
+function ticketCell(ticket, signalTickets) {
+  const signalId = signalTickets[String(ticket)];
+  if (signalId) {
+    return `<td class="num"><a href="#" class="signal-link" onclick="event.preventDefault(); openAnalysisFromHistory(${signalId})">${escapeHtml(ticket)}</a></td>`;
+  }
+  return `<td class="num">${escapeHtml(ticket)}</td>`;
+}
+
 async function loadPositions() {
-  const data = await wsApi("positions");
+  const [data] = await Promise.all([
+    wsApi("positions"),
+    loadSignalTickets(),
+  ]);
   const positions = data.positions || [];
   $("positionsBody").innerHTML = renderPositionRows(positions, true);
   $("dashboardPositionsBody").innerHTML = renderPositionRows(positions, false);
@@ -1741,7 +1761,10 @@ function setHistoryZeroClass(id, value) {
 
 async function loadHistory() {
   try {
-  const data = await wsApi("history", { page: 1, page_size: 20 });
+  const [data] = await Promise.all([
+    wsApi("history", { page: 1, page_size: 20 }),
+    loadSignalTickets(),
+  ]);
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
   setText("historyCredit", fmt(stats.credit));
@@ -1755,12 +1778,14 @@ async function loadHistory() {
     setHistoryZeroClass(id, stats[key]);
   });
   const rows = data.orders || [];
+  const tickets = state.signalTickets || {};
   $("historyBody").innerHTML = rows.length ? rows.map((row) => {
     const dir = signalType(row.type);
     const comment = row.comment || "";
+    const ticket = row.order || row.ticket;
     return `
     <tr>
-      <td class="num">${escapeHtml(row.order || row.ticket)}</td>
+      ${ticketCell(ticket, tickets)}
       <td>${escapeHtml(row.symbol)}</td>
       <td><span class="tag ${dir}">${String(row.type || dir).toUpperCase()} ${directionText(dir)}</span></td>
       <td class="num">${escapeHtml(volumeText(row.volume))}</td>

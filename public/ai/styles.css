@@ -3173,3 +3173,15 @@ input:checked + .slider::before { transform: translateX(18px); }
   transition: opacity 0.2s;
 }
 .pro-overlay-btn:hover { opacity: 0.85; }
+
+/* Signal link in position/history tables */
+a.signal-link {
+  color: #d4a017;
+  text-decoration: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+a.signal-link:hover {
+  color: #f0c040;
+  text-decoration: underline;
+}
