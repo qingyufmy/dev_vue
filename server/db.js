@@ -448,8 +448,6 @@ export async function initDB() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL UNIQUE,
       symbols VARCHAR(1000) NOT NULL DEFAULT 'XAUUSD',
-      timeframes VARCHAR(500) NOT NULL DEFAULT 'M15',
-      interval_seconds INT NOT NULL DEFAULT 300,
       enabled TINYINT NOT NULL DEFAULT 0,
       last_run_at DATETIME,
       created_at DATETIME NOT NULL DEFAULT (NOW()),
@@ -523,9 +521,6 @@ export async function initDB() {
     await p.query(`ALTER TABLE \`${col.TABLE_NAME}\` ALTER COLUMN \`${col.COLUMN_NAME}\` SET DEFAULT (NOW())`)
   }
   if (badCols.length) console.log(`[DB] Fixed ${badCols.length} columns with +8h defaults`)
-
-  // use_manual_config in ai_configs
-  try { await p.query('ALTER TABLE ai_configs ADD COLUMN use_manual_config TINYINT NOT NULL DEFAULT 0') } catch {}
 
   // v1.7: global_auto_config + cleanup
   const [gacExists] = await p.query('SELECT COUNT(*) as c FROM global_auto_config')

@@ -1546,6 +1546,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-summary-head">
       <div class="analysis-summary-title">
         <span class="analysis-symbol">${escapeHtml(signal.symbol)}</span>
+        <span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span>
         <span class="analysis-direction-badge ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span>
       </div>
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
@@ -1875,7 +1876,7 @@ function renderAnalysisHistory(signals) {
     return `
       <button class="analysis-history-item" data-analysis-id="${escapeHtml(signal.id)}">
         <span class="history-item-top">
-          <span class="history-item-symbol">${escapeHtml(signal.symbol)}</span>
+          <span class="history-item-symbol">${escapeHtml(signal.symbol)} · ${escapeHtml(signal.timeframe)}</span>
           <span class="history-item-dir ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span>
         </span>
         <span class="history-item-meta">
@@ -1930,6 +1931,7 @@ function renderSignalRows() {
         <td class="num">${escapeHtml(signal.id)}</td>
         <td>${compactTimeHtml(signal?.created_at_mt5 || signal?.created_at)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
+        <td><span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span></td>
         <td><span class="tag ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span></td>
         <td>
           <div class="conf-mini ${confidenceClass(signal.confidence)}">
@@ -2138,6 +2140,11 @@ function bindEvents() {
   // Symbol change is handled by searchable selector + setGlobalSymbol
   $("signalFilterDirection")?.addEventListener("change", (event) => {
     state.signalFilters.direction = event.target.value;
+    state.signalFilters.page = 1;
+    renderSignalRows();
+  });
+  $("signalFilterTimeframe")?.addEventListener("change", (event) => {
+    state.signalFilters.timeframe = event.target.value;
     state.signalFilters.page = 1;
     renderSignalRows();
   });

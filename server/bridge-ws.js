@@ -351,7 +351,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const newEnabled = !cfg?.enabled
         const globalCfg = await ai.getGlobalAutoConfig()
         const symbols = parseSymbols(globalCfg?.symbols)
-        await ai.upsertAutoConfig(null, userId, symbols, ['M5'], 300, newEnabled)
+        await ai.upsertAutoConfig(null, userId, symbols, newEnabled)
         ai.stopAutoScheduler(userId)
         if (newEnabled) {
           await ai.startAutoScheduler(userId)
@@ -417,12 +417,12 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'save_auto': {
         // Legacy: save per-user auto scheduler settings
-        const { symbols = ['XAUUSD'], timeframes = [] } = params
-        const enabled = timeframes.length > 0
-        await ai.upsertAutoConfig(null, userId, symbols, timeframes, 300, enabled)
+        const { symbols = ['XAUUSD'] } = params
+        const enabled = !!params.enabled
+        await ai.upsertAutoConfig(null, userId, symbols, enabled)
         ai.stopAutoScheduler(userId)
         if (enabled) await ai.startAutoScheduler(userId)
-        result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols, timeframes }
+        result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols }
         break
       }
       case 'audit_logs': {

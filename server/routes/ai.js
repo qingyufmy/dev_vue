@@ -946,6 +946,7 @@ async function handleAnalyze(userId, params) {
   if (!symbol) return { status: 'error', message: 'symbol required' }
 
   const config = await getActiveConfig(null, userId, session_id)
+  console.log(`[handleAnalyze] userId=${userId} session=${session_id} prompt_len=${config?.system_prompt?.length || 0} prompt_source=ai_configs`)
 
   const account = await mt5Bridge(userId, 'account', {})
   const positionsData = include_positions ? await mt5Bridge(userId, 'positions', { symbol }) : { positions: [] }
@@ -1058,16 +1059,15 @@ async function getAutoInferenceConfig(userId) {
   }
 }
 
-async function upsertAutoConfig(db, userId, symbols, timeframes, intervalSeconds, enabled) {
+async function upsertAutoConfig(db, userId, symbols, enabled) {
   const now = utcNow()
   await queryRun(`
-    INSERT INTO auto_scheduler (user_id, symbols, timeframes, interval_seconds, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO auto_scheduler (user_id, symbols, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
-      symbols = VALUES(symbols), timeframes = VALUES(timeframes),
-      interval_seconds = VALUES(interval_seconds), enabled = VALUES(enabled),
+      symbols = VALUES(symbols), enabled = VALUES(enabled),
       updated_at = VALUES(updated_at)
-  `, [userId, JSON.stringify(symbols), JSON.stringify(timeframes), intervalSeconds, enabled ? 1 : 0, now, now])
+  `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, now, now])
 }
 
 // Map timeframe to its candle period in ms
