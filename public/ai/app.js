@@ -515,8 +515,8 @@ async function _maybeRefreshSignal() {
     if (_lastSignalId !== latestSignal.id) {
       _lastSignalId = latestSignal.id;
       state.selectedSignal = latestSignal;
-      updateSignalDisplay(displaySignal);
-      setText("signalFreshness", signalFreshness(displaySignal));
+      updateSignalDisplay(latestSignal);
+      setText("signalFreshness", signalFreshness(latestSignal));
       renderAnalysisHistory(signals);
       renderSignalRows();
       return;
