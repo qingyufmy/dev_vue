@@ -54,8 +54,16 @@ function utcNow() {
 const mt5Now = utcNow
 
 function utcToMt5Time(str) {
-  // No timezone conversion — return as-is
-  return str || null
+  // Convert Beijing time (UTC+8) to MT5 broker time (UTC+3): subtract 5 hours
+  if (!str) return null
+  try {
+    const d = new Date(str.replace(' ', 'T'))
+    d.setHours(d.getHours() - 5)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  } catch {
+    return str
+  }
 }
 
 function signalTtlSeconds(timeframe) {
