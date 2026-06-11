@@ -20,7 +20,7 @@ const EXECUTION_JSON_CONTRACT = `你必须严格依据系统提示词里的策�
 JSON 字段必须完整：
 {
   "signal_type": "buy|sell|hold",
-  "confidence": 0.0,
+  "confidence": 0.0-1.0,
   "recommended_volume": 0.0,
   "analysis": "中文，说明按 1H/4H -> 15min -> 5min 的结构判断",
   "reasoning": "中文，说明缠论、谐波、裸K共振或放弃原因",
@@ -29,6 +29,13 @@ JSON 字段必须完整：
   "take_profit_2_price": null,
   "take_profit_3_price": null
 }
+
+⚠️ confidence 字段极其重要：
+- confidence 代表你对本次分析结论的确定程度（0.0~1.0），不是交易信心。
+- hold 也必须给出有意义的 confidence（如 0.6~0.8），代表「应该观望」这个判断的确定程度。
+- 只有当你完全无法分析时才用 0.0，正常分析必须给出 >= 0.3 的值。
+- buy/sell 信号 confidence 通常在 0.5~0.9 之间。
+- 绝对禁止把 confidence 写成 0.0 除非你真的完全无法给出任何判断。
 
 若 signal_type 为 hold，recommended_volume 必须为 0，止损止盈字段必须为 null。
 若 signal_type 为 buy/sell，必须给出数字型 recommended_volume、stop_loss_price、take_profit_1_price、take_profit_2_price、take_profit_3_price。`
@@ -488,6 +495,7 @@ async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, m
   if (!response.ok) throw new Error(`LLM HTTP ${response.status}`)
   const data = await response.json()
   const content = data.choices[0].message.content
+  console.log(`[AI] LLM raw response (${content.length} chars):`, content.substring(0, 500))
   try {
     return parseJsonObject(content)
   } catch (exc) {
