@@ -7608,8 +7608,8 @@ function setupGlobalEvents() {
     navigate('community')
   })
   $('#navAI').addEventListener('click', (e) => {
-    if (!requireLogin()) return
     e.preventDefault()
+    if (!requireLogin()) return
     const token = localStorage.getItem('ws_token')
     const url = `/ai?token=${encodeURIComponent(token)}`
     window.open(url, '_blank')
