@@ -11,35 +11,6 @@ const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSO
 
 const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
 
-const EXECUTION_JSON_CONTRACT = `你必须严格依据系统提示词里的策略框架完成推理，尤其是：
-1. 1H 主判趋势，只有 1H 不清晰时才参考 4H 降级备判。
-2. 15min 用于信号确认，5min 用于精确入场触发。
-3. 逆势信号、模糊结构、条件未满足时必须返回 hold，不得勉强给 buy/sell。
-4. 只允许输出一个 JSON 对象，不要 Markdown，不要代码块，不要额外解释。
-
-JSON 字段必须完整：
-{
-  "signal_type": "buy|sell|hold",
-  "confidence": 0.0-1.0,
-  "recommended_volume": 0.0,
-  "analysis": "中文，说明按 1H/4H -> 15min -> 5min 的结构判断",
-  "reasoning": "中文，说明缠论、谐波、裸K共振或放弃原因",
-  "stop_loss_price": null,
-  "take_profit_1_price": null,
-  "take_profit_2_price": null,
-  "take_profit_3_price": null
-}
-
-⚠️ confidence 字段极其重要：
-- confidence 代表你对本次分析结论的确定程度（0.0~1.0），不是交易信心。
-- hold 也必须给出有意义的 confidence（如 0.6~0.8），代表「应该观望」这个判断的确定程度。
-- 只有当你完全无法分析时才用 0.0，正常分析必须给出 >= 0.3 的值。
-- buy/sell 信号 confidence 通常在 0.5~0.9 之间。
-- 绝对禁止把 confidence 写成 0.0 除非你真的完全无法给出任何判断。
-
-若 signal_type 为 hold，recommended_volume 必须为 0，止损止盈字段必须为 null。
-若 signal_type 为 buy/sell，必须给出数字型 recommended_volume、stop_loss_price、take_profit_1_price、take_profit_2_price、take_profit_3_price。`
-
 const TRADE_REVIEW_JSON_CONTRACT = `你现在做订单复盘，不是开仓信号。必须严格依据系统提示词里的策略框架复盘订单是否符合：
 1H/4H 趋势过滤、15min 信号确认、5min 入场触发、缠论/谐波/裸K共振、逆势禁止、模糊放弃。
 
@@ -750,7 +721,7 @@ function ruleBasedSignal(config, market) {
 }
 
 // ============ AI Signal (DeepSeek/GPT) ============
-async function maybeAiSignal(db, config, market, useContract = true) {
+async function maybeAiSignal(db, config, market) {
   if (!config || !config.api_key_encrypted) return aiFailureHold(market, 'missing_ai_configuration_or_key')
   const apiKey = config.api_key_encrypted
   const provider = config.api_provider || 'deepseek'
@@ -771,7 +742,7 @@ async function maybeAiSignal(db, config, market, useContract = true) {
       maxTokens: parseInt(config.max_tokens || 2000),
       messages: [
         { role: 'system', content: prompt },
-        { role: 'user', content: (useContract ? EXECUTION_JSON_CONTRACT + '\n\n' : '') + '市场数据 JSON：\n' + JSON.stringify(market) },
+        { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(market) },
       ],
     })
     const required = ['signal_type', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
@@ -959,7 +930,7 @@ async function handleAnalyze(userId, params) {
 
   const market = calculateMarketData(symbol, timeframe, rates, account, positions)
   market.strategy_context = await buildStrategyContext(userId, symbol, account, positions, timeframe, rates)
-  const signal = await maybeAiSignal(null, config, market, false)
+  const signal = await maybeAiSignal(null, config, market)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
 
@@ -1224,5 +1195,5 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   reviewTrades, buildTradeReviewContext, runTradeReviewCycle,
   startTradeReviewScheduler, stopTradeReviewScheduler,
   getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
-  EXECUTION_JSON_CONTRACT, TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS }
+  TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS }
 export default router
