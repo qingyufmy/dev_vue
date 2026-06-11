@@ -511,10 +511,10 @@ async function _maybeRefreshSignal() {
     const selectedInList = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
     const displaySignal = selectedInList || latestSignal;
 
-    // New signal detected (ID changed) — full refresh of lists, but preserve selection
+    // New signal detected (ID changed) — switch to new signal
     if (_lastSignalId !== latestSignal.id) {
       _lastSignalId = latestSignal.id;
-      state.selectedSignal = displaySignal;
+      state.selectedSignal = latestSignal;
       updateSignalDisplay(displaySignal);
       setText("signalFreshness", signalFreshness(displaySignal));
       renderAnalysisHistory(signals);
@@ -1717,7 +1717,7 @@ async function loadSignals(options = {}) {
   const signals = data.signals || [];
   state.signals = signals;
 
-  // Preserve selected signal if it still exists in the new list
+  // Preserve selected signal if it still exists, otherwise use latest
   const selectedId = state.selectedSignal?.id;
   const stillExists = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
   const activeSignal = stillExists || signals[0] || null;
