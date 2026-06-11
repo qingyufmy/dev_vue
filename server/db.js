@@ -8,25 +8,30 @@ export function beijingNow() {
 }
 
 
-const DB_CONFIG = {
-  host: process.env.MYSQL_HOST || '192.168.1.254',
-  port: parseInt(process.env.MYSQL_PORT || '3306'),
-  user: process.env.MYSQL_USER || 'huaerjie',
-  password: process.env.MYSQL_PASSWORD || '8dn6jbMHNZza3yzP',
-  database: process.env.MYSQL_DATABASE || 'huaerjie',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  charset: 'utf8mb4',
-  dateStrings: true,  // Return DATE/DATETIME as strings, not Date objects
-}
-
 let pool
+let _dbConfig = null
+function getDBConfig() {
+  if (!_dbConfig) {
+    _dbConfig = {
+      host: process.env.MYSQL_HOST || '192.168.1.254',
+      port: parseInt(process.env.MYSQL_PORT || '3306'),
+      user: process.env.MYSQL_USER || 'huaerjie',
+      password: process.env.MYSQL_PASSWORD || '8dn6jbMHNZza3yzP',
+      database: process.env.MYSQL_DATABASE || 'huaerjie',
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      charset: 'utf8mb4',
+      dateStrings: true,
+    }
+  }
+  return _dbConfig
+}
 
 /** Get or create MySQL connection pool */
 export function getDB() {
   if (!pool) {
-    pool = mysql.createPool(DB_CONFIG)
+    pool = mysql.createPool(getDBConfig())
   }
   return pool
 }
