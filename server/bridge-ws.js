@@ -2,6 +2,14 @@ import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { query, queryOne, queryAll, queryRun, logAudit } from './db.js'
 
+// Parse symbols from DB: handles legacy JSON array or plain comma-separated text
+function parseSymbols(raw) {
+  if (!raw) return ['XAUUSD']
+  const s = raw.trim()
+  if (s.startsWith('[')) { try { return JSON.parse(s) } catch { return [s] } }
+  return s.split(',').map(x => x.trim()).filter(Boolean)
+}
+
 function localNow() {
   const d = new Date()
   const pad = n => String(n).padStart(2, '0')
@@ -297,20 +305,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', config: ai.configPublic(row) }
         break
       }
-      case 'get_system_prompt': {
-        const prompt = await ai.getSystemPrompt(null)
-        result = { status: 'success', prompt }
-        break
-      }
-      case 'save_system_prompt': {
-        if (user?.role !== 'admin') return reply({ status: 'error', message: 'Admin only' })
-        const prompt = params.prompt
-        if (!prompt || typeof prompt !== 'string') return reply({ status: 'error', message: 'prompt required' })
-        const now = localNow()
-        await queryRun('UPDATE system_prompts SET prompt = ?, updated_by = ?, updated_at = ?', [prompt, userId, now])
-        result = { status: 'success', prompt }
-        break
-      }
       case 'signals': {
         const rows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [userId, params.session_id || 'default'])
         const signals = rows.map(row => {
@@ -346,7 +340,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'auto_status': {
         const cfg = await ai.getAutoConfig(null, userId)
         const globalCfg = await ai.getGlobalAutoConfig()
-        const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : (globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD'])
+        const symbols = cfg?.symbols ? JSON.parse(cfg.symbols) : parseSymbols(globalCfg?.symbols)
         const timeframes = cfg?.timeframes ? JSON.parse(cfg.timeframes) : ['M15']
         const intervalMin = globalCfg?.interval_minutes || 5
         result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, timeframes, interval_minutes: intervalMin, running: !!cfg?.enabled } }
@@ -358,8 +352,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         const currentlyEnabled = !!cfg?.enabled
         const newEnabled = !currentlyEnabled
         const globalCfg = await ai.getGlobalAutoConfig()
-        const symbols = globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD']
-        const timeframes = globalCfg?.timeframes ? JSON.parse(globalCfg.timeframes) : ['M15']
+        const symbols = parseSymbols(globalCfg?.symbols)
+        const timeframes = ['M15']
         await ai.upsertAutoConfig(null, userId, symbols, timeframes, 300, newEnabled)
         ai.stopAutoScheduler(userId)
         if (newEnabled) {
@@ -380,6 +374,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (user?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         const globalCfg = await ai.getGlobalAutoConfig()
         const autoPrompt = globalCfg?.system_prompt || ''
+        const symbols = parseSymbols(globalCfg?.symbols)
         result = {
           status: 'success',
           config: {
@@ -393,7 +388,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             max_position_size: globalCfg?.max_position_size ?? 0.05,
             selected_take_profit: globalCfg?.selected_take_profit ?? 2,
             system_prompt: autoPrompt,
-            symbols: globalCfg?.symbols ? JSON.parse(globalCfg.symbols) : ['XAUUSD'],
+            symbols,
             interval_minutes: globalCfg?.interval_minutes || 5,
           }
         }
@@ -404,8 +399,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         const user2 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (user2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         const existing = await ai.getGlobalAutoConfig()
+        const existingSymbols = (existing?.symbols || 'XAUUSD').split(',').map(s => s.trim()).filter(Boolean)
         const newCfg = {
-          symbols: params.symbols || (existing?.symbols ? JSON.parse(existing.symbols) : ['XAUUSD']),
+          symbols: Array.isArray(params.symbols) ? params.symbols.join(',') : (params.symbols || existing?.symbols || 'XAUUSD'),
           interval_minutes: params.interval_minutes ?? existing?.interval_minutes ?? 5,
           api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',

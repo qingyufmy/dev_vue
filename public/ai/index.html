@@ -415,7 +415,12 @@
               <div class="config-section">
                 <div class="config-section-title">推理品种与循环时间</div>
                 <div class="config-grid">
-                  <label><span>品种</span><input id="autoSymbols" value="XAUUSD" placeholder="逗号分隔，如 XAUUSD,XAUUSD.s" /></label>
+                  <label><span>品种</span></label>
+                  <div class="auto-symbols-wrap">
+                    <div id="autoSymbolsTags" class="auto-symbols-tags"></div>
+                    <input id="autoSymbolsInput" class="sym-input" placeholder="搜索并添加品种..." autocomplete="off" />
+                    <div id="autoSymbolsDropdown" class="sym-dropdown"></div>
+                  </div>
                   <label><span>循环间隔</span><span class="unit-field"><input id="autoIntervalMin" class="num" type="number" min="1" max="1440" step="1" value="5" /><span class="input-unit">分钟</span></span><small class="field-help">自动推理每隔多久执行一次，最短1分钟</small></label>
                 </div>
               </div>

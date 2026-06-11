@@ -447,21 +447,31 @@ export async function initDB() {
     `CREATE TABLE IF NOT EXISTS auto_scheduler (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL UNIQUE,
-      symbols VARCHAR(1000) NOT NULL DEFAULT '["XAUUSD"]',
-      timeframes VARCHAR(500) NOT NULL DEFAULT '["M15"]',
-      interval_seconds INT NOT NULL DEFAULT 900,
+      symbols VARCHAR(1000) NOT NULL DEFAULT 'XAUUSD',
+      timeframes VARCHAR(500) NOT NULL DEFAULT 'M15',
+      interval_seconds INT NOT NULL DEFAULT 300,
       enabled TINYINT NOT NULL DEFAULT 0,
       last_run_at DATETIME,
       created_at DATETIME NOT NULL DEFAULT (NOW()),
       updated_at DATETIME NOT NULL DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    `CREATE TABLE IF NOT EXISTS system_prompts (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      prompt TEXT NOT NULL,
-      updated_by INT,
-      created_at DATETIME NOT NULL DEFAULT (NOW()),
-      updated_at DATETIME NOT NULL DEFAULT (NOW())
+    `CREATE TABLE IF NOT EXISTS global_auto_config (
+      id INT PRIMARY KEY DEFAULT 1,
+      symbols VARCHAR(1000) NOT NULL DEFAULT 'XAUUSD',
+      interval_minutes INT NOT NULL DEFAULT 5,
+      api_provider VARCHAR(50) DEFAULT 'deepseek',
+      model_name VARCHAR(100) DEFAULT 'deepseek-chat',
+      api_key_encrypted TEXT,
+      api_base_url VARCHAR(500) DEFAULT 'https://api.deepseek.com',
+      temperature DOUBLE DEFAULT 0.3,
+      max_tokens INT DEFAULT 2000,
+      risk_level VARCHAR(20) DEFAULT 'medium',
+      max_position_size DOUBLE DEFAULT 0.05,
+      selected_take_profit INT DEFAULT 2,
+      system_prompt TEXT,
+      updated_at DATETIME NOT NULL DEFAULT (NOW()),
+      CONSTRAINT chk_singleton CHECK (id = 1)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS audit_logs (
@@ -493,13 +503,6 @@ export async function initDB() {
     await p.query(sql)
   }
 
-  // Seed system prompt if empty
-  const [spRows] = await p.query('SELECT COUNT(*) as c FROM system_prompts')
-  if (spRows[0].c === 0) {
-    await p.query('INSERT INTO system_prompts (prompt) VALUES (?)',
-      ['You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'])
-  }
-
   // Seed demo data if empty
   const [userRows] = await p.query('SELECT COUNT(*) as c FROM users')
   if (userRows[0].c === 0) {
@@ -521,33 +524,39 @@ export async function initDB() {
   }
   if (badCols.length) console.log(`[DB] Fixed ${badCols.length} columns with +8h defaults`)
 
-  // Migrate auto_scheduler: add model config columns for global auto config
-  const autoMods = [
-    ['api_provider', 'VARCHAR(50)'],
-    ['model_name', 'VARCHAR(100)'],
-    ['api_key_encrypted', 'TEXT'],
-    ['api_base_url', 'VARCHAR(500)'],
-    ['temperature', 'DOUBLE'],
-    ['max_tokens', 'INT'],
-    ['system_prompt', 'TEXT'],
-    ['risk_level', 'VARCHAR(20)'],
-    ['max_position_size', 'DOUBLE'],
-    ['selected_take_profit', 'INT'],
-  ]
-  for (const [col, type] of autoMods) {
-    try {
-      await p.query(`ALTER TABLE auto_scheduler ADD COLUMN ${col} ${type} DEFAULT NULL`)
-    } catch {}
-  }
-  // Add interval_minutes to auto_scheduler
-  try { await p.query('ALTER TABLE auto_scheduler ADD COLUMN interval_minutes INT DEFAULT 5') } catch {}
-  // Add use_manual_config to ai_configs (per-user)
+  // use_manual_config in ai_configs
   try { await p.query('ALTER TABLE ai_configs ADD COLUMN use_manual_config TINYINT NOT NULL DEFAULT 0') } catch {}
-  // Ensure global auto config row (user_id=0) exists
-  const [globalAuto] = await p.query('SELECT id FROM auto_scheduler WHERE user_id = 0')
-  if (globalAuto.length === 0) {
-    await p.query(`INSERT INTO auto_scheduler (user_id, symbols, timeframes, interval_seconds, enabled) VALUES (0, '["XAUUSD"]', '["M15"]', 300, 0)`)
+
+  // v1.7: global_auto_config + cleanup
+  const [gacExists] = await p.query('SELECT COUNT(*) as c FROM global_auto_config')
+  if (gacExists[0].c === 0) {
+    let oldGlobal = []
+    try { [oldGlobal] = await p.query('SELECT * FROM auto_scheduler WHERE user_id = 0') } catch {}
+    if (oldGlobal.length) {
+      const g = oldGlobal[0]
+      await p.query('INSERT INTO global_auto_config (id, symbols, interval_minutes, api_provider, model_name, api_key_encrypted, api_base_url, temperature, max_tokens, risk_level, max_position_size, selected_take_profit, system_prompt) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+        g.symbols || 'XAUUSD', g.interval_minutes || 5, g.api_provider || 'deepseek',
+        g.model_name || 'deepseek-chat', g.api_key_encrypted || null, g.api_base_url || 'https://api.deepseek.com',
+        g.temperature || 0.3, g.max_tokens || 2000, g.risk_level || 'medium',
+        g.max_position_size || 0.05, g.selected_take_profit || 2, g.system_prompt || null
+      ])
+      console.log('[DB] Migrated global auto config from auto_scheduler')
+    } else {
+      await p.query('INSERT INTO global_auto_config (id) VALUES (1)')
+    }
   }
+  try { await p.query('DELETE FROM auto_scheduler WHERE user_id = 0') } catch {}
+
+  // Clean up auto_scheduler: drop model config columns
+  for (const col of ['api_provider','model_name','api_key_encrypted','api_base_url','temperature','max_tokens','system_prompt','risk_level','max_position_size','selected_take_profit','interval_minutes']) {
+    try { await p.query('ALTER TABLE auto_scheduler DROP COLUMN ' + col) } catch {}
+  }
+
+  // Drop system_prompts (prompt in ai_configs + global_auto_config now)
+  try { await p.query('DROP TABLE IF EXISTS system_prompts') } catch {}
+
+  // Clean notifications: drop unused 'read' column (reserved word)
+  try { await p.query('ALTER TABLE notifications DROP COLUMN `read`') } catch {}
 
   console.log('[DB] MySQL initialized')
 }

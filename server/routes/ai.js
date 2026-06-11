@@ -62,14 +62,6 @@ const TRADE_REVIEW_JSON_CONTRACT = `你现在做订单复盘，不是开仓信�
   ]
 }`
 
-async function getSystemPrompt(db) {
-  try {
-    const row = await queryOne('SELECT prompt FROM system_prompts ORDER BY id LIMIT 1')
-    return row?.prompt || DEFAULT_PROMPT
-  } catch {
-    return DEFAULT_PROMPT
-  }
-}
 
 // ============ Auth Middleware ============
 async function authMiddleware(req, res, next) {
@@ -154,7 +146,6 @@ function configPublic(row) {
   data.has_api_key = hasApiKey
   data.masked_api_key = hasApiKey ? '****' : null
   delete data.api_key_encrypted
-  delete data.system_prompt
   return data
 }
 
@@ -618,7 +609,7 @@ async function reviewTrades(config, reviewContext) {
   else if (provider === 'gpt') url = (baseUrl || 'https://api.openai.com') + '/v1/chat/completions'
   else return { status: 'skipped', reason: 'unsupported_ai_provider_for_trade_review' }
 
-  const prompt = await getSystemPrompt(null)
+  const prompt = config.system_prompt || DEFAULT_PROMPT
   try {
     const parsed = await requestJsonObject({
       url, apiKey,
@@ -772,7 +763,7 @@ async function maybeAiSignal(db, config, market) {
   else return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
 
   try {
-    const prompt = await getSystemPrompt(db)
+    const prompt = config.system_prompt || DEFAULT_PROMPT
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
@@ -1020,23 +1011,23 @@ async function getAutoConfig(db, userId) {
   return await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
 }
 
-// Global auto config (user_id = 0)
+// Global auto config (dedicated single-row table)
 async function getGlobalAutoConfig() {
-  return await queryOne('SELECT * FROM auto_scheduler WHERE user_id = 0')
+  return await queryOne('SELECT * FROM global_auto_config WHERE id = 1')
 }
 
 async function saveGlobalAutoConfig(cfg) {
   const now = utcNow()
   await queryRun(`
-    UPDATE auto_scheduler SET
+    UPDATE global_auto_config SET
       symbols = ?, interval_minutes = ?,
       api_provider = ?, model_name = ?, api_key_encrypted = ?, api_base_url = ?,
       temperature = ?, max_tokens = ?, system_prompt = ?,
       risk_level = ?, max_position_size = ?, selected_take_profit = ?,
       updated_at = ?
-    WHERE user_id = 0
+    WHERE id = 1
   `, [
-    JSON.stringify(cfg.symbols || ['XAUUSD']),
+    cfg.symbols || 'XAUUSD',
     cfg.interval_minutes || 5,
     cfg.api_provider || null, cfg.model_name || null, cfg.api_key_encrypted || null, cfg.api_base_url || null,
     cfg.temperature ?? null, cfg.max_tokens ?? null, cfg.system_prompt || null,
@@ -1068,14 +1059,13 @@ async function getAutoInferenceConfig(userId) {
         risk_level: manualConfig.risk_level,
         max_position_size: manualConfig.max_position_size,
         selected_take_profit: manualConfig.selected_take_profit,
-        system_prompt: manualConfig.system_prompt || await getSystemPrompt(null),
+        system_prompt: manualConfig.system_prompt || '',
         _source: 'manual'
       }
     }
   }
 
   // Otherwise use dedicated auto config
-  const autoPrompt = globalCfg.system_prompt || await getSystemPrompt(null)
   return {
     api_provider: globalCfg.api_provider || 'deepseek',
     model_name: globalCfg.model_name || 'deepseek-chat',
@@ -1086,7 +1076,7 @@ async function getAutoInferenceConfig(userId) {
     risk_level: globalCfg.risk_level || 'medium',
     max_position_size: globalCfg.max_position_size ?? 0.05,
     selected_take_profit: globalCfg.selected_take_profit ?? 2,
-    system_prompt: autoPrompt,
+    system_prompt: globalCfg.system_prompt || '',
     _source: 'auto'
   }
 }
@@ -1270,7 +1260,7 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,
   signalOrderPayload, attachSignalTiming, handleAnalyze,
   timeframeIntervalMs, startAutoScheduler, stopAutoScheduler,
-  getSystemPrompt, buildStrategyContext, maybeAiSignal, aiFailureHold,
+  buildStrategyContext, maybeAiSignal, aiFailureHold,
   reviewTrades, buildTradeReviewContext, runTradeReviewCycle,
   startTradeReviewScheduler, stopTradeReviewScheduler,
   getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
