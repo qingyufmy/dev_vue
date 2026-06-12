@@ -13,11 +13,11 @@ let _dbConfig = null
 function getDBConfig() {
   if (!_dbConfig) {
     _dbConfig = {
-      host: process.env.MYSQL_HOST || '192.168.1.254',
+      host: process.env.MYSQL_HOST,
       port: parseInt(process.env.MYSQL_PORT || '3306'),
-      user: process.env.MYSQL_USER || 'huaerjie',
-      password: process.env.MYSQL_PASSWORD || '8dn6jbMHNZza3yzP',
-      database: process.env.MYSQL_DATABASE || 'huaerjie',
+      user: process.env.MYSQL_USER,
+      password: process.env.MYSQL_PASSWORD,
+      database: process.env.MYSQL_DATABASE,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
