@@ -669,57 +669,6 @@ function stopTradeReviewScheduler(userId) {
 }
 
 // ============ Rule-Based Signal ============
-function ruleBasedSignal(config, market) {
-  const latest = parseFloat(market.latest_price)
-  const sma = parseFloat(market.sma_20)
-  const vol = Math.max(parseFloat(market.avg_volatility), latest * 0.001)
-  const score = market.strategy_score || {}
-  const dataConfidence = parseFloat(score.data_confidence || 0.55)
-  const trendStrength = parseFloat(score.trend_strength || 0)
-  const momentumAlignment = parseInt(score.momentum_alignment || 0)
-  const momentum10 = parseFloat(market.momentum_10_pct || 0)
-  const riskLevel = (config || {}).risk_level || 'medium'
-  const maxPosition = parseFloat((config || {}).max_position_size || 0.05)
-  const baseVolume = { low: 0.01, medium: 0.02, high: 0.03 }[riskLevel] || 0.02
-  const volume = Math.min(baseVolume, maxPosition)
-
-  let signalType, confidence, sl, tp1, tp2, tp3, trendText
-  if (latest > sma * 1.0004 && momentumAlignment >= 0) {
-    signalType = 'buy'
-    confidence = clamp(0.48 + trendStrength * 0.28 + Math.max(momentum10, 0) * 0.7, 0.05, 0.95)
-    sl = latest - vol * 1.5
-    tp1 = latest + vol * 1.2
-    tp2 = latest + vol * 2.0
-    tp3 = latest + vol * 3.0
-    trendText = 'price is above SMA20 and short-term momentum is positive'
-  } else if (latest < sma * 0.9996 && momentumAlignment <= 0) {
-    signalType = 'sell'
-    confidence = clamp(0.48 + trendStrength * 0.28 + Math.max(-momentum10, 0) * 0.7, 0.05, 0.95)
-    sl = latest + vol * 1.5
-    tp1 = latest - vol * 1.2
-    tp2 = latest - vol * 2.0
-    tp3 = latest - vol * 3.0
-    trendText = 'price is below SMA20 and short-term momentum is negative'
-  } else {
-    signalType = 'hold'
-    confidence = clamp(0.50 + (1 - trendStrength) * 0.18 + Math.min(Math.abs(market.sma_distance_pct || 0), 0.2) * 0.4, 0.05, 0.95)
-    sl = tp1 = tp2 = tp3 = null
-    trendText = 'price is close to SMA20 and directional edge is weak'
-  }
-
-  return {
-    signal_type: signalType,
-    confidence: round2(confidence),
-    recommended_volume: round2(Math.min(signalType === 'hold' ? 0.01 : volume, maxPosition)),
-    analysis: `${market.symbol} ${market.timeframe}: ${trendText}. Latest=${latest}, SMA20=${sma}, avg volatility=${market.avg_volatility}.`,
-    reasoning: 'Local rule-based analysis is used because no usable AI key is configured yet.',
-    stop_loss_price: sl ? round2(sl) : null,
-    take_profit_1_price: tp1 ? round2(tp1) : null,
-    take_profit_2_price: tp2 ? round2(tp2) : null,
-    take_profit_3_price: tp3 ? round2(tp3) : null,
-  }
-}
-
 // ============ AI Signal (DeepSeek/GPT) ============
 async function maybeAiSignal(db, config, market) {
   if (!config || !config.api_key_encrypted) return aiFailureHold(market, 'missing_ai_configuration_or_key')
