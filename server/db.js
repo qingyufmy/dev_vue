@@ -23,6 +23,7 @@ function getDBConfig() {
       queueLimit: 0,
       charset: 'utf8mb4',
       dateStrings: true,
+      connectTimeout: 60000,
     }
   }
   return _dbConfig
