@@ -5,13 +5,15 @@ import os
 import json
 import time
 import threading
+import urllib.request
 # MT5 broker time is UTC+3
 from datetime import datetime, timezone, timedelta
 _MT5_TZ = timezone(timedelta(hours=3))
 
+MAX_LOG_LINES = 500  # 日志最大行数，防止内存溢出
+
 def _mt5_time(ts):
-    """Convert MT5 timestamp to readable string.
-    MT5 tick.time is already in broker time (UTC+3), so utcfromtimestamp gives correct display."""
+    """Convert MT5 timestamp to readable string."""
     if not ts:
         return ''
     return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
@@ -25,6 +27,15 @@ except ImportError:
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 
+# System tray support
+HAS_TRAY = False
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    HAS_TRAY = True
+except ImportError:
+    pass
+
 # ===== Config =====
 SERVER_URL = "http://127.0.0.1:3000"
 TOKEN = ""
@@ -34,6 +45,7 @@ CONFIG_FILE = ""
 try:
     exe_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
     config_path = os.path.join(exe_dir, "config.json")
+    CONFIG_FILE = config_path
     if os.path.exists(config_path):
         with open(config_path, "r") as cf:
             cfg = json.loads(cf.read())
@@ -54,6 +66,16 @@ while i < len(sys.argv):
     else:
         i += 1
 
+
+def _create_tray_icon():
+    """Create a simple gold circle icon for system tray."""
+    img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([4, 4, 60, 60], fill=(234, 179, 8, 255), outline=(200, 150, 0, 255), width=2)
+    draw.text((20, 18), "Au", fill=(15, 23, 42, 255))
+    return img
+
+
 class AurumBridge:
     def __init__(self):
         self.root = tk.Tk()
@@ -65,10 +87,14 @@ class AurumBridge:
         self.mt5 = None
         self.running = False
         self.bridge_thread = None
-        self._trade_enabled = False  # Default: trading OFF
+        self._trade_enabled = False
+        self._ws = None
+        self._tray_icon = None
+        self._is_minimized_to_tray = False
 
         self._build_ui()
         self._check_mt5()
+        self._init_tray()
 
     def _build_ui(self):
         bg = "#0f172a"
@@ -76,8 +102,6 @@ class AurumBridge:
         accent = "#3b82f6"
         text = "#e2e8f0"
         muted = "#94a3b8"
-        green = "#22c55e"
-        red = "#ef4444"
 
         # Title
         tk.Label(self.root, text="⚡ AURUM MT5 Bridge", font=("Segoe UI", 16, "bold"),
@@ -168,6 +192,113 @@ class AurumBridge:
         tk.Label(self.root, text="AURUM AI · wall-street-skill.com", font=("Segoe UI", 8),
                  bg=bg, fg="#475569").pack(pady=(0, 8))
 
+    # ============ System Tray ============
+
+    def _init_tray(self):
+        if not HAS_TRAY:
+            return
+        icon_img = _create_tray_icon()
+        menu = pystray.Menu(
+            pystray.MenuItem("打开界面", self._tray_show, default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("启动桥接", self._tray_start_bridge),
+            pystray.MenuItem("关闭桥接", self._tray_stop_bridge),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("更新 Token", self._tray_update_token),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("退出", self._tray_quit),
+        )
+        self._tray_icon = pystray.Icon("AURUM Bridge", icon_img, "AURUM MT5 Bridge", menu)
+
+    def _tray_show(self, icon=None, item=None):
+        """Restore window from tray."""
+        self.root.after(0, self._restore_from_tray)
+
+    def _restore_from_tray(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        self._is_minimized_to_tray = False
+
+    def _tray_start_bridge(self, icon=None, item=None):
+        if not self.running:
+            self.root.after(0, self._toggle_bridge)
+
+    def _tray_stop_bridge(self, icon=None, item=None):
+        if self.running:
+            self.root.after(0, self._toggle_bridge)
+
+    def _tray_update_token(self, icon=None, item=None):
+        """Download fresh config.json from server and reload token."""
+        self.root.after(0, self._do_update_token)
+
+    def _do_update_token(self):
+        """Read server URL from config, download new config, reload token."""
+        server = self.server_var.get().strip().rstrip("/")
+        if not server:
+            toast_msg = "服务器地址为空"
+            self._log(toast_msg)
+            messagebox.showwarning("更新失败", toast_msg)
+            return
+
+        config_url = f"{server}/ai/bridge/config"
+        self._log(f"正在从服务器获取配置: {config_url}")
+        try:
+            req = urllib.request.Request(config_url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                new_token = data.get("token", "")
+                new_server = data.get("server_url", server)
+                if not new_token:
+                    self._log("服务器返回的配置中没有 token")
+                    messagebox.showwarning("更新失败", "服务器返回的配置中没有 token")
+                    return
+
+                # Save to config.json
+                save_path = CONFIG_FILE or os.path.join(
+                    os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)),
+                    "config.json"
+                )
+                config_data = {"server_url": new_server, "token": new_token}
+                with open(save_path, "w") as f:
+                    json.dump(config_data, f, indent=2)
+
+                # Update UI
+                self.server_var.set(new_server)
+                self.token_var.set(new_token)
+                self._log(f"Token 已更新，配置已保存到 {save_path}")
+                messagebox.showsuccess("更新成功", f"Token 已更新！\n\n配置已保存到:\n{save_path}")
+        except Exception as e:
+            self._log(f"更新 Token 失败: {e}")
+            messagebox.showerror("更新失败", f"无法获取配置:\n{e}")
+
+    def _tray_quit(self, icon=None, item=None):
+        """Quit from tray."""
+        self.root.after(0, self._do_quit)
+
+    def _do_quit(self):
+        self.running = False
+        # Disconnect WebSocket
+        try:
+            if self._ws and self._ws.connected:
+                self._ws.send(json.dumps({"type": "disconnect", "reason": "user_close"}))
+                self._ws.close()
+        except Exception:
+            pass
+        if self.mt5:
+            try:
+                self.mt5.shutdown()
+            except:
+                pass
+        if self._tray_icon:
+            try:
+                self._tray_icon.stop()
+            except:
+                pass
+        self.root.destroy()
+
+    # ============ Utilities ============
+
     def _copy(self, text):
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
@@ -181,6 +312,10 @@ class AurumBridge:
         self.log_area.config(state="normal")
         ts = time.strftime("%H:%M:%S")
         self.log_area.insert("end", f"[{ts}] {msg}\n")
+        # 限制日志行数，防止内存溢出
+        line_count = int(self.log_area.index("end-1c").split(".")[0])
+        if line_count > MAX_LOG_LINES:
+            self.log_area.delete("1.0", f"{line_count - MAX_LOG_LINES}.0")
         self.log_area.see("end")
         self.log_area.config(state="disabled")
 
@@ -226,7 +361,6 @@ class AurumBridge:
         except Exception as e:
             self._log(f"安装失败: {e}")
 
-
     def _toggle_bridge(self):
         if self.running:
             if not messagebox.askyesno("确认停止", "确定要断开 MT5 桥接连接吗？\n\n停止后将无法自动执行交易信号。",
@@ -236,6 +370,7 @@ class AurumBridge:
             self.start_btn.config(text="▶  启动桥接", bg="#3b82f6")
             self._set_status("已停止", "#ef4444")
             self._log("桥接已停止")
+            self._update_tray_state()
         else:
             server = self.server_var.get().strip()
             token = self.token_var.get().strip()
@@ -252,45 +387,52 @@ class AurumBridge:
             self.running = True
             self.start_btn.config(text="■  停止桥接", bg="#ef4444")
             self._set_status("连接中...", "#f59e0b")
+            self._log("启动桥接...")
+            self._update_tray_state()
             self.bridge_thread = threading.Thread(target=self._bridge_loop, daemon=True)
             self.bridge_thread.start()
 
+    def _update_tray_state(self):
+        """Update tray icon tooltip to reflect current state."""
+        if not self._tray_icon:
+            return
+        state = "运行中" if self.running else "已停止"
+        try:
+            self._tray_icon.title = f"AURUM Bridge - {state}"
+        except:
+            pass
+
     def _resolve_symbol(self, symbol):
-        """Find actual MT5 symbol name (matches old bridge resolve_live_symbol)"""
+        """Find actual MT5 symbol name."""
         requested = str(symbol or "").strip()
         if not requested:
             raise RuntimeError("Symbol is required")
         symbols = self.mt5.symbols_get()
         if symbols is None:
-            raise RuntimeError(f"MT5 symbols_get failed")
-        # Exact match
+            raise RuntimeError("MT5 symbols_get failed")
         for item in symbols:
             if item.name == requested:
                 return item.name
-        # Case-insensitive match
         requested_upper = requested.upper()
         for item in symbols:
             if item.name.upper() == requested_upper:
                 return item.name
-        # Fallback variants (XAUUSD -> XAUUSD.s, XAUUSDm, XAUUSD.c, etc.)
         fallbacks = [requested + ".s", requested + "m", requested + ".c", requested + "_", requested + ".micro"]
         for fb in fallbacks:
             for item in symbols:
                 if item.name.upper() == fb.upper():
                     return item.name
-        # Partial match (XAUUSD matches XAUUSD.s)
         for item in symbols:
             if item.name.upper().startswith(requested_upper + ".") or item.name.upper().startswith(requested_upper + "_"):
                 return item.name
         raise RuntimeError(f"Symbol not found in MT5: {requested}")
 
     def _get_filling_mode(self, symbol):
-        """Detect the correct filling mode for a symbol (same logic as mt5_bridge.py)"""
+        """Detect the correct filling mode for a symbol."""
         info = self.mt5.symbol_info(symbol)
         if not info:
             return self.mt5.ORDER_FILLING_IOC
         filling_mode = int(getattr(info, "filling_mode", 0) or 0)
-        # bit 1 = FOK, bit 2 = IOC
         candidates = []
         if filling_mode & 1:
             candidates.append(self.mt5.ORDER_FILLING_FOK)
@@ -298,7 +440,6 @@ class AurumBridge:
             candidates.append(self.mt5.ORDER_FILLING_IOC)
         if not candidates:
             candidates = [self.mt5.ORDER_FILLING_RETURN, self.mt5.ORDER_FILLING_FOK, self.mt5.ORDER_FILLING_IOC]
-        # Prefer FOK, then IOC, then RETURN
         if self.mt5.ORDER_FILLING_FOK in candidates:
             return self.mt5.ORDER_FILLING_FOK
         return candidates[0]
@@ -399,7 +540,8 @@ class AurumBridge:
                     for r in rates:
                         t = _mt5_time(int(r[0]))
                         out.append({"time": t, "open": float(r[1]), "high": float(r[2]),
-                                    "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]), "spread": int(r[6]) if len(r) > 6 else 0})
+                                    "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]),
+                                    "spread": int(r[6]) if len(r) > 6 else 0})
                     return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe", "M30"),
                             "count": len(out), "rates": out, "source": "mt5"}
                 return {"status": "success", "symbol": symbol, "rates": [], "source": "mt5"}
@@ -433,9 +575,7 @@ class AurumBridge:
                     payload = []
                     for p in positions:
                         d = p._asdict()
-                        sym_info = self.mt5.symbol_info(d["symbol"])
-                        time_val = d.get("time", 0)
-                        time_str = _mt5_time(time_val)
+                        time_str = _mt5_time(d.get("time", 0))
                         payload.append({
                             "ticket": d["ticket"], "symbol": d["symbol"],
                             "type": "buy" if d["type"] == 0 else "sell",
@@ -443,8 +583,7 @@ class AurumBridge:
                             "price_current": d["price_current"],
                             "profit": d["profit"], "sl": d["sl"], "tp": d["tp"],
                             "swap": d["swap"], "magic": d["magic"], "comment": d["comment"],
-                            "time": time_str,
-                            "source": "mt5",
+                            "time": time_str, "source": "mt5",
                         })
                     return {"status": "success", "positions": payload, "count": len(payload), "source": "mt5"}
                 return {"status": "success", "positions": [], "count": 0, "source": "mt5"}
@@ -505,12 +644,9 @@ class AurumBridge:
                 import math
                 page = params.get("page", 1)
                 page_size = params.get("page_size", 20)
-                from datetime import timedelta
                 deposit = 0.0
                 withdrawal = 0.0
                 credit = 0.0
-                # Include a small future buffer so newly closed trades appear
-                # immediately in history after execution (matches original).
                 date_to = datetime.utcnow() + timedelta(days=1)
                 date_from = date_to - timedelta(days=31)
                 deals = self.mt5.history_deals_get(date_from, date_to)
@@ -567,26 +703,17 @@ class AurumBridge:
                             profit_points = round((float(entry_price) - float(exit_price)) / point, 1)
                     entry_order = (entry_deal or {}).get("order") or position_id
                     rows.append({
-                        "ticket": entry_order,
-                        "deal_ticket": d.get("ticket"),
-                        "order": entry_order,
-                        "close_order": d.get("order"),
-                        "position_id": position_id,
-                        "symbol": symbol,
-                        "type": direction,
-                        "volume": d.get("volume"),
-                        "entry_price": entry_price,
-                        "exit_price": exit_price,
-                        "price": exit_price,
-                        "profit": d.get("profit"),
-                        "swap": d.get("swap"),
-                        "commission": d.get("commission"),
+                        "ticket": entry_order, "deal_ticket": d.get("ticket"),
+                        "order": entry_order, "close_order": d.get("order"),
+                        "position_id": position_id, "symbol": symbol,
+                        "type": direction, "volume": d.get("volume"),
+                        "entry_price": entry_price, "exit_price": exit_price,
+                        "price": exit_price, "profit": d.get("profit"),
+                        "swap": d.get("swap"), "commission": d.get("commission"),
                         "profit_points": profit_points,
                         "entry_time": _mt5_time((entry_deal or {}).get("time")),
                         "close_time": _mt5_time(d.get("time")),
                         "time": _mt5_time(d.get("time")),
-                        "time_local": datetime.fromtimestamp(d.get("time")).isoformat(timespec="seconds") if d.get("time") else None,
-                        "entry_time_local": datetime.fromtimestamp((entry_deal or {}).get("time")).isoformat(timespec="seconds") if (entry_deal or {}).get("time") else None,
                         "comment": d.get("comment"),
                     })
                 rows.sort(key=lambda row: row.get("close_time") or row.get("entry_time") or "", reverse=True)
@@ -618,10 +745,8 @@ class AurumBridge:
                         "total_volume": round(sum(float(r.get("volume") or 0) for r in rows), 2),
                     },
                     "pagination": {
-                        "current_page": page,
-                        "page_size": page_size,
-                        "total_count": total,
-                        "total_pages": max(math.ceil(total / page_size), 1),
+                        "current_page": page, "page_size": page_size,
+                        "total_count": total, "total_pages": max(math.ceil(total / page_size), 1),
                     },
                     "source": "mt5",
                 }
@@ -630,8 +755,7 @@ class AurumBridge:
                 acc = self.mt5.account_info()
                 terminal = self.mt5.terminal_info()
                 return {
-                    "status": "success",
-                    "mt5_connected": True,
+                    "status": "success", "mt5_connected": True,
                     "account": {"login": acc.login, "server": acc.server, "balance": acc.balance} if acc else None,
                     "terminal": {"build": terminal.build, "connected": terminal.connected, "trade_allowed": terminal.trade_allowed} if terminal else None,
                 }
@@ -652,7 +776,10 @@ class AurumBridge:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    # ============ Bridge Loop with Auto-Reconnect ============
+
     def _bridge_loop(self):
+        """Main bridge loop with auto-reconnect (5s interval, 5min timeout)."""
         # Initialize MT5
         if not self.mt5:
             try:
@@ -683,15 +810,45 @@ class AurumBridge:
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token_var.get()}"
         self.root.after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
-        # Single connection, no auto retry. Disconnect = stop, user clicks to reconnect.
-        try:
-            ws = websocket.create_connection(ws_url, timeout=10,
-                header=["Origin: http://localhost"])
-            self.root.after(0, self._log, "WebSocket 已连接")
-            self._ws = ws
+        MAX_RETRY_SECONDS = 300  # 5 minutes
+        RETRY_INTERVAL = 5       # 5 seconds
+
+        while self.running:
+            retry_start = time.time()
+            connected = False
+
+            # Try to connect (with retries)
+            while self.running:
+                elapsed = time.time() - retry_start
+                if elapsed >= MAX_RETRY_SECONDS:
+                    self.root.after(0, self._log, f"连接失败：已重试 {MAX_RETRY_SECONDS // 60} 分钟，停止自动重试")
+                    self.root.after(0, self._set_status, "连接失败", "#ef4444", "")
+                    self.root.after(0, self._toggle_bridge)
+                    if self.mt5:
+                        self.mt5.shutdown()
+                    return
+
+                try:
+                    ws = websocket.create_connection(ws_url, timeout=10,
+                        header=["Origin: http://localhost"])
+                    self._ws = ws
+                    connected = True
+                    self.root.after(0, self._log, "WebSocket 已连接")
+                    break
+                except Exception as e:
+                    retry_count = int(elapsed // RETRY_INTERVAL) + 1
+                    self.root.after(0, self._log, f"连接失败 (第{retry_count}次): {e}，{RETRY_INTERVAL}秒后重试...")
+                    self.root.after(0, self._set_status, f"重连中... ({retry_count})", "#f59e0b", "")
+                    time.sleep(RETRY_INTERVAL)
+
+            if not connected or not self.running:
+                break
+
+            # Connected — run bridge loop
             self._resolved_symbol = self._resolve_symbol("XAUUSD") if self.mt5 else "XAUUSD"
             last_hb = 0
             last_data_push = 0
+            disconnected = False
 
             while self.running:
                 now = time.time()
@@ -724,17 +881,13 @@ class AurumBridge:
                             },
                             "positions": [
                                 {
-                                    "ticket": p.ticket,
-                                    "symbol": p.symbol,
+                                    "ticket": p.ticket, "symbol": p.symbol,
                                     "type": "buy" if p.type == 0 else "sell",
-                                    "volume": p.volume,
-                                    "open_price": p.price_open,
+                                    "volume": p.volume, "open_price": p.price_open,
                                     "current_price": p.price_current,
                                     "profit": round(p.profit, 2),
-                                    "sl": p.sl,
-                                    "tp": p.tp,
-                                    "swap": p.swap,
-                                    "commission": getattr(p, 'commission', 0),
+                                    "sl": p.sl, "tp": p.tp,
+                                    "swap": p.swap, "commission": getattr(p, 'commission', 0),
                                 }
                                 for p in positions
                             ],
@@ -779,52 +932,53 @@ class AurumBridge:
                     pass
                 except websocket.WebSocketConnectionClosedException:
                     self.root.after(0, self._log, "WebSocket 连接已断开")
+                    disconnected = True
+                    break
+                except Exception as e:
+                    self.root.after(0, self._log, f"接收错误: {e}")
+                    disconnected = True
                     break
 
-        except (websocket.WebSocketException, ConnectionRefusedError, OSError) as e:
-            self.root.after(0, self._log, f"WebSocket 连接失败: {e}")
-        except Exception as e:
-            self.root.after(0, self._log, f"错误: {e}")
-        finally:
-            # Clean disconnect - no retry
+            # Connection lost — clean up
             try:
-                if self._ws and self._ws.connected:
-                    self._ws.send(json.dumps({"type": "disconnect", "reason": "client_shutdown"}))
-                    self._ws.close()
+                if ws and ws.connected:
+                    ws.send(json.dumps({"type": "disconnect", "reason": "client_reconnect"}))
+                    ws.close()
             except Exception:
                 pass
             self._ws = None
-            if self.running:
-                self.root.after(0, self._log, "桥接已断开，请手动重新连接")
-                self.root.after(0, self._set_status, "MT5桥接-已断开", "#ef4444", "")
-                self.root.after(0, self._toggle_bridge)
+
+            if not self.running:
+                break
+
+            # Auto-reconnect
+            self.root.after(0, self._log, f"连接断开，{RETRY_INTERVAL}秒后自动重连...")
+            self.root.after(0, self._set_status, "重连中...", "#f59e0b", "")
+            time.sleep(RETRY_INTERVAL)
 
         if self.mt5:
             self.mt5.shutdown()
         self.root.after(0, self._log, "MT5 已断开")
 
+    # ============ Window Lifecycle ============
+
+    def _on_close(self):
+        """Minimize to tray instead of closing (if tray is available)."""
+        if HAS_TRAY and self._tray_icon:
+            self.root.withdraw()
+            self._is_minimized_to_tray = True
+            self._log("已最小化到系统托盘")
+            # Start tray icon in background thread
+            if not hasattr(self, '_tray_thread') or not self._tray_thread.is_alive():
+                self._tray_thread = threading.Thread(target=self._tray_icon.run, daemon=True)
+                self._tray_thread.start()
+        else:
+            self._do_quit()
+
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.mainloop()
 
-    def _on_close(self):
-        if self.running:
-            if not messagebox.askyesno("确认退出", "桥接正在运行中，确定要关闭吗？\n\n关闭后 MT5 连接将断开，自动交易将停止。",
-                                       icon="warning"):
-                return
-            self.running = False
-            # Send disconnect to server
-            try:
-                if hasattr(self, "_ws") and self._ws and self._ws.connected:
-                    self._ws.send(json.dumps({"type": "disconnect", "reason": "user_close"}))
-            except Exception:
-                pass
-        if self.mt5:
-            try:
-                self.mt5.shutdown()
-            except:
-                pass
-        self.root.destroy()
 
 if __name__ == "__main__":
     app = AurumBridge()
