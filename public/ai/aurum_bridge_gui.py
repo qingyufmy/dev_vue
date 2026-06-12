@@ -74,6 +74,14 @@ class AurumBridge:
         self.root.geometry("520x580")
         self.root.resizable(False, False)
         self.root.configure(bg="#0f172a")
+        # Set window icon
+        try:
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(
+                sys.executable if getattr(sys, 'frozen', False) else __file__)), 'aurum_icon.ico')
+            if os.path.exists(icon_path):
+                self.root.iconbitmap(icon_path)
+        except:
+            pass
 
         self.mt5 = None
         self.running = False
@@ -87,6 +95,7 @@ class AurumBridge:
         self._check_mt5()
         if HAS_TRAY:
             self._init_tray()
+            self._show_tray()  # Show tray icon immediately on start
         self.root.mainloop()
 
     # ============ UI ============
@@ -153,7 +162,6 @@ class AurumBridge:
 
     def _init_tray(self):
         """Create hidden message-only window for tray icon."""
-        # Use a proper wndproc callback to handle tray click messages
         hinst = win32api.GetModuleHandle(None)
         message_map = {
             win32con.WM_COMMAND: self._on_tray_command,
@@ -166,20 +174,40 @@ class AurumBridge:
         try:
             win32gui.RegisterClass(wc)
         except win32gui.error:
-            pass  # already registered
+            pass
         self._tray_hwnd = win32gui.CreateWindow(
             "AurumBridgeTray", "AurumBridgeTray", 0, 0, 0, 0, 0,
             0, 0, hinst, None)
+        # Load icon from .ico file
+        self._hicon = self._load_icon()
+
+    def _load_icon(self):
+        """Load the .ico file for tray and window."""
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(
+            sys.executable if getattr(sys, 'frozen', False) else __file__)), 'aurum_icon.ico')
+        if os.path.exists(icon_path):
+            # Load large icon for window, small for tray
+            large, small = win32gui.ExtractIconEx(icon_path, 0, 1)
+            if large:
+                win32gui.DestroyIcon(large[0])  # we only need the small one
+            return small[0] if small else win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
+        return win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
 
     def _show_tray(self):
         """Add icon to system tray."""
-        hicon = win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
+        hicon = getattr(self, '_hicon', None) or win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
         self._notify_data = (
             self._tray_hwnd, 0,
             win32gui.NIF_ICON | win32gui.NIF_TIP | win32gui.NIF_MESSAGE,
             self.TRAY_WM, hicon, "AURUM MT5 Bridge"
         )
         win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data)
+        # Also set the window icon
+        try:
+            win32gui.SendMessage(self.root.winfo_id(), win32con.WM_SETICON, win32con.ICON_SMALL, hicon)
+            win32gui.SendMessage(self.root.winfo_id(), win32con.WM_SETICON, win32con.ICON_BIG, hicon)
+        except:
+            pass
 
     def _hide_tray(self):
         """Remove icon from system tray."""
