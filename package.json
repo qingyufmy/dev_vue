@@ -1,9 +1,10 @@
 {
   "name": "wall-street-skill",
-  "version": "1.0.0",
+  "version": "1.7.1",
   "type": "module",
   "scripts": {
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -12,6 +13,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.5-lts.1",
     "mysql2": "^3.22.5",
+    "nodemailer": "^8.0.10",
     "uuid": "^10.0.0",
     "ws": "^8.21.0"
   }

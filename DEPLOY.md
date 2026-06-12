@@ -36,11 +36,11 @@ EXIT;
 ## 四、安装依赖 & 配置
 
 ```bash
-cd /www1/wwwroot/aurum-ai/server
+cd /www1/wwwroot/aurum-ai
 npm install --production
 
 # 创建环境变量
-cp .env.example .env
+cp server/.env.example server/.env
 ```
 
 编辑 `.env` 文件：
@@ -66,7 +66,7 @@ PORT=3000
 
 1. 宝塔面板 → **网站** → **Node项目** → **添加Node项目**
 2. 填写：
-   - **项目目录**: `/www1/wwwroot/aurum-ai/server`
+   - **项目目录**: `/www1/wwwroot/aurum-ai`
    - **启动文件**: `index.js`
    - **Node版本**: 选已安装的 18/20
    - **端口**: `3000`
@@ -125,7 +125,6 @@ location /aurum-api/bridge/ws {
 ```bash
 cd /www1/wwwroot/aurum-ai
 git pull origin main
-cd server
 npm install --production
 # 在宝塔 Node 项目面板点击「重启」
 ```
