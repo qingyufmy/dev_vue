@@ -45,10 +45,10 @@ async function getAdminUserId() {
   return adminUserId
 }
 
-// Cache admin userId at startup
-getAdminUserId().catch(() => {})
 
 export function initBridgeWS(server) {
+  // Cache admin userId at startup
+  getAdminUserId().catch(() => {})
   wss = new WebSocketServer({ noServer: true })
 
   server.on('upgrade', (req, socket, head) => {
