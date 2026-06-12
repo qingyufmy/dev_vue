@@ -549,11 +549,14 @@ function handleBridgeData(msg) {
     setText("accountBalance", fmt(msg.account.balance));
     setText("accountEquity", fmt(msg.account.equity));
     setText("accountMargin", fmt(msg.account.margin));
-    setText("accountFreeMargin", fmt(msg.account.free_margin));
+    setText("accountMarginFree", fmt(msg.account.free_margin));
     setText("accountFloatPnl", fmt(msg.account.profit));
     setText("tradeAccountBalance", fmt(msg.account.balance));
     setText("tradeAccountEquity", fmt(msg.account.equity));
+    setText("tradeAccountProfit", fmt(msg.account.profit));
+    setText("tradeAccountFreeMargin", fmt(msg.account.free_margin));
     updatePnlStyle("accountFloatPnl", msg.account.profit);
+    updatePnlStyle("tradeAccountProfit", msg.account.profit);
   }
   if (msg.positions) {
     for (const pos of msg.positions) {
