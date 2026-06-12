@@ -660,8 +660,10 @@ function handleHeartbeat(msg) {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
   }
   if (!isLive && !usingFallback) setBadge("tradeMode", "请先启动桥接", "neutral");
+  const wasFallback = state._lastUsingFallback;
   state._lastGatewayLive = isLive;
-  if (isLive !== wasLive) {
+  state._lastUsingFallback = usingFallback;
+  if (isLive !== wasLive || usingFallback !== wasFallback) {
     if (isLive) { refreshAll().catch(() => {}); }
     else if (!usingFallback) {
       state.positions = [];
