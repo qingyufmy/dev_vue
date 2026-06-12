@@ -76,8 +76,11 @@ class AurumBridge:
         self.root.configure(bg="#0f172a")
         # Set window icon
         try:
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(
-                sys.executable if getattr(sys, 'frozen', False) else __file__)), 'aurum_icon.ico')
+            if getattr(sys, 'frozen', False):
+                base = sys._MEIPASS
+            else:
+                base = os.path.dirname(os.path.abspath(__file__))
+            icon_path = os.path.join(base, 'aurum_icon.ico')
             if os.path.exists(icon_path):
                 self.root.iconbitmap(icon_path)
         except:
@@ -183,13 +186,15 @@ class AurumBridge:
 
     def _load_icon(self):
         """Load the .ico file for tray and window."""
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(
-            sys.executable if getattr(sys, 'frozen', False) else __file__)), 'aurum_icon.ico')
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(base, 'aurum_icon.ico')
         if os.path.exists(icon_path):
-            # Load large icon for window, small for tray
             large, small = win32gui.ExtractIconEx(icon_path, 0, 1)
             if large:
-                win32gui.DestroyIcon(large[0])  # we only need the small one
+                win32gui.DestroyIcon(large[0])
             return small[0] if small else win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
         return win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
 
