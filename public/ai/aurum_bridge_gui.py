@@ -70,10 +70,16 @@ IMAGE_ICON = 1
 LR_LOADFROMFILE = 0x00000010
 LR_DEFAULTSIZE = 0x00000040
 
+def _get_base_dir():
+    if getattr(sys, 'frozen', False):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+
+def _get_ico_path():
+    return os.path.join(_get_base_dir(), 'aurum_icon.ico')
+
 def _load_ico_file():
-    """Load .ico file using LoadImageW (works in frozen EXE)."""
-    base = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-    ico = os.path.join(base, 'aurum_icon.ico')
+    ico = _get_ico_path()
     if os.path.exists(ico):
         h = user32.LoadImageW(None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
         if h:
