@@ -7,6 +7,7 @@ import time
 import threading
 import ctypes
 import ctypes.wintypes
+import traceback as _tb
 from datetime import datetime, timezone, timedelta
 
 MAX_LOG_LINES = 500
@@ -283,52 +284,94 @@ class AurumBridge:
             self._nid.szTip = tip[:127]
             shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(self._nid))
 
+    def _tray_log(self, msg):
+        """Write tray debug info to file (GUI log may be unavailable on crash)."""
+        try:
+            log_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'tray_debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write('[%s] %s\n' % (time.strftime('%H:%M:%S'), msg))
+        except:
+            pass
+
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
-        if msg == TRAY_WM:
-            if lparam == WM_LBUTTONUP:
-                self._safe_after(0, self._restore_from_tray)
-            elif lparam == WM_RBUTTONUP:
-                self._safe_after(0, self._show_context_menu)
-            return 0
-        elif msg == WM_COMMAND:
-            cmd = wparam & 0xFFFF
-            if cmd == MENU_OPEN: self._safe_after(0, self._restore_from_tray)
-            elif cmd == MENU_START:
-                if not self.running: self._safe_after(0, self._toggle_bridge)
-            elif cmd == MENU_STOP:
-                if self.running: self._safe_after(0, self._toggle_bridge)
-            elif cmd == MENU_QUIT: self._safe_after(0, self._do_quit)
-            return 0
-        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+        try:
+            self._tray_log('_wnd_proc msg=%d w=%d l=%d closing=%s' % (msg, wparam, lparam, self._closing))
+            if msg == TRAY_WM:
+                if lparam == WM_LBUTTONUP:
+                    self._tray_log('LEFT_CLICK -> _restore_from_tray')
+                    self.root.after(100, self._restore_from_tray)
+                elif lparam == WM_RBUTTONUP:
+                    self._tray_log('RIGHT_CLICK -> _show_context_menu')
+                    self.root.after(0, self._show_context_menu)
+                return 0
+            elif msg == WM_COMMAND:
+                cmd = wparam & 0xFFFF
+                self._tray_log('WM_COMMAND cmd=%d' % cmd)
+                if cmd == MENU_OPEN:
+                    self.root.after(100, self._restore_from_tray)
+                elif cmd == MENU_START:
+                    if not self.running:
+                        self.root.after(0, self._toggle_bridge)
+                elif cmd == MENU_STOP:
+                    if self.running:
+                        self.root.after(0, self._toggle_bridge)
+                elif cmd == MENU_QUIT:
+                    self.root.after(0, self._do_quit)
+                return 0
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+        except Exception as e:
+            self._tray_log('_wnd_proc EXCEPTION: %s\n%s' % (e, _tb.format_exc()))
+            try:
+                return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+            except:
+                return 0
 
     def _show_context_menu(self):
-        if not self._tray_hwnd:
-            return
-        menu = user32.CreatePopupMenu()
-        user32.AppendMenuW(menu, MF_STRING, MENU_OPEN, "打开界面")
-        user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
-        s_flag = MF_GRAYED if self.running else MF_STRING
-        p_flag = MF_STRING if self.running else MF_GRAYED
-        user32.AppendMenuW(menu, s_flag, MENU_START, "启动桥接")
-        user32.AppendMenuW(menu, p_flag, MENU_STOP, "关闭桥接")
-        user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
-        user32.AppendMenuW(menu, MF_STRING, MENU_QUIT, "退出")
-        pt = POINT()
-        user32.GetCursorPos(ctypes.byref(pt))
-        user32.SetForegroundWindow(self._tray_hwnd)
-        user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, self._tray_hwnd, None)
-        user32.PostMessageW(self._tray_hwnd, 0, 0, 0)
-        user32.DestroyMenu(menu)
+        try:
+            self._tray_log('_show_context_menu called')
+            if not self._tray_hwnd:
+                return
+            menu = user32.CreatePopupMenu()
+            user32.AppendMenuW(menu, MF_STRING, MENU_OPEN, "打开界面")
+            user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
+            s_flag = MF_GRAYED if self.running else MF_STRING
+            p_flag = MF_STRING if self.running else MF_GRAYED
+            user32.AppendMenuW(menu, s_flag, MENU_START, "启动桥接")
+            user32.AppendMenuW(menu, p_flag, MENU_STOP, "关闭桥接")
+            user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
+            user32.AppendMenuW(menu, MF_STRING, MENU_QUIT, "退出")
+            pt = POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            user32.SetForegroundWindow(self._tray_hwnd)
+            user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, self._tray_hwnd, None)
+            user32.PostMessageW(self._tray_hwnd, 0, 0, 0)
+            user32.DestroyMenu(menu)
+        except Exception as e:
+            self._tray_log('_show_context_menu EXCEPTION: %s' % e)
+            try:
+                self._log('Right-click menu error: %s' % e)
+            except:
+                pass
 
     def _restore_from_tray(self):
-        if self._closing:
-            return
-        self._hide_tray()
-        self._is_minimized_to_tray = False
-        self._safe_after(50, self._do_restore)
+        try:
+            self._tray_log('_restore_from_tray called, closing=%s' % self._closing)
+            if self._closing:
+                return
+            self._hide_tray()
+            self._is_minimized_to_tray = False
+            self._tray_log('_restore_from_tray: scheduling _do_restore')
+            self.root.after(50, self._do_restore)
+        except Exception as e:
+            self._tray_log('_restore_from_tray EXCEPTION: %s' % e)
+            try:
+                self._log('Restore failed: %s' % e)
+            except:
+                pass
 
     def _do_restore(self):
         try:
+            self._tray_log('_do_restore called')
             self.root.deiconify()
             self.root.lift()
             self.root.focus_force()
@@ -338,6 +381,7 @@ class AurumBridge:
     # ============ Window Lifecycle ============
 
     def _on_close(self):
+        self._tray_log('_on_close called')
         if self._closing:
             return
         try:
