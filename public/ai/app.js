@@ -650,13 +650,20 @@ async function _maybeRefreshSignal() {
 // Handle heartbeat reply — MT5 connection status
 function handleHeartbeat(msg) {
   const isLive = msg.mt5_connected && msg.mt5_alive;
+  const usingFallback = msg.using_fallback;
   const wasLive = state._lastGatewayLive;
-  setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
-  if (!isLive) setBadge("tradeMode", "请先启动桥接", "neutral");
+  state._usingFallback = usingFallback;
+
+  if (usingFallback) {
+    setBadge("gatewayMode", "观摩模式-管理员账户", "warning");
+  } else {
+    setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+  }
+  if (!isLive && !usingFallback) setBadge("tradeMode", "请先启动桥接", "neutral");
   state._lastGatewayLive = isLive;
   if (isLive !== wasLive) {
     if (isLive) { refreshAll().catch(() => {}); }
-    else {
+    else if (!usingFallback) {
       state.positions = [];
       renderPositionRows();
     }
@@ -804,10 +811,16 @@ async function loadStatus() {
   const health = await wsApi("health");
   const gateway = health.gateway || {};
   const isLive = gateway.mode === "live";
+  const usingFallback = gateway.using_fallback;
   const wasLive = state._lastGatewayLive;
+  state._usingFallback = usingFallback;
 
   // Gateway badge — bridge connection status
-  setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+  if (usingFallback) {
+    setBadge("gatewayMode", "观摩模式-管理员账户", "warning");
+  } else {
+    setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+  }
 
   // Reload symbols when bridge just came online
   if (isLive && !wasLive) {

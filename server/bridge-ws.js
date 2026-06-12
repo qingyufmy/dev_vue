@@ -33,9 +33,20 @@ const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 const bridges = new Map()       // userId -> { ws, lastSeen }
 const browsers = new Map()      // userId -> Set<ws>
 const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
+let adminUserId = null          // cached admin userId for fallback
 
 let cmdCounter = 0
 let wss = null
+
+async function getAdminUserId() {
+  if (adminUserId) return adminUserId
+  const row = await queryOne('SELECT id FROM users WHERE role = ? LIMIT 1', ['admin'])
+  adminUserId = row?.id || null
+  return adminUserId
+}
+
+// Cache admin userId at startup
+getAdminUserId().catch(() => {})
 
 export function initBridgeWS(server) {
   wss = new WebSocketServer({ noServer: true })
@@ -81,8 +92,15 @@ function handleBrowser(ws, url) {
     try { msg = JSON.parse(data) } catch { return }
 
     if (msg.type === 'hb') {
-      // Heartbeat — reply with MT5 connection status
-      const bridge = bridges.get(userId)
+      // Heartbeat — reply with MT5 connection status (fall back to admin bridge)
+      let bridge = bridges.get(userId)
+      let usingFallback = false
+      if (!bridge || bridge.ws.readyState !== 1) {
+        if (adminUserId) {
+          bridge = bridges.get(adminUserId)
+          usingFallback = true
+        }
+      }
       const connected = !!(bridge && bridge.ws.readyState === 1)
       const alive = connected && (Date.now() - bridge.lastSeen < 20000)
       ws.send(JSON.stringify({
@@ -90,6 +108,7 @@ function handleBrowser(ws, url) {
         seq: msg.seq,
         mt5_connected: connected,
         mt5_alive: alive,
+        using_fallback: usingFallback,
       }))
     } else if (msg.type === 'command' && msg.action) {
       handleBrowserCommand(ws, userId, msg)
@@ -172,13 +191,29 @@ function handleBridge(ws, url) {
 
 function sendToBrowsers(userId, data) {
   const set = browsers.get(userId)
-  if (!set) return
-  const json = JSON.stringify(data)
-  for (const ws of set) {
-    if (ws.readyState === 1) {
-      try { ws.send(json) } catch {}
-    } else {
-      set.delete(ws)
+  if (set) {
+    const json = JSON.stringify(data)
+    for (const ws of set) {
+      if (ws.readyState === 1) {
+        try { ws.send(json) } catch {}
+      } else {
+        set.delete(ws)
+      }
+    }
+  }
+  // If this is admin's bridge data, also forward to users without their own bridge
+  if (userId === adminUserId && data.type === 'data') {
+    const adminJson = JSON.stringify({ ...data, _source: 'admin_fallback' })
+    for (const [uid, browserSet] of browsers) {
+      if (uid === adminUserId) continue
+      if (bridges.has(uid)) continue // user has their own bridge
+      for (const ws of browserSet) {
+        if (ws.readyState === 1) {
+          try { ws.send(adminJson) } catch {}
+        } else {
+          browserSet.delete(ws)
+        }
+      }
     }
   }
 }
@@ -202,13 +237,24 @@ async function handleBrowserCommand(ws, userId, msg) {
     // Plus users: read-only, block write operations
     const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_auto_config', 'toggle_auto', 'set_quote_symbol']
     if (!isPro && writeActions.includes(action)) {
-      return reply({ status: 'error', message: 'Plus 会员仅可查看，无法执行操作' })
+      return reply({ status: 'error', message: '升级会员即可解锁交易功能' })
+    }
+
+    // Pro/Plus users without own bridge: block write operations
+    const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws.readyState === 1
+    if (!hasOwnBridge && writeActions.includes(action)) {
+      return reply({ status: 'error', message: '请先连接您的 MT5 账户' })
     }
 
     let result
     switch (action) {
       case 'health': {
-        const bridge = bridges.get(userId)
+        let bridge = bridges.get(userId)
+        let usingFallback = false
+        if (!bridge || bridge.ws.readyState !== 1) {
+          const adminId = await getAdminUserId()
+          if (adminId) { bridge = bridges.get(adminId); usingFallback = true }
+        }
         const connected = !!(bridge && bridge.ws.readyState === 1)
         const alive = connected && (Date.now() - bridge.lastSeen < 20000)
         result = {
@@ -216,7 +262,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           gateway: {
             mode: alive ? 'live' : 'mock',
             mt5_package_available: true,
-            live_trading_enabled: alive && (bridge.tradeEnabled !== false),
+            live_trading_enabled: alive && !usingFallback && (bridge.tradeEnabled !== false),
+            using_fallback: usingFallback,
           },
         }
         break
@@ -477,7 +524,16 @@ async function handleBrowserCommand(ws, userId, msg) {
 // Send command to bridge and wait for result
 export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
   return new Promise((resolve) => {
-    const bridge = bridges.get(userId)
+    let bridge = bridges.get(userId)
+    let usingFallback = false
+
+    // Fall back to admin bridge for read operations
+    const readActions = ['account', 'positions', 'rates', 'symbols', 'quote']
+    if ((!bridge || bridge.ws.readyState !== 1) && readActions.includes(action) && adminUserId) {
+      bridge = bridges.get(adminUserId)
+      usingFallback = true
+    }
+
     if (!bridge || bridge.ws.readyState !== 1) {
       resolve({ status: 'error', error: 'Bridge not connected' })
       return
