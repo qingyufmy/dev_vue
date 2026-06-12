@@ -37,6 +37,8 @@ MENU_QUIT = 1004
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 shell32 = ctypes.windll.shell32
+user32.DefWindowProcW.restype = ctypes.c_longlong
+user32.DefWindowProcW.argtypes = [ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM]
 
 class WNDCLASS(ctypes.Structure):
     _fields_ = [("style", ctypes.c_uint), ("lpfnWndProc", ctypes.c_void_p),
@@ -63,7 +65,7 @@ class NOTIFYICONDATA(ctypes.Structure):
         ("dwInfoFlags", ctypes.c_ulong), ("guidItem", ctypes.c_byte * 16),
         ("hBalloonIcon", ctypes.wintypes.HANDLE)]
 
-WNDPROC = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM)
+WNDPROC = ctypes.CFUNCTYPE(ctypes.c_longlong, ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM)
 _wndproc_refs = []
 
 IMAGE_ICON = 1
@@ -151,7 +153,6 @@ class AurumBridge:
         self._check_mt5()
         self._init_tray()
         self._show_tray()
-        self.root.mainloop()
 
     # ============ Window Icon ============
 
@@ -241,7 +242,7 @@ class AurumBridge:
     def _init_tray(self):
         hinst = kernel32.GetModuleHandleW(None)
         wc = WNDCLASS()
-        wc.lpszClassName = "AurumBridgeTray"
+        wc.lpszClassName = f"AurumBridgeTray_{os.getpid()}"
         wc.hInstance = hinst
         self._wndproc = WNDPROC(self._wnd_proc)
         _wndproc_refs.append(self._wndproc)
@@ -251,7 +252,7 @@ class AurumBridge:
             err = kernel32.GetLastError()
             self._log(f"[tray] RegisterClass 失败: {err}")
             return
-        self._tray_hwnd = user32.CreateWindowExW(0, "AurumBridgeTray", "", 0, 0, 0, 0, 0, 0, 0, hinst, None)
+        self._tray_hwnd = user32.CreateWindowExW(0, f"AurumBridgeTray_{os.getpid()}", "", 0, 0, 0, 0, 0, 0, 0, hinst, None)
         if not self._tray_hwnd:
             self._log(f"[tray] CreateWindow 失败: {kernel32.GetLastError()}")
             return
