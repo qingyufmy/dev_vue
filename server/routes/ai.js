@@ -447,6 +447,10 @@ function parseJsonObject(content) {
 }
 
 async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages }) {
+  // Validate apiKey is ASCII-only (non-ASCII chars cause ByteString error in fetch headers)
+  if (apiKey && /[^ -]/.test(apiKey)) {
+    throw new Error('API key contains non-ASCII characters, please check your configuration')
+  }
   const body = { model, temperature, max_tokens: maxTokens, messages }
   const response = await fetch(url, {
     method: 'POST',
