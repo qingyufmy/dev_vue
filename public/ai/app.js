@@ -2153,6 +2153,40 @@ function bindEvents() {
   $("refreshAllBtn").addEventListener("click", refreshAll);
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
+  $("useTemplateBtn")?.addEventListener("click", () => {
+    const templates = {
+      default: `你是一名严谨的量化交易分析师。请严格按照以下要求分析行情并输出 JSON：
+
+1. 分析维度：缠论（笔/段/中枢）、谐波形态（Gartley/Butterfly/Bat/Crab）、裸K形态（吞没/锤子线/十字星）
+2. 多周期分析：从大周期判断趋势，小周期寻找入场点
+3. 风控原则：宁可错过不可做错，高波动时降低仓位
+
+输出格式：
+{"signal_type":"buy/sell/hold","confidence":0.0-1.0,"recommended_volume":0.0,"analysis":"分析内容","reasoning":"推理过程","stop_loss_price":null,"take_profit_1_price":null,"take_profit_2_price":null,"take_profit_3_price":null}`,
+      conservative: `你是一名极度保守的交易顾问。你的核心原则：
+- 只在多重信号共振时才给出 buy/sell
+- 任何不确定因素都必须返回 hold
+- 止损必须设在关键技术位之外
+- 置信度 < 0.65 一律 hold
+
+分析方法：缠论 + 裸K + 支撑阻力
+输出严格 JSON 格式。`,
+      chanlun: `你是缠论专家。分析流程：
+1. 识别笔、线段、中枢
+2. 判断趋势/盘整
+3. 寻找买卖点（一买/二买/三买）
+4. 结合背驰确认
+
+输出 JSON，analysis 中必须包含缠论结构描述。`,
+    };
+    const names = Object.keys(templates);
+    const choice = prompt(`选择模板（输入编号）：\n1. 默认（缠论+谐波+裸K）\n2. 保守策略\n3. 缠论专精`);
+    const idx = Number(choice) - 1;
+    if (idx >= 0 && idx < names.length) {
+      $("systemPrompt").value = templates[names[idx]];
+      toast("已填入模板", "success");
+    }
+  });
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
   $("buyBtn").addEventListener("click", () => openManual("buy"));
