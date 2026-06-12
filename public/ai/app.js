@@ -866,6 +866,11 @@ async function loadStatus() {
 // ============ Gateway Badge Click ============
 // ============ Gateway Badge Click — MT5 connect/disconnect ============
 async function handleGatewayModeClick() {
+  // Plus users in observation mode: show upgrade prompt
+  if (state.isPlusReadOnly && state._usingFallback) {
+    toast("升级会员即可连接 MT5 账户", "warning");
+    return;
+  }
   const modal = $("mt5BridgeModal");
   if (!modal) return;
   // Toggle: if already open, close it
