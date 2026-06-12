@@ -285,18 +285,18 @@ class AurumBridge:
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         if msg == TRAY_WM:
             if lparam == WM_LBUTTONUP:
-                self.root.after(0, self._restore_from_tray)
+                self._safe_after(0, self._restore_from_tray)
             elif lparam == WM_RBUTTONUP:
-                self.root.after(0, self._show_context_menu)
+                self._safe_after(0, self._show_context_menu)
             return 0
         elif msg == WM_COMMAND:
             cmd = wparam & 0xFFFF
-            if cmd == MENU_OPEN: self.root.after(0, self._restore_from_tray)
+            if cmd == MENU_OPEN: self._safe_after(0, self._restore_from_tray)
             elif cmd == MENU_START:
-                if not self.running: self.root.after(0, self._toggle_bridge)
+                if not self.running: self._safe_after(0, self._toggle_bridge)
             elif cmd == MENU_STOP:
-                if self.running: self.root.after(0, self._toggle_bridge)
-            elif cmd == MENU_QUIT: self.root.after(0, self._do_quit)
+                if self.running: self._safe_after(0, self._toggle_bridge)
+            elif cmd == MENU_QUIT: self._safe_after(0, self._do_quit)
             return 0
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
@@ -322,27 +322,33 @@ class AurumBridge:
     def _restore_from_tray(self):
         self._hide_tray()
         self._is_minimized_to_tray = False
-        self.root.after(0, self._do_restore)
+        self._safe_after(0, self._do_restore)
 
     def _do_restore(self):
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except:
+            pass
 
     # ============ Window Lifecycle ============
 
     def _on_close(self):
-        if self._tray_hwnd:
-            self._show_tray()
-            self.root.withdraw()
-            self._is_minimized_to_tray = True
-            self._log("已最小化到系统托盘")
-            self._poll_tray()
-        else:
-            self._do_quit()
+        try:
+            if self._tray_hwnd:
+                self._show_tray()
+                self.root.withdraw()
+                self._is_minimized_to_tray = True
+                self._log("已最小化到系统托盘")
+                self._poll_tray()
+            else:
+                self._do_quit()
+        except:
+            os._exit(0)
 
     def _poll_tray(self):
-        if not self._is_minimized_to_tray or not self._tray_hwnd:
+        if self._closing or not self._is_minimized_to_tray or not self._tray_hwnd:
             return
         msg = MSG()
         while user32.PeekMessageW(ctypes.byref(msg), self._tray_hwnd, 0, 0, 1):
