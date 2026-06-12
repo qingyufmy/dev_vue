@@ -1006,6 +1006,9 @@ async function loadSymbols() {
   // Set initial value
   if (preferred) setGlobalSymbol(preferred.name);
   // Don't call refreshQuote here — tick stream handles it at 1s
+
+  // Re-init auto symbol selector now that symbols are loaded
+  initAutoSymbolsSelector();
 }
 
 async function loadAccount() {
@@ -1353,8 +1356,12 @@ async function loadAutoConfig() {
 }
 
 function initAutoSymbolsSelector() {
-  // Single-select mode — reuse createSymbolSelector
+  const input = document.getElementById('autoSymbolSelect');
+  if (!input) return;
+  // Skip if already wrapped
+  if (input.closest('.sym-selector')) return;
   const symbolNames = (state.symbols || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
+  if (!symbolNames.length) return; // will retry when loadSymbols completes
   createSymbolSelector('autoSymbolSelect', symbolNames);
 }
 
