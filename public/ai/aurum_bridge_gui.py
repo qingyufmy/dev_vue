@@ -97,8 +97,13 @@ class AurumBridge:
         self._build_ui()
         self._check_mt5()
         if HAS_TRAY:
-            self._init_tray()
-            self._show_tray()  # Show tray icon immediately on start
+            try:
+                self._init_tray()
+                self._show_tray()
+                self._log(f"系统托盘已就绪 (hwnd={self._tray_hwnd})")
+            except Exception as e:
+                self._log(f"托盘初始化失败: {e}")
+                self._tray_hwnd = None
         self.root.mainloop()
 
     # ============ UI ============
