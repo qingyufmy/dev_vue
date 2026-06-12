@@ -25,21 +25,19 @@ import { initBridgeWS } from './bridge-ws.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
 
-// Load .env
+// Load .env (check server/.env first, then project root)
 try {
-  const envPath = join(__dirname, '.env')
+  let envPath = join(__dirname, '.env')
+  if (!existsSync(envPath)) envPath = join(__dirname, '..', '.env')
   if (existsSync(envPath)) {
     readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
+      if (!line.trim() || line.trim().startsWith('#')) return
       const [key, ...val] = line.split('=')
       if (key && val.length) process.env[key.trim()] = val.join('=').trim()
     })
     console.log('[ENV] Loaded:', envPath)
-    console.log('[ENV] MYSQL_HOST:', process.env.MYSQL_HOST)
-    console.log('[ENV] MYSQL_PORT:', process.env.MYSQL_PORT)
-    console.log('[ENV] MYSQL_USER:', process.env.MYSQL_USER)
-    console.log('[ENV] MYSQL_DATABASE:', process.env.MYSQL_DATABASE)
   } else {
-    console.log('[ENV] .env not found at:', envPath)
+    console.log('[ENV] .env not found at:', join(__dirname, '.env'), 'or', join(__dirname, '..', '.env'))
   }
 } catch (e) { console.log('[ENV] Error:', e.message) }
 
