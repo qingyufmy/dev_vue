@@ -321,21 +321,25 @@ class AurumBridge:
         user32.DestroyMenu(menu)
 
     def _restore_from_tray(self):
+        if self._closing:
+            return
         self._hide_tray()
         self._is_minimized_to_tray = False
-        self._safe_after(0, self._do_restore)
+        self._safe_after(50, self._do_restore)
 
     def _do_restore(self):
         try:
             self.root.deiconify()
             self.root.lift()
             self.root.focus_force()
-        except:
-            pass
+        except Exception as e:
+            self._log(f"恢复窗口失败: {e}")
 
     # ============ Window Lifecycle ============
 
     def _on_close(self):
+        if self._closing:
+            return
         try:
             if self._tray_hwnd:
                 self._show_tray()
@@ -345,8 +349,9 @@ class AurumBridge:
                 self._poll_tray()
             else:
                 self._do_quit()
-        except:
-            os._exit(0)
+        except Exception as e:
+            self._log(f"最小化失败: {e}")
+            self._do_quit()
 
     def _poll_tray(self):
         if self._closing or not self._is_minimized_to_tray or not self._tray_hwnd:
