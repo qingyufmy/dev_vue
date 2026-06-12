@@ -479,7 +479,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const existing = await ai.getGlobalAutoConfig()
         const existingSymbols = (existing?.symbols || 'XAUUSD').split(',').map(s => s.trim()).filter(Boolean)
         const newCfg = {
-          symbols: Array.isArray(params.symbols) ? params.symbols.join(',') : (params.symbols || existing?.symbols || 'XAUUSD'),
+          symbols: Array.isArray(params.symbols) ? params.symbols[0] || 'XAUUSD' : (params.symbols || existing?.symbols || 'XAUUSD'),
           interval_minutes: params.interval_minutes ?? existing?.interval_minutes ?? 5,
           api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
@@ -504,7 +504,8 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'save_auto': {
         // Legacy: save per-user auto scheduler settings
-        const { symbols = ['XAUUSD'] } = params
+        const { symbol = 'XAUUSD' } = params
+        const symbols = [symbol]
         const enabled = !!params.enabled
         await ai.upsertAutoConfig(null, userId, symbols, enabled)
         ai.stopAutoScheduler(userId)

@@ -854,10 +854,11 @@ async function loadStatus() {
     const scheduler = auto.scheduler || {};
     const enabled = scheduler.enabled;
     const running = scheduler.running;
-    const symbols = (scheduler.symbols || []).join(', ');
+    const symbols = scheduler.symbols || [];
+    const sym = symbols[0] || 'XAUUSD';
     const intervalMin = scheduler.interval_minutes || 5;
     const label = enabled
-      ? running ? `自动推理运行中 · ${symbols} · ${intervalMin}分钟` : `自动推理 · ${symbols} · ${intervalMin}分钟`
+      ? running ? `自动推理运行中 · ${sym} · ${intervalMin}分钟` : `自动推理 · ${sym} · ${intervalMin}分钟`
       : '自动推理关闭';
     const type = enabled
       ? running ? 'active' : 'connected'
@@ -973,7 +974,7 @@ async function handleAutoToggle() {
     const symbols = state.autoConfig?.symbols || ['XAUUSD'];
     const intervalMin = state.autoConfig?.interval_minutes || 5;
     const label = result.enabled
-      ? `自动推理运行中 · ${symbols.join(', ')} · ${intervalMin}分钟`
+      ? `自动推理运行中 · ${symbols[0]} · ${intervalMin}分钟`
       : '自动推理关闭';
     const type = result.enabled ? 'active' : 'neutral';
     setBadge('autoAnalyzeMode', label, type);
@@ -1339,123 +1340,32 @@ async function loadAutoConfig() {
     document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
     document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
-    document.getElementById('autoSymbolSelect').value = (cfg.symbols || ['XAUUSD']).join(', ');
+    document.getElementById('autoSymbolSelect').value = (cfg.symbols || ['XAUUSD'])[0] || 'XAUUSD';
     document.getElementById('autoApiKey').placeholder = cfg.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
     document.getElementById('autoSystemPrompt').value = cfg.system_prompt || '';
     document.getElementById('autoIntervalMin').value = cfg.interval_minutes || 5;
 
     applyAutoProviderPreset(cfg.api_provider || 'deepseek');
-    setText('autoConfigStatus', `${cfg.api_provider || 'Provider'} · ${cfg.model_name || 'model'} · ${cfg.has_api_key ? '密钥已配置' : '未配置密钥'} · 品种: ${(cfg.symbols||[]).join(',')} · 间隔: ${cfg.interval_minutes || 5}分钟`);
+    setText('autoConfigStatus', `${cfg.api_provider || 'Provider'} · ${cfg.model_name || 'model'} · ${cfg.has_api_key ? '密钥已配置' : '未配置密钥'} · 品种: ${(cfg.symbols||['XAUUSD'])[0]} · 间隔: ${cfg.interval_minutes || 5}分钟`);
   } catch (e) {
     setText('autoConfigStatus', '加载失败: ' + e.message);
   }
 }
 
 function initAutoSymbolsSelector() {
-  // Use the exact same pattern as createSymbolSelector but support multi-select via comma-separated text
-  const input = document.getElementById('autoSymbolSelect');
-  if (!input) return;
-
-  // Wrap in sym-selector just like the overview
-  const wrapper = document.createElement('div');
-  wrapper.className = 'sym-selector';
-  input.parentNode.insertBefore(wrapper, input);
-  wrapper.appendChild(input);
-  input.className = 'sym-input';
-  input.setAttribute('autocomplete', 'off');
-  input.setAttribute('placeholder', '搜索品种...');
-
-  const dropdown = document.createElement('div');
-  dropdown.className = 'sym-dropdown';
-  wrapper.appendChild(dropdown);
-
-  let highlightIdx = -1;
-  let filtered = [];
-
-  // Current symbols as array
-  function getSymbols() {
-    return input.value.split(',').map(s => s.trim()).filter(Boolean);
-  }
-
-  function render(filter) {
-    const q = (filter || '').toUpperCase();
-    // Get the text being typed (last segment after comma)
-    const parts = input.value.split(',');
-    const typing = (parts[parts.length - 1] || '').trim().toUpperCase();
-    const activeSymbols = getSymbols();
-    const allNames = (state.symbols || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
-    filtered = q ? allNames.filter(s => s.toUpperCase().includes(q)) : [...allNames];
-    highlightIdx = -1;
-    if (!filtered.length) {
-      dropdown.innerHTML = '<div class="sym-empty">未找到匹配品种</div>';
-      return;
-    }
-    dropdown.innerHTML = filtered.map((s, i) =>
-      `<div class="sym-option${activeSymbols.includes(s) ? ' active' : ''}" data-symbol="${s}" data-idx="${i}">${s}</div>`
-    ).join('');
-  }
-
-  function open() { render(input.value); dropdown.classList.add('open'); }
-  function close() { dropdown.classList.remove('open'); }
-
-  input.addEventListener('focus', () => { open(); });
-  input.addEventListener('input', () => { render(input.value); dropdown.classList.add('open'); });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { close(); input.blur(); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); highlightIdx = Math.min(highlightIdx + 1, filtered.length - 1); updateHighlight(); }
-    if (e.key === 'ArrowUp') { e.preventDefault(); highlightIdx = Math.max(highlightIdx - 1, 0); updateHighlight(); }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (highlightIdx >= 0 && highlightIdx < filtered.length) addSymbol(filtered[highlightIdx]);
-      else if (filtered.length === 1) addSymbol(filtered[0]);
-    }
-  });
-  dropdown.addEventListener('mousedown', (e) => {
-    const opt = e.target.closest('.sym-option');
-    if (opt) addSymbol(opt.dataset.symbol);
-  });
-  document.addEventListener('click', (e) => { if (!wrapper.contains(e.target)) close(); });
-
-  function updateHighlight() {
-    dropdown.querySelectorAll('.sym-option').forEach((el, i) => {
-      el.classList.toggle('active', i === highlightIdx);
-    });
-    if (highlightIdx >= 0) {
-      const el = dropdown.children[highlightIdx];
-      if (el) el.scrollIntoView({ block: 'nearest' });
-    }
-  }
-
-  function addSymbol(sym) {
-    const parts = input.value.split(',').map(s => s.trim()).filter(Boolean);
-    if (!parts.includes(sym)) {
-      parts.push(sym);
-      input.value = parts.join(', ');
-    } else {
-      // Already selected, just close
-    }
-    close();
-    // Keep focus but don't select all
-  }
-
-  // Expose for loadAutoConfig to set value
-  input._autoSetSymbols = (symbols) => {
-    input.value = (symbols || []).join(', ');
-  };
-  // Prevent global symbol sync from overwriting multi-select value
-  input._symSet = () => {};
-  // Also push to _symSelectors so loadSymbols can update options
-  _symSelectors.push('autoSymbolSelect');
+  // Single-select mode — reuse createSymbolSelector
+  const symbolNames = (state.symbols || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
+  createSymbolSelector('autoSymbolSelect', symbolNames);
 }
 
 async function saveAutoConfig() {
-  const symbols = document.getElementById('autoSymbolSelect').value.split(',').map(s => s.trim()).filter(Boolean);
+  const symbol = document.getElementById('autoSymbolSelect').value.trim();
   const intervalMinutes = parseInt(document.getElementById('autoIntervalMin').value) || 5;
   const apiKey = document.getElementById('autoApiKey').value.trim();
 
   try {
     const payload = {
-      symbols,
+      symbols: [symbol],
       interval_minutes: intervalMinutes,
       api_provider: document.getElementById('autoApiProvider').value,
       model_name: document.getElementById('autoModelName').value,

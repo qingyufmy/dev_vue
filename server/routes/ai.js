@@ -1092,22 +1092,20 @@ async function startAutoScheduler(userId) {
   const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) return
 
-  const symbols = JSON.parse(cfg.symbols || '[]')
+  const symbol = parseSymbols(cfg.symbols)[0] || 'XAUUSD'
   const globalCfg = await getGlobalAutoConfig()
   const intervalMs = (globalCfg?.interval_minutes || 5) * 60_000
   autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null }
 
   const tick = async () => {
     if (!autoSchedulerState[userId]?.running) return
-    for (const symbol of symbols) {
-      try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler] ${symbol}/M5 tick error:`, e.message) }
-    }
+    try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler] ${symbol}/M5 tick error:`, e.message) }
     if (autoSchedulerState[userId]?.running) {
       autoSchedulerState[userId].timer = setTimeout(tick, intervalMs)
     }
   }
   autoSchedulerState[userId].timer = setTimeout(tick, 5000)
-  console.log(`[AutoScheduler] Started for user ${userId}: ${symbols.length} symbols, M5, interval=${intervalMs/1000}s`)
+  console.log(`[AutoScheduler] Started for user ${userId}: ${symbol}, M5, interval=${intervalMs/1000}s`)
 
   // Also start trade review scheduler
   startTradeReviewScheduler(userId)
