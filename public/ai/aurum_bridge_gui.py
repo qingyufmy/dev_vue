@@ -799,6 +799,8 @@ class AurumBridge:
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.mainloop()
+        try: self.root.destroy()
+        except: pass
 
 
 if __name__ == "__main__":
