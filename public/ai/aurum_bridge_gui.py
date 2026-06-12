@@ -150,9 +150,21 @@ class AurumBridge:
 
     def _set_window_icon(self):
         if self._hicon:
+            self.root.after(100, self._apply_icon)
+
+    def _apply_icon(self):
+        try:
+            hwnd = int(self.root.frame(), 16)
+            if hwnd:
+                user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)  # WM_SETICON ICON_SMALL
+                user32.SendMessageW(hwnd, 0x0080, 0, self._hicon)  # WM_SETICON ICON_BIG
+        except:
             try:
-                user32.SendMessageW(self.root.winfo_id(), 0x0080, 1, self._hicon)  # WM_SETICON ICON_SMALL
-                user32.SendMessageW(self.root.winfo_id(), 0x0080, 0, self._hicon)  # WM_SETICON ICON_BIG
+                import ctypes as _ct
+                hwnd = _ct.windll.user32.GetForegroundWindow()
+                if hwnd:
+                    user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)
+                    user32.SendMessageW(hwnd, 0x0080, 0, self._hicon)
             except: pass
 
     # ============ UI ============
@@ -341,6 +353,8 @@ class AurumBridge:
             try: self.mt5.shutdown()
             except: pass
         self._hide_tray()
+        try: self.root.quit()
+        except: pass
         try: self.root.destroy()
         except: pass
 
