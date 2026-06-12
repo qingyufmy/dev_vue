@@ -259,12 +259,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         const connected = !!(bridge && bridge.ws.readyState === 1)
         const alive = connected && (Date.now() - bridge.lastSeen < 20000)
+        const tradeEnabled = usingFallback ? (bridge.tradeEnabled !== false) : (alive && (bridge.tradeEnabled !== false))
         result = {
           status: 'success',
           gateway: {
             mode: alive ? 'live' : 'mock',
             mt5_package_available: true,
-            live_trading_enabled: alive && !usingFallback && (bridge.tradeEnabled !== false),
+            live_trading_enabled: tradeEnabled,
             using_fallback: usingFallback,
           },
         }
@@ -312,9 +313,14 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'history': {
-        const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
+        let bridgeOk = bridges.get(userId)?.ws?.readyState === 1
+        let historyUserId = userId
+        if (!bridgeOk && adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
+          bridgeOk = true
+          historyUserId = adminUserId
+        }
         if (bridgeOk) {
-          result = await ai.mt5Bridge(userId, 'history', { page: params.page || 1, page_size: params.page_size || 20 })
+          result = await ai.mt5Bridge(historyUserId, 'history', { page: params.page || 1, page_size: params.page_size || 20 })
         } else {
           result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
         }
@@ -362,7 +368,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'signals': {
-        const rows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [userId, params.session_id || 'default'])
+        let queryUserId = userId
+        const ownRows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [userId, params.session_id || 'default'])
+        if (ownRows.length === 0 && adminUserId) queryUserId = adminUserId
+        const rows = ownRows.length > 0 ? ownRows : await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [queryUserId, params.session_id || 'default'])
         const signals = rows.map(row => {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
@@ -394,7 +403,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'auto_status': {
-        const cfg = await ai.getAutoConfig(null, userId)
+        // In observation mode (no own bridge), show admin's auto state
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const statusUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
+        const cfg = await ai.getAutoConfig(null, statusUserId)
         const globalCfg = await ai.getGlobalAutoConfig()
         const symbols = parseSymbols(globalCfg?.symbols)
         const intervalMin = globalCfg?.interval_minutes || 5
@@ -488,8 +500,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'audit_logs': {
-        const rows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
-        const logs = rows.map(row => {
+        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
+        if (ownRows.length === 0 && adminUserId) ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [adminUserId])
+        const logs = ownRows.map(row => {
           const item = { ...row }
           item.created_at_mt5 = toMt5Time(item.created_at)
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
