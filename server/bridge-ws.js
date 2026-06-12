@@ -528,12 +528,15 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'signal_tickets': {
-        const rows = await queryAll('SELECT id, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 ORDER BY id DESC LIMIT 200', [userId])
+        const rows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 ORDER BY id DESC LIMIT 200', [userId])
         const ticketMap = {}
         for (const row of rows) {
           try {
-            const exec = JSON.parse(row.execution_result || '{}')
-            const ticket = exec.order || exec.ticket || exec.position
+            let ticket = row.trade_ticket
+            if (!ticket) {
+              const exec = JSON.parse(row.execution_result || '{}')
+              ticket = exec.order || exec.ticket || exec.position
+            }
             if (ticket) ticketMap[String(ticket)] = row.id
           } catch {}
         }
