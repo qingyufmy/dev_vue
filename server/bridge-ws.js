@@ -366,6 +366,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
         break
       }
+      case 'get_default_prompt': {
+        // Get admin's system prompt as default template
+        const adminRow = await queryOne('SELECT system_prompt FROM ai_configs WHERE user_id = (SELECT id FROM users WHERE role = ? LIMIT 1) AND is_active = 1', ['admin'])
+        result = { status: 'success', prompt: adminRow?.system_prompt || '' }
+        break
+      }
       case 'get_auto_config': {
         // Get global auto config (admin only)
         const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
