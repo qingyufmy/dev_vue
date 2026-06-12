@@ -196,7 +196,14 @@ async function handleBrowserCommand(ws, userId, msg) {
     const ai = await import('./routes/ai.js')
     const user = await queryOne('SELECT plan, role FROM users WHERE id = ?', [userId])
     const isPro = user?.role === 'admin' || user?.plan === 'pro'
-    if (!isPro) return reply({ status: 'error', message: '需要Pro会员' })
+    const hasAccess = isPro || user?.plan === 'plus'
+    if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
+
+    // Plus users: read-only, block write operations
+    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_auto_config', 'toggle_auto', 'set_quote_symbol']
+    if (!isPro && writeActions.includes(action)) {
+      return reply({ status: 'error', message: 'Plus 会员仅可查看，无法执行操作' })
+    }
 
     let result
     switch (action) {

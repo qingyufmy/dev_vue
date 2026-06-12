@@ -755,13 +755,16 @@ async function bootstrap() {
       return;
     }
     state.user = await api("/aurum-api/auth/me");
-    // Pro membership check
-    const isPro = state.user?.role === 'admin' || state.user?.plan === 'pro';
-    if (!isPro) {
+    // Access check: admin/pro/plus can access
+    const role = state.user?.role;
+    const plan = state.user?.plan;
+    const hasAccess = role === 'admin' || plan === 'pro' || plan === 'plus';
+    if (!hasAccess) {
       document.getElementById('proOverlay')?.classList.remove('hidden');
       showApp(false);
       return;
     }
+    state.isPlusReadOnly = plan === 'plus' && role !== 'admin';
     applyRoleUI();
     showApp(true);
     // Connect WebSocket FIRST — all data flows through it
@@ -1102,6 +1105,12 @@ async function loadPositions() {
 
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
+  const isPlusReadOnly = state.isPlusReadOnly;
+
+  // Model tab: hidden for plus users
+  const modelTab = document.querySelector('.nav-item[data-tab="ai-config"]');
+  if (modelTab) modelTab.style.display = isPlusReadOnly ? "none" : "";
+
   // Sub-tabs: non-admin only sees manual config
   const autoTab = document.querySelector('.config-sub-tab[data-config-tab="auto-config"]');
   if (autoTab) autoTab.style.display = isAdmin ? "" : "none";
@@ -1109,6 +1118,14 @@ function applyRoleUI() {
   if (!isAdmin) {
     const manualTab = document.querySelector('.config-sub-tab[data-config-tab="manual-config"]');
     if (manualTab) manualTab.click();
+  }
+
+  // Plus read-only: disable all action buttons
+  if (isPlusReadOnly) {
+    document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, [data-action="execute"], [data-action="close-position"]').forEach(el => {
+      el.disabled = true;
+      el.title = 'Plus 会员仅可查看';
+    });
   }
 }
 
