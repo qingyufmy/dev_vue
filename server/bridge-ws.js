@@ -169,7 +169,7 @@ function handleBridge(ws, url) {
     }
   })
 
-  ws.on('close', () => {
+  ws.on('close', async () => {
     bridges.delete(userId)
     console.log(`[BridgeWS] User ${userId} bridge disconnected`)
     // Notify browsers
@@ -181,6 +181,19 @@ function handleBridge(ws, url) {
         pendingCommands.delete(cmdId)
         pending.resolve({ status: 'error', error: 'Bridge disconnected' })
       }
+    }
+    // Auto-disable auto-reasoning when bridge disconnects
+    try {
+      const ai = await import('./routes/ai.js')
+      const cfg = await ai.getAutoConfig(null, userId)
+      if (cfg?.enabled) {
+        await ai.upsertAutoConfig(null, userId, null, false)
+        ai.stopAutoScheduler(userId)
+        sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
+        console.log(`[BridgeWS] User ${userId} auto-reasoning disabled: bridge disconnected`)
+      }
+    } catch (e) {
+      console.error('[BridgeWS] Failed to disable auto-reasoning on disconnect:', e.message)
     }
   })
 

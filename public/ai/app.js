@@ -491,6 +491,14 @@ function connectBridgeStatusWs(onReady) {
         handleHeartbeat(msg);
       } else if (msg.type === 'disconnect') {
         handleDisconnect(msg);
+      } else if (msg.type === 'auto_state') {
+        // Server pushed auto-reasoning state change (e.g. bridge disconnected)
+        state.autoEnabled = !!msg.enabled;
+        const autoSwitch = $("autoAnalyzeMode");
+        if (autoSwitch) autoSwitch.checked = state.autoEnabled;
+        if (msg.reason === 'bridge_disconnected' && !msg.enabled) {
+          toast('MT5桥接断开，自动推理已自动关闭', 'warning');
+        }
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
