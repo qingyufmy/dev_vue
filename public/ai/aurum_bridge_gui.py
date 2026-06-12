@@ -5,35 +5,39 @@ import os
 import json
 import time
 import threading
-# MT5 broker time is UTC+3
 from datetime import datetime, timezone, timedelta
-_MT5_TZ = timezone(timedelta(hours=3))
 
-MAX_LOG_LINES = 500  # 日志最大行数，防止内存溢出
+MAX_LOG_LINES = 500
 
 def _mt5_time(ts):
-    """Convert MT5 timestamp to readable string."""
     if not ts:
         return ''
     return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
 
 import ssl
 try:
-    import websocket  # websocket-client
+    import websocket
     HAS_WS = True
 except ImportError:
     HAS_WS = False
+
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
-import ctypes
-from ctypes import wintypes
+from tkinter import scrolledtext, messagebox
+
+# Windows tray
+try:
+    import win32gui
+    import win32con
+    import win32api
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
 
 # ===== Config =====
 SERVER_URL = "http://127.0.0.1:3000"
 TOKEN = ""
 CONFIG_FILE = ""
 
-# 1. Try loading from config.json (same directory as .exe)
 try:
     exe_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
     config_path = os.path.join(exe_dir, "config.json")
@@ -46,38 +50,24 @@ try:
 except:
     pass
 
-# 2. Command line args override: --server URL --token TOKEN
 i = 1
 while i < len(sys.argv):
     if sys.argv[i] == '--server' and i + 1 < len(sys.argv):
-        SERVER_URL = sys.argv[i + 1]
-        i += 2
+        SERVER_URL = sys.argv[i + 1]; i += 2
     elif sys.argv[i] == '--token' and i + 1 < len(sys.argv):
-        TOKEN = sys.argv[i + 1]
-        i += 2
+        TOKEN = sys.argv[i + 1]; i += 2
     else:
         i += 1
 
 
-def _create_tray_icon():
-    """Create a simple gold icon for system tray using ctypes."""
-    # Create a 16x16 RGBA icon
-    size = 16
-    pixels = []
-    for y in range(size):
-        for x in range(size):
-            dx = x - 7.5
-            dy = y - 7.5
-            dist = (dx*dx + dy*dy) ** 0.5
-            if dist <= 6:
-                # Gold circle
-                pixels.extend([139, 179, 234, 255])  # BGRA
-            else:
-                pixels.extend([0, 0, 0, 0])
-    return bytes(pixels)
-
-
 class AurumBridge:
+    # ===== Tray icon IDs =====
+    TRAY_WM = win32con.WM_USER + 20 if HAS_TRAY else 0x0414
+    MENU_OPEN = 1001
+    MENU_START = 1002
+    MENU_STOP = 1003
+    MENU_QUIT = 1004
+
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("AURUM MT5 Bridge")
@@ -90,264 +80,219 @@ class AurumBridge:
         self.bridge_thread = None
         self._trade_enabled = False
         self._ws = None
-        self._tray_icon = None
-        self._is_minimized_to_tray = False
         self._tray_hwnd = None
+        self._is_minimized_to_tray = False
 
         self._build_ui()
         self._check_mt5()
-        self._init_tray()
+        if HAS_TRAY:
+            self._init_tray()
+        self.root.mainloop()
+
+    # ============ UI ============
 
     def _build_ui(self):
-        bg = "#0f172a"
-        card_bg = "#1e293b"
-        accent = "#3b82f6"
-        text = "#e2e8f0"
-        muted = "#94a3b8"
+        bg, card_bg, accent = "#0f172a", "#1e293b", "#3b82f6"
+        text, muted = "#e2e8f0", "#94a3b8"
 
-        # Title
         tk.Label(self.root, text="⚡ AURUM MT5 Bridge", font=("Segoe UI", 16, "bold"),
                  bg=bg, fg=accent).pack(pady=(16, 4))
-        tk.Label(self.root, text="双击运行 · 自动连接", font=("Segoe UI", 9),
-                 bg=bg, fg=muted).pack()
 
-        # Connection card
         card = tk.Frame(self.root, bg=card_bg, highlightbackground="#334155",
                         highlightthickness=1, padx=16, pady=12)
         card.pack(padx=16, pady=(12, 8), fill="x")
 
-        # Server
         tk.Label(card, text="服务器地址", font=("Segoe UI", 9), bg=card_bg, fg=muted).grid(
             row=0, column=0, sticky="w", pady=(0, 2))
         self.server_var = tk.StringVar(value=SERVER_URL)
-        server_frame = tk.Frame(card, bg=card_bg)
-        server_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        sf = tk.Frame(card, bg=card_bg); sf.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         card.columnconfigure(0, weight=1)
+        tk.Entry(sf, textvariable=self.server_var, font=("Consolas", 10),
+                 bg="#0f172a", fg=text, insertbackground=text, relief="flat", bd=4
+                 ).pack(side="left", fill="x", expand=True)
+        tk.Button(sf, text="📋", font=("Segoe UI", 8), bg="#334155", fg=text, relief="flat",
+                  padx=6, command=lambda: self._copy(self.server_var.get())).pack(side="right", padx=(4,0))
 
-        self.server_entry = tk.Entry(server_frame, textvariable=self.server_var,
-                                      font=("Consolas", 10), bg="#0f172a", fg=text,
-                                      insertbackground=text, relief="flat", bd=4)
-        self.server_entry.pack(side="left", fill="x", expand=True)
-
-        tk.Button(server_frame, text="📋 复制", font=("Segoe UI", 8),
-                  bg="#334155", fg=text, relief="flat", padx=8,
-                  activebackground="#475569", cursor="hand2",
-                  command=lambda: self._copy(self.server_var.get())).pack(side="right", padx=(4, 0))
-
-        # Token
         tk.Label(card, text="认证 Token", font=("Segoe UI", 9), bg=card_bg, fg=muted).grid(
             row=2, column=0, sticky="w", pady=(0, 2))
-        token_frame = tk.Frame(card, bg=card_bg)
-        token_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-
+        tf = tk.Frame(card, bg=card_bg); tf.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         self.token_var = tk.StringVar(value=TOKEN)
         self.token_shown = False
-        self.token_entry = tk.Entry(token_frame, textvariable=self.token_var,
-                                     font=("Consolas", 10), bg="#0f172a", fg=text,
-                                     insertbackground=text, relief="flat", bd=4, show="•")
+        self.token_entry = tk.Entry(tf, textvariable=self.token_var, font=("Consolas", 10),
+                                     bg="#0f172a", fg=text, insertbackground=text, relief="flat", bd=4, show="•")
         self.token_entry.pack(side="left", fill="x", expand=True)
+        tk.Button(tf, text="👁", font=("Segoe UI", 9), bg="#334155", fg=text, relief="flat",
+                  padx=4, command=self._toggle_token).pack(side="right", padx=(2,0))
+        tk.Button(tf, text="📋", font=("Segoe UI", 8), bg="#334155", fg=text, relief="flat",
+                  padx=6, command=lambda: self._copy(self.token_var.get())).pack(side="right", padx=(4,0))
 
-        tk.Button(token_frame, text="👁", font=("Segoe UI", 9),
-                  bg="#334155", fg=text, relief="flat", padx=4,
-                  activebackground="#475569", cursor="hand2",
-                  command=self._toggle_token).pack(side="right", padx=(2, 0))
-
-        tk.Button(token_frame, text="📋 复制", font=("Segoe UI", 8),
-                  bg="#334155", fg=text, relief="flat", padx=8,
-                  activebackground="#475569", cursor="hand2",
-                  command=lambda: self._copy(self.token_var.get())).pack(side="right", padx=(4, 0))
-
-        # Status indicator
-        status_frame = tk.Frame(self.root, bg=bg)
-        status_frame.pack(padx=16, pady=(4, 4), fill="x")
-        self.status_dot = tk.Label(status_frame, text="●", font=("Segoe UI", 14),
-                                    bg=bg, fg=muted)
+        sf2 = tk.Frame(self.root, bg=bg); sf2.pack(padx=16, pady=(4,4), fill="x")
+        self.status_dot = tk.Label(sf2, text="●", font=("Segoe UI", 14), bg=bg, fg=muted)
         self.status_dot.pack(side="left")
-        self.status_label = tk.Label(status_frame, text="未连接", font=("Segoe UI", 11, "bold"),
-                                      bg=bg, fg=muted)
-        self.status_label.pack(side="left", padx=(4, 0))
-        self.account_label = tk.Label(status_frame, text="", font=("Segoe UI", 9),
-                                       bg=bg, fg=muted)
+        self.status_label = tk.Label(sf2, text="未连接", font=("Segoe UI", 11, "bold"), bg=bg, fg=muted)
+        self.status_label.pack(side="left", padx=(4,0))
+        self.account_label = tk.Label(sf2, text="", font=("Segoe UI", 9), bg=bg, fg=muted)
         self.account_label.pack(side="right")
 
-        # Start/Stop button
-        self.btn_frame = tk.Frame(self.root, bg=bg)
-        self.btn_frame.pack(padx=16, pady=(4, 8), fill="x")
-
-        self.start_btn = tk.Button(self.btn_frame, text="▶  启动桥接", font=("Segoe UI", 12, "bold"),
+        bf = tk.Frame(self.root, bg=bg); bf.pack(padx=16, pady=(4,8), fill="x")
+        self.start_btn = tk.Button(bf, text="▶  启动桥接", font=("Segoe UI", 12, "bold"),
                                     bg=accent, fg="white", relief="flat", padx=20, pady=8,
-                                    activebackground="#2563eb", cursor="hand2",
-                                    command=self._toggle_bridge)
+                                    activebackground="#2563eb", cursor="hand2", command=self._toggle_bridge)
         self.start_btn.pack(fill="x")
 
-        # Log area
-        tk.Label(self.root, text="运行日志", font=("Segoe UI", 9), bg=bg, fg=muted).pack(
-            padx=16, anchor="w")
-
+        tk.Label(self.root, text="运行日志", font=("Segoe UI", 9), bg=bg, fg=muted).pack(padx=16, anchor="w")
         self.log_area = scrolledtext.ScrolledText(self.root, height=14, font=("Consolas", 9),
-                                                   bg="#0f172a", fg="#94a3b8",
-                                                   insertbackground=text, relief="flat",
-                                                   bd=4, state="disabled", wrap="word")
-        self.log_area.pack(padx=16, pady=(2, 12), fill="both", expand=True)
+                                                   bg="#0f172a", fg="#94a3b8", insertbackground=text,
+                                                   relief="flat", bd=4, state="disabled", wrap="word")
+        self.log_area.pack(padx=16, pady=(2,12), fill="both", expand=True)
 
-        # Footer
         tk.Label(self.root, text="AURUM AI · wall-street-skill.com", font=("Segoe UI", 8),
-                 bg=bg, fg="#475569").pack(pady=(0, 8))
+                 bg=bg, fg="#475569").pack(pady=(0,8))
 
-    # ============ System Tray (Windows Native) ============
+    # ============ System Tray (win32gui) ============
 
     def _init_tray(self):
-        """Create a hidden window for tray icon message processing."""
+        """Create hidden message-only window for tray icon."""
+        # Use a proper wndproc callback to handle tray click messages
+        hinst = win32api.GetModuleHandle(None)
+        message_map = {
+            win32con.WM_COMMAND: self._on_tray_command,
+            self.TRAY_WM: self._on_tray_msg,
+        }
+        wc = win32gui.WNDCLASS()
+        wc.hInstance = hinst
+        wc.lpszClassName = "AurumBridgeTray"
+        wc.lpfnWndProc = message_map
         try:
-            wc = ctypes.windll.user32.WNDCLASSW()
-            wc.lpfnWndProc = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)(self._tray_wnd_proc)
-            wc.hInstance = ctypes.windll.kernel32.GetModuleHandleW(None)
-            wc.lpszClassName = "AurumBridgeTray"
-            ctypes.windll.user32.RegisterClassW(ctypes.byref(wc))
-            self._tray_hwnd = ctypes.windll.user32.CreateWindowExW(
-                0, "AurumBridgeTray", "AurumBridgeTray", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, None)
-            # Register tray icon
-            self._tray_icon_data = {
-                'cbSize': ctypes.sizeof(self._NOTIFYICONDATAW),
-                'hWnd': self._tray_hwnd,
-                'uID': 1,
-                'uFlags': 0x02 | 0x04 | 0x01,  # NIF_ICON | NIF_TIP | NIF_MESSAGE
-                'uCallbackMessage': 0x0400 + 1,  # WM_USER + 1
-                'szTip': 'AURUM MT5 Bridge',
-            }
-            # Set icon
-            icon_data = _create_tray_icon()
-            hicon = ctypes.windll.user32.CreateIcon(None, 16, 16, 1, 32, None, icon_data)
-            if hicon:
-                self._tray_icon_data['hIcon'] = hicon
-            self._tray_nid = self._NOTIFYICONDATAW(**self._tray_icon_data)
-        except Exception as e:
-            print(f"Tray init failed: {e}")
-
-    _NOTIFYICONDATAW = type('_NOTIFYICONDATAW', (ctypes.Structure,), {
-        '_fields_': [
-            ('cbSize', ctypes.c_ulong),
-            ('hWnd', wintypes.HWND),
-            ('uID', ctypes.c_uint),
-            ('uFlags', ctypes.c_uint),
-            ('uCallbackMessage', ctypes.c_uint),
-            ('hIcon', wintypes.HWND),
-            ('szTip', ctypes.c_wchar * 128),
-            ('dwState', ctypes.c_ulong),
-            ('dwStateMask', ctypes.c_ulong),
-            ('szInfo', ctypes.c_wchar * 256),
-            ('uVersion', ctypes.c_uint),
-            ('szInfoTitle', ctypes.c_wchar * 64),
-            ('dwInfoFlags', ctypes.c_ulong),
-        ]
-    })
-
-    def _show_tray_menu(self):
-        """Show tray context menu."""
-        menu = ctypes.windll.user32.CreatePopupMenu()
-        MF_STRING = 0x0000
-        MF_GRAYED = 0x0001
-        MF_SEPARATOR = 0x0800
-
-        ctypes.windll.user32.AppendMenuW(menu, MF_STRING, 1001, "打开界面")
-        ctypes.windll.user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
-        start_flag = MF_GRAYED if self.running else MF_STRING
-        stop_flag = MF_STRING if self.running else MF_GRAYED
-        ctypes.windll.user32.AppendMenuW(menu, start_flag, 1002, "启动桥接")
-        ctypes.windll.user32.AppendMenuW(menu, stop_flag, 1003, "关闭桥接")
-        ctypes.windll.user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
-        ctypes.windll.user32.AppendMenuW(menu, MF_STRING, 1004, "退出")
-
-        pt = wintypes.POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-        ctypes.windll.user32.SetForegroundWindow(self._tray_hwnd)
-        ctypes.windll.user32.TrackPopupMenu(menu, 0x0100, pt.x, pt.y, 0, self._tray_hwnd, None)  # TPM_RIGHTBUTTON
-        ctypes.windll.user32.PostMessageW(self._tray_hwnd, 0, 0, 0)
-        ctypes.windll.user32.DestroyMenu(menu)
-
-        # Check result
-        result = ctypes.windll.user32.GetMenuItemID(menu, 0)
-
-    def _tray_wnd_proc(self, hwnd, msg, wparam, lparam):
-        """Handle tray icon messages and menu commands."""
-        if msg == 0x0400 + 1:  # Tray callback
-            if lparam == 0x0201:  # WM_LBUTTONUP
-                self.root.after(0, self._restore_from_tray)
-            elif lparam == 0x0204:  # WM_RBUTTONUP
-                self.root.after(0, self._show_tray_menu)
-        elif msg == 0x0111:  # WM_COMMAND
-            cmd_id = wparam & 0xFFFF
-            if cmd_id == 1001:  # 打开界面
-                self.root.after(0, self._restore_from_tray)
-            elif cmd_id == 1002:  # 启动桥接
-                if not self.running:
-                    self.root.after(0, self._toggle_bridge)
-            elif cmd_id == 1003:  # 关闭桥接
-                if self.running:
-                    self.root.after(0, self._toggle_bridge)
-            elif cmd_id == 1004:  # 退出
-                self.root.after(0, self._do_quit)
-        return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+            win32gui.RegisterClass(wc)
+        except win32gui.error:
+            pass  # already registered
+        self._tray_hwnd = win32gui.CreateWindow(
+            "AurumBridgeTray", "AurumBridgeTray", 0, 0, 0, 0, 0,
+            0, 0, hinst, None)
 
     def _show_tray(self):
-        """Show the tray icon."""
-        if hasattr(self, '_tray_nid') and self._tray_nid:
-            try:
-                ctypes.windll.shell32.Shell_NotifyIconW(0, ctypes.byref(self._tray_nid))  # NIM_ADD
-            except:
-                pass
+        """Add icon to system tray."""
+        hicon = win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
+        self._notify_data = (
+            self._tray_hwnd, 0,
+            win32gui.NIF_ICON | win32gui.NIF_TIP | win32gui.NIF_MESSAGE,
+            self.TRAY_WM, hicon, "AURUM MT5 Bridge"
+        )
+        win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data)
 
     def _hide_tray(self):
-        """Remove the tray icon."""
-        if hasattr(self, '_tray_nid') and self._tray_nid:
+        """Remove icon from system tray."""
+        if hasattr(self, '_notify_data') and self._notify_data:
             try:
-                ctypes.windll.shell32.Shell_NotifyIconW(2, ctypes.byref(self._tray_nid))  # NIM_DELETE
+                win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, self._notify_data)
+            except:
+                pass
+            self._notify_data = None
+
+    def _update_tray_tip(self, tip):
+        """Update tray tooltip text."""
+        if hasattr(self, '_notify_data') and self._notify_data:
+            d = self._notify_data
+            self._notify_data = (d[0], d[1], d[2], d[3], d[4], tip)
+            try:
+                win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, self._notify_data)
             except:
                 pass
 
+    def _on_tray_command(self, hwnd, msg, wparam, lparam):
+        cmd = win32api.LOWORD(wparam)
+        if cmd == self.MENU_OPEN:
+            self.root.after(0, self._restore_from_tray)
+        elif cmd == self.MENU_START:
+            if not self.running:
+                self.root.after(0, self._toggle_bridge)
+        elif cmd == self.MENU_STOP:
+            if self.running:
+                self.root.after(0, self._toggle_bridge)
+        elif cmd == self.MENU_QUIT:
+            self.root.after(0, self._do_quit)
+
+    def _on_tray_msg(self, hwnd, msg, wparam, lparam):
+        """Handle custom tray callback message (WM_USER + 20)."""
+        if lparam == win32con.WM_LBUTTONUP:
+            self.root.after(0, self._restore_from_tray)
+        elif lparam == win32con.WM_RBUTTONUP:
+            self._on_tray_rbuttonup(hwnd, msg, wparam, lparam)
+
+    def _on_tray_rbuttonup(self, hwnd, msg, wparam, lparam):
+        """Right-click: show context menu."""
+        menu = win32gui.CreatePopupMenu()
+        win32gui.AppendMenu(menu, win32con.MF_STRING, self.MENU_OPEN, "打开界面")
+        win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+        s_flag = win32con.MF_GRAYED if self.running else win32con.MF_STRING
+        p_flag = win32con.MF_STRING if self.running else win32con.MF_GRAYED
+        win32gui.AppendMenu(menu, s_flag, self.MENU_START, "启动桥接")
+        win32gui.AppendMenu(menu, p_flag, self.MENU_STOP, "关闭桥接")
+        win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+        win32gui.AppendMenu(menu, win32con.MF_STRING, self.MENU_QUIT, "退出")
+        pt = win32api.GetCursorPos()
+        win32gui.SetForegroundWindow(self._tray_hwnd)
+        win32gui.TrackPopupMenu(menu, win32con.TPM_RIGHTBUTTON, pt[0], pt[1], 0, self._tray_hwnd, None)
+        win32gui.PostMessage(self._tray_hwnd, 0, 0, 0)
+        win32gui.DestroyMenu(menu)
+
     def _restore_from_tray(self):
-        """Restore window from tray."""
         self._hide_tray()
+        self.root.after(0, self._do_restore)
+
+    def _do_restore(self):
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
         self._is_minimized_to_tray = False
 
-    def _tray_start_bridge(self):
-        if not self.running:
-            self.root.after(0, self._toggle_bridge)
+    # ============ Window Lifecycle ============
 
-    def _tray_stop_bridge(self):
-        if self.running:
-            self.root.after(0, self._toggle_bridge)
+    def _on_close(self):
+        if self._tray_hwnd:
+            self._show_tray()
+            self.root.withdraw()
+            self._is_minimized_to_tray = True
+            self._log("已最小化到系统托盘")
+            self._poll_tray()
+        else:
+            self._do_quit()
 
-    def _tray_quit(self):
-        """Quit from tray."""
-        self._do_quit()
+    def _poll_tray(self):
+        """Pump Windows messages for the tray hidden window."""
+        if not self._is_minimized_to_tray or not self._tray_hwnd:
+            return
+        try:
+            while True:
+                msg = win32gui.PeekMessage(self._tray_hwnd, 0, 0, 1)  # PM_REMOVE
+                if not msg:
+                    break
+                win32gui.TranslateMessage(msg)
+                win32gui.DispatchMessage(msg)
+        except:
+            pass
+        if self._is_minimized_to_tray:
+            self.root.after(200, self._poll_tray)
 
     def _do_quit(self):
         self.running = False
-        # Disconnect WebSocket
         try:
             if self._ws and self._ws.connected:
                 self._ws.send(json.dumps({"type": "disconnect", "reason": "user_close"}))
                 self._ws.close()
-        except Exception:
+        except:
             pass
         if self.mt5:
-            try:
-                self.mt5.shutdown()
-            except:
-                pass
+            try: self.mt5.shutdown()
+            except: pass
         self._hide_tray()
         self.root.destroy()
 
     # ============ Utilities ============
 
     def _copy(self, text):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self._log("已复制到剪贴板")
+        self.root.clipboard_clear(); self.root.clipboard_append(text); self._log("已复制到剪贴板")
 
     def _toggle_token(self):
         self.token_shown = not self.token_shown
@@ -357,16 +302,13 @@ class AurumBridge:
         self.log_area.config(state="normal")
         ts = time.strftime("%H:%M:%S")
         self.log_area.insert("end", f"[{ts}] {msg}\n")
-        # 限制日志行数，防止内存溢出
         line_count = int(self.log_area.index("end-1c").split(".")[0])
         if line_count > MAX_LOG_LINES:
             self.log_area.delete("1.0", f"{line_count - MAX_LOG_LINES}.0")
-        self.log_area.see("end")
-        self.log_area.config(state="disabled")
+        self.log_area.see("end"); self.log_area.config(state="disabled")
 
     def _set_status(self, text, color, account=""):
-        self.status_dot.config(fg=color)
-        self.status_label.config(fg=color, text=text)
+        self.status_dot.config(fg=color); self.status_label.config(fg=color, text=text)
         self.account_label.config(text=account)
 
     def _check_mt5(self):
@@ -383,140 +325,84 @@ class AurumBridge:
             else:
                 self._log(f"MT5 初始化失败: {mt5.last_error()}")
         except Exception as e:
-            if getattr(sys, 'frozen', False):
-                self._log(f"错误: MetaTrader5 加载失败: {type(e).__name__}: {e}")
-                self._log(f"sys.path: {sys.path}")
-                self._log(f"sys._MEIPASS: {getattr(sys, '_MEIPASS', 'N/A')}")
-                import traceback
-                self._log(traceback.format_exc())
-                messagebox.showerror("缺少依赖",
-                    f"MetaTrader5 加载失败！\n\n{type(e).__name__}: {e}\n\n"
-                    f"临时目录: {getattr(sys, '_MEIPASS', 'N/A')}")
-            else:
-                self._log(f"MetaTrader5 加载失败: {e}，正在尝试安装...")
+            self._log(f"MetaTrader5 加载失败: {e}")
+            if not getattr(sys, 'frozen', False):
                 threading.Thread(target=self._install_mt5, daemon=True).start()
 
     def _install_mt5(self):
         import subprocess
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", "MetaTrader5", "-q"])
-            import MetaTrader5 as mt5
-            self.mt5 = mt5
-            self._log("MetaTrader5 安装成功")
+            import MetaTrader5 as mt5; self.mt5 = mt5; self._log("MetaTrader5 安装成功")
         except Exception as e:
             self._log(f"安装失败: {e}")
 
     def _toggle_bridge(self):
         if self.running:
-            if not messagebox.askyesno("确认停止", "确定要断开 MT5 桥接连接吗？\n\n停止后将无法自动执行交易信号。",
-                                       icon="warning"):
+            if not messagebox.askyesno("确认停止", "确定要断开 MT5 桥接连接吗？\n\n停止后将无法自动执行交易信号。", icon="warning"):
                 return
             self.running = False
             self.start_btn.config(text="▶  启动桥接", bg="#3b82f6")
-            self._set_status("已停止", "#ef4444")
-            self._log("桥接已停止")
-            self._update_tray_state()
+            self._set_status("已停止", "#ef4444"); self._log("桥接已停止")
+            self._update_tray_tip("AURUM Bridge - 已停止")
         else:
-            server = self.server_var.get().strip()
-            token = self.token_var.get().strip()
+            server, token = self.server_var.get().strip(), self.token_var.get().strip()
             if not server or not token:
                 missing = []
-                if not server:
-                    missing.append("服务器地址")
-                if not token:
-                    missing.append("Token")
-                messagebox.showwarning("信息不完整",
-                    f"{' 和 '.join(missing)} 为空！\n\n"
-                    f"请手动填写，或从网站下载 config.json 放到本程序目录。")
+                if not server: missing.append("服务器地址")
+                if not token: missing.append("Token")
+                messagebox.showwarning("信息不完整", f"{' 和 '.join(missing)} 为空！\n\n请手动填写，或从网站下载 config.json 放到本程序目录。")
                 return
             self.running = True
             self.start_btn.config(text="■  停止桥接", bg="#ef4444")
-            self._set_status("连接中...", "#f59e0b")
-            self._log("启动桥接...")
-            self._update_tray_state()
+            self._set_status("连接中...", "#f59e0b"); self._log("启动桥接...")
+            self._update_tray_tip("AURUM Bridge - 运行中")
             self.bridge_thread = threading.Thread(target=self._bridge_loop, daemon=True)
             self.bridge_thread.start()
 
-    def _update_tray_state(self):
-        """Update tray icon tooltip to reflect current state."""
-        if hasattr(self, '_tray_nid') and self._tray_nid:
-            state = "运行中" if self.running else "已停止"
-            self._tray_nid.szTip = f"AURUM Bridge - {state}"
-            try:
-                ctypes.windll.shell32.Shell_NotifyIconW(1, ctypes.byref(self._tray_nid))  # NIM_MODIFY
-            except:
-                pass
-
     def _resolve_symbol(self, symbol):
-        """Find actual MT5 symbol name."""
         requested = str(symbol or "").strip()
-        if not requested:
-            raise RuntimeError("Symbol is required")
+        if not requested: raise RuntimeError("Symbol is required")
         symbols = self.mt5.symbols_get()
-        if symbols is None:
-            raise RuntimeError("MT5 symbols_get failed")
+        if symbols is None: raise RuntimeError("MT5 symbols_get failed")
         for item in symbols:
-            if item.name == requested:
-                return item.name
-        requested_upper = requested.upper()
+            if item.name == requested: return item.name
         for item in symbols:
-            if item.name.upper() == requested_upper:
-                return item.name
-        fallbacks = [requested + ".s", requested + "m", requested + ".c", requested + "_", requested + ".micro"]
-        for fb in fallbacks:
+            if item.name.upper() == requested.upper(): return item.name
+        for fb in [requested+".s", requested+"m", requested+".c", requested+"_", requested+".micro"]:
             for item in symbols:
-                if item.name.upper() == fb.upper():
-                    return item.name
+                if item.name.upper() == fb.upper(): return item.name
         for item in symbols:
-            if item.name.upper().startswith(requested_upper + ".") or item.name.upper().startswith(requested_upper + "_"):
+            if item.name.upper().startswith(requested.upper()+".") or item.name.upper().startswith(requested.upper()+"_"):
                 return item.name
         raise RuntimeError(f"Symbol not found in MT5: {requested}")
 
     def _get_filling_mode(self, symbol):
-        """Detect the correct filling mode for a symbol."""
         info = self.mt5.symbol_info(symbol)
-        if not info:
-            return self.mt5.ORDER_FILLING_IOC
-        filling_mode = int(getattr(info, "filling_mode", 0) or 0)
-        candidates = []
-        if filling_mode & 1:
-            candidates.append(self.mt5.ORDER_FILLING_FOK)
-        if filling_mode & 2:
-            candidates.append(self.mt5.ORDER_FILLING_IOC)
-        if not candidates:
-            candidates = [self.mt5.ORDER_FILLING_RETURN, self.mt5.ORDER_FILLING_FOK, self.mt5.ORDER_FILLING_IOC]
-        if self.mt5.ORDER_FILLING_FOK in candidates:
-            return self.mt5.ORDER_FILLING_FOK
-        return candidates[0]
+        if not info: return self.mt5.ORDER_FILLING_IOC
+        fm = int(getattr(info, "filling_mode", 0) or 0)
+        cands = []
+        if fm & 1: cands.append(self.mt5.ORDER_FILLING_FOK)
+        if fm & 2: cands.append(self.mt5.ORDER_FILLING_IOC)
+        if not cands: cands = [self.mt5.ORDER_FILLING_RETURN, self.mt5.ORDER_FILLING_FOK, self.mt5.ORDER_FILLING_IOC]
+        return self.mt5.ORDER_FILLING_FOK if self.mt5.ORDER_FILLING_FOK in cands else cands[0]
 
     def _process_command(self, cmd):
-        action = cmd.get("action")
-        params = cmd.get("params", {})
+        action = cmd.get("action"); params = cmd.get("params", {})
         try:
             if action == "open":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
-                info = self.mt5.symbol_info(symbol)
-                tick = self.mt5.symbol_info_tick(symbol)
-                if not info:
-                    return {"status": "error", "message": f"Symbol not available: {symbol}"}
-                if not tick:
-                    return {"status": "error", "message": f"Invalid live quote for {symbol}"}
-                order_type = self.mt5.ORDER_TYPE_BUY if (params.get("type") or params.get("order_type") or "buy").lower() == "buy" else self.mt5.ORDER_TYPE_SELL
-                req = {
-                    "action": self.mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
-                    "volume": float(params.get("lot") or params.get("volume") or 0.01),
-                    "type": order_type,
-                    "magic": 234000,
-                    "comment": params.get("comment", "AURUM"),
-                    "type_time": self.mt5.ORDER_TIME_GTC,
-                    "type_filling": self._get_filling_mode(symbol),
-                }
-                if params.get("sl"):
-                    req["sl"] = float(params["sl"])
-                if params.get("tp"):
-                    req["tp"] = float(params["tp"])
+                info = self.mt5.symbol_info(symbol); tick = self.mt5.symbol_info_tick(symbol)
+                if not info: return {"status": "error", "message": f"Symbol not available: {symbol}"}
+                if not tick: return {"status": "error", "message": f"Invalid live quote for {symbol}"}
+                ot = self.mt5.ORDER_TYPE_BUY if (params.get("type") or params.get("order_type") or "buy").lower() == "buy" else self.mt5.ORDER_TYPE_SELL
+                req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
+                       "volume": float(params.get("lot") or params.get("volume") or 0.01),
+                       "type": ot, "magic": 234000, "comment": params.get("comment", "AURUM"),
+                       "type_time": self.mt5.ORDER_TIME_GTC, "type_filling": self._get_filling_mode(symbol)}
+                if params.get("sl"): req["sl"] = float(params["sl"])
+                if params.get("tp"): req["tp"] = float(params["tp"])
                 result = self.mt5.order_send(req)
                 if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                     return {"status": "success", "order": result.order, "price": result.price}
@@ -526,295 +412,190 @@ class AurumBridge:
                 ticket = params.get("ticket")
                 if ticket:
                     positions = self.mt5.positions_get(ticket=ticket)
-                    if not positions:
-                        return {"status": "error", "message": f"Position {ticket} not found"}
+                    if not positions: return {"status": "error", "message": f"Position {ticket} not found"}
                     pos = positions[0]
-                    close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                    result = self.mt5.order_send({
-                        "action": self.mt5.TRADE_ACTION_DEAL,
-                        "position": pos.ticket, "symbol": pos.symbol,
-                        "volume": pos.volume, "type": close_type,
-                        "magic": 234000, "type_filling": self._get_filling_mode(pos.symbol),
-                    })
+                    ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                    result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "position": pos.ticket,
+                        "symbol": pos.symbol, "volume": pos.volume, "type": ct, "magic": 234000,
+                        "type_filling": self._get_filling_mode(pos.symbol)})
                     if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                         return {"status": "success", "ticket": pos.ticket}
                     return {"status": "error", "message": result.comment if result else "close failed"}
                 else:
-                    symbol = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
-                    positions = self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
-                    if not positions:
-                        return {"status": "success", "message": "No positions"}
+                    sym = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
+                    positions = self.mt5.positions_get(symbol=sym) if sym else self.mt5.positions_get()
+                    if not positions: return {"status": "success", "message": "No positions"}
                     for pos in positions:
-                        close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                        self.mt5.order_send({
-                            "action": self.mt5.TRADE_ACTION_DEAL,
-                            "symbol": pos.symbol, "volume": pos.volume,
-                            "type": close_type, "position": pos.ticket,
-                            "magic": 234000, "type_filling": self._get_filling_mode(pos.symbol),
-                        })
+                        ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                        self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
+                            "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
+                            "type_filling": self._get_filling_mode(pos.symbol)})
                     return {"status": "success", "closed": len(positions)}
 
             elif action == "close_all":
                 positions = self.mt5.positions_get()
-                if not positions:
-                    return {"status": "success", "closed": 0}
+                if not positions: return {"status": "success", "closed": 0}
                 for pos in positions:
-                    close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                    self.mt5.order_send({
-                        "action": self.mt5.TRADE_ACTION_DEAL,
-                        "symbol": pos.symbol, "volume": pos.volume,
-                        "type": close_type, "position": pos.ticket,
-                        "magic": 234000, "type_filling": self._get_filling_mode(pos.symbol),
-                    })
+                    ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                    self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
+                        "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
+                        "type_filling": self._get_filling_mode(pos.symbol)})
                 return {"status": "success", "closed": len(positions)}
 
             elif action == "rates":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
-                tf_map = {
-                    "M1": self.mt5.TIMEFRAME_M1, "M5": self.mt5.TIMEFRAME_M5,
-                    "M15": self.mt5.TIMEFRAME_M15, "M30": self.mt5.TIMEFRAME_M30,
-                    "H1": self.mt5.TIMEFRAME_H1, "H4": self.mt5.TIMEFRAME_H4,
-                    "D1": self.mt5.TIMEFRAME_D1,
-                }
+                tf_map = {"M1": self.mt5.TIMEFRAME_M1, "M5": self.mt5.TIMEFRAME_M5,
+                          "M15": self.mt5.TIMEFRAME_M15, "M30": self.mt5.TIMEFRAME_M30,
+                          "H1": self.mt5.TIMEFRAME_H1, "H4": self.mt5.TIMEFRAME_H4, "D1": self.mt5.TIMEFRAME_D1}
                 tf = tf_map.get(params.get("timeframe", "M30"), self.mt5.TIMEFRAME_M30)
-                count = int(params.get("count", 100))
-                rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, count)
+                rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, int(params.get("count", 100)))
                 if rates is not None and len(rates) > 0:
-                    out = []
-                    for r in rates:
-                        t = _mt5_time(int(r[0]))
-                        out.append({"time": t, "open": float(r[1]), "high": float(r[2]),
-                                    "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]),
-                                    "spread": int(r[6]) if len(r) > 6 else 0})
-                    return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe", "M30"),
+                    out = [{"time": _mt5_time(int(r[0])), "open": float(r[1]), "high": float(r[2]),
+                            "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]),
+                            "spread": int(r[6]) if len(r) > 6 else 0} for r in rates]
+                    return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe","M30"),
                             "count": len(out), "rates": out, "source": "mt5"}
                 return {"status": "success", "symbol": symbol, "rates": [], "source": "mt5"}
 
             elif action == "quote":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
-                tick = self.mt5.symbol_info_tick(symbol)
-                info = self.mt5.symbol_info(symbol)
-                if not tick:
-                    return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
-                time_str = _mt5_time(tick.time)
-                return {
-                    "status": "success", "symbol": symbol,
-                    "bid": tick.bid, "ask": tick.ask,
-                    "spread": round(info.spread * info.point, info.digits) if info else 0,
-                    "time": time_str,
-                    "digits": info.digits if info else 2,
-                    "point": info.point if info else 0.01,
-                    "source": "mt5",
-                }
+                tick = self.mt5.symbol_info_tick(symbol); info = self.mt5.symbol_info(symbol)
+                if not tick: return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
+                return {"status": "success", "symbol": symbol, "bid": tick.bid, "ask": tick.ask,
+                        "spread": round(info.spread * info.point, info.digits) if info else 0,
+                        "time": _mt5_time(tick.time), "digits": info.digits if info else 2,
+                        "point": info.point if info else 0.01, "source": "mt5"}
 
             elif action == "positions":
-                symbol = params.get("symbol")
-                if symbol:
-                    symbol = self._resolve_symbol(symbol)
-                    positions = self.mt5.positions_get(symbol=symbol)
-                else:
-                    positions = self.mt5.positions_get()
+                sym = params.get("symbol")
+                if sym: sym = self._resolve_symbol(sym)
+                positions = self.mt5.positions_get(symbol=sym) if sym else self.mt5.positions_get()
                 if positions:
-                    payload = []
-                    for p in positions:
-                        d = p._asdict()
-                        time_str = _mt5_time(d.get("time", 0))
-                        payload.append({
-                            "ticket": d["ticket"], "symbol": d["symbol"],
-                            "type": "buy" if d["type"] == 0 else "sell",
-                            "volume": d["volume"], "open_price": d["price_open"], "price_open": d["price_open"],
-                            "price_current": d["price_current"],
-                            "profit": d["profit"], "sl": d["sl"], "tp": d["tp"],
-                            "swap": d["swap"], "magic": d["magic"], "comment": d["comment"],
-                            "time": time_str, "source": "mt5",
-                        })
+                    payload = [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
+                        "volume": p.volume, "open_price": p.price_open, "price_open": p.price_open,
+                        "price_current": p.price_current, "profit": p.profit, "sl": p.sl, "tp": p.tp,
+                        "swap": p.swap, "magic": p.magic, "comment": p.comment,
+                        "time": _mt5_time(getattr(p,'time',0)), "source": "mt5"} for p in positions]
                     return {"status": "success", "positions": payload, "count": len(payload), "source": "mt5"}
                 return {"status": "success", "positions": [], "count": 0, "source": "mt5"}
 
             elif action == "symbols":
                 symbols = self.mt5.symbols_get()
-                if symbols is None:
-                    return {"status": "error", "message": "MT5 symbols_get failed"}
-                payload = []
-                for s in symbols:
-                    d = s._asdict()
-                    payload.append({
-                        "name": d.get("name"), "description": d.get("description"),
-                        "currency_base": d.get("currency_base"), "currency_profit": d.get("currency_profit"),
-                        "currency_margin": d.get("currency_margin"), "digits": d.get("digits"),
-                        "trade_mode": d.get("trade_mode"), "trade_stops_level": d.get("trade_stops_level"),
-                        "point": d.get("point"),
-                    })
+                if symbols is None: return {"status": "error", "message": "MT5 symbols_get failed"}
+                payload = [{"name": s.name, "description": s.description, "currency_base": s.currency_base,
+                    "currency_profit": s.currency_profit, "currency_margin": s.currency_margin,
+                    "digits": s.digits, "trade_mode": s.trade_mode, "point": s.point} for s in symbols]
                 return {"status": "success", "symbols": payload, "source": "mt5"}
 
             elif action == "account":
-                acc = self.mt5.account_info()
+                acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
                 if acc:
-                    terminal = self.mt5.terminal_info()
-                    return {
-                        "status": "success",
-                        "balance": acc.balance, "equity": acc.equity,
+                    return {"status": "success", "balance": acc.balance, "equity": acc.equity,
                         "margin": acc.margin, "margin_free": acc.margin_free,
-                        "margin_level": getattr(acc, "margin_level", 0),
-                        "profit": acc.profit, "currency": acc.currency,
-                        "leverage": acc.leverage, "server": acc.server,
-                        "company": getattr(acc, "company", ""),
-                        "login": acc.login,
-                        "trade_allowed": acc.trade_allowed,
-                        "trade_expert": acc.trade_expert,
+                        "margin_level": getattr(acc, "margin_level", 0), "profit": acc.profit,
+                        "currency": acc.currency, "leverage": acc.leverage, "server": acc.server,
+                        "company": getattr(acc, "company", ""), "login": acc.login,
+                        "trade_allowed": acc.trade_allowed, "trade_expert": acc.trade_expert,
                         "terminal_build": terminal.build if terminal else 0,
-                        "terminal_connected": terminal.connected if terminal else False,
-                        "source": "mt5",
-                    }
+                        "terminal_connected": terminal.connected if terminal else False, "source": "mt5"}
                 return {"status": "error", "message": "no account info"}
 
             elif action == "status":
-                acc = self.mt5.account_info()
-                terminal = self.mt5.terminal_info()
+                acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
                 if acc:
-                    return {
-                        "mode": "live", "mt5_package_available": True,
-                        "live_trading_enabled": getattr(self, '_trade_enabled', False),
+                    return {"mode": "live", "mt5_package_available": True,
+                        "live_trading_enabled": self._trade_enabled,
                         "terminal_trade_allowed": terminal.trade_allowed if terminal else False,
-                        "account_trade_allowed": acc.trade_allowed,
-                        "account_trade_expert": acc.trade_expert,
-                        "login": acc.login, "server": acc.server,
-                        "balance": acc.balance, "equity": acc.equity,
-                    }
+                        "account_trade_allowed": acc.trade_allowed, "account_trade_expert": acc.trade_expert,
+                        "login": acc.login, "server": acc.server, "balance": acc.balance, "equity": acc.equity}
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
 
             elif action == "history":
                 import math
-                page = params.get("page", 1)
-                page_size = params.get("page_size", 20)
-                deposit = 0.0
-                withdrawal = 0.0
-                credit = 0.0
+                page = params.get("page", 1); page_size = params.get("page_size", 20)
+                deposit = withdrawal = credit = 0.0
                 date_to = datetime.utcnow() + timedelta(days=1)
                 date_from = date_to - timedelta(days=31)
                 deals = self.mt5.history_deals_get(date_from, date_to)
-                if deals is None:
-                    return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
+                if deals is None: return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
                 deal_rows = [d._asdict() for d in deals]
-                deals_by_position = {}
-                symbol_info_cache = {}
+                deals_by_pos = {}
                 balance_type = getattr(self.mt5, "DEAL_TYPE_BALANCE", 2)
                 credit_type = getattr(self.mt5, "DEAL_TYPE_CREDIT", 3)
                 for d in deal_rows:
                     if d.get("type") == balance_type:
-                        amount = float(d.get("profit") or 0)
-                        if amount >= 0:
-                            deposit += amount
-                        else:
-                            withdrawal += abs(amount)
-                    if d.get("type") == credit_type:
-                        credit += float(d.get("profit") or 0)
+                        amt = float(d.get("profit") or 0)
+                        if amt >= 0: deposit += amt
+                        else: withdrawal += abs(amt)
+                    if d.get("type") == credit_type: credit += float(d.get("profit") or 0)
                     key = d.get("position_id") or d.get("order") or d.get("ticket")
-                    deals_by_position.setdefault(key, []).append(d)
-
-                def symbol_point(symbol):
-                    if not symbol:
-                        return None
-                    if symbol not in symbol_info_cache:
-                        symbol_info_cache[symbol] = self.mt5.symbol_info(symbol)
-                    info = symbol_info_cache.get(symbol)
-                    point = getattr(info, "point", None) if info else None
-                    return float(point) if point else None
-
+                    deals_by_pos.setdefault(key, []).append(d)
+                si_cache = {}
+                def sp(sym):
+                    if not sym: return None
+                    if sym not in si_cache: si_cache[sym] = self.mt5.symbol_info(sym)
+                    i = si_cache.get(sym); p = getattr(i, "point", None) if i else None
+                    return float(p) if p else None
                 rows = []
                 entry_out = getattr(self.mt5, "DEAL_ENTRY_OUT", 1)
                 entry_inout = getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)
                 entry_in = getattr(self.mt5, "DEAL_ENTRY_IN", 0)
                 deal_type_buy = getattr(self.mt5, "DEAL_TYPE_BUY", 0)
                 for d in deal_rows:
-                    if d.get("entry") not in (entry_out, entry_inout):
-                        continue
-                    position_id = d.get("position_id") or d.get("order") or d.get("ticket")
-                    group = deals_by_position.get(position_id, [])
-                    entry_deal = next((item for item in group if item.get("entry") == entry_in), None)
-                    side_deal = entry_deal or d
-                    direction = "BUY" if side_deal.get("type") == deal_type_buy else "SELL"
-                    symbol = d.get("symbol") or (entry_deal or {}).get("symbol")
-                    entry_price = (entry_deal or {}).get("price")
-                    exit_price = d.get("price")
-                    point = symbol_point(symbol)
-                    profit_points = None
-                    if entry_price and exit_price and point:
-                        if direction == "BUY":
-                            profit_points = round((float(exit_price) - float(entry_price)) / point, 1)
-                        else:
-                            profit_points = round((float(entry_price) - float(exit_price)) / point, 1)
-                    entry_order = (entry_deal or {}).get("order") or position_id
-                    rows.append({
-                        "ticket": entry_order, "deal_ticket": d.get("ticket"),
-                        "order": entry_order, "close_order": d.get("order"),
-                        "position_id": position_id, "symbol": symbol,
-                        "type": direction, "volume": d.get("volume"),
-                        "entry_price": entry_price, "exit_price": exit_price,
-                        "price": exit_price, "profit": d.get("profit"),
-                        "swap": d.get("swap"), "commission": d.get("commission"),
-                        "profit_points": profit_points,
-                        "entry_time": _mt5_time((entry_deal or {}).get("time")),
-                        "close_time": _mt5_time(d.get("time")),
-                        "time": _mt5_time(d.get("time")),
-                        "comment": d.get("comment"),
-                    })
-                rows.sort(key=lambda row: row.get("close_time") or row.get("entry_time") or "", reverse=True)
-                total = len(rows)
-                start_idx = max(page - 1, 0) * page_size
-                page_rows = rows[start_idx : start_idx + page_size]
-                total_profit = sum(float(r.get("profit") or 0) for r in rows)
-                net_result = total_profit + credit + deposit - withdrawal
-                account_balance = 10000.0
+                    if d.get("entry") not in (entry_out, entry_inout): continue
+                    pid = d.get("position_id") or d.get("order") or d.get("ticket")
+                    grp = deals_by_pos.get(pid, [])
+                    ed = next((i for i in grp if i.get("entry") == entry_in), None)
+                    sd = ed or d
+                    direction = "BUY" if sd.get("type") == deal_type_buy else "SELL"
+                    sym = d.get("symbol") or (ed or {}).get("symbol")
+                    ep = (ed or {}).get("price"); xp = d.get("price"); pt = sp(sym)
+                    pp = None
+                    if ep and xp and pt:
+                        pp = round((float(xp)-float(ep))/pt, 1) if direction=="BUY" else round((float(ep)-float(xp))/pt, 1)
+                    eo = (ed or {}).get("order") or pid
+                    rows.append({"ticket": eo, "deal_ticket": d.get("ticket"), "order": eo,
+                        "close_order": d.get("order"), "position_id": pid, "symbol": sym,
+                        "type": direction, "volume": d.get("volume"), "entry_price": ep, "exit_price": xp,
+                        "price": xp, "profit": d.get("profit"), "swap": d.get("swap"),
+                        "commission": d.get("commission"), "profit_points": pp,
+                        "entry_time": _mt5_time((ed or {}).get("time")),
+                        "close_time": _mt5_time(d.get("time")), "time": _mt5_time(d.get("time")),
+                        "comment": d.get("comment")})
+                rows.sort(key=lambda r: r.get("close_time") or r.get("entry_time") or "", reverse=True)
+                total = len(rows); si = max(page-1,0)*page_size
+                pr = rows[si:si+page_size]
+                tp = sum(float(r.get("profit") or 0) for r in rows)
+                nr = tp+credit+deposit-withdrawal
+                ab = 10000.0
                 try:
                     acc = self.mt5.account_info()
-                    if acc:
-                        account_balance = float(acc.balance)
-                except Exception:
-                    pass
-                account_principal = round(account_balance - net_result, 2)
-                return {
-                    "status": "success",
-                    "orders": page_rows,
-                    "statistics": {
-                        "account_principal": account_principal,
-                        "account_balance": round(account_balance, 2),
-                        "total_profit": round(total_profit, 2),
-                        "credit": round(credit, 2),
-                        "deposit": round(deposit, 2),
-                        "withdrawal": round(withdrawal, 2),
-                        "net_result": round(net_result, 2),
-                        "trade_count": total,
-                        "total_volume": round(sum(float(r.get("volume") or 0) for r in rows), 2),
-                    },
-                    "pagination": {
-                        "current_page": page, "page_size": page_size,
-                        "total_count": total, "total_pages": max(math.ceil(total / page_size), 1),
-                    },
-                    "source": "mt5",
-                }
+                    if acc: ab = float(acc.balance)
+                except: pass
+                return {"status": "success", "orders": pr, "statistics": {
+                    "account_principal": round(ab-nr,2), "account_balance": round(ab,2),
+                    "total_profit": round(tp,2), "credit": round(credit,2), "deposit": round(deposit,2),
+                    "withdrawal": round(withdrawal,2), "net_result": round(nr,2),
+                    "trade_count": total, "total_volume": round(sum(float(r.get("volume") or 0) for r in rows),2)},
+                    "pagination": {"current_page": page, "page_size": page_size,
+                        "total_count": total, "total_pages": max(math.ceil(total/page_size),1)}, "source": "mt5"}
 
             elif action == "diagnostics":
-                acc = self.mt5.account_info()
-                terminal = self.mt5.terminal_info()
-                return {
-                    "status": "success", "mt5_connected": True,
+                acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
+                return {"status": "success", "mt5_connected": True,
                     "account": {"login": acc.login, "server": acc.server, "balance": acc.balance} if acc else None,
-                    "terminal": {"build": terminal.build, "connected": terminal.connected, "trade_allowed": terminal.trade_allowed} if terminal else None,
-                }
+                    "terminal": {"build": terminal.build, "connected": terminal.connected,
+                        "trade_allowed": terminal.trade_allowed} if terminal else None}
 
             elif action == "toggle_trade":
-                enable = params.get("enable", False)
-                self._trade_enabled = enable
-                return {"status": "success", "live_trading_enabled": enable}
+                self._trade_enabled = params.get("enable", False)
+                return {"status": "success", "live_trading_enabled": self._trade_enabled}
 
             elif action == "set_quote_symbol":
-                symbol = params.get("symbol", "XAUUSD")
-                resolved = self._resolve_symbol(symbol)
-                self._resolved_symbol = resolved
-                return {"status": "success", "symbol": resolved}
+                self._resolved_symbol = self._resolve_symbol(params.get("symbol", "XAUUSD"))
+                return {"status": "success", "symbol": self._resolved_symbol}
 
             else:
                 return {"status": "error", "message": f"unknown action: {action}"}
@@ -824,214 +605,119 @@ class AurumBridge:
     # ============ Bridge Loop with Auto-Reconnect ============
 
     def _bridge_loop(self):
-        """Main bridge loop with auto-reconnect (5s interval, 5min timeout)."""
-        # Initialize MT5
         if not self.mt5:
             try:
-                import MetaTrader5 as mt5
-                self.mt5 = mt5
+                import MetaTrader5 as mt5; self.mt5 = mt5
             except:
                 self.root.after(0, self._log, "错误: MetaTrader5 未安装")
-                self.root.after(0, self._toggle_bridge)
-                return
+                self.root.after(0, self._toggle_bridge); return
 
         if not self.mt5.initialize():
             self.root.after(0, self._log, f"MT5 初始化失败: {self.mt5.last_error()}")
-            self.root.after(0, self._toggle_bridge)
-            return
+            self.root.after(0, self._toggle_bridge); return
 
         info = self.mt5.account_info()
         if info:
             self.root.after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
-        else:
-            self.root.after(0, self._log, "警告: MT5 account_info() 返回 None，请检查MT5是否已登录")
 
         if not HAS_WS:
-            self.root.after(0, self._log, "错误: websocket-client 未安装，请运行: pip install websocket-client")
-            self.root.after(0, self._toggle_bridge)
-            return
+            self.root.after(0, self._log, "错误: websocket-client 未安装")
+            self.root.after(0, self._toggle_bridge); return
 
-        server = self.server_var.get().replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
+        server = self.server_var.get().replace("http://","ws://").replace("https://","wss://").rstrip("/")
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token_var.get()}"
         self.root.after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
-        MAX_RETRY_SECONDS = 300  # 5 minutes
-        RETRY_INTERVAL = 5       # 5 seconds
+        MAX_RETRY = 300; RETRY_INT = 5
 
         while self.running:
-            retry_start = time.time()
-            connected = False
+            retry_start = time.time(); connected = False
 
-            # Try to connect (with retries)
             while self.running:
                 elapsed = time.time() - retry_start
-                if elapsed >= MAX_RETRY_SECONDS:
-                    self.root.after(0, self._log, f"连接失败：已重试 {MAX_RETRY_SECONDS // 60} 分钟，停止自动重试")
+                if elapsed >= MAX_RETRY:
+                    self.root.after(0, self._log, "连接失败：已重试5分钟，停止自动重试")
                     self.root.after(0, self._set_status, "连接失败", "#ef4444", "")
                     self.root.after(0, self._toggle_bridge)
-                    if self.mt5:
-                        self.mt5.shutdown()
+                    if self.mt5: self.mt5.shutdown()
                     return
-
                 try:
-                    ws = websocket.create_connection(ws_url, timeout=10,
-                        header=["Origin: http://localhost"])
-                    self._ws = ws
-                    connected = True
-                    self.root.after(0, self._log, "WebSocket 已连接")
-                    break
+                    ws = websocket.create_connection(ws_url, timeout=10, header=["Origin: http://localhost"])
+                    self._ws = ws; connected = True
+                    self.root.after(0, self._log, "WebSocket 已连接"); break
                 except Exception as e:
-                    retry_count = int(elapsed // RETRY_INTERVAL) + 1
-                    self.root.after(0, self._log, f"连接失败 (第{retry_count}次): {e}，{RETRY_INTERVAL}秒后重试...")
-                    self.root.after(0, self._set_status, f"重连中... ({retry_count})", "#f59e0b", "")
-                    time.sleep(RETRY_INTERVAL)
+                    rc = int(elapsed // RETRY_INT) + 1
+                    self.root.after(0, self._log, f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
+                    self.root.after(0, self._set_status, f"重连中... ({rc})", "#f59e0b", "")
+                    time.sleep(RETRY_INT)
 
-            if not connected or not self.running:
-                break
+            if not connected or not self.running: break
 
-            # Connected — run bridge loop
             self._resolved_symbol = self._resolve_symbol("XAUUSD") if self.mt5 else "XAUUSD"
-            last_hb = 0
-            last_data_push = 0
-            disconnected = False
+            last_hb = 0; last_data = 0
 
             while self.running:
                 now = time.time()
-
-                # Push data every 1s
-                if now - last_data_push >= 1.0:
+                if now - last_data >= 1.0:
                     try:
-                        account = self.mt5.account_info()
-                        symbol = getattr(self, '_resolved_symbol', 'XAUUSD')
-                        tick = self.mt5.symbol_info_tick(symbol)
-                        positions = self.mt5.positions_get() or []
-
-                        data_msg = {
-                            "type": "data",
-                            "account": {
-                                "login": account.login if account else None,
-                                "balance": round(account.balance, 2) if account else None,
-                                "equity": round(account.equity, 2) if account else None,
-                                "margin": round(account.margin, 2) if account else None,
-                                "free_margin": round(account.margin_free, 2) if account else None,
-                                "profit": round(account.profit, 2) if account else None,
-                                "server": account.server if account else None,
-                            },
-                            "quote": {
-                                "symbol": symbol,
-                                "bid": round(tick.bid, 5) if tick else None,
-                                "ask": round(tick.ask, 5) if tick else None,
-                                "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in symbol else 0.001), 1) if tick else None,
-                                "time": _mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
-                            },
-                            "positions": [
-                                {
-                                    "ticket": p.ticket, "symbol": p.symbol,
-                                    "type": "buy" if p.type == 0 else "sell",
-                                    "volume": p.volume, "open_price": p.price_open,
-                                    "current_price": p.price_current,
-                                    "profit": round(p.profit, 2),
-                                    "sl": p.sl, "tp": p.tp,
-                                    "swap": p.swap, "commission": getattr(p, 'commission', 0),
-                                }
-                                for p in positions
-                            ],
-                            "live_trading_enabled": self._trade_enabled,
-                        }
-                        ws.send(json.dumps(data_msg))
-                        if account:
+                        acc = self.mt5.account_info(); sym = getattr(self, '_resolved_symbol', 'XAUUSD')
+                        tick = self.mt5.symbol_info_tick(sym); positions = self.mt5.positions_get() or []
+                        dm = {"type": "data", "account": {
+                            "login": acc.login if acc else None, "balance": round(acc.balance,2) if acc else None,
+                            "equity": round(acc.equity,2) if acc else None, "margin": round(acc.margin,2) if acc else None,
+                            "free_margin": round(acc.margin_free,2) if acc else None, "profit": round(acc.profit,2) if acc else None,
+                            "server": acc.server if acc else None}, "quote": {"symbol": sym,
+                            "bid": round(tick.bid,5) if tick else None, "ask": round(tick.ask,5) if tick else None,
+                            "spread": round((tick.ask-tick.bid)/(0.01 if "JPY" not in sym else 0.001),1) if tick else None,
+                            "time": _mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S")},
+                            "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
+                                "volume": p.volume, "open_price": p.price_open, "current_price": p.price_current,
+                                "profit": round(p.profit,2), "sl": p.sl, "tp": p.tp,
+                                "swap": p.swap, "commission": getattr(p,'commission',0)} for p in positions],
+                            "live_trading_enabled": self._trade_enabled}
+                        ws.send(json.dumps(dm))
+                        if acc:
                             self.root.after(0, self._set_status, "MT5桥接-已连接", "#22c55e",
-                                           f"{account.login} @ {account.server}  ${account.balance:,.2f}")
-                        last_data_push = now
+                                           f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
+                        last_data = now
                     except Exception as e:
                         self.root.after(0, self._log, f"数据推送错误: {e}")
 
-                # Heartbeat every 10s
                 if now - last_hb > 10:
-                    try:
-                        ws.send(json.dumps({"type": "hb"}))
-                        last_hb = now
-                    except Exception as e:
-                        self.root.after(0, self._log, f"心跳错误: {e}")
+                    try: ws.send(json.dumps({"type": "hb"})); last_hb = now
+                    except Exception as e: self.root.after(0, self._log, f"心跳错误: {e}")
 
-                # Receive commands (non-blocking)
                 ws.settimeout(0.3)
                 try:
                     data = ws.recv()
                     if data:
                         msg = json.loads(data)
                         if msg.get("type") == "command":
-                            cmd = msg
-                            self.root.after(0, self._log, f"执行: {cmd['action']}")
-                            try:
-                                resp = self._process_command(cmd)
-                            except Exception as cmd_err:
-                                resp = {"status": "error", "message": str(cmd_err)}
-                            ws.send(json.dumps({
-                                "type": "result",
-                                "command_id": msg["command_id"],
-                                "result": resp,
-                            }))
+                            self.root.after(0, self._log, f"执行: {msg['action']}")
+                            try: resp = self._process_command(msg)
+                            except Exception as ce: resp = {"status": "error", "message": str(ce)}
+                            ws.send(json.dumps({"type": "result", "command_id": msg["command_id"], "result": resp}))
                             self.root.after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
-                except websocket.WebSocketTimeoutException:
-                    pass
+                except websocket.WebSocketTimeoutException: pass
                 except websocket.WebSocketConnectionClosedException:
-                    self.root.after(0, self._log, "WebSocket 连接已断开")
-                    disconnected = True
-                    break
+                    self.root.after(0, self._log, "WebSocket 连接已断开"); break
                 except Exception as e:
-                    self.root.after(0, self._log, f"接收错误: {e}")
-                    disconnected = True
-                    break
+                    self.root.after(0, self._log, f"接收错误: {e}"); break
 
-            # Connection lost — clean up
             try:
                 if ws and ws.connected:
-                    ws.send(json.dumps({"type": "disconnect", "reason": "client_reconnect"}))
-                    ws.close()
-            except Exception:
-                pass
+                    ws.send(json.dumps({"type": "disconnect", "reason": "client_reconnect"})); ws.close()
+            except: pass
             self._ws = None
-
-            if not self.running:
-                break
-
-            # Auto-reconnect
-            self.root.after(0, self._log, f"连接断开，{RETRY_INTERVAL}秒后自动重连...")
+            if not self.running: break
+            self.root.after(0, self._log, f"连接断开，{RETRY_INT}秒后自动重连...")
             self.root.after(0, self._set_status, "重连中...", "#f59e0b", "")
-            time.sleep(RETRY_INTERVAL)
+            time.sleep(RETRY_INT)
 
-        if self.mt5:
-            self.mt5.shutdown()
+        if self.mt5: self.mt5.shutdown()
         self.root.after(0, self._log, "MT5 已断开")
 
-    # ============ Window Lifecycle ============
-
-    def _on_close(self):
-        """Minimize to tray instead of closing (if tray is available)."""
-        if self._tray_hwnd:
-            self._show_tray()
-            self.root.withdraw()
-            self._is_minimized_to_tray = True
-            self._log("已最小化到系统托盘")
-            # Process tray messages in background
-            self._poll_tray_messages()
-        else:
-            self._do_quit()
-
-    def _poll_tray_messages(self):
-        """Poll Windows messages for tray icon."""
-        if not self._is_minimized_to_tray:
-            return
-        try:
-            msg = wintypes.MSG()
-            while ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), self._tray_hwnd, 0, 0, 1):  # PM_REMOVE
-                ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
-                ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
-        except:
-            pass
-        if self._is_minimized_to_tray:
-            self.root.after(100, self._poll_tray_messages)
+    # ============ Entry ============
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
