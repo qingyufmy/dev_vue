@@ -134,7 +134,9 @@ function handleBridge(ws, url) {
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
   const existing = bridges.get(userId)
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: existing?.tradeEnabled ?? false }); ws._userId = userId
+  // Admin defaults to tradeEnabled=true, others false
+  const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
