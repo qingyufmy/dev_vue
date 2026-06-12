@@ -66,53 +66,19 @@ class NOTIFYICONDATA(ctypes.Structure):
 WNDPROC = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM)
 _wndproc_refs = []
 
-def _make_icon(size=16):
-    """Create a gold 'Au' icon using pure GDI."""
-    hdc = user32.GetDC(0)
-    hbmp = ctypes.windll.gdi32.CreateCompatibleBitmap(hdc, size, size)
-    hmem = ctypes.windll.gdi32.CreateCompatibleDC(hdc)
-    old = ctypes.windll.gdi32.SelectObject(hmem, hbmp)
-    user32.ReleaseDC(0, hdc)
-    # Background circle
-    hbrush_bg = user32.CreateSolidBrush(0x172030)
-    user32.FillRect(hmem, ctypes.byref(ctypes.wintypes.RECT(0,0,size,size)), hbrush_bg)
-    user32.DeleteObject(hbrush_bg)
-    # Gold circle
-    hbrush = user32.CreateSolidBrush(0x00C8FF)  # BGR for gold
-    hpen = user32.CreatePen(0, 2, 0x00C8FF)
-    ctypes.windll.gdi32.SelectObject(hmem, hpen)
-    ctypes.windll.gdi32.SelectObject(hmem, hbrush)
-    user32.Ellipse(hmem, 1, 1, size-1, size-1)
-    user32.DeleteObject(hpen)
-    user32.DeleteObject(hbrush)
-    # Text
-    user32.SetBkMode(hmem, 1)  # TRANSPARENT
-    user32.SetTextColor(hmem, 0x172030)
-    hfont = user32.CreateFontW(9, 0, 0, 0, 700, 0, 0, 0, 0, 0, 0, 0, 0, "Segoe UI")
-    ctypes.windll.gdi32.SelectObject(hmem, hfont)
-    rect = ctypes.wintypes.RECT(0, 1, size, size)
-    user32.DrawTextW(hmem, "Au", 2, ctypes.byref(rect), 0x0001)  # DT_CENTER
-    user32.DeleteObject(hfont)
-    # Create icon
-    ctypes.windll.gdi32.SelectObject(hmem, old)
-    ctypes.windll.gdi32.DeleteDC(hmem)
-    hicon = user32.CreateIcon(0, size, size, 1, 32, None, ctypes.cast(hbmp, ctypes.POINTER(ctypes.c_byte)))
-    user32.DeleteObject(hbmp)
-    return hicon
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x00000010
+LR_DEFAULTSIZE = 0x00000040
 
 def _load_ico_file():
-    """Load .ico file from bundle."""
+    """Load .ico file using LoadImageW (works in frozen EXE)."""
     base = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
     ico = os.path.join(base, 'aurum_icon.ico')
     if os.path.exists(ico):
-        large = ctypes.wintypes.HANDLE()
-        small = ctypes.wintypes.HANDLE()
-        ctypes.windll.shell32.ExtractIconExW(ico, 0, ctypes.byref(large), ctypes.byref(small), 1)
-        if small.value:
-            return small.value
-        if large.value:
-            return large.value
-    return _make_icon()
+        h = user32.LoadImageW(None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+        if h:
+            return h
+    return user32.LoadIconW(0, IDI_APPLICATION)
 
 
 def _mt5_time(ts):
