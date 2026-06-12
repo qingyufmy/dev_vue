@@ -24,24 +24,38 @@ except ImportError:
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 
-# Windows tray
+# Windows tray (win32gui)
+HAS_TRAY = False
 try:
     import win32gui
     import win32con
     import win32api
     HAS_TRAY = True
 except ImportError:
-    HAS_TRAY = False
+    pass
+
+# PIL for icon
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+def _get_base_dir():
+    """Get base directory for bundled files."""
+    if getattr(sys, 'frozen', False):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+def _get_ico_path():
+    return os.path.join(_get_base_dir(), 'aurum_icon.ico')
 
 # ===== Config =====
 SERVER_URL = "http://127.0.0.1:3000"
 TOKEN = ""
-CONFIG_FILE = ""
-
 try:
     exe_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
     config_path = os.path.join(exe_dir, "config.json")
-    CONFIG_FILE = config_path
     if os.path.exists(config_path):
         with open(config_path, "r") as cf:
             cfg = json.loads(cf.read())
@@ -61,7 +75,7 @@ while i < len(sys.argv):
 
 
 class AurumBridge:
-    # ===== Tray icon IDs =====
+    # Tray menu IDs
     TRAY_WM = win32con.WM_USER + 20 if HAS_TRAY else 0x0414
     MENU_OPEN = 1001
     MENU_START = 1002
@@ -74,17 +88,6 @@ class AurumBridge:
         self.root.geometry("520x580")
         self.root.resizable(False, False)
         self.root.configure(bg="#0f172a")
-        # Set window icon
-        try:
-            if getattr(sys, 'frozen', False):
-                base = sys._MEIPASS
-            else:
-                base = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(base, 'aurum_icon.ico')
-            if os.path.exists(icon_path):
-                self.root.iconbitmap(icon_path)
-        except:
-            pass
 
         self.mt5 = None
         self.running = False
@@ -93,18 +96,39 @@ class AurumBridge:
         self._ws = None
         self._tray_hwnd = None
         self._is_minimized_to_tray = False
+        self._hicon = None
+        self._notify_data = None
 
+        self._set_window_icon()
         self._build_ui()
         self._check_mt5()
         if HAS_TRAY:
-            try:
-                self._init_tray()
-                self._show_tray()
-                self._log(f"系统托盘已就绪 (hwnd={self._tray_hwnd})")
-            except Exception as e:
-                self._log(f"托盘初始化失败: {e}")
-                self._tray_hwnd = None
+            self._init_tray()
+            self._show_tray()
+            self._log("系统托盘已就绪")
+        else:
+            self._log("提示: win32gui 不可用，最小化到托盘功能已禁用")
         self.root.mainloop()
+
+    # ============ Window Icon ============
+
+    def _set_window_icon(self):
+        """Set window title bar icon using PIL (works in frozen EXE)."""
+        ico_path = _get_ico_path()
+        if HAS_PIL and os.path.exists(ico_path):
+            try:
+                img = Image.open(ico_path)
+                self._tk_icon = ImageTk.PhotoImage(img)
+                self.root.iconphoto(True, self._tk_icon)
+                return
+            except Exception:
+                pass
+        # Fallback: iconbitmap
+        try:
+            if os.path.exists(ico_path):
+                self.root.iconbitmap(ico_path)
+        except Exception:
+            pass
 
     # ============ UI ============
 
@@ -186,59 +210,68 @@ class AurumBridge:
         self._tray_hwnd = win32gui.CreateWindow(
             "AurumBridgeTray", "AurumBridgeTray", 0, 0, 0, 0, 0,
             0, 0, hinst, None)
-        # Load icon from .ico file
-        self._hicon = self._load_icon()
+        # Load icon
+        self._hicon = self._load_hicon()
 
-    def _load_icon(self):
-        """Load the .ico file for tray and window."""
-        if getattr(sys, 'frozen', False):
-            base = sys._MEIPASS
-        else:
-            base = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(base, 'aurum_icon.ico')
-        if os.path.exists(icon_path):
-            large, small = win32gui.ExtractIconEx(icon_path, 0, 1)
-            if large:
-                win32gui.DestroyIcon(large[0])
-            return small[0] if small else win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
+    def _load_hicon(self):
+        """Load .ico as HICON for tray/window."""
+        ico_path = _get_ico_path()
+        if os.path.exists(ico_path):
+            try:
+                large, small = win32gui.ExtractIconEx(ico_path, 0, 1)
+                if large:
+                    win32gui.DestroyIcon(large[0])
+                if small:
+                    return small[0]
+            except Exception:
+                pass
         return win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
 
     def _show_tray(self):
         """Add icon to system tray."""
-        hicon = getattr(self, '_hicon', None) or win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
+        if not HAS_TRAY or not self._tray_hwnd:
+            return
+        hicon = self._hicon or win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
         self._notify_data = (
             self._tray_hwnd, 0,
             win32gui.NIF_ICON | win32gui.NIF_TIP | win32gui.NIF_MESSAGE,
             self.TRAY_WM, hicon, "AURUM MT5 Bridge"
         )
-        win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data)
-        # Also set the window icon
         try:
-            win32gui.SendMessage(self.root.winfo_id(), win32con.WM_SETICON, win32con.ICON_SMALL, hicon)
-            win32gui.SendMessage(self.root.winfo_id(), win32con.WM_SETICON, win32con.ICON_BIG, hicon)
-        except:
+            win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, self._notify_data)
+        except Exception:
             pass
 
     def _hide_tray(self):
         """Remove icon from system tray."""
-        if hasattr(self, '_notify_data') and self._notify_data:
-            try:
-                win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, self._notify_data)
-            except:
-                pass
-            self._notify_data = None
+        if not HAS_TRAY or not self._notify_data:
+            return
+        try:
+            win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, self._notify_data)
+        except Exception:
+            pass
+        self._notify_data = None
 
     def _update_tray_tip(self, tip):
-        """Update tray tooltip text."""
-        if hasattr(self, '_notify_data') and self._notify_data:
-            d = self._notify_data
-            self._notify_data = (d[0], d[1], d[2], d[3], d[4], tip)
-            try:
-                win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, self._notify_data)
-            except:
-                pass
+        """Update tray tooltip."""
+        if not HAS_TRAY or not self._notify_data:
+            return
+        d = self._notify_data
+        self._notify_data = (d[0], d[1], d[2], d[3], d[4], tip)
+        try:
+            win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, self._notify_data)
+        except Exception:
+            pass
+
+    def _on_tray_msg(self, hwnd, msg, wparam, lparam):
+        """Handle custom tray callback (click events)."""
+        if lparam == win32con.WM_LBUTTONUP:
+            self.root.after(0, self._restore_from_tray)
+        elif lparam == win32con.WM_RBUTTONUP:
+            self.root.after(0, self._show_context_menu)
 
     def _on_tray_command(self, hwnd, msg, wparam, lparam):
+        """Handle menu command."""
         cmd = win32api.LOWORD(wparam)
         if cmd == self.MENU_OPEN:
             self.root.after(0, self._restore_from_tray)
@@ -251,15 +284,10 @@ class AurumBridge:
         elif cmd == self.MENU_QUIT:
             self.root.after(0, self._do_quit)
 
-    def _on_tray_msg(self, hwnd, msg, wparam, lparam):
-        """Handle custom tray callback message (WM_USER + 20)."""
-        if lparam == win32con.WM_LBUTTONUP:
-            self.root.after(0, self._restore_from_tray)
-        elif lparam == win32con.WM_RBUTTONUP:
-            self._on_tray_rbuttonup(hwnd, msg, wparam, lparam)
-
-    def _on_tray_rbuttonup(self, hwnd, msg, wparam, lparam):
-        """Right-click: show context menu."""
+    def _show_context_menu(self):
+        """Show right-click context menu on tray icon."""
+        if not HAS_TRAY or not self._tray_hwnd:
+            return
         menu = win32gui.CreatePopupMenu()
         win32gui.AppendMenu(menu, win32con.MF_STRING, self.MENU_OPEN, "打开界面")
         win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
@@ -276,19 +304,21 @@ class AurumBridge:
         win32gui.DestroyMenu(menu)
 
     def _restore_from_tray(self):
+        """Restore window from tray."""
         self._hide_tray()
+        self._is_minimized_to_tray = False
         self.root.after(0, self._do_restore)
 
     def _do_restore(self):
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
-        self._is_minimized_to_tray = False
 
     # ============ Window Lifecycle ============
 
     def _on_close(self):
-        if self._tray_hwnd:
+        """X button: minimize to tray if available, otherwise quit."""
+        if HAS_TRAY and self._tray_hwnd:
             self._show_tray()
             self.root.withdraw()
             self._is_minimized_to_tray = True
@@ -301,31 +331,34 @@ class AurumBridge:
         """Pump Windows messages for the tray hidden window."""
         if not self._is_minimized_to_tray or not self._tray_hwnd:
             return
-        try:
-            while True:
-                msg = win32gui.PeekMessage(self._tray_hwnd, 0, 0, 1)  # PM_REMOVE
-                if not msg:
-                    break
-                win32gui.TranslateMessage(msg)
-                win32gui.DispatchMessage(msg)
-        except:
-            pass
+        if HAS_TRAY:
+            try:
+                while True:
+                    msg = win32gui.PeekMessage(self._tray_hwnd, 0, 0, 1)
+                    if not msg:
+                        break
+                    win32gui.TranslateMessage(msg)
+                    win32gui.DispatchMessage(msg)
+            except Exception:
+                pass
         if self._is_minimized_to_tray:
             self.root.after(200, self._poll_tray)
 
     def _do_quit(self):
+        """Clean exit."""
         self.running = False
         try:
             if self._ws and self._ws.connected:
                 self._ws.send(json.dumps({"type": "disconnect", "reason": "user_close"}))
                 self._ws.close()
-        except:
+        except Exception:
             pass
         if self.mt5:
             try: self.mt5.shutdown()
             except: pass
         self._hide_tray()
-        self.root.destroy()
+        try: self.root.destroy()
+        except Exception: pass
 
     # ============ Utilities ============
 
@@ -640,7 +673,7 @@ class AurumBridge:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    # ============ Bridge Loop with Auto-Reconnect ============
+    # ============ Bridge Loop ============
 
     def _bridge_loop(self):
         if not self.mt5:
@@ -754,8 +787,6 @@ class AurumBridge:
 
         if self.mt5: self.mt5.shutdown()
         self.root.after(0, self._log, "MT5 已断开")
-
-    # ============ Entry ============
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
