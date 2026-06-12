@@ -78,6 +78,12 @@ app.use('/aurum-api', noCache, aiRoutes)
 // Serve AURUM AI static files at /ai
 app.use('/ai', noCache, express.static(join(__dirname, '..', 'public', 'ai')))
 
+// Bridge config download (for EXE update-token feature)
+app.get('/ai/bridge/config', (req, res) => {
+  const serverUrl = `${req.protocol}://${req.get('host')}`
+  res.json({ server_url: serverUrl, token: '' })
+})
+
 // Bridge script download with embedded auth token
 app.get('/ai/bridge/:platform', async (req, res) => {
   const platform = req.params.platform
@@ -160,6 +166,7 @@ app.get('/ai/bridge/:platform', async (req, res) => {
     res.status(400).json({ status: 'error', message: '平台不支持，请使用 win 或 mac' })
   }
 })
+
 app.get('/ai', noCache, (req, res) => {
   res.sendFile(join(__dirname, '..', 'public', 'ai', 'index.html'))
 })
