@@ -51,16 +51,16 @@ class POINT(ctypes.Structure):
 class MSG(ctypes.Structure):
     _fields_ = [("hwnd", ctypes.wintypes.HWND), ("message", ctypes.c_uint),
         ("wParam", ctypes.wintypes.WPARAM), ("lParam", ctypes.wintypes.LPARAM),
-        ("time", ctypes.c_dwORD), ("pt", POINT)]
+        ("time", ctypes.c_ulong), ("pt", POINT)]
 
 class NOTIFYICONDATA(ctypes.Structure):
-    _fields_ = [("cbSize", ctypes.c_dwORD), ("hWnd", ctypes.wintypes.HWND),
+    _fields_ = [("cbSize", ctypes.c_ulong), ("hWnd", ctypes.wintypes.HWND),
         ("uID", ctypes.c_uint), ("uFlags", ctypes.c_uint),
         ("uCallbackMessage", ctypes.c_uint), ("hIcon", ctypes.wintypes.HANDLE),
-        ("szTip", ctypes.c_wchar * 128), ("dwState", ctypes.c_dwORD),
-        ("dwStateMask", ctypes.c_dwORD), ("szInfo", ctypes.c_wchar * 256),
+        ("szTip", ctypes.c_wchar * 128), ("dwState", ctypes.c_ulong),
+        ("dwStateMask", ctypes.c_ulong), ("szInfo", ctypes.c_wchar * 256),
         ("uVersion", ctypes.c_uint), ("szInfoTitle", ctypes.c_wchar * 64),
-        ("dwInfoFlags", ctypes.c_dwORD), ("guidItem", ctypes.c_byte * 16),
+        ("dwInfoFlags", ctypes.c_ulong), ("guidItem", ctypes.c_byte * 16),
         ("hBalloonIcon", ctypes.wintypes.HANDLE)]
 
 WNDPROC = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM)
