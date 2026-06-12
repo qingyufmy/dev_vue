@@ -551,6 +551,8 @@ function handleBridgeData(msg) {
     setText("accountMargin", fmt(msg.account.margin));
     setText("accountFreeMargin", fmt(msg.account.free_margin));
     setText("accountFloatPnl", fmt(msg.account.profit));
+    setText("tradeAccountBalance", fmt(msg.account.balance));
+    setText("tradeAccountEquity", fmt(msg.account.equity));
     updatePnlStyle("accountFloatPnl", msg.account.profit);
   }
   if (msg.positions) {
