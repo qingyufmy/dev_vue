@@ -1092,7 +1092,8 @@ async function startAutoScheduler(userId) {
   const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) return
 
-  const symbol = parseSymbols(cfg.symbols)[0] || 'XAUUSD'
+  const raw = (cfg.symbols || 'XAUUSD').trim()
+  const symbol = raw.startsWith('[') ? (JSON.parse(raw)[0] || 'XAUUSD') : raw.split(',')[0].trim() || 'XAUUSD'
   const globalCfg = await getGlobalAutoConfig()
   const intervalMs = (globalCfg?.interval_minutes || 5) * 60_000
   autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null }
