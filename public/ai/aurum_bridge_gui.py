@@ -298,25 +298,25 @@ class AurumBridge:
             self._tray_log('_wnd_proc msg=%d w=%d l=%d closing=%s' % (msg, wparam, lparam, self._closing))
             if msg == TRAY_WM:
                 if lparam == WM_LBUTTONUP:
-                    self._tray_log('LEFT_CLICK -> _restore_from_tray')
-                    self.root.after(100, self._restore_from_tray)
+                    self._tray_log('LEFT_CLICK -> _restore_from_tray (direct)')
+                    self._restore_from_tray()
                 elif lparam == WM_RBUTTONUP:
-                    self._tray_log('RIGHT_CLICK -> _show_context_menu')
-                    self.root.after(0, self._show_context_menu)
+                    self._tray_log('RIGHT_CLICK -> _show_context_menu (direct)')
+                    self._show_context_menu()
                 return 0
             elif msg == WM_COMMAND:
                 cmd = wparam & 0xFFFF
                 self._tray_log('WM_COMMAND cmd=%d' % cmd)
                 if cmd == MENU_OPEN:
-                    self.root.after(100, self._restore_from_tray)
+                    self._restore_from_tray()
                 elif cmd == MENU_START:
                     if not self.running:
-                        self.root.after(0, self._toggle_bridge)
+                        self._toggle_bridge()
                 elif cmd == MENU_STOP:
                     if self.running:
-                        self.root.after(0, self._toggle_bridge)
+                        self._toggle_bridge()
                 elif cmd == MENU_QUIT:
-                    self.root.after(0, self._do_quit)
+                    self._do_quit()
                 return 0
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
         except Exception as e:
@@ -360,8 +360,8 @@ class AurumBridge:
                 return
             self._hide_tray()
             self._is_minimized_to_tray = False
-            self._tray_log('_restore_from_tray: scheduling _do_restore')
-            self.root.after(50, self._do_restore)
+            self._tray_log('_restore_from_tray: calling _do_restore directly')
+            self._do_restore()
         except Exception as e:
             self._tray_log('_restore_from_tray EXCEPTION: %s' % e)
             try:
@@ -381,8 +381,9 @@ class AurumBridge:
     # ============ Window Lifecycle ============
 
     def _on_close(self):
-        self._tray_log('_on_close called')
-        if self._closing:
+        self._tray_log('_on_close called, is_minimized=%s' % self._is_minimized_to_tray)
+        if self._closing or self._is_minimized_to_tray:
+            self._tray_log('_on_close: already minimized or closing, skip')
             return
         try:
             if self._tray_hwnd:
