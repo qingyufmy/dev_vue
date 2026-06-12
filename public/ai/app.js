@@ -12,6 +12,7 @@ const state = {
 
   auditRows: [],
   signalFilters: { direction: "", timeframe: "", page: 1, pageSize: 20 },
+  historyFilters: { page: 1, pageSize: 20 },
   auditFilters: { status: "", type: "", page: 1, pageSize: 25 },
   signalTickets: {},
 };
@@ -2028,8 +2029,9 @@ function setHistoryZeroClass(id, value) {
 
 async function loadHistory() {
   try {
+  const filters = state.historyFilters;
   const [data] = await Promise.all([
-    wsApi("history", { page: 1, page_size: 20 }),
+    wsApi("history", { page: filters.page, page_size: filters.pageSize }),
     loadSignalTickets(),
   ]);
   const stats = data.statistics || {};
@@ -2066,6 +2068,8 @@ async function loadHistory() {
     </tr>
   `;
   }).join("") : `<tr class="empty-row"><td colspan="11">暂无成交记录</td></tr>`;
+  const pg = data.pagination || {};
+  renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, pg.total_count || 0, "history");
   } catch (e) { console.error("loadHistory:", e); }
 }
 
@@ -2257,6 +2261,9 @@ function bindEvents() {
       } else if (pagerButton.dataset.pager === "audit") {
         state.auditFilters.page = page;
         renderAuditRows();
+      } else if (pagerButton.dataset.pager === "history") {
+        state.historyFilters.page = page;
+        loadHistory();
       }
       return;
     }
