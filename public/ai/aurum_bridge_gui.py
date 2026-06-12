@@ -137,6 +137,7 @@ class AurumBridge:
         self._is_minimized_to_tray = False
         self._hicon = None
         self._nid = None
+        self._closing = False
         self._hicon = _load_ico_file()
 
         self._set_window_icon()
@@ -149,23 +150,25 @@ class AurumBridge:
     # ============ Window Icon ============
 
     def _set_window_icon(self):
-        if self._hicon:
-            self.root.after(100, self._apply_icon)
+        ico_path = _get_ico_path()
+        if os.path.exists(ico_path):
+            try:
+                self.root.iconbitmap(ico_path)
+            except:
+                pass
+        self.root.after(200, self._apply_icon)
 
     def _apply_icon(self):
+        if not self._hicon:
+            return
         try:
-            hwnd = int(self.root.frame(), 16)
+            self.root.update_idletasks()
+            hwnd = int(self.root.wm_frame(), 16)
             if hwnd:
-                user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)  # WM_SETICON ICON_SMALL
-                user32.SendMessageW(hwnd, 0x0080, 0, self._hicon)  # WM_SETICON ICON_BIG
+                user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)
+                user32.SendMessageW(hwnd, 0x0080, 0, self._hicon)
         except:
-            try:
-                import ctypes as _ct
-                hwnd = _ct.windll.user32.GetForegroundWindow()
-                if hwnd:
-                    user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)
-                    user32.SendMessageW(hwnd, 0x0080, 0, self._hicon)
-            except: pass
+            pass
 
     # ============ UI ============
 
@@ -343,6 +346,9 @@ class AurumBridge:
             self.root.after(200, self._poll_tray)
 
     def _do_quit(self):
+        if self._closing:
+            return
+        self._closing = True
         self.running = False
         try:
             if self._ws and self._ws.connected:
@@ -354,8 +360,6 @@ class AurumBridge:
             except: pass
         self._hide_tray()
         try: self.root.quit()
-        except: pass
-        try: self.root.destroy()
         except: pass
 
     # ============ Utilities ============
