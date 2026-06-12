@@ -1102,11 +1102,14 @@ async function loadPositions() {
 
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
-  // System prompt: admin only (hidden from non-admin)
-  const promptSection = document.querySelector(".config-section:has(#systemPrompt)");
-  if (promptSection) promptSection.style.display = isAdmin ? "" : "none";
-  const saveSpBtn = document.getElementById("saveSystemPromptBtn");
-  if (saveSpBtn) saveSpBtn.style.display = isAdmin ? "" : "none";
+  // Sub-tabs: non-admin only sees manual config
+  const autoTab = document.querySelector('.config-sub-tab[data-config-tab="auto-config"]');
+  if (autoTab) autoTab.style.display = isAdmin ? "" : "none";
+  // If non-admin, force switch to manual tab
+  if (!isAdmin) {
+    const manualTab = document.querySelector('.config-sub-tab[data-config-tab="manual-config"]');
+    if (manualTab) manualTab.click();
+  }
 }
 
 /* ---- Provider presets: model name → API base URL ---- */
