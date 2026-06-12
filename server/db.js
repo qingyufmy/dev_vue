@@ -32,7 +32,9 @@ function getDBConfig() {
 /** Get or create MySQL connection pool */
 export function getDB() {
   if (!pool) {
-    pool = mysql.createPool(getDBConfig())
+    const cfg = getDBConfig()
+    console.log('[DB] Creating pool →', cfg.host + ':' + cfg.port, cfg.user + '/' + cfg.database)
+    pool = mysql.createPool(cfg)
   }
   return pool
 }
