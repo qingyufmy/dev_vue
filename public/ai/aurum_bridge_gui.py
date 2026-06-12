@@ -349,18 +349,38 @@ class AurumBridge:
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
         if self._is_minimized_to_tray:
-            self.root.after(200, self._poll_tray)
+            self._safe_after(200, self._poll_tray)
+
+    def _safe_after(self, ms, func, *args):
+        """Schedule after() only if not closing."""
+        if self._closing:
+            return
+        try:
+            self.root.after(ms, func, *args)
+        except:
+            pass
+
+    def _cancel_all_after(self):
+        """Cancel all pending after() callbacks."""
+        try:
+            for after_id in self.root.tk.eval('after info').split():
+                try: self.root.after_cancel(after_id)
+                except: pass
+        except: pass
 
     def _do_quit(self):
         if self._closing:
             return
         self._closing = True
+        self._is_minimized_to_tray = False
         self.running = False
-        try:
-            if self._ws and self._ws.connected:
-                self._ws.send(json.dumps({"type": "disconnect", "reason": "user_close"}))
-                self._ws.close()
-        except: pass
+        # Stop bridge thread
+        if self.bridge_thread and self.bridge_thread.is_alive():
+            try:
+                if self._ws and self._ws.connected:
+                    self._ws.close()
+            except: pass
+        self._cancel_all_after()
         if self.mt5:
             try: self.mt5.shutdown()
             except: pass
@@ -688,24 +708,24 @@ class AurumBridge:
             try:
                 import MetaTrader5 as mt5; self.mt5 = mt5
             except:
-                self.root.after(0, self._log, "错误: MetaTrader5 未安装")
-                self.root.after(0, self._toggle_bridge); return
+                self._safe_after(0, self._log, "错误: MetaTrader5 未安装")
+                self._safe_after(0, self._toggle_bridge); return
 
         if not self.mt5.initialize():
-            self.root.after(0, self._log, f"MT5 初始化失败: {self.mt5.last_error()}")
-            self.root.after(0, self._toggle_bridge); return
+            self._safe_after(0, self._log, f"MT5 初始化失败: {self.mt5.last_error()}")
+            self._safe_after(0, self._toggle_bridge); return
 
         info = self.mt5.account_info()
         if info:
-            self.root.after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
+            self._safe_after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
 
         if not HAS_WS:
-            self.root.after(0, self._log, "错误: websocket-client 未安装")
-            self.root.after(0, self._toggle_bridge); return
+            self._safe_after(0, self._log, "错误: websocket-client 未安装")
+            self._safe_after(0, self._toggle_bridge); return
 
         server = self.server_var.get().replace("http://","ws://").replace("https://","wss://").rstrip("/")
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token_var.get()}"
-        self.root.after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
+        self._safe_after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
         MAX_RETRY = 300; RETRY_INT = 5
 
@@ -715,19 +735,19 @@ class AurumBridge:
             while self.running:
                 elapsed = time.time() - retry_start
                 if elapsed >= MAX_RETRY:
-                    self.root.after(0, self._log, "连接失败：已重试5分钟，停止自动重试")
-                    self.root.after(0, self._set_status, "连接失败", "#ef4444", "")
-                    self.root.after(0, self._toggle_bridge)
+                    self._safe_after(0, self._log, "连接失败：已重试5分钟，停止自动重试")
+                    self._safe_after(0, self._set_status, "连接失败", "#ef4444", "")
+                    self._safe_after(0, self._toggle_bridge)
                     if self.mt5: self.mt5.shutdown()
                     return
                 try:
                     ws = websocket.create_connection(ws_url, timeout=10, header=["Origin: http://localhost"])
                     self._ws = ws; connected = True
-                    self.root.after(0, self._log, "WebSocket 已连接"); break
+                    self._safe_after(0, self._log, "WebSocket 已连接"); break
                 except Exception as e:
                     rc = int(elapsed // RETRY_INT) + 1
-                    self.root.after(0, self._log, f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
-                    self.root.after(0, self._set_status, f"重连中... ({rc})", "#f59e0b", "")
+                    self._safe_after(0, self._log, f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
+                    self._safe_after(0, self._set_status, f"重连中... ({rc})", "#f59e0b", "")
                     time.sleep(RETRY_INT)
 
             if not connected or not self.running: break
@@ -756,15 +776,15 @@ class AurumBridge:
                             "live_trading_enabled": self._trade_enabled}
                         ws.send(json.dumps(dm))
                         if acc:
-                            self.root.after(0, self._set_status, "MT5桥接-已连接", "#22c55e",
+                            self._safe_after(0, self._set_status, "MT5桥接-已连接", "#22c55e",
                                            f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
                         last_data = now
                     except Exception as e:
-                        self.root.after(0, self._log, f"数据推送错误: {e}")
+                        self._safe_after(0, self._log, f"数据推送错误: {e}")
 
                 if now - last_hb > 10:
                     try: ws.send(json.dumps({"type": "hb"})); last_hb = now
-                    except Exception as e: self.root.after(0, self._log, f"心跳错误: {e}")
+                    except Exception as e: self._safe_after(0, self._log, f"心跳错误: {e}")
 
                 ws.settimeout(0.3)
                 try:
@@ -772,16 +792,16 @@ class AurumBridge:
                     if data:
                         msg = json.loads(data)
                         if msg.get("type") == "command":
-                            self.root.after(0, self._log, f"执行: {msg['action']}")
+                            self._safe_after(0, self._log, f"执行: {msg['action']}")
                             try: resp = self._process_command(msg)
                             except Exception as ce: resp = {"status": "error", "message": str(ce)}
                             ws.send(json.dumps({"type": "result", "command_id": msg["command_id"], "result": resp}))
-                            self.root.after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
+                            self._safe_after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
                 except websocket.WebSocketTimeoutException: pass
                 except websocket.WebSocketConnectionClosedException:
-                    self.root.after(0, self._log, "WebSocket 连接已断开"); break
+                    self._safe_after(0, self._log, "WebSocket 连接已断开"); break
                 except Exception as e:
-                    self.root.after(0, self._log, f"接收错误: {e}"); break
+                    self._safe_after(0, self._log, f"接收错误: {e}"); break
 
             try:
                 if ws and ws.connected:
@@ -789,12 +809,12 @@ class AurumBridge:
             except: pass
             self._ws = None
             if not self.running: break
-            self.root.after(0, self._log, f"连接断开，{RETRY_INT}秒后自动重连...")
-            self.root.after(0, self._set_status, "重连中...", "#f59e0b", "")
+            self._safe_after(0, self._log, f"连接断开，{RETRY_INT}秒后自动重连...")
+            self._safe_after(0, self._set_status, "重连中...", "#f59e0b", "")
             time.sleep(RETRY_INT)
 
         if self.mt5: self.mt5.shutdown()
-        self.root.after(0, self._log, "MT5 已断开")
+        self._safe_after(0, self._log, "MT5 已断开")
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
