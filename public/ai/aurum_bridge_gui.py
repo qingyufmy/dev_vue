@@ -374,19 +374,21 @@ class AurumBridge:
         self._closing = True
         self._is_minimized_to_tray = False
         self.running = False
-        # Stop bridge thread
         if self.bridge_thread and self.bridge_thread.is_alive():
             try:
                 if self._ws and self._ws.connected:
                     self._ws.close()
             except: pass
-        self._cancel_all_after()
         if self.mt5:
             try: self.mt5.shutdown()
             except: pass
         self._hide_tray()
-        try: self.root.quit()
-        except: pass
+        self.root.withdraw()
+        threading.Thread(target=self._delayed_exit, daemon=True).start()
+
+    def _delayed_exit(self):
+        time.sleep(0.3)
+        os._exit(0)
 
     # ============ Utilities ============
 
