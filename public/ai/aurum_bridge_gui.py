@@ -5,7 +5,6 @@ import os
 import json
 import time
 import threading
-import urllib.request
 # MT5 broker time is UTC+3
 from datetime import datetime, timezone, timedelta
 _MT5_TZ = timezone(timedelta(hours=3))
@@ -26,15 +25,8 @@ except ImportError:
     HAS_WS = False
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
-
-# System tray support
-HAS_TRAY = False
-try:
-    import pystray
-    from PIL import Image, ImageDraw
-    HAS_TRAY = True
-except ImportError:
-    pass
+import ctypes
+from ctypes import wintypes
 
 # ===== Config =====
 SERVER_URL = "http://127.0.0.1:3000"
@@ -68,12 +60,21 @@ while i < len(sys.argv):
 
 
 def _create_tray_icon():
-    """Create a simple gold circle icon for system tray."""
-    img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([4, 4, 60, 60], fill=(234, 179, 8, 255), outline=(200, 150, 0, 255), width=2)
-    draw.text((20, 18), "Au", fill=(15, 23, 42, 255))
-    return img
+    """Create a simple gold icon for system tray using ctypes."""
+    # Create a 16x16 RGBA icon
+    size = 16
+    pixels = []
+    for y in range(size):
+        for x in range(size):
+            dx = x - 7.5
+            dy = y - 7.5
+            dist = (dx*dx + dy*dy) ** 0.5
+            if dist <= 6:
+                # Gold circle
+                pixels.extend([139, 179, 234, 255])  # BGRA
+            else:
+                pixels.extend([0, 0, 0, 0])
+    return bytes(pixels)
 
 
 class AurumBridge:
@@ -91,6 +92,7 @@ class AurumBridge:
         self._ws = None
         self._tray_icon = None
         self._is_minimized_to_tray = False
+        self._tray_hwnd = None
 
         self._build_ui()
         self._check_mt5()
@@ -192,89 +194,136 @@ class AurumBridge:
         tk.Label(self.root, text="AURUM AI · wall-street-skill.com", font=("Segoe UI", 8),
                  bg=bg, fg="#475569").pack(pady=(0, 8))
 
-    # ============ System Tray ============
+    # ============ System Tray (Windows Native) ============
 
     def _init_tray(self):
-        if not HAS_TRAY:
-            return
-        icon_img = _create_tray_icon()
-        menu = pystray.Menu(
-            pystray.MenuItem("打开界面", self._tray_show, default=True),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("启动桥接", self._tray_start_bridge),
-            pystray.MenuItem("关闭桥接", self._tray_stop_bridge),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("更新 Token", self._tray_update_token),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("退出", self._tray_quit),
-        )
-        self._tray_icon = pystray.Icon("AURUM Bridge", icon_img, "AURUM MT5 Bridge", menu)
+        """Create a hidden window for tray icon message processing."""
+        try:
+            wc = ctypes.windll.user32.WNDCLASSW()
+            wc.lpfnWndProc = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)(self._tray_wnd_proc)
+            wc.hInstance = ctypes.windll.kernel32.GetModuleHandleW(None)
+            wc.lpszClassName = "AurumBridgeTray"
+            ctypes.windll.user32.RegisterClassW(ctypes.byref(wc))
+            self._tray_hwnd = ctypes.windll.user32.CreateWindowExW(
+                0, "AurumBridgeTray", "AurumBridgeTray", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, None)
+            # Register tray icon
+            self._tray_icon_data = {
+                'cbSize': ctypes.sizeof(self._NOTIFYICONDATAW),
+                'hWnd': self._tray_hwnd,
+                'uID': 1,
+                'uFlags': 0x02 | 0x04 | 0x01,  # NIF_ICON | NIF_TIP | NIF_MESSAGE
+                'uCallbackMessage': 0x0400 + 1,  # WM_USER + 1
+                'szTip': 'AURUM MT5 Bridge',
+            }
+            # Set icon
+            icon_data = _create_tray_icon()
+            hicon = ctypes.windll.user32.CreateIcon(None, 16, 16, 1, 32, None, icon_data)
+            if hicon:
+                self._tray_icon_data['hIcon'] = hicon
+            self._tray_nid = self._NOTIFYICONDATAW(**self._tray_icon_data)
+        except Exception as e:
+            print(f"Tray init failed: {e}")
 
-    def _tray_show(self, icon=None, item=None):
-        """Restore window from tray."""
-        self.root.after(0, self._restore_from_tray)
+    _NOTIFYICONDATAW = type('_NOTIFYICONDATAW', (ctypes.Structure,), {
+        '_fields_': [
+            ('cbSize', ctypes.c_ulong),
+            ('hWnd', wintypes.HWND),
+            ('uID', ctypes.c_uint),
+            ('uFlags', ctypes.c_uint),
+            ('uCallbackMessage', ctypes.c_uint),
+            ('hIcon', wintypes.HWND),
+            ('szTip', ctypes.c_wchar * 128),
+            ('dwState', ctypes.c_ulong),
+            ('dwStateMask', ctypes.c_ulong),
+            ('szInfo', ctypes.c_wchar * 256),
+            ('uVersion', ctypes.c_uint),
+            ('szInfoTitle', ctypes.c_wchar * 64),
+            ('dwInfoFlags', ctypes.c_ulong),
+        ]
+    })
+
+    def _show_tray_menu(self):
+        """Show tray context menu."""
+        menu = ctypes.windll.user32.CreatePopupMenu()
+        MF_STRING = 0x0000
+        MF_GRAYED = 0x0001
+        MF_SEPARATOR = 0x0800
+
+        ctypes.windll.user32.AppendMenuW(menu, MF_STRING, 1001, "打开界面")
+        ctypes.windll.user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
+        start_flag = MF_GRAYED if self.running else MF_STRING
+        stop_flag = MF_STRING if self.running else MF_GRAYED
+        ctypes.windll.user32.AppendMenuW(menu, start_flag, 1002, "启动桥接")
+        ctypes.windll.user32.AppendMenuW(menu, stop_flag, 1003, "关闭桥接")
+        ctypes.windll.user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
+        ctypes.windll.user32.AppendMenuW(menu, MF_STRING, 1004, "退出")
+
+        pt = wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+        ctypes.windll.user32.SetForegroundWindow(self._tray_hwnd)
+        ctypes.windll.user32.TrackPopupMenu(menu, 0x0100, pt.x, pt.y, 0, self._tray_hwnd, None)  # TPM_RIGHTBUTTON
+        ctypes.windll.user32.PostMessageW(self._tray_hwnd, 0, 0, 0)
+        ctypes.windll.user32.DestroyMenu(menu)
+
+        # Check result
+        result = ctypes.windll.user32.GetMenuItemID(menu, 0)
+
+    def _tray_wnd_proc(self, hwnd, msg, wparam, lparam):
+        """Handle tray icon messages and menu commands."""
+        if msg == 0x0400 + 1:  # Tray callback
+            if lparam == 0x0201:  # WM_LBUTTONUP
+                self.root.after(0, self._restore_from_tray)
+            elif lparam == 0x0204:  # WM_RBUTTONUP
+                self.root.after(0, self._show_tray_menu)
+        elif msg == 0x0111:  # WM_COMMAND
+            cmd_id = wparam & 0xFFFF
+            if cmd_id == 1001:  # 打开界面
+                self.root.after(0, self._restore_from_tray)
+            elif cmd_id == 1002:  # 启动桥接
+                if not self.running:
+                    self.root.after(0, self._toggle_bridge)
+            elif cmd_id == 1003:  # 关闭桥接
+                if self.running:
+                    self.root.after(0, self._toggle_bridge)
+            elif cmd_id == 1004:  # 退出
+                self.root.after(0, self._do_quit)
+        return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def _show_tray(self):
+        """Show the tray icon."""
+        if hasattr(self, '_tray_nid') and self._tray_nid:
+            try:
+                ctypes.windll.shell32.Shell_NotifyIconW(0, ctypes.byref(self._tray_nid))  # NIM_ADD
+            except:
+                pass
+
+    def _hide_tray(self):
+        """Remove the tray icon."""
+        if hasattr(self, '_tray_nid') and self._tray_nid:
+            try:
+                ctypes.windll.shell32.Shell_NotifyIconW(2, ctypes.byref(self._tray_nid))  # NIM_DELETE
+            except:
+                pass
 
     def _restore_from_tray(self):
+        """Restore window from tray."""
+        self._hide_tray()
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
         self._is_minimized_to_tray = False
 
-    def _tray_start_bridge(self, icon=None, item=None):
+    def _tray_start_bridge(self):
         if not self.running:
             self.root.after(0, self._toggle_bridge)
 
-    def _tray_stop_bridge(self, icon=None, item=None):
+    def _tray_stop_bridge(self):
         if self.running:
             self.root.after(0, self._toggle_bridge)
 
-    def _tray_update_token(self, icon=None, item=None):
-        """Download fresh config.json from server and reload token."""
-        self.root.after(0, self._do_update_token)
-
-    def _do_update_token(self):
-        """Read server URL from config, download new config, reload token."""
-        server = self.server_var.get().strip().rstrip("/")
-        if not server:
-            toast_msg = "服务器地址为空"
-            self._log(toast_msg)
-            messagebox.showwarning("更新失败", toast_msg)
-            return
-
-        config_url = f"{server}/ai/bridge/config"
-        self._log(f"正在从服务器获取配置: {config_url}")
-        try:
-            req = urllib.request.Request(config_url)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                new_token = data.get("token", "")
-                new_server = data.get("server_url", server)
-                if not new_token:
-                    self._log("服务器返回的配置中没有 token")
-                    messagebox.showwarning("更新失败", "服务器返回的配置中没有 token")
-                    return
-
-                # Save to config.json
-                save_path = CONFIG_FILE or os.path.join(
-                    os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)),
-                    "config.json"
-                )
-                config_data = {"server_url": new_server, "token": new_token}
-                with open(save_path, "w") as f:
-                    json.dump(config_data, f, indent=2)
-
-                # Update UI
-                self.server_var.set(new_server)
-                self.token_var.set(new_token)
-                self._log(f"Token 已更新，配置已保存到 {save_path}")
-                messagebox.showsuccess("更新成功", f"Token 已更新！\n\n配置已保存到:\n{save_path}")
-        except Exception as e:
-            self._log(f"更新 Token 失败: {e}")
-            messagebox.showerror("更新失败", f"无法获取配置:\n{e}")
-
-    def _tray_quit(self, icon=None, item=None):
+    def _tray_quit(self):
         """Quit from tray."""
-        self.root.after(0, self._do_quit)
+        self._do_quit()
 
     def _do_quit(self):
         self.running = False
@@ -290,11 +339,7 @@ class AurumBridge:
                 self.mt5.shutdown()
             except:
                 pass
-        if self._tray_icon:
-            try:
-                self._tray_icon.stop()
-            except:
-                pass
+        self._hide_tray()
         self.root.destroy()
 
     # ============ Utilities ============
@@ -394,13 +439,13 @@ class AurumBridge:
 
     def _update_tray_state(self):
         """Update tray icon tooltip to reflect current state."""
-        if not self._tray_icon:
-            return
-        state = "运行中" if self.running else "已停止"
-        try:
-            self._tray_icon.title = f"AURUM Bridge - {state}"
-        except:
-            pass
+        if hasattr(self, '_tray_nid') and self._tray_nid:
+            state = "运行中" if self.running else "已停止"
+            self._tray_nid.szTip = f"AURUM Bridge - {state}"
+            try:
+                ctypes.windll.shell32.Shell_NotifyIconW(1, ctypes.byref(self._tray_nid))  # NIM_MODIFY
+            except:
+                pass
 
     def _resolve_symbol(self, symbol):
         """Find actual MT5 symbol name."""
@@ -964,16 +1009,29 @@ class AurumBridge:
 
     def _on_close(self):
         """Minimize to tray instead of closing (if tray is available)."""
-        if HAS_TRAY and self._tray_icon:
+        if self._tray_hwnd:
+            self._show_tray()
             self.root.withdraw()
             self._is_minimized_to_tray = True
             self._log("已最小化到系统托盘")
-            # Start tray icon in background thread
-            if not hasattr(self, '_tray_thread') or not self._tray_thread.is_alive():
-                self._tray_thread = threading.Thread(target=self._tray_icon.run, daemon=True)
-                self._tray_thread.start()
+            # Process tray messages in background
+            self._poll_tray_messages()
         else:
             self._do_quit()
+
+    def _poll_tray_messages(self):
+        """Poll Windows messages for tray icon."""
+        if not self._is_minimized_to_tray:
+            return
+        try:
+            msg = wintypes.MSG()
+            while ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), self._tray_hwnd, 0, 0, 1):  # PM_REMOVE
+                ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
+                ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
+        except:
+            pass
+        if self._is_minimized_to_tray:
+            self.root.after(100, self._poll_tray_messages)
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
