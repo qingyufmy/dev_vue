@@ -542,6 +542,7 @@ function updateMarketStatus(tradeMode) {
   const text = document.getElementById('marketStatusText');
   if (!dot || !text) return;
   state.marketTradeMode = tradeMode;
+  // CN convention: red=up(open), green=down(closed)
   const map = {
     0: ['closed', '休市', 'neutral'],
     1: ['closeonly', '仅平仓', 'warning'],

@@ -918,23 +918,23 @@ textarea:focus {
   vertical-align: middle;
   margin-top: 3px;
 }
-.market-dot-open { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.4); }
-.market-dot-closed { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); }
+.market-dot-open { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); }
+.market-dot-closed { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.4); }
 .market-dot-closeonly { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.4); }
 .market-dot-unknown { background: #4a5568; }
 .market-status-text { font-size: 11px; }
-.market-status-text-open { color: #22c55e; }
-.market-status-text-closed { color: #ef4444; }
+.market-status-text-open { color: #ef4444; }
+.market-status-text-closed { color: #22c55e; }
 .market-status-text-closeonly { color: #f59e0b; }
 .market-status-text-unknown { color: #4a5568; }
 
-/* Market status topbar badge — match quote-footer colors */
-#marketStatus.status-active { color: #22c55e; background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.3); }
-#marketStatus.status-active .badge-dot { background: #22c55e; box-shadow: 0 0 4px rgba(34,197,94,0.4); animation: none; }
+/* Market status topbar badge — red up / green down (CN convention) */
+#marketStatus.status-active { color: #ef4444; background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); }
+#marketStatus.status-active .badge-dot { background: #ef4444; box-shadow: 0 0 4px rgba(239,68,68,0.4); animation: none; }
 #marketStatus.status-warning { color: #f59e0b; background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); }
 #marketStatus.status-warning .badge-dot { background: #f59e0b; }
-#marketStatus.status-neutral { color: #ef4444; background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); }
-#marketStatus.status-neutral .badge-dot { background: #ef4444; }
+#marketStatus.status-neutral { color: #22c55e; background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.3); }
+#marketStatus.status-neutral .badge-dot { background: #22c55e; }
 
 .card-signal {
   position: relative;
