@@ -551,7 +551,11 @@ function updateMarketStatus(tradeMode) {
   };
   const [cls, label] = map[tradeMode] || ['unknown', '未知'];
   dot.className = 'market-dot market-dot-' + cls;
+  text.className = 'market-status-text market-status-text-' + cls;
   text.textContent = label;
+  // Update topbar badge
+  const badgeType = cls === 'open' ? 'active' : cls === 'closed' ? 'neutral' : 'warning';
+  setBadge('marketStatus', label, badgeType);
 }
 
 // Handle data push from bridge (account + quote + positions)
