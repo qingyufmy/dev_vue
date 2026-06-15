@@ -83,10 +83,21 @@ def _get_ico_path():
 def _load_ico_file():
     ico = _get_ico_path()
     if os.path.exists(ico):
+        # Load 16x16 for tray icon
         h = user32.LoadImageW(None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
         if h:
             return h
     return user32.LoadIconW(0, IDI_APPLICATION)
+
+
+def _load_ico_large():
+    """Load 32x32 icon for window title bar."""
+    ico = _get_ico_path()
+    if os.path.exists(ico):
+        h = user32.LoadImageW(None, ico, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+        if h:
+            return h
+    return None
 
 
 def _mt5_time(ts):
@@ -161,21 +172,22 @@ class AurumBridge:
         if os.path.exists(ico_path):
             try:
                 self.root.iconbitmap(ico_path)
-            except:
+                self.root.wm_iconbitmap(ico_path)
+            except Exception:
                 pass
         self.root.after(200, self._apply_icon)
 
     def _apply_icon(self):
-        if not self._hicon:
+        hwnd = int(self.root.wm_frame(), 16)
+        if not hwnd:
             return
-        try:
-            self.root.update_idletasks()
-            hwnd = int(self.root.wm_frame(), 16)
-            if hwnd:
-                user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)
-                user32.SendMessageW(hwnd, 0x0080, 0, self._hicon)
-        except:
-            pass
+        # Apply large icon (32x32) to window title bar
+        h_large = _load_ico_large()
+        if h_large:
+            user32.SendMessageW(hwnd, 0x0080, 0, h_large)  # ICON_BIG
+        # Apply small icon (16x16) to taskbar
+        if self._hicon:
+            user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)  # ICON_SMALL
 
     # ============ UI ============
 
