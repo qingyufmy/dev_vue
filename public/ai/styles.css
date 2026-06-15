@@ -2147,7 +2147,7 @@ input:checked + .slider::before { transform: translateX(18px); }
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--space-3);
-  max-height: 310px;
+  max-height: 381px;
   overflow: auto;
   padding-right: var(--space-1);
 }
