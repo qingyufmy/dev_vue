@@ -418,6 +418,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         const signal = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [params.signal_id, userId])
         if (!signal) return reply({ status: 'error', message: 'Signal not found' })
         const config = await ai.getActiveConfig(null, userId, params.session_id || 'default')
+        if (!config || !config.enable_auto_trade) {
+          result = { status: 'rejected', message: 'auto_trade_disabled', details: { enable_auto_trade: config?.enable_auto_trade ?? 0 } }
+          await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, result.status)
+          break
+        }
         const timedSignal = ai.attachSignalTiming({ ...signal })
         if (timedSignal.is_stale) {
           result = { status: 'rejected', message: 'signal_expired', details: { age_seconds: timedSignal.age_seconds, ttl_seconds: timedSignal.ttl_seconds } }
