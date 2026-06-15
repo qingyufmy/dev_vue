@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import jwt from 'jsonwebtoken'
 
-import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges } from '../bridge-ws.js'
+import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges, getBridgeTradeMode } from '../bridge-ws.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
@@ -1077,6 +1077,13 @@ async function runAutoCycle(userId, symbol, timeframe) {
   const config = await getAutoInferenceConfig(userId)
   if (!config || !config.api_key_encrypted) {
     console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: no API key in auto config`)
+    return
+  }
+
+  // Check market status — skip if closed or close-only
+  const tradeMode = getBridgeTradeMode(userId)
+  if (tradeMode === 0 || tradeMode === 1) {
+    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: market ${tradeMode === 0 ? 'closed' : 'close-only'} (trade_mode=${tradeMode})`)
     return
   }
 

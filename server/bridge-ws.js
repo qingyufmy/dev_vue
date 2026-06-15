@@ -150,6 +150,10 @@ function handleBridge(ws, url) {
     if (bridge) bridge.lastSeen = Date.now()
 
     if (msg.type === 'data') {
+      // Cache trade_mode for market status checks
+      if (bridge && msg.quote && typeof msg.quote.trade_mode === 'number') {
+        bridge.tradeMode = msg.quote.trade_mode
+      }
       // Data relay — push to browsers as-is
       sendToBrowsers(userId, { type: 'data', ...msg })
     } else if (msg.type === 'hb') {
@@ -280,6 +284,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             mt5_package_available: true,
             live_trading_enabled: tradeEnabled,
             using_fallback: usingFallback,
+            trade_mode: bridge ? (typeof bridge.tradeMode === 'number' ? bridge.tradeMode : -1) : -1,
           },
         }
         break
@@ -617,6 +622,13 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
 export function isBridgeAlive(userId) {
   const bridge = bridges.get(userId)
   return !!(bridge && bridge.ws.readyState === 1 && (Date.now() - bridge.lastSeen < 20000))
+}
+
+// Get cached trade_mode from bridge data push (-1 = unknown)
+export function getBridgeTradeMode(userId) {
+  const bridge = bridges.get(userId)
+  if (!bridge || bridge.ws.readyState !== 1) return -1
+  return typeof bridge.tradeMode === 'number' ? bridge.tradeMode : -1
 }
 
 // Get bridge status for a user

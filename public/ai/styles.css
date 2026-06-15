@@ -909,6 +909,21 @@ textarea:focus {
   color: var(--text-secondary);
 }
 
+/* Market status dot */
+.market-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+.market-dot-open { background: #22c55e; box-shadow: 0 0 4px #22c55e88; }
+.market-dot-closed { background: #ef4444; }
+.market-dot-closeonly { background: #f59e0b; }
+.market-dot-unknown { background: #6b7280; }
+.market-status-text { font-size: 11px; }
+
 .card-signal {
   position: relative;
   overflow: hidden;

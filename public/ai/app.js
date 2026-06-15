@@ -536,6 +536,24 @@ function connectBridgeStatusWs(onReady) {
   ws.onerror = () => {};
 }
 
+// Market status display helper
+function updateMarketStatus(tradeMode) {
+  const dot = document.getElementById('marketStatusDot');
+  const text = document.getElementById('marketStatusText');
+  if (!dot || !text) return;
+  state.marketTradeMode = tradeMode;
+  const map = {
+    0: ['closed', '休市'],
+    1: ['closeonly', '仅平仓'],
+    2: ['open', '交易中'],
+    3: ['open', '仅做空'],
+    4: ['open', '仅做多'],
+  };
+  const [cls, label] = map[tradeMode] || ['unknown', '未知'];
+  dot.className = 'market-dot market-dot-' + cls;
+  text.textContent = label;
+}
+
 // Handle data push from bridge (account + quote + positions)
 function handleBridgeData(msg) {
   const selectedSymbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
@@ -563,6 +581,8 @@ function handleBridgeData(msg) {
         state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
         updateTradingQuotePreview(state.lastQuote);
       }
+      // Update market status from trade_mode
+      if (typeof q.trade_mode === 'number') updateMarketStatus(q.trade_mode);
     }
   }
   if (msg.account) {
@@ -840,6 +860,10 @@ async function loadStatus() {
     : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
+  // Update market status from health response
+  if (typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
+  const marketClosed = gateway.trade_mode === 0 || gateway.trade_mode === 1;
+
   try {
     const auto = await wsApi('auto_status');
     const scheduler = auto.scheduler || {};
@@ -848,12 +872,19 @@ async function loadStatus() {
     const symbols = scheduler.symbols || [];
     const sym = symbols[0] || 'XAUUSD';
     const intervalMin = scheduler.interval_minutes || 5;
-    const label = enabled
-      ? running ? `自动推理运行中 · ${sym} · ${intervalMin}分钟` : `自动推理 · ${sym} · ${intervalMin}分钟`
-      : '自动推理关闭';
-    const type = enabled
-      ? running ? 'active' : 'connected'
-      : 'neutral';
+    let label, type;
+    if (marketClosed && enabled) {
+      // Market closed — show paused even if scheduler is enabled
+      label = gateway.trade_mode === 0 ? `市场休市 · 自动推理暂停` : `仅平仓 · 自动推理暂停`;
+      type = 'warning';
+    } else {
+      label = enabled
+        ? running ? `自动推理运行中 · ${sym} · ${intervalMin}分钟` : `自动推理 · ${sym} · ${intervalMin}分钟`
+        : '自动推理关闭';
+      type = enabled
+        ? running ? 'active' : 'connected'
+        : 'neutral';
+    }
     setBadge('autoAnalyzeMode', label, type);
 
     // Store current auto config
