@@ -730,7 +730,16 @@ function normalizeAiSignal(parsed, config, market) {
   let signalType = String(parsed.signal_type || 'hold').toLowerCase()
   if (!['buy', 'sell', 'hold'].includes(signalType)) signalType = 'hold'
 
-  const maxPosition = parseFloat((config || {}).max_position_size || 0.05)
+  // --- Risk level config ---
+  const riskLevel = (config || {}).risk_level || 'medium'
+  const RISK_TABLE = {
+    low:    { minConfidence: 0.60, volumeMultiplier: 0.5, slAtrMult: 2.0, tp1AtrMult: 1.5, tp2AtrMult: 2.5, tp3AtrMult: 4.0 },
+    medium: { minConfidence: 0.40, volumeMultiplier: 1.0, slAtrMult: 1.5, tp1AtrMult: 1.5, tp2AtrMult: 2.5, tp3AtrMult: 4.0 },
+    high:   { minConfidence: 0.25, volumeMultiplier: 1.5, slAtrMult: 1.0, tp1AtrMult: 1.0, tp2AtrMult: 2.0, tp3AtrMult: 3.0 },
+  }
+  const risk = RISK_TABLE[riskLevel] || RISK_TABLE.medium
+
+  const maxPosition = parseFloat((config || {}).max_position_size || 0.05) * risk.volumeMultiplier
   const rawVolume = parseFloat(parsed.recommended_volume || 0)
   const recommendedVolume = signalType === 'hold' ? 0 : round2(Math.max(0.01, Math.min(rawVolume, maxPosition)))
 
@@ -747,46 +756,44 @@ function normalizeAiSignal(parsed, config, market) {
     const holdCertainty = 0.50 + (1 - trendStrength) * 0.22 + Math.min(volatilityPct / 0.5, 0.12)
     calibrated = rawConfidence * 0.55 + holdCertainty * 0.45
   } else {
-    // LLM confidence is the primary signal — dataConfidence is a soft tie-breaker, not a heavy penalty
-    // Gold (XAUUSD) has inherently high volatility that makes dataConfidence low (~0.3),
-    // so weighting it at 40% crushes real signals. 85/15 split keeps LLM judgment dominant.
     calibrated = rawConfidence * 0.85 + dataConfidence * 0.15
   }
 
-  parsed.signal_type = signalType
   parsed.confidence = round2(Math.max(0.05, Math.min(0.95, calibrated)))
+
+  // Confidence gate: downgrade to hold if below risk_level threshold
+  if (signalType !== 'hold' && parsed.confidence < risk.minConfidence) {
+    console.log(`[AI] ${market.symbol} ${market.timeframe} confidence ${parsed.confidence} < ${risk.minConfidence} (${riskLevel}), downgrading ${signalType} → hold`)
+    signalType = 'hold'
+    parsed.signal_type = 'hold'
+    parsed.recommended_volume = 0
+    return parsed
+  }
+
+  parsed.signal_type = signalType
   parsed.recommended_volume = recommendedVolume
 
-  // Fallback: if AI returned buy/sell without TP/SL, calculate from ATR and support/resistance
+  // TP/SL fallback: calculate from ATR when AI omits them
   if (signalType !== 'hold') {
     const price = market.latest_price || 0
     const atr = market.atr_14 || 0
-    const sr = market.support_resistance || {}
-    const bb = market.bollinger || {}
-    const selectedTp = (config || {}).selected_take_profit || 2
     if (atr > 0 && price > 0) {
-      // Stop loss: 1.5× ATR from entry
       if (!parsed.stop_loss_price) {
-        const slOffset = atr * 1.5
+        const slOffset = atr * risk.slAtrMult
         parsed.stop_loss_price = signalType === 'buy'
-          ? round2(price - slOffset)
-          : round2(price + slOffset)
+          ? round2(price - slOffset) : round2(price + slOffset)
       }
-      // Take profits: use selected_take_profit level or fallback to ATR multiples
       if (!parsed.take_profit_1_price) {
         parsed.take_profit_1_price = signalType === 'buy'
-          ? round2(price + atr * 1.5)
-          : round2(price - atr * 1.5)
+          ? round2(price + atr * risk.tp1AtrMult) : round2(price - atr * risk.tp1AtrMult)
       }
       if (!parsed.take_profit_2_price) {
         parsed.take_profit_2_price = signalType === 'buy'
-          ? round2(price + atr * 2.5)
-          : round2(price - atr * 2.5)
+          ? round2(price + atr * risk.tp2AtrMult) : round2(price - atr * risk.tp2AtrMult)
       }
       if (!parsed.take_profit_3_price) {
         parsed.take_profit_3_price = signalType === 'buy'
-          ? round2(price + atr * 4)
-          : round2(price - atr * 4)
+          ? round2(price + atr * risk.tp3AtrMult) : round2(price - atr * risk.tp3AtrMult)
       }
     }
   }
