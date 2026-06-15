@@ -275,7 +275,10 @@ class AurumBridge:
 
     def _hide_tray(self):
         if self._nid:
-            shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._nid))
+            try:
+                shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._nid))
+            except Exception:
+                pass
             self._nid = None
 
     def _update_tray_tip(self, tip):
@@ -413,12 +416,18 @@ class AurumBridge:
             try:
                 if self._ws and self._ws.connected:
                     self._ws.close()
-            except: pass
+            except Exception:
+                pass
         if self.mt5:
             try: self.mt5.shutdown()
-            except: pass
-        self._hide_tray()
-        self.root.withdraw()
+            except Exception:
+                pass
+        try: self._hide_tray()
+        except Exception:
+            pass
+        try: self.root.withdraw()
+        except Exception:
+            pass
         threading.Thread(target=self._delayed_exit, daemon=True).start()
 
     def _delayed_exit(self):
