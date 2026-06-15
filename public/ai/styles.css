@@ -918,9 +918,9 @@ textarea:focus {
   vertical-align: middle;
   margin-top: 3px;
 }
-.market-dot-open { background: var(--gold-primary); box-shadow: 0 0 6px rgba(212,175,55,0.4); }
-.market-dot-closed { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); }
-.market-dot-closeonly { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.4); }
+.market-dot-open { background: var(--gold-primary); box-shadow: 0 0 6px rgba(212,175,55,0.4); animation: pulse-dot-gold 2s ease-in-out infinite; }
+.market-dot-closed { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); animation: pulse-dot-red 2s ease-in-out infinite; }
+.market-dot-closeonly { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.4); animation: pulse-dot-amber 2s ease-in-out infinite; }
 .market-dot-unknown { background: #4a5568; }
 .market-status-text { font-size: 11px; }
 .market-status-text-open { color: var(--gold-primary); }
@@ -930,11 +930,11 @@ textarea:focus {
 
 /* Market status topbar badge */
 #marketStatus.status-active { color: var(--gold-primary); background: var(--gold-wash); border-color: var(--border-gold); }
-#marketStatus.status-active .badge-dot { background: var(--gold-primary); box-shadow: 0 0 4px rgba(212,175,55,0.4); animation: none; }
+#marketStatus.status-active .badge-dot { background: var(--gold-primary); box-shadow: 0 0 4px rgba(212,175,55,0.4); animation: pulse-dot-gold 2s ease-in-out infinite; }
 #marketStatus.status-warning { color: #f59e0b; background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); }
-#marketStatus.status-warning .badge-dot { background: #f59e0b; }
+#marketStatus.status-warning .badge-dot { background: #f59e0b; animation: pulse-dot-amber 2s ease-in-out infinite; }
 #marketStatus.status-neutral { color: #ef4444; background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); }
-#marketStatus.status-neutral .badge-dot { background: #ef4444; }
+#marketStatus.status-neutral .badge-dot { background: #ef4444; animation: pulse-dot-red 2s ease-in-out infinite; }
 
 .card-signal {
   position: relative;
@@ -2614,6 +2614,26 @@ input:checked + .slider::before { transform: translateX(18px); }
   50% {
     opacity: 0.82;
     box-shadow: 0 0 0 5px rgba(212, 175, 55, 0);
+  }
+}
+
+@keyframes pulse-dot-red {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0);
+  }
+}
+
+@keyframes pulse-dot-amber {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
   }
 }
 
