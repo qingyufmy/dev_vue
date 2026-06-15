@@ -1654,13 +1654,6 @@ input:checked + .slider::before { transform: translateX(18px); }
   display: grid;
   grid-template-columns: 450px minmax(0, 1fr);
   gap: var(--space-5);
-  align-items: stretch;
-}
-
-.analysis-grid > .card:first-child {
-  display: flex;
-  flex-direction: column;
-  max-height: 100%;
 }
 
 .trading-grid {
@@ -2140,11 +2133,6 @@ input:checked + .slider::before { transform: translateX(18px); }
   margin-top: var(--space-5);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .analysis-history-head {
@@ -2159,9 +2147,7 @@ input:checked + .slider::before { transform: translateX(18px); }
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--space-3);
-  flex: 1;
-  min-height: 0;
-  max-height: none;
+  max-height: 310px;
   overflow: auto;
   padding-right: var(--space-1);
 }
