@@ -542,19 +542,20 @@ function updateMarketStatus(tradeMode) {
   const text = document.getElementById('marketStatusText');
   if (!dot || !text) return;
   state.marketTradeMode = tradeMode;
-  // CN convention: red=up(open), green=down(closed)
   const map = {
-    0: ['closed', '休市', 'neutral'],
-    1: ['closeonly', '仅平仓', 'warning'],
-    2: ['open', '交易中', 'active'],
-    3: ['open', '仅做空', 'active'],
-    4: ['open', '仅做多', 'active'],
+    0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动推理已暂停'],
+    1: ['closeonly', '仅平仓', 'warning', '仅平仓 - 当前仅允许平仓，禁止开新仓'],
+    2: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
+    3: ['open', '仅做空', 'active', '仅做空 - 当前仅允许做空交易'],
+    4: ['open', '仅做多', 'active', '仅做多 - 当前仅允许做多交易'],
   };
-  const [cls, label, badgeType] = map[tradeMode] || ['unknown', '未知', 'neutral'];
+  const [cls, label, badgeType, tip] = map[tradeMode] || ['unknown', '未知', 'neutral', '未知状态'];
   dot.className = 'market-dot market-dot-' + cls;
   text.className = 'market-status-text market-status-text-' + cls;
   text.textContent = label;
   setBadge('marketStatus', label, badgeType);
+  const badge = document.getElementById('marketStatus');
+  if (badge) badge.title = '\u5E02\u573A\u72B6\u6001\uFF1A' + tip;
 }
 
 // Handle data push from bridge (account + quote + positions)
