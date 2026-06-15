@@ -1334,6 +1334,7 @@ async function loadAutoConfig() {
     document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
     document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
+    document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enable_auto_trade);
     document.getElementById('autoSymbolSelect').value = (cfg.symbols || ['XAUUSD'])[0] || 'XAUUSD';
     document.getElementById('autoApiKey').placeholder = cfg.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
     document.getElementById('autoSystemPrompt').value = cfg.system_prompt || '';
@@ -1373,6 +1374,7 @@ async function saveAutoConfig() {
       risk_level: document.getElementById('autoRiskLevel').value,
       max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
       selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
+      enable_auto_trade: document.getElementById('autoEnableAutoTrade').checked,
       system_prompt: document.getElementById('autoSystemPrompt').value || null,
     };
     if (apiKey) payload.api_key = apiKey;

@@ -470,6 +470,7 @@ export async function initDB() {
       risk_level VARCHAR(20) DEFAULT 'medium',
       max_position_size DOUBLE DEFAULT 0.05,
       selected_take_profit INT DEFAULT 2,
+      enable_auto_trade TINYINT NOT NULL DEFAULT 0,
       system_prompt TEXT,
       updated_at DATETIME NOT NULL DEFAULT (NOW()),
       CONSTRAINT chk_singleton CHECK (id = 1)
@@ -555,6 +556,15 @@ export async function initDB() {
 
   // Clean notifications: drop unused 'read' column (reserved word)
   try { await p.query('ALTER TABLE notifications DROP COLUMN `read`') } catch {}
+
+  // v1.7.3: add enable_auto_trade to global_auto_config
+  try {
+    const [eacCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_auto_config' AND COLUMN_NAME = 'enable_auto_trade'`)
+    if (eacCols.length === 0) {
+      await p.query('ALTER TABLE global_auto_config ADD COLUMN enable_auto_trade TINYINT NOT NULL DEFAULT 0 AFTER selected_take_profit')
+      console.log('[DB] Added enable_auto_trade to global_auto_config')
+    }
+  } catch {}
 
   console.log('[DB] MySQL initialized')
 }

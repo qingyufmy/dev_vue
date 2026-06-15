@@ -491,6 +491,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             system_prompt: autoPrompt,
             symbols,
             interval_minutes: globalCfg?.interval_minutes || 5,
+            enable_auto_trade: !!globalCfg?.enable_auto_trade,
           }
         }
         break
@@ -514,6 +515,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           risk_level: params.risk_level ?? existing?.risk_level ?? 'medium',
           max_position_size: params.max_position_size ?? existing?.max_position_size ?? 0.05,
           selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
+          enable_auto_trade: params.enable_auto_trade ?? existing?.enable_auto_trade ?? 0,
         }
         await ai.saveGlobalAutoConfig(newCfg)
         // Restart schedulers for all enabled users

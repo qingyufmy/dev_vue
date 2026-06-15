@@ -1015,6 +1015,7 @@ async function saveGlobalAutoConfig(cfg) {
       api_provider = ?, model_name = ?, api_key_encrypted = ?, api_base_url = ?,
       temperature = ?, max_tokens = ?, system_prompt = ?,
       risk_level = ?, max_position_size = ?, selected_take_profit = ?,
+      enable_auto_trade = ?,
       updated_at = ?
     WHERE id = 1
   `, [
@@ -1023,6 +1024,7 @@ async function saveGlobalAutoConfig(cfg) {
     cfg.api_provider || null, cfg.model_name || null, cfg.api_key_encrypted || null, cfg.api_base_url || null,
     cfg.temperature ?? null, cfg.max_tokens ?? null, cfg.system_prompt || null,
     cfg.risk_level || null, cfg.max_position_size ?? null, cfg.selected_take_profit ?? null,
+    cfg.enable_auto_trade ? 1 : 0,
     now
   ])
 }
@@ -1044,7 +1046,7 @@ async function getAutoInferenceConfig(userId) {
     max_position_size: globalCfg.max_position_size ?? 0.05,
     selected_take_profit: globalCfg.selected_take_profit ?? 2,
     system_prompt: globalCfg.system_prompt || '',
-    enable_auto_trade: true,
+    enable_auto_trade: !!globalCfg.enable_auto_trade,
     _source: 'auto'
   }
 }
