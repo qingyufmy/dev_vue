@@ -380,6 +380,24 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', config: ai.configPublic(row) }
         break
       }
+      case 'signals_latest_id': {
+        // Lightweight check: return only latest signal's ID and minimal fields
+        let queryUserId = userId
+        let row = await queryOne('SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 1', [userId, params.session_id || 'default'])
+        if (!row && adminUserId) {
+          queryUserId = adminUserId
+          row = await queryOne('SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 1', [queryUserId, params.session_id || 'default'])
+        }
+        if (row) {
+          const now = Date.now()
+          const createdAt = new Date(row.created_at).getTime()
+          const ttl = (row.ttl_seconds || 3600) * 1000
+          row.is_stale = (now - createdAt) > ttl
+          row.age_seconds = Math.floor((now - createdAt) / 1000)
+        }
+        result = { status: 'success', signal: row || null }
+        break
+      }
       case 'signals': {
         let queryUserId = userId
         const ownRows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [userId, params.session_id || 'default'])

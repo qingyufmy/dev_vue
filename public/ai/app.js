@@ -605,54 +605,37 @@ async function _maybeRefreshSignal() {
   if (now - _lastSignalRefreshTs < 1000) return;
   _lastSignalRefreshTs = now;
   try {
-    const data = await wsApi("signals", { session_id: "default" });
-    const signals = data.signals || [];
-    const latestSignal = signals[0] || null;
+    // Lightweight check: only fetch latest signal's ID + minimal fields (~200 bytes)
+    const data = await wsApi("signals_latest_id", { session_id: "default" });
+    const latest = data.signal || null;
 
-    // No signals at all
-    if (!latestSignal) {
-      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.selectedSignal = null; }
+    if (!latest) {
+      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.selectedSignal = null; state.signals = []; renderAnalysisHistory([]); renderSignalRows(); }
       return;
     }
 
-    // Update signals list
+    // ID unchanged — only update timing UI for the displayed signal, skip full fetch
+    if (latest.id === _lastSignalId) {
+      const displaySignal = state.selectedSignal;
+      if (displaySignal) {
+        setText("sigValidWindow", signalFreshness(displaySignal));
+        setText("signalFreshness", signalFreshness(displaySignal));
+        setText("analysisValidity", signalFreshness(displaySignal));
+        setSignalBadge(displaySignal);
+      }
+      return;
+    }
+
+    // New signal detected — fetch full signal list
+    _lastSignalId = latest.id;
+    const fullData = await wsApi("signals", { session_id: "default" });
+    const signals = fullData.signals || [];
     state.signals = signals;
-
-    // Determine which signal to display: user's selection > latest
-    const selectedId = state.selectedSignal?.id;
-    const selectedInList = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
-    const displaySignal = selectedInList || latestSignal;
-
-    // New signal detected (ID changed) — switch to new signal
-    if (_lastSignalId !== latestSignal.id) {
-      _lastSignalId = latestSignal.id;
-      state.selectedSignal = latestSignal;
-      updateSignalDisplay(latestSignal);
-      setText("signalFreshness", signalFreshness(latestSignal));
-      renderAnalysisHistory(signals);
-      renderSignalRows();
-      return;
-    }
-
-    // Same signal — light refresh: only update timing UI for the DISPLAYED signal
-    state.selectedSignal = displaySignal;
-    setText("sigValidWindow", signalFreshness(displaySignal));
-    setText("signalFreshness", signalFreshness(displaySignal));
-    setText("analysisValidity", signalFreshness(displaySignal));
-    setSignalBadge(displaySignal);
-    const card = $("signalCard");
-    if (card) {
-      card.dataset.status = displaySignal.is_executed ? "executed" : displaySignal.is_stale ? "expired" : "live";
-      const dir = signalType(displaySignal.signal_type);
-      const colorMap = { buy: "var(--color-positive)", sell: "var(--color-negative)", hold: "var(--color-warning)" };
-      card.style.setProperty("--signal-border", colorMap[dir]);
-      card.style.setProperty("--signal-glow", colorMap[dir] === "var(--color-positive)" ? "var(--signal-glow-buy)" : colorMap[dir] === "var(--color-negative)" ? "var(--signal-glow-sell)" : "var(--signal-glow-hold)");
-    }
-    const btn = $("executeSignalBtn");
-    if (btn) {
-      const executable = signalType(displaySignal.signal_type) !== "hold" && !displaySignal.is_stale && !displaySignal.is_executed;
-      btn.disabled = !executable;
-    }
+    state.selectedSignal = signals[0] || null;
+    updateSignalDisplay(state.selectedSignal);
+    if (state.selectedSignal) setText("signalFreshness", signalFreshness(state.selectedSignal));
+    renderAnalysisHistory(signals);
+    renderSignalRows();
   } catch (e) { /* silent */ }
 }
 
@@ -688,22 +671,7 @@ function handleDisconnect(msg) {
   state._lastGatewayLive = false;
 }
 
-function startRealtimeSync() {
-  stopRealtimeSync();
-  // Delay first background sync by 5s to let bridge connect
-  setTimeout(() => {
-    if (!state.token) return;
-    state.backgroundSyncTimer = setInterval(() => {
-      if (!state.token || state.backgroundSyncInFlight) return;
-      state.backgroundSyncInFlight = true;
-      const tab = activeTabId();
-      const tasks = [loadSignals()];
-      if (tab === "history") tasks.push(loadHistory());
-      if (tab === "audit" || tab === "trading" || tab === "dashboard") tasks.push(loadAudit());
-      Promise.allSettled(tasks).finally(() => { state.backgroundSyncInFlight = false; });
-    }, 30000);
-  }, 5000);
-}
+
 
 function setTab(tabId) {
   document.querySelectorAll(".nav-item").forEach((button) => {
@@ -790,8 +758,7 @@ async function bootstrap() {
       connectBridgeStatusWs(resolve);
     });
     await refreshAll();
-    startRealtimeSync();
-    // Activate tick stream for current tab (stops old polling)
+    // Data loads on-demand: tab switch + manual refresh + bridge data push
     refreshTabData(activeTabId());
   } catch {
     logout();
