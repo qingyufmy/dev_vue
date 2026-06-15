@@ -756,6 +756,41 @@ function normalizeAiSignal(parsed, config, market) {
   parsed.signal_type = signalType
   parsed.confidence = round2(Math.max(0.05, Math.min(0.95, calibrated)))
   parsed.recommended_volume = recommendedVolume
+
+  // Fallback: if AI returned buy/sell without TP/SL, calculate from ATR and support/resistance
+  if (signalType !== 'hold') {
+    const price = market.latest_price || 0
+    const atr = market.atr_14 || 0
+    const sr = market.support_resistance || {}
+    const bb = market.bollinger || {}
+    const selectedTp = (config || {}).selected_take_profit || 2
+    if (atr > 0 && price > 0) {
+      // Stop loss: 1.5× ATR from entry
+      if (!parsed.stop_loss_price) {
+        const slOffset = atr * 1.5
+        parsed.stop_loss_price = signalType === 'buy'
+          ? round2(price - slOffset)
+          : round2(price + slOffset)
+      }
+      // Take profits: use selected_take_profit level or fallback to ATR multiples
+      if (!parsed.take_profit_1_price) {
+        parsed.take_profit_1_price = signalType === 'buy'
+          ? round2(price + atr * 1.5)
+          : round2(price - atr * 1.5)
+      }
+      if (!parsed.take_profit_2_price) {
+        parsed.take_profit_2_price = signalType === 'buy'
+          ? round2(price + atr * 2.5)
+          : round2(price - atr * 2.5)
+      }
+      if (!parsed.take_profit_3_price) {
+        parsed.take_profit_3_price = signalType === 'buy'
+          ? round2(price + atr * 4)
+          : round2(price - atr * 4)
+      }
+    }
+  }
+
   return parsed
 }
 
@@ -1058,14 +1093,14 @@ async function runAutoCycle(userId, symbol, timeframe) {
     const result = await queryRun(`
       INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
         recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
-        take_profit_2_price, take_profit_3_price, market_data_json, is_executed, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        take_profit_2_price, take_profit_3_price, market_data_json, ai_model, ttl_seconds, is_executed, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `, [
       userId, config?.id || null, 'default', symbol, timeframe.toUpperCase(),
       signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price,
       signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
-      JSON.stringify(market), createdAt
+      JSON.stringify(market), config.model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt
     ])
     signal.id = result.insertId
     signal.symbol = symbol
