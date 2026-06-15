@@ -543,18 +543,16 @@ function updateMarketStatus(tradeMode) {
   if (!dot || !text) return;
   state.marketTradeMode = tradeMode;
   const map = {
-    0: ['closed', '休市'],
-    1: ['closeonly', '仅平仓'],
-    2: ['open', '交易中'],
-    3: ['open', '仅做空'],
-    4: ['open', '仅做多'],
+    0: ['closed', '休市', 'neutral'],
+    1: ['closeonly', '仅平仓', 'warning'],
+    2: ['open', '交易中', 'active'],
+    3: ['open', '仅做空', 'active'],
+    4: ['open', '仅做多', 'active'],
   };
-  const [cls, label] = map[tradeMode] || ['unknown', '未知'];
+  const [cls, label, badgeType] = map[tradeMode] || ['unknown', '未知', 'neutral'];
   dot.className = 'market-dot market-dot-' + cls;
   text.className = 'market-status-text market-status-text-' + cls;
   text.textContent = label;
-  // Update topbar badge
-  const badgeType = cls === 'open' ? 'active' : cls === 'closed' ? 'neutral' : 'warning';
   setBadge('marketStatus', label, badgeType);
 }
 
