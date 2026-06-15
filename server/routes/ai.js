@@ -496,7 +496,9 @@ async function buildStrategyContext(userId, symbol, account, positions, primaryT
       rates = (resp && resp.rates) ? resp.rates : []
     }
     const summary = calculateMarketData(symbol, tf, rates, account, positions)
-    timeframes[tf] = { summary, klines: compactRates(rates) }
+    // Strip redundant fields already present at top-level market object
+    const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
+    timeframes[tf] = { summary: slimSummary, klines: compactRates(rates) }
   }
   return {
     strategy_sequence: '1H trend primary, 4H fallback only if 1H unclear, M15 signal confirmation, M5 precise entry trigger',
@@ -688,6 +690,19 @@ async function maybeAiSignal(db, config, market) {
 
   try {
     const prompt = config.system_prompt || DEFAULT_PROMPT
+    // Build slim payload for AI: basic info + strategy_context only (no duplicated top-level indicators)
+    const aiPayload = {
+      symbol: market.symbol,
+      timeframe: market.timeframe,
+      timestamp: market.timestamp,
+      latest_price: market.latest_price,
+      price_change: market.price_change,
+      price_change_pct: market.price_change_pct,
+      account: market.account,
+      positions: market.positions,
+      kline_count: market.kline_count,
+    }
+    if (market.strategy_context) aiPayload.strategy_context = market.strategy_context
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
@@ -695,7 +710,7 @@ async function maybeAiSignal(db, config, market) {
       maxTokens: parseInt(config.max_tokens || 2000),
       messages: [
         { role: 'system', content: prompt },
-        { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(market) },
+        { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(aiPayload) },
       ],
     })
     const required = ['signal_type', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
@@ -704,7 +719,7 @@ async function maybeAiSignal(db, config, market) {
       throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
     }
     parsed._inference_source = 'ai'
-    console.log(`[AI] ${market.symbol} ${market.timeframe} raw: type=${parsed.signal_type} conf=${parsed.confidence} prompt_len=${prompt.length} data_keys=${Object.keys(market).join(',')}`)
+    console.log(`[AI] ${market.symbol} ${market.timeframe} raw: type=${parsed.signal_type} conf=${parsed.confidence} prompt_len=${prompt.length} ai_payload=${JSON.stringify(aiPayload).length}B full_market=${JSON.stringify(market).length}B`)
     return normalizeAiSignal(parsed, config, market)
   } catch (exc) {
     return aiFailureHold(market, exc.message)
