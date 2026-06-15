@@ -897,7 +897,16 @@ async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const market = calculateMarketData(symbol, timeframe, rates, account, positions)
-  market.strategy_context = await buildStrategyContext(userId, symbol, account, positions, timeframe, rates)
+  // Manual reasoning: build single-timeframe strategy_context from already-fetched data
+  // (skip buildStrategyContext which fetches 4 extra timeframes)
+  const { account: _sa, positions: _sp, symbol: _ss, timeframe: _stf, timestamp: _sts, ...slimSummary } = market
+  market.strategy_context = {
+    strategy_sequence: 'single-timeframe analysis based on user selection',
+    required_timeframes: [timeframe.toUpperCase()],
+    timeframes: {
+      [timeframe.toUpperCase()]: { summary: slimSummary, klines: compactRates(rates) }
+    }
+  }
   const signal = await maybeAiSignal(null, config, market)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
