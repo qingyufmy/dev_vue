@@ -603,11 +603,29 @@ function handleBridgeData(msg) {
     updatePnlStyle("tradeAccountProfit", msg.account.profit);
   }
   if (msg.positions) {
+    const newTickets = new Set(msg.positions.map(p => String(p.ticket)));
+    // Remove rows for positions that no longer exist (closed)
+    const existingRows = document.querySelectorAll('#positionsBody tr[data-ticket]');
+    for (const row of existingRows) {
+      if (!newTickets.has(row.dataset.ticket)) {
+        row.classList.add('fade-out');
+        setTimeout(() => row.remove(), 300);
+        // Also trigger a full refresh to update account/history
+        clearTimeout(state._posRefreshTimer);
+        state._posRefreshTimer = setTimeout(() => {
+          loadPositions();
+          loadAccount();
+          loadHistory();
+        }, 500);
+      }
+    }
+    // Update existing rows
     for (const pos of msg.positions) {
       const closeBtn = document.querySelector(`[data-close-ticket="${pos.ticket}"]`);
       if (closeBtn) {
         const row = closeBtn.closest('tr');
         if (row) {
+          row.setAttribute('data-ticket', pos.ticket);
           const cells = row.querySelectorAll('td');
           if (cells[5]) cells[5].textContent = fmt(pos.current_price);
           if (cells[9]) {
@@ -1120,7 +1138,7 @@ function renderPositionRows(positions, withAction) {
     const digits = Number(position.digits);
     const priceDigits = Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
     return `
-      <tr>
+      <tr data-ticket="${escapeHtml(position.ticket)}">
         ${ticketCell(position.ticket, tickets)}
         <td>${escapeHtml(position.symbol)}</td>
         <td><span class="${directionClass}">${directionLabel}</span></td>
