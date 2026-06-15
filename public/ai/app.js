@@ -201,18 +201,29 @@ function priceDisplay(value, digits = 2) {
   return fmt(num, digits);
 }
 
+function signalIsStale(signal) {
+  if (!signal) return false;
+  if (signal.is_executed) return false;
+  const ttl = Number(signal.ttl_seconds);
+  if (!Number.isFinite(ttl)) return !!signal.is_stale;
+  const createdAt = new Date(signal.created_at).getTime();
+  if (!createdAt || isNaN(createdAt)) return !!signal.is_stale;
+  return (Date.now() - createdAt) / 1000 > ttl;
+}
+
 function setSignalBadge(signal) {
   const badge = $("signalLiveBadge");
   if (!badge) return;
   let label = "等待";
   let stateClass = "expired";
+  const stale = signalIsStale(signal);
   if (signal?.is_executed) {
     label = "已执行";
     stateClass = "executed";
-  } else if (signal && !signal.is_stale) {
+  } else if (signal && !stale) {
     label = "LIVE";
     stateClass = "";
-  } else if (signal?.is_stale) {
+  } else if (stale) {
     label = "已过期";
     stateClass = "expired";
   }
@@ -600,6 +611,20 @@ function handleBridgeData(msg) {
 
 let _lastSignalRefreshTs = 0;
 let _lastSignalId = null;
+
+// UI-only timer: refresh signal timing displays every second (no network calls)
+setInterval(() => {
+  const s = state.selectedSignal;
+  if (!s) return;
+  setText("sigValidWindow", signalFreshness(s));
+  setText("signalFreshness", signalFreshness(s));
+  setText("analysisValidity", signalFreshness(s));
+  setSignalBadge(s);
+  // Update execute button state when signal expires
+  const btn = $("executeSignalBtn");
+  if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
+}, 1000);
+
 async function _maybeRefreshSignal() {
   const now = Date.now();
   if (now - _lastSignalRefreshTs < 1000) return;
@@ -614,17 +639,8 @@ async function _maybeRefreshSignal() {
       return;
     }
 
-    // ID unchanged — only update timing UI for the displayed signal, skip full fetch
-    if (latest.id === _lastSignalId) {
-      const displaySignal = state.selectedSignal;
-      if (displaySignal) {
-        setText("sigValidWindow", signalFreshness(displaySignal));
-        setText("signalFreshness", signalFreshness(displaySignal));
-        setText("analysisValidity", signalFreshness(displaySignal));
-        setSignalBadge(displaySignal);
-      }
-      return;
-    }
+    // ID unchanged — UI timer handles timing display, nothing to do
+    if (latest.id === _lastSignalId) return;
 
     // New signal detected — fetch full signal list
     _lastSignalId = latest.id;
@@ -1434,11 +1450,15 @@ function updateSignalDisplay(signal) {
 
 function signalFreshness(signal) {
   if (!signal) return "--";
-  if (signal.is_stale) return "已过期";
-  const age = Number(signal.age_seconds);
+  // Compute age in real-time from created_at, not from stale snapshot
   const ttl = Number(signal.ttl_seconds);
-  if (Number.isFinite(age) && Number.isFinite(ttl)) return `${Math.round(age)}s / ${ttl}s`;
-  return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
+  if (!Number.isFinite(ttl)) return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
+  const createdAt = new Date(signal.created_at).getTime();
+  if (!createdAt || isNaN(createdAt)) return "--";
+  const age = Math.floor((Date.now() - createdAt) / 1000);
+  const isStale = age > ttl;
+  if (isStale) return "已过期";
+  return `${age}s / ${ttl}s`;
 }
 
 function executionStatus(signal) {
