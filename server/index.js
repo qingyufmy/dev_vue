@@ -83,7 +83,16 @@ app.use('/aurum-api', noCache, aiRoutes)
 
 
 // Serve AURUM AI static files at /ai
-app.use('/ai', noCache, express.static(join(__dirname, '..', 'public', 'ai')))
+// Serve AURUM AI static files — allow browser caching for assets, no-cache for HTML
+app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.set('Cache-Control', 'no-cache')  // HTML: revalidate each time
+    } else {
+      res.set('Cache-Control', 'public, max-age=604800')  // JS/CSS/images: cache 7 days
+    }
+  }
+}))
 
 // Bridge config download (for EXE update-token feature)
 app.get('/ai/bridge/config', (req, res) => {
