@@ -916,18 +916,17 @@ textarea:focus {
   height: 8px;
   border-radius: 50%;
   vertical-align: middle;
-  margin-right: 2px;
   margin-top: 3px;
 }
-.market-dot-open { background: #22c55e; box-shadow: 0 0 4px #22c55e88; }
-.market-dot-closed { background: #ef4444; }
-.market-dot-closeonly { background: #f59e0b; }
-.market-dot-unknown { background: #6b7280; }
+.market-dot-open { background: var(--gold-primary); box-shadow: 0 0 4px rgba(212,175,55,0.35); }
+.market-dot-closed { background: var(--color-warning); }
+.market-dot-closeonly { background: var(--color-warning); }
+.market-dot-unknown { background: var(--text-muted); }
 .market-status-text { font-size: 11px; }
-.market-status-text-open { color: #22c55e; }
-.market-status-text-closed { color: #ef4444; }
-.market-status-text-closeonly { color: #f59e0b; }
-.market-status-text-unknown { color: #6b7280; }
+.market-status-text-open { color: var(--gold-primary); }
+.market-status-text-closed { color: var(--color-warning); }
+.market-status-text-closeonly { color: var(--color-warning); }
+.market-status-text-unknown { color: var(--text-muted); }
 
 .card-signal {
   position: relative;
