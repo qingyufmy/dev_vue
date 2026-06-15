@@ -428,10 +428,29 @@ class AurumBridge:
         try: self.root.withdraw()
         except Exception:
             pass
+        # Cancel pending after() callbacks before destroying root
+        try: self._cancel_all_after()
+        except Exception:
+            pass
+        try: self.root.quit()
+        except Exception:
+            pass
+        try: self.root.destroy()
+        except Exception:
+            pass
+        # Give daemon threads a moment, then force exit
         threading.Thread(target=self._delayed_exit, daemon=True).start()
 
     def _delayed_exit(self):
-        time.sleep(0.3)
+        time.sleep(0.5)
+        # Clean up PyInstaller temp dir if sys.exit didn't work
+        mei = getattr(sys, '_MEIPASS', None)
+        if mei:
+            import shutil
+            try:
+                shutil.rmtree(mei, ignore_errors=True)
+            except Exception:
+                pass
         os._exit(0)
 
     # ============ Utilities ============
