@@ -613,16 +613,24 @@ let _lastSignalRefreshTs = 0;
 let _lastSignalId = null;
 
 // UI-only timer: refresh signal timing displays every second (no network calls)
+// Also polls for new signals every 5s when bridge is not pushing data
+let _uiTimerPollCounter = 0;
 setInterval(() => {
   const s = state.selectedSignal;
-  if (!s) return;
-  setText("sigValidWindow", signalFreshness(s));
-  setText("signalFreshness", signalFreshness(s));
-  setText("analysisValidity", signalFreshness(s));
-  setSignalBadge(s);
-  // Update execute button state when signal expires
-  const btn = $("executeSignalBtn");
-  if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
+  if (s) {
+    setText("sigValidWindow", signalFreshness(s));
+    setText("signalFreshness", signalFreshness(s));
+    setText("analysisValidity", signalFreshness(s));
+    setSignalBadge(s);
+    // Update execute button state when signal expires
+    const btn = $("executeSignalBtn");
+    if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
+  }
+  // Poll for new signals every 5s (bridge data push handles this when connected)
+  if (++_uiTimerPollCounter >= 5) {
+    _uiTimerPollCounter = 0;
+    if (state.token) _maybeRefreshSignal();
+  }
 }, 1000);
 
 async function _maybeRefreshSignal() {
@@ -1917,6 +1925,9 @@ async function loadSignals(options = {}) {
   const data = await wsApi("signals", { session_id: "default" });
   const signals = data.signals || [];
   state.signals = signals;
+
+  // Sync _lastSignalId so _maybeRefreshSignal doesn't re-fetch unnecessarily
+  if (signals.length > 0) _lastSignalId = signals[0].id;
 
   // Preserve selected signal if it still exists, otherwise use latest
   const selectedId = state.selectedSignal?.id;
