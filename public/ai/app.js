@@ -544,10 +544,10 @@ function updateMarketStatus(tradeMode) {
   state.marketTradeMode = tradeMode;
   const map = {
     0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动推理已暂停'],
-    1: ['closeonly', '仅平仓', 'warning', '仅平仓 - 当前仅允许平仓，禁止开新仓'],
+    1: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
     2: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
-    3: ['open', '仅做空', 'active', '仅做空 - 当前仅允许做空交易'],
-    4: ['open', '仅做多', 'active', '仅做多 - 当前仅允许做多交易'],
+    3: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
+    4: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
   };
   const [cls, label, badgeType, tip] = map[tradeMode] || ['unknown', '未知', 'neutral', '未知状态'];
   dot.className = 'market-dot market-dot-' + cls;
@@ -884,7 +884,7 @@ async function loadStatus() {
 
   // Update market status from health response
   if (typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
-  const marketClosed = gateway.trade_mode === 0 || gateway.trade_mode === 1;
+  const marketClosed = gateway.trade_mode === 0;
 
   try {
     const auto = await wsApi('auto_status');
@@ -897,7 +897,7 @@ async function loadStatus() {
     let label, type;
     if (marketClosed && enabled) {
       // Market closed — show paused even if scheduler is enabled
-      label = gateway.trade_mode === 0 ? `市场休市 · 自动推理暂停` : `仅平仓 · 自动推理暂停`;
+      label = `市场休市 · 自动推理暂停`;
       type = 'warning';
     } else {
       label = enabled

@@ -1080,10 +1080,10 @@ async function runAutoCycle(userId, symbol, timeframe) {
     return
   }
 
-  // Check market status — skip if closed or close-only
+  // Check market status — skip only if market closed
   const tradeMode = getBridgeTradeMode(userId)
-  if (tradeMode === 0 || tradeMode === 1) {
-    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: market ${tradeMode === 0 ? 'closed' : 'close-only'} (trade_mode=${tradeMode})`)
+  if (tradeMode === 0) {
+    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: market closed (trade_mode=${tradeMode})`)
     return
   }
 
