@@ -340,6 +340,44 @@ button {
   flex-shrink: 0;
 }
 
+.topbar-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  line-height: initial;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(135deg, rgba(18, 22, 35, 0.9), rgba(12, 16, 28, 0.95));
+  border: 1px solid rgba(212, 175, 55, 0.15);
+  white-space: nowrap;
+  user-select: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.topbar-time i {
+  color: var(--gold-primary);
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.topbar-time #mt5ServerTime {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--gold-primary);
+  letter-spacing: 0.04em;
+}
+
+.topbar-time span:last-child {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  color: var(--gold-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transform: translateY(-5px);
+}
+
 .sidebar {
   grid-area: sidebar;
   overflow-y: auto;

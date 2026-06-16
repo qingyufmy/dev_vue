@@ -577,6 +577,7 @@ function handleBridgeData(msg) {
       setText("quoteAsk", q.ask);
       setText("quoteSpread", q.spread);
       setText("quoteTime", formatTime(q.time));
+      setText("mt5ServerTime", formatTime(q.time).split(" ").pop() || "--");
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
       flashPrice("quoteBid", bidDir);
