@@ -1969,32 +1969,23 @@ async function openAnalysisFromHistory(signalId) {
     // Not in local cache — fetch single signal by ID
     try {
       const data = await wsApi("signal_detail", { signal_id: Number(signalId) });
-      if (data.status === 'success' && data.signal) signal = data.signal;
+      if (data.status === 'success' && data.signal) {
+        signal = data.signal;
+        // Insert into state.signals at correct position (ordered by id DESC)
+        const idx = state.signals.findIndex(s => s.id < signal.id);
+        if (idx >= 0) {
+          state.signals.splice(idx, 0, signal);
+        } else {
+          state.signals.push(signal);
+        }
+        renderAnalysisHistory(state.signals);
+      }
     } catch (e) { /* ignore */ }
   }
   if (!signal) {
     toast("未找到对应推理记录", "warning");
     return;
   }
-
-  // Ensure signal is in state.signals for history list highlight
-  const existsInList = state.signals.find(s => String(s.id) === String(signalId));
-  if (!existsInList) {
-    // Reload signals with enough limit to include this signal
-    try {
-      const neededLimit = Math.max(signalId, 20);
-      const data = await wsApi("signals", { session_id: "default", limit: neededLimit, offset: 0 });
-      const allSignals = data.signals || [];
-      const found = allSignals.find(s => String(s.id) === String(signalId));
-      if (found) {
-        state.signals = allSignals;
-        state.analysisHistoryOffset = allSignals.length;
-        state.analysisHistoryHasMore = data.has_more !== undefined ? data.has_more : false;
-        renderAnalysisHistory(state.signals);
-      }
-    } catch (e) { /* ignore */ }
-  }
-
   state.selectedSignal = signal;
   setTab("ai-analyze");
   renderSignal(signal, null);
