@@ -2,13 +2,13 @@
 
 ## Project overview
 
-AURUM AI Trading System v1.6.1 — Node.js/Express server + MySQL + WebSocket bridge to MT5. Serves both API (`/api`, `/aurum-api`) and static frontend (`/public`). The `server/` directory is the backend root; `public/` is the SPA frontend.
+AURUM AI Trading System v1.7.3 — Node.js/Express server + MySQL + WebSocket bridge to MT5. Serves both API (`/api`, `/aurum-api`) and static frontend (`/public`). The `server/` directory is the backend root; `public/` is the SPA frontend.
 
 ## Commands
 
 ```bash
 # Install dependencies (from web/)
-cd server && npm install
+npm install
 
 # Start server (port 3000, auto-creates tables + seeds on first run)
 node server/index.js
