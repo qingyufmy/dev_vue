@@ -15,6 +15,9 @@
   historyFilters: { page: 1, pageSize: 20 },
   auditFilters: { status: "", type: "", page: 1, pageSize: 25 },
   signalTickets: {},
+  analysisHistoryOffset: 0,
+  analysisHistoryHasMore: true,
+  analysisHistoryLoading: false,
 };
 
 // ===== Global Symbol Management =====
@@ -439,7 +442,10 @@ function wsApi(action, params = {}) {
     const ws = state.bridgeWs;
     if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
     const cmdId = `ws_${++_wsCmdId}`;
-    const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, 10000);
+    // analyze/auto-inference may take 60-120s
+    const timeout = params._timeout || (action === 'analyze' ? 120000 : 10000);
+    delete params._timeout;
+    const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, timeout);
     _wsPending.set(cmdId, { resolve, reject, timer });
     try {
       ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }));
@@ -1891,14 +1897,33 @@ function signalStatusLabel(signal) {
   return "待复核";
 }
 
-function renderAnalysisHistory(signals) {
+function renderAnalysisHistory(signals, options = {}) {
   const host = $("analysisHistoryBody");
   if (!host) return;
-  host.innerHTML = signals.length ? signals.slice(0, 12).map((signal) => {
-    const dir = signalType(signal.signal_type);
-    const confidence = confidenceInfo(signal.confidence).label;
-    const status = signalStatusLabel(signal);
-    return `
+  if (options.append) {
+    // Append new items to existing list (remove sentinel first if exists)
+    const sentinel = host.querySelector(".history-sentinel");
+    if (sentinel) sentinel.remove();
+    const limit = options.limit || 6;
+    const fragment = signals.slice(-limit).map((signal) => buildHistoryItemHTML(signal)).join("");
+    host.insertAdjacentHTML("beforeend", fragment);
+  } else {
+    host.innerHTML = signals.length ? signals.slice(0, 6).map((signal) => buildHistoryItemHTML(signal)).join("") : `<div class="history-empty">暂无推理记录</div>`;
+  }
+  // Add sentinel if more data available
+  if (state.analysisHistoryHasMore) {
+    const existing = host.querySelector(".history-sentinel");
+    if (!existing) {
+      host.insertAdjacentHTML("beforeend", `<div class="history-sentinel"><span class="history-sentinel-text">滚动加载更多</span></div>`);
+    }
+  }
+}
+
+function buildHistoryItemHTML(signal) {
+  const dir = signalType(signal.signal_type);
+  const confidence = confidenceInfo(signal.confidence).label;
+  const status = signalStatusLabel(signal);
+  return `
       <button class="analysis-history-item" data-analysis-id="${escapeHtml(signal.id)}">
         <span class="history-item-top">
           <span class="history-item-symbol">${escapeHtml(signal.symbol)} · ${escapeHtml(signal.timeframe)}</span>
@@ -1913,7 +1938,6 @@ function renderAnalysisHistory(signals) {
         <span class="history-item-text">${escapeHtml(signal.analysis || signal.reasoning || "--")}</span>
       </button>
     `;
-  }).join("") : `<div class="history-empty">暂无推理记录</div>`;
 }
 
 function highlightActiveAnalysis(signalId) {
@@ -1978,23 +2002,35 @@ function renderSignalRows() {
 }
 
 async function loadSignals(options = {}) {
-  const data = await wsApi("signals", { session_id: "default" });
+  const limit = options.limit || 6;
+  const offset = options.offset || 0;
+  const data = await wsApi("signals", { session_id: "default", limit, offset });
   const signals = data.signals || [];
-  state.signals = signals;
+  const hasMore = data.has_more !== undefined ? data.has_more : signals.length >= limit;
+
+  if (options.append) {
+    state.signals = state.signals.concat(signals);
+  } else {
+    state.signals = signals;
+  }
+  state.analysisHistoryOffset = state.signals.length;
+  state.analysisHistoryHasMore = hasMore;
 
   // Sync _lastSignalId so _maybeRefreshSignal doesn't re-fetch unnecessarily
-  if (signals.length > 0) _lastSignalId = signals[0].id;
+  if (state.signals.length > 0 && !options.append) _lastSignalId = state.signals[0].id;
 
   // Preserve selected signal if it still exists, otherwise use latest
   const selectedId = state.selectedSignal?.id;
-  const stillExists = selectedId ? signals.find(s => String(s.id) === String(selectedId)) : null;
-  const activeSignal = stillExists || signals[0] || null;
+  const stillExists = selectedId ? state.signals.find(s => String(s.id) === String(selectedId)) : null;
+  const activeSignal = stillExists || state.signals[0] || null;
 
-  state.selectedSignal = activeSignal;
-  updateSignalDisplay(activeSignal);
-  if (activeSignal) setText("signalFreshness", signalFreshness(activeSignal));
-  renderAnalysisHistory(signals);
-  if (!options.skipResultRender) {
+  if (!options.append) {
+    state.selectedSignal = activeSignal;
+    updateSignalDisplay(activeSignal);
+    if (activeSignal) setText("signalFreshness", signalFreshness(activeSignal));
+  }
+  renderAnalysisHistory(state.signals, options.append ? { append: true } : {});
+  if (!options.skipResultRender && !options.append) {
     renderSignal(activeSignal, null);
   }
 
@@ -2401,6 +2437,7 @@ const _origSetTab = setTab;
 setTab = function(tab) {
   _origSetTab(tab);
   if (tab === 'feedback') showFeedbackPanel();
+  if (tab === 'ai-analyze') initAnalysisHistoryScroll();
 };
 
 // Bind refresh button
@@ -2424,3 +2461,34 @@ if (!window._feedbackInitDone) {
     if (e.target.name === 'feedbackType') hideFieldError('errType');
   });
 }
+
+// ============ Analysis History Infinite Scroll ============
+function initAnalysisHistoryScroll() {
+  const list = $("analysisHistoryBody");
+  if (!list || list._scrollBound) return;
+  list._scrollBound = true;
+
+  const loadMore = () => {
+    if (!state.analysisHistoryHasMore || state.analysisHistoryLoading) return;
+    state.analysisHistoryLoading = true;
+    const sentinelEl = list.querySelector(".history-sentinel-text");
+    if (sentinelEl) sentinelEl.textContent = "加载中...";
+    loadSignals({ append: true, offset: state.analysisHistoryOffset, limit: 6 }).finally(() => {
+      state.analysisHistoryLoading = false;
+      if (!state.analysisHistoryHasMore) {
+        const sentinel = list.querySelector(".history-sentinel");
+        if (sentinel) sentinel.remove();
+      }
+    });
+  };
+
+  list.addEventListener("scroll", function() {
+    const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 60;
+    if (nearBottom) loadMore();
+  });
+
+  list.addEventListener("click", function(e) {
+    if (e.target.closest(".history-sentinel")) loadMore();
+  });
+}
+

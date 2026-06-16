@@ -404,11 +404,16 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'signals': {
+        const offset = Number(params.offset) || 0
+        const limit = Math.min(Number(params.limit) || 6, 100)
         let queryUserId = userId
-        const ownRows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [userId, params.session_id || 'default'])
+        // Fetch one extra to detect has_more
+        const ownRows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT ? OFFSET ?', [userId, params.session_id || 'default', limit + 1, offset])
         if (ownRows.length === 0 && adminUserId) queryUserId = adminUserId
-        const rows = ownRows.length > 0 ? ownRows : await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 100', [queryUserId, params.session_id || 'default'])
-        const signals = rows.map(row => {
+        const rows = ownRows.length > 0 ? ownRows : await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT ? OFFSET ?', [queryUserId, params.session_id || 'default', limit + 1, offset])
+        const hasMore = rows.length > limit
+        const sliced = rows.slice(0, limit)
+        const signals = sliced.map(row => {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
           delete item.market_data_json
@@ -416,7 +421,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           ai.attachSignalTiming(item)
           return item
         })
-        result = { status: 'success', signals }
+        result = { status: 'success', signals, has_more: hasMore }
         break
       }
       case 'execute': {
