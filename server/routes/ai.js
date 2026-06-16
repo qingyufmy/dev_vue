@@ -11,6 +11,54 @@ const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSO
 
 const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
 
+// MTF = Manual TimeFrame (手动推理), ATF = Auto TimeFrame (自动推理)
+const MTF_TAG_RE = /\{\{MTF:([A-Z]\d+):(\d+)\}\}/g
+const ATF_TAG_RE = /\{\{ATF:([A-Z]\d+):(\d+)\}\}/g
+const ALL_TF_TAG_RE = /\{\{[MA]TF:([A-Z]\d+):(\d+)\}\}/g
+
+function parseTimeframeTags(prompt, mode = 'manual') {
+  if (!prompt) return []
+  const re = mode === 'auto' ? ATF_TAG_RE : MTF_TAG_RE
+  const tags = []
+  let m
+  while ((m = re.exec(prompt)) !== null) {
+    tags.push({ tf: m[1].toUpperCase(), count: Math.min(Math.max(parseInt(m[2]) || 100, 10), 500) })
+  }
+  return tags
+}
+function stripTimeframeTags(prompt) {
+  return prompt ? prompt.replace(ALL_TF_TAG_RE, '').replace(/\n{3,}/g, '\n\n').trim() : prompt
+}
+
+async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual') {
+  let tags = parseTimeframeTags(prompt, mode)
+  // If no tags in prompt, use fallback: single timeframe from caller
+  if (tags.length === 0) {
+    const tf = (fallbackTimeframe || 'M30').toUpperCase()
+    const count = STRATEGY_TIMEFRAME_COUNTS[tf] || 100
+    tags = [{ tf, count }]
+  }
+  const timeframes = {}
+  for (const { tf, count } of tags) {
+    let rates
+    if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= count) {
+      rates = fallbackRates
+    } else {
+      const resp = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count })
+      rates = (resp && resp.rates) ? resp.rates : []
+    }
+    if (rates.length === 0) continue
+    const summary = calculateMarketData(symbol, tf, rates, account, positions)
+    const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
+    timeframes[tf] = { summary: slimSummary, klines: compactRates(rates) }
+  }
+  return {
+    strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
+    required_timeframes: tags.map(t => t.tf),
+    timeframes,
+  }
+}
+
 const TRADE_REVIEW_JSON_CONTRACT = `你现在做订单复盘，不是开仓信号。必须严格依据系统提示词里的策略框架复盘订单是否符合：
 1H/4H 趋势过滤、15min 信号确认、5min 入场触发、缠论/谐波/裸K共振、逆势禁止、模糊放弃。
 
@@ -689,7 +737,7 @@ async function maybeAiSignal(db, config, market) {
   else return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
 
   try {
-    const prompt = config.system_prompt || DEFAULT_PROMPT
+    const prompt = stripTimeframeTags(config.system_prompt || DEFAULT_PROMPT)
     // Build slim payload for AI: basic info + strategy_context only (no duplicated top-level indicators)
     const aiPayload = {
       symbol: market.symbol,
@@ -923,32 +971,29 @@ async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
 
 // Handle analyze request (called from WebSocket command handler)
 async function handleAnalyze(userId, params) {
-  const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true } = params
+  const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true, prompt_override } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
 
   const config = await getActiveConfig(null, userId, session_id)
-  console.log(`[handleAnalyze] userId=${userId} session=${session_id} prompt_len=${config?.system_prompt?.length || 0} prompt_source=ai_configs`)
+  const prompt = prompt_override || config?.system_prompt || ''
+  const tags = parseTimeframeTags(prompt)
+  console.log(`[handleAnalyze] userId=${userId} session=${session_id} prompt_len=${prompt.length} tags=${tags.map(t=>t.tf+':'+t.count).join(',')} prompt_source=ai_configs`)
 
   const account = await mt5Bridge(userId, 'account', {})
   const positionsData = include_positions ? await mt5Bridge(userId, 'positions', { symbol }) : { positions: [] }
   const positions = positionsData.positions || []
-  const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe, count: kline_count })
 
+  // Fetch primary timeframe data (for market summary + fallback)
+  const primaryTf = tags.length > 0 ? tags[0].tf : timeframe.toUpperCase()
+  const primaryCount = tags.length > 0 ? tags[0].count : kline_count
+  const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
   if (!ratesResp || ratesResp.status === 'error') return { status: 'error', message: 'Failed to get rates' }
   const rates = ratesResp.rates || []
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
-  const market = calculateMarketData(symbol, timeframe, rates, account, positions)
-  // Manual reasoning: build single-timeframe strategy_context from already-fetched data
-  // (skip buildStrategyContext which fetches 4 extra timeframes)
-  const { account: _sa, positions: _sp, symbol: _ss, timeframe: _stf, timestamp: _sts, ...slimSummary } = market
-  market.strategy_context = {
-    strategy_sequence: 'single-timeframe analysis based on user selection',
-    required_timeframes: [timeframe.toUpperCase()],
-    timeframes: {
-      [timeframe.toUpperCase()]: { summary: slimSummary, klines: compactRates(rates) }
-    }
-  }
+  const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
+  // Build strategy context from tags (unified logic with auto inference)
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
   const signal = await maybeAiSignal(null, config, market)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
@@ -1031,10 +1076,34 @@ async function saveGlobalAutoConfig(cfg) {
 
 // Get the config to use for auto inference
 async function getAutoInferenceConfig(userId) {
+  // Check if this user has auto_config_override enabled in their manual config
+  if (userId) {
+    const userConfig = await queryOne(
+      'SELECT * FROM ai_configs WHERE user_id = ? AND session_id = \'default\' AND is_active = 1 AND auto_config_override = 1 ORDER BY updated_at DESC LIMIT 1',
+      [userId]
+    )
+    if (userConfig && userConfig.api_key_encrypted) {
+      return {
+        api_provider: userConfig.api_provider || 'deepseek',
+        model_name: userConfig.model_name || 'deepseek-chat',
+        api_key_encrypted: userConfig.api_key_encrypted,
+        api_base_url: userConfig.api_base_url || 'https://api.deepseek.com',
+        temperature: userConfig.temperature ?? 0.7,
+        max_tokens: userConfig.max_tokens ?? 2000,
+        risk_level: userConfig.risk_level || 'medium',
+        max_position_size: userConfig.max_position_size ?? 0.05,
+        selected_take_profit: userConfig.selected_take_profit ?? 1,
+        system_prompt: userConfig.system_prompt || '',
+        enable_auto_trade: !!userConfig.enable_auto_trade,
+        _source: 'user_override'
+      }
+    }
+  }
+
+  // Fallback to global auto config
   const globalCfg = await getGlobalAutoConfig()
   if (!globalCfg) return null
 
-  // Auto inference always uses global_auto_config (separate from manual config)
   return {
     api_provider: globalCfg.api_provider || 'deepseek',
     model_name: globalCfg.model_name || 'deepseek-chat',
@@ -1092,14 +1161,20 @@ async function runAutoCycle(userId, symbol, timeframe) {
     const account = await mt5Bridge(userId, 'account', {})
     const positionsData = await mt5Bridge(userId, 'positions', { symbol })
     const positions = positionsData.positions || []
-    const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe, count: 100 })
+
+    // Parse tags from auto config's system_prompt to determine which timeframes to fetch
+    const prompt = config.system_prompt || ''
+    const tags = parseTimeframeTags(prompt)
+    const primaryTf = tags.length > 0 ? tags[0].tf : (timeframe || 'M5').toUpperCase()
+    const primaryCount = tags.length > 0 ? tags[0].count : 100
+    const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
 
     if (!ratesResp || ratesResp.status === 'error') return
     const rates = ratesResp.rates || []
     if (!Array.isArray(rates) || rates.length === 0) return
 
-    const market = calculateMarketData(symbol, timeframe, rates, account, positions)
-    market.strategy_context = await buildStrategyContext(userId, symbol, account, positions, timeframe, rates)
+    const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
+    market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
 
     const signal = await maybeAiSignal(null, config, market)
     market.inference_source = signal._inference_source || 'unknown'
@@ -1212,7 +1287,8 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,
   signalOrderPayload, attachSignalTiming, handleAnalyze,
   timeframeIntervalMs, startAutoScheduler, stopAutoScheduler,
-  buildStrategyContext, maybeAiSignal, aiFailureHold,
+  buildStrategyContext, buildStrategyContextFromTags, parseTimeframeTags, stripTimeframeTags,
+  maybeAiSignal, aiFailureHold,
   reviewTrades, buildTradeReviewContext, runTradeReviewCycle,
   startTradeReviewScheduler, stopTradeReviewScheduler,
   getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,

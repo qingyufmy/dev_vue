@@ -8,7 +8,11 @@ const router = Router()
 router.get('/course-items', optionalAuth, async (req, res) => {
   try {
     const courses = await queryAll(`
-      SELECT *, bilibili_id as bilibiliId FROM courses WHERE status = 'published' ORDER BY sort_order ASC
+      SELECT c.*, c.bilibili_id as bilibiliId,
+        vs.duration as vs_duration
+      FROM courses c
+      LEFT JOIN video_streams vs ON vs.episode_id = c.episode_id
+      WHERE c.status = 'published' ORDER BY c.sort_order ASC
     `)
 
     res.json({
@@ -21,7 +25,7 @@ router.get('/course-items', optionalAuth, async (req, res) => {
         description: c.description,
         category: c.category,
         contentType: c.content_type,
-        duration: c.duration,
+        duration: c.duration || (c.vs_duration ? formatDurationSeconds(c.vs_duration) : ''),
         youtubeId: c.youtube_id,
         bilibiliId: c.bilibili_id || '',
         cover: c.cover,
@@ -36,6 +40,7 @@ router.get('/course-items', optionalAuth, async (req, res) => {
         structureCount: c.structure_count,
         status: c.status,
         sortOrder: c.sort_order,
+        createdAt: c.created_at,
         updatedAt: c.updated_at,
       })),
       source: 'local-db'
@@ -99,7 +104,7 @@ router.get('/bilibili-duration/:bvid', async (req, res) => {
     })
     const data = await resp.json()
     if (data.code === 0 && data.data?.duration) {
-      res.json({ ok: true, duration: data.data.duration })
+      res.json({ ok: true, duration: data.data.duration, cover: data.data.pic || '' })
     } else {
       res.json({ ok: false, error: '获取时长失败' })
     }
@@ -107,5 +112,38 @@ router.get('/bilibili-duration/:bvid', async (req, res) => {
     res.json({ ok: false, error: 'Bilibili API 请求失败' })
   }
 })
+
+// Get Bilibili video cover + duration by BV ID (proxy for CORS)
+router.get('/bilibili-info/:bvid', async (req, res) => {
+  try {
+    const bvid = req.params.bvid
+    const resp = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+    })
+    const data = await resp.json()
+    if (data.code === 0) {
+      const d = data.data
+      res.json({
+        ok: true,
+        cover: d.pic || '',
+        duration: d.duration || 0,
+        title: d.title || '',
+        durationFormatted: d.duration ? formatDurationSeconds(d.duration) : ''
+      })
+    } else {
+      res.json({ ok: false, error: '获取B站信息失败' })
+    }
+  } catch (err) {
+    res.json({ ok: false, error: 'Bilibili API 请求失败' })
+  }
+})
+
+function formatDurationSeconds(seconds) {
+  const s = Number(seconds)
+  if (!s || s <= 0) return ''
+  const mins = Math.floor(s / 60)
+  const secs = Math.floor(s % 60)
+  return `${mins}:${String(secs).padStart(2, '0')}`
+}
 
 export default router

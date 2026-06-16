@@ -46,6 +46,7 @@ const courseCatalog = {
       structureCount: Number(item.structureCount || item.structure_count || 0),
       status: item.status || 'published',
       sortOrder: Number(item.sortOrder || item.sort_order || id),
+      createdAt: item.createdAt || item.created_at || '',
       updatedAt: item.updatedAt || item.updated_at || '',
     }
   },
@@ -1249,9 +1250,18 @@ let biliPlayer = null
 const biliDurationCache = {}
 
 function fetchBiliDuration(bvid, epId) {
-  api.get(`/api/bilibili-duration/${bvid}`).then(r => {
-    if (r.ok && r.duration) {
-      biliDurationCache[epId] = r.duration
+  api.get(`/api/bilibili-info/${bvid}`).then(r => {
+    if (r.ok) {
+      if (r.duration) biliDurationCache[epId] = r.duration
+      // Auto-update cover for bilibili courses if cover is missing
+      if (r.cover) {
+        const ep = episodes.find(e => e.id === epId)
+        if (ep && !ep.cover && r.cover) {
+          ep.cover = r.cover
+          // Persist cover to database
+          api.post('/api/video-stream', { episodeId: epId, bilibiliId: bvid }).catch(() => {})
+        }
+      }
     }
   }).catch(() => {})
 }
@@ -1909,7 +1919,7 @@ function renderEpisodeCard(ep) {
           ` : ''}
           ${locked ? '<div class="card-lock-overlay"><span class="lock-icon">🔒</span></div>' : ''}
         </div>
-        ${ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id) ? `<span class="card-duration">${ep.duration}</span>` : ''}
+        ${(ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)) && ep.duration ? `<span class="card-duration">${ep.duration}</span>` : ''}
         ${ep.number ? `<span class="card-ep-badge">EP.${String(ep.number).padStart(2, '0')}</span>` : ''}
         ${isArticleEpisode(ep) ? '<span class="card-type-badge">文章</span>' : ''}
         ${accessBadge && !isArticleEpisode(ep) ? `<span class="card-paid-badge">${accessBadge}</span>` : ''}
@@ -2270,7 +2280,7 @@ function getFilteredEpisodes() {
     // 视频课程分类：文章课程即使挂了视频讲解也不混入此列表
     list = episodes.filter(ep => !isArticleEpisode(ep) && (ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)))
     if (state.sortOrder === 'latest') {
-      list = [...list].sort((a, b) => b.number - a.number)
+      list = [...list].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
     } else {
       list = [...list].sort((a, b) => a.number - b.number)
     }
@@ -4877,9 +4887,9 @@ async function startStreamUpload() {
 
     const { uploadURL, uid } = createRes
 
-    // Step 2: Upload file directly to Cloudflare via XHR (for progress tracking)
+    // Step 2: Upload file via XHR (for progress tracking)
     progressText.textContent = '正在上传...'
-    await new Promise((resolve, reject) => {
+    const uploadResult = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
 
       xhr.upload.addEventListener('progress', (e) => {
@@ -4892,7 +4902,10 @@ async function startStreamUpload() {
 
       xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 400) {
-          resolve()
+          try {
+            const resp = JSON.parse(xhr.responseText)
+            resolve(resp)
+          } catch { resolve() }
         } else {
           reject(new Error(`上传失败: HTTP ${xhr.status}`))
         }
@@ -4908,7 +4921,8 @@ async function startStreamUpload() {
       xhr.send(formData)
     })
 
-    // Step 3: Show success
+    // Step 3: Show success - store upload info for linking
+    const uploadedVideo = { uid, duration: uploadResult?.duration || '', localPath: uploadResult?.url || '', cover: uploadResult?.cover || '' }
     progressFill.style.width = '100%'
     progressFill.style.background = 'var(--accent-gradient)'
     progressText.textContent = '上传完成！视频正在处理中...'
@@ -4947,7 +4961,13 @@ async function startStreamUpload() {
       if (!epId) { alert('请选择集数'); return }
       const linkBtn = document.getElementById('streamLinkBtn')
       linkBtn.disabled = true; linkBtn.textContent = '关联中...'
-      const r = await api.post('/api/video-stream', { episodeId: Number(epId), cfStreamId: uid, title })
+      const r = await api.post('/api/video-stream', {
+        episodeId: Number(epId),
+        title,
+        localPath: uploadedVideo.localPath,
+        duration: uploadedVideo.duration,
+        cover: uploadedVideo.cover,
+      })
       if (r.ok) {
         linkBtn.textContent = '✓ 已关联'
         // Refresh paid video list + access map

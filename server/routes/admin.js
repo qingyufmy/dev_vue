@@ -374,20 +374,42 @@ router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) =
     console.log('[AdminCourse] episodeId:', episodeId, 'title:', title)
 
     if (episodeId) {
+      // Auto-fetch bilibili cover if missing
+      let finalCover = cover
+      if (bilibiliId && !finalCover) {
+        try {
+          const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+          })
+          const bd = await bi.json()
+          if (bd.code === 0 && bd.data?.pic) finalCover = bd.data.pic
+        } catch {}
+      }
       await queryRun(`
         UPDATE courses SET number=?, title=?, description=?, category=?, content_type=?, duration=?,
         youtube_id=?, bilibili_id=?, cover=?, access_level=?, sort_order=?, article_url=?, article_object_key=?,
         status=?, updated_at=NOW() WHERE episode_id=?
-      `, [number, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId])
+      `, [number, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId])
       const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episodeId])
       res.json({ ok: true, course })
     } else {
       const maxRow = await queryOne('SELECT MAX(episode_id) as m FROM courses')
       const maxId = maxRow?.m || 0
+      // Auto-fetch bilibili cover if missing
+      let finalCover = cover
+      if (bilibiliId && !finalCover) {
+        try {
+          const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+          })
+          const bd = await bi.json()
+          if (bd.code === 0 && bd.data?.pic) finalCover = bd.data.pic
+        } catch {}
+      }
       await queryRun(`
         INSERT INTO courses (episode_id, number, title, description, category, content_type, duration, youtube_id, bilibili_id, cover, access_level, sort_order, article_url, article_object_key, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [maxId + 1, number || maxId + 1, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status || 'published'])
+      `, [maxId + 1, number || maxId + 1, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status || 'published'])
       const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [maxId + 1])
       res.json({ ok: true, course })
     }

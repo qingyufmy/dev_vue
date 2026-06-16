@@ -576,6 +576,15 @@ export async function initDB() {
     }
   } catch {}
 
+  // v1.7.7: add auto_config_override to ai_configs
+  try {
+    const [acCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_config_override'`)
+    if (acCols.length === 0) {
+      await p.query('ALTER TABLE ai_configs ADD COLUMN auto_config_override TINYINT NOT NULL DEFAULT 0 AFTER model_sharing_enabled')
+      console.log('[DB] Added auto_config_override to ai_configs')
+    }
+  } catch {}
+
   console.log('[DB] MySQL initialized')
 }
 

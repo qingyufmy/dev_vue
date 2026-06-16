@@ -365,21 +365,22 @@ async function handleBrowserCommand(ws, userId, msg) {
         await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
         await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, model_sharing_enabled, system_prompt, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override, system_prompt, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           ON DUPLICATE KEY UPDATE
             api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
             api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
             max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
             enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
             max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
-            model_sharing_enabled = VALUES(model_sharing_enabled),
+            model_sharing_enabled = VALUES(model_sharing_enabled), auto_config_override = VALUES(auto_config_override),
             system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
             is_active = 1, updated_at = VALUES(updated_at)`,
           [userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
             cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
             cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
             cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
+            cfg.auto_config_override ? 1 : 0,
             cfg.system_prompt || null, now, now])
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
@@ -401,6 +402,23 @@ async function handleBrowserCommand(ws, userId, msg) {
           row.age_seconds = Math.floor((now - createdAt) / 1000)
         }
         result = { status: 'success', signal: row || null }
+        break
+      }
+      case 'signal_detail': {
+        const signalId = Number(params.signal_id)
+        if (!signalId) return reply({ status: 'error', message: 'signal_id required' })
+        let row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, userId])
+        if (!row && adminUserId) row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, adminUserId])
+        if (row) {
+          const item = { ...row }
+          try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
+          delete item.market_data_json
+          item.is_executed = !!item.is_executed
+          ai.attachSignalTiming(item)
+          result = { status: 'success', signal: item }
+        } else {
+          result = { status: 'error', message: 'signal not found' }
+        }
         break
       }
       case 'signals': {

@@ -96,18 +96,50 @@ router.get('/video-stream', optionalAuth, async (req, res) => {
 })
 
 // ===== Upload video (local storage) =====
-router.post('/video-upload', authMiddleware, upload.single('file'), (req, res) => {
+router.post('/video-upload', authMiddleware, upload.single('file'), async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
     if (!req.file) return res.json({ ok: false, error: '未选择文件' })
 
     const fileUrl = `/uploads/videos/${req.file.filename}`
+    const filePath = join(uploadDir, req.file.filename)
+    
+    // Extract duration + cover thumbnail using ffprobe + ffmpeg if available
+    let duration = ''
+    let cover = ''
+    try {
+      const { execSync } = await import('child_process')
+      const result = execSync(
+        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+        { encoding: 'utf8', timeout: 5000 }
+      )
+      const seconds = parseFloat(result.trim())
+      if (seconds > 0) {
+        const mins = Math.floor(seconds / 60)
+        const secs = Math.floor(seconds % 60)
+        duration = `${mins}:${String(secs).padStart(2, '0')}`
+        // Extract thumbnail at 5s or 10% of video duration
+        const coversDir = join(__dirname, '..', 'uploads', 'covers')
+        if (!existsSync(coversDir)) { const { mkdirSync } = await import('fs'); mkdirSync(coversDir, { recursive: true }) }
+        const coverFilename = `cover_${Date.now()}_${Math.random().toString(36).slice(2,6)}.jpg`
+        const coverPath = join(coversDir, coverFilename)
+        const seekTime = Math.min(5, Math.floor(seconds * 0.1))
+        try {
+          execSync(`ffmpeg -ss ${seekTime} -i "${filePath}" -vframes 1 -q:v 2 -y "${coverPath}"`, { timeout: 10000 })
+          cover = `/uploads/covers/${coverFilename}`
+        } catch {}
+      }
+    } catch {}
+    
     res.json({
       ok: true,
       url: fileUrl,
       filename: req.file.filename,
       size: req.file.size,
       originalName: req.file.originalname,
+      duration,
+      durationSeconds: duration ? parseInt(duration.split(':')[0]) * 60 + parseInt(duration.split(':')[1]) : 0,
+      cover,
     })
   } catch (err) {
     console.error('Video upload error:', err)
@@ -157,7 +189,7 @@ router.post('/video-stream', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
 
-    const { episodeId, bilibiliId, localPath, qiniuKey, youtubeId, title, accessLevel, duration } = req.body
+    const { episodeId, bilibiliId, localPath, qiniuKey, youtubeId, title, accessLevel, duration, cover } = req.body
 
     // Check if stream already exists for this episode
     const existing = await queryOne('SELECT id FROM video_streams WHERE episode_id = ?', [episodeId])
@@ -180,22 +212,34 @@ router.post('/video-stream', authMiddleware, async (req, res) => {
       `, [episodeId, bilibiliId || '', localPath || '', qiniuKey || '', `ep${episodeId}`, accessLevel || 'plus_pro', title || '', duration || 0])
     }
 
-    // Update course record
-    const updates = []
-    const params = []
-    if (bilibiliId) { updates.push('bilibili_id = ?'); params.push(bilibiliId) }
-    if (localPath) { updates.push('local_video_path = ?'); params.push(localPath) }
-    if (youtubeId) { updates.push('youtube_id = ?'); params.push(youtubeId) }
-    if (accessLevel) { updates.push('access_level = ?'); params.push(accessLevel) }
-    updates.push('has_stream_video = 1')
-    updates.push('updated_at = NOW()')
-    params.push(episodeId)
-
-    if (updates.length > 2) {
-      await queryRun(`UPDATE courses SET ${updates.join(', ')} WHERE episode_id = ?`, params)
-    } else {
-      await queryRun("UPDATE courses SET has_stream_video = 1, updated_at = NOW() WHERE episode_id = ?", [episodeId])
+    // Sync course record: duration (always sync when provided) + auto-fetch bilibili cover
+    const courseUpdates = ['updated_at = NOW()', 'has_stream_video = 1']
+    const courseParams = []
+    if (duration && duration !== '0') {
+      courseUpdates.unshift('duration = ?'); courseParams.unshift(duration)
     }
+    if (bilibiliId) {
+      courseUpdates.push('bilibili_id = ?'); courseParams.push(bilibiliId)
+      // Auto-fetch cover from Bilibili if course has no cover
+      const existingCourse = await queryOne('SELECT cover FROM courses WHERE episode_id = ?', [episodeId])
+      if (!existingCourse?.cover) {
+        try {
+          const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+          })
+          const bd = await bi.json()
+          if (bd.code === 0 && bd.data?.pic) {
+            courseUpdates.push('cover = ?'); courseParams.push(bd.data.pic)
+          }
+        } catch {}
+      }
+    }
+    if (localPath) { courseUpdates.push('local_video_path = ?'); courseParams.push(localPath) }
+    if (cover) { courseUpdates.push('cover = ?'); courseParams.push(cover) }
+    if (youtubeId) { courseUpdates.push('youtube_id = ?'); courseParams.push(youtubeId) }
+    if (accessLevel) { courseUpdates.push('access_level = ?'); courseParams.push(accessLevel) }
+    courseParams.push(episodeId)
+    await queryRun(`UPDATE courses SET ${courseUpdates.join(', ')} WHERE episode_id = ?`, courseParams)
 
     res.json({ ok: true })
   } catch (err) {

@@ -705,9 +705,12 @@ async function _maybeRefreshSignal() {
     const signals = fullData.signals || [];
     state.signals = signals;
     state.selectedSignal = signals[0] || null;
+    state.analysisHistoryOffset = signals.length;
+    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= 6;
     updateSignalDisplay(state.selectedSignal);
     if (state.selectedSignal) setText("signalFreshness", signalFreshness(state.selectedSignal));
     renderAnalysisHistory(signals);
+    renderSignal(state.selectedSignal, null);
     renderSignalRows();
   } catch (e) { /* silent */ }
 }
@@ -1287,6 +1290,10 @@ async function loadConfig() {
   if (isAdmin && $("modelSharingEnabled")) {
     $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
   }
+  // Auto config override toggle (all users with config)
+  const overrideWrap = $("autoConfigOverrideWrap");
+  if (overrideWrap) overrideWrap.style.display = state.currentConfigHasApiKey ? "" : "none";
+  if ($("autoConfigOverride")) $("autoConfigOverride").checked = Boolean(cfg.auto_config_override);
   if (sharedInfo) {
     if (!isAdmin && cfg._model_shared) {
       sharedInfo.style.display = "";
@@ -1322,6 +1329,7 @@ async function saveConfig() {
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
       model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
+      auto_config_override: $("autoConfigOverride")?.checked ? 1 : 0,
       system_prompt: $("systemPrompt").value.trim() || null,
     },
   };
@@ -1659,13 +1667,21 @@ async function runAnalysis() {
   const started = performance.now();
 
   try {
-    const results = await Promise.all(frames.map((timeframe) => wsApi("analyze", {
-      session_id: "default",
-      symbol,
-      timeframe,
-      kline_count: Number($("klineCount").value) || 100,
-      include_positions: true,
-    })));
+    const klineCount = Number($("klineCount").value) || 100;
+    const results = await Promise.all(frames.map((timeframe) => {
+      // Inject timeframe tag into system_prompt so backend parses it for multi-TF data
+      const tag = `{{MTF:${timeframe.toUpperCase()}:${klineCount}}}`;
+      const basePrompt = $("systemPrompt")?.value?.trim() || "";
+      const promptWithTag = tag + (basePrompt ? "\n" + basePrompt : "");
+      return wsApi("analyze", {
+        session_id: "default",
+        symbol,
+        timeframe,
+        kline_count: klineCount,
+        include_positions: true,
+        prompt_override: promptWithTag,
+      });
+    }));
     const best = results
       .map((item) => item.signal)
       .filter(Boolean)
@@ -1908,7 +1924,8 @@ function renderAnalysisHistory(signals, options = {}) {
     const fragment = signals.slice(-limit).map((signal) => buildHistoryItemHTML(signal)).join("");
     host.insertAdjacentHTML("beforeend", fragment);
   } else {
-    host.innerHTML = signals.length ? signals.slice(0, 6).map((signal) => buildHistoryItemHTML(signal)).join("") : `<div class="history-empty">暂无推理记录</div>`;
+    // Render all loaded signals (not just first 6)
+    host.innerHTML = signals.length ? signals.map((signal) => buildHistoryItemHTML(signal)).join("") : `<div class="history-empty">暂无推理记录</div>`;
   }
   // Add sentinel if more data available
   if (state.analysisHistoryHasMore) {
@@ -1946,15 +1963,45 @@ function highlightActiveAnalysis(signalId) {
   });
 }
 
-function openAnalysisFromHistory(signalId) {
-  const signal = state.signals.find((item) => String(item.id) === String(signalId));
+async function openAnalysisFromHistory(signalId) {
+  let signal = state.signals.find((item) => String(item.id) === String(signalId));
   if (!signal) {
-    toast("未找到对应推理记录，请刷新历史", "warning");
+    // Not in local cache — fetch single signal by ID
+    try {
+      const data = await wsApi("signal_detail", { signal_id: Number(signalId) });
+      if (data.status === 'success' && data.signal) signal = data.signal;
+    } catch (e) { /* ignore */ }
+  }
+  if (!signal) {
+    toast("未找到对应推理记录", "warning");
     return;
   }
+
+  // Ensure signal is in state.signals for history list highlight
+  const existsInList = state.signals.find(s => String(s.id) === String(signalId));
+  if (!existsInList) {
+    // Reload signals with enough limit to include this signal
+    try {
+      const neededLimit = Math.max(signalId, 20);
+      const data = await wsApi("signals", { session_id: "default", limit: neededLimit, offset: 0 });
+      const allSignals = data.signals || [];
+      const found = allSignals.find(s => String(s.id) === String(signalId));
+      if (found) {
+        state.signals = allSignals;
+        state.analysisHistoryOffset = allSignals.length;
+        state.analysisHistoryHasMore = data.has_more !== undefined ? data.has_more : false;
+        renderAnalysisHistory(state.signals);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   state.selectedSignal = signal;
   setTab("ai-analyze");
   renderSignal(signal, null);
+  highlightActiveAnalysis(signalId);
+  // Scroll the active item into view
+  const activeEl = document.querySelector(`[data-analysis-id="${signalId}"]`);
+  if (activeEl) activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function renderSignalRows() {
