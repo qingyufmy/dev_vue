@@ -18,6 +18,7 @@ import paymentRoutes from './routes/payment.js'
 import videoRoutes from './routes/video.js'
 import configRoutes from './routes/config.js'
 import aiRoutes from './routes/ai.js'
+import feedbackRoutes from './routes/feedback.js'
 import { initAutoSchedulers } from './routes/ai.js'
 import { authMiddleware } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
@@ -77,6 +78,7 @@ app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
 app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
+app.use('/api', feedbackRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
 
 

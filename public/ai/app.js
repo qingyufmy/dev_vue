@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || "",
   user: null,
   symbols: [],
@@ -2288,3 +2288,139 @@ document.addEventListener("DOMContentLoaded", () => {
   if (state.token) bootstrap();
   else showApp(false);
 });
+
+// --- feedback logic ---
+let _feedbackSubmitting = false;
+
+function showFeedbackPanel() {
+  loadFeedbackHistory();
+}
+
+function showFieldError(id) {
+  document.getElementById(id).classList.add('visible');
+}
+function hideFieldError(id) {
+  document.getElementById(id).classList.remove('visible');
+}
+function clearFieldErrors() {
+  ['errType', 'errTitle', 'errDesc'].forEach(hideFieldError);
+}
+
+async function submitFeedback(e) {
+  e.preventDefault();
+  if (_feedbackSubmitting) return;
+  clearFieldErrors();
+
+  const form = document.getElementById('feedbackForm');
+  const type = form.querySelector('input[name="feedbackType"]:checked')?.value;
+  const title = document.getElementById('feedbackTitle').value.trim();
+  const description = document.getElementById('feedbackDesc').value.trim();
+  const contact = document.getElementById('feedbackContact').value.trim();
+
+  if (!type) return showFieldError('errType');
+  if (!title) return showFieldError('errTitle');
+  if (!description) return showFieldError('errDesc');
+
+  _feedbackSubmitting = true;
+  const submitBtn = form.querySelector('.feedback-submit-btn');
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = '<i data-lucide="loader" size="16"></i>提交中…';
+
+  try {
+    const resp = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+      body: JSON.stringify({ type, title, description, contact }),
+    });
+    const data = await resp.json();
+
+    const successBox = document.getElementById('feedbackSuccess');
+    const successMsg = document.getElementById('feedbackSuccessMsg');
+    if (data.ok) {
+      successBox.classList.remove('hidden');
+      successMsg.textContent = data.message;
+      // Reset form
+      document.getElementById('feedbackTitle').value = '';
+      document.getElementById('feedbackDesc').value = '';
+      document.getElementById('feedbackContact').value = '';
+      form.querySelector('input[name="feedbackType"][value="feature"]').checked = true;
+      lucide.createIcons();
+      loadFeedbackHistory();
+      // Auto-hide success after 6s
+      setTimeout(() => { successBox.classList.add('hidden'); }, 6000);
+    } else {
+      toast(data.error || '提交失败', 'error');
+    }
+  } catch (err) {
+    toast('网络错误，请稍后重试', 'error');
+  } finally {
+    _feedbackSubmitting = false;
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<i data-lucide="send" size="16"></i>提交反馈';
+    lucide.createIcons();
+  }
+}
+
+async function loadFeedbackHistory() {
+  const list = document.getElementById('feedbackHistoryList');
+  try {
+    const resp = await fetch('/api/feedback/history', {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
+    const data = await resp.json();
+    if (!data.ok || !data.items.length) {
+      list.innerHTML = '<div class="empty-state">暂无提交记录</div>';
+      return;
+    }
+
+    const typeLabels = { feature: '功能建议', bug: 'Bug反馈', trading: '交易需求', course: '课程建议', other: '其他' };
+    list.innerHTML = data.items.map(item => `
+      <div class="feedback-history-item">
+        <div class="fh-meta">
+          <span class="fh-type ${escapeHtml(item.type)}">${typeLabels[item.type] || item.type}</span>
+          <span>#${item.id}</span>
+          <span>${new Date(item.created_at).toLocaleString('zh-CN')}</span>
+        </div>
+        <div class="fh-title">${escapeHtml(item.title)}</div>
+        <div class="fh-desc">${escapeHtml(item.description)}</div>
+      </div>
+    `).join('');
+  } catch (err) {
+    list.innerHTML = '<div class="empty-state">加载失败</div>';
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Hook into existing setTab
+const _origSetTab = setTab;
+setTab = function(tab) {
+  _origSetTab(tab);
+  if (tab === 'feedback') showFeedbackPanel();
+};
+
+// Bind refresh button
+document.addEventListener('click', function(e) {
+  if (e.target.closest('#refreshFeedbackHistory')) {
+    loadFeedbackHistory();
+  }
+});
+
+if (!window._feedbackInitDone) {
+  window._feedbackInitDone = true;
+  document.addEventListener('submit', function(e) {
+    if (e.target.id === 'feedbackForm') submitFeedback(e);
+  });
+  // clear inline errors when user starts typing / selecting
+  document.addEventListener('input', function(e) {
+    if (e.target.id === 'feedbackTitle') hideFieldError('errTitle');
+    if (e.target.id === 'feedbackDesc') hideFieldError('errDesc');
+  });
+  document.addEventListener('change', function(e) {
+    if (e.target.name === 'feedbackType') hideFieldError('errType');
+  });
+}

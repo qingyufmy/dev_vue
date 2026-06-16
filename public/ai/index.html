@@ -11,7 +11,7 @@
     </script>
     <title>AURUM AI MT5 Control Panel</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260610-model-sharing" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260616-v2" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -102,6 +102,12 @@
           <span class="nav-group-label">管理</span>
           <button class="nav-item" data-tab="audit" data-title="审计">
             <i data-lucide="shield-check" size="16"></i>审计
+          </button>
+        </div>
+
+        <div class="nav-group nav-group-bottom">
+          <button class="nav-item" data-tab="feedback" data-title="需求反馈">
+            <i data-lucide="lightbulb" size="16"></i>需求反馈
           </button>
         </div>
       </aside>
@@ -617,6 +623,88 @@
             <div id="auditPager" class="pager"></div>
           </div>
         </section>
+
+        <section id="feedback" class="tab-panel">
+          <div class="card content-card">
+            <div class="card-header">
+              <span class="card-title">💡 需求反馈</span>
+              <span class="card-subtitle">告诉我们你想要什么功能，或遇到了什么问题</span>
+            </div>
+            <form id="feedbackForm" class="feedback-form" novalidate>
+              <div class="feedback-type-group">
+                <label class="feedback-type-option">
+                  <input type="radio" name="feedbackType" value="feature" checked>
+                  <span class="feedback-type-chip">
+                    <i data-lucide="sparkles" size="14"></i>功能建议
+                  </span>
+                </label>
+                <label class="feedback-type-option">
+                  <input type="radio" name="feedbackType" value="bug">
+                  <span class="feedback-type-chip">
+                    <i data-lucide="bug" size="14"></i>Bug反馈
+                  </span>
+                </label>
+                <label class="feedback-type-option">
+                  <input type="radio" name="feedbackType" value="trading">
+                  <span class="feedback-type-chip">
+                    <i data-lucide="trending-up" size="14"></i>交易需求
+                  </span>
+                </label>
+                <label class="feedback-type-option">
+                  <input type="radio" name="feedbackType" value="course">
+                  <span class="feedback-type-chip">
+                    <i data-lucide="book-open" size="14"></i>课程建议
+                  </span>
+                </label>
+                <label class="feedback-type-option">
+                  <input type="radio" name="feedbackType" value="other">
+                  <span class="feedback-type-chip">
+                    <i data-lucide="ellipsis" size="14"></i>其他
+                  </span>
+                </label>
+              </div>
+              <span class="field-error" id="errType">请选择反馈类型</span>
+
+              <div class="form-group">
+                <label class="form-label">标题</label>
+                <input type="text" id="feedbackTitle" class="form-input" placeholder="简短描述你的需求…" maxlength="200" required>
+                <span class="field-error" id="errTitle">请填写标题</span>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">详细描述</label>
+                <textarea id="feedbackDesc" class="form-textarea" placeholder="展开描述你的想法或遇到的问题…" maxlength="5000" required></textarea>
+                <span class="field-error" id="errDesc">请填写描述</span>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">联系方式（选填）</label>
+                <input type="text" id="feedbackContact" class="form-input" placeholder="邮箱或微信，方便我们回复你">
+              </div>
+
+              <div class="feedback-actions">
+                <button type="submit" class="btn btn-primary feedback-submit-btn">
+                  <i data-lucide="send" size="16"></i>提交反馈
+                </button>
+              </div>
+
+              <div id="feedbackSuccess" class="feedback-success hidden">
+                <i data-lucide="check-circle" size="20"></i>
+                <span id="feedbackSuccessMsg"></span>
+              </div>
+            </form>
+          </div>
+
+          <div class="card content-card" style="margin-top:16px">
+            <div class="card-header">
+              <span class="card-title">我的提交记录</span>
+              <button class="card-action-btn" id="refreshFeedbackHistory"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+            </div>
+            <div id="feedbackHistoryList" class="feedback-history-list">
+              <div class="empty-state">暂无提交记录</div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -682,6 +770,6 @@
     </div>
     <div id="toastHost" class="toast-host"></div>
     <script src="lucide.js"></script>
-    <script src="/ai/app.js?v=20260610-sysprompt"></script>
+    <script src="/ai/app.js?v=20260616-feedback"></script>
   </body>
 </html>

@@ -499,6 +499,16 @@ export async function initDB() {
       message TEXT NOT NULL,
       created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS feedback (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT,
+      type VARCHAR(50) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      description TEXT NOT NULL,
+      contact VARCHAR(200) DEFAULT '',
+      created_at DATETIME DEFAULT (NOW())
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ]
 
   for (const sql of tables) {
