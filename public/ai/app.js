@@ -712,6 +712,9 @@ async function _maybeRefreshSignal() {
     renderAnalysisHistory(signals);
     renderSignal(state.selectedSignal, null);
     renderSignalRows();
+    // Scroll history list to top (latest signal)
+    const firstItem = document.querySelector(".analysis-history-item");
+    if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (e) { /* silent */ }
 }
 
@@ -1689,6 +1692,9 @@ async function runAnalysis() {
     if (!best) throw new Error("未返回有效信号");
     renderSignal(best, Math.round(performance.now() - started));
     await loadSignals({ skipResultRender: true });
+    // Scroll history list to top (latest signal)
+    const firstItem = document.querySelector(".analysis-history-item");
+    if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
     toast(`已生成 ${results.length} 个周期信号，已选最高置信度结果`, "success");
   } catch (error) {
     $("analysisResult").className = "analysis-result muted-block";
@@ -1971,13 +1977,8 @@ async function openAnalysisFromHistory(signalId) {
       const data = await wsApi("signal_detail", { signal_id: Number(signalId) });
       if (data.status === 'success' && data.signal) {
         signal = data.signal;
-        // Insert into state.signals at correct position (ordered by id DESC)
-        const idx = state.signals.findIndex(s => s.id < signal.id);
-        if (idx >= 0) {
-          state.signals.splice(idx, 0, signal);
-        } else {
-          state.signals.push(signal);
-        }
+        // Insert into state.signals at top
+        state.signals.unshift(signal);
         renderAnalysisHistory(state.signals);
       }
     } catch (e) { /* ignore */ }
