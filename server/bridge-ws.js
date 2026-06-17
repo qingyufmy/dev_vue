@@ -254,7 +254,7 @@ async function handleBrowserCommand(ws, userId, msg) {
     if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
 
     // Plus users: read-only, block write operations
-    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_auto_config', 'toggle_auto', 'set_quote_symbol']
+    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_auto_config', 'toggle_auto', 'set_quote_symbol', 'save_close_config', 'run_close_now']
     if (!isPro && writeActions.includes(action)) {
       return reply({ status: 'error', message: '升级会员即可解锁交易功能' })
     }
@@ -263,6 +263,15 @@ async function handleBrowserCommand(ws, userId, msg) {
     const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws.readyState === 1
     if (!hasOwnBridge && writeActions.includes(action)) {
       return reply({ status: 'error', message: '请先连接您的 MT5 账户' })
+    }
+
+    // Block trade operations when trading is disabled
+    const tradeActions = ['open', 'close', 'execute']
+    if (tradeActions.includes(action) && hasOwnBridge) {
+      const bridge = bridges.get(userId)
+      if (bridge.tradeEnabled === false) {
+        return reply({ status: 'error', message: '交易发送已关闭，请先开启' })
+      }
     }
 
     let result
@@ -404,10 +413,12 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signals_latest_id': {
         // Lightweight check: return only latest signal's ID and minimal fields
         let queryUserId = userId
-        let row = await queryOne('SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 1', [userId, params.session_id || 'default'])
+        const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
+        const sessionParam = params.session_id ? [params.session_id] : []
+        let row = await queryOne(`SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`, [userId, ...sessionParam])
         if (!row && adminUserId) {
           queryUserId = adminUserId
-          row = await queryOne('SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT 1', [queryUserId, params.session_id || 'default'])
+          row = await queryOne(`SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`, [queryUserId, ...sessionParam])
         }
         if (row) {
           const now = Date.now()
@@ -453,8 +464,14 @@ async function handleBrowserCommand(ws, userId, msg) {
           filterClauses.push('timeframe = ?')
           filterParams.push(params.timeframe)
         }
-        filterClauses.push('session_id = ?')
-        filterParams.push(params.session_id || 'default')
+        if (params.direction === 'close') {
+          // CLOSE signals use session_id='smart_close'
+          filterClauses.push('session_id = ?')
+          filterParams.push('smart_close')
+        } else if (params.session_id) {
+          filterClauses.push('session_id = ?')
+          filterParams.push(params.session_id)
+        }
         const where = filterClauses.join(' AND ')
         // Check if user has any rows matching filters
         const ownRows = await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
@@ -639,6 +656,51 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', tickets: ticketMap }
         break
       }
+      case 'save_close_config': {
+        const cfg = params.config
+        if (!cfg) return reply({ status: 'error', message: 'config required' })
+        const saved = await ai.saveCloseConfig(userId, cfg)
+        // Restart scheduler if enabled
+        if (saved?.enabled) {
+          ai.stopSmartCloseScheduler(userId)
+          ai.startSmartCloseScheduler(userId)
+        } else {
+          ai.stopSmartCloseScheduler(userId)
+        }
+        result = { status: 'success', config: saved }
+        break
+      }
+      case 'get_close_config': {
+        const cfg = await ai.getCloseConfig(userId)
+        result = { status: 'success', config: cfg || { enabled: false, check_interval_seconds: 30, model_name: 'deepseek-chat' } }
+        break
+      }
+      case 'close_signal_tickets': {
+        const map = await ai.getCloseSignalTickets(userId)
+        result = { status: 'success', tickets: map }
+        break
+      }
+      case 'toggle_close': {
+        const enabled = !!params.enabled
+        const existing = await ai.getCloseConfig(userId)
+        await ai.saveCloseConfig(userId, { ...(existing || {}), enabled })
+        if (enabled) {
+          ai.startSmartCloseScheduler(userId)
+        } else {
+          ai.stopSmartCloseScheduler(userId)
+        }
+        result = { status: 'success', enabled }
+        break
+      }
+      case 'run_close_now': {
+        try {
+          await ai.runSmartCloseCycle(userId)
+          result = { status: 'success' }
+        } catch (e) {
+          result = { status: 'error', message: e.message }
+        }
+        break
+      }
       default:
         result = { status: 'error', message: `Unknown action: ${action}` }
     }
@@ -687,6 +749,13 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
 export function isBridgeAlive(userId) {
   const bridge = bridges.get(userId)
   return !!(bridge && bridge.ws.readyState === 1 && (Date.now() - bridge.lastSeen < 20000))
+}
+
+// Check if live trading is enabled for a user
+export function isTradeEnabled(userId) {
+  const bridge = bridges.get(userId)
+  if (!bridge || bridge.ws.readyState !== 1) return false
+  return bridge.tradeEnabled !== false
 }
 
 // Get cached trade_mode from bridge data push (-1 = unknown)

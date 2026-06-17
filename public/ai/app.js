@@ -17,6 +17,7 @@
   historyFilters: { page: 1, pageSize: 20 },
   auditFilters: { status: "", type: "", page: 1, pageSize: 25 },
   signalTickets: {},
+  closeSignalTickets: {},
   analysisHistoryOffset: 0,
   analysisHistoryHasMore: true,
   analysisHistoryLoading: false,
@@ -25,6 +26,116 @@
 // ===== Global Symbol Management =====
 const SYMBOL_STORAGE_KEY = "aurum_selected_symbol";
 const _symSelectors = []; // registered selector IDs
+
+const DEFAULT_PROMPT = `你是一个严谨的交易分析师。根据提供的行情数据，输出交易信号。
+
+## 输出格式（JSON Schema）
+
+你必须输出一个合法的 JSON 对象，结构如下：
+
+\`\`\`json
+{
+  "signal_type": "buy / sell / hold",
+  "confidence": 0.00,
+  "recommended_volume": 0.00,
+  "analysis": "中文行情分析",
+  "reasoning": "中文决策理由",
+  "stop_loss_price": null,
+  "take_profit_1_price": null,
+  "take_profit_2_price": null,
+  "take_profit_3_price": null
+}
+\`\`\`
+
+## 分析规则
+
+### signal_type
+- 只能是 buy、sell、hold，禁止其他值。
+- 方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时，必须返回 hold。
+
+### confidence（动态估算，禁止固定值）
+按以下维度综合评估：
+1. 趋势强度：价格与 SMA20 的距离、momentum_3_pct / momentum_10_pct / momentum_20_pct 是否同向。
+2. 位置结构：range_position_20 是否接近区间高低位，是否追涨/追空。
+3. 波动噪音：volatility_pct 与 avg_volatility 是否过高，过高则降低置信度。
+4. 风险状态：已有持仓、账户净值、止损距离是否合理。
+- BUY/SELL：弱优势 0.52-0.62，中等优势 0.63-0.74，强共振才可高于 0.75。
+- HOLD：方向不清晰时 0.55-0.68，明确应回避风险时可高于 0.70。
+- 即使 signal_type 为 hold，confidence 也不得为 0。
+
+### recommended_volume
+- 不得超过 0.05。
+- 如果 signal_type 为 hold，可以返回 0。
+
+### analysis
+用中文说明行情结构、趋势强弱、波动、支撑阻力、当前价与均线关系。
+
+### reasoning
+用中文说明为什么给出该方向，以及为什么可以执行或为什么不执行。
+
+### 止损止盈
+- 如果 buy 或 sell，必须给出 stop_loss_price、take_profit_1_price、take_profit_2_price、take_profit_3_price，价格必须是数字。
+- 如果 hold，止损止盈可以为 null。
+
+## 输出示例
+
+\`\`\`json
+{
+  "signal_type": "buy",
+  "confidence": 0.68,
+  "recommended_volume": 0.03,
+  "analysis": "当前价2038.50站上SMA20(2035.20)，momentum_3/10/20同向上行，range_position_20=0.65处于中高位但未极端，波动率适中。",
+  "reasoning": "趋势共振向上，均线多头排列，但接近区间上沿不宜重仓，轻仓试探。",
+  "stop_loss_price": 2032.00,
+  "take_profit_1_price": 2042.00,
+  "take_profit_2_price": 2045.50,
+  "take_profit_3_price": 2050.00
+}
+\`\`\``;
+
+const DEFAULT_CLOSE_PROMPT = `你是一个严格的持仓管理分析师。根据持仓数据和当前行情，判断每笔持仓是否应该平仓。
+
+## 输出格式（JSON Schema）
+
+你必须输出一个合法的 JSON 对象，结构如下：
+
+\`\`\`json
+{
+  "positions": [
+    {
+      "ticket": "持仓票据号（必须与输入中的 ticket 完全一致）",
+      "action": "close 或 hold",
+      "confidence": 0.00,
+      "reason": "中文分析理由，必须引用具体数值（价格/浮盈/点数/时间）"
+    }
+  ]
+}
+\`\`\`
+
+## 分析规则
+
+1. 对 positions.details 中的每一笔持仓，给出 close 或 hold 判断。
+2. confidence 为 0-1 的小数，必须根据持仓状态动态评估：
+   - 浮盈且趋势延续 → hold 0.70-0.90
+   - 浮盈但趋势减弱 → hold 0.50-0.65
+   - 浮亏但在止损范围内 → hold 0.55-0.70
+   - 浮亏且趋势反向 → close 0.65-0.85
+   - 浮盈但趋势反转 → close 0.60-0.80
+3. reason 必须引用具体行情数据（当前价格、浮盈金额、持仓时长、技术指标等），禁止空洞描述。
+4. ticket 必须是输入持仓中已存在的 ticket，禁止编造。
+5. 如果所有持仓都没有明确的平仓依据，全部返回 hold。
+6. 禁止因为“保守起见”就建议平仓，必须有明确的行情依据。
+
+## 输出示例
+
+\`\`\`json
+{
+  "positions": [
+    {"ticket": "12345", "action": "hold", "confidence": 0.75, "reason": "当前价2038.50高于开仓价2035.00，浮盈$35.00，SMA20上行趋势延续"},
+    {"ticket": "12346", "action": "close", "confidence": 0.72, "reason": "当前价2031.20低于开仓价2036.00，浮亏$48.00，EMA12下穿EMA26形成死叉，趋势反向"}
+  ]
+}
+\`\`\``;
 
 function getGlobalSymbol() {
   return localStorage.getItem(SYMBOL_STORAGE_KEY) || "XAUUSD";
@@ -238,11 +349,11 @@ function setSignalBadge(signal) {
 
 function signalType(value) {
   const type = String(value || "hold").toLowerCase();
-  return type === "buy" || type === "sell" ? type : "hold";
+  return ["buy", "sell", "close"].includes(type) ? type : "hold";
 }
 
 function directionText(value) {
-  return { buy: "买入", sell: "卖出", hold: "观望" }[signalType(value)] || "观望";
+  return { buy: "买入", sell: "卖出", hold: "观望", close: "平仓" }[signalType(value)] || "观望";
 }
 
 function volumeText(value) {
@@ -396,6 +507,25 @@ function toast(message, type = "info") {
   node.textContent = message;
   host.appendChild(node);
   setTimeout(() => node.remove(), 3600);
+}
+
+function showSignalNotification(signal) {
+  if (!signal) return;
+  const host = $("toastHost");
+  if (!host) return;
+  const dir = signalType(signal.signal_type);
+  const dirLabel = dir.toUpperCase() + " " + directionText(dir);
+  const node = document.createElement("div");
+  node.className = "toast signal-notification";
+  node.innerHTML = `<div class="notif-header">🔔 新信号</div><div class="notif-body"><span class="notif-symbol">${escapeHtml(signal.symbol)}</span> <span class="notif-dir tag ${dir}">${dirLabel}</span> <span class="notif-tf">${escapeHtml(signal.timeframe)}</span> <span class="notif-conf">${(signal.confidence * 100).toFixed(0)}%</span></div>`;
+  node.style.cursor = "pointer";
+  node.onclick = () => {
+    node.remove();
+    openAnalysisFromHistory(signal.id);
+    setTab("ai-analyze");
+  };
+  host.appendChild(node);
+  setTimeout(() => node.remove(), 8000);
 }
 
 function renderPager(hostId, page, pageSize, total, kind) {
@@ -690,7 +820,7 @@ async function _maybeRefreshSignal() {
   _lastSignalRefreshTs = now;
   try {
     // Lightweight check: only fetch latest signal's ID + minimal fields (~200 bytes)
-    const data = await wsApi("signals_latest_id", { session_id: "default" });
+    const data = await wsApi("signals_latest_id", {});
     const latest = data.signal || null;
 
     if (!latest) {
@@ -701,22 +831,24 @@ async function _maybeRefreshSignal() {
     // ID unchanged — UI timer handles timing display, nothing to do
     if (latest.id === _lastSignalId) return;
 
-    // New signal detected — fetch full signal list
+    // New signal detected — reuse the known-good click handler
     _lastSignalId = latest.id;
-    const fullData = await wsApi("signals", { session_id: "default" });
+    const fullData = await wsApi("signals", {});
     const signals = fullData.signals || [];
     state.signals = signals;
     state.selectedSignal = signals[0] || null;
     state.analysisHistoryOffset = signals.length;
     state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= 6;
-    updateSignalDisplay(state.selectedSignal);
-    if (state.selectedSignal) setText("signalFreshness", signalFreshness(state.selectedSignal));
     renderAnalysisHistory(signals);
-    renderSignal(state.selectedSignal, null);
     loadSignalTable();
-    // Scroll history list to top (latest signal)
-    const firstItem = document.querySelector(".analysis-history-item");
-    if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (state.selectedSignal) {
+      showSignalNotification(state.selectedSignal);
+      if (activeTabId() === "ai-analyze") {
+        openAnalysisFromHistory(state.selectedSignal.id);
+        const firstItem = document.querySelector(".analysis-history-item");
+        if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
   } catch (e) { /* silent */ }
 }
 
@@ -932,6 +1064,15 @@ async function loadStatus() {
   } catch {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
   }
+
+  // Update smart close badge
+  try {
+    const closeData = await wsApi('get_close_config');
+    const closeCfg = closeData.config || {};
+    updateSmartCloseBadge(!!closeCfg.enabled, closeCfg.check_interval_seconds);
+  } catch {
+    setBadge('smartCloseMode', '智能平仓 --', 'neutral');
+  }
 }
 
 // ============ Gateway Badge Click ============
@@ -1039,6 +1180,29 @@ async function handleAutoToggle() {
     setBadge('autoAnalyzeMode', label, type);
     // Also reload full status in background
     loadStatus().catch(() => {});
+  } catch (e) {
+    toast('切换失败: ' + e.message, 'error');
+  }
+}
+
+async function handleSmartCloseToggle() {
+  try {
+    const data = await wsApi('get_close_config');
+    const cfg = data.config || {};
+    const newEnabled = !cfg.enabled;
+    await wsApi('toggle_close', { enabled: newEnabled });
+    toast(newEnabled ? '智能平仓已开启' : '智能平仓已关闭', 'success');
+    updateSmartCloseBadge(newEnabled, cfg.check_interval_seconds);
+    if (newEnabled) {
+      toast('正在执行首次持仓分析...', 'info');
+      try {
+        await wsApi('run_close_now', { _timeout: 60000 });
+        loadSignals({ limit: 6, offset: 0 });
+        loadSignalTable();
+      } catch (e) {
+        console.error('run_close_now:', e);
+      }
+    }
   } catch (e) {
     toast('切换失败: ' + e.message, 'error');
   }
@@ -1176,6 +1340,13 @@ async function loadSignalTickets() {
   } catch { state.signalTickets = {}; }
 }
 
+async function loadCloseSignalTickets() {
+  try {
+    const data = await wsApi("close_signal_tickets");
+    state.closeSignalTickets = data.tickets || {};
+  } catch { state.closeSignalTickets = {}; }
+}
+
 function ticketCell(ticket, signalTickets) {
   const signalId = signalTickets[String(ticket)];
   if (signalId) {
@@ -1257,7 +1428,7 @@ async function loadConfig() {
   const cfg = data.config;
   if (!cfg) {
     state.currentConfigHasApiKey = false;
-    $("systemPrompt").value = "You are a disciplined trading analyst. Return strict JSON.";
+    $("systemPrompt").value = DEFAULT_PROMPT;
     $("apiKey").placeholder = "输入 API Key 后保存";
     setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
     applyProviderPreset("deepseek");
@@ -1285,7 +1456,7 @@ async function loadConfig() {
   setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · ${keyText}`);
 
   // Load system prompt from config (per-user in ai_configs)
-  if (cfg.system_prompt) $("systemPrompt").value = cfg.system_prompt;
+  $("systemPrompt").value = cfg.system_prompt || DEFAULT_PROMPT;
 
   // Model sharing toggle (admin only)
   const isAdmin = state.user?.role === "admin";
@@ -1400,6 +1571,7 @@ function initConfigSubTabs() {
       const panel = document.getElementById(target);
       if (panel) panel.classList.add('active');
       if (target === 'auto-config') loadAutoConfig();
+      if (target === 'close-config') loadCloseConfig();
     });
   });
 }
@@ -1494,6 +1666,62 @@ async function saveAutoConfig() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// ============ Close Config ============
+async function loadCloseConfig() {
+  try {
+    const data = await wsApi('get_close_config');
+    const cfg = data.config || {};
+    document.getElementById('closeApiProvider').value = cfg.api_provider || 'deepseek';
+    document.getElementById('closeModelName').value = cfg.model_name || 'deepseek-chat';
+    document.getElementById('closeApiBaseUrl').value = cfg.api_base_url || 'https://api.deepseek.com';
+    document.getElementById('closeTemperature').value = cfg.temperature ?? 0.3;
+    document.getElementById('closeMaxTokens').value = cfg.max_tokens || 4000;
+    document.getElementById('closeCheckInterval').value = Math.round((cfg.check_interval_seconds || 60) / 60);
+    document.getElementById('closeRuleSoftSl').value = cfg.rule_soft_sl ?? '';
+    document.getElementById('closeRuleSoftTp').value = cfg.rule_soft_tp ?? '';
+    document.getElementById('closeRuleTimeout').value = cfg.rule_timeout_minutes ?? '';
+    document.getElementById('closeRuleMaxLoss').value = cfg.rule_max_loss_pct ?? '';
+    document.getElementById('closeRuleReverse').checked = !!cfg.rule_reverse_signal;
+    document.getElementById('closeSystemPrompt').value = cfg.system_prompt || DEFAULT_CLOSE_PROMPT;
+  } catch (e) { console.error('loadCloseConfig:', e); }
+}
+
+async function saveCloseConfig() {
+  try {
+    const payload = {
+      enabled: true,
+      api_provider: document.getElementById('closeApiProvider').value,
+      model_name: document.getElementById('closeModelName').value,
+      api_base_url: document.getElementById('closeApiBaseUrl').value,
+      temperature: parseFloat(document.getElementById('closeTemperature').value) || 0.3,
+      max_tokens: parseInt(document.getElementById('closeMaxTokens').value) || 1500,
+      check_interval_seconds: (parseInt(document.getElementById('closeCheckInterval').value) || 1) * 60,
+      rule_soft_sl: parseFloat(document.getElementById('closeRuleSoftSl').value) || null,
+      rule_soft_tp: parseFloat(document.getElementById('closeRuleSoftTp').value) || null,
+      rule_timeout_minutes: parseInt(document.getElementById('closeRuleTimeout').value) || null,
+      rule_max_loss_pct: parseFloat(document.getElementById('closeRuleMaxLoss').value) || null,
+      rule_reverse_signal: document.getElementById('closeRuleReverse').checked,
+      system_prompt: document.getElementById('closeSystemPrompt').value || null,
+    };
+    await wsApi('save_close_config', { config: payload });
+    toast('智能平仓配置已保存', 'success');
+    await loadCloseConfig();
+    updateSmartCloseBadge(true, payload.check_interval_seconds);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function updateSmartCloseBadge(enabled, intervalSeconds) {
+  let label;
+  if (enabled) {
+    const min = Math.round((intervalSeconds || 60) / 60);
+    label = `智能平仓 · ${min}分钟`;
+  } else {
+    label = '智能平仓关闭';
+  }
+  const type = enabled ? 'success' : 'neutral';
+  setBadge('smartCloseMode', label, type);
+}
+
 function updateSignalDisplay(signal) {
   const card = $("signalCard");
   if (!card) return;
@@ -1534,6 +1762,7 @@ function updateSignalDisplay(signal) {
     buy: { border: "var(--color-positive)", glow: "var(--signal-glow-buy)" },
     sell: { border: "var(--color-negative)", glow: "var(--signal-glow-sell)" },
     hold: { border: "var(--color-warning)", glow: "var(--signal-glow-hold)" },
+    close: { border: "var(--color-info, #63b3ed)", glow: "0 0 15px rgba(99,179,237,0.3)" },
   };
 
   card.dataset.direction = dir;
@@ -1558,13 +1787,14 @@ function updateSignalDisplay(signal) {
   setText("lastSigTime", signalDisplayTime(signal));
   $("lastSigDirection").className = dir;
 
-  const executable = dir !== "hold" && !signal.is_stale && !signal.is_executed;
+  const executable = dir !== "hold" && dir !== "close" && !signal.is_stale && !signal.is_executed;
   $("executeSignalBtn").disabled = !executable;
   $("executeSignalBtn").title = executable
     ? "复核后发送执行请求"
-    : signal.is_stale ? "信号已过期，无法执行"
-      : signal.is_executed ? "信号已执行"
-        : "HOLD 观望信号不执行";
+    : dir === "close" ? "平仓信号已自动执行"
+      : signal.is_stale ? "信号已过期，无法执行"
+        : signal.is_executed ? "信号已执行"
+          : "HOLD 观望信号不执行";
 }
 
 function signalFreshness(signal) {
@@ -1610,8 +1840,15 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   setText("signalFreshness", signalFreshness(signal));
   const confidence = confidenceInfo(signal.confidence);
   const dir = signalType(signal.signal_type);
-  const market = signal.market_data || {};
-  const positions = market.positions || {};
+  const rawMarket = signal.market_data || {};
+  // CLOSE signals: market data nested in timeframes.X.summary
+  const closeSummary = rawMarket.timeframes ? Object.values(rawMarket.timeframes)[0]?.summary || {} : {};
+  const market = dir === "close" ? { ...closeSummary, latest_price: rawMarket.latest_price ?? closeSummary.latest_price } : rawMarket;
+  const account = dir === "close" ? (rawMarket.account || {}) : {};
+  // CLOSE: positions from closeContext ({total, details}), others from market.positions
+  const positions = dir === "close"
+    ? { total_positions: rawMarket.positions?.total ?? "--", symbol_positions: rawMarket.positions?.details?.filter(d => d.symbol === signal.symbol).length ?? "--" }
+    : (market.positions || {});
   const result = $("analysisResult");
   const freshnessClass = signal.is_stale ? "expired" : signal.is_executed ? "executed" : "live";
   const latestPrice = Number(market.latest_price);
@@ -1620,6 +1857,23 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   const atrValue = market.atr_14 ?? market.atr ?? market.avg_volatility;
   const analysisText = String(signal.analysis || "").trim();
   const reasoningText = String(signal.reasoning || "").trim();
+  // For CLOSE signals: highlight lines mentioning 平仓/close/ticket numbers
+  let escapedAnalysis = escapeHtml(analysisText || "暂无行情判断");
+  let closeDetailsBlock = "";
+  if (dir === "close") {
+    // Build structured close details from execution_result
+    const execResult = signal.execution_result ? (typeof signal.execution_result === 'string' ? (() => { try { return JSON.parse(signal.execution_result) } catch { return {} } })() : signal.execution_result) : {};
+    const results = execResult.results || [];
+    if (results.length > 0) {
+      const rows = results.map(r => {
+        const status = r.success ? "✅ 已平仓" : "❌ 失败";
+        const price = r.price ? `平仓价 ${Number(r.price).toFixed(2)}` : "";
+        const reason = r.reason || "";
+        return `<div class="close-detail-row"><span class="close-detail-ticket">#${escapeHtml(String(r.ticket))}</span> <span class="close-detail-status">${status}</span> ${escapeHtml(price)} ${escapeHtml(reason) ? `<em>${escapeHtml(reason)}</em>` : ""}</div>`;
+      }).join("");
+      closeDetailsBlock = `<strong>平仓详情</strong>\n<div class="close-detail-list">${rows}</div>\n\n`;
+    }
+  }
   const reasoningBlock = reasoningText ? `\n\n<strong>推理依据</strong>\n${escapeHtml(reasoningText)}` : "";
   result.className = "analysis-result";
   result.innerHTML = `
@@ -1657,7 +1911,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
         <div class="market-group">
           <span class="market-group-title">波动</span>
           <div class="market-group-cells">
-            <div><span>ATR / 平均波动 <em class="market-unit">USD</em></span><strong>${Number.isFinite(Number(atrValue)) ? fmt(atrValue, 2) : "--"}</strong></div>
+            <div><span>ATR <em class="market-unit">USD</em></span><strong>${Number.isFinite(Number(atrValue)) ? fmt(atrValue, 2) : "--"}</strong></div>
             <div><span>涨跌幅 <em class="market-unit">%</em></span><strong>${Number.isFinite(Number(market.price_change_pct)) ? signedText(market.price_change_pct, 3, "%") : "--"}</strong></div>
           </div>
         </div>
@@ -1673,8 +1927,8 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-section">
       <div class="analysis-section-title"><i data-lucide="file-text" size="14"></i>推理正文</div>
     </div>
-    <div id="analysisTextContent" class="analysis-text collapsed"><strong>行情判断</strong>
-${escapeHtml(analysisText || "暂无行情判断")}${reasoningBlock}</div>
+    <div id="analysisTextContent" class="analysis-text collapsed">${closeDetailsBlock}<strong>行情判断</strong>
+${escapedAnalysis}${reasoningBlock}</div>
     <div class="analysis-expand-row">
       <button class="btn-expand-analysis" type="button" data-action="toggle-analysis-text">展开完整推理</button>
     </div>
@@ -1729,6 +1983,7 @@ async function runAnalysis() {
       .sort((a, b) => Number(b.confidence) - Number(a.confidence))[0];
     if (!best) throw new Error("未返回有效信号");
     renderSignal(best, Math.round(performance.now() - started));
+    showSignalNotification(best);
     await loadSignals({ skipResultRender: true });
     // Scroll history list to top (latest signal)
     const firstItem = document.querySelector(".analysis-history-item");
@@ -2049,7 +2304,7 @@ function renderSignalRows() {
         <td class="num">${escapeHtml(signal.id)}</td>
         <td>${compactTimeHtml(signal?.created_at_mt5 || signal?.created_at)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
-        <td><span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span></td>
+        <td><span class="signal-tf-badge">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
         <td><span class="tag ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span></td>
         <td>
           <div class="conf-mini ${confidenceClass(signal.confidence)}">
@@ -2064,7 +2319,7 @@ function renderSignalRows() {
         <td class="num tp-cell">${escapeHtml(signal.take_profit_2_price || "--")} <span class="tp3-val">/ ${escapeHtml(signal.take_profit_3_price || "--")}</span></td>
       </tr>
     `;
-  }).join("") : `<tr class="empty-row"><td colspan="11">当前筛选下暂无信号</td></tr>`;
+  }).join("") : `<tr class="empty-row"><td colspan="12">当前筛选下暂无信号</td></tr>`;
   renderPager("signalPager", state.signalFilters.page, state.signalFilters.pageSize, total, "signals");
   highlightActiveAnalysis(state.selectedSignal?.id);
   initIcons();
@@ -2073,7 +2328,7 @@ function renderSignalRows() {
 async function loadSignals(options = {}) {
   const limit = options.limit || 6;
   const offset = options.offset || 0;
-  const data = await wsApi("signals", { session_id: "default", limit, offset });
+  const data = await wsApi("signals", { limit, offset });
   const signals = data.signals || [];
   const hasMore = data.has_more !== undefined ? data.has_more : signals.length >= limit;
 
@@ -2111,7 +2366,7 @@ async function loadSignals(options = {}) {
 async function loadSignalTable() {
   const page = state.signalFilters.page;
   const pageSize = state.signalFilters.pageSize;
-  const params = { session_id: "default", limit: pageSize, offset: (page - 1) * pageSize };
+  const params = { limit: pageSize, offset: (page - 1) * pageSize };
   if (state.signalFilters.direction) params.direction = state.signalFilters.direction;
   if (state.signalFilters.timeframe) params.timeframe = state.signalFilters.timeframe;
   try {
@@ -2135,6 +2390,7 @@ async function loadHistory() {
   const [data] = await Promise.all([
     wsApi("history", { page: filters.page, page_size: filters.pageSize }),
     loadSignalTickets(),
+    loadCloseSignalTickets(),
   ]);
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
@@ -2150,10 +2406,16 @@ async function loadHistory() {
   });
   const rows = data.orders || [];
   const tickets = state.signalTickets || {};
+  const closeTickets = state.closeSignalTickets || {};
   $("historyBody").innerHTML = rows.length ? rows.map((row) => {
     const dir = signalType(row.type);
     const comment = row.comment || "";
     const ticket = row.order || row.ticket;
+    const exitPrice = row.exit_price ?? row.price;
+    const closeInfo = closeTickets[String(ticket)];
+    const exitPriceCell = closeInfo
+      ? `<td class="num"><a href="#" class="signal-link close-price-link" onclick="event.preventDefault(); openAnalysisFromHistory(${closeInfo.signalId})" title="点击查看平仓分析">${escapeHtml(raw(closeInfo.price ?? exitPrice))}</a></td>`
+      : `<td class="num">${escapeHtml(raw(exitPrice))}</td>`;
     return `
     <tr>
       ${ticketCell(ticket, tickets)}
@@ -2161,12 +2423,12 @@ async function loadHistory() {
       <td><span class="tag ${dir}">${String(row.type || dir).toUpperCase()} ${directionText(dir)}</span></td>
       <td class="num">${escapeHtml(volumeText(row.volume))}</td>
       <td class="num">${escapeHtml(raw(row.entry_price))}</td>
-      <td class="num">${escapeHtml(raw(row.exit_price ?? row.price))}</td>
+      ${exitPriceCell}
       <td class="num ${profitClass(row.profit_points)}">${escapeHtml(row.profit_points ?? "--")}</td>
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
       <td class="num">${escapeHtml(formatTime(row.entry_time))}</td>
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
-      <td class="comment-cell"><span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span></td>
+      <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>
   `;
   }).join("") : `<tr class="empty-row"><td colspan="11">暂无成交记录</td></tr>`;
@@ -2337,6 +2599,10 @@ function bindEvents() {
   $("autoConfigOverride")?.addEventListener("change", syncOverrideSection);
   $("saveAutoConfigBtn")?.addEventListener("click", saveAutoConfig);
   $("autoApiProvider")?.addEventListener("change", (e) => applyAutoProviderPreset(e.target.value));
+
+  // Smart close config
+  $("saveCloseConfigBtn")?.addEventListener("click", saveCloseConfig);
+  $("smartCloseMode")?.addEventListener("click", handleSmartCloseToggle);
 
   // Timeframe checkbox change → update confirm text
   // (removed old modal handlers)
@@ -2511,12 +2777,6 @@ async function loadFeedbackHistory() {
   } catch (err) {
     list.innerHTML = '<div class="empty-state">加载失败</div>';
   }
-}
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
 }
 
 // Hook into existing setTab

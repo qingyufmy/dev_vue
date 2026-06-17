@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import jwt from 'jsonwebtoken'
 
-import { sendBridgeCommand, isBridgeAlive, getBridgeStatus, getAllBridges, getBridgeTradeMode } from '../bridge-ws.js'
+import { sendBridgeCommand, isBridgeAlive, isTradeEnabled, getBridgeStatus, getAllBridges, getBridgeTradeMode } from '../bridge-ws.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
@@ -14,11 +14,12 @@ const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
 // MTF = Manual TimeFrame (手动推理), ATF = Auto TimeFrame (自动推理)
 const MTF_TAG_RE = /\{\{MTF:([A-Z]\d+):(\d+)\}\}/g
 const ATF_TAG_RE = /\{\{ATF:([A-Z]\d+):(\d+)\}\}/g
-const ALL_TF_TAG_RE = /\{\{[MA]TF:([A-Z]\d+):(\d+)\}\}/g
+const CTF_TAG_RE = /\{\{CTF:([A-Z]\d+):(\d+)\}\}/g
+const ALL_TF_TAG_RE = /\{\{[MAC]TF:([A-Z]\d+):(\d+)\}\}/g
 
 function parseTimeframeTags(prompt, mode = 'manual') {
   if (!prompt) return []
-  const re = mode === 'auto' ? ATF_TAG_RE : MTF_TAG_RE
+  const re = mode === 'auto' ? ATF_TAG_RE : mode === 'close' ? CTF_TAG_RE : MTF_TAG_RE
   const tags = []
   let m
   while ((m = re.exec(prompt)) !== null) {
@@ -463,7 +464,7 @@ function calculateMarketData(symbol, timeframe, rates, account, positions) {
         tp: p.tp || null,
       })),
     },
-    account: { balance: account.balance, equity: account.equity },
+    account: account ? { balance: account.balance, equity: account.equity } : null,
   }
 }
 
@@ -860,6 +861,200 @@ function normalizeAiSignal(parsed, config, market) {
   return parsed
 }
 
+// ============ Smart Close ============
+
+function buildCloseContext(userId, symbol, positions, account, recentSignal) {
+  const details = (positions || []).map(p => ({
+    ticket: p.ticket,
+    symbol: p.symbol,
+    type: p.type === 'buy' ? 'BUY' : 'SELL',
+    volume: p.volume,
+    open_price: p.open_price || p.price_open,
+    current_price: p.price_current,
+    profit: round2(p.profit || 0),
+    sl: p.sl || null,
+    tp: p.tp || null,
+    duration_minutes: p.time ? Math.floor((Date.now() / 1000 - p.time) / 60) : null,
+  }))
+  return {
+    positions: { total: details.length, details },
+    account: account ? { balance: account.balance, equity: account.equity, profit: account.profit } : null,
+    recent_signal: recentSignal ? { type: recentSignal.signal_type, analysis: recentSignal.analysis } : null,
+  }
+}
+
+async function runSmartClose(userId, closeConfig, account, positions) {
+  if (!positions || positions.length === 0) return []
+
+  const symbol = positions[0].symbol || 'XAUUSD'
+  const prompt = closeConfig.system_prompt
+  if (!prompt) { console.error('[SmartClose] No system_prompt configured'); return [] }
+  const model = closeConfig.model_name || 'deepseek-chat'
+
+  // Fetch market data based on CTF tags in prompt
+  let strategyContext = {}
+  try {
+    strategyContext = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, 'M5', null, 'close')
+  } catch (e) {
+    console.error('[SmartClose] Failed to build strategy context:', e.message)
+  }
+
+  const recentSignal = await queryOne(
+    'SELECT signal_type, analysis FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1',
+    [userId]
+  )
+
+  const closeContext = buildCloseContext(userId, symbol, positions, account, recentSignal)
+  const contextPayload = {
+    ...strategyContext,
+    ...closeContext,
+    latest_price: positions[0].price_current || 0,
+  }
+
+  // Call AI - use close config's own engine settings, fallback to user's main config
+  let apiKey, baseUrl
+  if (closeConfig.api_key_encrypted) {
+    apiKey = closeConfig.api_key_encrypted
+    baseUrl = closeConfig.api_base_url || 'https://api.deepseek.com'
+  } else {
+    const config = await getActiveConfig(null, userId)
+    if (!config) return []
+    apiKey = config.api_key_encrypted
+    baseUrl = closeConfig.api_base_url || config.api_base_url || 'https://api.deepseek.com'
+  }
+  const temperature = closeConfig.temperature ?? 0.3
+  let maxTokens = closeConfig.max_tokens || 4000
+  // Reasoning models need more tokens for chain-of-thought
+  if (/reason|think|flash/i.test(model) && maxTokens < 8000) {
+    maxTokens = Math.min(maxTokens * 2, 8000)
+    console.log(`[SmartClose] Reasoning model detected, maxTokens bumped to ${maxTokens}`)
+  }
+
+  try {
+    console.log(`[SmartClose] Calling AI: ${baseUrl}/v1/chat/completions, model=${model}, positions=${positions.length}`)
+    const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        temperature,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: stripTimeframeTags(prompt) },
+          { role: 'user', content: JSON.stringify(contextPayload) },
+        ],
+      }),
+    })
+    const data = await resp.json()
+    let content = data.choices?.[0]?.message?.content || ''
+    // DeepSeek reasoning models: content may be empty, extract JSON from reasoning_content
+    if (!content) {
+      const reasoning = data.choices?.[0]?.message?.reasoning_content || ''
+      if (reasoning) {
+        console.log('[SmartClose] content empty, extracting from reasoning_content')
+        // Try to find JSON in reasoning content
+        const jsonMatch = reasoning.match(/\{[\s\S]*"positions"[\s\S]*\]/)
+        if (jsonMatch) {
+          let candidate = jsonMatch[0]
+          // Try to close the JSON object
+          const openBraces = (candidate.match(/\{/g) || []).length
+          const closeBraces = (candidate.match(/\}/g) || []).length
+          if (openBraces > closeBraces) candidate += '}'.repeat(openBraces - closeBraces)
+          content = candidate
+        } else {
+          console.error('[SmartClose] No JSON found in reasoning_content (first 500):', reasoning.substring(0, 500))
+          return []
+        }
+      } else {
+        console.error('[SmartClose] Empty AI response. Status:', resp.status, 'Response:', JSON.stringify(data).substring(0, 300))
+        return []
+      }
+    }
+
+    // Extract JSON from response (may be wrapped in markdown)
+    let jsonStr = content.replace(/```json\n?|```/g, '').trim()
+    // Try to find JSON object boundaries
+    const firstBrace = jsonStr.indexOf('{')
+    const lastBrace = jsonStr.lastIndexOf('}')
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      jsonStr = jsonStr.substring(firstBrace, lastBrace + 1)
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(jsonStr)
+    } catch (e) {
+      console.error('[SmartClose] JSON parse error:', e.message, '\nRaw content (first 500):', content.substring(0, 500))
+      return []
+    }
+
+    if (!Array.isArray(parsed.positions)) return []
+
+    // Build analysis text from all positions
+    const analysisLines = parsed.positions.map(p => {
+      const action = p.action === 'close' ? '平仓' : '持有'
+      return `#${p.ticket}: ${action} (${(p.confidence * 100).toFixed(0)}%) - ${p.reason}`
+    })
+    const avgConfidence = parsed.positions.reduce((s, p) => s + (p.confidence || 0.5), 0) / parsed.positions.length
+
+    // Save CLOSE signal to ai_signals
+    const createdAt = utcNow()
+    const closeSignalResult = await queryRun(
+      `INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
+        analysis, reasoning, market_data_json, ai_model, ttl_seconds, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, 'smart_close', symbol, 'CLOSE', 'close', avgConfidence, 0,
+        analysisLines.join('\n'),
+        `智能平仓分析：${positions.length}笔持仓`,
+        JSON.stringify(contextPayload), model, 3600, createdAt]
+    )
+    const closeSignalId = closeSignalResult?.insertId
+
+    // Validate and execute
+    const validTickets = new Set(positions.map(p => String(p.ticket)))
+    const results = []
+    for (const item of parsed.positions) {
+      if (!validTickets.has(String(item.ticket))) continue
+      if (item.action !== 'close') continue
+
+      const pos = positions.find(p => String(p.ticket) === String(item.ticket))
+      if (!pos) continue
+
+      // Execute close
+      try {
+        const closeResult = await mt5Bridge(userId, 'close', { ticket: pos.ticket })
+        results.push({ ticket: pos.ticket, success: true, price: closeResult?.price, reason: item.reason })
+
+        // Record in close_signal_tickets
+        if (closeSignalId) {
+          await queryRun(
+            'INSERT IGNORE INTO close_signal_tickets (user_id, original_ticket, close_signal_id, close_price) VALUES (?, ?, ?, ?)',
+            [userId, String(pos.ticket), closeSignalId, closeResult?.price || pos.price_current]
+          )
+        }
+
+        // Audit
+        await logAudit({ userId, action: 'smart_close', targetType: symbol, targetId: String(pos.ticket), detail: JSON.stringify({ ticket: pos.ticket, reason: item.reason, confidence: item.confidence, result: closeResult }) })
+        console.log(`[SmartClose] Audit logged: ticket=${pos.ticket} action=smart_close`)
+      } catch (e) {
+        results.push({ ticket: pos.ticket, success: false, error: e.message })
+        await logAudit({ userId, action: 'smart_close', targetType: symbol, targetId: String(pos.ticket), detail: JSON.stringify({ ticket: pos.ticket, error: e.message }) })
+      }
+    }
+
+    // Mark signal as executed if any closes were successful
+    const successCount = results.filter(r => r.success).length
+    if (closeSignalId && successCount > 0) {
+      await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?',
+        [JSON.stringify({ closed: successCount, total: results.length, results }), closeSignalId])
+    }
+
+    return results
+  } catch (e) {
+    console.error('[SmartClose] AI error:', e.message)
+    return []
+  }
+}
+
 // ============ Risk Validation ============
 class RiskReject extends Error {
   constructor(reason, details = {}) {
@@ -1010,7 +1205,7 @@ async function handleAnalyze(userId, params) {
   delete signal._inference_source
 
   const createdAt = utcNow()
-  await queryRun(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
+  const result = await queryRun(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
     analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
     market_data_json, ai_model, ttl_seconds, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1018,6 +1213,15 @@ async function handleAnalyze(userId, params) {
       signal.analysis, signal.reasoning, signal.stop_loss_price || null,
       signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
       JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt])
+
+  // Enrich signal with DB fields (same as runAutoCycle)
+  signal.id = result.insertId
+  signal.symbol = symbol
+  signal.timeframe = timeframe.toUpperCase()
+  signal.created_at = createdAt
+  signal.market_data = market
+  signal.is_executed = false
+  attachSignalTiming(signal)
 
   return { status: 'success', signal, market }
 }
@@ -1251,6 +1455,169 @@ async function runAutoCycle(userId, symbol, timeframe) {
   if (autoSchedulerState[userId]) autoSchedulerState[userId].lastRunAt = utcNow()
 }
 
+// ============ Smart Close Scheduler ============
+
+const closeSchedulerState = {}
+
+export async function getCloseConfig(userId) {
+  return await queryOne('SELECT * FROM close_config WHERE user_id = ?', [userId])
+}
+
+export async function saveCloseConfig(userId, cfg) {
+  const now = utcNow()
+  let keyEnc = cfg.api_key_encrypted || null
+  if (cfg.api_key && !keyEnc) {
+    keyEnc = cfg.api_key
+  }
+  await queryRun(`INSERT INTO close_config (user_id, enabled, check_interval_seconds, model_name, api_provider, api_base_url, api_key_encrypted, temperature, max_tokens, system_prompt,
+    rule_soft_sl, rule_soft_tp, rule_timeout_minutes, rule_max_loss_pct, rule_reverse_signal, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+    enabled = VALUES(enabled), check_interval_seconds = VALUES(check_interval_seconds),
+    model_name = VALUES(model_name), api_provider = VALUES(api_provider), api_base_url = VALUES(api_base_url),
+    api_key_encrypted = VALUES(api_key_encrypted), temperature = VALUES(temperature), max_tokens = VALUES(max_tokens),
+    system_prompt = VALUES(system_prompt),
+    rule_soft_sl = VALUES(rule_soft_sl), rule_soft_tp = VALUES(rule_soft_tp),
+    rule_timeout_minutes = VALUES(rule_timeout_minutes), rule_max_loss_pct = VALUES(rule_max_loss_pct),
+    rule_reverse_signal = VALUES(rule_reverse_signal), updated_at = VALUES(updated_at)`,
+    [userId, cfg.enabled ? 1 : 0, cfg.check_interval_seconds || 60, cfg.model_name || 'deepseek-chat',
+      cfg.api_provider || 'deepseek', cfg.api_base_url || 'https://api.deepseek.com', keyEnc,
+      cfg.temperature ?? 0.3, cfg.max_tokens || 4000,
+      cfg.system_prompt || null, cfg.rule_soft_sl ?? null, cfg.rule_soft_tp ?? null,
+      cfg.rule_timeout_minutes ?? null, cfg.rule_max_loss_pct ?? null, cfg.rule_reverse_signal ? 1 : 0, now])
+  return await getCloseConfig(userId)
+}
+
+export async function getCloseSignalTickets(userId) {
+  const rows = await queryAll('SELECT cst.original_ticket, cst.close_signal_id, cst.close_price, s.take_profit_1_price FROM close_signal_tickets cst LEFT JOIN ai_signals s ON cst.close_signal_id = s.id WHERE cst.user_id = ?', [userId])
+  const map = {}
+  for (const r of rows) {
+    map[String(r.original_ticket)] = { signalId: r.close_signal_id, price: r.close_price, takeProfit: r.take_profit_1_price }
+  }
+  return map
+}
+
+async function runSmartCloseCycle(userId) {
+  const closeCfg = await getCloseConfig(userId)
+  if (!closeCfg || !closeCfg.enabled) return
+
+  // Check if trading is enabled (toggle_trade)
+  if (!isTradeEnabled(userId)) {
+    console.log(`[SmartClose] User ${userId}: trading disabled, skipping`)
+    return
+  }
+
+  // Check Pro permission
+  const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
+  if (!user || user.plan !== 'pro') return
+
+  // Get positions
+  const positionsData = await mt5Bridge(userId, 'positions', {})
+  const positions = positionsData?.positions || []
+  if (positions.length === 0) return
+
+  // Get account
+  let account = null
+  try {
+    const accountData = await mt5Bridge(userId, 'account', {})
+    account = accountData?.account || null
+  } catch {}
+
+  // Rule-based checks first
+  const ruleResults = runCloseRules(closeCfg, positions, account)
+  if (ruleResults.length > 0) {
+    for (const r of ruleResults) {
+      try {
+        const closeResult = await mt5Bridge(userId, 'close', { ticket: r.ticket })
+        await logAudit({ userId, action: 'smart_close_rule', targetType: r.symbol || 'XAUUSD', targetId: String(r.ticket), detail: JSON.stringify({ ticket: r.ticket, rule: r.rule, reason: r.reason, result: closeResult }) })
+      } catch (e) {
+        await logAudit({ userId, action: 'smart_close_rule', targetType: r.symbol || 'XAUUSD', targetId: String(r.ticket), detail: JSON.stringify({ ticket: r.ticket, error: e.message }) })
+      }
+    }
+  }
+
+  // Re-fetch positions after rule-based closes
+  const remainingData = await mt5Bridge(userId, 'positions', {})
+  const remaining = remainingData?.positions || []
+  if (remaining.length === 0) return
+
+  // AI-based close
+  try {
+    const aiResults = await runSmartClose(userId, closeCfg, account, remaining)
+    if (aiResults.length > 0) {
+      console.log(`[SmartClose] User ${userId}: ${aiResults.filter(r => r.success).length}/${aiResults.length} closed by AI`)
+    }
+  } catch (e) {
+    console.error(`[SmartClose] User ${userId} AI cycle error:`, e.message)
+  }
+}
+
+function runCloseRules(cfg, positions, account) {
+  const results = []
+  for (const pos of positions) {
+    const profit = pos.profit || 0
+    const openPrice = pos.open_price || pos.price_open || 0
+    const currentPrice = pos.price_current || 0
+
+    // Soft stop-loss
+    if (cfg.rule_soft_sl != null && profit < 0 && Math.abs(profit) >= cfg.rule_soft_sl) {
+      results.push({ ticket: pos.ticket, symbol: pos.symbol, rule: 'soft_sl', reason: `亏损 $${Math.abs(profit).toFixed(2)} >= 软止损 $${cfg.rule_soft_sl}` })
+      continue
+    }
+
+    // Soft take-profit
+    if (cfg.rule_soft_tp != null && profit > 0 && profit >= cfg.rule_soft_tp) {
+      results.push({ ticket: pos.ticket, symbol: pos.symbol, rule: 'soft_tp', reason: `盈利 $${profit.toFixed(2)} >= 软止盈 $${cfg.rule_soft_tp}` })
+      continue
+    }
+
+    // Position timeout
+    if (cfg.rule_timeout_minutes != null && pos.time) {
+      const durationMin = (Date.now() / 1000 - pos.time) / 60
+      if (durationMin >= cfg.rule_timeout_minutes && profit <= 0) {
+        results.push({ ticket: pos.ticket, symbol: pos.symbol, rule: 'timeout', reason: `持仓 ${Math.floor(durationMin)} 分钟且浮亏，超时平仓` })
+        continue
+      }
+    }
+
+    // Max loss percentage
+    if (cfg.rule_max_loss_pct != null && account?.balance && profit < 0) {
+      const lossPct = (Math.abs(profit) / account.balance) * 100
+      if (lossPct >= cfg.rule_max_loss_pct) {
+        results.push({ ticket: pos.ticket, symbol: pos.symbol, rule: 'max_loss_pct', reason: `亏损 ${lossPct.toFixed(1)}% >= 最大亏损 ${cfg.rule_max_loss_pct}%` })
+        continue
+      }
+    }
+  }
+  return results
+}
+
+export async function startSmartCloseScheduler(userId) {
+  if (closeSchedulerState[userId]?.timer) return
+  const cfg = await getCloseConfig(userId)
+  if (!cfg || !cfg.enabled) return
+
+  const intervalMs = (cfg.check_interval_seconds || 30) * 1000
+  closeSchedulerState[userId] = { running: true, timer: null }
+
+  const tick = async () => {
+    if (!closeSchedulerState[userId]?.running) return
+    try { await runSmartCloseCycle(userId) } catch (e) { console.error(`[SmartClose] User ${userId} tick error:`, e.message) }
+    if (closeSchedulerState[userId]?.running) {
+      closeSchedulerState[userId].timer = setTimeout(tick, intervalMs)
+    }
+  }
+  closeSchedulerState[userId].timer = setTimeout(tick, 5000)
+  console.log(`[SmartClose] Started for user ${userId}: interval=${intervalMs/1000}s`)
+}
+
+export function stopSmartCloseScheduler(userId) {
+  const state = closeSchedulerState[userId]
+  if (state?.timer) clearTimeout(state.timer)
+  closeSchedulerState[userId] = null
+  console.log(`[SmartClose] Stopped for user ${userId}`)
+}
+
 async function startAutoScheduler(userId) {
   if (autoSchedulerState[userId]?.timer) return
   const cfg = await getAutoConfig(null, userId)
@@ -1303,6 +1670,15 @@ export async function initAutoSchedulers() {
     }
     if (rows.length) console.log(`[AutoScheduler] Restored ${rows.length} scheduler(s)`)
   } catch {}
+
+  // Restore smart close schedulers
+  try {
+    const closeRows = await queryAll('SELECT user_id FROM close_config WHERE enabled = 1')
+    for (const row of closeRows) {
+      await startSmartCloseScheduler(row.user_id)
+    }
+    if (closeRows.length) console.log(`[SmartClose] Restored ${closeRows.length} scheduler(s)`)
+  } catch {}
 }
 
 
@@ -1316,5 +1692,6 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   reviewTrades, buildTradeReviewContext, runTradeReviewCycle,
   startTradeReviewScheduler, stopTradeReviewScheduler,
   getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
-  TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS }
+  TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS,
+  runSmartCloseCycle }
 export default router

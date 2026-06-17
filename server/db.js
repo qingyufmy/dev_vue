@@ -63,8 +63,9 @@ export async function queryRun(sql, params = []) {
   return { changes: result.affectedRows, insertId: result.insertId }
 }
 
-export async function logAudit({ userId, action, targetType, targetId, detail, ip, userAgent }) {
+export async function logAudit({ userId, action, targetType, targetId, detail, ip, userAgent } = {}) {
   try {
+    if (!action) { console.warn('logAudit: action is required, skipping'); return }
     let userEmail = '', userNickname = ''
     if (userId) {
       const user = await queryOne('SELECT email, nickname FROM users WHERE id = ?', [userId])
@@ -73,7 +74,7 @@ export async function logAudit({ userId, action, targetType, targetId, detail, i
     await query(`INSERT INTO audit_logs (user_id, user_email, user_nickname, action, target_type, target_id, detail, ip, user_agent)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [userId || null, userEmail, userNickname, action, targetType || '', targetId || null, detail || '', ip || '', userAgent || ''])
   } catch (err) {
-    console.error('logAudit error:', err)
+    console.error('logAudit error:', err.message)
   }
 }
 
@@ -509,6 +510,35 @@ export async function initDB() {
       contact VARCHAR(200) DEFAULT '',
       created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS close_config (
+      user_id INT PRIMARY KEY,
+      enabled TINYINT NOT NULL DEFAULT 0,
+      check_interval_seconds INT NOT NULL DEFAULT 30,
+      model_name VARCHAR(100) DEFAULT 'deepseek-chat',
+      api_provider VARCHAR(50) DEFAULT 'deepseek',
+      api_base_url VARCHAR(255) DEFAULT 'https://api.deepseek.com',
+      api_key_encrypted VARCHAR(500) DEFAULT NULL,
+      temperature DOUBLE DEFAULT 0.3,
+      max_tokens INT DEFAULT 1500,
+      system_prompt TEXT,
+      rule_soft_sl DOUBLE DEFAULT NULL,
+      rule_soft_tp DOUBLE DEFAULT NULL,
+      rule_timeout_minutes INT DEFAULT NULL,
+      rule_max_loss_pct DOUBLE DEFAULT NULL,
+      rule_reverse_signal TINYINT NOT NULL DEFAULT 0,
+      updated_at DATETIME NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS close_signal_tickets (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      original_ticket VARCHAR(100) NOT NULL,
+      close_signal_id INT NOT NULL,
+      close_price DOUBLE,
+      created_at DATETIME DEFAULT (NOW()),
+      UNIQUE KEY uk_original_ticket (user_id, original_ticket)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ]
 
   for (const sql of tables) {
@@ -603,6 +633,19 @@ export async function initDB() {
   try {
     await p.query("UPDATE courses SET cover = REPLACE(cover, 'http://', 'https://') WHERE cover LIKE 'http://i%.hdslb.com/%'")
     console.log('[DB] Fixed http→https Bilibili covers')
+  } catch {}
+
+  // v1.8.5: add engine fields to close_config
+  try {
+    const [ccCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'close_config' AND COLUMN_NAME = 'api_provider'`)
+    if (ccCols.length === 0) {
+      await p.query('ALTER TABLE close_config ADD COLUMN api_provider VARCHAR(50) DEFAULT \'deepseek\' AFTER model_name')
+      await p.query('ALTER TABLE close_config ADD COLUMN api_base_url VARCHAR(255) DEFAULT \'https://api.deepseek.com\' AFTER api_provider')
+      await p.query('ALTER TABLE close_config ADD COLUMN api_key_encrypted VARCHAR(500) DEFAULT NULL AFTER api_base_url')
+      await p.query('ALTER TABLE close_config ADD COLUMN temperature DOUBLE DEFAULT 0.3 AFTER api_key_encrypted')
+      await p.query('ALTER TABLE close_config ADD COLUMN max_tokens INT DEFAULT 1500 AFTER temperature')
+      console.log('[DB] Added engine fields to close_config')
+    }
   } catch {}
 
   console.log('[DB] MySQL initialized')
