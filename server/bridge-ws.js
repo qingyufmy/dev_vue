@@ -355,7 +355,19 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'ai_config': {
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default')
-        result = { status: 'success', config: ai.configPublic(row) }
+        const cfg = ai.configPublic(row)
+        // Fill override defaults from global auto config when user hasn't customized
+        if (cfg) {
+          if (!cfg.auto_symbols || !cfg.auto_interval_minutes) {
+            const globalAutoCfg = await ai.getGlobalAutoConfig()
+            if (globalAutoCfg) {
+              const defaultSyms = parseSymbols(globalAutoCfg.symbols)
+              cfg.auto_symbols = cfg.auto_symbols || (defaultSyms[0] || 'XAUUSD')
+              cfg.auto_interval_minutes = cfg.auto_interval_minutes ?? (globalAutoCfg.interval_minutes || 5)
+            }
+          }
+        }
+        result = { status: 'success', config: cfg }
         break
       }
       case 'save_config': {
@@ -365,8 +377,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
         await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
           temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override, system_prompt, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override,
+          auto_symbols, auto_interval_minutes, system_prompt, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           ON DUPLICATE KEY UPDATE
             api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
             api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
@@ -374,6 +387,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
             max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
             model_sharing_enabled = VALUES(model_sharing_enabled), auto_config_override = VALUES(auto_config_override),
+            auto_symbols = VALUES(auto_symbols), auto_interval_minutes = VALUES(auto_interval_minutes),
             system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
             is_active = 1, updated_at = VALUES(updated_at)`,
           [userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
@@ -381,6 +395,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
             cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
             cfg.auto_config_override ? 1 : 0,
+            cfg.auto_symbols || null, cfg.auto_interval_minutes || null,
             cfg.system_prompt || null, now, now])
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
@@ -495,8 +510,16 @@ async function handleBrowserCommand(ws, userId, msg) {
         const statusUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
         const cfg = await ai.getAutoConfig(null, statusUserId)
         const globalCfg = await ai.getGlobalAutoConfig()
-        const symbols = parseSymbols(globalCfg?.symbols)
-        const intervalMin = globalCfg?.interval_minutes || 5
+        let symbols = parseSymbols(globalCfg?.symbols)
+        let intervalMin = globalCfg?.interval_minutes || 5
+        // Check for user override (silent, no banner)
+        const overrideRow = await queryOne(
+          `SELECT auto_symbols, auto_interval_minutes FROM ai_configs
+           WHERE user_id = ? AND session_id = 'default' AND is_active = 1 AND auto_config_override = 1
+           ORDER BY updated_at DESC LIMIT 1`, [userId]
+        )
+        if (overrideRow?.auto_symbols) symbols = [overrideRow.auto_symbols.trim()]
+        if (overrideRow?.auto_interval_minutes != null) intervalMin = Number(overrideRow.auto_interval_minutes)
         result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, interval_minutes: intervalMin, running: !!cfg?.enabled } }
         break
       }
@@ -521,12 +544,20 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'get_auto_config': {
-        // Get global auto config (admin only)
         const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (user?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         const globalCfg = await ai.getGlobalAutoConfig()
         const autoPrompt = globalCfg?.system_prompt || ''
-        const symbols = parseSymbols(globalCfg?.symbols)
+        let symbols = parseSymbols(globalCfg?.symbols)
+        let intervalMinutes = globalCfg?.interval_minutes || 5
+        // If user has override enabled, silently use their symbol + interval (no banner / no disabled)
+        const overrideRow = await queryOne(
+          `SELECT auto_symbols, auto_interval_minutes FROM ai_configs
+           WHERE user_id = ? AND session_id = 'default' AND is_active = 1 AND auto_config_override = 1
+           ORDER BY updated_at DESC LIMIT 1`, [userId]
+        )
+        if (overrideRow?.auto_symbols) symbols = [overrideRow.auto_symbols.trim()]
+        if (overrideRow?.auto_interval_minutes != null) intervalMinutes = Number(overrideRow.auto_interval_minutes)
         result = {
           status: 'success',
           config: {
@@ -541,8 +572,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             selected_take_profit: globalCfg?.selected_take_profit ?? 2,
             system_prompt: autoPrompt,
             symbols,
-            interval_minutes: globalCfg?.interval_minutes || 5,
-            enable_auto_trade: !!globalCfg?.enable_auto_trade,
+            interval_minutes: intervalMinutes,
+            enable_auto_trade: !!globalCfg?.enable_auto_trade
           }
         }
         break

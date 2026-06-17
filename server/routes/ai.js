@@ -1095,6 +1095,9 @@ async function getAutoInferenceConfig(userId) {
         selected_take_profit: userConfig.selected_take_profit ?? 1,
         system_prompt: userConfig.system_prompt || '',
         enable_auto_trade: !!userConfig.enable_auto_trade,
+        // Per-user auto reasoning symbol + interval (null = use global defaults)
+        auto_symbols: userConfig.auto_symbols || null,
+        auto_interval_minutes: userConfig.auto_interval_minutes ?? null,
         _source: 'user_override'
       }
     }
@@ -1164,7 +1167,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
 
     // Parse tags from auto config's system_prompt to determine which timeframes to fetch
     const prompt = config.system_prompt || ''
-    const tags = parseTimeframeTags(prompt)
+    const tags = parseTimeframeTags(prompt, 'auto')
     const primaryTf = tags.length > 0 ? tags[0].tf : (timeframe || 'M5').toUpperCase()
     const primaryCount = tags.length > 0 ? tags[0].count : 100
     const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
@@ -1242,10 +1245,20 @@ async function startAutoScheduler(userId) {
   const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) return
 
+  // Check if user has override config with custom symbol + interval
+  const inferenceCfg = await getAutoInferenceConfig(userId)
+  const isOverride = inferenceCfg?._source === 'user_override'
   const raw = (cfg.symbols || 'XAUUSD').trim()
-  const symbol = raw.startsWith('[') ? (JSON.parse(raw)[0] || 'XAUUSD') : raw.split(',')[0].trim() || 'XAUUSD'
-  const globalCfg = await getGlobalAutoConfig()
-  const intervalMs = (globalCfg?.interval_minutes || 5) * 60_000
+  let symbol = raw.startsWith('[') ? (JSON.parse(raw)[0] || 'XAUUSD') : raw.split(',')[0].trim() || 'XAUUSD'
+  let intervalMinutes = (await getGlobalAutoConfig())?.interval_minutes || 5
+
+  if (isOverride && inferenceCfg.auto_symbols) {
+    symbol = inferenceCfg.auto_symbols.trim()
+  }
+  if (isOverride && inferenceCfg.auto_interval_minutes != null) {
+    intervalMinutes = Number(inferenceCfg.auto_interval_minutes)
+  }
+  const intervalMs = intervalMinutes * 60_000
   autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null }
 
   const tick = async () => {

@@ -387,6 +387,14 @@
 
                 </div>
               </div>
+              <!-- 自动推理品种与循环间隔（仅 override 开启时显示） -->
+              <div id="autoConfigOverrideSection" class="config-section" style="display:none">
+                <div class="config-section-title">自动推理品种与循环间隔</div>
+                <div class="config-grid">
+                  <label><span>品种</span><input id="overrideSymbolSelect" class="instrument-select" placeholder="搜索品种..." /></label>
+                  <label><span>循环间隔</span><span class="unit-field"><input id="overrideIntervalMin" class="num" type="number" min="1" max="1440" step="1" value="5" /><span class="input-unit">分钟</span></span><small class="field-help">自动推理固定使用 M5 周期，每隔多久执行一次</small></label>
+                </div>
+              </div>
               <div class="config-section">
                 <div class="config-section-title">系统提示词</div>
                 <div class="tf-tag-hint" style="background:var(--color-warning-bg);border:1px solid var(--color-warning-border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.6">
@@ -794,6 +802,6 @@
     </div>
     <div id="toastHost" class="toast-host"></div>
     <script src="lucide.js"></script>
-    <script src="/ai/app.js?v=20260616-feedback"></script>
+    <script src="/ai/app.js?v=20260617-auto"></script>
   </body>
 </html>

@@ -1299,6 +1299,11 @@ async function loadConfig() {
   const overrideWrap = $("autoConfigOverrideWrap");
   if (overrideWrap) overrideWrap.style.display = state.currentConfigHasApiKey ? "" : "none";
   if ($("autoConfigOverride")) $("autoConfigOverride").checked = Boolean(cfg.auto_config_override);
+  // Restore per-user auto symbol + interval (backend fills defaults from global auto config)
+  if ($("overrideSymbolSelect")) $("overrideSymbolSelect").value = cfg.auto_symbols;
+  if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
+  // Sync override section visibility
+  syncOverrideSection();
   if (sharedInfo) {
     if (!isAdmin && cfg._model_shared) {
       sharedInfo.style.display = "";
@@ -1340,13 +1345,44 @@ async function saveConfig() {
   };
 
   try {
-    await wsApi("save_config", { config: body.config, session_id: body.session_id });
+    const configPayload = { ...body.config };
+    // If override is ON, save auto symbol + interval from override section
+    if ($("autoConfigOverride")?.checked) {
+      const osym = $("overrideSymbolSelect")?.value?.trim();
+      const oiv = parseInt($("overrideIntervalMin")?.value) || 5;
+      if (osym) {
+        configPayload.auto_symbols = osym;
+        configPayload.auto_interval_minutes = oiv;
+      }
+    }
+    await wsApi("save_config", { config: configPayload, session_id: body.session_id });
     $("apiKey").value = "";
     await loadConfig();
     toast("模型配置已保存", "success");
   } catch (error) {
     toast(error.message, "error");
   }
+}
+
+// ---- Auto-config override section (show symbol + interval inside manual config) ---
+async function syncOverrideSection() {
+  const section = $("autoConfigOverrideSection");
+  const checkbox = $("autoConfigOverride");
+  if (!section || !checkbox) return;
+  const on = checkbox.checked;
+  section.style.display = on ? "" : "none";
+  if (on) {
+    initOverrideSymbolsSelector();
+  }
+}
+
+function initOverrideSymbolsSelector() {
+  const input = $("overrideSymbolSelect");
+  if (!input) return;
+  if (input.closest(".sym-selector")) return;
+  const symbolNames = (state.symbols || []).map(s => typeof s === "string" ? s : s.name).filter(Boolean);
+  if (!symbolNames.length) return;
+  createSymbolSelector("overrideSymbolSelect", symbolNames);
 }
 
 function selectedTimeframes() {
@@ -2297,6 +2333,8 @@ function bindEvents() {
   // Config sub-tabs
   initConfigSubTabs();
   initAutoSymbolsSelector();
+  // Auto config override toggle — show/hide symbol+interval section
+  $("autoConfigOverride")?.addEventListener("change", syncOverrideSection);
   $("saveAutoConfigBtn")?.addEventListener("click", saveAutoConfig);
   $("autoApiProvider")?.addEventListener("change", (e) => applyAutoProviderPreset(e.target.value));
 

@@ -585,6 +585,20 @@ export async function initDB() {
     }
   } catch {}
 
+  // v1.8.2: add auto_symbols / auto_interval_minutes to ai_configs (per-user auto reasoning override)
+  try {
+    const [symCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_symbols'`)
+    if (symCols.length === 0) {
+      await p.query('ALTER TABLE ai_configs ADD COLUMN auto_symbols VARCHAR(100) DEFAULT NULL AFTER auto_config_override')
+      console.log('[DB] Added auto_symbols to ai_configs')
+    }
+    const [ivCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_interval_minutes'`)
+    if (ivCols.length === 0) {
+      await p.query('ALTER TABLE ai_configs ADD COLUMN auto_interval_minutes INT DEFAULT NULL AFTER auto_symbols')
+      console.log('[DB] Added auto_interval_minutes to ai_configs')
+    }
+  } catch {}
+
   console.log('[DB] MySQL initialized')
 }
 
