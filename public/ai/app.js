@@ -41,7 +41,7 @@ function setGlobalSymbol(symbol) {
 }
 
 // ===== Searchable Symbol Selector =====
-function createSymbolSelector(inputId, options) {
+function createSymbolSelector(inputId, options, opts = {}) {
   const input = document.getElementById(inputId);
   if (!input) return;
   const wrapper = document.createElement("div");
@@ -108,7 +108,7 @@ function createSymbolSelector(inputId, options) {
     currentSymbol = sym;
     input.value = sym;
     close();
-    setGlobalSymbol(sym);
+    if (!opts.noGlobalSync) setGlobalSymbol(sym);
   }
 
   input.value = currentSymbol;
@@ -1346,8 +1346,8 @@ async function saveConfig() {
 
   try {
     const configPayload = { ...body.config };
-    // If override is ON, save auto symbol + interval from override section
-    if ($("autoConfigOverride")?.checked) {
+    // Always save auto symbol + interval from override section (preserves values when switch is off)
+    {
       const osym = $("overrideSymbolSelect")?.value?.trim();
       const oiv = parseInt($("overrideIntervalMin")?.value) || 5;
       if (osym) {
@@ -1382,7 +1382,7 @@ function initOverrideSymbolsSelector() {
   if (input.closest(".sym-selector")) return;
   const symbolNames = (state.symbols || []).map(s => typeof s === "string" ? s : s.name).filter(Boolean);
   if (!symbolNames.length) return;
-  createSymbolSelector("overrideSymbolSelect", symbolNames);
+  createSymbolSelector("overrideSymbolSelect", symbolNames, { noGlobalSync: true });
 }
 
 function selectedTimeframes() {
@@ -1463,7 +1463,7 @@ function initAutoSymbolsSelector() {
   if (input.closest('.sym-selector')) return;
   const symbolNames = (state.symbols || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
   if (!symbolNames.length) return; // will retry when loadSymbols completes
-  createSymbolSelector('autoSymbolSelect', symbolNames);
+  createSymbolSelector('autoSymbolSelect', symbolNames, { noGlobalSync: true });
 }
 
 async function saveAutoConfig() {

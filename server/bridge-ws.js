@@ -513,13 +513,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         let symbols = parseSymbols(globalCfg?.symbols)
         let intervalMin = globalCfg?.interval_minutes || 5
         // Check for user override (silent, no banner)
-        const overrideRow = await queryOne(
-          `SELECT auto_symbols, auto_interval_minutes FROM ai_configs
-           WHERE user_id = ? AND session_id = 'default' AND is_active = 1 AND auto_config_override = 1
-           ORDER BY updated_at DESC LIMIT 1`, [userId]
-        )
-        if (overrideRow?.auto_symbols) symbols = [overrideRow.auto_symbols.trim()]
-        if (overrideRow?.auto_interval_minutes != null) intervalMin = Number(overrideRow.auto_interval_minutes)
+        // Override removed: auto config panel shows global config only
         result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, interval_minutes: intervalMin, running: !!cfg?.enabled } }
         break
       }
@@ -551,13 +545,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         let symbols = parseSymbols(globalCfg?.symbols)
         let intervalMinutes = globalCfg?.interval_minutes || 5
         // If user has override enabled, silently use their symbol + interval (no banner / no disabled)
-        const overrideRow = await queryOne(
-          `SELECT auto_symbols, auto_interval_minutes FROM ai_configs
-           WHERE user_id = ? AND session_id = 'default' AND is_active = 1 AND auto_config_override = 1
-           ORDER BY updated_at DESC LIMIT 1`, [userId]
-        )
-        if (overrideRow?.auto_symbols) symbols = [overrideRow.auto_symbols.trim()]
-        if (overrideRow?.auto_interval_minutes != null) intervalMinutes = Number(overrideRow.auto_interval_minutes)
+        // Override removed: auto config panel shows global config only
         result = {
           status: 'success',
           config: {
