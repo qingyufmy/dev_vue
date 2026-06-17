@@ -451,6 +451,17 @@ function calculateMarketData(symbol, timeframe, rates, account, positions) {
       long_positions: longPositions.length,
       short_positions: shortPositions.length,
       total_profit: round2(totalProfit),
+      details: positions.map(p => ({
+        ticket: p.ticket,
+        symbol: p.symbol,
+        type: p.type === 'buy' ? 'BUY' : 'SELL',
+        volume: p.volume,
+        open_price: p.open_price || p.price_open,
+        current_price: p.price_current,
+        profit: round2(p.profit || 0),
+        sl: p.sl || null,
+        tp: p.tp || null,
+      })),
     },
     account: { balance: account.balance, equity: account.equity },
   }
