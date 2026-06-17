@@ -220,19 +220,25 @@ router.post('/video-stream', authMiddleware, async (req, res) => {
     }
     if (bilibiliId) {
       courseUpdates.push('bilibili_id = ?'); courseParams.push(bilibiliId)
-      // Auto-fetch cover from Bilibili if course has no cover
-      const existingCourse = await queryOne('SELECT cover FROM courses WHERE episode_id = ?', [episodeId])
-      if (!existingCourse?.cover) {
-        try {
-          const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
-          })
-          const bd = await bi.json()
-          if (bd.code === 0 && bd.data?.pic) {
-            courseUpdates.push('cover = ?'); courseParams.push(bd.data.pic)
+      // Auto-fetch cover + duration from Bilibili
+      try {
+        const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+        })
+        const bd = await bi.json()
+        if (bd.code === 0 && bd.data) {
+          // Cover (always fetch, https enforced to avoid mixed content)
+          if (bd.data.pic) {
+            courseUpdates.push('cover = ?')
+            courseParams.push(bd.data.pic.replace('http://', 'https://'))
           }
-        } catch {}
-      }
+          // Duration (auto-fetch if frontend didn't send one)
+          if ((!duration || duration === '0') && bd.data.duration) {
+            courseUpdates.push('duration = ?')
+            courseParams.push(bd.data.duration)
+          }
+        }
+      } catch {}
     }
     if (localPath) { courseUpdates.push('local_video_path = ?'); courseParams.push(localPath) }
     if (cover) { courseUpdates.push('cover = ?'); courseParams.push(cover) }

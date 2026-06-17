@@ -1664,7 +1664,7 @@ function getEpisodeBackLabel(ep = state.currentEpisode) {
 
 function getNextEpisodeLabel(ep) {
   if (!ep) return '进入下一篇'
-  return ep.number ? `进入第${ep.number}期` : `进入${escapeHtml(ep.title)}`
+  return `进入${escapeHtml(ep.title)}`
 }
 
 // 渲染用户头像（支持自定义头像或首字母）
@@ -2094,6 +2094,10 @@ function formatTimeAgo(timestamp) {
   return `${Math.floor(days / 30)}个月前`
 }
 
+// Category labels matching homepage tabs
+const CATEGORY_LABELS = { strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型', basics: '基础', analysis: '分析', psychology: '心理', risk: '风控' }
+function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
+
 function hasEpisodeVideo(ep) {
   return Boolean(ep?.youtubeId) || Boolean(ep?.hasStreamVideo) || state.paidVideoEpisodes.includes(ep?.id)
 }
@@ -2265,7 +2269,7 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
       ` : ''}
 
       <div class="video-info">
-        <h1 class="video-title">${ep.number ? `第${ep.number}期 · ` : ''}${escapeHtml(ep.title)}</h1>
+        <h1 class="video-title">${escapeHtml(ep.title)}</h1>
         <p class="video-description">${escapeHtml(ep.description)}</p>
         ${renderEpisodeActions(ep, progressRecord)}
       </div>
@@ -2279,14 +2283,15 @@ function getFilteredEpisodes() {
     // 视频课程：显示有YouTube视频或CF Stream付费视频的
     // 视频课程分类：文章课程即使挂了视频讲解也不混入此列表
     list = episodes.filter(ep => !isArticleEpisode(ep) && (ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)))
-    if (state.sortOrder === 'latest') {
-      list = [...list].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-    } else {
-      list = [...list].sort((a, b) => a.number - b.number)
-    }
+    list = [...list].sort((a, b) => state.sortOrder === 'latest'
+      ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+      : new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
   } else {
     // 其他分类：文章课程始终保留；无视频的占位课程也显示
     list = episodes.filter(ep => ep.category === state.currentCategory && (isArticleEpisode(ep) || (!ep.youtubeId && !ep.hasStreamVideo && !state.paidVideoEpisodes.includes(ep.id))))
+    list = [...list].sort((a, b) => state.sortOrder === 'latest'
+      ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+      : new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
   }
   return list
 }
@@ -2620,7 +2625,7 @@ function renderQuizContent(ep, questions) {
       <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
       <div class="quiz-card">
         <div class="quiz-header">
-          <h2>课后测试${ep.number ? ` · 第${ep.number}期` : ''}</h2>
+          <h2>课后测试</h2>
           <span class="quiz-progress-text">${currentQuestion + 1} / ${total}</span>
         </div>
         <div class="quiz-progress-bar">
@@ -2702,7 +2707,7 @@ async function renderKnowledge() {
     mainContent.innerHTML = `
       <div class="knowledge-section fade-in">
         <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-        <h2>${ep.number ? `第${ep.number}期 · ` : ''}知识点</h2>
+        <h2>知识点</h2>
         ${courseContentLoadingHtml('正在加载知识点...')}
       </div>
     `
@@ -2719,7 +2724,7 @@ function renderKnowledgeContent(ep, knowledgePoints) {
   mainContent.innerHTML = `
     <div class="knowledge-section fade-in">
       <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-      <h2>${ep.number ? `第${ep.number}期 · ` : ''}知识点</h2>
+      <h2>知识点</h2>
       <div class="knowledge-grid">
         ${knowledgePoints.length > 0
           ? knowledgePoints.map(kp => {
@@ -2752,7 +2757,7 @@ async function renderMindmap() {
     mainContent.innerHTML = `
       <div class="mindmap-section fade-in">
         <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-        <h2>${ep.number ? `第${ep.number}期 · ` : ''}思维导图与知识点</h2>
+        <h2>思维导图与知识点</h2>
         ${courseContentLoadingHtml('正在加载思维导图...')}
       </div>
     `
@@ -2769,7 +2774,7 @@ function renderMindmapContent(ep, mindmapItems) {
   mainContent.innerHTML = `
     <div class="mindmap-section fade-in">
       <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-      <h2>${ep.number ? `第${ep.number}期 · ` : ''}思维导图与知识点</h2>
+      <h2>思维导图与知识点</h2>
       <div class="mindmap-list">
         ${mindmapItems.length > 0
           ? mindmapItems.map(renderMindmapItemHtml).join('')
@@ -3034,7 +3039,7 @@ function renderCourseOptionList(selectedId = '') {
     .slice()
     .sort((a, b) => (a.sortOrder || a.id) - (b.sortOrder || b.id))
     .map(ep => {
-      const label = `${ep.number ? `第${ep.number}期 · ` : `#${ep.id} · `}${ep.title}`
+      const label = ep.title
       return `<option value="${ep.id}" ${Number(selectedId) === ep.id ? 'selected' : ''}>${escapeHtml(label)}</option>`
     }).join('')
 }
@@ -4380,20 +4385,19 @@ function renderAdminCourseList(courses) {
 
   el.innerHTML = `
     <table class="admin-table">
-      <thead><tr><th>ID</th><th>课程</th><th>类型</th><th>状态</th><th>资料</th><th>操作</th></tr></thead>
+      <thead><tr><th>ID</th><th>课程</th><th>类型</th><th>分类</th><th>发布时间</th><th>状态</th><th>操作</th></tr></thead>
       <tbody>
         ${pageItems.map(course => `
           <tr>
             <td class="admin-uid">#${course.id}</td>
             <td>
-              <strong>${course.number ? `第${course.number}期 · ` : ''}${escapeHtml(course.title)}</strong>
-              <div class="admin-uid">${escapeHtml(course.category || '-')} · ${escapeHtml(course.duration || '-')}</div>
+              <strong>${escapeHtml(course.title)}</strong>
+              <div class="admin-uid">${escapeHtml(course.duration || '-')}</div>
             </td>
             <td>${course.contentType === 'article' ? '文章' : '视频'}</td>
+            <td>${escapeHtml(getCategoryLabel(course.category) || '-')}</td>
+            <td style="font-size:12px;white-space:nowrap;">${escapeHtml(formatDateTime(course.createdAt))}</td>
             <td><span class="admin-badge ${course.status === 'published' ? 'badge-paid' : course.status === 'draft' ? 'badge-free' : 'badge-expired'}">${course.status === 'published' ? '已发布' : course.status === 'draft' ? '草稿' : '已归档'}</span></td>
-            <td style="font-size:12px;">
-              ${course.bilibiliId ? 'B站 ' : ''}${course.youtubeId ? 'YouTube ' : ''}${course.hasStreamVideo ? '本地 ' : ''}${course.articleUrl ? '文章 ' : ''}${course.quizCount ? `答题${course.quizCount} ` : ''}${course.mindmapCount ? `导图${course.mindmapCount}` : ''}
-            </td>
             <td>
               <div class="admin-actions">
                 <button class="btn btn-primary btn-xs admin-course-edit" data-course-id="${course.id}">编辑</button>
@@ -4466,7 +4470,7 @@ function openCourseModal(course = null) {
             <div class="course-form-group">
               <label>分类</label>
               <select class="stream-input" id="courseCategory">
-                ${['strategy','basics','analysis','psychology','risk'].map(v => `<option value="${v}" ${(isEdit ? course.category : 'strategy') === v ? 'selected' : ''}>${{strategy:'策略',basics:'基础',analysis:'分析',psychology:'心理',risk:'风控'}[v]}</option>`).join('')}
+                ${['strategy','indicator','pattern','advanced'].map(v => `<option value="${v}" ${(isEdit ? course.category : 'strategy') === v ? 'selected' : ''}>${CATEGORY_LABELS[v]}</option>`).join('')}
               </select>
             </div>
             <div class="course-form-group">
@@ -4929,7 +4933,7 @@ async function startStreamUpload() {
 
     resultDiv.style.display = 'block'
     const linkableCourses = state.adminCourses.length ? state.adminCourses : episodes
-    const epOptions = linkableCourses.map(e => `<option value="${e.id}">${e.number ? `第${e.number}期` : `#${e.id}`} - ${escapeHtml(e.title)}</option>`).join('')
+    const epOptions = linkableCourses.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
     resultDiv.innerHTML = `
       <div class="stream-result-success">
         <div class="stream-result-title">✅ 上传成功</div>
@@ -5027,11 +5031,11 @@ async function loadStreamVideos() {
     const accessLevelOptions = `<option value="free">公开</option><option value="logged_in">登录可看</option><option value="plus_pro">Plus/Pro会员</option><option value="pro_only">仅Pro</option>`
 
     const linkableCourses = state.adminCourses.length ? state.adminCourses : episodes
-    const epOptions = linkableCourses.map(e => `<option value="${e.id}">${e.number ? `第${e.number}期` : `#${e.id}`} - ${escapeHtml(e.title)}</option>`).join('')
+    const epOptions = linkableCourses.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
 
     listEl.innerHTML = videos.map(v => {
       const linkedEp = streamToEp[v.uid]
-      const linkedLabel = linkedEp ? `已关联 → 第${linkedEp}期` : ''
+      const linkedLabel = linkedEp ? '已关联' : ''
       return `
       <div class="stream-video-card" data-stream-uid="${v.uid}">
         <div class="stream-video-thumb">
@@ -5269,8 +5273,8 @@ function renderMembership() {
               : currentPlan === 'plus'
                 ? (currentPeriod === 'yearly'
                   ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
-                  : `<button class="btn mem-btn mem-btn-plus" data-plan="plus" data-force-yearly="1">切换为年付</button>`)
-                : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">立即订阅</button>`}
+                  : `<button class="btn mem-btn mem-btn-plus" data-plan="plus" data-force-yearly="1">暂关闭</button>`)
+                : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">暂关闭</button>`}
           </div>
         </div>
 
@@ -5300,8 +5304,8 @@ function renderMembership() {
             ${currentPlan === 'pro'
               ? (currentPeriod === 'yearly'
                 ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
-                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro" data-force-yearly="1">切换为年付</button>`)
-              : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">立即订阅</button>`}
+                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro" data-force-yearly="1">暂关闭</button>`)
+              : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">暂关闭</button>`}
           </div>
         </div>
       </div>
@@ -5807,7 +5811,7 @@ function renderProfile() {
                       </div>
                     </div>
                     <div class="sub-plan-price">$50/月</div>
-                    ${currentPlan === 'plus' ? '<span class="sub-plan-current">当前</span>' : currentPlan === 'pro' ? '' : '<button class="btn btn-sm btn-primary sub-plan-btn" data-upgrade="plus">升级</button>'}
+                    ${currentPlan === 'plus' ? '<span class="sub-plan-current">当前</span>' : currentPlan === 'pro' ? '' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>暂关闭</button>'}
                   </div>
                   <div class="sub-plan-row ${currentPlan === 'pro' ? 'sub-plan-active' : ''}" data-plan="pro">
                     <div class="sub-plan-info">
@@ -5818,7 +5822,7 @@ function renderProfile() {
                       </div>
                     </div>
                     <div class="sub-plan-price">$100/月</div>
-                    ${currentPlan === 'pro' ? '<span class="sub-plan-current">当前</span>' : '<button class="btn btn-sm btn-primary sub-plan-btn" data-upgrade="pro">升级</button>'}
+                    ${currentPlan === 'pro' ? '<span class="sub-plan-current">当前</span>' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>暂关闭</button>'}
                   </div>
                 </div>
               </div>
@@ -8264,78 +8268,11 @@ function setupGlobalEvents() {
     if (target.id === 'goUpgrade' || target.id === 'goUpgrade2' || target.id === 'goUpgradeCommunity' || target.id === 'goUpgradeCommunityReplies') { navigate('membership'); return }
     if (target.id === 'goUpgradeVideo') { if (!state.user) { showAuthModal('login_password') } else { navigate('membership') }; return }
 
-    // Membership: subscribe button
-    const memSubBtn = target.closest('.mem-btn-plus, .mem-btn-pro')
-    if (memSubBtn) {
-      if (!requireLogin()) return
-      const plan = memSubBtn.dataset.plan
-      const forceYearly = memSubBtn.dataset.forceYearly === '1'
-      const card = memSubBtn.closest('.mem-card')
-      const activeTab = card?.querySelector('.price-tab.active')
-      const period = forceYearly ? 'yearly' : (activeTab?.dataset.period || 'monthly')
-      const originalText = memSubBtn.textContent
-
-      memSubBtn.disabled = true
-      memSubBtn.textContent = '计算价格...'
-
-      try {
-        const preview = await api.get(`/api/payment?preview=1&plan=${plan}&period=${period}&use_referral_credit=1`)
-        if (preview.error) {
-          alert(preview.error)
-          memSubBtn.disabled = false
-          memSubBtn.textContent = originalText
-          return
-        }
-
-        let confirmMsg = `${preview.label}\n`
-        if (preview.credit > 0 || Number(preview.referral_credit_applied_cents || 0) > 0) {
-          confirmMsg += `\n原价：$${preview.fullPrice}`
-          if (preview.credit > 0) confirmMsg += `\n当前方案剩余 ${preview.daysRemaining} 天，抵扣：-$${preview.credit}`
-          if (Number(preview.referral_credit_applied_cents || 0) > 0) confirmMsg += `\n返佣邀请优惠：-${formatMinorUsd(preview.referral_credit_applied_cents)}`
-          confirmMsg += `\n实际支付：$${preview.finalAmount}`
-        } else {
-          confirmMsg += `\n支付金额：$${preview.finalAmount}`
-        }
-        confirmMsg += `\n\n确认支付？`
-
-        if (!confirm(confirmMsg)) {
-          memSubBtn.disabled = false
-          memSubBtn.textContent = originalText
-          return
-        }
-
-        memSubBtn.textContent = '正在创建订单...'
-        const res = await api.post('/api/payment', { plan, period, use_referral_credit: true })
-        if (res.paid_with_credit) {
-          alert('返佣邀请优惠已使用，本次订阅已开通。')
-          await refreshCurrentUserProfile({ rerender: false }).catch(() => null)
-          renderMembership()
-        } else if (res.checkout_url) {
-          window.location.href = res.checkout_url
-        } else {
-          alert(res.error || '创建订单失败')
-          memSubBtn.disabled = false
-          memSubBtn.textContent = originalText
-        }
-      } catch (err) {
-        alert('网络错误，请稍后重试')
-        memSubBtn.disabled = false
-        memSubBtn.textContent = originalText
-      }
+    // Membership: subscribe button — currently disabled
+    if (target.closest('.mem-btn-plus, .mem-btn-pro')) {
+      alert('支付功能暂关闭，请联系管理员开通。')
       return
-    }
-
-    // Settings page: upgrade button
-    const upgradeBtn = target.closest('.sub-plan-btn')
-    if (upgradeBtn) {
-      const plan = upgradeBtn.dataset.upgrade
-      if (plan && plan !== 'free') {
-        navigate('membership')
-      }
-      return
-    }
-
-    // Membership price toggle (月付/年付)
+    }// Membership price toggle (月付/年付)
     const priceTab = target.closest('.price-tab')
     if (priceTab) {
       const card = priceTab.closest('.mem-card')

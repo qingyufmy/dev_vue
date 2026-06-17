@@ -599,6 +599,12 @@ export async function initDB() {
     }
   } catch {}
 
+  // v1.8.3: fix Bilibili http:// covers to https:// (mixed content)
+  try {
+    await p.query("UPDATE courses SET cover = REPLACE(cover, 'http://', 'https://') WHERE cover LIKE 'http://i%.hdslb.com/%'")
+    console.log('[DB] Fixed http→https Bilibili covers')
+  } catch {}
+
   console.log('[DB] MySQL initialized')
 }
 

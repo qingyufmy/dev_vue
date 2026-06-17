@@ -354,7 +354,7 @@ router.patch('/admin/referrals/rules', authMiddleware, adminOnly, (req, res) => 
 // Admin: course items
 router.get('/admin-course-items', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const courses = await queryAll('SELECT * FROM courses ORDER BY sort_order')
+    const courses = await queryAll('SELECT * FROM courses ORDER BY created_at DESC')
     res.json({ ok: true, courses: courses.map(c => ({
       id: c.episode_id, episodeId: c.episode_id, number: c.number, title: c.title,
       description: c.description, category: c.category, contentType: c.content_type,
@@ -363,6 +363,7 @@ router.get('/admin-course-items', authMiddleware, adminOnly, async (req, res) =>
       articleUrl: c.article_url, articleObjectKey: c.article_object_key,
       accessLevel: c.access_level, hasStreamVideo: !!c.has_stream_video,
       quizCount: c.quiz_count, status: c.status, sortOrder: c.sort_order,
+      createdAt: c.created_at, updatedAt: c.updated_at,
     })) })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
@@ -373,43 +374,36 @@ router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) =
     const { episodeId, number, title, description, category, contentType, duration, youtubeId, bilibiliId, cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status } = req.body
     console.log('[AdminCourse] episodeId:', episodeId, 'title:', title)
 
+    // Shared: auto-fetch Bilibili cover + duration
+    let finalCover = cover, finalDuration = duration
+    if (bilibiliId) {
+      try {
+        const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+        })
+        const bd = await bi.json()
+        if (bd.code === 0 && bd.data) {
+          if (bd.data.pic) finalCover = bd.data.pic.replace('http://', 'https://')
+          if ((!duration || duration === '') && bd.data.duration) finalDuration = bd.data.duration
+        }
+      } catch {}
+    }
+
     if (episodeId) {
-      // Auto-fetch bilibili cover if missing
-      let finalCover = cover
-      if (bilibiliId && !finalCover) {
-        try {
-          const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
-          })
-          const bd = await bi.json()
-          if (bd.code === 0 && bd.data?.pic) finalCover = bd.data.pic
-        } catch {}
-      }
       await queryRun(`
         UPDATE courses SET number=?, title=?, description=?, category=?, content_type=?, duration=?,
         youtube_id=?, bilibili_id=?, cover=?, access_level=?, sort_order=?, article_url=?, article_object_key=?,
         status=?, updated_at=NOW() WHERE episode_id=?
-      `, [number, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId])
+      `, [number, title, description, category, contentType, finalDuration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId])
       const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episodeId])
       res.json({ ok: true, course })
     } else {
       const maxRow = await queryOne('SELECT MAX(episode_id) as m FROM courses')
       const maxId = maxRow?.m || 0
-      // Auto-fetch bilibili cover if missing
-      let finalCover = cover
-      if (bilibiliId && !finalCover) {
-        try {
-          const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
-          })
-          const bd = await bi.json()
-          if (bd.code === 0 && bd.data?.pic) finalCover = bd.data.pic
-        } catch {}
-      }
       await queryRun(`
         INSERT INTO courses (episode_id, number, title, description, category, content_type, duration, youtube_id, bilibili_id, cover, access_level, sort_order, article_url, article_object_key, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [maxId + 1, number || maxId + 1, title, description, category, contentType, duration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status || 'published'])
+      `, [maxId + 1, number || maxId + 1, title, description, category, contentType, finalDuration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status || 'published'])
       const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [maxId + 1])
       res.json({ ok: true, course })
     }

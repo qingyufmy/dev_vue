@@ -12,7 +12,7 @@ router.get('/course-items', optionalAuth, async (req, res) => {
         vs.duration as vs_duration
       FROM courses c
       LEFT JOIN video_streams vs ON vs.episode_id = c.episode_id
-      WHERE c.status = 'published' ORDER BY c.sort_order ASC
+      WHERE c.status = 'published' ORDER BY c.created_at DESC
     `)
 
     res.json({
@@ -25,10 +25,10 @@ router.get('/course-items', optionalAuth, async (req, res) => {
         description: c.description,
         category: c.category,
         contentType: c.content_type,
-        duration: c.duration || (c.vs_duration ? formatDurationSeconds(c.vs_duration) : ''),
+        duration: (c.duration && !isNaN(c.duration) ? formatDurationSeconds(c.duration) : c.duration) || (c.vs_duration ? formatDurationSeconds(c.vs_duration) : ''),
         youtubeId: c.youtube_id,
         bilibiliId: c.bilibili_id || '',
-        cover: c.cover,
+        cover: c.cover ? (c.cover.includes('.hdslb.com/') ? `/api/bilibili-proxy?url=${encodeURIComponent(c.cover)}` : c.cover.replace(/^http:\/\//, 'https://')) : c.cover,
         gradient: c.gradient,
         articleUrl: c.article_url,
         articleObjectKey: c.article_object_key,

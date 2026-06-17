@@ -61,6 +61,23 @@ app.use(express.urlencoded({ extended: true }))
 // Serve uploaded files
 app.use('/uploads', express.static(join(__dirname, uploadDir)))
 
+// Bilibili CDN image proxy — bypasses Referer anti-leech
+import https from 'https'
+app.get('/api/bilibili-proxy', (req, res) => {
+  const imageUrl = req.query.url
+  if (!imageUrl || !imageUrl.startsWith('https://i') || !imageUrl.includes('.hdslb.com/')) {
+    return res.status(400).end()
+  }
+  https.get(imageUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+  }, (proxyRes) => {
+    if (proxyRes.statusCode !== 200) return res.status(502).end()
+    res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'image/jpeg')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    proxyRes.pipe(res)
+  }).on('error', () => res.status(502).end())
+})
+
 // Serve frontend static files
 const publicDir = join(__dirname, '..', 'public')
 app.use(express.static(publicDir))
