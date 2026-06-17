@@ -425,12 +425,35 @@ async function handleBrowserCommand(ws, userId, msg) {
         const offset = Number(params.offset) || 0
         const limit = Math.min(Number(params.limit) || 6, 100)
         let queryUserId = userId
-        // Fetch one extra to detect has_more
-        const ownRows = await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT ? OFFSET ?', [userId, params.session_id || 'default', limit + 1, offset])
-        if (ownRows.length === 0 && adminUserId) queryUserId = adminUserId
-        const rows = ownRows.length > 0 ? ownRows : await queryAll('SELECT * FROM ai_signals WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT ? OFFSET ?', [queryUserId, params.session_id || 'default', limit + 1, offset])
+        // Build filter conditions
+        const filterClauses = ['user_id = ?']
+        const filterParams = [userId]
+        if (params.direction) {
+          const types = { buy: 'buy,strong_buy', sell: 'sell,strong_sell', hold: 'hold' }
+          const dirTypes = types[params.direction] || params.direction
+          filterClauses.push(`signal_type IN (${dirTypes.split(',').map(() => '?').join(',')})`)
+          filterParams.push(...dirTypes.split(','))
+        }
+        if (params.timeframe) {
+          filterClauses.push('timeframe = ?')
+          filterParams.push(params.timeframe)
+        }
+        filterClauses.push('session_id = ?')
+        filterParams.push(params.session_id || 'default')
+        const where = filterClauses.join(' AND ')
+        // Check if user has any rows matching filters
+        const ownRows = await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
+        if (ownRows.length === 0 && adminUserId) {
+          queryUserId = adminUserId
+          filterParams[0] = adminUserId
+        }
+        const rows = ownRows.length > 0 ? ownRows : await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
         const hasMore = rows.length > limit
         const sliced = rows.slice(0, limit)
+        // Get filtered total count for pagination
+        const countParams = [...filterParams]
+        const countRow = await queryOne(`SELECT COUNT(*) as total FROM ai_signals WHERE ${where}`, countParams)
+        const totalCount = countRow ? countRow.total : sliced.length
         const signals = sliced.map(row => {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
@@ -439,7 +462,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           ai.attachSignalTiming(item)
           return item
         })
-        result = { status: 'success', signals, has_more: hasMore }
+        result = { status: 'success', signals, has_more: hasMore, total_count: totalCount }
         break
       }
       case 'execute': {

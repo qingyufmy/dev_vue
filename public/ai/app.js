@@ -11,6 +11,8 @@
   pendingManualOrder: null,
 
   auditRows: [],
+  signalTableData: [],
+  signalTableTotal: 0,
   signalFilters: { direction: "", timeframe: "", page: 1, pageSize: 20 },
   historyFilters: { page: 1, pageSize: 20 },
   auditFilters: { status: "", type: "", page: 1, pageSize: 25 },
@@ -711,7 +713,7 @@ async function _maybeRefreshSignal() {
     if (state.selectedSignal) setText("signalFreshness", signalFreshness(state.selectedSignal));
     renderAnalysisHistory(signals);
     renderSignal(state.selectedSignal, null);
-    renderSignalRows();
+    loadSignalTable();
     // Scroll history list to top (latest signal)
     const firstItem = document.querySelector(".analysis-history-item");
     if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1999,18 +2001,10 @@ async function openAnalysisFromHistory(signalId) {
 function renderSignalRows() {
   const body = $("signalsBody");
   if (!body) return;
-  const filters = state.signalFilters;
-  const filtered = state.signals.filter((signal) => {
-    const dir = signalType(signal.signal_type);
-    const tf = String(signal.timeframe || "");
-    return (!filters.direction || dir === filters.direction)
-      && (!filters.timeframe || tf === filters.timeframe);
-  });
-  filters.page = clampPage(filters.page, filters.pageSize, filtered.length);
-  const start = (filters.page - 1) * filters.pageSize;
-  const pageRows = filtered.slice(start, start + filters.pageSize);
-  setText("signalCount", `显示 ${filtered.length} / ${state.signals.length} 条`);
-  body.innerHTML = pageRows.length ? pageRows.map((signal) => {
+  const rows = state.signalTableData || [];
+  const total = state.signalTableTotal || rows.length;
+  setText("signalCount", `显示 ${rows.length} / ${total} 条`);
+  body.innerHTML = rows.length ? rows.map((signal) => {
     const dir = signalType(signal.signal_type);
     const confidence = confidenceInfo(signal.confidence);
     const rowStatus = signal.is_executed ? "executed" : signal.is_stale ? "expired" : "live";
@@ -2035,7 +2029,7 @@ function renderSignalRows() {
       </tr>
     `;
   }).join("") : `<tr class="empty-row"><td colspan="11">当前筛选下暂无信号</td></tr>`;
-  renderPager("signalPager", filters.page, filters.pageSize, filtered.length, "signals");
+  renderPager("signalPager", state.signalFilters.page, state.signalFilters.pageSize, total, "signals");
   highlightActiveAnalysis(state.selectedSignal?.id);
   initIcons();
 }
@@ -2073,7 +2067,23 @@ async function loadSignals(options = {}) {
     renderSignal(activeSignal, null);
   }
 
-  renderSignalRows();
+  // Also refresh signal table on non-append loads
+  if (!options.append) loadSignalTable();
+}
+
+// Load signal table data (server-side filtering + pagination, 20/page)
+async function loadSignalTable() {
+  const page = state.signalFilters.page;
+  const pageSize = state.signalFilters.pageSize;
+  const params = { session_id: "default", limit: pageSize, offset: (page - 1) * pageSize };
+  if (state.signalFilters.direction) params.direction = state.signalFilters.direction;
+  if (state.signalFilters.timeframe) params.timeframe = state.signalFilters.timeframe;
+  try {
+    const data = await wsApi("signals", params);
+    state.signalTableData = data.signals || [];
+    state.signalTableTotal = data.total_count || 0;
+    renderSignalRows();
+  } catch (e) { /* silent */ }
 }
 
 function setHistoryZeroClass(id, value) {
@@ -2260,12 +2270,12 @@ function bindEvents() {
   $("signalFilterDirection")?.addEventListener("change", (event) => {
     state.signalFilters.direction = event.target.value;
     state.signalFilters.page = 1;
-    renderSignalRows();
+    loadSignalTable();
   });
   $("signalFilterTimeframe")?.addEventListener("change", (event) => {
     state.signalFilters.timeframe = event.target.value;
     state.signalFilters.page = 1;
-    renderSignalRows();
+    loadSignalTable();
   });
   $("auditFilterStatus")?.addEventListener("change", (event) => {
     state.auditFilters.status = event.target.value;
@@ -2313,7 +2323,7 @@ function bindEvents() {
       const page = Number(pagerButton.dataset.page);
       if (pagerButton.dataset.pager === "signals") {
         state.signalFilters.page = page;
-        renderSignalRows();
+        loadSignalTable();
       } else if (pagerButton.dataset.pager === "audit") {
         state.auditFilters.page = page;
         renderAuditRows();
