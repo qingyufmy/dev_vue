@@ -2628,9 +2628,10 @@ async function loadHistoryChart() {
     let cum = 0;
     const cumProfits = dailyProfits.map(v => { cum += v; return Math.round(cum * 100) / 100; });
 
-    // Colors
-    const barColors = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.7)' : 'rgba(16,185,129,0.7)');
-    const barBorders = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,1)' : 'rgba(16,185,129,1)');
+    // Gradient colors for positive/negative segments
+    const lastCum = cumProfits[cumProfits.length - 1] || 0;
+    const lineColor = lastCum >= 0 ? '#ef4444' : '#10b981';
+    const fillColor = lastCum >= 0 ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)';
 
     const canvas = document.getElementById('historyChart');
     if (!canvas) return;
@@ -2638,48 +2639,29 @@ async function loadHistoryChart() {
 
     if (_historyChart) _historyChart.destroy();
     _historyChart = new Chart(ctx, {
-      type: 'bar',
+      type: 'line',
       data: {
         labels: dates.map(d => d.slice(5)), // MM-DD
-        datasets: [
-          {
-            type: 'bar',
-            label: '每日盈亏',
-            data: dailyProfits,
-            backgroundColor: barColors,
-            borderColor: barBorders,
-            borderWidth: 1,
-            borderRadius: 3,
-            yAxisID: 'y',
-            order: 2,
-          },
-          {
-            type: 'line',
-            label: '累计收益',
-            data: cumProfits,
-            borderColor: '#d4af37',
-            backgroundColor: 'rgba(212,175,55,0.08)',
-            borderWidth: 2,
-            pointRadius: 2,
-            pointHoverRadius: 5,
-            pointBackgroundColor: '#d4af37',
-            tension: 0.3,
-            fill: true,
-            yAxisID: 'y',
-            order: 1,
-          },
-        ],
+        datasets: [{
+          label: '累计收益',
+          data: cumProfits,
+          borderColor: lineColor,
+          backgroundColor: fillColor,
+          borderWidth: 2,
+          pointRadius: 3,
+          pointHoverRadius: 6,
+          pointBackgroundColor: lineColor,
+          pointBorderColor: 'transparent',
+          tension: 0.35,
+          fill: true,
+        }],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: {
-            display: true,
-            position: 'top',
-            labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12, padding: 12 },
-          },
+          legend: { display: false },
           tooltip: {
             backgroundColor: '#1c2333',
             titleColor: '#e2e8f0',
@@ -2688,7 +2670,8 @@ async function loadHistoryChart() {
             borderWidth: 1,
             padding: 10,
             callbacks: {
-              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}`,
+              title: items => items[0]?.label || '',
+              label: ctx => `累计: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}`,
             },
           },
         },
