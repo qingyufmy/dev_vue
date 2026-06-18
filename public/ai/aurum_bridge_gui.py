@@ -742,6 +742,17 @@ class AurumBridge:
                     if sym not in si_cache: si_cache[sym] = self.mt5.symbol_info(sym)
                     i = si_cache.get(sym); p = getattr(i, "point", None) if i else None
                     return float(p) if p else None
+                # Compact mode: return only fields needed for chart aggregation
+                compact = params.get("compact", False)
+                if compact:
+                    compact_rows = []
+                    for d in deal_rows:
+                        if d.get("entry") not in (entry_out, entry_inout): continue
+                        sd = next((i for i in deals_by_pos.get(d.get("position_id") or d.get("order") or d.get("ticket", []), []) if i.get("entry") == entry_in), d)
+                        compact_rows.append({"t": _mt5_time(d.get("time")), "p": float(d.get("profit") or 0), "y": "BUY" if sd.get("type") == deal_type_buy else "SELL"})
+                    compact_rows.sort(key=lambda r: r.get("t") or "", reverse=True)
+                    return {"status": "success", "orders": compact_rows, "total_count": len(compact_rows)}
+
                 rows = []
                 entry_out = getattr(self.mt5, "DEAL_ENTRY_OUT", 1)
                 entry_inout = getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)

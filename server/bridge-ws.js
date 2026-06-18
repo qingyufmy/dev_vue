@@ -403,20 +403,15 @@ async function handleBrowserCommand(ws, userId, msg) {
           hcUserId = adminUserId
         }
         if (bridgeOk) {
-          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999 })
+          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999, compact: true })
           if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
             let orders = hcResult.orders
-            // Apply same filters as history
-            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '') >= params.entry_from)
-            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '') <= params.entry_to + 'T23:59:59')
-            if (params.close_from) orders = orders.filter(o => (o.close_time || o.time || '') >= params.close_from)
-            if (params.close_to) orders = orders.filter(o => (o.close_time || o.time || '') <= params.close_to + 'T23:59:59')
-            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
-            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit) > 0)
-            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit) < 0)
-
-            // Strip unnecessary fields to reduce payload (chart only needs close_time + profit)
-            orders = orders.map(o => ({ t: o.close_time || o.time, p: Number(o.profit || 0) }));
+            // Apply filters (compact uses short keys: t=time, p=profit, y=type)
+            if (params.close_from) orders = orders.filter(o => (o.t || '') >= params.close_from)
+            if (params.close_to) orders = orders.filter(o => (o.t || '') <= params.close_to + 'T23:59:59')
+            if (params.direction) orders = orders.filter(o => (o.y || '').toUpperCase() === params.direction)
+            if (params.profit_filter === 'profit') orders = orders.filter(o => o.p > 0)
+            if (params.profit_filter === 'loss') orders = orders.filter(o => o.p < 0)
 
             // Aggregate by close date
             const dailyMap = {}

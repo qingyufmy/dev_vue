@@ -2937,6 +2937,20 @@ function _renderHistoryChart(data) {
           fill: true,
           yAxisID: 'y2',
           order: 1,
+        },
+        {
+          type: 'line',
+          label: '回撤 %',
+          data: drawdown,
+          borderColor: 'rgba(251,191,36,0.5)',
+          backgroundColor: 'rgba(251,191,36,0.06)',
+          borderWidth: 1,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0.35,
+          fill: true,
+          yAxisID: 'y3',
+          order: 3,
         }
       ]
     },
@@ -2986,6 +3000,13 @@ function _renderHistoryChart(data) {
           grid: { display: false },
           ticks: { color: lineColor, font: { size: 10 }, callback: v => v.toFixed(0) },
           title: { display: true, text: '累计收益', color: lineColor, font: { size: 10 } }
+        },
+        y3: {
+          position: 'right',
+          display: false,
+          grid: { drawOnChartArea: false },
+          reverse: true,
+          ticks: { color: '#4a5568', font: { size: 10 }, callback: v => v + '%' },
         }
       }
     }
