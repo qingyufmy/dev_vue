@@ -874,7 +874,7 @@ class AurumBridge:
             if not connected or not self.running: break
 
             self._resolved_symbol = self._resolve_symbol("XAUUSD") if self.mt5 else "XAUUSD"
-            last_hb = 0; last_data = 0
+            last_hb = 0; last_data = 0; _bar_vol = 0; _bar_time = 0
 
             while self.running:
                 now = time.time()
@@ -882,6 +882,11 @@ class AurumBridge:
                     try:
                         acc = self.mt5.account_info(); sym = getattr(self, '_resolved_symbol', 'XAUUSD')
                         tick = self.mt5.symbol_info_tick(sym); info = self.mt5.symbol_info(sym); positions = self.mt5.positions_get() or []
+                        # Accumulate tick volume per M1 bar
+                        if tick:
+                            t = int(tick.time)
+                            if t != _bar_time: _bar_time = t; _bar_vol = 0
+                            _bar_vol += int(getattr(tick, 'volume', 0) or 0)
                         dm = {"type": "data", "account": {
                             "login": acc.login if acc else None, "balance": round(acc.balance,2) if acc else None,
                             "equity": round(acc.equity,2) if acc else None, "margin": round(acc.margin,2) if acc else None,
@@ -890,7 +895,7 @@ class AurumBridge:
                             "bid": round(tick.bid,5) if tick else None, "ask": round(tick.ask,5) if tick else None,
                             "spread": round((tick.ask-tick.bid)/(0.01 if "JPY" not in sym else 0.001),1) if tick else None,
                             "time": _mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "volume": int(tick.volume) if tick else 0,
+                            "volume": _bar_vol,
                             "trade_mode": info.trade_mode if (tick and info) else -1},
                             "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
                                 "volume": p.volume, "open_price": p.price_open, "current_price": p.price_current,
