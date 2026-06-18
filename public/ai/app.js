@@ -2602,6 +2602,8 @@ function auditActionLabel(action) {
     ai_execute: "AI 信号执行",
     ai_auto_execute: "AI 自动执行",
     ai_auto_scan: "AI 自动扫描",
+    smart_close: "AI 智能平仓",
+    smart_close_rule: "规则智能平仓",
   }[action] || action || "--";
 }
 
