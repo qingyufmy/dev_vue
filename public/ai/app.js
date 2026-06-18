@@ -911,9 +911,10 @@ function handleHeartbeat(msg) {
   if (isLive !== wasLive || usingFallback !== wasFallback) {
     applyRoleUI();
     if (isLive) {
-      refreshAll().catch(() => {});
-      // Also refresh current tab (bridge-dependent data)
-      refreshTabData(activeTabId()).catch(() => {});
+      refreshAll().then(() => {
+        // Refresh current tab after general data loads
+        refreshTabData(activeTabId()).catch(() => {});
+      }).catch(() => {});
     }
     else if (!usingFallback) {
       state.positions = [];
@@ -3048,7 +3049,7 @@ async function refreshTradingPage() {
 }
 
 async function refreshHistoryPage() {
-  await Promise.allSettled([loadAccount(), loadHistory(), loadAudit()]);
+  await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
 }
 
 function auditActionLabel(action) {
