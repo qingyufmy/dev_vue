@@ -415,12 +415,15 @@ async function handleBrowserCommand(ws, userId, msg) {
             if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit) > 0)
             if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit) < 0)
 
+            // Strip unnecessary fields to reduce payload (chart only needs close_time + profit)
+            orders = orders.map(o => ({ t: o.close_time || o.time, p: Number(o.profit || 0) }));
+
             // Aggregate by close date
             const dailyMap = {}
             orders.forEach(o => {
-              const d = (o.close_time || o.time || '').slice(0, 10)
+              const d = (o.t || '').slice(0, 10)
               if (!d) return
-              dailyMap[d] = (dailyMap[d] || 0) + Number(o.profit || 0)
+              dailyMap[d] = (dailyMap[d] || 0) + o.p
             })
             const dates = Object.keys(dailyMap).sort()
             const daily = dates.map(d => ({ date: d, profit: Math.round(dailyMap[d] * 100) / 100 }))
@@ -440,10 +443,10 @@ async function handleBrowserCommand(ws, userId, msg) {
             })
 
             // Win/loss stats
-            const wins = orders.filter(o => Number(o.profit) > 0)
-            const losses = orders.filter(o => Number(o.profit) < 0)
-            const grossProfit = wins.reduce((s, o) => s + Number(o.profit), 0)
-            const grossLoss = Math.abs(losses.reduce((s, o) => s + Number(o.profit), 0))
+            const wins = orders.filter(o => o.p > 0)
+            const losses = orders.filter(o => o.p < 0)
+            const grossProfit = wins.reduce((s, o) => s + o.p, 0)
+            const grossLoss = Math.abs(losses.reduce((s, o) => s + o.p, 0))
 
             result = {
               status: 'success',

@@ -23,6 +23,11 @@
   analysisHistoryLoading: false,
 };
 
+// ===== History Cache =====
+let _historyCache = null;      // { filters: string, data: object }
+let _historyChartCache = null; // { filters: string, data: object }
+let _prevPositionCount = 0;
+
 // ===== Global Symbol Management =====
 const SYMBOL_STORAGE_KEY = "aurum_selected_symbol";
 const _symSelectors = []; // registered selector IDs
@@ -700,6 +705,14 @@ function updateMarketStatus(tradeMode) {
 // Handle data push from bridge (account + quote + positions)
 function handleBridgeData(msg) {
   const selectedSymbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+  // Detect position close → invalidate history cache
+  const currPosCount = (msg.positions || []).length;
+  if (currPosCount < _prevPositionCount && _prevPositionCount > 0) {
+    _historyCache = null;
+    _historyChartCache = null;
+  }
+  _prevPositionCount = currPosCount;
+
   if (msg.quote) {
     const q = msg.quote;
     // Only update quote display if the pushed symbol matches the selected symbol
@@ -835,6 +848,13 @@ async function _maybeRefreshSignal() {
 
     // New signal detected — reuse the known-good click handler
     _lastSignalId = latest.id;
+
+    // CLOSE signal → invalidate history cache (new closed order)
+    if (latest.signal_type === 'close') {
+      _historyCache = null;
+      _historyChartCache = null;
+    }
+
     const fullData = await wsApi("signals", {});
     const signals = fullData.signals || [];
     state.signals = signals;
@@ -2688,28 +2708,43 @@ function setHistoryZeroClass(id, value) {
   el.parentElement.classList.toggle("zero-value", Number.isFinite(num) && num === 0);
 }
 
-async function loadHistory() {
+async function loadHistory(forceRefresh) {
   try {
-  const filters = state.historyFilters;
-  // Collect filter values
-  const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
-  const entryTo = document.getElementById('filterEntryTo')?.value || '';
-  const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
-  const closeTo = document.getElementById('filterCloseTo')?.value || '';
-  const direction = document.getElementById('filterDirection')?.value || '';
-  const profit = document.getElementById('filterProfit')?.value || '';
-  const filterParams = {};
-  if (entryFrom) filterParams.entry_from = entryFrom;
-  if (entryTo) filterParams.entry_to = entryTo;
-  if (closeFrom) filterParams.close_from = closeFrom;
-  if (closeTo) filterParams.close_to = closeTo;
-  if (direction) filterParams.direction = direction;
-  if (profit) filterParams.profit_filter = profit;
-  const [data] = await Promise.all([
-    wsApi("history", { page: filters.page, page_size: filters.pageSize, ...filterParams }),
-    loadSignalTickets(),
-    loadCloseSignalTickets(),
-  ]);
+    const filters = state.historyFilters;
+    const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
+    const entryTo = document.getElementById('filterEntryTo')?.value || '';
+    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
+    const closeTo = document.getElementById('filterCloseTo')?.value || '';
+    const direction = document.getElementById('filterDirection')?.value || '';
+    const profit = document.getElementById('filterProfit')?.value || '';
+    const filterParams = {};
+    if (entryFrom) filterParams.entry_from = entryFrom;
+    if (entryTo) filterParams.entry_to = entryTo;
+    if (closeFrom) filterParams.close_from = closeFrom;
+    if (closeTo) filterParams.close_to = closeTo;
+    if (direction) filterParams.direction = direction;
+    if (profit) filterParams.profit_filter = profit;
+
+    // Cache check
+    const filterKey = JSON.stringify({ ...filterParams, page: filters.page, pageSize: filters.pageSize });
+    if (!forceRefresh && _historyCache && _historyCache.filters === filterKey) {
+      _applyHistoryData(_historyCache.data);
+      loadSignalTickets().catch(()=>{});
+      loadCloseSignalTickets().catch(()=>{});
+      return;
+    }
+
+    const [data] = await Promise.all([
+      wsApi("history", { page: filters.page, page_size: filters.pageSize, ...filterParams }),
+      loadSignalTickets(),
+      loadCloseSignalTickets(),
+    ]);
+    _historyCache = { filters: filterKey, data };
+    _applyHistoryData(data);
+  } catch (e) { console.error("loadHistory:", e); }
+}
+
+function _applyHistoryData(data) {
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
   setText("historyCredit", fmt(stats.credit));
@@ -2725,6 +2760,13 @@ async function loadHistory() {
   const rows = data.orders || [];
   const tickets = state.signalTickets || {};
   const closeTickets = state.closeSignalTickets || {};
+  _renderHistoryRows(rows, tickets, closeTickets);
+  const pg = data.pagination || {};
+  renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, pg.total_count || 0, "history");
+  setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
+}
+
+function _renderHistoryRows(rows, tickets, closeTickets) {
   $("historyBody").innerHTML = rows.length ? rows.map((row) => {
     const dir = signalType(row.type);
     const comment = row.comment || "";
@@ -2749,17 +2791,13 @@ async function loadHistory() {
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
       <td class="num">${(() => { const ep = parseFloat(row.entry_price); const xp = parseFloat(exitPrice); if (!ep || !xp || ep === 0) return '--'; const pct = String(row.type || '').toUpperCase() === 'BUY' ? ((xp - ep) / ep * 100) : ((ep - xp) / ep * 100); const cls = pct >= 0 ? 'pnl-positive' : 'pnl-negative'; const sign = pct >= 0 ? '+' : ''; return `<span class="${cls}">${sign}${pct.toFixed(2)}%</span>`; })()}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
-    </tr>
-  `;
-  }).join("") : `<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>`;
-  const pg = data.pagination || {};
-  renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, pg.total_count || 0, "history");
-  setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
-  } catch (e) { console.error("loadHistory:", e); }
+    </tr>  `;
+  }).join("") : '<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>';
 }
 
-/* ---- History Profit Chart ---- */
 let _historyChart = null;
+
+/* ---- History Profit Chart ---- */
 
 /* ---- Chart date range state ---- */
 let _chartDateFrom = '';
@@ -2805,9 +2843,9 @@ const zeroLinePlugin = {
   }
 };
 
-async function loadHistoryChart() {
+
+async function loadHistoryChart(forceRefresh) {
   try {
-    // Collect filter params
     const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
     const entryTo = document.getElementById('filterEntryTo')?.value || '';
     const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
@@ -2821,171 +2859,139 @@ async function loadHistoryChart() {
     if (closeTo) filterParams.close_to = closeTo;
     if (direction) filterParams.direction = direction;
     if (profit) filterParams.profit_filter = profit;
-    // Chart-specific date range override
     if (_chartDateFrom) filterParams.close_from = _chartDateFrom;
     if (_chartDateTo) filterParams.close_to = _chartDateTo;
 
-    const data = await wsApi('history_chart_data', filterParams);
-    const { daily = [], cumulative = [], drawdown = [], stats = {} } = data;
-
-    // Update stats display
-    const el = id => document.getElementById(id);
-    el('chartTotalTrades').textContent = stats.total_trades || 0;
-    el('chartWinRate').textContent = (stats.win_rate || 0).toFixed(1) + '%';
-    el('chartWinRate').className = 'chart-stat-value ' + (stats.win_rate >= 50 ? 'positive' : 'negative');
-    el('chartProfitFactor').textContent = stats.profit_factor >= 999 ? '∞' : (stats.profit_factor || 0).toFixed(2);
-    el('chartProfitFactor').className = 'chart-stat-value ' + (stats.profit_factor >= 1 ? 'positive' : 'negative');
-    el('chartMaxDD').textContent = (stats.max_drawdown || 0).toFixed(2) + '%';
-    el('chartMaxDD').className = 'chart-stat-value ' + (stats.max_drawdown > 10 ? 'negative' : '');
-
-    if (!daily.length) {
-      if (_historyChart) { _historyChart.destroy(); _historyChart = null; }
+    // Cache check
+    const filterKey = JSON.stringify(filterParams);
+    if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
+      _renderHistoryChart(_historyChartCache.data);
       return;
     }
 
-    const labels = daily.map(d => d.date.slice(5)); // MM-DD
-    const dailyProfits = daily.map(d => d.profit);
-    const lastCum = cumulative[cumulative.length - 1] || 0;
-    const lineColor = lastCum >= 0 ? '#ef4444' : '#10b981';
-    const fillColor = lastCum >= 0 ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)';
-    const barColors = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.5)' : 'rgba(16,185,129,0.5)');
-    const barBorders = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.8)' : 'rgba(16,185,129,0.8)');
-
-    const canvas = document.getElementById('historyChart');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-
-    if (_historyChart) _historyChart.destroy();
-    _historyChart = new Chart(ctx, {
-      type: 'bar',
-      plugins: [zeroLinePlugin, barLabelPlugin],
-      data: {
-        labels,
-        datasets: [
-          {
-            type: 'bar',
-            label: '每日盈亏',
-            data: dailyProfits,
-            backgroundColor: barColors,
-            borderColor: barBorders,
-            borderWidth: 1,
-            borderRadius: 3,
-            yAxisID: 'y',
-            order: 2,
-          },
-          {
-            type: 'line',
-            label: '累计收益',
-            data: cumulative,
-            borderColor: lineColor,
-            backgroundColor: fillColor,
-            borderWidth: 2,
-            pointRadius: 3,
-            pointHoverRadius: 6,
-            pointBackgroundColor: lineColor,
-            pointBorderColor: 'transparent',
-            tension: 0.35,
-            fill: true,
-            yAxisID: 'y2',
-            order: 1,
-          },
-          {
-            type: 'line',
-            label: '回撤 %',
-            data: drawdown,
-            borderColor: 'rgba(251,191,36,0.5)',
-            backgroundColor: 'rgba(251,191,36,0.06)',
-            borderWidth: 1,
-            pointRadius: 0,
-            pointHoverRadius: 3,
-            tension: 0.35,
-            fill: true,
-            yAxisID: 'y3',
-            order: 3,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        onClick: (e, elements) => {
-          if (!elements.length) return;
-          const idx = elements[0].index;
-          const date = daily[idx]?.date;
-          if (!date) return;
-          // Set filter to this date and reload table
-          const ef = document.getElementById('filterCloseFrom');
-          const et = document.getElementById('filterCloseTo');
-          if (ef) ef.value = date;
-          if (et) et.value = date;
-          state.historyFilters.page = 1;
-          loadHistory();
-          // Highlight the selected bar
-          showToast(`已筛选: ${date}`, 'info');
-        },
-        plugins: {
-          legend: {
-            display: true,
-            position: 'top',
-            labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12, padding: 12 },
-          },
-          tooltip: {
-            backgroundColor: '#1c2333',
-            titleColor: '#e2e8f0',
-            bodyColor: '#e2e8f0',
-            borderColor: '#1e293b',
-            borderWidth: 1,
-            padding: 10,
-            callbacks: {
-              title: items => items[0]?.label || '',
-              label: ctx => {
-                const v = ctx.parsed.y;
-                const suffix = ctx.dataset.label.includes('回撤') ? '%' : '';
-                return `${ctx.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(2)}${suffix}`;
-              },
-            },
-          },
-        },
-        scales: {
-          x: {
-            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-            ticks: { color: '#4a5568', font: { size: 10 }, maxRotation: 0, autoSkipPadding: 12 },
-          },
-          y: {
-            position: 'left',
-            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-            ticks: {
-              color: '#4a5568',
-              font: { size: 10 },
-              callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
-            },
-            title: { display: true, text: '每日', color: '#4a5568', font: { size: 10 }, rotation: -90 },
-          },
-          y2: {
-            position: 'right',
-            grid: { drawOnChartArea: false },
-            ticks: {
-              color: '#4a5568',
-              font: { size: 10 },
-              callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
-            },
-            title: { display: true, text: '累计', color: '#4a5568', font: { size: 10 }, rotation: 90 },
-          },
-          y3: {
-            position: 'right',
-            display: false,
-            grid: { drawOnChartArea: false },
-            reverse: true,
-            ticks: { color: '#4a5568', font: { size: 10 }, callback: v => v + '%' },
-          },
-        },
-      },
-    });
-  } catch (e) {
-    console.error('loadHistoryChart:', e);
-  }
+    const data = await wsApi('history_chart_data', filterParams);
+    _historyChartCache = { filters: filterKey, data };
+    _renderHistoryChart(data);
+  } catch (e) { console.error("loadHistoryChart:", e); }
 }
+
+function _renderHistoryChart(data) {
+  const { daily = [], cumulative = [], drawdown = [], stats = {} } = data;
+
+  const el = id => document.getElementById(id);
+  el('chartTotalTrades').textContent = stats.total_trades || 0;
+  el('chartWinRate').textContent = (stats.win_rate || 0).toFixed(1) + '%';
+  el('chartWinRate').className = 'chart-stat-value ' + (stats.win_rate >= 50 ? 'positive' : 'negative');
+  el('chartProfitFactor').textContent = stats.profit_factor >= 999 ? '∞' : (stats.profit_factor || 0).toFixed(2);
+  el('chartProfitFactor').className = 'chart-stat-value ' + (stats.profit_factor >= 1 ? 'positive' : 'negative');
+  el('chartMaxDD').textContent = (stats.max_drawdown || 0).toFixed(2) + '%';
+  el('chartMaxDD').className = 'chart-stat-value ' + (stats.max_drawdown > 10 ? 'negative' : '');
+
+  if (!daily.length) {
+    if (_historyChart) { _historyChart.destroy(); _historyChart = null; }
+    return;
+  }
+
+  const labels = daily.map(d => d.date.slice(5));
+  const dailyProfits = daily.map(d => d.profit);
+  const lastCum = cumulative[cumulative.length - 1] || 0;
+  const lineColor = lastCum >= 0 ? '#ef4444' : '#10b981';
+  const fillColor = lastCum >= 0 ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)';
+  const barColors = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.5)' : 'rgba(16,185,129,0.5)');
+  const barBorders = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.8)' : 'rgba(16,185,129,0.8)');
+
+  const canvas = document.getElementById('historyChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  if (_historyChart) _historyChart.destroy();
+  _historyChart = new Chart(ctx, {
+    type: 'bar',
+    plugins: [zeroLinePlugin, barLabelPlugin],
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: '每日盈亏',
+          data: dailyProfits,
+          backgroundColor: barColors,
+          borderColor: barBorders,
+          borderWidth: 1,
+          borderRadius: 3,
+          yAxisID: 'y',
+          order: 2,
+        },
+        {
+          type: 'line',
+          label: '累计收益',
+          data: cumulative,
+          borderColor: lineColor,
+          backgroundColor: fillColor,
+          borderWidth: 2,
+          pointRadius: 3,
+          pointHoverRadius: 6,
+          pointBackgroundColor: lineColor,
+          pointBorderColor: 'transparent',
+          tension: 0.35,
+          fill: true,
+          yAxisID: 'y2',
+          order: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      onClick: (e, elements) => {
+        if (!elements.length) return;
+        const idx = elements[0].index;
+        const date = daily[idx]?.date;
+        if (!date) return;
+        const fromEl = document.getElementById('filterEntryFrom');
+        const toEl = document.getElementById('filterEntryTo');
+        if (fromEl) fromEl.value = date;
+        if (toEl) toEl.value = date;
+        _historyCache = null;
+        _historyChartCache = null;
+        loadHistory(true);
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(17,24,39,0.95)',
+          borderColor: 'rgba(212,175,55,0.3)',
+          borderWidth: 1,
+          titleFont: { size: 11 },
+          bodyFont: { size: 11 },
+          callbacks: {
+            label: ctx => ctx.dataset.label + ': ' + (ctx.parsed.y >= 0 ? '+' : '') + ctx.parsed.y.toFixed(2)
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255,255,255,0.03)' },
+          ticks: { color: '#4a5568', font: { size: 10 } }
+        },
+        y: {
+          position: 'left',
+          grid: { color: 'rgba(255,255,255,0.03)' },
+          ticks: { color: '#4a5568', font: { size: 10 }, callback: v => v.toFixed(0) },
+          title: { display: true, text: '每日盈亏', color: '#4a5568', font: { size: 10 } }
+        },
+        y2: {
+          position: 'right',
+          grid: { display: false },
+          ticks: { color: lineColor, font: { size: 10 }, callback: v => v.toFixed(0) },
+          title: { display: true, text: '累计收益', color: lineColor, font: { size: 10 } }
+        }
+      }
+    }
+  });
+}
+
 
 async function refreshTradingPage() {
   await Promise.allSettled([loadStatus(), loadAccount(), refreshQuote(), loadPositions(), loadAudit()]);
@@ -3092,7 +3098,7 @@ async function loadAudit() {
 
 function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
-  $("refreshAllBtn").addEventListener("click", refreshAll);
+  $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
   $("useTemplateBtn")?.addEventListener("click", async () => {
@@ -3225,6 +3231,7 @@ function bindEvents() {
   // History filter buttons
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     state.historyFilters.page = 1;
+    _historyCache = null; _historyChartCache = null;
     loadHistory();
     loadHistoryChart();
   });
@@ -3232,6 +3239,7 @@ function bindEvents() {
     ['filterEntryFrom','filterEntryTo','filterCloseFrom','filterCloseTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
+    _historyCache = null; _historyChartCache = null;
     loadHistory();
     loadHistoryChart();
   });
@@ -3239,6 +3247,7 @@ function bindEvents() {
   document.getElementById('chartDateApply')?.addEventListener('click', () => {
     _chartDateFrom = document.getElementById('chartDateFrom')?.value || '';
     _chartDateTo = document.getElementById('chartDateTo')?.value || '';
+    _historyChartCache = null;
     loadHistoryChart();
   });
   document.getElementById('chartDateReset')?.addEventListener('click', () => {
