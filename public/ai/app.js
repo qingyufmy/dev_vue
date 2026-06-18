@@ -2576,7 +2576,7 @@ async function loadHistory() {
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="num ${profitClass(row.profit_points)}">${escapeHtml(row.profit_points ?? "--")}</td>
+      <td class="num">${(() => { const ep = parseFloat(row.entry_price); const xp = parseFloat(exitPrice); if (!ep || !xp || ep === 0) return '--'; const pct = String(row.type || '').toUpperCase() === 'BUY' ? ((xp - ep) / ep * 100) : ((ep - xp) / ep * 100); const cls = pct >= 0 ? 'positive' : 'negative'; const sign = pct >= 0 ? '+' : ''; return `<span class="${cls}">${sign}${pct.toFixed(2)}%</span>`; })()}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>
   `;
