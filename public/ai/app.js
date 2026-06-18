@@ -1537,6 +1537,8 @@ function updateKlineTick(bid, ask) {
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.update(_klineLastBar);
+    // Add volume placeholder for new bar so histogram doesn't show blank
+    if (_klineVolumeSeries) _klineVolumeSeries.update({ time: barTime, value: 0, color: 'rgba(239,68,68,0.3)' });
   }
 
   setText('klineLastPrice', Number(bid).toFixed(2));
