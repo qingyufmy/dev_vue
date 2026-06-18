@@ -395,6 +395,78 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         break
       }
+      case 'history_chart_data': {
+        let bridgeOk = bridges.get(userId)?.ws?.readyState === 1
+        let hcUserId = userId
+        if (!bridgeOk && adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
+          bridgeOk = true
+          hcUserId = adminUserId
+        }
+        if (bridgeOk) {
+          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999 })
+          if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
+            let orders = hcResult.orders
+            // Apply same filters as history
+            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '') >= params.entry_from)
+            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '') <= params.entry_to + 'T23:59:59')
+            if (params.close_from) orders = orders.filter(o => (o.close_time || o.time || '') >= params.close_from)
+            if (params.close_to) orders = orders.filter(o => (o.close_time || o.time || '') <= params.close_to + 'T23:59:59')
+            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
+            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit) > 0)
+            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit) < 0)
+
+            // Aggregate by close date
+            const dailyMap = {}
+            orders.forEach(o => {
+              const d = (o.close_time || o.time || '').slice(0, 10)
+              if (!d) return
+              dailyMap[d] = (dailyMap[d] || 0) + Number(o.profit || 0)
+            })
+            const dates = Object.keys(dailyMap).sort()
+            const daily = dates.map(d => ({ date: d, profit: Math.round(dailyMap[d] * 100) / 100 }))
+
+            // Cumulative + drawdown
+            let cum = 0, peak = 0, maxDD = 0
+            const cumulative = []
+            const drawdown = []
+            daily.forEach(d => {
+              cum += d.profit
+              cum = Math.round(cum * 100) / 100
+              cumulative.push(cum)
+              if (cum > peak) peak = cum
+              const dd = peak > 0 ? Math.round((peak - cum) / peak * 10000) / 100 : 0
+              drawdown.push(dd)
+              if (dd > maxDD) maxDD = dd
+            })
+
+            // Win/loss stats
+            const wins = orders.filter(o => Number(o.profit) > 0)
+            const losses = orders.filter(o => Number(o.profit) < 0)
+            const grossProfit = wins.reduce((s, o) => s + Number(o.profit), 0)
+            const grossLoss = Math.abs(losses.reduce((s, o) => s + Number(o.profit), 0))
+
+            result = {
+              status: 'success',
+              daily,
+              cumulative,
+              drawdown,
+              stats: {
+                total_trades: orders.length,
+                win_rate: orders.length > 0 ? Math.round(wins.length / orders.length * 10000) / 100 : 0,
+                profit_factor: grossLoss > 0 ? Math.round(grossProfit / grossLoss * 100) / 100 : grossProfit > 0 ? 999 : 0,
+                max_drawdown: maxDD,
+                gross_profit: Math.round(grossProfit * 100) / 100,
+                gross_loss: Math.round(grossLoss * 100) / 100,
+              }
+            }
+          } else {
+            result = { status: 'success', daily: [], cumulative: [], drawdown: [], stats: { total_trades: 0, win_rate: 0, profit_factor: 0, max_drawdown: 0, gross_profit: 0, gross_loss: 0 } }
+          }
+        } else {
+          result = { status: 'success', daily: [], cumulative: [], drawdown: [], stats: { total_trades: 0, win_rate: 0, profit_factor: 0, max_drawdown: 0, gross_profit: 0, gross_loss: 0 } }
+        }
+        break
+      }
       case 'rates':
         result = await ai.mt5Bridge(userId, 'rates', { symbol: params.symbol, timeframe: params.timeframe || 'M30', count: params.count || 100 })
         break

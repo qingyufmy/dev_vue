@@ -2590,9 +2590,53 @@ async function loadHistory() {
 /* ---- History Profit Chart ---- */
 let _historyChart = null;
 
+/* ---- Chart date range state ---- */
+let _chartDateFrom = '';
+let _chartDateTo = '';
+
+/* ---- Data labels plugin (show values on bars when few points) ---- */
+const barLabelPlugin = {
+  id: 'barLabels',
+  afterDatasetsDraw(chart) {
+    const meta = chart.getDatasetMeta(0);
+    if (meta.data.length > 15) return; // too many bars
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    meta.data.forEach((bar, i) => {
+      const val = chart.data.datasets[0].data[i];
+      if (val === undefined) return;
+      ctx.fillStyle = val >= 0 ? '#ef4444' : '#10b981';
+      ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(0), bar.x, bar.y - 5);
+    });
+    ctx.restore();
+  }
+};
+
+/* ---- Zero line plugin ---- */
+const zeroLinePlugin = {
+  id: 'zeroLine',
+  beforeDraw(chart) {
+    const yScale = chart.scales.y;
+    if (!yScale) return;
+    const y = yScale.getPixelForValue(0);
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(chart.chartArea.left, y);
+    ctx.lineTo(chart.chartArea.right, y);
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
 async function loadHistoryChart() {
   try {
-    // Collect filter params (same as loadHistory)
+    // Collect filter params
     const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
     const entryTo = document.getElementById('filterEntryTo')?.value || '';
     const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
@@ -2606,33 +2650,33 @@ async function loadHistoryChart() {
     if (closeTo) filterParams.close_to = closeTo;
     if (direction) filterParams.direction = direction;
     if (profit) filterParams.profit_filter = profit;
+    // Chart-specific date range override
+    if (_chartDateFrom) filterParams.close_from = _chartDateFrom;
+    if (_chartDateTo) filterParams.close_to = _chartDateTo;
 
-    const data = await wsApi('history', { page: 1, page_size: 9999, ...filterParams });
-    const rows = data.orders || [];
-    if (!rows.length) {
+    const data = await wsApi('history_chart_data', filterParams);
+    const { daily = [], cumulative = [], drawdown = [], stats = {} } = data;
+
+    // Update stats display
+    const el = id => document.getElementById(id);
+    el('chartTotalTrades').textContent = stats.total_trades || 0;
+    el('chartWinRate').textContent = (stats.win_rate || 0).toFixed(1) + '%';
+    el('chartWinRate').className = 'chart-stat-value ' + (stats.win_rate >= 50 ? 'positive' : 'negative');
+    el('chartProfitFactor').textContent = stats.profit_factor >= 999 ? '∞' : (stats.profit_factor || 0).toFixed(2);
+    el('chartProfitFactor').className = 'chart-stat-value ' + (stats.profit_factor >= 1 ? 'positive' : 'negative');
+    el('chartMaxDD').textContent = (stats.max_drawdown || 0).toFixed(2) + '%';
+    el('chartMaxDD').className = 'chart-stat-value ' + (stats.max_drawdown > 10 ? 'negative' : '');
+
+    if (!daily.length) {
       if (_historyChart) { _historyChart.destroy(); _historyChart = null; }
       return;
     }
 
-    // Aggregate by close date
-    const dailyMap = {};
-    rows.forEach(r => {
-      const d = (r.close_time || r.time || '').slice(0, 10);
-      if (!d) return;
-      dailyMap[d] = (dailyMap[d] || 0) + Number(r.profit || 0);
-    });
-    const dates = Object.keys(dailyMap).sort();
-    const dailyProfits = dates.map(d => Math.round(dailyMap[d] * 100) / 100);
-
-    // Cumulative profit
-    let cum = 0;
-    const cumProfits = dailyProfits.map(v => { cum += v; return Math.round(cum * 100) / 100; });
-
-    // Gradient colors for positive/negative segments
-    const lastCum = cumProfits[cumProfits.length - 1] || 0;
+    const labels = daily.map(d => d.date.slice(5)); // MM-DD
+    const dailyProfits = daily.map(d => d.profit);
+    const lastCum = cumulative[cumulative.length - 1] || 0;
     const lineColor = lastCum >= 0 ? '#ef4444' : '#10b981';
     const fillColor = lastCum >= 0 ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)';
-
     const barColors = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.5)' : 'rgba(16,185,129,0.5)');
     const barBorders = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.8)' : 'rgba(16,185,129,0.8)');
 
@@ -2643,8 +2687,9 @@ async function loadHistoryChart() {
     if (_historyChart) _historyChart.destroy();
     _historyChart = new Chart(ctx, {
       type: 'bar',
+      plugins: [zeroLinePlugin, barLabelPlugin],
       data: {
-        labels: dates.map(d => d.slice(5)), // MM-DD
+        labels,
         datasets: [
           {
             type: 'bar',
@@ -2660,7 +2705,7 @@ async function loadHistoryChart() {
           {
             type: 'line',
             label: '累计收益',
-            data: cumProfits,
+            data: cumulative,
             borderColor: lineColor,
             backgroundColor: fillColor,
             borderWidth: 2,
@@ -2673,12 +2718,41 @@ async function loadHistoryChart() {
             yAxisID: 'y2',
             order: 1,
           },
+          {
+            type: 'line',
+            label: '回撤 %',
+            data: drawdown,
+            borderColor: 'rgba(251,191,36,0.5)',
+            backgroundColor: 'rgba(251,191,36,0.06)',
+            borderWidth: 1,
+            pointRadius: 0,
+            pointHoverRadius: 3,
+            tension: 0.35,
+            fill: true,
+            yAxisID: 'y3',
+            order: 3,
+          },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
+        onClick: (e, elements) => {
+          if (!elements.length) return;
+          const idx = elements[0].index;
+          const date = daily[idx]?.date;
+          if (!date) return;
+          // Set filter to this date and reload table
+          const ef = document.getElementById('filterCloseFrom');
+          const et = document.getElementById('filterCloseTo');
+          if (ef) ef.value = date;
+          if (et) et.value = date;
+          state.historyFilters.page = 1;
+          loadHistory();
+          // Highlight the selected bar
+          showToast(`已筛选: ${date}`, 'info');
+        },
         plugins: {
           legend: {
             display: true,
@@ -2694,7 +2768,11 @@ async function loadHistoryChart() {
             padding: 10,
             callbacks: {
               title: items => items[0]?.label || '',
-              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}`,
+              label: ctx => {
+                const v = ctx.parsed.y;
+                const suffix = ctx.dataset.label.includes('回撤') ? '%' : '';
+                return `${ctx.dataset.label}: ${v >= 0 ? '+' : ''}${v.toFixed(2)}${suffix}`;
+              },
             },
           },
         },
@@ -2722,6 +2800,13 @@ async function loadHistoryChart() {
               callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
             },
             title: { display: true, text: '累计', color: '#4a5568', font: { size: 10 } },
+          },
+          y3: {
+            position: 'right',
+            display: false,
+            grid: { drawOnChartArea: false },
+            reverse: true,
+            ticks: { color: '#4a5568', font: { size: 10 }, callback: v => v + '%' },
           },
         },
       },
@@ -2977,6 +3062,21 @@ function bindEvents() {
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
     loadHistory();
+    loadHistoryChart();
+  });
+  // Chart date range filter
+  document.getElementById('chartDateApply')?.addEventListener('click', () => {
+    _chartDateFrom = document.getElementById('chartDateFrom')?.value || '';
+    _chartDateTo = document.getElementById('chartDateTo')?.value || '';
+    loadHistoryChart();
+  });
+  document.getElementById('chartDateReset')?.addEventListener('click', () => {
+    _chartDateFrom = '';
+    _chartDateTo = '';
+    const ef = document.getElementById('chartDateFrom');
+    const et = document.getElementById('chartDateTo');
+    if (ef) ef.value = '';
+    if (et) et.value = '';
     loadHistoryChart();
   });
 }

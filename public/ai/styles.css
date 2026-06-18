@@ -1600,6 +1600,41 @@ textarea:focus {
   width: 100% !important;
   max-height: 160px;
 }
+.chart-stats-row {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) 0;
+}
+.chart-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chart-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.chart-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.chart-stat-value.positive { color: var(--loss-color); }
+.chart-stat-value.negative { color: var(--profit-color); }
+.chart-date-range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.chart-date-sep {
+  color: var(--text-muted);
+  font-size: 12px;
+}
 
 /* History filter bar */
 .history-filter-bar {

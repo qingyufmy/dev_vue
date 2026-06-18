@@ -666,7 +666,20 @@
               <button class="card-action-btn" data-action="refresh-history-page"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
             </div>
             <div class="history-chart-wrap">
-              <canvas id="historyChart" height="140"></canvas>
+              <div class="chart-stats-row">
+                <div class="chart-stat"><span class="chart-stat-label">总交易</span><span id="chartTotalTrades" class="chart-stat-value">--</span></div>
+                <div class="chart-stat"><span class="chart-stat-label">胜率</span><span id="chartWinRate" class="chart-stat-value">--</span></div>
+                <div class="chart-stat"><span class="chart-stat-label">盈亏比</span><span id="chartProfitFactor" class="chart-stat-value">--</span></div>
+                <div class="chart-stat"><span class="chart-stat-label">最大回撤</span><span id="chartMaxDD" class="chart-stat-value">--</span></div>
+              </div>
+              <div class="chart-date-range">
+                <input type="date" id="chartDateFrom" class="filter-date">
+                <span class="chart-date-sep">至</span>
+                <input type="date" id="chartDateTo" class="filter-date">
+                <button id="chartDateApply" class="btn-filter">筛选</button>
+                <button id="chartDateReset" class="btn-reset">重置</button>
+              </div>
+              <canvas id="historyChart" height="160"></canvas>
             </div>
             <div class="history-stats">
               <div><span>盈利</span><strong id="historyProfit" class="num">--</strong></div>
