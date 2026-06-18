@@ -1354,6 +1354,21 @@ function initKlineChart() {
   const container = document.getElementById('klineChart');
   if (!container || _klineChart) return;
 
+  // Defer chart creation if container is hidden (0 size)
+  if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+    const deferred = new ResizeObserver(() => {
+      if (container.offsetWidth > 0 && container.offsetHeight > 0) {
+        deferred.disconnect();
+        _createKlineChart(container);
+      }
+    });
+    deferred.observe(container);
+    return;
+  }
+  _createKlineChart(container);
+}
+
+function _createKlineChart(container) {
   _klineChart = LightweightCharts.createChart(container, {
     width: container.clientWidth || 400,
     height: container.clientHeight || 220,
@@ -1429,15 +1444,12 @@ function initKlineChart() {
 
 async function loadKlineData() {
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
-  if (!symbol || !_klineSeries) { console.log('[KLINE] skip load:', {symbol, hasSeries:!!_klineSeries}); return; }
   try {
-    console.log('[KLINE] loading', symbol, _klineTimeframe);
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 100 });
-    console.log('[KLINE] data received:', data?.status, 'rates:', data?.rates?.length);
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
     const candles = data.rates.map(b => ({
-      time: Math.floor(new Date(b.time + 'Z').getTime() / 1000),
+      time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
       open: Number(b.open),
       high: Number(b.high),
       low: Number(b.low),
@@ -1445,7 +1457,7 @@ async function loadKlineData() {
     }));
 
     const volumes = data.rates.map(b => ({
-      time: Math.floor(new Date(b.time + 'Z').getTime() / 1000),
+      time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
       value: Number(b.tick_volume || b.volume || 0),
       color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
@@ -1465,12 +1477,11 @@ async function loadKlineData() {
 }
 
 function updateKlineTick(bid, ask) {
-  console.log('[KLINE] tick:', bid, 'series:', !!_klineSeries, 'lastBar:', !!_klineLastBar);
   if (!_klineSeries) return;
   const price = Number(bid); // K线以bid价（卖出价）为基准，与MT5图表一致
-  const now = Math.floor(Date.now() / 1000);
+  const nowUtc = Math.floor(Date.now() / 1000);
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
-  const barTime = Math.floor(now / tfSeconds) * tfSeconds;
+  const barTime = Math.floor(nowUtc / tfSeconds) * tfSeconds;
 
   if (!_klineLastBar) {
     // K-line data not loaded yet, create first bar
@@ -1482,7 +1493,6 @@ function updateKlineTick(bid, ask) {
     if (price > _klineLastBar.high) _klineLastBar.high = price;
     if (price < _klineLastBar.low) _klineLastBar.low = price;
     _klineSeries.update(_klineLastBar);
-    console.log('[KLINE] bar updated:', _klineLastBar);
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.update(_klineLastBar);
