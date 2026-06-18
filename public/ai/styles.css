@@ -1589,6 +1589,18 @@ textarea:focus {
   animation: order-highlight-flash 2.5s ease-out;
 }
 
+/* History profit chart */
+.history-chart-wrap {
+  position: relative;
+  padding: var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-2);
+}
+.history-chart-wrap canvas {
+  width: 100% !important;
+  max-height: 160px;
+}
+
 /* History filter bar */
 .history-filter-bar {
   padding: var(--space-3) 0;

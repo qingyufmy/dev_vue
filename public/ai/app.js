@@ -930,7 +930,7 @@ async function refreshTabData(tabId) {
   } else if (tabId === "dashboard") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
   } else if (tabId === "history") {
-    await Promise.allSettled([loadAccount(), loadHistory()]);
+    await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
   } else if (tabId === "audit") {
     await loadAudit();
   } else if (tabId === "ai-config") {
@@ -2587,6 +2587,132 @@ async function loadHistory() {
   } catch (e) { console.error("loadHistory:", e); }
 }
 
+/* ---- History Profit Chart ---- */
+let _historyChart = null;
+
+async function loadHistoryChart() {
+  try {
+    // Collect filter params (same as loadHistory)
+    const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
+    const entryTo = document.getElementById('filterEntryTo')?.value || '';
+    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
+    const closeTo = document.getElementById('filterCloseTo')?.value || '';
+    const direction = document.getElementById('filterDirection')?.value || '';
+    const profit = document.getElementById('filterProfit')?.value || '';
+    const filterParams = {};
+    if (entryFrom) filterParams.entry_from = entryFrom;
+    if (entryTo) filterParams.entry_to = entryTo;
+    if (closeFrom) filterParams.close_from = closeFrom;
+    if (closeTo) filterParams.close_to = closeTo;
+    if (direction) filterParams.direction = direction;
+    if (profit) filterParams.profit_filter = profit;
+
+    const data = await wsApi('history', { page: 1, page_size: 9999, ...filterParams });
+    const rows = data.orders || [];
+    if (!rows.length) {
+      if (_historyChart) { _historyChart.destroy(); _historyChart = null; }
+      return;
+    }
+
+    // Aggregate by close date
+    const dailyMap = {};
+    rows.forEach(r => {
+      const d = (r.close_time || r.time || '').slice(0, 10);
+      if (!d) return;
+      dailyMap[d] = (dailyMap[d] || 0) + Number(r.profit || 0);
+    });
+    const dates = Object.keys(dailyMap).sort();
+    const dailyProfits = dates.map(d => Math.round(dailyMap[d] * 100) / 100);
+
+    // Cumulative profit
+    let cum = 0;
+    const cumProfits = dailyProfits.map(v => { cum += v; return Math.round(cum * 100) / 100; });
+
+    // Colors
+    const barColors = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,0.7)' : 'rgba(16,185,129,0.7)');
+    const barBorders = dailyProfits.map(v => v >= 0 ? 'rgba(239,68,68,1)' : 'rgba(16,185,129,1)');
+
+    const canvas = document.getElementById('historyChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    if (_historyChart) _historyChart.destroy();
+    _historyChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: dates.map(d => d.slice(5)), // MM-DD
+        datasets: [
+          {
+            type: 'bar',
+            label: '每日盈亏',
+            data: dailyProfits,
+            backgroundColor: barColors,
+            borderColor: barBorders,
+            borderWidth: 1,
+            borderRadius: 3,
+            yAxisID: 'y',
+            order: 2,
+          },
+          {
+            type: 'line',
+            label: '累计收益',
+            data: cumProfits,
+            borderColor: '#d4af37',
+            backgroundColor: 'rgba(212,175,55,0.08)',
+            borderWidth: 2,
+            pointRadius: 2,
+            pointHoverRadius: 5,
+            pointBackgroundColor: '#d4af37',
+            tension: 0.3,
+            fill: true,
+            yAxisID: 'y',
+            order: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12, padding: 12 },
+          },
+          tooltip: {
+            backgroundColor: '#1c2333',
+            titleColor: '#e2e8f0',
+            bodyColor: '#e2e8f0',
+            borderColor: '#1e293b',
+            borderWidth: 1,
+            padding: 10,
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
+            ticks: { color: '#4a5568', font: { size: 10 }, maxRotation: 0, autoSkipPadding: 12 },
+          },
+          y: {
+            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
+            ticks: {
+              color: '#4a5568',
+              font: { size: 10 },
+              callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
+            },
+          },
+        },
+      },
+    });
+  } catch (e) {
+    console.error('loadHistoryChart:', e);
+  }
+}
+
 async function refreshTradingPage() {
   await Promise.allSettled([loadStatus(), loadAccount(), refreshQuote(), loadPositions(), loadAudit()]);
 }
@@ -2826,12 +2952,14 @@ function bindEvents() {
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     state.historyFilters.page = 1;
     loadHistory();
+    loadHistoryChart();
   });
   document.getElementById('historyFilterReset')?.addEventListener('click', () => {
     ['filterEntryFrom','filterEntryTo','filterCloseFrom','filterCloseTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
     loadHistory();
+    loadHistoryChart();
   });
 }
 

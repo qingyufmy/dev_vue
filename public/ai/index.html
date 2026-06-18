@@ -672,6 +672,9 @@
               <div><span>提款</span><strong id="historyWithdrawal" class="num">--</strong></div>
               <div><span>结余</span><strong id="historyNetResult" class="num">--</strong></div>
             </div>
+            <div class="history-chart-wrap">
+              <canvas id="historyChart" height="160"></canvas>
+            </div>
             <div class="table-toolbar history-filter-bar">
               <div class="filter-field">
                 <label class="filter-label">开仓时间</label>
@@ -887,6 +890,7 @@
     </div>
     <div id="toastHost" class="toast-host"></div>
     <script src="lucide.js"></script>
-    <script src="/ai/app.js?v=20260618-filter-ui"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="/ai/app.js?v=20260618-chart"></script>
   </body>
 </html>
