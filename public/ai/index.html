@@ -207,6 +207,19 @@
                 <span>MT5服务器时间</span>
                 <span id="quoteTime" class="num">--</span>
               </div>
+              <div class="kline-toolbar">
+                <div class="kline-periods">
+                  <button class="kline-period-btn" data-tf="M1">M1</button>
+                  <button class="kline-period-btn active" data-tf="M5">M5</button>
+                  <button class="kline-period-btn" data-tf="M15">M15</button>
+                  <button class="kline-period-btn" data-tf="M30">M30</button>
+                  <button class="kline-period-btn" data-tf="H1">H1</button>
+                  <button class="kline-period-btn" data-tf="H4">H4</button>
+                  <button class="kline-period-btn" data-tf="D1">D1</button>
+                </div>
+                <span id="klineLastPrice" class="kline-last-price num">--</span>
+              </div>
+              <div id="klineChart" class="kline-chart-container"></div>
             </div>
 
             <div id="signalCard" class="card card-signal grid-area-signal" data-direction="hold">
@@ -905,6 +918,7 @@
     </div>
     <div id="toastHost" class="toast-host"></div>
     <script src="lucide.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script src="/ai/app.js?v=20260618-chart"></script>
   </body>

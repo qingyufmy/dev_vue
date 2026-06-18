@@ -149,6 +149,7 @@ function setGlobalSymbol(symbol) {
   }
   wsApi("set_quote_symbol", { symbol }).catch(() => {});
   refreshQuote().catch(() => {});
+  loadKlineData().catch(() => {});
 }
 
 // ===== Searchable Symbol Selector =====
@@ -723,6 +724,7 @@ function handleBridgeData(msg) {
       if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
         state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
         updateTradingQuotePreview(state.lastQuote);
+        updateKlineTick(q.bid, q.ask);
       }
       // Update market status from trade_mode
       if (typeof q.trade_mode === 'number') updateMarketStatus(q.trade_mode);
@@ -1014,6 +1016,7 @@ async function refreshAll() {
       loadSignals(),
       loadHistory(),
       loadAudit(),
+      loadKlineData(),
     ]);
     const rejected = results.find((item) => item.status === "rejected");
     if (rejected && state.token) {
@@ -1335,8 +1338,140 @@ async function refreshQuote() {
     setQuoteChangeUnavailable();
     state.lastQuote = { symbol, bid, ask, spread: Number(data.spread), time: data.time };
     updateTradingQuotePreview(state.lastQuote);
+    updateKlineTick(data.bid, data.ask);
   }
   updateSignalPriceFields(state.selectedSignal);
+}
+
+/* ---- K-line Chart ---- */
+let _klineChart = null;
+let _klineSeries = null;
+let _klineVolumeSeries = null;
+let _klineTimeframe = 'M5';
+let _klineLastBar = null;
+
+function initKlineChart() {
+  const container = document.getElementById('klineChart');
+  if (!container || _klineChart) return;
+
+  _klineChart = LightweightCharts.createChart(container, {
+    layout: {
+      background: { type: 'solid', color: 'transparent' },
+      textColor: '#4a5568',
+      fontSize: 10,
+    },
+    grid: {
+      vertLines: { color: 'rgba(255,255,255,0.03)' },
+      horzLines: { color: 'rgba(255,255,255,0.03)' },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: 'rgba(212,175,55,0.3)', width: 1, style: 2, labelBackgroundColor: '#1c2333' },
+      horzLine: { color: 'rgba(212,175,55,0.3)', width: 1, style: 2, labelBackgroundColor: '#1c2333' },
+    },
+    rightPriceScale: {
+      borderColor: 'rgba(255,255,255,0.06)',
+      scaleMargins: { top: 0.1, bottom: 0.25 },
+    },
+    timeScale: {
+      borderColor: 'rgba(255,255,255,0.06)',
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    handleScroll: { vertTouchDrag: false },
+  });
+
+  _klineSeries = _klineChart.addCandlestickSeries({
+    upColor: '#ef4444',
+    downColor: '#10b981',
+    borderUpColor: '#ef4444',
+    borderDownColor: '#10b981',
+    wickUpColor: '#ef4444',
+    wickDownColor: '#10b981',
+  });
+
+  _klineVolumeSeries = _klineChart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'volume',
+  });
+  _klineChart.priceScale('volume').applyOptions({
+    scaleMargins: { top: 0.8, bottom: 0 },
+  });
+
+  // Responsive
+  const ro = new ResizeObserver(() => {
+    if (_klineChart && container.clientWidth > 0) {
+      _klineChart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+    }
+  });
+  ro.observe(container);
+
+  // Period buttons
+  document.querySelectorAll('.kline-period-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.kline-period-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _klineTimeframe = btn.dataset.tf;
+      loadKlineData();
+    });
+  });
+}
+
+async function loadKlineData() {
+  const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+  if (!symbol || !_klineSeries) return;
+  try {
+    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
+    if (!data || data.status !== 'success' || !Array.isArray(data.bars) || !data.bars.length) return;
+
+    const candles = data.bars.map(b => ({
+      time: Math.floor(new Date(b.time).getTime() / 1000),
+      open: Number(b.open),
+      high: Number(b.high),
+      low: Number(b.low),
+      close: Number(b.close),
+    }));
+
+    const volumes = data.bars.map(b => ({
+      time: Math.floor(new Date(b.time).getTime() / 1000),
+      value: Number(b.tick_volume || b.volume || 0),
+      color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
+    }));
+
+    _klineSeries.setData(candles);
+    _klineVolumeSeries.setData(volumes);
+    _klineLastBar = candles[candles.length - 1];
+
+    // Update last price display
+    const last = data.bars[data.bars.length - 1];
+    setText('klineLastPrice', Number(last.close).toFixed(2));
+
+    _klineChart.timeScale().fitContent();
+  } catch (e) {
+    console.error('loadKlineData:', e);
+  }
+}
+
+function updateKlineTick(bid, ask) {
+  if (!_klineSeries || !_klineLastBar) return;
+  const price = (Number(bid) + Number(ask)) / 2;
+  const now = Math.floor(Date.now() / 1000);
+  const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
+  const barTime = Math.floor(now / tfSeconds) * tfSeconds;
+
+  if (barTime === _klineLastBar.time) {
+    // Update current bar
+    _klineLastBar.close = price;
+    if (price > _klineLastBar.high) _klineLastBar.high = price;
+    if (price < _klineLastBar.low) _klineLastBar.low = price;
+    _klineSeries.update(_klineLastBar);
+  } else {
+    // New bar
+    _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
+    _klineSeries.update(_klineLastBar);
+  }
+
+  setText('klineLastPrice', price.toFixed(2));
 }
 
 function renderPositionRows(positions, withAction) {
@@ -3086,6 +3221,7 @@ document.addEventListener("DOMContentLoaded", () => {
   updateSignalDisplay(null);
   initIcons();
   initBridgeModal();
+  initKlineChart();
   if (state.token) bootstrap();
   else showApp(false);
 });
