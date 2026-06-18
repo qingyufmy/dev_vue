@@ -161,6 +161,11 @@ function setGlobalSymbol(symbol) {
 function createSymbolSelector(inputId, options, opts = {}) {
   const input = document.getElementById(inputId);
   if (!input) return;
+  // Check observe mode: disable selector for Plus/Pro-no-bridge
+  const isPlusReadOnly = state.isPlusReadOnly;
+  const isPro = state.user?.plan === 'pro' || state.user?.role === 'admin';
+  const isProNoBridge = isPro && state.user?.role !== 'admin' && state._usingFallback;
+  const isObserveMode = isPlusReadOnly || isProNoBridge;
   const wrapper = document.createElement("div");
   wrapper.className = "sym-selector";
   input.parentNode.insertBefore(wrapper, input);
@@ -168,6 +173,12 @@ function createSymbolSelector(inputId, options, opts = {}) {
   input.className = "sym-input";
   input.setAttribute("autocomplete", "off");
   input.setAttribute("placeholder", "搜索品种...");
+
+  // Disable in observe mode
+  if (isObserveMode) {
+    input.disabled = true;
+    input.title = isPlusReadOnly ? 'Plus 会员仅可查看' : '请先连接您的 MT5 账户';
+  }
 
   const dropdown = document.createElement("div");
   dropdown.className = "sym-dropdown";
@@ -1637,6 +1648,11 @@ function applyRoleUI() {
       el.disabled = true;
       el.title = 'Plus 会员仅可查看';
     });
+    // Disable symbol selectors (observe mode)
+    document.querySelectorAll('.sym-input').forEach(el => {
+      el.disabled = true;
+      el.title = 'Plus 会员仅可查看';
+    });
     // Keep clickable-badge on all topbar badges (for pointer cursor) — guards in click handlers block action
     // Hide smart close config panel
     const closeConfig = document.getElementById("close-config");
@@ -1666,6 +1682,11 @@ function applyRoleUI() {
     // Keep smart close badge clickable (cursor only, handler guarded)
     const scMode = document.getElementById("smartCloseMode");
     if (scMode) { scMode.classList.add("clickable-badge"); scMode.title = "请先连接 MT5 账户"; }
+    // Disable symbol selectors (observe mode)
+    document.querySelectorAll('.sym-input').forEach(el => {
+      el.disabled = true;
+      el.title = '请先连接您的 MT5 账户';
+    });
     return;
   }
 
@@ -2817,7 +2838,7 @@ const barLabelPlugin = {
       const val = chart.data.datasets[0].data[i];
       if (val === undefined) return;
       ctx.fillStyle = val >= 0 ? '#ef4444' : '#10b981';
-      ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(0), bar.x, bar.y - 5);
+      ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(2), bar.x, bar.y - 5);
     });
     ctx.restore();
   }

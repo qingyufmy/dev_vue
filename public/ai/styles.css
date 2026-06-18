@@ -539,7 +539,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--space-2);
 }
 
 .card-title {
@@ -3820,6 +3820,7 @@ a.signal-link:hover {
 .sym-selector{position:relative;display:inline-block}
 .sym-selector .sym-input{background:rgba(255,255,255,.05);border:1px solid rgba(212,160,23,.25);border-radius:6px;color:var(--text-primary,#fff);padding:4px 8px;font-size:12px;width:100px;outline:none;transition:border-color .2s}
 .sym-selector .sym-input:focus{border-color:var(--gold-primary,#d4a017)}
+.sym-selector .sym-input:disabled{opacity:0.5;cursor:not-allowed;pointer-events:none}
 .sym-selector .sym-dropdown{display:none;position:absolute;top:100%;left:0;z-index:999;min-width:140px;max-height:240px;overflow-y:auto;background:rgba(22,27,34,.97);border:1px solid rgba(212,160,23,.3);border-radius:6px;margin-top:2px;backdrop-filter:blur(12px)}
 .sym-selector .sym-dropdown.open{display:block}
 .sym-selector .sym-option{padding:6px 10px;cursor:pointer;font-size:12px;color:var(--text-secondary,#ccc);transition:background .15s}
