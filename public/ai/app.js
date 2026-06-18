@@ -748,7 +748,7 @@ function handleBridgeData(msg) {
       if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
         state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
         updateTradingQuotePreview(state.lastQuote);
-        updateKlineTick(q.bid, q.ask, q.volume);
+        updateKlineTick(q.bid, q.ask);
       }
       // Update market status from trade_mode
       if (typeof q.trade_mode === 'number') updateMarketStatus(q.trade_mode);
@@ -1376,7 +1376,7 @@ async function refreshQuote() {
     setQuoteChangeUnavailable();
     state.lastQuote = { symbol, bid, ask, spread: Number(data.spread), time: data.time };
     updateTradingQuotePreview(state.lastQuote);
-    updateKlineTick(data.bid, data.ask, data.volume);
+    updateKlineTick(data.bid, data.ask);
   }
   updateSignalPriceFields(state.selectedSignal);
 }
@@ -1387,6 +1387,7 @@ let _klineSeries = null;
 let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
+let _klineVolRefreshTimer = null;
 
 function initKlineChart() {
   const container = document.getElementById('klineChart');
@@ -1510,35 +1511,35 @@ async function loadKlineData() {
 
     _klineChart.timeScale().fitContent();
   } catch (e) {
-    // Suppress errors when bridge is not connected
     if (!String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
       console.error('loadKlineData:', e);
     }
   }
+  // Refresh volume every 30 seconds
+  clearInterval(_klineVolRefreshTimer);
+  _klineVolRefreshTimer = setInterval(loadKlineData, 30000);
 }
 
-function updateKlineTick(bid, ask, tickVolume) {
+function updateKlineTick(bid, ask) {
   if (!_klineSeries) return;
   const price = Number(bid);
   const nowUtc = Math.floor(Date.now() / 1000);
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
   const barTime = Math.floor(nowUtc / tfSeconds) * tfSeconds;
-  const vol = Number(tickVolume) || 0;
 
   if (!_klineLastBar) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.setData([_klineLastBar]);
-    if (_klineVolumeSeries) _klineVolumeSeries.setData([{ time: barTime, value: vol, color: 'rgba(239,68,68,0.3)' }]);
   } else if (barTime === _klineLastBar.time) {
     _klineLastBar.close = price;
     if (price > _klineLastBar.high) _klineLastBar.high = price;
     if (price < _klineLastBar.low) _klineLastBar.low = price;
     _klineSeries.update(_klineLastBar);
-    if (_klineVolumeSeries) _klineVolumeSeries.update({ time: barTime, value: vol, color: price >= _klineLastBar.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)' });
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.update(_klineLastBar);
-    if (_klineVolumeSeries) _klineVolumeSeries.update({ time: barTime, value: vol, color: 'rgba(239,68,68,0.3)' });
+    // New bar: refresh historical data for correct volume
+    setTimeout(loadKlineData, 500);
   }
 
   setText('klineLastPrice', Number(bid).toFixed(2));
