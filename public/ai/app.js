@@ -894,6 +894,22 @@ function handleDisconnect(msg) {
 
 
 
+// Navigate to order in positions/history list from close analysis table
+async function navigateToOrder(ticket, action) {
+  const targetTab = action === 'close' ? 'history' : 'trading';
+  setTab(targetTab);
+  // Wait for tab data to load, then find and highlight the row
+  setTimeout(() => {
+    const selector = targetTab === 'trading' ? '#positionsBody' : '#historyBody';
+    const row = document.querySelector(`${selector} tr[data-ticket="${ticket}"]`);
+    if (row) {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.classList.add('order-highlight');
+      setTimeout(() => row.classList.remove('order-highlight'), 2500);
+    }
+  }, 500);
+}
+
 function setTab(tabId) {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabId);
@@ -1969,21 +1985,6 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     if (raw.startsWith("[")) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length > 0 && arr[0].ticket) closePositions = arr; }
   } catch {}
   let escapedAnalysis = closePositions ? "" : escapeHtml(String(signal.analysis || "").trim() || "暂无行情判断");
-  let closeDetailsBlock = "";
-  if (dir === "close") {
-    // Build structured close details from execution_result
-    const execResult = signal.execution_result ? (typeof signal.execution_result === 'string' ? (() => { try { return JSON.parse(signal.execution_result) } catch { return {} } })() : signal.execution_result) : {};
-    const results = execResult.results || [];
-    if (results.length > 0) {
-      const rows = results.map(r => {
-        const status = r.success ? "✅ 已平仓" : "❌ 失败";
-        const price = r.price ? `平仓价 ${Number(r.price).toFixed(2)}` : "";
-        const reason = r.reason || "";
-        return `<div class="close-detail-row"><span class="close-detail-ticket">#${escapeHtml(String(r.ticket))}</span> <span class="close-detail-status">${status}</span> ${escapeHtml(price)} ${escapeHtml(reason) ? `<em>${escapeHtml(reason)}</em>` : ""}</div>`;
-      }).join("");
-      closeDetailsBlock = `<strong>平仓详情</strong>\n<div class="close-detail-list">${rows}</div>\n\n`;
-    }
-  }
   // Build analysis block: table for structured data, plain text otherwise
   let analysisBlock = "";
   if (closePositions) {
@@ -1992,15 +1993,16 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       const actionLabel = p.action === 'close' ? '🔴 平仓' : '🟢 持有';
       const pct = ((p.confidence || 0) * 100).toFixed(0);
       const confClass = Number(pct) >= 70 ? 'confidence-high' : Number(pct) >= 40 ? 'confidence-mid' : 'confidence-low';
+      const ticket = String(p.ticket);
       return `<tr>
-        <td class="num">#${escapeHtml(String(p.ticket))}</td>
-        <td><span class="${actionClass}">${actionLabel}</span></td>
-        <td class="num"><span class="${confClass}">${pct}%</span></td>
+        <td class="num"><a href="#" class="close-ticket-link" onclick="event.preventDefault(); navigateToOrder('${escapeHtml(ticket)}', '${escapeHtml(p.action)}')">#${escapeHtml(ticket)}</a></td>
+        <td class="action-col"><span class="${actionClass}">${actionLabel}</span></td>
+        <td class="confidence-col"><span class="${confClass}">${pct}%</span></td>
         <td>${escapeHtml(p.reason || "--")}</td>
       </tr>`;
     }).join("\n");
     analysisBlock = `<strong>持仓分析</strong>\n<table class="close-analysis-table">
-  <thead><tr><th>Ticket</th><th>动作</th><th>置信度</th><th>分析理由</th></tr></thead>
+  <thead><tr><th>订单号</th><th>动作</th><th>置信度</th><th>分析理由</th></tr></thead>
   <tbody>${rows}</tbody>
 </table>`;
   } else {
@@ -2059,7 +2061,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-section">
       <div class="analysis-section-title"><i data-lucide="file-text" size="14"></i>推理正文</div>
     </div>
-    <div id="analysisTextContent" class="analysis-text collapsed">${closeDetailsBlock}${analysisBlock}${reasoningBlock}</div>
+    <div id="analysisTextContent" class="analysis-text collapsed">${analysisBlock}${reasoningBlock}</div>
     <div class="analysis-expand-row">
       <button class="btn-expand-analysis" type="button" data-action="toggle-analysis-text">展开完整推理</button>
     </div>
@@ -2548,7 +2550,7 @@ async function loadHistory() {
       ? `<td class="num"><a href="#" class="signal-link close-price-link" onclick="event.preventDefault(); openAnalysisFromHistory(${closeInfo.signalId})" title="点击查看平仓分析">${escapeHtml(raw(closeInfo.price ?? exitPrice))}</a></td>`
       : `<td class="num">${escapeHtml(raw(exitPrice))}</td>`;
     return `
-    <tr>
+    <tr data-ticket="${escapeHtml(String(ticket))}">
       <td class="num">${escapeHtml(formatTime(row.entry_time))}</td>
       <td>${escapeHtml(row.symbol)}</td>
       ${ticketCell(ticket, tickets)}

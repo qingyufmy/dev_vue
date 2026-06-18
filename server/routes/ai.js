@@ -1506,12 +1506,6 @@ async function runSmartCloseCycle(userId) {
   const closeCfg = await getCloseConfig(userId)
   if (!closeCfg || !closeCfg.enabled) return
 
-  // Check if trading is enabled (toggle_trade)
-  if (!isTradeEnabled(userId)) {
-    console.log(`[SmartClose] User ${userId}: trading disabled, skipping`)
-    return
-  }
-
   // Check Pro permission
   const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
   if (!user || user.plan !== 'pro') return

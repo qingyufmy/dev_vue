@@ -1562,6 +1562,32 @@ textarea:focus {
 .close-analysis-table .confidence-low {
   color: rgba(255, 255, 255, 0.5);
 }
+.close-analysis-table .action-col {
+  min-width: 90px;
+}
+.close-analysis-table .confidence-col {
+  min-width: 80px;
+}
+.close-analysis-table .close-ticket-link {
+  color: var(--accent-primary, #f0b90b);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.15s;
+}
+.close-analysis-table .close-ticket-link:hover {
+  color: var(--accent-hover, #fcd535);
+  text-decoration: underline;
+}
+
+/* Order row highlight animation */
+@keyframes order-highlight-flash {
+  0%   { background: rgba(240, 185, 11, 0.35); }
+  50%  { background: rgba(240, 185, 11, 0.18); }
+  100% { background: transparent; }
+}
+.order-highlight {
+  animation: order-highlight-flash 2.5s ease-out;
+}
 
 .date-badge {
   display: inline-flex;
