@@ -666,18 +666,20 @@
               <button class="card-action-btn" data-action="refresh-history-page"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
             </div>
             <div class="history-chart-wrap">
-              <div class="chart-stats-row">
-                <div class="chart-stat"><span class="chart-stat-label">总交易</span><span id="chartTotalTrades" class="chart-stat-value">--</span></div>
-                <div class="chart-stat"><span class="chart-stat-label">胜率</span><span id="chartWinRate" class="chart-stat-value">--</span></div>
-                <div class="chart-stat"><span class="chart-stat-label">盈亏比</span><span id="chartProfitFactor" class="chart-stat-value">--</span></div>
-                <div class="chart-stat"><span class="chart-stat-label">最大回撤</span><span id="chartMaxDD" class="chart-stat-value">--</span></div>
-              </div>
-              <div class="chart-date-range">
-                <input type="date" id="chartDateFrom" class="filter-date">
-                <span class="chart-date-sep">至</span>
-                <input type="date" id="chartDateTo" class="filter-date">
-                <button id="chartDateApply" class="btn-filter">筛选</button>
-                <button id="chartDateReset" class="btn-reset">重置</button>
+              <div class="chart-top-bar">
+                <div class="chart-stats-row">
+                  <div class="chart-stat"><span class="chart-stat-label">总交易</span><span id="chartTotalTrades" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">胜率</span><span id="chartWinRate" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">盈亏比</span><span id="chartProfitFactor" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">最大回撤</span><span id="chartMaxDD" class="chart-stat-value">--</span></div>
+                </div>
+                <div class="chart-date-range">
+                  <input type="date" id="chartDateFrom" class="chart-date-input">
+                  <span class="chart-date-sep">—</span>
+                  <input type="date" id="chartDateTo" class="chart-date-input">
+                  <button id="chartDateApply" class="chart-btn chart-btn-apply"><i data-lucide="filter" size="12"></i></button>
+                  <button id="chartDateReset" class="chart-btn chart-btn-reset"><i data-lucide="x" size="12"></i></button>
+                </div>
               </div>
               <canvas id="historyChart" height="160"></canvas>
             </div>

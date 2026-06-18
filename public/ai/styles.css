@@ -1600,11 +1600,17 @@ textarea:focus {
   width: 100% !important;
   max-height: 160px;
 }
-.chart-stats-row {
+.chart-top-bar {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-2);
   padding: var(--space-2) 0;
+}
+.chart-stats-row {
+  display: flex;
+  gap: var(--space-4);
 }
 .chart-stat {
   display: flex;
@@ -1628,12 +1634,55 @@ textarea:focus {
 .chart-date-range {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: 6px;
+  flex-shrink: 0;
+}
+.chart-date-input {
+  background: var(--bg-input, #1c2333);
+  border: 1px solid var(--border-default, #1e293b);
+  border-radius: 6px;
+  color: var(--text-secondary, #e2e8f0);
+  font-size: 12px;
+  padding: 5px 8px;
+  width: 120px;
+  outline: none;
+  color-scheme: dark;
+  transition: border-color 0.2s;
+}
+.chart-date-input:focus {
+  border-color: var(--gold-primary, #d4af37);
 }
 .chart-date-sep {
-  color: var(--text-muted);
-  font-size: 12px;
+  color: var(--text-muted, #4a5568);
+  font-size: 11px;
+}
+.chart-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.chart-btn-apply {
+  background: var(--gold-primary, #d4af37);
+  color: #000;
+}
+.chart-btn-apply:hover {
+  background: var(--gold-light, #e8c54a);
+  box-shadow: 0 0 8px rgba(212,175,55,0.3);
+}
+.chart-btn-reset {
+  background: transparent;
+  border: 1px solid var(--border-default, #1e293b);
+  color: var(--text-muted, #4a5568);
+}
+.chart-btn-reset:hover {
+  border-color: var(--text-muted, #4a5568);
+  color: var(--text-secondary, #e2e8f0);
 }
 
 /* History filter bar */
