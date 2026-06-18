@@ -2628,7 +2628,9 @@ function auditRowClass(status) {
 }
 
 function auditActionType(action) {
-  return String(action || "").startsWith("ai_") ? "ai" : "manual";
+  const s = String(action || "");
+  if (s.startsWith("ai_") || s.startsWith("smart_close")) return "ai";
+  return "manual";
 }
 
 function auditReasonLabel(reason) {
