@@ -11,7 +11,7 @@
     </script>
     <title>AURUM AI MT5 Control Panel</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260618-nav" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260618-filter-ui" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -672,6 +672,33 @@
               <div><span>提款</span><strong id="historyWithdrawal" class="num">--</strong></div>
               <div><span>结余</span><strong id="historyNetResult" class="num">--</strong></div>
             </div>
+            <div class="table-toolbar history-filter-bar">
+              <div class="filter-field">
+                <label class="filter-label">开仓时间</label>
+                <input type="date" id="filterEntryFrom" class="filter-date">
+                <span class="filter-range-sep">~</span>
+                <input type="date" id="filterEntryTo" class="filter-date">
+              </div>
+              <div class="filter-field">
+                <label class="filter-label">平仓时间</label>
+                <input type="date" id="filterCloseFrom" class="filter-date">
+                <span class="filter-range-sep">~</span>
+                <input type="date" id="filterCloseTo" class="filter-date">
+              </div>
+              <select id="filterDirection" class="filter-select">
+                <option value="">全部方向</option>
+                <option value="BUY">买入</option>
+                <option value="SELL">卖出</option>
+              </select>
+              <select id="filterProfit" class="filter-select">
+                <option value="">全部盈亏</option>
+                <option value="profit">盈利</option>
+                <option value="loss">亏损</option>
+              </select>
+              <button class="btn-filter-action" id="historyFilterApply" type="button"><i data-lucide="search" size="12"></i>筛选</button>
+              <button class="btn-filter-reset" id="historyFilterReset" type="button">重置</button>
+              <span id="historyFilterCount" class="record-count"></span>
+            </div>
             <div class="table-wrap">
               <table class="data-table">
                 <thead><tr><th>开仓时间</th><th>品种</th><th>订单号</th><th>方向</th><th>手数</th><th>入场价</th><th>止损</th><th>止盈</th><th>平仓时间</th><th>平仓价</th><th>盈亏</th><th>盈点</th><th>备注</th></tr></thead>
@@ -860,6 +887,6 @@
     </div>
     <div id="toastHost" class="toast-host"></div>
     <script src="lucide.js"></script>
-    <script src="/ai/app.js?v=20260618-nav"></script>
+    <script src="/ai/app.js?v=20260618-filter-ui"></script>
   </body>
 </html>

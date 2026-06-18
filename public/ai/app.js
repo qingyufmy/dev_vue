@@ -2520,8 +2520,22 @@ function setHistoryZeroClass(id, value) {
 async function loadHistory() {
   try {
   const filters = state.historyFilters;
+  // Collect filter values
+  const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
+  const entryTo = document.getElementById('filterEntryTo')?.value || '';
+  const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
+  const closeTo = document.getElementById('filterCloseTo')?.value || '';
+  const direction = document.getElementById('filterDirection')?.value || '';
+  const profit = document.getElementById('filterProfit')?.value || '';
+  const filterParams = {};
+  if (entryFrom) filterParams.entry_from = entryFrom;
+  if (entryTo) filterParams.entry_to = entryTo;
+  if (closeFrom) filterParams.close_from = closeFrom;
+  if (closeTo) filterParams.close_to = closeTo;
+  if (direction) filterParams.direction = direction;
+  if (profit) filterParams.profit_filter = profit;
   const [data] = await Promise.all([
-    wsApi("history", { page: filters.page, page_size: filters.pageSize }),
+    wsApi("history", { page: filters.page, page_size: filters.pageSize, ...filterParams }),
     loadSignalTickets(),
     loadCloseSignalTickets(),
   ]);
@@ -2569,6 +2583,7 @@ async function loadHistory() {
   }).join("") : `<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>`;
   const pg = data.pagination || {};
   renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, pg.total_count || 0, "history");
+  setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
   } catch (e) { console.error("loadHistory:", e); }
 }
 
@@ -2801,6 +2816,18 @@ function bindEvents() {
     const analysisButton = event.target.closest("[data-analysis-id]");
     if (analysisButton) openAnalysisFromHistory(analysisButton.dataset.analysisId);
     if (closeButton) closePosition(closeButton.dataset.closeTicket);
+  });
+
+  // History filter buttons
+  document.getElementById('historyFilterApply')?.addEventListener('click', () => {
+    state.historyFilters.page = 1;
+    loadHistory();
+  });
+  document.getElementById('historyFilterReset')?.addEventListener('click', () => {
+    ['filterEntryFrom','filterEntryTo','filterCloseFrom','filterCloseTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
+    state.historyFilters.page = 1;
+    loadHistory();
   });
 }
 

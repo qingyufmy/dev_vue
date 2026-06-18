@@ -350,8 +350,43 @@ async function handleBrowserCommand(ws, userId, msg) {
           bridgeOk = true
           historyUserId = adminUserId
         }
+        // Check if any filter is active
+        const hasFilter = params.entry_from || params.entry_to || params.close_from || params.close_to || params.direction || params.profit_filter
         if (bridgeOk) {
-          result = await ai.mt5Bridge(historyUserId, 'history', { page: params.page || 1, page_size: params.page_size || 20 })
+          // When filtering, fetch all data (large page_size) so we can filter server-side
+          const bridgePageSize = hasFilter ? 9999 : (params.page_size || 20)
+          result = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: bridgePageSize })
+          // Apply filters if present
+          if (hasFilter && result?.status === 'success' && Array.isArray(result.orders)) {
+            let orders = result.orders
+            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '') >= params.entry_from)
+            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '') <= params.entry_to + 'T23:59:59')
+            if (params.close_from) orders = orders.filter(o => (o.close_time || o.time || '') >= params.close_from)
+            if (params.close_to) orders = orders.filter(o => (o.close_time || o.time || '') <= params.close_to + 'T23:59:59')
+            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
+            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit) > 0)
+            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit) < 0)
+            // Recalculate statistics from filtered data
+            const tp = orders.reduce((s, o) => s + Number(o.profit || 0), 0)
+            const stats = result.statistics || {}
+            result.statistics = {
+              ...stats,
+              total_profit: Math.round(tp * 100) / 100,
+              net_result: Math.round((tp + (stats.credit || 0) + (stats.deposit || 0) - (stats.withdrawal || 0)) * 100) / 100,
+              trade_count: orders.length
+            }
+            // Paginate filtered results
+            const page = params.page || 1
+            const pageSize = params.page_size || 20
+            const si = (page - 1) * pageSize
+            result.orders = orders.slice(si, si + pageSize)
+            result.pagination = {
+              current_page: page,
+              page_size: pageSize,
+              total_count: orders.length,
+              total_pages: Math.max(Math.ceil(orders.length / pageSize), 1)
+            }
+          }
           // TEMP DIAG: check order lookup
           const diag = result?._diag
           if (diag) console.log(`[OrdDiag] lookup_count=${diag.order_lookup_count} first_keys=${JSON.stringify(diag.order_diag?.first_keys)} sample_tp=${diag.order_diag?.sample_tp} sample_sl=${diag.order_diag?.sample_sl} via_attr_tp=${diag.order_diag?.via_attr_tp} via_attr_sl=${diag.order_diag?.via_attr_sl} has_tp=${diag.order_diag?.has_tp_attr} has_sl=${diag.order_diag?.has_sl_attr} ticket=${diag.order_diag?.ticket_sample}`)
