@@ -911,8 +911,10 @@ function handleHeartbeat(msg) {
   if (isLive !== wasLive || usingFallback !== wasFallback) {
     applyRoleUI();
     if (isLive) {
+      // Clear caches so bridge-dependent data refreshes
+      _historyCache = null;
+      _historyChartCache = null;
       refreshAll().then(() => {
-        // Refresh current tab after general data loads
         refreshTabData(activeTabId()).catch(() => {});
       }).catch(() => {});
     }
@@ -3049,6 +3051,9 @@ async function refreshTradingPage() {
 }
 
 async function refreshHistoryPage() {
+  // Clear caches so fresh data is fetched
+  _historyCache = null;
+  _historyChartCache = null;
   await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
 }
 
