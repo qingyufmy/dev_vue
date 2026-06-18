@@ -2634,39 +2634,6 @@ const zeroLinePlugin = {
   }
 };
 
-/* ---- Vertical axis labels plugin ---- */
-const axisLabelPlugin = {
-  id: 'axisLabels',
-  afterDraw(chart) {
-    const ctx = chart.ctx;
-    const area = chart.chartArea;
-    const yScale = chart.scales.y;
-    const y2Scale = chart.scales.y2;
-    if (!yScale || !y2Scale) return;
-    ctx.save();
-    ctx.font = '10px sans-serif';
-    ctx.fillStyle = '#4a5568';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    // Left axis: "每日" rotated -90deg
-    const leftX = (area.left + yScale.left) / 2 || area.left - 28;
-    const centerY = (area.top + area.bottom) / 2;
-    ctx.save();
-    ctx.translate(leftX, centerY);
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillText('每日', 0, 0);
-    ctx.restore();
-    // Right axis: "累计" rotated 90deg
-    const rightX = (area.right + y2Scale.right) / 2 || area.right + 28;
-    ctx.save();
-    ctx.translate(rightX, centerY);
-    ctx.rotate(Math.PI / 2);
-    ctx.fillText('累计', 0, 0);
-    ctx.restore();
-    ctx.restore();
-  }
-};
-
 async function loadHistoryChart() {
   try {
     // Collect filter params
@@ -2720,7 +2687,7 @@ async function loadHistoryChart() {
     if (_historyChart) _historyChart.destroy();
     _historyChart = new Chart(ctx, {
       type: 'bar',
-      plugins: [zeroLinePlugin, barLabelPlugin, axisLabelPlugin],
+      plugins: [zeroLinePlugin, barLabelPlugin],
       data: {
         labels,
         datasets: [
@@ -2822,7 +2789,7 @@ async function loadHistoryChart() {
               font: { size: 10 },
               callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
             },
-            title: { display: false },
+            title: { display: true, text: '每日', color: '#4a5568', font: { size: 10 }, rotation: -90 },
           },
           y2: {
             position: 'right',
@@ -2832,7 +2799,7 @@ async function loadHistoryChart() {
               font: { size: 10 },
               callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
             },
-            title: { display: false },
+            title: { display: true, text: '累计', color: '#4a5568', font: { size: 10 }, rotation: 90 },
           },
           y3: {
             position: 'right',
