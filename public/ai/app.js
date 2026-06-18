@@ -1355,6 +1355,8 @@ function initKlineChart() {
   if (!container || _klineChart) return;
 
   _klineChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth || 400,
+    height: container.clientHeight || 220,
     layout: {
       background: { type: 'solid', color: 'transparent' },
       textColor: '#4a5568',
@@ -1379,6 +1381,7 @@ function initKlineChart() {
       secondsVisible: false,
     },
     handleScroll: { vertTouchDrag: false },
+    watermark: { visible: false },
   });
 
   _klineSeries = _klineChart.addCandlestickSeries({
@@ -1422,18 +1425,18 @@ async function loadKlineData() {
   if (!symbol || !_klineSeries) return;
   try {
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
-    if (!data || data.status !== 'success' || !Array.isArray(data.bars) || !data.bars.length) return;
+    if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
-    const candles = data.bars.map(b => ({
-      time: Math.floor(new Date(b.time).getTime() / 1000),
+    const candles = data.rates.map(b => ({
+      time: Math.floor(new Date(b.time + 'Z').getTime() / 1000),
       open: Number(b.open),
       high: Number(b.high),
       low: Number(b.low),
       close: Number(b.close),
     }));
 
-    const volumes = data.bars.map(b => ({
-      time: Math.floor(new Date(b.time).getTime() / 1000),
+    const volumes = data.rates.map(b => ({
+      time: Math.floor(new Date(b.time + 'Z').getTime() / 1000),
       value: Number(b.tick_volume || b.volume || 0),
       color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
@@ -1443,7 +1446,7 @@ async function loadKlineData() {
     _klineLastBar = candles[candles.length - 1];
 
     // Update last price display
-    const last = data.bars[data.bars.length - 1];
+    const last = data.rates[data.rates.length - 1];
     setText('klineLastPrice', Number(last.close).toFixed(2));
 
     _klineChart.timeScale().fitContent();
