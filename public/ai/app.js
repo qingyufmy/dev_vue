@@ -1479,6 +1479,10 @@ function _createKlineChart(container) {
   document.querySelectorAll('.kline-period-btn').forEach(btn => {
     btn.addEventListener('click', () => switchKlineTimeframe(btn.dataset.tf));
   });
+
+  // Volume refresh every 1 second
+  clearInterval(_klineVolRefreshTimer);
+  _klineVolRefreshTimer = setInterval(refreshKlineVolume, 1000);
 }
 
 async function loadKlineData() {
@@ -1515,9 +1519,21 @@ async function loadKlineData() {
       console.error('loadKlineData:', e);
     }
   }
-  // Refresh volume every 30 seconds
-  clearInterval(_klineVolRefreshTimer);
-  _klineVolRefreshTimer = setInterval(loadKlineData, 30000);
+}
+
+// Lightweight: fetch only the last bar's volume every second
+async function refreshKlineVolume() {
+  if (!_klineVolumeSeries || !_klineLastBar) return;
+  const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+  try {
+    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 1 });
+    if (data && data.status === 'success' && Array.isArray(data.rates) && data.rates.length) {
+      const b = data.rates[0];
+      const vol = Number(b.tick_volume || b.volume || 0);
+      const color = Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)';
+      _klineVolumeSeries.update({ time: _klineLastBar.time, value: vol, color: color });
+    }
+  } catch (e) { /* ignore */ }
 }
 
 function updateKlineTick(bid, ask) {
