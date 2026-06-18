@@ -2013,8 +2013,10 @@ async function loadCloseConfig() {
 
 async function saveCloseConfig() {
   try {
+    // Preserve current enabled state, don't force-enable on save
+    const closeCfg = await wsApi('get_close_config');
     const payload = {
-      enabled: true,
+      enabled: closeCfg?.config?.enabled || false,
       api_provider: document.getElementById('closeApiProvider').value,
       model_name: document.getElementById('closeModelName').value,
       api_base_url: document.getElementById('closeApiBaseUrl').value,
@@ -2033,7 +2035,7 @@ async function saveCloseConfig() {
     await loadCloseConfig();
     const closeStatus = await wsApi('close_status');
     state.closeScheduler = closeStatus.scheduler || {};
-    updateSmartCloseBadge(true, payload.check_interval_seconds);
+    updateSmartCloseBadge(payload.enabled, payload.check_interval_seconds);
   } catch (e) { toast(e.message, 'error'); }
 }
 

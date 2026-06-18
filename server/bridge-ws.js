@@ -772,12 +772,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
         const saved = await ai.saveCloseConfig(userId, cfg)
-        // Restart scheduler if enabled
-        if (saved?.enabled) {
+        // Only restart scheduler if it was already running, don't auto-start
+        const schedulerState = ai.closeSchedulerState?.[userId]
+        if (schedulerState?.running) {
           ai.stopSmartCloseScheduler(userId)
           ai.startSmartCloseScheduler(userId)
-        } else {
-          ai.stopSmartCloseScheduler(userId)
         }
         result = { status: 'success', config: saved }
         break

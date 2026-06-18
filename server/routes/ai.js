@@ -1699,5 +1699,5 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   startTradeReviewScheduler, stopTradeReviewScheduler,
   getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
   TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS,
-  runSmartCloseCycle }
+  runSmartCloseCycle, closeSchedulerState }
 export default router
