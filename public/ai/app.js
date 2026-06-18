@@ -1432,7 +1432,7 @@ async function loadKlineData() {
   if (!symbol || !_klineSeries) { console.log('[KLINE] skip load:', {symbol, hasSeries:!!_klineSeries}); return; }
   try {
     console.log('[KLINE] loading', symbol, _klineTimeframe);
-    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
+    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 100 });
     console.log('[KLINE] data received:', data?.status, 'rates:', data?.rates?.length);
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
@@ -1465,6 +1465,7 @@ async function loadKlineData() {
 }
 
 function updateKlineTick(bid, ask) {
+  console.log('[KLINE] tick:', bid, 'series:', !!_klineSeries, 'lastBar:', !!_klineLastBar);
   if (!_klineSeries) return;
   const price = Number(bid); // K线以bid价（卖出价）为基准，与MT5图表一致
   const now = Math.floor(Date.now() / 1000);
@@ -1481,6 +1482,7 @@ function updateKlineTick(bid, ask) {
     if (price > _klineLastBar.high) _klineLastBar.high = price;
     if (price < _klineLastBar.low) _klineLastBar.low = price;
     _klineSeries.update(_klineLastBar);
+    console.log('[KLINE] bar updated:', _klineLastBar);
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.update(_klineLastBar);
