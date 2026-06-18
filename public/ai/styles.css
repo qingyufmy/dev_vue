@@ -1003,6 +1003,10 @@ textarea:focus {
   border-radius: 6px;
   overflow: hidden;
 }
+.kline-chart-container a[href*="tradingview"],
+.kline-chart-container #tv-attr-logo {
+  display: none !important;
+}
 
 /* Market status dot */
 .market-dot {

@@ -1381,7 +1381,7 @@ function initKlineChart() {
       secondsVisible: false,
     },
     handleScroll: { vertTouchDrag: false },
-    watermark: { visible: false },
+    watermark: { visible: false, text: '', color: 'transparent' },
   });
 
   _klineSeries = _klineChart.addCandlestickSeries({
@@ -1400,6 +1400,18 @@ function initKlineChart() {
   _klineChart.priceScale('volume').applyOptions({
     scaleMargins: { top: 0.8, bottom: 0 },
   });
+
+  // Remove TradingView attribution logo
+  const tvLogo = container.querySelector('#tv-attr-logo') || container.querySelector('a[href*="tradingview"]');
+  if (tvLogo) tvLogo.remove();
+  // Also watch for late-inserted logo
+  new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(n) {
+        if (n.tagName === 'A' && n.href && n.href.indexOf('tradingview') > -1) n.remove();
+      });
+    });
+  }).observe(container, { childList: true });
 
   // Responsive
   const ro = new ResizeObserver(() => {
