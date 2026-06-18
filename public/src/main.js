@@ -3484,6 +3484,7 @@ const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
         admin_delete_reply: '管理员删回复', trade_create: '添加战绩',
         course_resources_upload: '上传课程资料',
         trade_delete: '删除战绩', mt5_credentials_access: '查看MT5账号',
+        smart_close: 'AI 智能平仓', smart_close_rule: 'AI 智能平仓',
       }
       container.innerHTML = `
         <table class="admin-table" style="font-size:13px;">

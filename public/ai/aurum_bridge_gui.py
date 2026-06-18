@@ -696,9 +696,35 @@ class AurumBridge:
                 deposit = withdrawal = credit = 0.0
                 date_to = datetime.utcnow() + timedelta(days=1)
                 date_from = date_to - timedelta(days=31)
+                # Fetch both deals (trade executions) and orders (contain tp/sl)
                 deals = self.mt5.history_deals_get(date_from, date_to)
                 if deals is None: return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
                 deal_rows = [d._asdict() for d in deals]
+                # Build order lookup: order_ticket -> {tp, sl}
+                orders = self.mt5.history_orders_get(date_from, date_to)
+                order_lookup = {}
+                order_diag = {"count": len(orders) if orders else 0, "first_keys": None, "sample_tp": None, "sample_sl": None, "via_attr_tp": None, "via_attr_sl": None, "has_tp_attr": None, "has_sl_attr": None, "ticket_sample": None, "lookup_size": 0}
+                if orders:
+                    o0 = orders[0]
+                    od0 = o0._asdict()
+                    order_diag["first_keys"] = sorted(od0.keys())
+                    order_diag["sample_tp"] = od0.get("tp")
+                    order_diag["sample_sl"] = od0.get("sl")
+                    order_diag["has_tp_attr"] = hasattr(o0, "tp")
+                    order_diag["has_sl_attr"] = hasattr(o0, "sl")
+                    order_diag["via_attr_tp"] = getattr(o0, "tp", "MISSING")
+                    order_diag["via_attr_sl"] = getattr(o0, "sl", "MISSING")
+                    order_diag["ticket_sample"] = od0.get("ticket")
+                    for o in orders:
+                        od = o._asdict()
+                        ticket = od.get("ticket")
+                        if ticket is None:
+                            continue
+                        tp = getattr(o, "tp", 0) or od.get("tp") or 0
+                        sl = getattr(o, "sl", 0) or od.get("sl") or 0
+                        if tp != 0 or sl != 0:
+                            order_lookup[int(ticket)] = {"tp": tp, "sl": sl}
+                    order_diag["lookup_size"] = len(order_lookup)
                 deals_by_pos = {}
                 balance_type = getattr(self.mt5, "DEAL_TYPE_BALANCE", 2)
                 credit_type = getattr(self.mt5, "DEAL_TYPE_CREDIT", 3)
@@ -734,6 +760,8 @@ class AurumBridge:
                     if ep and xp and pt:
                         pp = round((float(xp)-float(ep))/pt, 1) if direction=="BUY" else round((float(ep)-float(xp))/pt, 1)
                     eo = (ed or {}).get("order") or pid
+                    # Look up tp/sl from the order record
+                    ord_info = order_lookup.get(eo, {})
                     rows.append({"ticket": eo, "deal_ticket": d.get("ticket"), "order": eo,
                         "close_order": d.get("order"), "position_id": pid, "symbol": sym,
                         "type": direction, "volume": d.get("volume"), "entry_price": ep, "exit_price": xp,
@@ -741,7 +769,8 @@ class AurumBridge:
                         "commission": d.get("commission"), "profit_points": pp,
                         "entry_time": _mt5_time((ed or {}).get("time")),
                         "close_time": _mt5_time(d.get("time")), "time": _mt5_time(d.get("time")),
-                        "comment": d.get("comment")})
+                        "comment": d.get("comment"),
+                        "take_profit": ord_info.get("tp"), "stop_loss": ord_info.get("sl")})
                 rows.sort(key=lambda r: r.get("close_time") or r.get("entry_time") or "", reverse=True)
                 total = len(rows); si = max(page-1,0)*page_size
                 pr = rows[si:si+page_size]
@@ -758,7 +787,8 @@ class AurumBridge:
                     "withdrawal": round(withdrawal,2), "net_result": round(nr,2),
                     "trade_count": total, "total_volume": round(sum(float(r.get("volume") or 0) for r in rows),2)},
                     "pagination": {"current_page": page, "page_size": page_size,
-                        "total_count": total, "total_pages": max(math.ceil(total/page_size),1)}, "source": "mt5"}
+                        "total_count": total, "total_pages": max(math.ceil(total/page_size),1)}, "source": "mt5",
+                    "_diag": {"order_lookup_count": len(order_lookup), "order_diag": order_diag}}
 
             elif action == "diagnostics":
                 acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()

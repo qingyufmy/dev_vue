@@ -857,18 +857,26 @@ function handleHeartbeat(msg) {
   const isLive = msg.mt5_connected && msg.mt5_alive;
   const usingFallback = msg.using_fallback;
   const wasLive = state._lastGatewayLive;
+  const wasFallback = state._lastUsingFallback;
   state._usingFallback = usingFallback;
 
   if (usingFallback) {
-    setBadge("gatewayMode", "观摩模式-管理员账户", "warning");
+    if (state.isPlusReadOnly) {
+      setBadge("gatewayMode", "观摩模式-管理员账户", "warning");
+    } else {
+      setBadge("gatewayMode", "观摩模式-管理员账户（请连接您的MT5）", "warning");
+    }
   } else {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
   }
   if (!isLive && !usingFallback) setBadge("tradeMode", "请先启动桥接", "neutral");
-  const wasFallback = state._lastUsingFallback;
+
   state._lastGatewayLive = isLive;
   state._lastUsingFallback = usingFallback;
+
+  // Bridge state changed → update role-based UI
   if (isLive !== wasLive || usingFallback !== wasFallback) {
+    applyRoleUI();
     if (isLive) { refreshAll().catch(() => {}); }
     else if (!usingFallback) {
       state.positions = [];
@@ -1068,7 +1076,9 @@ async function loadStatus() {
   // Update smart close badge
   try {
     const closeData = await wsApi('get_close_config');
+    const closeStatus = await wsApi('close_status');
     const closeCfg = closeData.config || {};
+    state.closeScheduler = closeStatus.scheduler || {};
     updateSmartCloseBadge(!!closeCfg.enabled, closeCfg.check_interval_seconds);
   } catch {
     setBadge('smartCloseMode', '智能平仓 --', 'neutral');
@@ -1078,14 +1088,14 @@ async function loadStatus() {
 // ============ Gateway Badge Click ============
 // ============ Gateway Badge Click — MT5 connect/disconnect ============
 async function handleGatewayModeClick() {
-  // Plus users in observation mode: show upgrade prompt
-  if (state.isPlusReadOnly && state._usingFallback) {
-    toast("升级会员即可连接 MT5 账户", "warning");
+  // Plus users: blocked from bridge download entirely
+  if (state.isPlusReadOnly) {
+    toast("Pro 会员可连接 MT5 账户", "warning");
     return;
   }
+  // Pro without own bridge: allow bridge download modal
   const modal = $("mt5BridgeModal");
   if (!modal) return;
-  // Toggle: if already open, close it
   if (!modal.classList.contains("hidden")) {
     modal.classList.add("hidden");
     return;
@@ -1146,6 +1156,8 @@ function initBridgeModal() {
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
 async function handleTradeModeClick() {
+  if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
+  if (!state.isAdmin && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   const health = await wsApi("health").catch(() => null);
   const gateway = health?.gateway || {};
   const currentlyEnabled = gateway.live_trading_enabled;
@@ -1167,6 +1179,7 @@ async function handleTradeModeClick() {
 
 // ============ Auto Toggle (Simple) ============
 async function handleAutoToggle() {
+  if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   try {
     const result = await wsApi('toggle_auto');
     toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
@@ -1186,12 +1199,17 @@ async function handleAutoToggle() {
 }
 
 async function handleSmartCloseToggle() {
+  if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
+  if (!state.isAdmin && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   try {
     const data = await wsApi('get_close_config');
     const cfg = data.config || {};
     const newEnabled = !cfg.enabled;
     await wsApi('toggle_close', { enabled: newEnabled });
     toast(newEnabled ? '智能平仓已开启' : '智能平仓已关闭', 'success');
+    // Fetch latest status for pause info
+    const closeStatus = await wsApi('close_status');
+    state.closeScheduler = closeStatus.scheduler || {};
     updateSmartCloseBadge(newEnabled, cfg.check_interval_seconds);
     if (newEnabled) {
       toast('正在执行首次持仓分析...', 'info');
@@ -1371,27 +1389,96 @@ async function loadPositions() {
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
   const isPlusReadOnly = state.isPlusReadOnly;
+  const isPro = state.user?.plan === "pro" || isAdmin;
+  // Pro without bridge = has own account but bridge not connected (using admin fallback)
+  const isProNoBridge = isPro && !isAdmin && state._usingFallback;
 
-  // Model tab: hidden for plus users
+  // Free users: locked out entirely (proOverlay shown during init)
+
+  // === Plus users: observation-only mode ===
+  // Hide model config tab
   const modelTab = document.querySelector('.nav-item[data-tab="ai-config"]');
   if (modelTab) modelTab.style.display = isPlusReadOnly ? "none" : "";
 
-  // Sub-tabs: non-admin only sees manual config
+  // Hide auto config sub-tab from non-admin
   const autoTab = document.querySelector('.config-sub-tab[data-config-tab="auto-config"]');
-  if (autoTab) autoTab.style.display = isAdmin ? "" : "none";
-  // If non-admin, force switch to manual tab
-  if (!isAdmin) {
+  if (autoTab) autoTab.style.display = (isAdmin && !isPlusReadOnly) ? "" : "none";
+  if (!isAdmin || isPlusReadOnly) {
     const manualTab = document.querySelector('.config-sub-tab[data-config-tab="manual-config"]');
     if (manualTab) manualTab.click();
   }
 
-  // Plus read-only: disable all action buttons
+  // Keep gateway badge clickable for all users — guards in click handlers block action
+  const gatewayBadge = document.getElementById("gatewayMode");
+  if (gatewayBadge) {
+    gatewayBadge.classList.add("clickable-badge");
+    if (isPlusReadOnly) {
+      gatewayBadge.title = "Plus 会员仅可查看";
+    } else if (isProNoBridge) {
+      gatewayBadge.title = "";
+    } else {
+      gatewayBadge.title = "";
+    }
+  }
+
+  // Plus read-only: disable all action buttons, hide bridge download
   if (isPlusReadOnly) {
+    // Show observation banner
+    const banner = document.getElementById("observeBanner");
+    if (banner) banner.classList.remove("hidden");
     document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, [data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
       el.title = 'Plus 会员仅可查看';
     });
+    // Keep clickable-badge on all topbar badges (for pointer cursor) — guards in click handlers block action
+    // Hide smart close config panel
+    const closeConfig = document.getElementById("close-config");
+    if (closeConfig) closeConfig.style.display = "none";
+    return;
   }
+
+  // === Pro without bridge: data visible, trade disabled, bridge download allowed ===
+  if (isProNoBridge) {
+    // Hide observation banner
+    const banner = document.getElementById("observeBanner");
+    if (banner) banner.classList.add("hidden");
+    // Disable trade-related buttons
+    document.querySelectorAll('[data-action="execute"], [data-action="close-position"]').forEach(el => {
+      el.disabled = true;
+      el.title = '请先连接您的 MT5 账户';
+    });
+    // Disable trade toggle, keep clickable-badge (cursor only, handler guarded)
+    const tradeMode = document.getElementById("tradeMode");
+    if (tradeMode) { tradeMode.classList.add("clickable-badge"); tradeMode.title = "请先连接 MT5 账户"; }
+    // Keep gateway badge clickable (opens bridge download modal)
+    const gatewayBadge2 = document.getElementById("gatewayMode");
+    if (gatewayBadge2) { gatewayBadge2.classList.add("clickable-badge"); gatewayBadge2.title = ""; }
+    // Allow execute button but show disabled state
+    const execBtn = document.getElementById("executeSignalBtn");
+    if (execBtn) { execBtn.disabled = true; execBtn.title = "请先连接 MT5 账户"; }
+    // Keep smart close badge clickable (cursor only, handler guarded)
+    const scMode = document.getElementById("smartCloseMode");
+    if (scMode) { scMode.classList.add("clickable-badge"); scMode.title = "请先连接 MT5 账户"; }
+    return;
+  }
+
+  // === Pro with bridge / Admin: full access ===
+  // Hide observation banner
+  const banner = document.getElementById("observeBanner");
+  if (banner) banner.classList.add("hidden");
+  const tradeMode = document.getElementById("tradeMode");
+  if (tradeMode) { tradeMode.classList.add("clickable-badge"); tradeMode.title = ""; }
+  const autoMode = document.getElementById("autoAnalyzeMode");
+  if (autoMode) { autoMode.classList.add("clickable-badge"); autoMode.title = ""; }
+  const gatewayBadge3 = document.getElementById("gatewayMode");
+  if (gatewayBadge3) { gatewayBadge3.classList.add("clickable-badge"); gatewayBadge3.title = ""; }
+  // Show model tab
+  if (modelTab) modelTab.style.display = "";
+  // Show smart close config
+  const closeConfig = document.getElementById("close-config");
+  if (closeConfig) closeConfig.style.display = "";
+  const scMode = document.getElementById("smartCloseMode");
+  if (scMode) { scMode.classList.add("clickable-badge"); scMode.title = ""; }
 }
 
 /* ---- Provider presets: model name → API base URL ---- */
@@ -1706,19 +1793,38 @@ async function saveCloseConfig() {
     await wsApi('save_close_config', { config: payload });
     toast('智能平仓配置已保存', 'success');
     await loadCloseConfig();
+    const closeStatus = await wsApi('close_status');
+    state.closeScheduler = closeStatus.scheduler || {};
     updateSmartCloseBadge(true, payload.check_interval_seconds);
   } catch (e) { toast(e.message, 'error'); }
 }
 
 function updateSmartCloseBadge(enabled, intervalSeconds) {
   let label;
+  let type;
   if (enabled) {
     const min = Math.round((intervalSeconds || 60) / 60);
-    label = `智能平仓 · ${min}分钟`;
+    const paused = state.closeScheduler?.paused;
+    const reason = state.closeScheduler?.pause_reason || '';
+    if (paused) {
+      if (reason === 'market_closed') {
+        label = '市场休市 · 智能平仓暂停';
+        type = 'warning';
+      } else if (reason === 'no_positions') {
+        label = '无持仓 · 智能平仓待机';
+        type = 'warning';
+      } else {
+        label = `智能平仓暂停 · ${min}分钟`;
+        type = 'warning';
+      }
+    } else {
+      label = `智能平仓运行中 · ${min}分钟`;
+      type = 'danger';
+    }
   } else {
     label = '智能平仓关闭';
+    type = 'neutral';
   }
-  const type = enabled ? 'success' : 'neutral';
   setBadge('smartCloseMode', label, type);
 }
 
@@ -2418,20 +2524,22 @@ async function loadHistory() {
       : `<td class="num">${escapeHtml(raw(exitPrice))}</td>`;
     return `
     <tr>
-      ${ticketCell(ticket, tickets)}
+      <td class="num">${escapeHtml(formatTime(row.entry_time))}</td>
       <td>${escapeHtml(row.symbol)}</td>
+      ${ticketCell(ticket, tickets)}
       <td><span class="tag ${dir}">${String(row.type || dir).toUpperCase()} ${directionText(dir)}</span></td>
       <td class="num">${escapeHtml(volumeText(row.volume))}</td>
       <td class="num">${escapeHtml(raw(row.entry_price))}</td>
-      ${exitPriceCell}
-      <td class="num ${profitClass(row.profit_points)}">${escapeHtml(row.profit_points ?? "--")}</td>
-      <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="num">${escapeHtml(formatTime(row.entry_time))}</td>
+      <td class="num">${row.stop_loss ? escapeHtml(raw(row.stop_loss)) : '--'}</td>
+      <td class="num">${row.take_profit ? escapeHtml(raw(row.take_profit)) : '--'}</td>
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
+      ${exitPriceCell}
+      <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
+      <td class="num ${profitClass(row.profit_points)}">${escapeHtml(row.profit_points ?? "--")}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>
   `;
-  }).join("") : `<tr class="empty-row"><td colspan="11">暂无成交记录</td></tr>`;
+  }).join("") : `<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>`;
   const pg = data.pagination || {};
   renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, pg.total_count || 0, "history");
   } catch (e) { console.error("loadHistory:", e); }

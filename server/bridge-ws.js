@@ -253,10 +253,14 @@ async function handleBrowserCommand(ws, userId, msg) {
     const hasAccess = isPro || user?.plan === 'plus'
     if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
 
-    // Plus users: read-only, block write operations
+    // Plus users: read-only, block write operations + analyze (API cost)
     const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_auto_config', 'toggle_auto', 'set_quote_symbol', 'save_close_config', 'run_close_now']
     if (!isPro && writeActions.includes(action)) {
       return reply({ status: 'error', message: '升级会员即可解锁交易功能' })
+    }
+    // Plus users also blocked from analyze (consumes AI API credits)
+    if (!isPro && action === 'analyze') {
+      return reply({ status: 'error', message: '升级会员即可使用 AI 推理' })
     }
 
     // Pro/Plus users without own bridge: block write operations
@@ -348,6 +352,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         if (bridgeOk) {
           result = await ai.mt5Bridge(historyUserId, 'history', { page: params.page || 1, page_size: params.page_size || 20 })
+          // TEMP DIAG: check order lookup
+          const diag = result?._diag
+          if (diag) console.log(`[OrdDiag] lookup_count=${diag.order_lookup_count} first_keys=${JSON.stringify(diag.order_diag?.first_keys)} sample_tp=${diag.order_diag?.sample_tp} sample_sl=${diag.order_diag?.sample_sl} via_attr_tp=${diag.order_diag?.via_attr_tp} via_attr_sl=${diag.order_diag?.via_attr_sl} has_tp=${diag.order_diag?.has_tp_attr} has_sl=${diag.order_diag?.has_sl_attr} ticket=${diag.order_diag?.ticket_sample}`)
         } else {
           result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
         }
@@ -673,6 +680,42 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'get_close_config': {
         const cfg = await ai.getCloseConfig(userId)
         result = { status: 'success', config: cfg || { enabled: false, check_interval_seconds: 30, model_name: 'deepseek-chat' } }
+        break
+      }
+      case 'close_status': {
+        // Report smart close scheduler status including pause reasons
+        const closeCfg = await ai.getCloseConfig(userId)
+        const enabled = !!(closeCfg?.enabled)
+        const intervalSec = closeCfg?.check_interval_seconds || 30
+        let paused = false
+        let pauseReason = ''
+
+        if (enabled) {
+          // Check market status
+          const tradeMode = getBridgeTradeMode(userId)
+          if (tradeMode === 0) {
+            paused = true
+            pauseReason = 'market_closed'
+          } else {
+            // Check positions
+            try {
+              const posData = await sendBridgeCommand(userId, 'positions', {})
+              const positions = posData?.positions || []
+              if (positions.length === 0) {
+                paused = true
+                pauseReason = 'no_positions'
+              }
+            } catch {
+              paused = true
+              pauseReason = 'bridge_error'
+            }
+          }
+        }
+
+        result = {
+          status: 'success',
+          scheduler: { enabled, interval_seconds: intervalSec, paused, pause_reason: pauseReason }
+        }
         break
       }
       case 'close_signal_tickets': {

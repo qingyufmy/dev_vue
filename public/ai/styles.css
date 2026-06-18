@@ -3438,6 +3438,26 @@ input:checked + .slider::before { transform: translateX(18px); }
 }
 .pro-overlay-btn:hover { opacity: 0.85; }
 
+/* Observation mode banner (Plus users) */
+.observe-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: rgba(234, 179, 8, 0.12);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.25);
+  color: #eab308;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.observe-banner.hidden { display: none; }
+.observe-banner a {
+  color: #fbbf24;
+  font-weight: 600;
+  text-decoration: underline;
+}
+.observe-banner a:hover { color: #facc15; }
+
 /* Signal link in position/history tables */
 a.signal-link {
   color: #d4a017;

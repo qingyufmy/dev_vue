@@ -1033,11 +1033,11 @@ async function runSmartClose(userId, closeConfig, account, positions) {
         }
 
         // Audit
-        await logAudit({ userId, action: 'smart_close', targetType: symbol, targetId: String(pos.ticket), detail: JSON.stringify({ ticket: pos.ticket, reason: item.reason, confidence: item.confidence, result: closeResult }) })
+        await insertAudit(null, userId, 'smart_close', symbol, { ticket: pos.ticket, reason: item.reason, confidence: item.confidence }, closeResult, 'success')
         console.log(`[SmartClose] Audit logged: ticket=${pos.ticket} action=smart_close`)
       } catch (e) {
         results.push({ ticket: pos.ticket, success: false, error: e.message })
-        await logAudit({ userId, action: 'smart_close', targetType: symbol, targetId: String(pos.ticket), detail: JSON.stringify({ ticket: pos.ticket, error: e.message }) })
+        await insertAudit(null, userId, 'smart_close', symbol, { ticket: pos.ticket, error: e.message }, null, 'error')
       }
     }
 
@@ -1367,6 +1367,13 @@ async function runAutoCycle(userId, symbol, timeframe) {
     return
   }
 
+  // Check Pro permission (defense in depth: also guarded at WS layer)
+  const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
+  if (!user || user.plan !== 'pro') {
+    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: user ${userId} not Pro (plan=${user?.plan})`)
+    return
+  }
+
   // Check market status — skip only if market closed
   const tradeMode = getBridgeTradeMode(userId)
   if (tradeMode === 0) {
@@ -1511,6 +1518,13 @@ async function runSmartCloseCycle(userId) {
   const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
   if (!user || user.plan !== 'pro') return
 
+  // Check market status — pause when market closed
+  const tradeMode = getBridgeTradeMode(userId)
+  if (tradeMode === 0) {
+    console.log(`[SmartClose] User ${userId}: market closed (trade_mode=${tradeMode}), skipping`)
+    return
+  }
+
   // Get positions
   const positionsData = await mt5Bridge(userId, 'positions', {})
   const positions = positionsData?.positions || []
@@ -1529,9 +1543,9 @@ async function runSmartCloseCycle(userId) {
     for (const r of ruleResults) {
       try {
         const closeResult = await mt5Bridge(userId, 'close', { ticket: r.ticket })
-        await logAudit({ userId, action: 'smart_close_rule', targetType: r.symbol || 'XAUUSD', targetId: String(r.ticket), detail: JSON.stringify({ ticket: r.ticket, rule: r.rule, reason: r.reason, result: closeResult }) })
+        await insertAudit(null, userId, 'smart_close_rule', r.symbol || 'XAUUSD', { ticket: r.ticket, rule: r.rule, reason: r.reason }, closeResult, 'success')
       } catch (e) {
-        await logAudit({ userId, action: 'smart_close_rule', targetType: r.symbol || 'XAUUSD', targetId: String(r.ticket), detail: JSON.stringify({ ticket: r.ticket, error: e.message }) })
+        await insertAudit(null, userId, 'smart_close_rule', r.symbol || 'XAUUSD', { ticket: r.ticket, error: e.message }, null, 'error')
       }
     }
   }
