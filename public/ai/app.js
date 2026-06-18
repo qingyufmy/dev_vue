@@ -2789,7 +2789,7 @@ async function loadHistoryChart() {
               font: { size: 10 },
               callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
             },
-            title: { display: true, text: '每日', color: '#4a5568', font: { size: 10 } },
+            title: { display: true, text: '每日', color: '#4a5568', font: { size: 10 }, rotation: -90 },
           },
           y2: {
             position: 'right',
@@ -2799,7 +2799,7 @@ async function loadHistoryChart() {
               font: { size: 10 },
               callback: v => (v >= 0 ? '+' : '') + v.toFixed(0),
             },
-            title: { display: true, text: '累计', color: '#4a5568', font: { size: 10 } },
+            title: { display: true, text: '累计', color: '#4a5568', font: { size: 10 }, rotation: 90 },
           },
           y3: {
             position: 'right',
