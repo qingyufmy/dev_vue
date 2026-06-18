@@ -1429,9 +1429,11 @@ function initKlineChart() {
 
 async function loadKlineData() {
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
-  if (!symbol || !_klineSeries) return;
+  if (!symbol || !_klineSeries) { console.log('[KLINE] skip load:', {symbol, hasSeries:!!_klineSeries}); return; }
   try {
+    console.log('[KLINE] loading', symbol, _klineTimeframe);
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
+    console.log('[KLINE] data received:', data?.status, 'rates:', data?.rates?.length);
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
     const candles = data.rates.map(b => ({
@@ -1463,25 +1465,28 @@ async function loadKlineData() {
 }
 
 function updateKlineTick(bid, ask) {
-  if (!_klineSeries || !_klineLastBar) return;
-  const price = (Number(bid) + Number(ask)) / 2;
+  if (!_klineSeries) return;
+  const price = Number(bid); // K线以bid价（卖出价）为基准，与MT5图表一致
   const now = Math.floor(Date.now() / 1000);
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
   const barTime = Math.floor(now / tfSeconds) * tfSeconds;
 
-  if (barTime === _klineLastBar.time) {
-    // Update current bar
+  if (!_klineLastBar) {
+    // K-line data not loaded yet, create first bar
+    _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
+    _klineSeries.setData([_klineLastBar]);
+    if (_klineVolumeSeries) _klineVolumeSeries.setData([{ time: barTime, value: 0, color: 'rgba(239,68,68,0.3)' }]);
+  } else if (barTime === _klineLastBar.time) {
     _klineLastBar.close = price;
     if (price > _klineLastBar.high) _klineLastBar.high = price;
     if (price < _klineLastBar.low) _klineLastBar.low = price;
     _klineSeries.update(_klineLastBar);
   } else if (barTime > _klineLastBar.time) {
-    // New bar
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.update(_klineLastBar);
   }
 
-  setText('klineLastPrice', price.toFixed(2));
+  setText('klineLastPrice', Number(bid).toFixed(2));
 }
 
 // Period button click → reload K-line data
