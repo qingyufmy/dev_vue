@@ -910,7 +910,11 @@ function handleHeartbeat(msg) {
   // Bridge state changed → update role-based UI
   if (isLive !== wasLive || usingFallback !== wasFallback) {
     applyRoleUI();
-    if (isLive) { refreshAll().catch(() => {}); }
+    if (isLive) {
+      refreshAll().catch(() => {});
+      // Also refresh current tab (bridge-dependent data)
+      refreshTabData(activeTabId()).catch(() => {});
+    }
     else if (!usingFallback) {
       state.positions = [];
       renderPositionRows();
@@ -1503,7 +1507,10 @@ async function loadKlineData() {
 
     _klineChart.timeScale().fitContent();
   } catch (e) {
-    console.error('loadKlineData:', e);
+    // Suppress errors when bridge is not connected
+    if (!String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
+      console.error('loadKlineData:', e);
+    }
   }
 }
 
