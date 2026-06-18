@@ -748,7 +748,7 @@ function handleBridgeData(msg) {
       if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
         state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
         updateTradingQuotePreview(state.lastQuote);
-        updateKlineTick(q.bid, q.ask);
+        updateKlineTick(q.bid, q.ask, q.volume);
       }
       // Update market status from trade_mode
       if (typeof q.trade_mode === 'number') updateMarketStatus(q.trade_mode);
@@ -1376,7 +1376,7 @@ async function refreshQuote() {
     setQuoteChangeUnavailable();
     state.lastQuote = { symbol, bid, ask, spread: Number(data.spread), time: data.time };
     updateTradingQuotePreview(state.lastQuote);
-    updateKlineTick(data.bid, data.ask);
+    updateKlineTick(data.bid, data.ask, data.volume);
   }
   updateSignalPriceFields(state.selectedSignal);
 }
@@ -1385,6 +1385,7 @@ async function refreshQuote() {
 let _klineChart = null;
 let _klineSeries = null;
 let _klineVolumeSeries = null;
+let _klineCurrentVol = 0; // accumulated tick volume for current bar
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
 
@@ -1517,28 +1518,32 @@ async function loadKlineData() {
   }
 }
 
-function updateKlineTick(bid, ask) {
+function updateKlineTick(bid, ask, tickVolume) {
   if (!_klineSeries) return;
   const price = Number(bid); // K线以bid价（卖出价）为基准，与MT5图表一致
   const nowUtc = Math.floor(Date.now() / 1000);
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
   const barTime = Math.floor(nowUtc / tfSeconds) * tfSeconds;
+  const vol = Number(tickVolume) || 0;
 
   if (!_klineLastBar) {
     // K-line data not loaded yet, create first bar
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
+    _klineCurrentVol = vol;
     _klineSeries.setData([_klineLastBar]);
-    if (_klineVolumeSeries) _klineVolumeSeries.setData([{ time: barTime, value: 0, color: 'rgba(239,68,68,0.3)' }]);
+    if (_klineVolumeSeries) _klineVolumeSeries.setData([{ time: barTime, value: vol, color: 'rgba(239,68,68,0.3)' }]);
   } else if (barTime === _klineLastBar.time) {
     _klineLastBar.close = price;
     if (price > _klineLastBar.high) _klineLastBar.high = price;
     if (price < _klineLastBar.low) _klineLastBar.low = price;
     _klineSeries.update(_klineLastBar);
+    // Update volume: use latest tick volume (not accumulated, matches MT5 behavior)
+    if (_klineVolumeSeries) _klineVolumeSeries.update({ time: barTime, value: vol, color: price >= _klineLastBar.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)' });
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
+    _klineCurrentVol = vol;
     _klineSeries.update(_klineLastBar);
-    // Add volume placeholder for new bar so histogram doesn't show blank
-    if (_klineVolumeSeries) _klineVolumeSeries.update({ time: barTime, value: 0, color: 'rgba(239,68,68,0.3)' });
+    if (_klineVolumeSeries) _klineVolumeSeries.update({ time: barTime, value: vol, color: 'rgba(239,68,68,0.3)' });
   }
 
   setText('klineLastPrice', Number(bid).toFixed(2));

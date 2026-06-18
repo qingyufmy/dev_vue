@@ -890,6 +890,7 @@ class AurumBridge:
                             "bid": round(tick.bid,5) if tick else None, "ask": round(tick.ask,5) if tick else None,
                             "spread": round((tick.ask-tick.bid)/(0.01 if "JPY" not in sym else 0.001),1) if tick else None,
                             "time": _mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "volume": int(tick.volume) if tick else 0,
                             "trade_mode": info.trade_mode if (tick and info) else -1},
                             "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
                                 "volume": p.volume, "open_price": p.price_open, "current_price": p.price_current,
