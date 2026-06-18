@@ -2870,6 +2870,7 @@ async function loadHistoryChart(forceRefresh) {
     }
 
     const data = await wsApi('history_chart_data', filterParams);
+    console.log('[CHART] response:', JSON.stringify(data).slice(0, 200));
     _historyChartCache = { filters: filterKey, data };
     _renderHistoryChart(data);
   } catch (e) { console.error("loadHistoryChart:", e); }
