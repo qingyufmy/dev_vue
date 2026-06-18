@@ -989,12 +989,10 @@ async function runSmartClose(userId, closeConfig, account, positions) {
 
     if (!Array.isArray(parsed.positions)) return []
 
-    // Build analysis text from all positions
-    const analysisLines = parsed.positions.map(p => {
-      const action = p.action === 'close' ? '平仓' : '持有'
-      return `#${p.ticket}: ${action} (${(p.confidence * 100).toFixed(0)}%) - ${p.reason}`
-    })
     const avgConfidence = parsed.positions.reduce((s, p) => s + (p.confidence || 0.5), 0) / parsed.positions.length
+
+    // Store structured positions as JSON for table rendering
+    const analysisJson = JSON.stringify(parsed.positions)
 
     // Save CLOSE signal to ai_signals
     const createdAt = utcNow()
@@ -1003,7 +1001,7 @@ async function runSmartClose(userId, closeConfig, account, positions) {
         analysis, reasoning, market_data_json, ai_model, ttl_seconds, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, 'smart_close', symbol, 'CLOSE', 'close', avgConfidence, 0,
-        analysisLines.join('\n'),
+        analysisJson,
         `智能平仓分析：${positions.length}笔持仓`,
         JSON.stringify(contextPayload), model, 3600, createdAt]
     )

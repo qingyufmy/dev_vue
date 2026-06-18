@@ -1961,10 +1961,14 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   const sma20 = Number(market.sma_20);
   const smaDeviation = Number.isFinite(latestPrice) && Number.isFinite(sma20) ? signedText(latestPrice - sma20, 2) : "--";
   const atrValue = market.atr_14 ?? market.atr ?? market.avg_volatility;
-  const analysisText = String(signal.analysis || "").trim();
   const reasoningText = String(signal.reasoning || "").trim();
-  // For CLOSE signals: highlight lines mentioning 平仓/close/ticket numbers
-  let escapedAnalysis = escapeHtml(analysisText || "暂无行情判断");
+  // Try to parse structured positions data (CLOSE signals store JSON array)
+  let closePositions = null;
+  try {
+    const raw = String(signal.analysis || "").trim();
+    if (raw.startsWith("[")) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length > 0 && arr[0].ticket) closePositions = arr; }
+  } catch {}
+  let escapedAnalysis = closePositions ? "" : escapeHtml(String(signal.analysis || "").trim() || "暂无行情判断");
   let closeDetailsBlock = "";
   if (dir === "close") {
     // Build structured close details from execution_result
@@ -1979,6 +1983,28 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       }).join("");
       closeDetailsBlock = `<strong>平仓详情</strong>\n<div class="close-detail-list">${rows}</div>\n\n`;
     }
+  }
+  // Build analysis block: table for structured data, plain text otherwise
+  let analysisBlock = "";
+  if (closePositions) {
+    const rows = closePositions.map(p => {
+      const actionClass = p.action === 'close' ? 'close-action' : 'hold-action';
+      const actionLabel = p.action === 'close' ? '🔴 平仓' : '🟢 持有';
+      const pct = ((p.confidence || 0) * 100).toFixed(0);
+      const confClass = Number(pct) >= 70 ? 'confidence-high' : Number(pct) >= 40 ? 'confidence-mid' : 'confidence-low';
+      return `<tr>
+        <td class="num">#${escapeHtml(String(p.ticket))}</td>
+        <td><span class="${actionClass}">${actionLabel}</span></td>
+        <td class="num"><span class="${confClass}">${pct}%</span></td>
+        <td>${escapeHtml(p.reason || "--")}</td>
+      </tr>`;
+    }).join("\n");
+    analysisBlock = `<strong>持仓分析</strong>\n<table class="close-analysis-table">
+  <thead><tr><th>Ticket</th><th>动作</th><th>置信度</th><th>分析理由</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>`;
+  } else {
+    analysisBlock = `<strong>行情判断</strong>\n${escapedAnalysis}`;
   }
   const reasoningBlock = reasoningText ? `\n\n<strong>推理依据</strong>\n${escapeHtml(reasoningText)}` : "";
   result.className = "analysis-result";
@@ -2033,8 +2059,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-section">
       <div class="analysis-section-title"><i data-lucide="file-text" size="14"></i>推理正文</div>
     </div>
-    <div id="analysisTextContent" class="analysis-text collapsed">${closeDetailsBlock}<strong>行情判断</strong>
-${escapedAnalysis}${reasoningBlock}</div>
+    <div id="analysisTextContent" class="analysis-text collapsed">${closeDetailsBlock}${analysisBlock}${reasoningBlock}</div>
     <div class="analysis-expand-row">
       <button class="btn-expand-analysis" type="button" data-action="toggle-analysis-text">展开完整推理</button>
     </div>
