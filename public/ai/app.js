@@ -930,7 +930,7 @@ async function refreshTabData(tabId) {
   if (tabId === "trading") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
   } else if (tabId === "dashboard") {
-    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadKlineData()]);
   } else if (tabId === "history") {
     await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
   } else if (tabId === "audit") {
@@ -1423,12 +1423,7 @@ function initKlineChart() {
 
   // Period buttons
   document.querySelectorAll('.kline-period-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.kline-period-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      _klineTimeframe = btn.dataset.tf;
-      loadKlineData();
-    });
+    btn.addEventListener('click', () => switchKlineTimeframe(btn.dataset.tf));
   });
 }
 
@@ -1480,13 +1475,22 @@ function updateKlineTick(bid, ask) {
     if (price > _klineLastBar.high) _klineLastBar.high = price;
     if (price < _klineLastBar.low) _klineLastBar.low = price;
     _klineSeries.update(_klineLastBar);
-  } else {
+  } else if (barTime > _klineLastBar.time) {
     // New bar
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.update(_klineLastBar);
   }
 
   setText('klineLastPrice', price.toFixed(2));
+}
+
+// Period button click → reload K-line data
+function switchKlineTimeframe(tf) {
+  _klineTimeframe = tf;
+  document.querySelectorAll('.kline-period-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.tf === tf);
+  });
+  loadKlineData();
 }
 
 function renderPositionRows(positions, withAction) {
