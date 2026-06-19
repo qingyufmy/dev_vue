@@ -1391,7 +1391,8 @@ let _klineVolRefreshTimer = null;
 let _klineAllCandles = [];
 let _klineAllVolumes = [];
 let _klineLoadingMore = false;
-let _klineMaxBars = 200;
+let _klineMaxBars = 500;
+let _klineDefaultBars = 200;
 
 function initKlineChart() {
   const container = document.getElementById('klineChart');
@@ -1488,20 +1489,22 @@ function _createKlineChart(container) {
   clearInterval(_klineVolRefreshTimer);
   _klineVolRefreshTimer = setInterval(refreshKlineVolume, 1000);
 
-  // Scroll/zoom: load more data on left edge, limit max zoom
+  // Scroll/zoom: load more data on zoom out, limit max zoom
   _klineChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
     if (!range || _klineLoadingMore) return;
 
-    // Max zoom limit: 200 bars
     const span = range.to - range.from;
+    const totalBars = _klineAllCandles.length;
+
+    // Max zoom limit: 500 bars visible at once
     if (span > _klineMaxBars) {
-      _klineChart.timeScale().setVisibleLogicalRange({ from: range.from, to: range.from + _klineMaxBars });
+      _klineChart.timeScale().setVisibleLogicalRange({ from: range.to - _klineMaxBars, to: range.to });
       return;
     }
 
-    // Load more data when scrolled to left edge (within 5 bars of start)
-    if (range.from < 5 && _klineAllCandles.length < _klineMaxBars) {
-      loadMoreKlineData();
+    // Load more data when zooming out beyond loaded range (right edge pinned)
+    if (span > totalBars - 5 && totalBars < _klineMaxBars) {
+      loadMoreKlineData(range.to);
     }
   });
 }
@@ -1536,7 +1539,10 @@ async function loadKlineData() {
     const last = data.rates[data.rates.length - 1];
     setText('klineLastPrice', Number(last.close).toFixed(2));
 
-    _klineChart.timeScale().fitContent();
+    // Show latest _klineDefaultBars, right edge pinned
+    const total = _klineAllCandles.length;
+    const from = Math.max(0, total - _klineDefaultBars);
+    _klineChart.timeScale().setVisibleLogicalRange({ from, to: total - 1 });
   } catch (e) {
     if (!String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
       console.error('loadKlineData:', e);
@@ -1545,13 +1551,12 @@ async function loadKlineData() {
 }
 
 // Load older K-line data when scrolling to left edge
-async function loadMoreKlineData() {
+async function loadMoreKlineData(rightEdge) {
   if (_klineLoadingMore || !_klineAllCandles.length || _klineAllCandles.length >= _klineMaxBars) return;
   _klineLoadingMore = true;
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   try {
     const oldestTime = _klineAllCandles[0].time;
-    const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
     const count = Math.min(100, _klineMaxBars - _klineAllCandles.length);
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: count + 10 });
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) { _klineLoadingMore = false; return; }
@@ -1573,8 +1578,6 @@ async function loadMoreKlineData() {
       }))
       .filter(v => v.time < oldestTime);
 
-    // Save current visible range
-    const prevRange = _klineChart.timeScale().getVisibleLogicalRange();
     const addedCount = oldCandles.length;
 
     // Merge: prepend older data
@@ -1584,13 +1587,11 @@ async function loadMoreKlineData() {
     _klineSeries.setData(_klineAllCandles);
     _klineVolumeSeries.setData(_klineAllVolumes);
 
-    // Restore visible range (shifted by added count)
-    if (prevRange) {
-      _klineChart.timeScale().setVisibleLogicalRange({
-        from: prevRange.from + addedCount,
-        to: prevRange.to + addedCount,
-      });
-    }
+    // Keep right edge pinned, extend left
+    const total = _klineAllCandles.length;
+    const right = rightEdge != null ? rightEdge : total - 1;
+    const left = Math.max(0, right - _klineDefaultBars);
+    _klineChart.timeScale().setVisibleLogicalRange({ from: left, to: right });
   } catch (e) {
     console.error('loadMoreKlineData:', e);
   } finally {
