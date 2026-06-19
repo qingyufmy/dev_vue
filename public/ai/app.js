@@ -1483,6 +1483,17 @@ function _createKlineChart(container) {
   // Volume refresh every 1 second
   clearInterval(_klineVolRefreshTimer);
   _klineVolRefreshTimer = setInterval(refreshKlineVolume, 1000);
+
+  // Zoom limit: don't allow zooming out beyond all loaded data
+  _klineChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (!range) return;
+    const total = _klineSeries.data().length;
+    if (total < 2) return;
+    const span = range.to - range.from;
+    if (span >= total) {
+      _klineChart.timeScale().setVisibleLogicalRange({ from: 0, to: total - 1 });
+    }
+  });
 }
 
 async function loadKlineData() {
