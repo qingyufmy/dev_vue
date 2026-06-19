@@ -1388,6 +1388,10 @@ let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
 let _klineVolRefreshTimer = null;
+let _klineAllCandles = [];
+let _klineAllVolumes = [];
+let _klineLoadingMore = false;
+let _klineMaxBars = 200;
 
 function initKlineChart() {
   const container = document.getElementById('klineChart');
@@ -1483,6 +1487,23 @@ function _createKlineChart(container) {
   // Volume refresh every 1 second
   clearInterval(_klineVolRefreshTimer);
   _klineVolRefreshTimer = setInterval(refreshKlineVolume, 1000);
+
+  // Scroll/zoom: load more data on left edge, limit max zoom
+  _klineChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (!range || _klineLoadingMore) return;
+
+    // Max zoom limit: 200 bars
+    const span = range.to - range.from;
+    if (span > _klineMaxBars) {
+      _klineChart.timeScale().setVisibleLogicalRange({ from: range.from, to: range.from + _klineMaxBars });
+      return;
+    }
+
+    // Load more data when scrolled to left edge (within 5 bars of start)
+    if (range.from < 5 && _klineAllCandles.length < _klineMaxBars) {
+      loadMoreKlineData();
+    }
+  });
 }
 
 async function loadKlineData() {
@@ -1505,9 +1526,11 @@ async function loadKlineData() {
       color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
 
-    _klineSeries.setData(candles);
-    _klineVolumeSeries.setData(volumes);
-    _klineLastBar = candles[candles.length - 1];
+    _klineAllCandles = candles;
+    _klineAllVolumes = volumes;
+    _klineSeries.setData(_klineAllCandles);
+    _klineVolumeSeries.setData(_klineAllVolumes);
+    _klineLastBar = _klineAllCandles[_klineAllCandles.length - 1];
 
     // Update last price display
     const last = data.rates[data.rates.length - 1];
@@ -1518,6 +1541,60 @@ async function loadKlineData() {
     if (!String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
       console.error('loadKlineData:', e);
     }
+  }
+}
+
+// Load older K-line data when scrolling to left edge
+async function loadMoreKlineData() {
+  if (_klineLoadingMore || !_klineAllCandles.length || _klineAllCandles.length >= _klineMaxBars) return;
+  _klineLoadingMore = true;
+  const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+  try {
+    const oldestTime = _klineAllCandles[0].time;
+    const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
+    const count = Math.min(100, _klineMaxBars - _klineAllCandles.length);
+    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: count + 10 });
+    if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) { _klineLoadingMore = false; return; }
+
+    const oldCandles = data.rates
+      .map(b => ({
+        time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
+        open: Number(b.open), high: Number(b.high), low: Number(b.low), close: Number(b.close),
+      }))
+      .filter(c => c.time < oldestTime);
+
+    if (!oldCandles.length) { _klineLoadingMore = false; return; }
+
+    const oldVolumes = data.rates
+      .map(b => ({
+        time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
+        value: Number(b.tick_volume || b.volume || 0),
+        color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
+      }))
+      .filter(v => v.time < oldestTime);
+
+    // Save current visible range
+    const prevRange = _klineChart.timeScale().getVisibleLogicalRange();
+    const addedCount = oldCandles.length;
+
+    // Merge: prepend older data
+    _klineAllCandles = [...oldCandles, ..._klineAllCandles].slice(-_klineMaxBars);
+    _klineAllVolumes = [...oldVolumes, ..._klineAllVolumes].slice(-_klineMaxBars);
+
+    _klineSeries.setData(_klineAllCandles);
+    _klineVolumeSeries.setData(_klineAllVolumes);
+
+    // Restore visible range (shifted by added count)
+    if (prevRange) {
+      _klineChart.timeScale().setVisibleLogicalRange({
+        from: prevRange.from + addedCount,
+        to: prevRange.to + addedCount,
+      });
+    }
+  } catch (e) {
+    console.error('loadMoreKlineData:', e);
+  } finally {
+    _klineLoadingMore = false;
   }
 }
 
@@ -1545,7 +1622,8 @@ function updateKlineTick(bid, ask) {
 
   if (!_klineLastBar) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
-    _klineSeries.setData([_klineLastBar]);
+    _klineAllCandles = [_klineLastBar];
+    _klineSeries.setData(_klineAllCandles);
   } else if (barTime === _klineLastBar.time) {
     _klineLastBar.close = price;
     if (price > _klineLastBar.high) _klineLastBar.high = price;
@@ -1553,8 +1631,9 @@ function updateKlineTick(bid, ask) {
     _klineSeries.update(_klineLastBar);
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
+    _klineAllCandles.push(_klineLastBar);
+    if (_klineAllCandles.length > _klineMaxBars) _klineAllCandles.shift();
     _klineSeries.update(_klineLastBar);
-    // New bar: refresh historical data for correct volume
     setTimeout(loadKlineData, 500);
   }
 
@@ -1564,6 +1643,8 @@ function updateKlineTick(bid, ask) {
 // Period button click → reload K-line data
 function switchKlineTimeframe(tf) {
   _klineTimeframe = tf;
+  _klineAllCandles = [];
+  _klineAllVolumes = [];
   document.querySelectorAll('.kline-period-btn').forEach(function(b) {
     b.classList.toggle('active', b.dataset.tf === tf);
   });
