@@ -1,4 +1,4 @@
-# AURUM AI Trading System v1.9.1
+# AURUM AI Trading System v1.9.3
 
 全自动 MT5 量化交易系统 · AI 驱动决策 · WebSocket 纯转发架构 · 实时信号执行
 
@@ -258,7 +258,11 @@ node index.js
 - **Google Fonts 本地化** — 离线可用
 - **EXE 重编译** — 23.9MB
 
-### v1.9.3 (2026-06-18)
+### v1.9.3 (2026-06-19)
+- **K 线数量调整** — 默认显示 200 根 K 线，缩小至全部数据后停止缩放
+- **成交量实时刷新** — 每秒通过 rates(count:1) 获取当前 bar 累计 tick_volume，值与刷新时一致
+- **EXE 图标修复** — 重新编译 AURUM_Bridge.exe，恢复 aurum_icon.ico 图标
+- **桥接 numpy 修复** — PyInstaller 增加 --collect-all MetaTrader5 --collect-all numpy，解决 frozen 环境导入失败
 - **K 线图** — 概览页实时 K 线（TradingView Lightweight Charts），周期切换 M1~D1，tick 实时更新
 - **盈利曲线** — 历史页 Chart.js 双轴图表（每日盈亏柱状 + 累计面积折线 + 回撤曲线），统计指标栏（胜率/盈亏比/最大回撤）
 - **历史筛选** — 开仓/平仓时间范围、方向、盈亏筛选，服务端 SQL 筛选 + 分页
