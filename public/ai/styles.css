@@ -2486,6 +2486,12 @@ input:checked + .slider::before { transform: translateX(18px); }
   border-color: var(--color-warning-border);
 }
 
+.analysis-direction-badge.close {
+  color: var(--color-info, #63b3ed);
+  border-color: rgba(99, 179, 237, 0.4);
+  background: rgba(99, 179, 237, 0.08);
+}
+
 .analysis-status-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2711,6 +2717,10 @@ input:checked + .slider::before { transform: translateX(18px); }
   font-family: var(--font-display);
   font-size: 17px;
   font-weight: 800;
+}
+
+.history-item-dir.close {
+  color: var(--color-info, #63b3ed);
 }
 
 .history-item-meta {
