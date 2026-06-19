@@ -1388,11 +1388,6 @@ let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
 let _klineVolRefreshTimer = null;
-let _klineAllCandles = [];
-let _klineAllVolumes = [];
-let _klineLoadingMore = false;
-let _klineMaxBars = 500;
-let _klineDefaultBars = 200;
 
 function initKlineChart() {
   const container = document.getElementById('klineChart');
@@ -1488,31 +1483,12 @@ function _createKlineChart(container) {
   // Volume refresh every 1 second
   clearInterval(_klineVolRefreshTimer);
   _klineVolRefreshTimer = setInterval(refreshKlineVolume, 1000);
-
-  // Scroll/zoom: load more data on zoom out, limit max zoom
-  _klineChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (!range || _klineLoadingMore) return;
-
-    const span = range.to - range.from;
-    const totalBars = _klineAllCandles.length;
-
-    // Max zoom limit: 500 bars visible at once
-    if (span > _klineMaxBars) {
-      _klineChart.timeScale().setVisibleLogicalRange({ from: range.to - _klineMaxBars, to: range.to });
-      return;
-    }
-
-    // Load more data when zooming out beyond loaded range (right edge pinned)
-    if (span > totalBars - 5 && totalBars < _klineMaxBars) {
-      loadMoreKlineData(range.to);
-    }
-  });
 }
 
 async function loadKlineData() {
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   try {
-    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 100 });
+    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
     const candles = data.rates.map(b => ({
@@ -1529,73 +1505,19 @@ async function loadKlineData() {
       color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
 
-    _klineAllCandles = candles;
-    _klineAllVolumes = volumes;
-    _klineSeries.setData(_klineAllCandles);
-    _klineVolumeSeries.setData(_klineAllVolumes);
-    _klineLastBar = _klineAllCandles[_klineAllCandles.length - 1];
+    _klineSeries.setData(candles);
+    _klineVolumeSeries.setData(volumes);
+    _klineLastBar = candles[candles.length - 1];
 
     // Update last price display
     const last = data.rates[data.rates.length - 1];
     setText('klineLastPrice', Number(last.close).toFixed(2));
 
-    // Show latest _klineDefaultBars, right edge pinned
-    const total = _klineAllCandles.length;
-    const from = Math.max(0, total - _klineDefaultBars);
-    _klineChart.timeScale().setVisibleLogicalRange({ from, to: total - 1 });
+    _klineChart.timeScale().fitContent();
   } catch (e) {
     if (!String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
       console.error('loadKlineData:', e);
     }
-  }
-}
-
-// Load older K-line data when scrolling to left edge
-async function loadMoreKlineData(rightEdge) {
-  if (_klineLoadingMore || !_klineAllCandles.length || _klineAllCandles.length >= _klineMaxBars) return;
-  _klineLoadingMore = true;
-  const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
-  try {
-    const oldestTime = _klineAllCandles[0].time;
-    const count = Math.min(100, _klineMaxBars - _klineAllCandles.length);
-    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: count + 10 });
-    if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) { _klineLoadingMore = false; return; }
-
-    const oldCandles = data.rates
-      .map(b => ({
-        time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
-        open: Number(b.open), high: Number(b.high), low: Number(b.low), close: Number(b.close),
-      }))
-      .filter(c => c.time < oldestTime);
-
-    if (!oldCandles.length) { _klineLoadingMore = false; return; }
-
-    const oldVolumes = data.rates
-      .map(b => ({
-        time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
-        value: Number(b.tick_volume || b.volume || 0),
-        color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
-      }))
-      .filter(v => v.time < oldestTime);
-
-    const addedCount = oldCandles.length;
-
-    // Merge: prepend older data
-    _klineAllCandles = [...oldCandles, ..._klineAllCandles].slice(-_klineMaxBars);
-    _klineAllVolumes = [...oldVolumes, ..._klineAllVolumes].slice(-_klineMaxBars);
-
-    _klineSeries.setData(_klineAllCandles);
-    _klineVolumeSeries.setData(_klineAllVolumes);
-
-    // Keep right edge pinned, extend left
-    const total = _klineAllCandles.length;
-    const right = rightEdge != null ? rightEdge : total - 1;
-    const left = Math.max(0, right - _klineDefaultBars);
-    _klineChart.timeScale().setVisibleLogicalRange({ from: left, to: right });
-  } catch (e) {
-    console.error('loadMoreKlineData:', e);
-  } finally {
-    _klineLoadingMore = false;
   }
 }
 
@@ -1623,8 +1545,7 @@ function updateKlineTick(bid, ask) {
 
   if (!_klineLastBar) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
-    _klineAllCandles = [_klineLastBar];
-    _klineSeries.setData(_klineAllCandles);
+    _klineSeries.setData([_klineLastBar]);
   } else if (barTime === _klineLastBar.time) {
     _klineLastBar.close = price;
     if (price > _klineLastBar.high) _klineLastBar.high = price;
@@ -1632,9 +1553,8 @@ function updateKlineTick(bid, ask) {
     _klineSeries.update(_klineLastBar);
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
-    _klineAllCandles.push(_klineLastBar);
-    if (_klineAllCandles.length > _klineMaxBars) _klineAllCandles.shift();
     _klineSeries.update(_klineLastBar);
+    // New bar: refresh historical data for correct volume
     setTimeout(loadKlineData, 500);
   }
 
@@ -1644,8 +1564,6 @@ function updateKlineTick(bid, ask) {
 // Period button click → reload K-line data
 function switchKlineTimeframe(tf) {
   _klineTimeframe = tf;
-  _klineAllCandles = [];
-  _klineAllVolumes = [];
   document.querySelectorAll('.kline-period-btn').forEach(function(b) {
     b.classList.toggle('active', b.dataset.tf === tf);
   });
