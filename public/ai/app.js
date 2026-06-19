@@ -370,7 +370,7 @@ function signalType(value) {
 }
 
 function directionText(value) {
-  return { buy: "买入", sell: "卖出", hold: "观望", close: "平仓" }[signalType(value)] || "观望";
+  return { buy: "买入", sell: "卖出", hold: "观望", close: "持仓分析" }[signalType(value)] || "观望";
 }
 
 function volumeText(value) {
@@ -2167,7 +2167,7 @@ function updateSignalDisplay(signal) {
   $("executeSignalBtn").disabled = !executable;
   $("executeSignalBtn").title = executable
     ? "复核后发送执行请求"
-    : dir === "close" ? "平仓信号已自动执行"
+    : dir === "close" ? "持仓分析信号已自动执行"
       : signal.is_stale ? "信号已过期，无法执行"
         : signal.is_executed ? "信号已执行"
           : "HOLD 观望信号不执行";
