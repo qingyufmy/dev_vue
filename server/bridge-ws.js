@@ -432,7 +432,14 @@ async function handleBrowserCommand(ws, userId, msg) {
               cum = Math.round(cum * 100) / 100
               cumulative.push(cum)
               if (cum > peak) peak = cum
-              const dd = peak > 0 ? Math.round((peak - cum) / peak * 10000) / 100 : 0
+              let dd = 0
+              if (peak > 0) {
+                // 从高点回落的百分比
+                dd = Math.round((peak - cum) / peak * 10000) / 100
+              } else if (cum < 0) {
+                // 从未盈利过，亏损即回撤（以 1 为基数避免除零）
+                dd = Math.round((-cum) * 100) / 100
+              }
               drawdown.push(dd)
               if (dd > maxDD) maxDD = dd
             })
