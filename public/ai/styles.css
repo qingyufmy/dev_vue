@@ -1175,6 +1175,12 @@ textarea:focus {
   font-weight: 700;
 }
 
+.signal-tf-badge.close-badge {
+  color: var(--color-info, #63b3ed);
+  background: rgba(99, 179, 237, 0.1);
+  border-color: rgba(99, 179, 237, 0.3);
+}
+
 .signal-direction-row {
   display: flex;
   align-items: baseline;
@@ -1469,6 +1475,12 @@ textarea:focus {
 .dir-sell,
 .tag.sell {
   color: var(--color-negative);
+  font-weight: 800;
+}
+
+.dir-close,
+.tag.close {
+  color: var(--color-info, #63b3ed);
   font-weight: 800;
 }
 

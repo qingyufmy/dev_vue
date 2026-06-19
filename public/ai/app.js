@@ -1589,7 +1589,7 @@ function renderPositionRows(positions, withAction) {
   return positions.map((position) => {
     const type = String(position.type || "").toLowerCase();
     const directionLabel = type === "buy" ? "买入 多" : "卖出 空";
-    const directionClass = type === "buy" ? "dir-buy" : "dir-sell";
+    const directionClass = type === "buy" ? "dir-buy" : type === "close" ? "dir-close" : "dir-sell";
     const digits = Number(position.digits);
     const priceDigits = Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
     return `
@@ -2691,7 +2691,7 @@ function renderSignalRows() {
         <td class="num">${escapeHtml(signal.id)}</td>
         <td>${compactTimeHtml(signal?.created_at_mt5 || signal?.created_at)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
-        <td><span class="signal-tf-badge">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
+        <td><span class="signal-tf-badge ${dir === 'close' ? 'close-badge' : ''}">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
         <td><span class="tag ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span></td>
         <td>
           <div class="conf-mini ${confidenceClass(signal.confidence)}">
