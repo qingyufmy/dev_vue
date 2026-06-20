@@ -1,4 +1,4 @@
-# AURUM AI Trading System v1.9.3
+# AURUM AI Trading System v1.9.4
 
 全自动 MT5 量化交易系统 · AI 驱动决策 · WebSocket 纯转发架构 · 实时信号执行
 
@@ -257,6 +257,16 @@ node index.js
 - **市场状态颜色显示** — trade_mode 仅区分休市/非休市，金=交易中，红=休市，琥珀=仅平仓
 - **Google Fonts 本地化** — 离线可用
 - **EXE 重编译** — 23.9MB
+
+### v1.9.4 (2026-06-20)
+- **市场状态服务端检测** — 检测逻辑从浏览器迁移至 bridge-ws.js，基于 MT5 tick_time 字符串对比（首条 tick >60s 判休市、时间不变判休市、时间变化判交易中），服务端推送附带 trade_mode 字段
+- **桥接 fallback 修复** — getBridgeTradeMode() async + admin 桥接自动 fallback，Plus/Pro 用户不再因 UUID 不匹配显示"未知"
+- **调度器休市判断统一** — 自动推理/智能平仓调度器改为 `tradeMode !== 4` 判断（原仅 `=== 0` 漏过桥接断开时的 -1）
+- **休市前端联动** — K线成交量轮询暂停、手动推理拦截（"休市·暂停"）、交易操作禁用
+- **EXE 图标完整修复** — aurum_icon.ico 打包进 EXE datas（sys._MEIPASS 可用），托盘/窗口/标题栏图标全部生效；spec 文件 force-add 进仓库（修复 .gitignore *.spec 排除问题）
+- **EXE 下载防缓存** — /ai/bridge/exe-file 端点添加 Cache-Control: no-cache
+- **bindEvents null 安全** — 6 个 role-conditional DOM 元素 addEventListener 添加 ?. 守卫，修复非 Pro 用户页面崩溃
+- **旧周末硬编码移除** — 删除原有周末检测逻辑，统一由服务端 tick_time 时效检测
 
 ### v1.9.3 (2026-06-19)
 - **K 线数量调整** — 默认显示 200 根 K 线，缩小至全部数据后停止缩放
