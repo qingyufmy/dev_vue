@@ -150,14 +150,30 @@ function handleBridge(ws, url) {
     if (bridge) bridge.lastSeen = Date.now()
 
     if (msg.type === 'data') {
-      // Cache trade_mode for market status checks
-      if (bridge && msg.quote && typeof msg.quote.tick_time === 'number') {
-        bridge.lastTickMs = msg.quote.tick_time * 1000
-        // Detect MT5 time staleness: if tick_time stops advancing, market is closed
-        if (bridge.mt5TickTime !== undefined) {
-          bridge.lastTradeMode = msg.quote.tick_time > bridge.mt5TickTime ? 4 : 0
+      // Real-time market status detection via MT5 time string comparison
+      if (bridge && msg.quote && typeof msg.quote.time === 'string') {
+        const now = Date.now()
+        bridge.lastTickMs = now
+        const prev = bridge.mt5TimeStr
+        bridge.mt5TimeStr = msg.quote.time
+        if (prev !== undefined) {
+          // Second+ tick: time changed → trading (4), same → closed (0)
+          bridge.lastTradeMode = msg.quote.time !== prev ? 4 : 0
+        } else {
+          // First tick after bridge connect: parse MT5 time to detect staleness
+          // Format: "YYYY.MM.DD HH:mm:ss" (Beijing time from bridge)
+          const parts = msg.quote.time.split(/[. :]/)
+          if (parts.length >= 6) {
+            const mt5Date = new Date(
+              parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]),
+              parseInt(parts[3]), parseInt(parts[4]), parseInt(parts[5])
+            )
+            // If MT5 time is > 60s old, market is likely closed
+            if ((now - mt5Date.getTime()) > 60000) {
+              bridge.lastTradeMode = 0
+            }
+          }
         }
-        bridge.mt5TickTime = msg.quote.tick_time
       }
       // Data relay — push to browsers, include server-detected trade_mode
       const tradeMode = bridge ? bridge.lastTradeMode : undefined
