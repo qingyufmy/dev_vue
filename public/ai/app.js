@@ -755,7 +755,7 @@ function handleBridgeData(msg) {
         updateKlineTick(q.bid, q.ask);
       }
       // Update market status from trade_mode
-      if (typeof q.trade_mode === 'number') updateMarketStatus(q.trade_mode);
+      if (typeof q.trade_mode === 'number' && !state._marketForcedClosed) updateMarketStatus(q.trade_mode);
       // Recovery from MT5 time staleness → refresh badges
       if (state._marketForcedClosed && q.time) {
         state._marketForcedClosed = false;
@@ -839,8 +839,8 @@ setInterval(() => {
     if (staleSec > 5 && state.marketTradeMode !== 0) {
       state._marketForcedClosed = true;
       updateMarketStatus(0);
-      setBadge('autoAnalyzeMode', '市场休市 · 自动推理暂停', 'warning');
-      setBadge('smartCloseMode', '市场休市 · 智能平仓暂停', 'warning');
+      if (state.autoEnabled) setBadge('autoAnalyzeMode', '市场休市 · 自动推理暂停', 'warning');
+      if (state.closeEnabled) setBadge('smartCloseMode', '市场休市 · 智能平仓暂停', 'warning');
     }
   }
   const s = state.selectedSignal;
@@ -1143,9 +1143,11 @@ async function loadStatus() {
 
     // Store current auto config
     state.autoConfig = {
+      enabled,
       symbols: scheduler.symbols || ['XAUUSD'],
       interval_minutes: intervalMin,
     };
+    state.autoEnabled = enabled;
   } catch {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
   }
@@ -1156,6 +1158,7 @@ async function loadStatus() {
     const closeStatus = await wsApi('close_status');
     const closeCfg = closeData.config || {};
     state.closeScheduler = closeStatus.scheduler || {};
+    state.closeEnabled = !!closeCfg.enabled;
     updateSmartCloseBadge(!!closeCfg.enabled, closeCfg.check_interval_seconds);
   } catch {
     setBadge('smartCloseMode', '智能平仓 --', 'neutral');
