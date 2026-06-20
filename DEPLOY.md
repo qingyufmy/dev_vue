@@ -61,6 +61,8 @@ PORT=3000
 ```
 
 > **说明**：首次启动会自动建表和种子数据（管理账号 admin@wallstreetskill.com / admin123）
+> 
+> **⚠️ 内存配置**：启动参数需添加 `--max-old-space-size=256`，避免堆内存耗尽导致频繁重启
 
 ## 五、宝塔配置 Node 项目
 
