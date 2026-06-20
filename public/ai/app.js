@@ -754,8 +754,6 @@ function handleBridgeData(msg) {
         updateTradingQuotePreview(state.lastQuote);
         updateKlineTick(q.bid, q.ask);
       }
-      // Update market status from trade_mode
-      if (typeof q.trade_mode === 'number' && !state._marketForcedClosed) updateMarketStatus(q.trade_mode);
       // Recovery from MT5 time staleness → refresh badges
       if (state._marketForcedClosed && q.time) {
         state._marketForcedClosed = false;

@@ -151,8 +151,8 @@ function handleBridge(ws, url) {
 
     if (msg.type === 'data') {
       // Cache trade_mode for market status checks
-      if (bridge && msg.quote && typeof msg.quote.trade_mode === 'number') {
-        bridge.tradeMode = msg.quote.trade_mode
+      if (bridge && msg.quote && typeof msg.quote.tick_time === 'number') {
+        bridge.lastTickMs = msg.quote.tick_time * 1000
       }
       // Data relay — push to browsers as-is
       sendToBrowsers(userId, { type: 'data', ...msg })
@@ -297,7 +297,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             mt5_package_available: true,
             live_trading_enabled: tradeEnabled,
             using_fallback: usingFallback,
-            trade_mode: bridge ? (typeof bridge.tradeMode === 'number' ? bridge.tradeMode : -1) : -1,
+            trade_mode: getBridgeTradeMode(userId),
           },
         }
         break
@@ -912,11 +912,15 @@ export function isTradeEnabled(userId) {
   return bridge.tradeEnabled !== false
 }
 
-// Get cached trade_mode from bridge data push (-1 = unknown)
+// Market status: bridge connected + tick time unchanged for 5 min → closed
+// Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
 export function getBridgeTradeMode(userId) {
   const bridge = bridges.get(userId)
   if (!bridge || bridge.ws.readyState !== 1) return -1
-  return typeof bridge.tradeMode === 'number' ? bridge.tradeMode : -1
+  // If tick time hasn't changed for 5 minutes (300s), market is closed
+  if (bridge.lastTickMs && (Date.now() - bridge.lastTickMs) > 300000) return 0
+  // Bridge connected and data is fresh → assume trading
+  return 4
 }
 
 // Get bridge status for a user
