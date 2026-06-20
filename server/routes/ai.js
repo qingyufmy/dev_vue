@@ -1688,6 +1688,19 @@ export async function initAutoSchedulers() {
 }
 
 
+// ── Bridge 版本检查端点 ──
+router.get('/bridge/version', (req, res) => {
+  res.json({
+    version: '1.9.5',
+    build_date: '2026-06-20',
+    changelog: 'PySide6 UI 重构、自动登录、七牛云分发',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
+    updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
+    file_size: 64950383,
+    md5: '90b7111b3321731a04c950ae98d80a2e'
+  })
+})
+
 export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   insertAudit, getActiveConfig, configPublic, mt5Bridge,
   getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,

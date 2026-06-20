@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""AURUM Bridge - MT5 桥接桌面客户端 (纯 ctypes 托盘, 无 pywin32 依赖)"""
+"""
+AURUM Bridge - MT5 桥接桌面客户端 (PySide6)
+功能：登录验证、MT5 数据桥接、自动重连
+配置存储：%APPDATA%\\AURUM_Bridge\\config.json
+"""
 import sys
 import os
 import json
@@ -9,532 +13,297 @@ import ctypes
 import ctypes.wintypes
 from datetime import datetime, timezone, timedelta
 
+# ── PySide6 ──
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QStackedWidget,
+    QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QCheckBox, QTextEdit, QProgressBar, QFrame, QSystemTrayIcon,
+    QMenu, QMessageBox, QStyle, QDialog,
+)
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QSize
+from PySide6.QtGui import (
+    QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
+)
+
+APP_VERSION = "v1.9.5"
+APP_NAME = "AURUM Bridge"
 MAX_LOG_LINES = 500
-GWL_WNDPROC = -4
-WM_USER = 0x0400
-WM_COMMAND = 0x0111
-WM_LBUTTONUP = 0x0202
-WM_RBUTTONUP = 0x0205
-NIM_ADD = 0x00000000
-NIM_MODIFY = 0x00000001
-NIM_DELETE = 0x00000002
-NIF_MESSAGE = 0x00000001
-NIF_ICON = 0x00000002
-NIF_TIP = 0x00000004
-IDI_APPLICATION = 32512
-MF_STRING = 0x00000000
-MF_SEPARATOR = 0x00000800
-MF_GRAYED = 0x00000001
-TPM_RIGHTBUTTON = 0x0002
-SW_HIDE = 0
-SW_SHOW = 5
-TRAY_WM = WM_USER + 20
-MENU_OPEN = 1001
-MENU_START = 1002
-MENU_STOP = 1003
-MENU_QUIT = 1004
+CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
-shell32 = ctypes.windll.shell32
-user32.DefWindowProcW.restype = ctypes.c_longlong
-user32.DefWindowProcW.argtypes = [ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM]
+# PyInstaller bundle resource path
+if getattr(sys, 'frozen', False):
+    BUNDLE_DIR = sys._MEIPASS
+else:
+    BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-class WNDCLASS(ctypes.Structure):
-    _fields_ = [("style", ctypes.c_uint), ("lpfnWndProc", ctypes.c_void_p),
-        ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
-        ("hInstance", ctypes.wintypes.HANDLE), ("hIcon", ctypes.wintypes.HANDLE),
-        ("hCursor", ctypes.wintypes.HANDLE), ("hbrBackground", ctypes.wintypes.HANDLE),
-        ("lpszMenuName", ctypes.wintypes.LPCWSTR), ("lpszClassName", ctypes.wintypes.LPCWSTR)]
+def resource_path(relative):
+    return os.path.join(BUNDLE_DIR, relative)
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+DEFAULT_SERVER = "http://127.0.0.1:3000"
 
-class POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+os.makedirs(CONFIG_DIR, exist_ok=True)
 
-class MSG(ctypes.Structure):
-    _fields_ = [("hwnd", ctypes.wintypes.HWND), ("message", ctypes.c_uint),
-        ("wParam", ctypes.wintypes.WPARAM), ("lParam", ctypes.wintypes.LPARAM),
-        ("time", ctypes.c_ulong), ("pt", POINT)]
+# ══════════════════════════════════════════════════════════
+#  Config helpers
+# ══════════════════════════════════════════════════════════
 
-class NOTIFYICONDATA(ctypes.Structure):
-    _fields_ = [("cbSize", ctypes.c_ulong), ("hWnd", ctypes.wintypes.HWND),
-        ("uID", ctypes.c_uint), ("uFlags", ctypes.c_uint),
-        ("uCallbackMessage", ctypes.c_uint), ("hIcon", ctypes.wintypes.HANDLE),
-        ("szTip", ctypes.c_wchar * 128), ("dwState", ctypes.c_ulong),
-        ("dwStateMask", ctypes.c_ulong), ("szInfo", ctypes.c_wchar * 256),
-        ("uVersion", ctypes.c_uint), ("szInfoTitle", ctypes.c_wchar * 64),
-        ("dwInfoFlags", ctypes.c_ulong), ("guidItem", ctypes.c_byte * 16),
-        ("hBalloonIcon", ctypes.wintypes.HANDLE)]
-
-WNDPROC = ctypes.CFUNCTYPE(ctypes.c_longlong, ctypes.wintypes.HWND, ctypes.c_uint, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM)
-_wndproc_refs = []
-
-IMAGE_ICON = 1
-LR_LOADFROMFILE = 0x00000010
-LR_DEFAULTSIZE = 0x00000040
-
-def _get_base_dir():
-    if getattr(sys, 'frozen', False):
-        return sys._MEIPASS
-    return os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
-
-def _get_ico_path():
-    return os.path.join(_get_base_dir(), 'aurum_icon.ico')
-
-def _load_ico_file():
-    ico = _get_ico_path()
-    if os.path.exists(ico):
-        # Load 16x16 for tray icon
-        h = user32.LoadImageW(None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
-        if h:
-            return h
-    return user32.LoadIconW(0, IDI_APPLICATION)
-
-
-def _load_ico_large():
-    """Load 32x32 icon for window title bar."""
-    ico = _get_ico_path()
-    if os.path.exists(ico):
-        h = user32.LoadImageW(None, ico, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
-        if h:
-            return h
-    return None
-
-
-def _mt5_time(ts):
-    if not ts:
-        return ''
-    return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
-
-import ssl
-try:
-    import websocket
-    HAS_WS = True
-except ImportError:
-    HAS_WS = False
-
-import tkinter as tk
-from tkinter import scrolledtext, messagebox
-
-# ===== Config =====
-SERVER_URL = "http://127.0.0.1:3000"
-TOKEN = ""
-try:
-    exe_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-    config_path = os.path.join(exe_dir, "config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r") as cf:
-            cfg = json.loads(cf.read())
-            SERVER_URL = cfg.get("server_url", SERVER_URL)
-            TOKEN = cfg.get("token", TOKEN)
-except:
-    pass
-
-i = 1
-while i < len(sys.argv):
-    if sys.argv[i] == '--server' and i + 1 < len(sys.argv):
-        SERVER_URL = sys.argv[i + 1]; i += 2
-    elif sys.argv[i] == '--token' and i + 1 < len(sys.argv):
-        TOKEN = sys.argv[i + 1]; i += 2
-    else:
-        i += 1
-
-
-class AurumBridge:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("AURUM MT5 Bridge")
-        self.root.geometry("520x580")
-        self.root.resizable(False, False)
-        self.root.configure(bg="#0f172a")
-
-        self.mt5 = None
-        self.running = False
-        self.bridge_thread = None
-        self._trade_enabled = False
-        self._ws = None
-        self._tray_hwnd = None
-        self._is_minimized_to_tray = False
-        self._hicon = None
-        self._nid = None
-        self._closing = False
-        self._hicon = _load_ico_file()
-
-        self._set_window_icon()
-        self._build_ui()
-        self._check_mt5()
-        self._init_tray()
-        self._show_tray()
-
-    # ============ Window Icon ============
-
-    def _set_window_icon(self):
-        ico_path = _get_ico_path()
-        if os.path.exists(ico_path):
-            try:
-                self.root.iconbitmap(ico_path)
-                self.root.wm_iconbitmap(ico_path)
-            except Exception:
-                pass
-        self.root.after(200, self._apply_icon)
-
-    def _apply_icon(self):
-        hwnd = int(self.root.wm_frame(), 16)
-        if not hwnd:
-            return
-        # Apply large icon (32x32) to window title bar
-        h_large = _load_ico_large()
-        if h_large:
-            user32.SendMessageW(hwnd, 0x0080, 0, h_large)  # ICON_BIG
-        # Apply small icon (16x16) to taskbar
-        if self._hicon:
-            user32.SendMessageW(hwnd, 0x0080, 1, self._hicon)  # ICON_SMALL
-
-    # ============ UI ============
-
-    def _build_ui(self):
-        bg, card_bg, accent = "#0f172a", "#1e293b", "#3b82f6"
-        text, muted = "#e2e8f0", "#94a3b8"
-
-        tk.Label(self.root, text="⚡ AURUM MT5 Bridge", font=("Segoe UI", 16, "bold"),
-                 bg=bg, fg=accent).pack(pady=(16, 4))
-
-        card = tk.Frame(self.root, bg=card_bg, highlightbackground="#334155",
-                        highlightthickness=1, padx=16, pady=12)
-        card.pack(padx=16, pady=(12, 8), fill="x")
-
-        tk.Label(card, text="服务器地址", font=("Segoe UI", 9), bg=card_bg, fg=muted).grid(
-            row=0, column=0, sticky="w", pady=(0, 2))
-        self.server_var = tk.StringVar(value=SERVER_URL)
-        sf = tk.Frame(card, bg=card_bg); sf.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        card.columnconfigure(0, weight=1)
-        tk.Entry(sf, textvariable=self.server_var, font=("Consolas", 10),
-                 bg="#0f172a", fg=text, insertbackground=text, relief="flat", bd=4
-                 ).pack(side="left", fill="x", expand=True)
-        tk.Button(sf, text="📋", font=("Segoe UI", 8), bg="#334155", fg=text, relief="flat",
-                  padx=6, command=lambda: self._copy(self.server_var.get())).pack(side="right", padx=(4,0))
-
-        tk.Label(card, text="认证 Token", font=("Segoe UI", 9), bg=card_bg, fg=muted).grid(
-            row=2, column=0, sticky="w", pady=(0, 2))
-        tf = tk.Frame(card, bg=card_bg); tf.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        self.token_var = tk.StringVar(value=TOKEN)
-        self.token_shown = False
-        self.token_entry = tk.Entry(tf, textvariable=self.token_var, font=("Consolas", 10),
-                                     bg="#0f172a", fg=text, insertbackground=text, relief="flat", bd=4, show="•")
-        self.token_entry.pack(side="left", fill="x", expand=True)
-        tk.Button(tf, text="👁", font=("Segoe UI", 9), bg="#334155", fg=text, relief="flat",
-                  padx=4, command=self._toggle_token).pack(side="right", padx=(2,0))
-        tk.Button(tf, text="📋", font=("Segoe UI", 8), bg="#334155", fg=text, relief="flat",
-                  padx=6, command=lambda: self._copy(self.token_var.get())).pack(side="right", padx=(4,0))
-
-        sf2 = tk.Frame(self.root, bg=bg); sf2.pack(padx=16, pady=(4,4), fill="x")
-        self.status_dot = tk.Label(sf2, text="●", font=("Segoe UI", 14), bg=bg, fg=muted)
-        self.status_dot.pack(side="left")
-        self.status_label = tk.Label(sf2, text="未连接", font=("Segoe UI", 11, "bold"), bg=bg, fg=muted)
-        self.status_label.pack(side="left", padx=(4,0))
-        self.account_label = tk.Label(sf2, text="", font=("Segoe UI", 9), bg=bg, fg=muted)
-        self.account_label.pack(side="right")
-
-        bf = tk.Frame(self.root, bg=bg); bf.pack(padx=16, pady=(4,8), fill="x")
-        self.start_btn = tk.Button(bf, text="▶  启动桥接", font=("Segoe UI", 12, "bold"),
-                                    bg=accent, fg="white", relief="flat", padx=20, pady=8,
-                                    activebackground="#2563eb", cursor="hand2", command=self._toggle_bridge)
-        self.start_btn.pack(fill="x")
-
-        tk.Label(self.root, text="运行日志", font=("Segoe UI", 9), bg=bg, fg=muted).pack(padx=16, anchor="w")
-        self.log_area = scrolledtext.ScrolledText(self.root, height=14, font=("Consolas", 9),
-                                                   bg="#0f172a", fg="#94a3b8", insertbackground=text,
-                                                   relief="flat", bd=4, state="disabled", wrap="word")
-        self.log_area.pack(padx=16, pady=(2,12), fill="both", expand=True)
-
-        tk.Label(self.root, text="AURUM AI · wall-street-skill.com", font=("Segoe UI", 8),
-                 bg=bg, fg="#475569").pack(pady=(0,8))
-
-    # ============ System Tray (纯 ctypes) ============
-
-    def _init_tray(self):
-        hinst = kernel32.GetModuleHandleW(None)
-        wc = WNDCLASS()
-        wc.lpszClassName = f"AurumBridgeTray_{os.getpid()}"
-        wc.hInstance = hinst
-        self._wndproc = WNDPROC(self._wnd_proc)
-        _wndproc_refs.append(self._wndproc)
-        wc.lpfnWndProc = ctypes.cast(self._wndproc, ctypes.c_void_p)
-        atom = user32.RegisterClassW(ctypes.byref(wc))
-        if not atom:
-            err = kernel32.GetLastError()
-            self._log(f"[tray] RegisterClass 失败: {err}")
-            return
-        self._tray_hwnd = user32.CreateWindowExW(0, f"AurumBridgeTray_{os.getpid()}", "", 0, 0, 0, 0, 0, 0, 0, hinst, None)
-        if not self._tray_hwnd:
-            self._log(f"[tray] CreateWindow 失败: {kernel32.GetLastError()}")
-            return
-        self._log("系统托盘已就绪")
-
-    def _show_tray(self):
-        if not self._tray_hwnd:
-            return
-        tip = "AURUM MT5 Bridge"
-        nid = NOTIFYICONDATA()
-        nid.cbSize = ctypes.sizeof(NOTIFYICONDATA)
-        nid.hWnd = self._tray_hwnd
-        nid.uID = 1
-        nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE
-        nid.uCallbackMessage = TRAY_WM
-        nid.hIcon = self._hicon or user32.LoadIconW(0, IDI_APPLICATION)
-        nid.szTip = tip
-        self._nid = nid
-        shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
-
-    def _hide_tray(self):
-        if self._nid:
-            try:
-                shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._nid))
-            except Exception:
-                pass
-            self._nid = None
-
-    def _update_tray_tip(self, tip):
-        if self._nid:
-            self._nid.szTip = tip[:127]
-            shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(self._nid))
-
-
-    def _wnd_proc(self, hwnd, msg, wparam, lparam):
+def load_config():
+    if os.path.exists(CONFIG_PATH):
         try:
-            if msg == TRAY_WM:
-                if lparam == WM_LBUTTONUP:
-                    self._restore_from_tray()
-                elif lparam == WM_RBUTTONUP:
-                    self._show_context_menu()
-                return 0
-            elif msg == WM_COMMAND:
-                cmd = wparam & 0xFFFF
-                if cmd == MENU_OPEN:
-                    self._restore_from_tray()
-                elif cmd == MENU_START:
-                    if not self.running:
-                        self._toggle_bridge()
-                elif cmd == MENU_STOP:
-                    if self.running:
-                        self._toggle_bridge()
-                elif cmd == MENU_QUIT:
-                    self._do_quit()
-                return 0
-            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
-        except Exception as e:
-            try:
-                return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
-            except:
-                return 0
-
-    def _show_context_menu(self):
-        try:
-            if not self._tray_hwnd:
-                return
-            menu = user32.CreatePopupMenu()
-            user32.AppendMenuW(menu, MF_STRING, MENU_OPEN, "打开界面")
-            user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
-            s_flag = MF_GRAYED if self.running else MF_STRING
-            p_flag = MF_STRING if self.running else MF_GRAYED
-            user32.AppendMenuW(menu, s_flag, MENU_START, "启动桥接")
-            user32.AppendMenuW(menu, p_flag, MENU_STOP, "关闭桥接")
-            user32.AppendMenuW(menu, MF_SEPARATOR, 0, "")
-            user32.AppendMenuW(menu, MF_STRING, MENU_QUIT, "退出")
-            pt = POINT()
-            user32.GetCursorPos(ctypes.byref(pt))
-            user32.SetForegroundWindow(self._tray_hwnd)
-            user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, self._tray_hwnd, None)
-            user32.PostMessageW(self._tray_hwnd, 0, 0, 0)
-            user32.DestroyMenu(menu)
-        except Exception as e:
-            try:
-                self._log('Right-click menu error: %s' % e)
-            except:
-                pass
-
-    def _restore_from_tray(self):
-        try:
-            if self._closing:
-                return
-            self._hide_tray()
-            self._is_minimized_to_tray = False
-            self._do_restore()
-        except Exception as e:
-            try:
-                self._log('Restore failed: %s' % e)
-            except:
-                pass
-
-    def _do_restore(self):
-        try:
-            self.root.deiconify()
-            self.root.lift()
-            self.root.focus_force()
-        except Exception as e:
-            self._log(f"恢复窗口失败: {e}")
-
-    # ============ Window Lifecycle ============
-
-    def _on_close(self):
-        if self._closing or self._is_minimized_to_tray:
-            return
-        try:
-            if self._tray_hwnd:
-                self._show_tray()
-                self.root.withdraw()
-                self._is_minimized_to_tray = True
-                self._log("已最小化到系统托盘")
-                self._poll_tray()
-            else:
-                self._do_quit()
-        except Exception as e:
-            self._log(f"最小化失败: {e}")
-            self._do_quit()
-
-    def _poll_tray(self):
-        if self._closing or not self._is_minimized_to_tray or not self._tray_hwnd:
-            return
-        msg = MSG()
-        while user32.PeekMessageW(ctypes.byref(msg), self._tray_hwnd, 0, 0, 1):
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-        if self._is_minimized_to_tray:
-            self._safe_after(200, self._poll_tray)
-
-    def _safe_after(self, ms, func, *args):
-        """Schedule after() only if not closing."""
-        if self._closing:
-            return
-        try:
-            self.root.after(ms, func, *args)
-        except:
-            pass
-
-    def _cancel_all_after(self):
-        """Cancel all pending after() callbacks."""
-        try:
-            for after_id in self.root.tk.eval('after info').split():
-                try: self.root.after_cancel(after_id)
-                except: pass
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
         except: pass
+    return {}
 
-    def _do_quit(self):
-        if self._closing:
-            return
-        self._closing = True
-        self._is_minimized_to_tray = False
-        self.running = False
-        if self.bridge_thread and self.bridge_thread.is_alive():
-            try:
-                if self._ws and self._ws.connected:
-                    self._ws.close()
-            except Exception:
-                pass
-        if self.mt5:
-            try: self.mt5.shutdown()
-            except Exception:
-                pass
-        try: self._hide_tray()
-        except Exception:
-            pass
-        try: self.root.withdraw()
-        except Exception:
-            pass
-        # Cancel pending after() callbacks before destroying root
-        try: self._cancel_all_after()
-        except Exception:
-            pass
-        try: self.root.quit()
-        except Exception:
-            pass
-        try: self.root.destroy()
-        except Exception:
-            pass
-        # Give daemon threads a moment, then force exit
-        threading.Thread(target=self._delayed_exit, daemon=True).start()
+def save_config(cfg):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except: pass
 
-    def _delayed_exit(self):
-        time.sleep(0.5)
-        # Clean up PyInstaller temp dir if sys.exit didn't work
-        mei = getattr(sys, '_MEIPASS', None)
-        if mei:
-            import shutil
-            try:
-                shutil.rmtree(mei, ignore_errors=True)
-            except Exception:
-                pass
-        os._exit(0)
+def update_config(patch):
+    cfg = load_config()
+    cfg.update(patch)
+    save_config(cfg)
 
-    # ============ Utilities ============
+# ══════════════════════════════════════════════════════════
+#  HTTP helpers
+# ══════════════════════════════════════════════════════════
 
-    def _copy(self, text):
-        self.root.clipboard_clear(); self.root.clipboard_append(text); self._log("已复制到剪贴板")
+import urllib.request, urllib.error
 
-    def _toggle_token(self):
-        self.token_shown = not self.token_shown
-        self.token_entry.config(show="" if self.token_shown else "•")
+def _get_ssl_context():
+    """PySide6 frozen EXE 中 SSL 证书可能不全，提供兼容 context"""
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+    except ImportError:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
-    def _log(self, msg):
-        self.log_area.config(state="normal")
-        ts = time.strftime("%H:%M:%S")
-        self.log_area.insert("end", f"[{ts}] {msg}\n")
-        line_count = int(self.log_area.index("end-1c").split(".")[0])
-        if line_count > MAX_LOG_LINES:
-            self.log_area.delete("1.0", f"{line_count - MAX_LOG_LINES}.0")
-        self.log_area.see("end"); self.log_area.config(state="disabled")
+def http_get_json(url, timeout=10):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "AURUM-Bridge/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return e.code, {"error": str(e)}
+    except Exception as e:
+        return 0, {"error": str(e)}
 
-    def _set_status(self, text, color, account=""):
-        self.status_dot.config(fg=color); self.status_label.config(fg=color, text=text)
-        self.account_label.config(text=account)
+def http_post_json(url, data, timeout=10):
+    try:
+        body = json.dumps(data).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers={
+            "Content-Type": "application/json", "User-Agent": "AURUM-Bridge/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return e.code, {"error": str(e)}
+    except Exception as e:
+        return 0, {"error": str(e)}
 
-    def _check_mt5(self):
-        try:
-            import MetaTrader5 as mt5
-            self.mt5 = mt5
-            if mt5.initialize():
-                info = mt5.account_info()
-                if info:
-                    self._log(f"MT5 已就绪: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
-                else:
-                    self._log("MT5 已初始化，请在终端中登录账户")
-                mt5.shutdown()
-            else:
-                self._log(f"MT5 初始化失败: {mt5.last_error()}")
-        except Exception as e:
-            self._log(f"MetaTrader5 加载失败: {e}")
-            if not getattr(sys, 'frozen', False):
-                threading.Thread(target=self._install_mt5, daemon=True).start()
+# ══════════════════════════════════════════════════════════
+#  Stylesheet
+# ══════════════════════════════════════════════════════════
 
-    def _install_mt5(self):
-        import subprocess
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "MetaTrader5", "-q"])
-            import MetaTrader5 as mt5; self.mt5 = mt5; self._log("MetaTrader5 安装成功")
-        except Exception as e:
-            self._log(f"安装失败: {e}")
+DARK_STYLE = """
+QMainWindow, QWidget {
+    background-color: #0f172a;
+    color: #e2e8f0;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+}
+QLabel { color: #e2e8f0; background: transparent; }
+QLabel[muted="true"] { color: #94a3b8; background: transparent; }
+QLabel[accent="true"] { color: #3b82f6; background: transparent; }
+QLabel[error="true"] { color: #ef4444; }
+QLabel[success="true"] { color: #22c55e; }
+QLabel[warning="true"] { color: #f59e0b; }
 
-    def _toggle_bridge(self):
-        if self.running:
-            if not messagebox.askyesno("确认停止", "确定要断开 MT5 桥接连接吗？\n\n停止后将无法自动执行交易信号。", icon="warning"):
-                return
-            self.running = False
-            self.start_btn.config(text="▶  启动桥接", bg="#3b82f6")
-            self._set_status("已停止", "#ef4444"); self._log("桥接已停止")
-            self._update_tray_tip("AURUM Bridge - 已停止")
-        else:
-            server, token = self.server_var.get().strip(), self.token_var.get().strip()
-            if not server or not token:
-                missing = []
-                if not server: missing.append("服务器地址")
-                if not token: missing.append("Token")
-                messagebox.showwarning("信息不完整", f"{' 和 '.join(missing)} 为空！\n\n请手动填写，或从网站下载 config.json 放到本程序目录。")
-                return
-            self.running = True
-            self.start_btn.config(text="■  停止桥接", bg="#ef4444")
-            self._set_status("连接中...", "#f59e0b"); self._log("启动桥接...")
-            self._update_tray_tip("AURUM Bridge - 运行中")
-            self.bridge_thread = threading.Thread(target=self._bridge_loop, daemon=True)
-            self.bridge_thread.start()
+QLineEdit {
+    background-color: #1e293b;
+    color: #e2e8f0;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 13px;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    selection-background-color: #3b82f6;
+}
+QLineEdit:focus { border-color: #3b82f6; }
+
+QPushButton {
+    background-color: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 20px 12px;
+    font-size: 13px;
+    font-weight: bold;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+QPushButton:hover { background-color: #2563eb; }
+QPushButton:pressed { background-color: #1d4ed8; }
+QPushButton:disabled { background-color: #334155; color: #64748b; }
+
+QPushButton[secondary="true"] {
+    background-color: #334155;
+    color: #e2e8f0;
+}
+QPushButton[secondary="true"]:hover { background-color: #475569; }
+
+QPushButton[danger="true"] {
+    background-color: #ef4444;
+}
+QPushButton[danger="true"]:hover { background-color: #dc2626; }
+
+QCheckBox {
+    color: #94a3b8;
+    spacing: 6px;
+}
+QCheckBox::indicator {
+    width: 16px; height: 16px;
+    border: 1px solid #475569;
+    border-radius: 3px;
+    background-color: #1e293b;
+}
+QCheckBox::indicator:checked {
+    background-color: #3b82f6;
+    border-color: #3b82f6;
+}
+
+QTextEdit {
+    background-color: #0f172a;
+    color: #94a3b8;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: 8px;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+}
+
+QFrame[card="true"] {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 0px;
+}
+
+QProgressBar {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    text-align: center;
+    color: #e2e8f0;
+    height: 20px;
+}
+QProgressBar::chunk {
+    background-color: #3b82f6;
+    border-radius: 3px;
+}
+
+QMenu {
+    background-color: #1e293b;
+    color: #e2e8f0;
+    border: 1px solid #334155;
+}
+QMenu::item:selected { background-color: #334155; }
+"""
+
+# ══════════════════════════════════════════════════════════
+#  Custom QPainter icon buttons
+# ══════════════════════════════════════════════════════════
+
+class EyeToggleButton(QPushButton):
+    """密码可见性切换按钮 - QPainter 绘制眼睛图标"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(36, 36)
+        self.setCursor(Qt.PointingHandCursor)
+        self._visible = False
+        self.setToolTip("显示/隐藏密码")
+
+    def set_password_visible(self, v):
+        self._visible = v
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#94a3b8"), 2)
+        p.setPen(pen)
+        cx, cy = self.width() // 2, self.height() // 2
+        # Eye shape
+        path = QPainterPath()
+        path.moveTo(cx - 12, cy)
+        path.cubicTo(cx - 6, cy - 8, cx + 6, cy - 8, cx + 12, cy)
+        path.cubicTo(cx + 6, cy + 8, cx - 6, cy + 8, cx - 12, cy)
+        p.drawPath(path)
+        # Pupil
+        if self._visible:
+            p.setBrush(QBrush(QColor("#94a3b8")))
+        p.drawEllipse(cx - 4, cy - 4, 8, 8)
+        # Slash when hidden
+        if not self._visible:
+            p.setPen(QPen(QColor("#ef4444"), 2))
+            p.drawLine(cx - 10, cy + 10, cx + 10, cy - 10)
+        p.end()
+
+
+class GearButton(QPushButton):
+    """设置按钮 - QPainter 绘制齿轮图标"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(36, 32)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("设置")
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#94a3b8"), 2)
+        p.setPen(pen)
+        cx, cy = self.width() // 2, self.height() // 2
+        # Simple gear: circle + teeth
+        p.drawEllipse(cx - 8, cy - 8, 16, 16)
+        p.drawEllipse(cx - 4, cy - 4, 8, 8)
+        for angle in range(0, 360, 45):
+            import math
+            rad = math.radians(angle)
+            x1 = cx + int(8 * math.cos(rad))
+            y1 = cy + int(8 * math.sin(rad))
+            x2 = cx + int(12 * math.cos(rad))
+            y2 = cy + int(12 * math.sin(rad))
+            p.drawLine(x1, y1, x2, y2)
+        p.end()
+
+# ══════════════════════════════════════════════════════════
+#  Bridge Worker (QThread)
+# ══════════════════════════════════════════════════════════
+
+class BridgeWorker(QThread):
+    log_signal = Signal(str)
+    status_signal = Signal(str, str, str)  # text, color, account
+    connected_signal = Signal()
+
+    def __init__(self, server_url, token):
+        super().__init__()
+        self.server_url = server_url
+        self.token = token
+        self.running = True
+        self._trade_enabled = False
+        self._resolved_symbol = "XAUUSD"
+        self.mt5 = None
+        self._ws = None
+        self._acc_lost_warned = False
+
+    def _mt5_time(self, ts):
+        if not ts: return ''
+        return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
 
     def _resolve_symbol(self, symbol):
         requested = str(symbol or "").strip()
@@ -583,7 +352,6 @@ class AurumBridge:
                 if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                     return {"status": "success", "order": result.order, "price": result.price}
                 return {"status": "error", "message": result.comment if result else "order_send failed"}
-
             elif action == "close":
                 ticket = params.get("ticket")
                 if ticket:
@@ -607,7 +375,6 @@ class AurumBridge:
                             "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
                             "type_filling": self._get_filling_mode(pos.symbol)})
                     return {"status": "success", "closed": len(positions)}
-
             elif action == "close_all":
                 positions = self.mt5.positions_get()
                 if not positions: return {"status": "success", "closed": 0}
@@ -617,7 +384,6 @@ class AurumBridge:
                         "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
                         "type_filling": self._get_filling_mode(pos.symbol)})
                 return {"status": "success", "closed": len(positions)}
-
             elif action == "rates":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
@@ -627,13 +393,12 @@ class AurumBridge:
                 tf = tf_map.get(params.get("timeframe", "M30"), self.mt5.TIMEFRAME_M30)
                 rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, int(params.get("count", 100)))
                 if rates is not None and len(rates) > 0:
-                    out = [{"time": _mt5_time(int(r[0])), "open": float(r[1]), "high": float(r[2]),
+                    out = [{"time": self._mt5_time(int(r[0])), "open": float(r[1]), "high": float(r[2]),
                             "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]),
                             "spread": int(r[6]) if len(r) > 6 else 0} for r in rates]
                     return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe","M30"),
                             "count": len(out), "rates": out, "source": "mt5"}
                 return {"status": "success", "symbol": symbol, "rates": [], "source": "mt5"}
-
             elif action == "quote":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
@@ -641,10 +406,8 @@ class AurumBridge:
                 if not tick: return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
                 return {"status": "success", "symbol": symbol, "bid": tick.bid, "ask": tick.ask,
                         "spread": round(info.spread * info.point, info.digits) if info else 0,
-                        "time": _mt5_time(tick.time), "digits": info.digits if info else 2,
-                        "point": info.point if info else 0.01,
-                        "source": "mt5"}
-
+                        "time": self._mt5_time(tick.time), "digits": info.digits if info else 2,
+                        "point": info.point if info else 0.01, "source": "mt5"}
             elif action == "positions":
                 sym = params.get("symbol")
                 if sym: sym = self._resolve_symbol(sym)
@@ -654,18 +417,15 @@ class AurumBridge:
                         "volume": p.volume, "open_price": p.price_open, "price_open": p.price_open,
                         "price_current": p.price_current, "profit": p.profit, "sl": p.sl, "tp": p.tp,
                         "swap": p.swap, "magic": p.magic, "comment": p.comment,
-                        "time": _mt5_time(getattr(p,'time',0)), "source": "mt5"} for p in positions]
+                        "time": self._mt5_time(getattr(p,'time',0)), "source": "mt5"} for p in positions]
                     return {"status": "success", "positions": payload, "count": len(payload), "source": "mt5"}
                 return {"status": "success", "positions": [], "count": 0, "source": "mt5"}
-
             elif action == "symbols":
                 symbols = self.mt5.symbols_get()
                 if symbols is None: return {"status": "error", "message": "MT5 symbols_get failed"}
-                payload = [{"name": s.name, "description": s.description, "currency_base": s.currency_base,
-                    "currency_profit": s.currency_profit, "currency_margin": s.currency_margin,
-                    "digits": s.digits, "trade_mode": s.trade_mode, "point": s.point} for s in symbols]
+                payload = [{"name": s.name, "description": s.description, "digits": s.digits,
+                    "trade_mode": s.trade_mode, "point": s.point} for s in symbols]
                 return {"status": "success", "symbols": payload, "source": "mt5"}
-
             elif action == "account":
                 acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
                 if acc:
@@ -678,7 +438,6 @@ class AurumBridge:
                         "terminal_build": terminal.build if terminal else 0,
                         "terminal_connected": terminal.connected if terminal else False, "source": "mt5"}
                 return {"status": "error", "message": "no account info"}
-
             elif action == "status":
                 acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
                 if acc:
@@ -688,42 +447,26 @@ class AurumBridge:
                         "account_trade_allowed": acc.trade_allowed, "account_trade_expert": acc.trade_expert,
                         "login": acc.login, "server": acc.server, "balance": acc.balance, "equity": acc.equity}
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
-
             elif action == "history":
                 import math
                 page = params.get("page", 1); page_size = params.get("page_size", 20)
                 deposit = withdrawal = credit = 0.0
                 date_to = datetime.utcnow() + timedelta(days=1)
                 date_from = date_to - timedelta(days=31)
-                # Fetch both deals (trade executions) and orders (contain tp/sl)
                 deals = self.mt5.history_deals_get(date_from, date_to)
                 if deals is None: return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
                 deal_rows = [d._asdict() for d in deals]
-                # Build order lookup: order_ticket -> {tp, sl}
                 orders = self.mt5.history_orders_get(date_from, date_to)
                 order_lookup = {}
-                order_diag = {"count": len(orders) if orders else 0, "first_keys": None, "sample_tp": None, "sample_sl": None, "via_attr_tp": None, "via_attr_sl": None, "has_tp_attr": None, "has_sl_attr": None, "ticket_sample": None, "lookup_size": 0}
                 if orders:
-                    o0 = orders[0]
-                    od0 = o0._asdict()
-                    order_diag["first_keys"] = sorted(od0.keys())
-                    order_diag["sample_tp"] = od0.get("tp")
-                    order_diag["sample_sl"] = od0.get("sl")
-                    order_diag["has_tp_attr"] = hasattr(o0, "tp")
-                    order_diag["has_sl_attr"] = hasattr(o0, "sl")
-                    order_diag["via_attr_tp"] = getattr(o0, "tp", "MISSING")
-                    order_diag["via_attr_sl"] = getattr(o0, "sl", "MISSING")
-                    order_diag["ticket_sample"] = od0.get("ticket")
                     for o in orders:
                         od = o._asdict()
                         ticket = od.get("ticket")
-                        if ticket is None:
-                            continue
+                        if ticket is None: continue
                         tp = getattr(o, "tp", 0) or od.get("tp") or 0
                         sl = getattr(o, "sl", 0) or od.get("sl") or 0
                         if tp != 0 or sl != 0:
                             order_lookup[int(ticket)] = {"tp": tp, "sl": sl}
-                    order_diag["lookup_size"] = len(order_lookup)
                 deals_by_pos = {}
                 balance_type = getattr(self.mt5, "DEAL_TYPE_BALANCE", 2)
                 credit_type = getattr(self.mt5, "DEAL_TYPE_CREDIT", 3)
@@ -745,7 +488,6 @@ class AurumBridge:
                 entry_inout = getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)
                 entry_in = getattr(self.mt5, "DEAL_ENTRY_IN", 0)
                 deal_type_buy = getattr(self.mt5, "DEAL_TYPE_BUY", 0)
-                # Compact mode: return only fields needed for chart aggregation
                 compact = params.get("compact", False)
                 if compact:
                     compact_rows = []
@@ -753,10 +495,9 @@ class AurumBridge:
                         if d.get("entry") not in (entry_out, entry_inout): continue
                         pid = d.get("position_id") or d.get("order") or d.get("ticket") or ""
                         sd = next((i for i in deals_by_pos.get(pid, []) if i.get("entry") == entry_in), d)
-                        compact_rows.append({"t": _mt5_time(d.get("time")), "p": float(d.get("profit") or 0), "y": "BUY" if sd.get("type") == deal_type_buy else "SELL"})
+                        compact_rows.append({"t": self._mt5_time(d.get("time")), "p": float(d.get("profit") or 0), "y": "BUY" if sd.get("type") == deal_type_buy else "SELL"})
                     compact_rows.sort(key=lambda r: r.get("t") or "", reverse=True)
                     return {"status": "success", "orders": compact_rows, "total_count": len(compact_rows)}
-
                 rows = []
                 for d in deal_rows:
                     if d.get("entry") not in (entry_out, entry_inout): continue
@@ -771,15 +512,13 @@ class AurumBridge:
                     if ep and xp and pt:
                         pp = round((float(xp)-float(ep))/pt, 1) if direction=="BUY" else round((float(ep)-float(xp))/pt, 1)
                     eo = (ed or {}).get("order") or pid
-                    # Look up tp/sl from the order record
                     ord_info = order_lookup.get(eo, {})
                     rows.append({"ticket": eo, "deal_ticket": d.get("ticket"), "order": eo,
-                        "close_order": d.get("order"), "position_id": pid, "symbol": sym,
-                        "type": direction, "volume": d.get("volume"), "entry_price": ep, "exit_price": xp,
-                        "price": xp, "profit": d.get("profit"), "swap": d.get("swap"),
-                        "commission": d.get("commission"), "profit_points": pp,
-                        "entry_time": _mt5_time((ed or {}).get("time")),
-                        "close_time": _mt5_time(d.get("time")), "time": _mt5_time(d.get("time")),
+                        "position_id": pid, "symbol": sym, "type": direction, "volume": d.get("volume"),
+                        "entry_price": ep, "exit_price": xp, "price": xp, "profit": d.get("profit"),
+                        "swap": d.get("swap"), "commission": d.get("commission"), "profit_points": pp,
+                        "entry_time": self._mt5_time((ed or {}).get("time")),
+                        "close_time": self._mt5_time(d.get("time")), "time": self._mt5_time(d.get("time")),
                         "comment": d.get("comment"),
                         "take_profit": ord_info.get("tp"), "stop_loss": ord_info.get("sl")})
                 rows.sort(key=lambda r: r.get("close_time") or r.get("entry_time") or "", reverse=True)
@@ -798,116 +537,113 @@ class AurumBridge:
                     "withdrawal": round(withdrawal,2), "net_result": round(nr,2),
                     "trade_count": total, "total_volume": round(sum(float(r.get("volume") or 0) for r in rows),2)},
                     "pagination": {"current_page": page, "page_size": page_size,
-                        "total_count": total, "total_pages": max(math.ceil(total/page_size),1)}, "source": "mt5",
-                    "_diag": {"order_lookup_count": len(order_lookup), "order_diag": order_diag}}
-
+                        "total_count": total, "total_pages": max(math.ceil(total/page_size),1)}, "source": "mt5"}
             elif action == "diagnostics":
                 acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
                 return {"status": "success", "mt5_connected": True,
                     "account": {"login": acc.login, "server": acc.server, "balance": acc.balance} if acc else None,
                     "terminal": {"build": terminal.build, "connected": terminal.connected,
                         "trade_allowed": terminal.trade_allowed} if terminal else None}
-
             elif action == "toggle_trade":
                 self._trade_enabled = params.get("enable", False)
                 return {"status": "success", "live_trading_enabled": self._trade_enabled}
-
             elif action == "set_quote_symbol":
                 self._resolved_symbol = self._resolve_symbol(params.get("symbol", "XAUUSD"))
                 return {"status": "success", "symbol": self._resolved_symbol}
-
             else:
                 return {"status": "error", "message": f"unknown action: {action}"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    # ============ Bridge Loop ============
-
-    def _bridge_loop(self):
-        if not self.mt5:
-            try:
-                import MetaTrader5 as mt5; self.mt5 = mt5
-            except:
-                self._safe_after(0, self._log, "错误: MetaTrader5 未安装")
-                self._safe_after(0, self._toggle_bridge); return
+    def run(self):
+        # Import MT5
+        try:
+            import MetaTrader5 as mt5
+            self.mt5 = mt5
+        except:
+            self.log_signal.emit("错误: MetaTrader5 未安装")
+            self.status_signal.emit("MT5 未安装", "#ef4444", "")
+            return
 
         if not self.mt5.initialize():
-            err_code = self.mt5.last_error()
-            self._safe_after(0, self._log, f"MT5 初始化失败 (错误码 {err_code})：请确认MT5已运行且已登录交易账户")
-            self._safe_after(0, self._set_status, "未检测到MT5", "#ef4444", "请先运行MT5并登录您的交易账户")
-            self._safe_after(0, self._toggle_bridge); return
+            self.log_signal.emit(f"MT5 初始化失败: {self.mt5.last_error()}")
+            self.status_signal.emit("未检测到MT5", "#ef4444", "请先运行MT5并登录交易账户")
+            return
 
         info = self.mt5.account_info()
         if not info:
-            self._safe_after(0, self._log, "错误：MT5终端已运行但未登录交易账户，停止连接")
-            self._safe_after(0, self._set_status, "MT5未登录", "#ef4444", "请在MT5中登录交易账户后重试")
-            self._safe_after(0, self._toggle_bridge)
-            self.mt5.shutdown(); return
+            self.log_signal.emit("MT5 未登录，请在终端中登录账户")
+            self.status_signal.emit("MT5未登录", "#ef4444", "请在MT5中登录交易账户后重试")
+            self.mt5.shutdown()
+            return
 
-        self._safe_after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
+        self.log_signal.emit(f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
 
-        # Check algorithmic trading
         terminal = self.mt5.terminal_info()
         if terminal and not terminal.trade_allowed:
-            self._safe_after(0, self._log, "⚠️ 算法交易未开启：MT5 → 工具 → 选项 → EA交易 → 允许算法交易")
-            self._safe_after(0, self._set_status, "⚠️ 请开启算法交易", "#f59e0b", "MT5菜单：工具→选项→EA交易→勾选允许算法交易")
+            self.log_signal.emit("⚠️ 算法交易未开启：MT5 → 工具 → 选项 → EA交易 → 允许算法交易")
 
-        if not HAS_WS:
-            self._safe_after(0, self._log, "错误: websocket-client 未安装")
-            self._safe_after(0, self._toggle_bridge); return
+        try:
+            import websocket
+        except:
+            self.log_signal.emit("错误: websocket-client 未安装")
+            return
 
-        server = self.server_var.get().replace("http://","ws://").replace("https://","wss://").rstrip("/")
-        ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token_var.get()}"
-        self._safe_after(0, self._log, f"连接 WebSocket: {server}/aurum-api/bridge/ws")
+        server = self.server_url.replace("http://","ws://").replace("https://","wss://").rstrip("/")
+        ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
+        self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
         MAX_RETRY = 300; RETRY_INT = 5
 
         while self.running:
             retry_start = time.time(); connected = False
-
             while self.running:
                 elapsed = time.time() - retry_start
                 if elapsed >= MAX_RETRY:
-                    self._safe_after(0, self._log, "连接失败：已重试5分钟，停止自动重试")
-                    self._safe_after(0, self._set_status, "连接失败", "#ef4444", "")
-                    self._safe_after(0, self._toggle_bridge)
+                    self.log_signal.emit("连接失败：已重试5分钟，停止")
+                    self.status_signal.emit("连接失败", "#ef4444", "")
                     if self.mt5: self.mt5.shutdown()
                     return
                 try:
                     ws = websocket.create_connection(ws_url, timeout=10, header=["Origin: http://localhost"])
                     self._ws = ws; connected = True
-                    self._safe_after(0, self._log, "WebSocket 已连接"); break
+                    self.log_signal.emit("WebSocket 已连接")
+                    break
                 except Exception as e:
                     rc = int(elapsed // RETRY_INT) + 1
-                    self._safe_after(0, self._log, f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
-                    self._safe_after(0, self._set_status, f"重连中... ({rc})", "#f59e0b", "")
+                    self.log_signal.emit(f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
+                    self.status_signal.emit(f"重连中... ({rc})", "#f59e0b", "")
                     time.sleep(RETRY_INT)
 
             if not connected or not self.running: break
 
-            self._resolved_symbol = self._resolve_symbol("XAUUSD") if self.mt5 else "XAUUSD"
+            try:
+                self._resolved_symbol = self._resolve_symbol("XAUUSD")
+            except:
+                self._resolved_symbol = "XAUUSD"
             last_hb = 0; last_data = 0
 
             while self.running:
                 now = time.time()
                 if now - last_data >= 1.0:
                     try:
-                        acc = self.mt5.account_info(); sym = getattr(self, '_resolved_symbol', 'XAUUSD')
-                        if not acc and not getattr(self, '_acc_lost_warned', False):
+                        acc = self.mt5.account_info()
+                        sym = self._resolved_symbol
+                        if not acc and not self._acc_lost_warned:
                             self._acc_lost_warned = True
-                            self._safe_after(0, self._log, "⚠️ MT5账户已断开，请重新登录后重启桥接")
-                            self._safe_after(0, self._set_status, "MT5账户已断开", "#ef4444", "请重新登录MT5后重启桥接")
-                        if acc and getattr(self, '_acc_lost_warned', False):
+                            self.log_signal.emit("⚠️ MT5账户已断开，请重新登录后重启桥接")
+                        if acc and self._acc_lost_warned:
                             self._acc_lost_warned = False
-                            self._safe_after(0, self._log, "MT5账户已恢复")
-                        tick = self.mt5.symbol_info_tick(sym); info = self.mt5.symbol_info(sym); positions = self.mt5.positions_get() or []
-                        # Get current bar tick_volume from MT5 rates (M1)
+                            self.log_signal.emit("MT5账户已恢复")
+                        tick = self.mt5.symbol_info_tick(sym)
+                        info = self.mt5.symbol_info(sym)
+                        positions = self.mt5.positions_get() or []
                         bar_vol = 0
                         try:
                             rates = self.mt5.copy_rates_from_pos(sym, self.mt5.TIMEFRAME_M1, 0, 1)
                             if rates is not None and len(rates) > 0:
-                                bar_vol = int(rates[0][5])  # tick_volume is index 5
-                        except Exception: pass
+                                bar_vol = int(rates[0][5])
+                        except: pass
                         dm = {"type": "data", "account": {
                             "login": acc.login if acc else None, "balance": round(acc.balance,2) if acc else None,
                             "equity": round(acc.equity,2) if acc else None, "margin": round(acc.margin,2) if acc else None,
@@ -915,7 +651,7 @@ class AurumBridge:
                             "server": acc.server if acc else None}, "quote": {"symbol": sym,
                             "bid": round(tick.bid,5) if tick else None, "ask": round(tick.ask,5) if tick else None,
                             "spread": round((tick.ask-tick.bid)/(0.01 if "JPY" not in sym else 0.001),1) if tick else None,
-                            "time": _mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "time": self._mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
                             "volume": bar_vol},
                             "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
                                 "volume": p.volume, "open_price": p.price_open, "current_price": p.price_current,
@@ -924,15 +660,15 @@ class AurumBridge:
                             "live_trading_enabled": self._trade_enabled}
                         ws.send(json.dumps(dm))
                         if acc:
-                            self._safe_after(0, self._set_status, "MT5桥接-已连接", "#22c55e",
-                                           f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
+                            self.status_signal.emit("MT5桥接-已连接", "#22c55e",
+                                                   f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
                         last_data = now
                     except Exception as e:
-                        self._safe_after(0, self._log, f"数据推送错误: {e}")
+                        self.log_signal.emit(f"数据推送错误: {e}")
 
                 if now - last_hb > 10:
                     try: ws.send(json.dumps({"type": "hb"})); last_hb = now
-                    except Exception as e: self._safe_after(0, self._log, f"心跳错误: {e}")
+                    except Exception as e: self.log_signal.emit(f"心跳错误: {e}")
 
                 ws.settimeout(0.3)
                 try:
@@ -940,16 +676,16 @@ class AurumBridge:
                     if data:
                         msg = json.loads(data)
                         if msg.get("type") == "command":
-                            self._safe_after(0, self._log, f"执行: {msg['action']}")
+                            self.log_signal.emit(f"执行: {msg['action']}")
                             try: resp = self._process_command(msg)
                             except Exception as ce: resp = {"status": "error", "message": str(ce)}
                             ws.send(json.dumps({"type": "result", "command_id": msg["command_id"], "result": resp}))
-                            self._safe_after(0, self._log, f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
+                            self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
                 except websocket.WebSocketTimeoutException: pass
                 except websocket.WebSocketConnectionClosedException:
-                    self._safe_after(0, self._log, "WebSocket 连接已断开"); break
+                    self.log_signal.emit("WebSocket 连接已断开"); break
                 except Exception as e:
-                    self._safe_after(0, self._log, f"接收错误: {e}"); break
+                    self.log_signal.emit(f"接收错误: {e}"); break
 
             try:
                 if ws and ws.connected:
@@ -957,18 +693,984 @@ class AurumBridge:
             except: pass
             self._ws = None
             if not self.running: break
-            self._safe_after(0, self._log, f"连接断开，{RETRY_INT}秒后自动重连...")
-            self._safe_after(0, self._set_status, "重连中...", "#f59e0b", "")
+            self.log_signal.emit(f"连接断开，{RETRY_INT}秒后自动重连...")
+            self.status_signal.emit("重连中...", "#f59e0b", "")
             time.sleep(RETRY_INT)
 
         if self.mt5: self.mt5.shutdown()
-        self._safe_after(0, self._log, "MT5 已断开")
+        self.log_signal.emit("MT5 已断开")
+
+    def stop(self):
+        self.running = False
+        try:
+            if self._ws and self._ws.connected:
+                self._ws.close()
+        except: pass
+
+# ══════════════════════════════════════════════════════════
+#  Update Downloader
+# ══════════════════════════════════════════════════════════
+
+class UpdateDownloader(QThread):
+    progress = Signal(int)
+    finished = Signal(bool, str)
+
+    def __init__(self, url, dest):
+        super().__init__()
+        self.url = url
+        self.dest = dest
 
     def run(self):
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.mainloop()
+        try:
+            import ssl
+            ctx = ssl.create_default_context()
+            try:
+                import certifi
+                ctx.load_verify_locations(certifi.where())
+            except ImportError:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(self.url, headers={"User-Agent": "AURUM-Bridge/1.0"})
+            with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                with open(self.dest, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk: break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            self.progress.emit(int(downloaded * 100 / total))
+            self.finished.emit(True, "OK")
+        except Exception as e:
+            self.finished.emit(False, str(e))
 
+UPDATE_TEMP = os.path.join(CONFIG_DIR, "update_temp.exe")
+
+
+class UpdateDialog(QDialog):
+    def __init__(self, download_url, temp_path, parent=None):
+        super().__init__(parent)
+        self.download_url = download_url
+        self.temp_path = temp_path
+        self.setWindowTitle("AURUM Bridge 更新")
+        self.setFixedSize(400, 180)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        self.lbl_title = QLabel("正在下载更新...")
+        self.lbl_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #e2e8f0;")
+        layout.addWidget(self.lbl_title)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setStyleSheet(""
+            "QProgressBar{background:#2d2d3f;border:1px solid #444;border-radius:4px;}"
+            "QProgressBar::chunk{background:#f59e0b;border-radius:4px;}")
+        layout.addWidget(self.progress_bar)
+
+        self.lbl_status = QLabel("准备下载...")
+        self.lbl_status.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        layout.addWidget(self.lbl_status)
+
+        self.btn_close = QPushButton("取消")
+        self.btn_close.setProperty("secondary", True)
+        self.btn_close.clicked.connect(self.reject)
+        layout.addWidget(self.btn_close, alignment=Qt.AlignRight)
+
+        self._downloader = None
+        QTimer.singleShot(300, self._start_download)
+
+    def _start_download(self):
+        self._downloader = UpdateDownloader(self.download_url, self.temp_path)
+        self._downloader.progress.connect(self._on_progress)
+        self._downloader.finished.connect(self._on_finished)
+        self._downloader.start()
+
+    def _on_progress(self, pct):
+        self.progress_bar.setValue(pct)
+        self.lbl_status.setText(f"已下载 {pct}%")
+
+    def _on_finished(self, success, msg):
+        if success:
+            self.progress_bar.setValue(100)
+            self.lbl_title.setText("下载完成！")
+            self.lbl_status.setText("正在准备替换，程序将自动重启...")
+            self.btn_close.setEnabled(False)
+            self.btn_close.setText("请稍候...")
+            if self.parent() and hasattr(self.parent(), '_apply_update'):
+                self.parent()._apply_update()
+            self.accept()
+        else:
+            self.lbl_title.setText("下载失败")
+            self.lbl_status.setText(f"错误: {msg}")
+            self.lbl_status.setStyleSheet("color: #ef4444; font-size: 12px;")
+            self.btn_close.setText("关闭")
+
+
+# ══════════════════════════════════════════════════════════
+#  Login Page
+# ══════════════════════════════════════════════════════════
+
+class LoginPage(QWidget):
+    login_success = Signal(str, str)  # (email, token)
+
+    def __init__(self):
+        super().__init__()
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(12)
+
+        # Title
+        title = QLabel("AURUM MT5 Bridge")
+        title.setFont(QFont("Segoe UI", 20, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #3b82f6; background: transparent;")
+        layout.addWidget(title)
+
+        layout.addSpacing(20)
+
+        # Card
+        card = QFrame()
+        card.setProperty("card", True)
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(14)
+        card_layout.setContentsMargins(16, 16, 16, 16)
+
+        # Server
+        lbl_server = QLabel("服务器地址")
+        lbl_server.setProperty("muted", True)
+        card_layout.addWidget(lbl_server)
+        self.input_server = QLineEdit()
+        self.input_server.setPlaceholderText("http://你的服务器:3000")
+        card_layout.addWidget(self.input_server)
+
+        # Email
+        lbl_email = QLabel("邮箱")
+        lbl_email.setProperty("muted", True)
+        card_layout.addWidget(lbl_email)
+        self.input_email = QLineEdit()
+        self.input_email.setPlaceholderText("your@email.com")
+        card_layout.addWidget(self.input_email)
+
+        # Password
+        lbl_pwd = QLabel("密码")
+        lbl_pwd.setProperty("muted", True)
+        card_layout.addWidget(lbl_pwd)
+        pwd_row = QHBoxLayout()
+        self.input_password = QLineEdit()
+        self.input_password.setPlaceholderText("输入密码")
+        self.input_password.setEchoMode(QLineEdit.Password)
+        pwd_row.addWidget(self.input_password)
+        self.btn_toggle_pwd = EyeToggleButton()
+        self.btn_toggle_pwd.clicked.connect(self._toggle_password)
+        pwd_row.addWidget(self.btn_toggle_pwd)
+        card_layout.addLayout(pwd_row)
+
+        # Remember + auto-login
+        check_row = QHBoxLayout()
+        self.chk_remember = QCheckBox("记住密码")
+        self.chk_auto_login = QCheckBox("自动登录")
+        check_row.addWidget(self.chk_remember)
+        check_row.addStretch()
+        check_row.addWidget(self.chk_auto_login)
+        card_layout.addLayout(check_row)
+
+        # Login button
+        self.btn_login = QPushButton("登录并连接")
+        self.btn_login.setFixedHeight(42)
+        self.btn_login.clicked.connect(self._do_login)
+        card_layout.addWidget(self.btn_login)
+
+        # Status
+        self.lbl_status = QLabel("")
+        self.lbl_status.setAlignment(Qt.AlignCenter)
+        self.lbl_status.setWordWrap(True)
+        card_layout.addWidget(self.lbl_status)
+
+        layout.addWidget(card)
+
+        # Hint
+        hint = QLabel("⚠️ 请确保 MT5 已运行并登录交易账户")
+        hint.setProperty("muted", True)
+        hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(hint)
+
+        layout.addStretch()
+
+        # Footer
+        footer = QLabel(f"AURUM AI · wall-street-skill.com · {APP_VERSION}")
+        footer.setProperty("muted", True)
+        footer.setAlignment(Qt.AlignCenter)
+        layout.addWidget(footer)
+
+        self.input_password.returnPressed.connect(self._do_login)
+        self.input_email.returnPressed.connect(self._do_login)
+
+    def _toggle_password(self):
+        if self.input_password.echoMode() == QLineEdit.Password:
+            self.input_password.setEchoMode(QLineEdit.Normal)
+            self.btn_toggle_pwd.set_password_visible(True)
+        else:
+            self.input_password.setEchoMode(QLineEdit.Password)
+            self.btn_toggle_pwd.set_password_visible(False)
+
+    def load_config(self):
+        cfg = load_config()
+        self.input_server.setText(cfg.get("server_url", DEFAULT_SERVER))
+        self.input_email.setText(cfg.get("email", ""))
+        if cfg.get("saved_password"):
+            self.input_password.setText(cfg.get("saved_password", ""))
+        self.chk_remember.setChecked(cfg.get("remember", False))
+        self.chk_auto_login.setChecked(cfg.get("auto_login", False))
+
+    def _do_login(self):
+        server = self.input_server.text().strip()
+        email = self.input_email.text().strip()
+        password = self.input_password.text().strip()
+
+        if not server or not email or not password:
+            self.lbl_status.setText("请填写所有字段")
+            self.lbl_status.setProperty("error", True)
+            self.lbl_status.style().polish(self.lbl_status)
+            return
+
+        self.btn_login.setEnabled(False)
+        self.btn_login.setText("登录中...")
+        self.lbl_status.setText("正在连接服务器...")
+        self.lbl_status.setProperty("muted", True)
+        self.lbl_status.style().polish(self.lbl_status)
+        QApplication.processEvents()
+
+        url = f"{server.rstrip('/')}/api/login"
+        status_code, data = http_post_json(url, {"email": email, "password": password}, timeout=10)
+
+        self.btn_login.setEnabled(True)
+        self.btn_login.setText("登录并连接")
+
+        if status_code == 200 and data.get("token"):
+            token = data["token"]
+            self.lbl_status.setText("✅ 登录成功")
+            self.lbl_status.setProperty("success", True)
+            self.lbl_status.style().polish(self.lbl_status)
+
+            # Save config
+            cfg = load_config()
+            cfg["server_url"] = server
+            cfg["email"] = email
+            cfg["token"] = token
+            cfg["remember"] = self.chk_remember.isChecked()
+            cfg["auto_login"] = self.chk_auto_login.isChecked()
+            if self.chk_remember.isChecked():
+                cfg["saved_password"] = password
+            else:
+                cfg.pop("saved_password", None)
+            save_config(cfg)
+
+            self.login_success.emit(email, token)
+        else:
+            err = data.get("error", data.get("message", f"HTTP {status_code}"))
+            self.lbl_status.setText(f"❌ 登录失败: {err}")
+            self.lbl_status.setProperty("error", True)
+            self.lbl_status.style().polish(self.lbl_status)
+
+# ══════════════════════════════════════════════════════════
+#  Bridge Page (Main)
+# ══════════════════════════════════════════════════════════
+
+class BridgePage(QWidget):
+    request_settings = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._worker = None
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Top row
+        top_row = QHBoxLayout()
+        title = QLabel("⚡ AURUM MT5 Bridge")
+        title.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        title.setStyleSheet("color: #3b82f6; background: transparent;")
+        top_row.addWidget(title)
+        top_row.addStretch()
+        self.btn_settings = GearButton()
+        self.btn_settings.clicked.connect(self.request_settings.emit)
+        top_row.addWidget(self.btn_settings)
+        layout.addLayout(top_row)
+
+        # Status card
+        status_card = QFrame()
+        status_card.setProperty("card", True)
+        sc_layout = QVBoxLayout(status_card)
+        sc_layout.setContentsMargins(16, 12, 16, 12)
+
+        status_row = QHBoxLayout()
+        self.lbl_status_dot = QLabel("●")
+        self.lbl_status_dot.setStyleSheet("color: #64748b; font-size: 18px; background: transparent;")
+        status_row.addWidget(self.lbl_status_dot)
+        self.lbl_status = QLabel("未连接")
+        self.lbl_status.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.lbl_status.setStyleSheet("color: #64748b; background: transparent;")
+        status_row.addWidget(self.lbl_status)
+        status_row.addStretch()
+        self.lbl_account = QLabel("")
+        self.lbl_account.setProperty("muted", True)
+        status_row.addWidget(self.lbl_account)
+        sc_layout.addLayout(status_row)
+
+        # 登录用户信息行
+        user_row = QHBoxLayout()
+        self.lbl_login_user = QLabel("")
+        self.lbl_login_user.setProperty("muted", True)
+        self.lbl_login_user.setStyleSheet("font-size: 12px; background: transparent;")
+        user_row.addWidget(self.lbl_login_user)
+        user_row.addStretch()
+        sc_layout.addLayout(user_row)
+
+        layout.addWidget(status_card)
+
+        # 更新提示（默认隐藏）
+        self.lbl_update_hint = QLabel("")
+        self.lbl_update_hint.setStyleSheet(
+            "color: #f59e0b; background-color: #1e293b; border: 1px solid #334155; "
+            "border-radius: 6px; padding: 8px 12px; font-size: 12px;")
+        self.lbl_update_hint.setVisible(False)
+        self.lbl_update_hint.setCursor(Qt.PointingHandCursor)
+        self.lbl_update_hint.mousePressEvent = lambda _: self.request_settings.emit()
+        layout.addWidget(self.lbl_update_hint)
+
+        # Start button
+        self.btn_start = QPushButton("▶  启动桥接")
+        self.btn_start.setFixedHeight(48)
+        self.btn_start.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        self.btn_start.clicked.connect(self._toggle_bridge)
+        layout.addWidget(self.btn_start)
+
+        # Log
+        lbl_log = QLabel("运行日志")
+        lbl_log.setProperty("muted", True)
+        layout.addWidget(lbl_log)
+
+        self.log_area = QTextEdit()
+        self.log_area.setReadOnly(True)
+        layout.addWidget(self.log_area, 1)
+
+        # Footer
+        footer = QLabel(f"AURUM AI · wall-street-skill.com · {APP_VERSION}")
+        footer.setProperty("muted", True)
+        footer.setStyleSheet("color: #475569; font-size: 11px; background: transparent;")
+        footer.setAlignment(Qt.AlignCenter)
+        layout.addWidget(footer)
+
+    def _log(self, msg):
+        ts = time.strftime("%H:%M:%S")
+        self.log_area.append(f"[{ts}] {msg}")
+        # Limit lines
+        doc = self.log_area.document()
+        if doc.blockCount() > MAX_LOG_LINES:
+            cursor = self.log_area.textCursor()
+            cursor.movePosition(cursor.Start)
+            cursor.movePosition(cursor.Down, cursor.KeepAnchor, doc.blockCount() - MAX_LOG_LINES)
+            cursor.removeSelectedText()
+        # Auto-scroll
+        sb = self.log_area.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _set_status(self, text, color, account=""):
+        self.lbl_status.setText(text)
+        self.lbl_status.setStyleSheet(f"color: {color}; background: transparent;")
+        self.lbl_status_dot.setStyleSheet(f"color: {color}; font-size: 18px; background: transparent;")
+        self.lbl_account.setText(account)
+
+    def _toggle_bridge(self):
+        if self._worker and self._worker.isRunning():
+            # Stop
+            self._worker.stop()
+            self._worker.wait(3000)
+            self._worker = None
+            self.btn_start.setText("▶  启动桥接")
+            self.btn_start.setStyleSheet("background-color: #3b82f6;")
+            self._set_status("已停止", "#ef4444")
+            self._log("桥接已停止")
+        else:
+            cfg = load_config()
+            server = cfg.get("server_url", DEFAULT_SERVER)
+            token = cfg.get("token", "")
+            if not server or not token:
+                QMessageBox.warning(self, "信息不完整", "请先登录或配置服务器地址和Token。")
+                return
+            self._worker = BridgeWorker(server, token)
+            self._worker.log_signal.connect(self._log)
+            self._worker.status_signal.connect(self._set_status)
+            self._worker.start()
+            self.btn_start.setText("■  停止桥接")
+            self.btn_start.setStyleSheet("background-color: #ef4444;")
+            self._set_status("连接中...", "#f59e0b")
+            self._log("启动桥接...")
+
+    def stop_bridge(self):
+        if self._worker and self._worker.isRunning():
+            self._worker.stop()
+            self._worker.wait(3000)
+            self._worker = None
+        self.btn_start.setText("▶  启动桥接")
+        self.btn_start.setStyleSheet("background-color: #3b82f6;")
+        self._set_status("已断开", "#6b7280")
+
+# ══════════════════════════════════════════════════════════
+#  Settings Page
+# ══════════════════════════════════════════════════════════
+
+class SettingsPage(QWidget):
+    request_back = Signal()
+    logout_signal = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._downloader = None
+        self._pending_update = None
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Top row
+        top_row = QHBoxLayout()
+        title = QLabel("⚙ 设置")
+        title.setFont(QFont("Segoe UI Emoji", 16, QFont.Bold))
+        title.setStyleSheet("color: #3b82f6; background: transparent;")
+        top_row.addWidget(title)
+        top_row.addStretch()
+        btn_back = QPushButton("< 返回主页")
+        btn_back.setProperty("secondary", "true")
+        btn_back.setFixedHeight(36)
+        btn_back.setFont(QFont("Segoe UI", 10))
+        btn_back.clicked.connect(self.request_back.emit)
+        top_row.addWidget(btn_back)
+        layout.addLayout(top_row)
+
+        # ── 服务器配置卡片 ──
+        server_card = QFrame()
+        server_card.setProperty("card", True)
+        server_layout = QVBoxLayout(server_card)
+        server_layout.setSpacing(8)
+        server_layout.setContentsMargins(16, 12, 16, 12)
+
+        # 标题 + 测试结果同行
+        header_row = QHBoxLayout()
+        lbl_s = QLabel("服务器配置")
+        lbl_s.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        header_row.addWidget(lbl_s)
+        header_row.addStretch()
+        self.lbl_test_result = QLabel("")
+        self.lbl_test_result.setProperty("muted", True)
+        self.lbl_test_result.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header_row.addWidget(self.lbl_test_result)
+        server_layout.addLayout(header_row)
+
+        # 地址输入
+        row_svr = QHBoxLayout()
+        lbl_url = QLabel("地址:")
+        lbl_url.setProperty("muted", True)
+        row_svr.addWidget(lbl_url)
+        self.input_server = QLineEdit()
+        self.input_server.setPlaceholderText("http://server:3000")
+        row_svr.addWidget(self.input_server, 1)
+        server_layout.addLayout(row_svr)
+
+        # 测试 + 保存按钮（紧凑并排）
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        self.btn_test = QPushButton("测试连接")
+        self.btn_test.setProperty("secondary", True)
+        self.btn_test.clicked.connect(self._test_connection)
+        btn_row.addWidget(self.btn_test)
+        self.btn_save_server = QPushButton("保存服务器地址")
+        self.btn_save_server.clicked.connect(self._save_server)
+        btn_row.addWidget(self.btn_save_server)
+        server_layout.addLayout(btn_row)
+
+        layout.addWidget(server_card)
+
+        # ── 账户信息 + 退出 ──
+        account_card = QFrame()
+        account_card.setProperty("card", True)
+        account_layout = QVBoxLayout(account_card)
+        account_layout.setSpacing(10)
+        account_layout.setContentsMargins(16, 12, 16, 12)
+
+        # 用户信息 + 退出按钮同行
+        acct_row = QHBoxLayout()
+        lbl_a = QLabel("账户信息")
+        lbl_a.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        acct_row.addWidget(lbl_a)
+        self.lbl_user = QLabel("未登录")
+        self.lbl_user.setProperty("muted", True)
+        acct_row.addWidget(self.lbl_user, 1)
+        btn_logout = QPushButton("退出登录")
+        btn_logout.setProperty("danger", "true")
+        btn_logout.clicked.connect(self._logout)
+        acct_row.addWidget(btn_logout)
+        account_layout.addLayout(acct_row)
+
+        layout.addWidget(account_card)
+
+        # ── 版本信息（紧凑单行） ──
+        version_card = QFrame()
+        version_card.setProperty("card", True)
+        version_layout = QVBoxLayout(version_card)
+        version_layout.setSpacing(8)
+        version_layout.setContentsMargins(16, 10, 16, 10)
+
+        # 版本号 + 检查更新按钮同行
+        ver_row = QHBoxLayout()
+        lbl_v = QLabel("版本信息")
+        lbl_v.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        ver_row.addWidget(lbl_v)
+        self.lbl_version = QLabel(APP_VERSION)
+        self.lbl_version.setProperty("muted", True)
+        self.lbl_version.setStyleSheet("color: #64748b; font-size: 12px; background: transparent; padding-left: 4px;")
+        ver_row.addWidget(self.lbl_version)
+        ver_row.addStretch()
+        self.btn_check_update = QPushButton("检查更新")
+        self.btn_check_update.setProperty("secondary", True)
+        self.btn_check_update.clicked.connect(self._check_update)
+        ver_row.addWidget(self.btn_check_update)
+        version_layout.addLayout(ver_row)
+
+        # 更新状态（默认隐藏，点击后显示）
+        self.lbl_update_status = QLabel("")
+        self.lbl_update_status.setProperty("muted", True)
+        self.lbl_update_status.setWordWrap(True)
+        self.lbl_update_status.setVisible(False)
+        version_layout.addWidget(self.lbl_update_status)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setRange(0, 100)
+        version_layout.addWidget(self.progress_bar)
+
+        self.btn_retry_download = QPushButton("重试下载")
+        self.btn_retry_download.setProperty("warning", True)
+        self.btn_retry_download.setFixedHeight(30)
+        self.btn_retry_download.setVisible(False)
+        self.btn_retry_download.clicked.connect(self._do_update)
+        version_layout.addWidget(self.btn_retry_download)
+
+        layout.addWidget(version_card)
+        layout.addStretch()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.lbl_test_result.setText("")
+        self.lbl_test_result.setProperty("muted", True)
+        self.lbl_test_result.style().polish(self.lbl_test_result)
+        self.lbl_update_status.setVisible(False)
+        self.lbl_update_status.setText("")
+        self.progress_bar.setVisible(False)
+        self.btn_retry_download.setVisible(False)
+        # Reset button to default state
+        self.btn_check_update.setText("检查更新")
+        self.btn_check_update.setEnabled(True)
+        self.btn_check_update.setProperty("secondary", True)
+        self.btn_check_update.style().polish(self.btn_check_update)
+        try: self.btn_check_update.clicked.disconnect()
+        except: pass
+        self.btn_check_update.clicked.connect(self._check_update)
+
+    def load_settings(self):
+        cfg = load_config()
+        self.input_server.setText(cfg.get("server_url", DEFAULT_SERVER))
+        email = cfg.get("email", "")
+        if email and "@" in email:
+            parts = email.split("@")
+            name = parts[0]
+            if len(name) > 2:
+                masked = name[:2] + "***@" + parts[1]
+            else:
+                masked = email
+            self.lbl_user.setText(f"当前用户: {masked}")
+            self.lbl_user.setProperty("success", True)
+            self.lbl_user.style().polish(self.lbl_user)
+        elif email:
+            self.lbl_user.setText(f"当前用户: {email}")
+        else:
+            self.lbl_user.setText("未登录")
+
+    def _test_connection(self):
+        server = self.input_server.text().strip()
+        if not server:
+            self.lbl_test_result.setText("请输入服务器地址")
+            return
+        self.btn_test.setEnabled(False)
+        self.btn_test.setText("测试中...")
+        QApplication.processEvents()
+
+        status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5)
+        self.btn_test.setEnabled(True)
+        self.btn_test.setText("测试连接")
+
+        if status_code in (200, 401, 403):
+            self.lbl_test_result.setText("✅ 连接正常")
+            self.lbl_test_result.setProperty("success", True)
+        else:
+            self.lbl_test_result.setText(f"❌ 连接失败: {data.get('error', f'HTTP {status_code}')}")
+            self.lbl_test_result.setProperty("error", True)
+        self.lbl_test_result.style().polish(self.lbl_test_result)
+
+    def _save_server(self):
+        server = self.input_server.text().strip()
+        if not server: return
+        update_config({"server_url": server})
+        self.lbl_test_result.setText("✅ 已保存")
+        self.lbl_test_result.setProperty("success", True)
+        self.lbl_test_result.style().polish(self.lbl_test_result)
+
+    def _logout(self):
+        cfg = load_config()
+        cfg.pop("token", None)
+        cfg.pop("saved_password", None)
+        cfg["auto_login"] = False
+        save_config(cfg)
+        self.logout_signal.emit()
+
+    def _check_update(self):
+        cfg = load_config()
+        server = cfg.get("server_url", DEFAULT_SERVER)
+        self.btn_check_update.setEnabled(False)
+        self.btn_check_update.setText("检查中...")
+        self.lbl_update_status.setVisible(True)
+        self.lbl_update_status.setText("正在连接服务器...")
+        self.lbl_update_status.setProperty("muted", True)
+        QApplication.processEvents()
+
+        url = f"{server.rstrip('/')}/api/bridge/version"
+        status_code, data = http_get_json(url, timeout=10)
+
+        self.btn_check_update.setEnabled(True)
+
+        if status_code == 200 and data.get("version"):
+            remote_ver = data["version"]
+            if self._version_newer(remote_ver, APP_VERSION):
+                self.lbl_update_status.setText(f"发现新版本 v{remote_ver}")
+                self.lbl_update_status.setProperty("warning", True)
+                self.lbl_update_status.style().polish(self.lbl_update_status)
+                self.btn_check_update.setText("立即更新")
+                self.btn_check_update.setProperty("secondary", False)
+                self.btn_check_update.style().polish(self.btn_check_update)
+                try: self.btn_check_update.clicked.disconnect()
+                except: pass
+                self.btn_check_update.clicked.connect(self._do_update)
+                self.btn_retry_download.setVisible(False)
+                self._pending_update = data
+            else:
+                self.lbl_update_status.setText("✅ 已是最新版本")
+                self.lbl_update_status.setProperty("success", True)
+                self.lbl_update_status.style().polish(self.lbl_update_status)
+                self.btn_check_update.setText("检查更新")
+                self.btn_check_update.setProperty("secondary", True)
+                self.btn_check_update.style().polish(self.btn_check_update)
+                self.btn_retry_download.setVisible(False)
+        else:
+            self.lbl_update_status.setText(f"❌ 检查失败: {data.get('error', f'HTTP {status_code}')}")
+            self.lbl_update_status.setProperty("error", True)
+            self.lbl_update_status.style().polish(self.lbl_update_status)
+            self.btn_check_update.setText("检查更新")
+            self.btn_check_update.setProperty("secondary", True)
+            self.btn_check_update.style().polish(self.btn_check_update)
+
+    def _version_newer(self, remote, local):
+        def parse(v):
+            return [int(x) for x in v.replace("v", "").split(".") if x.isdigit()]
+        try: return parse(remote) > parse(local)
+        except: return False
+
+    def _do_update(self):
+        data = self._pending_update
+        if not data:
+            return
+        server = load_config().get("server_url", DEFAULT_SERVER)
+        updater_url = data.get("updater_url", "")
+        if updater_url.startswith("/"):
+            updater_url = f"{server.rstrip('/')}{updater_url}"
+        if not updater_url:
+            return
+
+        self.btn_check_update.setEnabled(False)
+        self.btn_check_update.setText("下载中...")
+        self.btn_retry_download.setVisible(False)
+        self.lbl_update_status.setVisible(True)
+        self.lbl_update_status.setText("正在下载更新器...")
+        self.lbl_update_status.setProperty("muted", True)
+        self.lbl_update_status.style().polish(self.lbl_update_status)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        QApplication.processEvents()
+
+        # Download updater from Qiniu
+        updater_tmp = os.path.join(CONFIG_DIR, "aurum_updater.exe")
+        try:
+            import ssl, urllib.request, shutil
+            ctx = ssl.create_default_context()
+            try:
+                import certifi; ctx.load_verify_locations(certifi.where())
+            except:
+                ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(updater_url, headers={"User-Agent": "AURUM-Bridge/1.0"})
+            with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                with open(updater_tmp, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            self.progress_bar.setValue(int(downloaded * 100 / total))
+                            QApplication.processEvents()
+        except Exception as e:
+            self.lbl_update_status.setText(f"❌ 下载失败: {e}")
+            self.lbl_update_status.setProperty("error", True)
+            self.lbl_update_status.style().polish(self.lbl_update_status)
+            self.btn_check_update.setEnabled(True)
+            self.btn_check_update.setText("重试")
+            self.progress_bar.setVisible(False)
+            return
+
+        self.progress_bar.setValue(100)
+        self.lbl_update_status.setText("正在替换，程序将自动重启...")
+        QApplication.processEvents()
+
+        # Launch updater
+        exe_path = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
+        import subprocess
+        subprocess.Popen(
+            [updater_tmp, server, exe_path, str(os.getpid())],
+            shell=False,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+        )
+        QTimer.singleShot(500, lambda: os._exit(0))
+
+# ══════════════════════════════════════════════════════════
+#  Main Window
+# ══════════════════════════════════════════════════════════
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(APP_NAME)
+        self.setFixedSize(520, 600)
+        self._pending_update_data = None
+
+        ico_path = resource_path("aurum_icon.ico")
+        if os.path.exists(ico_path):
+            self.setWindowIcon(QIcon(ico_path))
+
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._auto_check_update)
+
+        self.stack = QStackedWidget()
+        self.setCentralWidget(self.stack)
+
+        self.login_page = LoginPage()
+        self.login_page.login_success.connect(self._on_login_success)
+        self.stack.addWidget(self.login_page)
+
+        self.bridge_page = BridgePage()
+        self.bridge_page.request_settings.connect(self._show_settings)
+        self.stack.addWidget(self.bridge_page)
+
+        self.settings_page = SettingsPage()
+        self.settings_page.request_back.connect(lambda: self.stack.setCurrentIndex(1))
+        self.settings_page.logout_signal.connect(self._on_logout)
+        self.stack.addWidget(self.settings_page)
+
+        self._init_tray()
+
+        cfg = load_config()
+        if cfg.get("auto_login") and cfg.get("token"):
+            self.stack.setCurrentIndex(0)
+            QTimer.singleShot(500, self._auto_login)
+        else:
+            self.login_page.load_config()
+            self.stack.setCurrentIndex(0)
+
+    def _auto_login(self):
+        cfg = load_config()
+        server = cfg.get("server_url", DEFAULT_SERVER)
+        token = cfg.get("token", "")
+        email = cfg.get("email", "")
+        password = cfg.get("saved_password", "")
+        if not server or not email:
+            self.login_page.load_config()
+            return
+
+        self.login_page.input_server.setText(server)
+        self.login_page.input_email.setText(email)
+        self.login_page.lbl_status.setText("自动登录中...")
+        self.login_page.lbl_status.setProperty("muted", True)
+        self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+
+        # 先验证 token
+        if token:
+            status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5)
+            if status_code == 200:
+                self._on_login_success(email, token)
+                return
+
+        # token 无效，尝试用保存的密码重新登录
+        if password:
+            self.login_page.input_password.setText(password)
+            self.login_page.lbl_status.setText("Token 过期，正在重新登录...")
+            QApplication.processEvents()
+            status_code, data = http_post_json(f"{server.rstrip('/')}/api/login",
+                {"email": email, "password": password}, timeout=10)
+            if status_code == 200 and data.get("token"):
+                new_token = data["token"]
+                update_config({"token": new_token})
+                self._on_login_success(email, new_token)
+                return
+
+        # 都失败了，回到登录页
+        self.login_page.lbl_status.setText("自动登录失败，请手动登录")
+        self.login_page.lbl_status.setProperty("warning", True)
+        self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+        self.login_page.load_config()
+
+    def _on_login_success(self, email, token):
+        self.bridge_page._log(f"登录成功: {email}")
+        self.bridge_page.lbl_login_user.setText(f"当前登录: {email}")
+        # 确保桥接状态为断开
+        self.bridge_page.btn_start.setText("▶  启动桥接")
+        self.bridge_page.btn_start.setStyleSheet("background-color: #3b82f6;")
+        self.bridge_page._set_status("已断开", "#6b7280")
+        self.bridge_page.lbl_update_hint.setVisible(False)
+        self.stack.setCurrentIndex(1)
+        # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
+        QTimer.singleShot(3000, self._auto_check_update)
+        self._update_timer.start(30 * 60 * 1000)
+
+    def _auto_check_update(self):
+        """静默检查更新，有新版本时在主页显示提示条"""
+        cfg = load_config()
+        server = cfg.get("server_url", DEFAULT_SERVER)
+        status_code, data = http_get_json(f"{server.rstrip('/')}/api/bridge/version", timeout=8)
+        if status_code == 200 and data.get("version"):
+            remote_ver = data["version"]
+            if self.settings_page._version_newer(remote_ver, APP_VERSION):
+                if not self._pending_update_data:
+                    self._pending_update_data = data
+                    self.bridge_page._log(f"发现新版本 v{remote_ver}，请前往设置页更新")
+                    self.bridge_page.lbl_update_hint.setText(f"新版本 v{remote_ver} 可用 — 点此前往更新")
+                    self.bridge_page.lbl_update_hint.setVisible(True)
+
+    def _show_settings(self):
+        self.settings_page.load_settings()
+        self.stack.setCurrentIndex(2)
+
+    def _on_logout(self):
+        self._update_timer.stop()
+        self._pending_update_data = None
+        self.bridge_page.stop_bridge()
+        self.bridge_page.lbl_login_user.setText("")
+        self.bridge_page.lbl_update_hint.setVisible(False)
+        self.login_page.load_config()
+        self.login_page.lbl_status.setText("")
+        self.stack.setCurrentIndex(0)
+
+    def _init_tray(self):
+        ico_path = resource_path("aurum_icon.ico")
+        if os.path.exists(ico_path):
+            tray_icon = QIcon(ico_path)
+        else:
+            tray_icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
+        self.tray = QSystemTrayIcon(tray_icon, self)
+        self.tray.setToolTip(APP_NAME)
+        tray_menu = QMenu()
+        act_show = QAction("打开界面", self)
+        act_show.triggered.connect(self._show_from_tray)
+        tray_menu.addAction(act_show)
+        tray_menu.addSeparator()
+        act_quit = QAction("退出", self)
+        act_quit.triggered.connect(self._do_quit)
+        tray_menu.addAction(act_quit)
+        self.tray.setContextMenu(tray_menu)
+        self.tray.activated.connect(self._tray_activated)
+        self.tray.show()
+
+    def _tray_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self._show_from_tray()
+
+    def _show_from_tray(self):
+        self.showNormal()
+        self.activateWindow()
+
+    def _do_quit(self):
+        self.bridge_page.stop_bridge()
+        self.tray.hide()
+        QTimer.singleShot(200, QApplication.quit)
+
+    def closeEvent(self, event):
+        event.ignore()
+        self.hide()
+        self.tray.showMessage(APP_NAME, "已最小化到系统托盘", QSystemTrayIcon.Information, 1500)
+
+# ══════════════════════════════════════════════════════════
+#  Entry
+# ══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    app = AurumBridge()
-    app.run()
+    # Single instance check
+    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\AURUM_Bridge_SingleInstance")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        import ctypes.wintypes
+        # Find and activate existing window
+        EnumWindows = ctypes.windll.user32.EnumWindows
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        def _activate_existing(hwnd, _):
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+                if APP_NAME in buf.value:
+                    ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                    return False
+            return True
+        EnumWindows(WNDENUMPROC(_activate_existing), 0)
+        sys.exit(0)
+
+    # DPI awareness
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except: pass
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(DARK_STYLE)
+
+    # Font
+    font = QFont("Segoe UI", 10)
+    font.setStyleStrategy(QFont.PreferAntialias)
+    app.setFont(font)
+
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())
