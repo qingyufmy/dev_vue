@@ -134,6 +134,11 @@ function handleBridge(ws, url) {
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
   const existing = bridges.get(userId)
+  // Close old bridge connection if still open (one bridge per account)
+  if (existing && existing.ws && existing.ws.readyState === 1) {
+    try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
+    console.log(`[BridgeWS] User ${userId} old bridge replaced`)
+  }
   // Admin defaults to tradeEnabled=true, others false
   const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
   bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade }); ws._userId = userId

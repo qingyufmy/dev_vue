@@ -1180,47 +1180,22 @@ function initBridgeModal() {
   $("mt5BridgeClose")?.addEventListener("click", () => modal.classList.add("hidden"));
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
-  $("downloadExe")?.addEventListener("click", () => {
-    const token = state.token || localStorage.getItem("authToken") || "";
-    // Download EXE
-    const url = `/ai/bridge/exe-file?token=${encodeURIComponent(token)}`;
-    const a = document.createElement("a");
-    a.href = url; a.download = "AURUM_Bridge.exe"; a.click();
-    // Auto download config.json
-    const serverUrl = location.origin;
-    const cfg = JSON.stringify({ server_url: serverUrl, token }, null, 2);
-    const blob = new Blob([cfg], { type: "application/json" });
-    const a2 = document.createElement("a");
-    a2.href = URL.createObjectURL(blob);
-    a2.download = "config.json";
-    setTimeout(() => { a2.click(); URL.revokeObjectURL(a2.href); }, 500);
-    toast("正在下载 EXE 和 config.json", "success");
+  $("downloadExe")?.addEventListener("click", async () => {
+    try {
+      const resp = await fetch("/api/bridge/version");
+      const data = await resp.json();
+      const url = data.download_url || "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe";
+      const a = document.createElement("a");
+      a.href = url; a.download = "AURUM_Bridge.exe"; a.click();
+      toast("正在下载 AURUM Bridge", "success");
+    } catch {
+      const a = document.createElement("a");
+      a.href = "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe";
+      a.download = "AURUM_Bridge.exe"; a.click();
+      toast("正在下载 AURUM Bridge", "success");
+    }
     modal.classList.add("hidden");
   });
-
-  $("downloadMac")?.addEventListener("click", () => {
-    const token = state.token || localStorage.getItem("authToken") || "";
-    const url = `/ai/bridge/mac?token=${encodeURIComponent(token)}`;
-    const a = document.createElement("a");
-    a.href = url; a.download = "AURUM_Bridge_Mac.command"; a.click();
-    toast("macOS 桥接脚本已下载", "success");
-    modal.classList.add("hidden");
-  });
-
-  $("downloadConfig")?.addEventListener("click", () => {
-    const token = state.token || localStorage.getItem("authToken") || "";
-    const serverUrl = location.origin;
-    const cfg = JSON.stringify({ server_url: serverUrl, token }, null, 2);
-    const blob = new Blob([cfg], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "config.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast("config.json 已下载，放到 EXE 同目录覆盖即可", "success");
-    modal.classList.add("hidden");
-  });
-
 
 }
 
