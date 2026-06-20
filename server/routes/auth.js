@@ -149,7 +149,6 @@ router.post('/send-code', async (req, res) => {
       console.error('Send email error:', emailErr.message)
     }
 
-    if (!emailSent) console.log(`[验证码] ${targetEmail}: ${code}`)
     res.json({ ok: true, message: emailSent ? '验证码已发送到您的邮箱' : '验证码已发送（本地开发模式请查看控制台）' })
   } catch (err) {
     console.error('[send-code]', err.message)
