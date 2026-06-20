@@ -6,6 +6,7 @@
   selectedSignal: null,
   _lastGatewayLive: false,
   _lastMt5TimeUpdate: 0,
+  _lastMt5TimeValue: null,
   _marketForcedClosed: false,
   backgroundSyncTimer: null,
   lastQuote: null,
@@ -743,7 +744,7 @@ function handleBridgeData(msg) {
       setText("quoteSpread", q.spread);
       setText("quoteTime", formatTime(q.time));
       setText("mt5ServerTime", formatTime(q.time).split(" ").pop() || "--");
-      if (q.time) state._lastMt5TimeUpdate = Date.now();
+      if (q.time && q.time !== state._lastMt5TimeValue) { state._lastMt5TimeValue = q.time; state._lastMt5TimeUpdate = Date.now(); }
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
       flashPrice("quoteBid", bidDir);
