@@ -5,9 +5,6 @@
   signals: [],
   selectedSignal: null,
   _lastGatewayLive: false,
-  _lastMt5TimeUpdate: 0,
-  _lastMt5TimeValue: null,
-  _marketForcedClosed: false,
   backgroundSyncTimer: null,
   lastQuote: null,
   currentConfigHasApiKey: false,
@@ -727,6 +724,8 @@ function updateMarketStatus(tradeMode) {
 
 // Handle data push from bridge (account + quote + positions)
 function handleBridgeData(msg) {
+  // Server-detected market status — update in real-time
+  if (typeof msg.trade_mode === 'number') updateMarketStatus(msg.trade_mode);
   const selectedSymbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   // Detect position close → invalidate history cache
   const currPosCount = (msg.positions || []).length;
@@ -753,21 +752,6 @@ function handleBridgeData(msg) {
       setText("quoteSpread", q.spread);
       setText("quoteTime", formatTime(q.time));
       setText("mt5ServerTime", formatTime(q.time).split(" ").pop() || "--");
-      if (q.time && q.time !== state._lastMt5TimeValue) {
-        // Time advanced → market is live, clear forced-closed if needed
-        state._lastMt5TimeValue = q.time;
-        state._lastMt5TimeUpdate = Date.now();
-        if (state._marketForcedClosed) {
-          state._marketForcedClosed = false;
-          loadStatus().catch(() => {});
-        }
-      } else if (q.time && state._lastMt5TimeValue !== null && !state._marketForcedClosed && state._lastGatewayLive) {
-        // Time frozen on second+ push → force market closed immediately
-        state._marketForcedClosed = true;
-        updateMarketStatus(0);
-        if (state.autoEnabled) setBadge('autoAnalyzeMode', '市场休市 · 自动推理暂停', 'warning');
-        if (state.closeEnabled) setBadge('smartCloseMode', '市场休市 · 智能平仓暂停', 'warning');
-      }
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
       flashPrice("quoteBid", bidDir);
@@ -1120,9 +1104,8 @@ async function loadStatus() {
     : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
-  // Update market status from health response
-  // Don't override frontend-forced-closed state (MT5 time staleness detected locally)
-  if (!state._marketForcedClosed && typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
+  // Update market status from server (server now detects staleness via tick_time)
+  if (typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
   const marketClosed = state.marketTradeMode !== 4;
 
   try {

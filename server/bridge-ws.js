@@ -153,9 +153,15 @@ function handleBridge(ws, url) {
       // Cache trade_mode for market status checks
       if (bridge && msg.quote && typeof msg.quote.tick_time === 'number') {
         bridge.lastTickMs = msg.quote.tick_time * 1000
+        // Detect MT5 time staleness: if tick_time stops advancing, market is closed
+        if (bridge.mt5TickTime !== undefined) {
+          bridge.lastTradeMode = msg.quote.tick_time > bridge.mt5TickTime ? 4 : 0
+        }
+        bridge.mt5TickTime = msg.quote.tick_time
       }
-      // Data relay — push to browsers as-is
-      sendToBrowsers(userId, { type: 'data', ...msg })
+      // Data relay — push to browsers, include server-detected trade_mode
+      const tradeMode = bridge ? bridge.lastTradeMode : undefined
+      sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
     } else if (msg.type === 'hb') {
       // Bridge heartbeat — lastSeen already updated
     } else if (msg.type === 'result') {
@@ -922,9 +928,11 @@ export async function getBridgeTradeMode(userId) {
     if (adminId) bridge = bridges.get(adminId)
   }
   if (!bridge || bridge.ws.readyState !== 1) return -1
-  // If tick time hasn't changed for 5 minutes (300s), market is closed
+  // Use real-time trade mode detected from MT5 tick_time advancement
+  if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
+  // Fallback: if no tick data yet, check staleness from last tick timestamp
   if (bridge.lastTickMs && (Date.now() - bridge.lastTickMs) > 300000) return 0
-  // Bridge connected and data is fresh → assume trading
+  // Bridge connected, data is fresh → assume trading
   return 4
 }
 
