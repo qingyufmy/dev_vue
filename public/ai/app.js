@@ -754,9 +754,11 @@ function handleBridgeData(msg) {
         updateTradingQuotePreview(state.lastQuote);
         updateKlineTick(q.bid, q.ask);
       }
-      // Recovery from MT5 time staleness → refresh badges
-      if (state._marketForcedClosed && q.time) {
+      // Recovery from MT5 time staleness → only refresh when time actually advances
+      if (state._marketForcedClosed && q.time && q.time !== state._lastMt5TimeValue) {
         state._marketForcedClosed = false;
+        state._lastMt5TimeValue = q.time;
+        state._lastMt5TimeUpdate = Date.now();
         loadStatus().catch(() => {});
       }
     }
@@ -1113,8 +1115,9 @@ async function loadStatus() {
   setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
 
   // Update market status from health response
-  if (typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
-  const marketClosed = gateway.trade_mode === 0;
+  // Don't override frontend-forced-closed state (MT5 time staleness detected locally)
+  if (!state._marketForcedClosed && typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
+  const marketClosed = state.marketTradeMode === 0 || gateway.trade_mode === 0;
 
   try {
     const auto = await wsApi('auto_status');
