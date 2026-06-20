@@ -831,7 +831,7 @@ let _lastSignalId = null;
 let _uiTimerPollCounter = 0;
 setInterval(() => {
   // MT5 time staleness: bridge connected but time not updated for 5s → force market closed
-  const isBridgeLive = state._lastGatewayLive && !state._usingFallback;
+  const isBridgeLive = state._lastGatewayLive;
   if (isBridgeLive) {
     const staleSec = (Date.now() - (state._lastMt5TimeUpdate || 0)) / 1000;
     if (staleSec > 5 && state.marketTradeMode !== 0) {

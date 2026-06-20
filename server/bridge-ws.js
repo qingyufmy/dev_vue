@@ -297,7 +297,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             mt5_package_available: true,
             live_trading_enabled: tradeEnabled,
             using_fallback: usingFallback,
-            trade_mode: getBridgeTradeMode(userId),
+            trade_mode: await getBridgeTradeMode(userId),
           },
         }
         break
@@ -803,7 +803,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         if (enabled) {
           // Check market status
-          const tradeMode = getBridgeTradeMode(userId)
+          const tradeMode = await getBridgeTradeMode(userId)
           if (tradeMode === 0) {
             paused = true
             pauseReason = 'market_closed'
@@ -914,8 +914,13 @@ export function isTradeEnabled(userId) {
 
 // Market status: bridge connected + tick time unchanged for 5 min → closed
 // Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
-export function getBridgeTradeMode(userId) {
-  const bridge = bridges.get(userId)
+export async function getBridgeTradeMode(userId) {
+  let bridge = bridges.get(userId)
+  if (!bridge || bridge.ws.readyState !== 1) {
+    // Fallback: try admin bridge (Pro/Plus users observing admin's MT5)
+    const adminId = await getAdminUserId()
+    if (adminId) bridge = bridges.get(adminId)
+  }
   if (!bridge || bridge.ws.readyState !== 1) return -1
   // If tick time hasn't changed for 5 minutes (300s), market is closed
   if (bridge.lastTickMs && (Date.now() - bridge.lastTickMs) > 300000) return 0
