@@ -700,6 +700,15 @@ function updateMarketStatus(tradeMode) {
   const text = document.getElementById('marketStatusText');
   if (!dot || !text) return;
   state.marketTradeMode = tradeMode;
+  if (tradeMode < 0) { // bridge disconnected
+    dot.className = 'market-dot market-dot-unknown';
+    text.className = 'market-status-text market-status-text-unknown';
+    text.textContent = '未连接';
+    setBadge('marketStatus', '未连接', 'neutral');
+    const b = document.getElementById('marketStatus');
+    if (b) b.title = '市场状态：MT5 桥接未连接';
+    return;
+  }
   const map = {
     0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动推理已暂停'],
     1: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
@@ -1114,7 +1123,7 @@ async function loadStatus() {
   // Update market status from health response
   // Don't override frontend-forced-closed state (MT5 time staleness detected locally)
   if (!state._marketForcedClosed && typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
-  const marketClosed = state.marketTradeMode === 0 || gateway.trade_mode === 0;
+  const marketClosed = state.marketTradeMode !== 4;
 
   try {
     const auto = await wsApi('auto_status');

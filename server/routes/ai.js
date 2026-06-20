@@ -1372,10 +1372,10 @@ async function runAutoCycle(userId, symbol, timeframe) {
     return
   }
 
-  // Check market status — skip only if market closed
+  // Check market status — skip unless actively trading
   const tradeMode = await getBridgeTradeMode(userId)
-  if (tradeMode === 0) {
-    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: market closed (trade_mode=${tradeMode})`)
+  if (tradeMode !== 4) {
+    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: market not trading (trade_mode=${tradeMode})`)
     return
   }
 
@@ -1510,10 +1510,10 @@ async function runSmartCloseCycle(userId) {
   const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
   if (!user || user.plan !== 'pro') return
 
-  // Check market status — pause when market closed
+  // Check market status — pause unless actively trading
   const tradeMode = await getBridgeTradeMode(userId)
-  if (tradeMode === 0) {
-    console.log(`[SmartClose] User ${userId}: market closed (trade_mode=${tradeMode}), skipping`)
+  if (tradeMode !== 4) {
+    console.log(`[SmartClose] User ${userId}: market not trading (trade_mode=${tradeMode}), skipping`)
     return
   }
 
