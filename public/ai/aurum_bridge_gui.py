@@ -832,12 +832,25 @@ class AurumBridge:
                 self._safe_after(0, self._toggle_bridge); return
 
         if not self.mt5.initialize():
-            self._safe_after(0, self._log, f"MT5 初始化失败: {self.mt5.last_error()}")
+            err_code = self.mt5.last_error()
+            self._safe_after(0, self._log, f"MT5 初始化失败 (错误码 {err_code})：请确认MT5已运行且已登录交易账户")
+            self._safe_after(0, self._set_status, "未检测到MT5", "#ef4444", "请先运行MT5并登录您的交易账户")
             self._safe_after(0, self._toggle_bridge); return
 
         info = self.mt5.account_info()
-        if info:
-            self._safe_after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
+        if not info:
+            self._safe_after(0, self._log, "错误：MT5终端已运行但未登录交易账户，停止连接")
+            self._safe_after(0, self._set_status, "MT5未登录", "#ef4444", "请在MT5中登录交易账户后重试")
+            self._safe_after(0, self._toggle_bridge)
+            self.mt5.shutdown(); return
+
+        self._safe_after(0, self._log, f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
+
+        # Check algorithmic trading
+        terminal = self.mt5.terminal_info()
+        if terminal and not terminal.trade_allowed:
+            self._safe_after(0, self._log, "⚠️ 算法交易未开启：MT5 → 工具 → 选项 → EA交易 → 允许算法交易")
+            self._safe_after(0, self._set_status, "⚠️ 请开启算法交易", "#f59e0b", "MT5菜单：工具→选项→EA交易→勾选允许算法交易")
 
         if not HAS_WS:
             self._safe_after(0, self._log, "错误: websocket-client 未安装")
@@ -880,6 +893,13 @@ class AurumBridge:
                 if now - last_data >= 1.0:
                     try:
                         acc = self.mt5.account_info(); sym = getattr(self, '_resolved_symbol', 'XAUUSD')
+                        if not acc and not getattr(self, '_acc_lost_warned', False):
+                            self._acc_lost_warned = True
+                            self._safe_after(0, self._log, "⚠️ MT5账户已断开，请重新登录后重启桥接")
+                            self._safe_after(0, self._set_status, "MT5账户已断开", "#ef4444", "请重新登录MT5后重启桥接")
+                        if acc and getattr(self, '_acc_lost_warned', False):
+                            self._acc_lost_warned = False
+                            self._safe_after(0, self._log, "MT5账户已恢复")
                         tick = self.mt5.symbol_info_tick(sym); info = self.mt5.symbol_info(sym); positions = self.mt5.positions_get() or []
                         # Get current bar tick_volume from MT5 rates (M1)
                         bar_vol = 0

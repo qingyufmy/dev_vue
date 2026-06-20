@@ -1547,7 +1547,7 @@ async function loadKlineData() {
 
 // Lightweight: fetch only the last bar's volume every second
 async function refreshKlineVolume() {
-  if (!_klineVolumeSeries || !_klineLastBar) return;
+  if (state.marketTradeMode === 0 || !_klineVolumeSeries || !_klineLastBar) return;
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   try {
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 1 });
