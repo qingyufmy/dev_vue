@@ -744,7 +744,21 @@ function handleBridgeData(msg) {
       setText("quoteSpread", q.spread);
       setText("quoteTime", formatTime(q.time));
       setText("mt5ServerTime", formatTime(q.time).split(" ").pop() || "--");
-      if (q.time && q.time !== state._lastMt5TimeValue) { state._lastMt5TimeValue = q.time; state._lastMt5TimeUpdate = Date.now(); }
+      if (q.time && q.time !== state._lastMt5TimeValue) {
+        // Time advanced → market is live, clear forced-closed if needed
+        state._lastMt5TimeValue = q.time;
+        state._lastMt5TimeUpdate = Date.now();
+        if (state._marketForcedClosed) {
+          state._marketForcedClosed = false;
+          loadStatus().catch(() => {});
+        }
+      } else if (q.time && state._lastMt5TimeValue !== null && !state._marketForcedClosed && state._lastGatewayLive) {
+        // Time frozen on second+ push → force market closed immediately
+        state._marketForcedClosed = true;
+        updateMarketStatus(0);
+        if (state.autoEnabled) setBadge('autoAnalyzeMode', '市场休市 · 自动推理暂停', 'warning');
+        if (state.closeEnabled) setBadge('smartCloseMode', '市场休市 · 智能平仓暂停', 'warning');
+      }
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
       flashPrice("quoteBid", bidDir);
@@ -754,13 +768,7 @@ function handleBridgeData(msg) {
         updateTradingQuotePreview(state.lastQuote);
         updateKlineTick(q.bid, q.ask);
       }
-      // Recovery from MT5 time staleness → only refresh when time actually advances
-      if (state._marketForcedClosed && q.time && q.time !== state._lastMt5TimeValue) {
-        state._marketForcedClosed = false;
-        state._lastMt5TimeValue = q.time;
-        state._lastMt5TimeUpdate = Date.now();
-        loadStatus().catch(() => {});
-      }
+
     }
   }
   if (msg.account) {
@@ -832,17 +840,6 @@ let _lastSignalId = null;
 // Also polls for new signals every 5s when bridge is not pushing data
 let _uiTimerPollCounter = 0;
 setInterval(() => {
-  // MT5 time staleness: bridge connected but time not updated for 5s → force market closed
-  const isBridgeLive = state._lastGatewayLive;
-  if (isBridgeLive) {
-    const staleSec = (Date.now() - (state._lastMt5TimeUpdate || 0)) / 1000;
-    if (staleSec > 5 && state.marketTradeMode !== 0) {
-      state._marketForcedClosed = true;
-      updateMarketStatus(0);
-      if (state.autoEnabled) setBadge('autoAnalyzeMode', '市场休市 · 自动推理暂停', 'warning');
-      if (state.closeEnabled) setBadge('smartCloseMode', '市场休市 · 智能平仓暂停', 'warning');
-    }
-  }
   const s = state.selectedSignal;
   if (s) {
     setText("sigValidWindow", signalFreshness(s));
