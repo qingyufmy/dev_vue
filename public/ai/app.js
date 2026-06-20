@@ -5,6 +5,8 @@
   signals: [],
   selectedSignal: null,
   _lastGatewayLive: false,
+  _lastMt5TimeUpdate: 0,
+  _marketForcedClosed: false,
   backgroundSyncTimer: null,
   lastQuote: null,
   currentConfigHasApiKey: false,
@@ -741,6 +743,7 @@ function handleBridgeData(msg) {
       setText("quoteSpread", q.spread);
       setText("quoteTime", formatTime(q.time));
       setText("mt5ServerTime", formatTime(q.time).split(" ").pop() || "--");
+      if (q.time) state._lastMt5TimeUpdate = Date.now();
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
       flashPrice("quoteBid", bidDir);
@@ -752,6 +755,11 @@ function handleBridgeData(msg) {
       }
       // Update market status from trade_mode
       if (typeof q.trade_mode === 'number') updateMarketStatus(q.trade_mode);
+      // Recovery from MT5 time staleness → refresh badges
+      if (state._marketForcedClosed && q.time) {
+        state._marketForcedClosed = false;
+        loadStatus().catch(() => {});
+      }
     }
   }
   if (msg.account) {
@@ -823,6 +831,17 @@ let _lastSignalId = null;
 // Also polls for new signals every 5s when bridge is not pushing data
 let _uiTimerPollCounter = 0;
 setInterval(() => {
+  // MT5 time staleness: bridge connected but time not updated for 5s → force market closed
+  const isBridgeLive = state._lastGatewayLive && !state._usingFallback;
+  if (isBridgeLive) {
+    const staleSec = (Date.now() - (state._lastMt5TimeUpdate || 0)) / 1000;
+    if (staleSec > 5 && state.marketTradeMode !== 0) {
+      state._marketForcedClosed = true;
+      updateMarketStatus(0);
+      setBadge('autoAnalyzeMode', '市场休市 · 自动推理暂停', 'warning');
+      setBadge('smartCloseMode', '市场休市 · 智能平仓暂停', 'warning');
+    }
+  }
   const s = state.selectedSignal;
   if (s) {
     setText("sigValidWindow", signalFreshness(s));
@@ -1548,7 +1567,7 @@ async function refreshKlineVolume() {
 }
 
 function updateKlineTick(bid, ask) {
-  if (!_klineSeries) return;
+  if (!_klineSeries || state.marketTradeMode === 0) return;
   const price = Number(bid);
   const nowUtc = Math.floor(Date.now() / 1000);
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
@@ -2329,6 +2348,12 @@ async function runAnalysis() {
   const frames = selectedTimeframes();
   if (!frames.length) {
     toast("请至少选择一个周期", "warning");
+    return;
+  }
+
+  // Block manual reasoning when market is closed
+  if (state.marketTradeMode === 0) {
+    toast("当前市场休市，暂无法推理", "warning");
     return;
   }
 
