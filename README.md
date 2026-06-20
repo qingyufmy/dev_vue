@@ -267,6 +267,9 @@ node index.js
 - **EXE 下载防缓存** — /ai/bridge/exe-file 端点添加 Cache-Control: no-cache
 - **bindEvents null 安全** — 6 个 role-conditional DOM 元素 addEventListener 添加 ?. 守卫，修复非 Pro 用户页面崩溃
 - **旧周末硬编码移除** — 删除原有周末检测逻辑，统一由服务端 tick_time 时效检测
+- **安全修复** — 移除 auth.js 验证码明文 console.log（敏感信息泄露），清理 index.js 误导性调试注释
+- **macOS 下载隐藏** — 桥接下载页移除 macOS 下载入口，仅保留 Windows .exe + config.json
+- **PM2 内存优化** — 添加 --max-old-space-size=256 参数，解决堆内存耗尽导致服务频繁重启（145次/27min）
 
 ### v1.9.3 (2026-06-19)
 - **K 线数量调整** — 默认显示 200 根 K 线，缩小至全部数据后停止缩放
