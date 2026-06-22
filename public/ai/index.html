@@ -45,9 +45,11 @@
           <span id="autoAnalyzeMode" class="status-badge status-neutral clickable-badge" title="点击配置自动推理">
             <span class="badge-dot"></span>自动推理 --
           </span>
+          <!-- [disabled] 智能平仓 badge
           <span id="smartCloseMode" class="status-badge status-neutral clickable-badge" title="点击配置智能平仓">
             <span class="badge-dot"></span>智能平仓 --
           </span>
+          -->
           <span id="marketStatus" class="status-badge status-neutral" title="市场状态：未知">
             <span class="badge-dot"></span>市场 --
           </span>
@@ -337,7 +339,9 @@
             <div class="config-sub-tabs">
               <button class="config-sub-tab active" data-config-tab="manual-config">手动推理配置</button>
               <button class="config-sub-tab" data-config-tab="auto-config">自动推理配置</button>
+              <!-- [disabled] 智能平仓配置 tab
               <button class="config-sub-tab" data-config-tab="close-config">智能平仓配置</button>
+              -->
             </div>
 
             <!-- 手动推理配置 -->
@@ -498,7 +502,7 @@
               </div>
             </div>
 
-            <!-- 智能平仓配置 -->
+            <!-- [disabled] 智能平仓配置
             <div id="close-config" class="config-sub-panel">
               <div class="config-section">
                 <div class="config-section-title">智能平仓引擎</div>
@@ -550,6 +554,7 @@
                 <button id="saveCloseConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存平仓配置</button>
               </div>
             </div>
+            -->
           </div>
         </section>
 
