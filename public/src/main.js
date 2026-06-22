@@ -1843,8 +1843,9 @@ function renderHome() {
   const statsHtml = renderSidebarStats()
   const quotesHtml = renderSidebarQuotes()
   const updatesHtml = renderSidebarUpdates()
+  const mobileUpdatesHtml = renderSidebarUpdates(null, true)
   const historyHtml = renderSidebarHistory()
-  const mobileBelowCoursesHtml = `${updatesHtml}${historyHtml}${quotesHtml}${statsHtml}`
+  const mobileBelowCoursesHtml = `${mobileUpdatesHtml}${historyHtml}${quotesHtml}${statsHtml}`
   const sidebarHtml = `${statsHtml}${quotesHtml}${updatesHtml}${historyHtml}`
 
   mainContent.innerHTML = `
@@ -1989,12 +1990,13 @@ function renderSidebarQuotes() {
   `
 }
 
-function renderSidebarUpdates(data = null) {
+function renderSidebarUpdates(data = null, isMobile = false) {
   const updates = data || []
+  const cardId = isMobile ? 'mobile-updates-card' : 'sidebar-updates-card'
   if (!updates || updates.length === 0) {
     // 页面加载时异步获取，先显示占位
     return `
-      <div class="sidebar-card sidebar-updates-card" id="sidebar-updates-card">
+      <div class="sidebar-card sidebar-updates-card" id="${cardId}">
         <h3>最近更新</h3>
         <ul class="updates-list">
           <li class="update-item" style="justify-content:center;opacity:0.5">加载中…</li>
@@ -2006,7 +2008,7 @@ function renderSidebarUpdates(data = null) {
   const now = new Date()
 
   return `
-    <div class="sidebar-card sidebar-updates-card" id="sidebar-updates-card">
+    <div class="sidebar-card sidebar-updates-card" id="${cardId}">
       <h3>📢 最近更新</h3>
       <ul class="updates-list">
         ${items.map((u, idx) => {
@@ -2049,8 +2051,6 @@ function formatUpdateDate(dateStr, now) {
 }
 
 async function refreshSidebarUpdates() {
-  const card = document.getElementById('sidebar-updates-card')
-  if (!card) return
   const updates = await loadSiteUpdates(5)
   if (!updates || updates.length === 0) return
   const now = new Date()
@@ -2067,8 +2067,13 @@ async function refreshSidebarUpdates() {
       </li>
     `
   }).join('')
-  const list = card.querySelector('.updates-list')
-  if (list) list.innerHTML = html
+  // 同时更新桌面端和移动端两个卡片
+  for (const id of ['sidebar-updates-card', 'mobile-updates-card']) {
+    const card = document.getElementById(id)
+    if (!card) continue
+    const list = card.querySelector('.updates-list')
+    if (list) list.innerHTML = html
+  }
 }
 
 function renderSidebarHistory() {
