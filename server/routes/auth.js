@@ -50,6 +50,7 @@ router.post('/register', async (req, res) => {
     }
 
     await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入街哥课堂', '您的账户已创建成功，开始学习吧！'])
+    await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', '已为您赠送 1 个月 Pro 会员体验，尽享全部课程和 AI 全自动交易！'])
 
     logAudit({ userId: result.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
 
