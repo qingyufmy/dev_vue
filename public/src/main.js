@@ -1,4 +1,4 @@
-﻿import { episodes as staticEpisodes, categories } from './data/episodes.js'
+import { episodes as staticEpisodes, categories } from './data/episodes.js'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
@@ -100,11 +100,11 @@ function formatMinorUsd(cents) {
 }
 
 function planLabel(plan, expiresAt) {
-  if (!plan || plan === 'free') return '<span class="admin-badge badge-free">鍏嶈垂</span>'
+  if (!plan || plan === 'free') return '<span class="admin-badge badge-free">免费</span>'
   const label = plan === 'pro' ? 'PRO' : 'Plus'
   const expStr = expiresAt instanceof Date ? expiresAt.toISOString().substring(0, 10) : String(expiresAt || '').substring(0, 10)
   const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
-  if (expired) return `<span class="admin-badge badge-expired">${label} (宸茶繃鏈?</span>`
+  if (expired) return `<span class="admin-badge badge-expired">${label} (已过期)</span>`
   return `<span class="admin-badge badge-paid">${label}</span>`
 }
 
@@ -177,7 +177,7 @@ function renderReplyDraftImages() {
   list.innerHTML = replyDraftImages.map(image => `
     <div class="reply-image-card">
       <img class="reply-image-card-img" src="${escapeHtml(image.previewUrl)}" alt="${escapeHtml(image.alt)}">
-      <button type="button" class="reply-image-card-remove" data-remove-reply-image="${image.id}" aria-label="绉婚櫎鍥剧墖">脳</button>
+      <button type="button" class="reply-image-card-remove" data-remove-reply-image="${image.id}" aria-label="移除图片">×</button>
     </div>
   `).join('')
 }
@@ -187,7 +187,7 @@ function updateReplyComposerMeta() {
   if (!count) return
 
   const textLength = String(document.getElementById('replyInput')?.value || '').length
-  count.textContent = `${textLength} 瀛?路 ${replyDraftImages.length} 鍥綻
+  count.textContent = `${textLength} 字 · ${replyDraftImages.length} 图`
 }
 
 function resetReplyDraftImages() {
@@ -218,12 +218,12 @@ function handleReplyImageSelection(fileList) {
 
   for (const file of files) {
     if (!allowedTypes.has((file.type || '').toLowerCase())) {
-      alert('鍥炲浠呮敮鎸?JPEG銆丳NG銆乄ebP銆丟IF 鍥剧墖')
+      alert('回复仅支持 JPEG、PNG、WebP、GIF 图片')
       continue
     }
 
     if (file.size > MAX_POST_IMAGE_BYTES) {
-      alert('鍗曞紶鍥剧墖涓嶈兘瓒呰繃 5MB')
+      alert('单张图片不能超过 5MB')
       continue
     }
 
@@ -258,7 +258,7 @@ function buildReplyContentHtml(text, imageUrls = []) {
 
   if (imageUrls.length) {
     blocks.push(`<p>${imageUrls.map((url, index) => (
-      `<img src="${escapeHtml(url)}" alt="鍥炲鍥剧墖 ${index + 1}">`
+      `<img src="${escapeHtml(url)}" alt="回复图片 ${index + 1}">`
     )).join('')}</p>`)
   }
 
@@ -323,12 +323,12 @@ async function uploadReplyDraftImages(submitBtn) {
     formData.append('file', image.file, image.file.name || `reply-image-${index + 1}.${getImageExtension(image.file.type)}`)
 
     if (submitBtn) {
-      submitBtn.textContent = `涓婁紶鍥剧墖 ${index + 1}/${replyDraftImages.length}...`
+      submitBtn.textContent = `上传图片 ${index + 1}/${replyDraftImages.length}...`
     }
 
     const response = await api.postForm('/api/post-images', formData)
     if (!response.ok || !response.assetId || !response.url) {
-      throw new Error(response.error || '涓婁紶鍥炲鍥剧墖澶辫触')
+      throw new Error(response.error || '上传回复图片失败')
     }
 
     uploadedAssetIds.push(response.assetId)
@@ -348,12 +348,12 @@ function closePostImageLightbox() {
   }, 180)
 }
 
-function showPostImageLightbox(src, alt = '甯栧瓙鍥剧墖') {
+function showPostImageLightbox(src, alt = '帖子图片') {
   closePostImageLightbox()
   const overlay = document.createElement('div')
   overlay.className = 'post-image-lightbox active'
   overlay.innerHTML = `
-    <button class="post-image-lightbox-close" aria-label="鍏抽棴棰勮">脳</button>
+    <button class="post-image-lightbox-close" aria-label="关闭预览">×</button>
     <img class="post-image-lightbox-img" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">
   `
   overlay.addEventListener('click', (event) => {
@@ -394,7 +394,7 @@ function initCommunityEditor() {
 
   communityEditor = new Quill(editorEl, {
     theme: 'snow',
-    placeholder: '鍐欎笅浣犵殑鎯虫硶锛屾敮鎸佹钀姐€佸紩鐢ㄣ€佸垪琛ㄣ€侀摼鎺ュ拰鍥剧墖...',
+    placeholder: '写下你的想法，支持段落、引用、列表、链接和图片...',
     modules: {
       toolbar: {
         container: [
@@ -419,7 +419,7 @@ async function handleCommunityEditorImageInsert() {
   if (!editor) return
 
   if (getPostImageCount(editor.root) >= MAX_POST_IMAGES) {
-    alert(`鏈€澶氫笂浼?${MAX_POST_IMAGES} 寮犲浘鐗嘸)
+    alert(`最多上传 ${MAX_POST_IMAGES} 张图片`)
     return
   }
 
@@ -430,11 +430,11 @@ async function handleCommunityEditorImageInsert() {
     const file = input.files?.[0]
     if (!file) return
     if (file.size > MAX_POST_IMAGE_BYTES) {
-      alert('鍗曞紶鍥剧墖涓嶈兘瓒呰繃 5MB')
+      alert('单张图片不能超过 5MB')
       return
     }
     if (getPostImageCount(editor.root) >= MAX_POST_IMAGES) {
-      alert(`鏈€澶氫笂浼?${MAX_POST_IMAGES} 寮犲浘鐗嘸)
+      alert(`最多上传 ${MAX_POST_IMAGES} 张图片`)
       return
     }
 
@@ -455,7 +455,7 @@ async function uploadEditorImages(editorRoot, submitBtn) {
   const dataImages = images.filter(image => (image.getAttribute('src') || '').startsWith('data:image/'))
 
   if (images.length > MAX_POST_IMAGES) {
-    throw new Error(`鏈€澶氫笂浼?${MAX_POST_IMAGES} 寮犲浘鐗嘸)
+    throw new Error(`最多上传 ${MAX_POST_IMAGES} 张图片`)
   }
 
   for (let index = 0; index < dataImages.length; index++) {
@@ -463,22 +463,22 @@ async function uploadEditorImages(editorRoot, submitBtn) {
     const source = image.getAttribute('src') || ''
     const blob = dataUrlToBlob(source)
     if (!blob) {
-      throw new Error('鍥剧墖鏍煎紡鏃犳晥锛岃閲嶆柊鎻掑叆')
+      throw new Error('图片格式无效，请重新插入')
     }
     if (blob.size > MAX_POST_IMAGE_BYTES) {
-      throw new Error('鍗曞紶鍥剧墖涓嶈兘瓒呰繃 5MB')
+      throw new Error('单张图片不能超过 5MB')
     }
 
     const formData = new FormData()
     formData.append('file', blob, `post-image-${index + 1}.${getImageExtension(blob.type)}`)
 
     if (submitBtn) {
-      submitBtn.textContent = `涓婁紶鍥剧墖 ${index + 1}/${dataImages.length}...`
+      submitBtn.textContent = `上传图片 ${index + 1}/${dataImages.length}...`
     }
 
     const response = await api.postForm('/api/post-images', formData)
     if (!response.ok || !response.assetId || !response.url) {
-      throw new Error(response.error || '涓婁紶鍥剧墖澶辫触')
+      throw new Error(response.error || '上传图片失败')
     }
 
     uploadedAssetIds.push(response.assetId)
@@ -527,47 +527,47 @@ async function hydrateProtectedPostImages(container, options = {}) {
       console.error('Post image hydrate error:', error)
       image.classList.remove('is-loading')
       image.classList.add('is-error')
-      image.alt = '甯栧瓙鍥剧墖鍔犺浇澶辫触'
+      image.alt = '帖子图片加载失败'
     }
   }))
 }
 
-// ===== 琛楀摜璇綍 =====
+// ===== 街哥语录 =====
 const allQuotes = [
-  '澶槼搴曚笅娌℃湁鏂伴矞浜嬶紝浜烘€т笉浼氬彉锛屽ぇ澶氭暟浜轰細鍦ㄧ被浼肩殑浣嶇疆鐘悓鏍风殑閿欍€?,
-  '鏀惧純澶嫢鎸ょ殑浜ゆ槗锛屽ぇ澶氭暟鏃堕棿鍋囩獊鐮村悗鍙備笌鍙嶅悜锛屾瘮杩界獊鐮磋儨鐜囬珮銆?,
-  '浠讳綍浜ゆ槗鍦ㄥ弬涓庝箣鍓嶉兘瑕佹兂濂藉湪鍝寕姝㈡崯鎴栬€呬簭鏈噾鐨勫灏戦挶姝㈡崯銆?,
-  '宸︿晶浜ゆ槗鏄瘯鍥炬敼鍙樿繍鍔ㄦ柟鍚戯紝鍙充晶浜ゆ槗鏄瘯鍥捐窡闅忚繍鍔ㄦ柟鍚戙€?,
-  '澶村涓婂ぇ澶氭暟鏃堕棿瑕佷繚鎸佺┖浠擄紝鎵嶈兘瀹㈣鐨勭湅寰呭競鍦恒€?,
-  '涔板湪鏃犱汉闂触锛屽崠鍦ㄤ汉澹伴紟娌搞€?,
-  '涓嶈涓嬮噸娉紝鎸佷粨涓嶈楂樹簬鎬昏祫閲戠殑10%锛屼笉瑕佸姞澶ф潬鏉嗭紝杩欐槸姒傜巼娓告垙锛岀粏姘撮暱娴侊紝绔欏湪姒傜巼鐨勪竴鏂癸紝鎵嶅彲鑳借禋閽憋紝鍚﹀垯蹇呬簭銆?,
-  '姝ｅ父璧板娍锛氫細鎶€鏈殑鍜屽簞瀹朵竴璧锋帹鍔ㄧ洏闈紝鏀跺壊涓嶆噦鎶€鏈殑闊彍銆傞潪姝ｅ父璧板娍锛氫笉鎳傛妧鏈殑闊彍鐖嗗畬浜嗭紝鍐嶆敹鍓?鍒颁綅浜?鐨勯偅浜涙噦鎶€鏈殑浜恒€?,
-  '涓栫晫缁忔祹鍙叉槸涓€閮ㄥ熀浜庡亣璞″拰璋庤█鐨勮繛缁墽銆傝鑾峰緱璐㈠瘜锛屽仛娉曞氨鏄娓呭叾鍋囪薄锛屾姇鍏ュ叾涓紝鐒跺悗鍦ㄥ亣璞¤鍏紬璁よ瘑涔嬪墠閫€鍑烘父鎴忋€?,
-  '褰撲綘璁や负涓€瀹氫細鎸ｉ挶鐨勬椂鍊欙紝浜忔崯灏变細鏉ヤ复銆?,
-  '鍐嶄紭绉€鐨勪氦鏄撹€呴兘鏃犳硶閬垮厤瀵硅鎯呯殑棰勬祴锛屼氦鏄撳尯鍒簬璧屽崥姝ｆ槸鍦ㄤ簬閫氳繃瀵硅鎯呯殑棰勬祴鍜屾妸鎻¤兘澶熻揪鍒版棰勬湡锛屽彧鏄細鍙婃椂鍚戝競鍦轰綆澶达紝涓嶄細闄峰叆鎵у康缃簡銆?,
-  '褰撲釜浜烘槸涓€涓绔嬬殑涓綋鏃讹紝浠栨湁鐫€鑷繁椴滄槑鐨勪釜鎬у寲鐗瑰緛锛岃€屽綋杩欎釜浜鸿瀺鍏ヤ簡缇や綋鍚庯紝浠栫殑鎵€鏈変釜鎬ч兘浼氳杩欎釜缇や綋鎵€娣规病锛屼粬鐨勬€濇兂绔嬪埢灏变細琚兢浣撶殑鎬濇兂鎵€鍙栦唬銆?,
-  '鍏充簬鎶€鏈垎鏋愶紝鐪熺殑涓嶅瓨鍦ㄦ墍璋撶殑"灞犻緳涔嬫湳"锛屽浼氬氨鍙互涓€鍔虫案閫镐簡銆?,
-  'Buy the rumor锛宻ell the news銆備拱娑堟伅锛屽崠浜嬪疄銆?,
-  '甯傚満鎯呯华楂樻定鐨勬椂鍊欙紝鏋佸叾涔愯娌℃湁浜烘暍鍋氱┖锛屾祦鍔ㄦ€ф渶濂斤紝鏄幇璐ц窇璺殑濂芥椂鏈恒€?,
-  '浜ゆ槗鏄竴鍦哄弽浜烘€х殑璧屽崥锛岃€屽競鍦烘病鏈夊閿欙紝闇€浠ュ悇璺垎鏋愬笀涓洪暅锛屽彲浠ユ瑙傜偣鏄庡绌烘壘鍙嶆寚銆?,
-  '鏄爣鐨勫拰瓒嬪娍鎴愬氨浜猴紝鑰屼笉鏄汉鎴愬氨鏍囩殑銆備竴娴佹爣鐨勬垚灏变竴娴佺殑浜猴紝鏁簬鍙備笌鏍稿績鏍囩殑銆傛渶缁堜細鍙戠幇锛?0%鐨勬敹鐩婃潵鑷簬涓€娆℃垬褰广€?,
-  '浜ゆ槗涓€寮€濮嬫槸鐪嬪埌鏈轰細锛屽啀鍚庨潰鏄〃杈炬満浼氾紝鍐嶅悗闈㈡槸鍝佸懗鏈轰細銆傚搧鍛虫満浼氬湪浜庣瓑寰呬笌閫夋嫨锛屽搧鍛冲湪浜庝笉骞蹭粈涔堛€?,
-  '璐㈠瘜浼氬憜鍦ㄤ护浜烘剰鎯充笉鍒扮殑閭ｄ竴杈广€?,
-  '涓€涓汉鎸佺画浜忛挶锛屼粠鏉ラ兘涓嶄細鏄洜涓?涓€鏃犳墍鐭?锛屽彧浼氭槸"灞℃暀涓嶆敼"銆?,
-  '澶ч儴鍒嗕氦鏄撴槸瀹屽叏涓嶅€煎緱鍙備笌鐨勶紝骞朵笖浼氳浜哄け鍘诲瓒嬪娍鐨勫垽鏂姏銆?,
-  '鍦ㄦ煇涓勾绾箣鍓嶏紝鍙互闈犻€忔敮韬綋銆佸皬鑱槑鍜岃€佸ぉ缁欑殑杩愭皵锛屼竴鐩村彇宸у湴娲荤潃銆傜劧鑰屽埌浜嗘煇涓勾绾箣鍚庯紝鐪熸鑳借鎴戜滑璧拌繙鐨勶紝閮芥槸鑷緥銆佺Н鏋佸拰璁ょ煡琛ヨ冻銆?,
-  '姣忔澶ц鎯呴兘浼氭湁浜哄皝绁烇紝浣嗘槸娌℃湁璋佸彲浠ユ案杩滃銆傞珮鎵嬪拰骞冲焊鑰呯殑鍖哄埆鍦ㄤ簬锛岀湅瀵圭殑琛屾儏蹇冪嫚鎵嬭荆璧氱殑鐩嗘弧閽垫弧锛岀湅閿欑殑琛屾儏涓€鏍峰績鐙犳墜杈ｅ壊瀹屽氨璺戙€傞煭鑿滃憿锛岀湅瀵圭殑琛屾儏涓嶆暍鎷匡紝鍋氶敊鐨勮鎯呮鎵涖€?,
-  '娌℃湁浜哄ぉ鐢熸槸璧岄锛屾瘡涓€涓祵楝奸兘璧锋簮浜庤耽灏忛挶銆?,
-  '甯傚満姘歌繙鏄埜鐖革紝鎴戞瘡娆′互涓烘垜鏄珮鎵嬬殑鏃跺€欙紝灏辨槸璇ヨ鎶借€冲厜鐖嗕粨鐨勬椂鍊欎簡銆?,
-  '鍦ㄥ崕灏旇锛屽仛绌虹殑浜鸿兘璧氶挶锛屽仛澶氱殑浜轰篃鑳借禋閽憋紝鍞嫭璐┆鐨勪汉姘歌繙璧氫笉鍒伴挶銆?,
-  '璧氶挶浜嗕竴瀹氳鑸嶅緱绂诲紑璧屾銆?,
-  '鍋氫氦鏄撹鎳傚緱闅忕紭锛屽埆鎯崇潃姣忎竴娈甸兘鍚冨埌锛岃窡浣犺皥鎭嬬埍涓€鏍烽€夎窡浣犳渶鑸掓湇鐨勯偅涓汉鍦ㄤ竴璧枫€?,
-  '濡傛灉浣犲湪涓€涓爣鐨勪笂灞℃浜忛挶锛屽氨鏀惧純锛屼笉瑕佹兂鐫€鎹炲洖鏉ワ紝鍚岀悊浣犲湪涓€涓コ浜轰笂灞℃鏍借窡澶村氨缁撴潫杩欐鍏崇郴銆?,
-  '鏁簬鎺ュ彈鑷繁鐨勫け璐ワ紝鎵胯甯傚満鏄鐨勶紝浣犵殑浜ゆ槗浼氫笂鍗囦竴涓珮搴︺€?,
-  '璇ユ潵鐨勮鎯呰嚜鐒朵細鏉ワ紝涓嶈鏉ョ殑姘歌繙涓嶄細鏉ワ紝鍒妸浣犻娴嬬殑琛屾儏褰撴垚涓€瀹氬彂鐢熺殑浜嬩欢锛屼笉瑕侀€氳繃棰勬祴璇佹槑鑷繁锛岃閫氳繃鐩堝埄璇佹槑鑷繁銆?,
-  '鍦ㄩ噾铻嶈繖鍦哄ぇ鍨嬫父鎴忛噷锛屼綘姘歌繙鐚滀笉鍒版湭鏉ヤ細鍙戠敓浠€涔堛€?,
-  '浣犲彲浠ョ姱閿欙紝浣嗘槸涓嶈兘鍦ㄥ悓涓€涓湴鏂瑰薄娆＄姱閿欍€?,
-  '鍋氬骞磋交浜猴紝灏辨槸鍋氬鏁翠釜涓栫晫銆?,
+  '太阳底下没有新鲜事，人性不会变，大多数人会在类似的位置犯同样的错。',
+  '放弃太拥挤的交易，大多数时间假突破后参与反向，比追突破胜率高。',
+  '任何交易在参与之前都要想好在哪挂止损或者亏本金的多少钱止损。',
+  '左侧交易是试图改变运动方向，右侧交易是试图跟随运动方向。',
+  '头寸上大多数时间要保持空仓，才能客观的看待市场。',
+  '买在无人问津，卖在人声鼎沸。',
+  '不要下重注，持仓不要高于总资金的10%，不要加大杠杆，这是概率游戏，细水长流，站在概率的一方，才可能赚钱，否则必亏。',
+  '正常走势：会技术的和庄家一起推动盘面，收割不懂技术的韭菜。非正常走势：不懂技术的韭菜爆完了，再收割"到位了"的那些懂技术的人。',
+  '世界经济史是一部基于假象和谎言的连续剧。要获得财富，做法就是认清其假象，投入其中，然后在假象被公众认识之前退出游戏。',
+  '当你认为一定会挣钱的时候，亏损就会来临。',
+  '再优秀的交易者都无法避免对行情的预测，交易区别于赌博正是在于通过对行情的预测和把握能够达到正预期，只是会及时向市场低头，不会陷入执念罢了。',
+  '当个人是一个孤立的个体时，他有着自己鲜明的个性化特征，而当这个人融入了群体后，他的所有个性都会被这个群体所淹没，他的思想立刻就会被群体的思想所取代。',
+  '关于技术分析，真的不存在所谓的"屠龙之术"，学会就可以一劳永逸了。',
+  'Buy the rumor，sell the news。买消息，卖事实。',
+  '市场情绪高涨的时候，极其乐观没有人敢做空，流动性最好，是现货跑路的好时机。',
+  '交易是一场反人性的赌博，而市场没有对错，需以各路分析师为镜，可以正观点明多空找反指。',
+  '是标的和趋势成就人，而不是人成就标的。一流标的成就一流的人，敢于参与核心标的。最终会发现，80%的收益来自于一次战役。',
+  '交易一开始是看到机会，再后面是表达机会，再后面是品味机会。品味机会在于等待与选择，品味在于不干什么。',
+  '财富会呆在令人意想不到的那一边。',
+  '一个人持续亏钱，从来都不会是因为"一无所知"，只会是"屡教不改"。',
+  '大部分交易是完全不值得参与的，并且会让人失去对趋势的判断力。',
+  '在某个年纪之前，可以靠透支身体、小聪明和老天给的运气，一直取巧地活着。然而到了某个年纪之后，真正能让我们走远的，都是自律、积极和认知补足。',
+  '每次大行情都会有人封神，但是没有谁可以永远对。高手和平庸者的区别在于，看对的行情心狠手辣赚的盆满钵满，看错的行情一样心狠手辣割完就跑。韭菜呢，看对的行情不敢拿，做错的行情死扛。',
+  '没有人天生是赌鬼，每一个赌鬼都起源于赢小钱。',
+  '市场永远是爸爸，我每次以为我是高手的时候，就是该被抽耳光爆仓的时候了。',
+  '在华尔街，做空的人能赚钱，做多的人也能赚钱，唯独贪婪的人永远赚不到钱。',
+  '赚钱了一定要舍得离开赌桌。',
+  '做交易要懂得随缘，别想着每一段都吃到，跟你谈恋爱一样选跟你最舒服的那个人在一起。',
+  '如果你在一个标的上屡次亏钱，就放弃，不要想着捞回来，同理你在一个女人上屡次栽跟头就结束这段关系。',
+  '敢于接受自己的失败，承认市场是对的，你的交易会上升一个高度。',
+  '该来的行情自然会来，不该来的永远不会来，别把你预测的行情当成一定发生的事件，不要通过预测证明自己，要通过盈利证明自己。',
+  '在金融这场大型游戏里，你永远猜不到未来会发生什么。',
+  '你可以犯错，但是不能在同一个地方屡次犯错。',
+  '做多年轻人，就是做多整个世界。',
 ]
 
 // ===== State =====
@@ -600,7 +600,7 @@ const state = {
   replyQuote: null,
   notificationUnread: 0,
   paidVideoEpisodes: [], // episode IDs with CF Stream paid videos
-  videoAccessMap: {},    // { episodeId: access_level } 鈥?universal access control
+  videoAccessMap: {},    // { episodeId: access_level } — universal access control
   adminRefreshTimer: null, // admin page auto-refresh timer
   authMode: 'login_password',
   authPrefillEmail: '',
@@ -611,7 +611,7 @@ const state = {
 
 const AUTH_COOKIE_NAME = 'ws_token'
 const AUTH_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
-const LOGIN_REQUIRED_STATIC_PREFIXES = ['/research', '/earnings', '/ai娉℃搏鍛ㄦ姤', '/weekly']
+const LOGIN_REQUIRED_STATIC_PREFIXES = ['/research', '/earnings', '/ai泡沫周报', '/weekly']
 const LOGIN_REQUIRED_APP_PREFIXES = [
   '/article',
   '/video',
@@ -714,7 +714,7 @@ function getSafeLoginReturnPath(rawPath) {
 
 function showLoginRequiredModal(nextUrl) {
   showAuthModal('login_password', {
-    message: '璇峰厛鐧诲綍鍚庤闂鏉垮潡',
+    message: '请先登录后访问该板块',
     messageType: 'err',
     nextUrl,
   })
@@ -773,7 +773,7 @@ function getEpisodeContentEntry(episodeId) {
   }
 }
 
-function courseContentLoadingHtml(label = '璇剧▼璧勬枡鍔犺浇涓?..') {
+function courseContentLoadingHtml(label = '课程资料加载中...') {
   return `<p class="course-content-loading">${label}</p>`
 }
 
@@ -795,10 +795,10 @@ function getTelegramBindingSignature(user) {
 }
 
 function getTelegramBindingLabel(binding) {
-  if (!binding) return '鏈粦瀹?
+  if (!binding) return '未绑定'
   if (binding.username) return `@${binding.username}`
   if (binding.name) return binding.name
-  return '宸茬粦瀹?Telegram 璐﹀彿'
+  return '已绑定 Telegram 账号'
 }
 
 function getTelegramBindingStatus(binding) {
@@ -818,18 +818,18 @@ function canGenerateTelegramEntry(user) {
 
 function getTelegramEntryButtonLabel(user) {
   const status = getTelegramBindingStatus(user?.telegramBinding)
-  if (status === 'left' || status === 'kicked') return '閲嶆柊鑾峰彇鍏ョ兢閾炬帴'
-  if (status === 'bound') return '閲嶆柊鑾峰彇鏈哄櫒浜哄叆鍙?
-  return '鑱旂郴鏈哄櫒浜鸿幏鍙栧叆缇ら摼鎺?
+  if (status === 'left' || status === 'kicked') return '重新获取入群链接'
+  if (status === 'bound') return '重新获取机器人入口'
+  return '联系机器人获取入群链接'
 }
 
 function getTelegramBindingHint(binding) {
   const status = getTelegramBindingStatus(binding)
-  if (status === 'left') return '浣犱箣鍓嶅凡缁忛€€鍑虹兢鑱婏紝鍙互缁х画鐢ㄨ繖涓?Telegram 璐﹀彿閲嶆柊鑾峰彇鍏ョ兢閾炬帴銆?
-  if (status === 'bound') return '濡傛灉浣犱笂娆℃病杩涚兢锛屾垨鑰呴個璇烽摼鎺ヨ繃鏈熶簡锛屽彲浠ョ户缁敤杩欎釜 Telegram 璐﹀彿閲嶆柊鑾峰彇銆?
-  if (status === 'kicked') return '濡傛灉浣犲凡缁忛噸鏂扮画璐癸紝鍙互缁х画鐢ㄨ繖涓?Telegram 璐﹀彿閲嶆柊鑾峰彇鍏ョ兢閾炬帴銆?
-  if (status === 'grace') return '浣犲綋鍓嶈繕鍦ㄥ闄愭湡鍐咃紝鏆傛椂涓嶉渶瑕侀噸鏂扮敓鎴愬叆鍙ｃ€?
-  if (status === 'joined') return '浣犲綋鍓嶅凡缁忓湪缇ら噷锛屼笉闇€瑕侀噸鏂扮敓鎴愬叆鍙ｃ€?
+  if (status === 'left') return '你之前已经退出群聊，可以继续用这个 Telegram 账号重新获取入群链接。'
+  if (status === 'bound') return '如果你上次没进群，或者邀请链接过期了，可以继续用这个 Telegram 账号重新获取。'
+  if (status === 'kicked') return '如果你已经重新续费，可以继续用这个 Telegram 账号重新获取入群链接。'
+  if (status === 'grace') return '你当前还在宽限期内，暂时不需要重新生成入口。'
+  if (status === 'joined') return '你当前已经在群里，不需要重新生成入口。'
   return ''
 }
 
@@ -1060,7 +1060,7 @@ const progress = {
     return Math.min(100, Math.round((p.watchedSeconds / p.totalDuration) * 100))
   },
 
-  // 娴嬮獙閫氳繃璁板綍
+  // 测验通过记录
   isQuizPassed(episodeId) {
     const all = this.getAll()
     return all[episodeId]?.quizPassed === true
@@ -1081,7 +1081,7 @@ const progress = {
     localStorage.setItem('ws_progress', JSON.stringify(data))
   },
 
-  // 璇剧▼鏄惁瑙ｉ攣锛氭墍鏈夎绋嬪潎鍙嚜鐢辫繘鍏ワ紝鏃犻『搴忛檺鍒?
+  // 课程是否解锁：所有课程均可自由进入，无顺序限制
   isUnlocked(episodeId) {
     return true
   },
@@ -1105,7 +1105,7 @@ const comments = {
     return this._getData()[episodeId] || []
   },
 
-  // 缁熻鎬绘暟锛堣瘎璁?+ 鍥炲锛?
+  // 统计总数（评论 + 回复）
   getTotalCount(episodeId) {
     const list = this.getByEpisode(episodeId)
     return list.reduce((sum, c) => sum + 1 + (c.replies?.length || 0), 0)
@@ -1148,7 +1148,7 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Add comment error:', err)
-      alert('鍙戝竷璇勮澶辫触锛岃妫€鏌ョ綉缁滃悗閲嶈瘯')
+      alert('发布评论失败，请检查网络后重试')
     }
   },
 
@@ -1163,11 +1163,11 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Delete comment error:', err)
-      alert('鍒犻櫎璇勮澶辫触锛岃妫€鏌ョ綉缁滃悗閲嶈瘯')
+      alert('删除评论失败，请检查网络后重试')
     }
   },
 
-  // 鐐硅禐/鍙栨秷鐐硅禐
+  // 点赞/取消点赞
   async toggleLike(episodeId, commentIndex) {
     if (!state.user) return
     const data = this._getData()
@@ -1182,7 +1182,7 @@ const comments = {
     }
   },
 
-  // 鍥炲鐐硅禐
+  // 回复点赞
   async toggleReplyLike(episodeId, commentIndex, replyIndex) {
     if (!state.user) return
     const data = this._getData()
@@ -1197,7 +1197,7 @@ const comments = {
     }
   },
 
-  // 娣诲姞鍥炲
+  // 添加回复
   async addReply(episodeId, commentIndex, text) {
     if (!state.user || !text.trim()) return
     const data = this._getData()
@@ -1209,11 +1209,11 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Add reply error:', err)
-      alert('鍥炲澶辫触锛岃妫€鏌ョ綉缁滃悗閲嶈瘯')
+      alert('回复失败，请检查网络后重试')
     }
   },
 
-  // 鍒犻櫎鍥炲
+  // 删除回复
   async deleteReply(episodeId, commentIndex, replyIndex) {
     const data = this._getData()
     const reply = data[episodeId]?.[commentIndex]?.replies?.[replyIndex]
@@ -1225,7 +1225,7 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Delete reply error:', err)
-      alert('鍒犻櫎鍥炲澶辫触锛岃妫€鏌ョ綉缁滃悗閲嶈瘯')
+      alert('删除回复失败，请检查网络后重试')
     }
   },
 
@@ -1233,10 +1233,10 @@ const comments = {
     const d = new Date(ts)
     const now = new Date()
     const diff = now - d
-    if (diff < 60000) return '鍒氬垰'
-    if (diff < 3600000) return `${Math.floor(diff / 60000)} 鍒嗛挓鍓峘
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)} 灏忔椂鍓峘
-    if (diff < 2592000000) return `${Math.floor(diff / 86400000)} 澶╁墠`
+    if (diff < 60000) return '刚刚'
+    if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+    if (diff < 2592000000) return `${Math.floor(diff / 86400000)} 天前`
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   },
 }
@@ -1305,7 +1305,7 @@ function initLocalPlayer(videoUrl) {
   const container = document.getElementById('videoContainer')
   if (!container) return
 
-  container.innerHTML = '<video id="localPlayer" controls preload="metadata" style="width:100%;height:100%;"><source src="' + escapeHtml(videoUrl) + '" type="video/mp4">鎮ㄧ殑娴忚鍣ㄤ笉鏀寔瑙嗛鎾斁</video>'
+  container.innerHTML = '<video id="localPlayer" controls preload="metadata" style="width:100%;height:100%;"><source src="' + escapeHtml(videoUrl) + '" type="video/mp4">您的浏览器不支持视频播放</video>'
 
   const video = document.getElementById('localPlayer')
   if (!video) return
@@ -1391,20 +1391,20 @@ function updateProgressUI(entry, duration) {
   const fill = document.getElementById('watchFill')
   const text = document.getElementById('watchText')
   if (fill) fill.style.width = percent + '%'
-  if (text) text.textContent = `宸茶鐪?${percent}%` + (entry.completed ? ' 路 宸插畬鎴? : ` 路 闇€杈惧埌 60%`)
+  if (text) text.textContent = `已观看 ${percent}%` + (entry.completed ? ' · 已完成' : ` · 需达到 60%`)
 
-  // 瀹屾垚鎻愮ず + 瑙ｉ攣绛旈鎸夐挳
+  // 完成提示 + 解锁答题按钮
   if (entry.completed) {
     if (fill) fill.style.background = 'var(--accent-gradient)'
     const badge = document.getElementById('completeBadge')
     if (badge) badge.style.display = 'inline-flex'
-    const quizBtn = document.querySelector('.video-actions button[disabled][title="瑙傜湅60%鍚庤В閿?]')
+    const quizBtn = document.querySelector('.video-actions button[disabled][title="观看60%后解锁"]')
     if (quizBtn) {
       quizBtn.disabled = false
       quizBtn.className = 'btn btn-primary btn-lg'
       quizBtn.id = 'startQuiz'
       quizBtn.removeAttribute('title')
-      quizBtn.textContent = '寮€濮嬬瓟棰?
+      quizBtn.textContent = '开始答题'
     }
   }
 }
@@ -1460,13 +1460,13 @@ async function handleReferralQueryParam(urlParams) {
   const nextUrl = `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`
   if (state.user) {
     window.history.replaceState(window.history.state || {}, '', nextUrl || '/')
-    showFormMsgProfile('閭€璇烽摼鎺ヤ粎鐢ㄤ簬鏂扮敤鎴锋敞鍐?, 'ok')
+    showFormMsgProfile('邀请链接仅用于新用户注册', 'ok')
     return
   }
   try {
     const res = await api.post('/api/referrals/track', { code })
     if (res.disabled) {
-      showFormMsgProfile(res.message || '閭€璇疯繑浣ｅ姛鑳芥殏鏈紑鏀?, 'ok')
+      showFormMsgProfile(res.message || '邀请返佣功能暂未开放', 'ok')
     }
     if (res.ok || res.disabled) {
       window.history.replaceState(window.history.state || {}, '', nextUrl || '/')
@@ -1474,7 +1474,7 @@ async function handleReferralQueryParam(urlParams) {
         state.referralInviteCode = code
         showAuthModal('register', {
           referralCode: code,
-          message: '宸茶瘑鍒個璇烽摼鎺ワ紝璇峰畬鎴愭敞鍐?,
+          message: '已识别邀请链接，请完成注册',
           messageType: 'ok',
         })
       }
@@ -1497,7 +1497,7 @@ async function init() {
   }
   syncAuthCookieFromStorage()
 
-  mainContent.innerHTML = '<div class="loading-spinner" style="padding:60px 0;text-align:center;">鍔犺浇璇剧▼涓?..</div>'
+  mainContent.innerHTML = '<div class="loading-spinner" style="padding:60px 0;text-align:center;">加载课程中...</div>'
   await courseCatalog.load()
 
   // Check for payment redirect
@@ -1513,11 +1513,11 @@ async function init() {
     state.currentView = 'home'
     if (paymentStatus === 'success') {
       setTimeout(() => {
-        alert('馃帀 鏀粯鎴愬姛锛佷綘鐨勪細鍛樺凡鍗囩骇锛岃閲嶆柊鐧诲綍浠ュ埛鏂扮姸鎬併€?)
+        alert('🎉 支付成功！你的会员已升级，请重新登录以刷新状态。')
       }, 500)
     } else if (paymentStatus === 'failed') {
       setTimeout(() => {
-        alert('鏀粯鏈畬鎴愶紝濡傛湁闂璇疯仈绯诲鏈嶃€?)
+        alert('支付未完成，如有问题请联系客服。')
       }, 500)
     }
   } else {
@@ -1557,7 +1557,7 @@ async function init() {
     if (shouldRerenderForCourseManifest()) renderView()
   }).catch(() => {})
 
-  // Load video access map (public, no sensitive data 鈥?only episode IDs + access_level)
+  // Load video access map (public, no sensitive data — only episode IDs + access_level)
   api.get('/api/video-stream').then(r => {
     if (r.episodes) {
       state.paidVideoEpisodes = r.episodes.map(e => e.id)
@@ -1602,14 +1602,14 @@ function renderView() {
   }
 }
 
-// 鏈櫥褰曟椂鎷︽埅鎿嶄綔锛屽脊鍑虹櫥褰曟彁绀?
+// 未登录时拦截操作，弹出登录提示
 function requireLogin() {
   if (hasClientAuth()) return true
   showAuthModal('login_password')
   return false
 }
 
-// 鏄惁浠樿垂浼氬憳锛坧lus 鎴?pro锛?
+// 是否付费会员（plus 或 pro）
 function isPaid() {
   const plan = getEffectivePlan()
   return plan === 'plus' || plan === 'pro'
@@ -1633,9 +1633,9 @@ function getAccessLabel(episodeId) {
   const ep = episodes.find(item => item.id === Number(episodeId))
   const level = state.videoAccessMap[episodeId] || ep?.accessLevel
   if (!level || level === 'free') return ''
-  if (level === 'logged_in') return '鐧诲綍鍙湅'
-  if (level === 'plus_pro') return '浠?Plus / Pro 浼氬憳鍙鐪?
-  if (level === 'pro_only') return '浠?Pro 浼氬憳鍙鐪?
+  if (level === 'logged_in') return '登录可看'
+  if (level === 'plus_pro') return '仅 Plus / Pro 会员可观看'
+  if (level === 'pro_only') return '仅 Pro 会员可观看'
   return ''
 }
 
@@ -1644,9 +1644,9 @@ function getAccessBadge(episodeId) {
   const ep = episodes.find(item => item.id === Number(episodeId))
   const level = state.videoAccessMap[episodeId] || ep?.accessLevel
   if (!level || level === 'free') return ''
-  if (level === 'logged_in') return '鐧诲綍鍙湅'
-  if (level === 'plus_pro') return '浼氬憳涓撳睘'
-  if (level === 'pro_only') return 'Pro 涓撳睘'
+  if (level === 'logged_in') return '登录可看'
+  if (level === 'plus_pro') return '会员专属'
+  if (level === 'pro_only') return 'Pro 专属'
   return ''
 }
 
@@ -1668,15 +1668,15 @@ function navigateToEpisode(ep, skipPush = false) {
 }
 
 function getEpisodeBackLabel(ep = state.currentEpisode) {
-  return isArticleEpisode(ep) ? '鈫?杩斿洖鏂囩珷' : '鈫?杩斿洖瑙嗛'
+  return isArticleEpisode(ep) ? '← 返回文章' : '← 返回视频'
 }
 
 function getNextEpisodeLabel(ep) {
-  if (!ep) return '杩涘叆涓嬩竴绡?
-  return `杩涘叆${escapeHtml(ep.title)}`
+  if (!ep) return '进入下一篇'
+  return `进入${escapeHtml(ep.title)}`
 }
 
-// 娓叉煋鐢ㄦ埛澶村儚锛堟敮鎸佽嚜瀹氫箟澶村儚鎴栭瀛楁瘝锛?
+// 渲染用户头像（支持自定义头像或首字母）
 function renderAvatar(user, extraClass = '') {
   const cls = extraClass ? `comment-avatar ${extraClass}` : 'comment-avatar'
   if (user.avatar) {
@@ -1862,11 +1862,11 @@ function renderHome() {
       <div class="home-main">
         ${!isMobileHome ? `
         <div class="home-quotes">
-          <p class="quote-hero">鍋氱┖鐨勪汉鑳借禋閽憋紝鍋氬鐨勪汉涔熻兘璧氶挶锛?br>鍞嫭<span class="quote-gold">璐┆</span>鐨勪汉姘歌繙璧氫笉鍒伴挶銆?/p>
+          <p class="quote-hero">做空的人能赚钱，做多的人也能赚钱，<br>唯独<span class="quote-gold">贪婪</span>的人永远赚不到钱。</p>
           <div class="quote-divider"></div>
-          <p class="quote-detail"><span class="quote-label">姝ｅ父璧板娍</span>浼氭妧鏈殑鍜屼富鍔涗竴璧锋帹鍔ㄧ洏闈紝鏀跺壊涓嶆噦鎶€鏈殑闊彍</p>
-          <p class="quote-detail"><span class="quote-label quote-label-warn">闈炴甯歌蛋鍔?/span>涓嶆噦鎶€鏈殑闊彍鐖嗗畬浜嗭紝鍐嶆敹鍓?鍒颁綅浜?鐨勯偅浜涙噦鎶€鏈殑浜?/p>
-          <a href="https://x.com/WallStreet0Name" target="_blank" rel="noopener noreferrer" class="quote-author">鈥?鍗庡皵琛楁病鏈夊悕瀛?鈫?/a>
+          <p class="quote-detail"><span class="quote-label">正常走势</span>会技术的和主力一起推动盘面，收割不懂技术的韭菜</p>
+          <p class="quote-detail"><span class="quote-label quote-label-warn">非正常走势</span>不懂技术的韭菜爆完了，再收割"到位了"的那些懂技术的人</p>
+          <a href="https://x.com/WallStreet0Name" target="_blank" rel="noopener noreferrer" class="quote-author">— 华尔街没有名字 ↗</a>
         </div>
         ` : ''}
 
@@ -1880,8 +1880,8 @@ function renderHome() {
 
         ${state.currentCategory === 'all' ? `
         <div class="sort-bar">
-          <button class="sort-btn ${state.sortOrder === 'default' ? 'active' : ''}" data-sort="default">榛樿</button>
-          <button class="sort-btn ${state.sortOrder === 'latest' ? 'active' : ''}" data-sort="latest">鏈€鏂?/button>
+          <button class="sort-btn ${state.sortOrder === 'default' ? 'active' : ''}" data-sort="default">默认</button>
+          <button class="sort-btn ${state.sortOrder === 'latest' ? 'active' : ''}" data-sort="latest">最新</button>
         </div>
         ` : ''}
 
@@ -1889,7 +1889,7 @@ function renderHome() {
           ${filtered.map(ep => renderEpisodeCard(ep)).join('')}
         </div>
 
-        ${filtered.length === 0 ? '<p style="text-align:center; color:var(--text-3); padding:48px 0;">鏈壘鍒板尮閰嶇殑璇剧▼</p>' : ''}
+        ${filtered.length === 0 ? '<p style="text-align:center; color:var(--text-3); padding:48px 0;">未找到匹配的课程</p>' : ''}
 
         <div class="home-mobile-below-courses">
           ${mobileBelowCoursesHtml}
@@ -1902,7 +1902,7 @@ function renderHome() {
     </div>
   `
 
-  // 寮傛浠?API 鍔犺浇鏈€鏂版洿鏂帮紙鐢ㄧ湡瀹炴暟鎹浛鎹㈤潤鎬佸悗澶囷級
+  // 异步从 API 加载最新更新（用真实数据替换静态后备）
   refreshSidebarUpdates()
 
 }
@@ -1930,13 +1930,13 @@ function renderEpisodeCard(ep) {
             <span class="ep-label">EP</span>
             <span class="ep-number">${String(ep.number).padStart(2, '0')}</span>
           ` : ''}
-          ${locked ? '<div class="card-lock-overlay"><span class="lock-icon">馃敀</span></div>' : ''}
+          ${locked ? '<div class="card-lock-overlay"><span class="lock-icon">🔒</span></div>' : ''}
         </div>
         ${(ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)) && ep.duration ? `<span class="card-duration">${ep.duration}</span>` : ''}
         ${ep.number ? `<span class="card-ep-badge">EP.${String(ep.number).padStart(2, '0')}</span>` : ''}
-        ${isArticleEpisode(ep) ? '<span class="card-type-badge">鏂囩珷</span>' : ''}
+        ${isArticleEpisode(ep) ? '<span class="card-type-badge">文章</span>' : ''}
         ${accessBadge && !isArticleEpisode(ep) ? `<span class="card-paid-badge">${accessBadge}</span>` : ''}
-        ${completed && quizPassed ? '<span class="card-complete-badge">宸查€氳繃</span>' : completed ? '<span class="card-complete-badge" style="background:rgba(247,147,26,0.9)">寰呯瓟棰?/span>' : ''}
+        ${completed && quizPassed ? '<span class="card-complete-badge">已通过</span>' : completed ? '<span class="card-complete-badge" style="background:rgba(247,147,26,0.9)">待答题</span>' : ''}
       </div>
       ${percent > 0 && !completed ? `<div class="card-progress"><div class="card-progress-fill" style="width:${percent}%"></div></div>` : ''}
       <div class="card-body">
@@ -1953,24 +1953,24 @@ function renderSidebarStats() {
 
   return `
     <div class="sidebar-card">
-      <h3>瀛︿範缁熻</h3>
-      ${!state.user ? '<p class="login-hint">鐧诲綍鍚庢煡鐪嬪涔犺繘搴?/p>' : `
+      <h3>学习统计</h3>
+      ${!state.user ? '<p class="login-hint">登录后查看学习进度</p>' : `
         <div class="stats-grid">
           <div class="stat-box">
             <div class="stat-number">${episodes.length}</div>
-            <div class="stat-label">鎬昏绋?/div>
+            <div class="stat-label">总课程</div>
           </div>
           <div class="stat-box">
             <div class="stat-number">${completedCount}</div>
-            <div class="stat-label">宸插畬鎴?/div>
+            <div class="stat-label">已完成</div>
           </div>
           <div class="stat-box">
             <div class="stat-number">${inProgressCount}</div>
-            <div class="stat-label">瀛︿範涓?/div>
+            <div class="stat-label">学习中</div>
           </div>
           <div class="stat-box">
             <div class="stat-number">${Math.round(completedCount / episodes.length * 100)}%</div>
-            <div class="stat-label">瀹屾垚鐜?/div>
+            <div class="stat-label">完成率</div>
           </div>
         </div>
       `}
@@ -1979,13 +1979,13 @@ function renderSidebarStats() {
 }
 
 function renderSidebarQuotes() {
-  // 渚ц竟鏍忛殢鏈烘樉绀?鏉¤褰?
+  // 侧边栏随机显示5条语录
   const shuffled = [...allQuotes].sort(() => Math.random() - 0.5)
   const sidebarQuotes = shuffled.slice(0, 5)
 
   return `
     <div class="sidebar-card sidebar-quote-card quotes-card" style="cursor:pointer">
-      <h3>琛楀摜璇綍</h3>
+      <h3>街哥语录</h3>
       <ul class="sidebar-quote-list">
         ${sidebarQuotes.map((q, i) => `
           <li class="sidebar-quote-item">
@@ -1994,7 +1994,7 @@ function renderSidebarQuotes() {
           </li>
         `).join('')}
       </ul>
-      <div class="sidebar-quote-more">鏌ョ湅鍏ㄩ儴 ${allQuotes.length} 鏉¤褰?鈫?/div>
+      <div class="sidebar-quote-more">查看全部 ${allQuotes.length} 条语录 →</div>
     </div>
   `
 }
@@ -2003,12 +2003,12 @@ function renderSidebarUpdates(data = null, isMobile = false) {
   const updates = data || []
   const cardId = isMobile ? 'mobile-updates-card' : 'sidebar-updates-card'
   if (!updates || updates.length === 0) {
-    // 椤甸潰鍔犺浇鏃跺紓姝ヨ幏鍙栵紝鍏堟樉绀哄崰浣?
+    // 页面加载时异步获取，先显示占位
     return `
       <div class="sidebar-card sidebar-updates-card" id="${cardId}">
-        <h3>鏈€杩戞洿鏂?/h3>
+        <h3>最近更新</h3>
         <ul class="updates-list">
-          <li class="update-item" style="justify-content:center;opacity:0.5">鍔犺浇涓€?/li>
+          <li class="update-item" style="justify-content:center;opacity:0.5">加载中…</li>
         </ul>
       </div>
     `
@@ -2018,16 +2018,16 @@ function renderSidebarUpdates(data = null, isMobile = false) {
 
   return `
     <div class="sidebar-card sidebar-updates-card" id="${cardId}">
-      <h3>馃摙 鏈€杩戞洿鏂?/h3>
+      <h3>📢 最近更新</h3>
       <ul class="updates-list">
         ${items.map((u, idx) => {
-          const isNew = isRecent(u.date, now, 3) // 3 澶╁唴鏍?鏂?
+          const isNew = isRecent(u.date, now, 3) // 3 天内标"新"
           const targetAttr = u.target ? `data-update-target='${escapeHtml(JSON.stringify(u.target))}'` : ''
           return `
             <li class="update-item" ${targetAttr}>
-              <div class="update-icon">${u.icon || '路'}</div>
+              <div class="update-icon">${u.icon || '·'}</div>
               <div class="update-info">
-                <div class="update-title">${escapeHtml(u.title)}${isNew ? '<span class="update-new-badge">鏂?/span>' : ''}</div>
+                <div class="update-title">${escapeHtml(u.title)}${isNew ? '<span class="update-new-badge">新</span>' : ''}</div>
                 <div class="update-date">${formatUpdateDate(u.date, now)}</div>
               </div>
             </li>
@@ -2049,11 +2049,11 @@ function formatUpdateDate(dateStr, now) {
   if (!dateStr) return ''
   const then = new Date(dateStr + 'T00:00:00')
   const diffDays = Math.floor((now - then) / (1000 * 60 * 60 * 24))
-  if (diffDays === 0) return '浠婂ぉ'
-  if (diffDays === 1) return '鏄ㄥぉ'
-  if (diffDays < 7) return `${diffDays}澶╁墠`
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)}鍛ㄥ墠`
-  // 瓒呰繃 30 澶╂樉绀哄叿浣撴棩鏈燂紙鍘诲勾灏卞甫骞翠唤锛?
+  if (diffDays === 0) return '今天'
+  if (diffDays === 1) return '昨天'
+  if (diffDays < 7) return `${diffDays}天前`
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}周前`
+  // 超过 30 天显示具体日期（去年就带年份）
   const [y, m, d] = dateStr.split('-')
   if (String(now.getFullYear()) !== y) return `${y}.${m}.${d}`
   return `${m}.${d}`
@@ -2070,13 +2070,13 @@ async function refreshSidebarUpdates() {
       <li class="update-item" ${targetAttr}>
         <div class="update-icon">${u.icon || '\u00B7'}</div>
         <div class="update-info">
-          <div class="update-title">${escapeHtml(u.title)}${isNew ? '<span class="update-new-badge">鏂?/span>' : ''}</div>
+          <div class="update-title">${escapeHtml(u.title)}${isNew ? '<span class="update-new-badge">新</span>' : ''}</div>
           <div class="update-date">${formatUpdateDate(u.date, now)}</div>
         </div>
       </li>
     `
   }).join('')
-  // 鍚屾椂鏇存柊妗岄潰绔拰绉诲姩绔袱涓崱鐗?
+  // 同时更新桌面端和移动端两个卡片
   for (const id of ['sidebar-updates-card', 'mobile-updates-card']) {
     const card = document.getElementById(id)
     if (!card) continue
@@ -2092,7 +2092,7 @@ function renderSidebarHistory() {
 
   return `
     <div class="sidebar-card sidebar-history-card">
-      <h3>瑙傜湅鍘嗗彶</h3>
+      <h3>观看历史</h3>
       <ul class="history-list">
         ${recent.map(p => {
           const ep = episodes.find(e => e.id === p.episodeId)
@@ -2104,19 +2104,19 @@ function renderSidebarHistory() {
             <li class="history-item" data-episode-id="${ep.id}">
               <div class="history-thumb">
                 <span class="history-ep">${ep.number ? `EP${String(ep.number).padStart(2, '0')}` : ''}</span>
-                ${p.completed ? '<span class="history-done-badge">鉁?/span>' : ''}
+                ${p.completed ? '<span class="history-done-badge">✓</span>' : ''}
               </div>
               <div class="history-info">
                 <div class="history-title">${ep.title.length > 20 ? ep.title.substring(0, 20) + '...' : ep.title}</div>
                 <div class="history-meta">
-                  <span class="history-time">鐪嬪埌 ${timeStr}</span>
+                  <span class="history-time">看到 ${timeStr}</span>
                   ${ago ? `<span class="history-ago">${ago}</span>` : ''}
                 </div>
                 <div class="history-progress-bar">
                   <div class="history-progress-fill ${p.completed ? 'completed' : ''}" style="width:${percent}%"></div>
                 </div>
               </div>
-              <span class="history-play">鈻?/span>
+              <span class="history-play">▶</span>
             </li>
           `
         }).join('')}
@@ -2136,17 +2136,17 @@ function formatWatchTime(seconds) {
 function formatTimeAgo(timestamp) {
   const diff = Date.now() - timestamp
   const mins = Math.floor(diff / 60000)
-  if (mins < 1) return '鍒氬垰'
-  if (mins < 60) return `${mins}鍒嗛挓鍓峘
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins}分钟前`
   const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}灏忔椂鍓峘
+  if (hours < 24) return `${hours}小时前`
   const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}澶╁墠`
-  return `${Math.floor(days / 30)}涓湀鍓峘
+  if (days < 30) return `${days}天前`
+  return `${Math.floor(days / 30)}个月前`
 }
 
 // Category labels matching homepage tabs
-const CATEGORY_LABELS = { strategy: '浜ゆ槗绛栫暐', indicator: '鎶€鏈寚鏍?, pattern: '褰㈡€佸垎鏋?, advanced: '鎶€鏈ā鍨?, basics: '鍩虹', analysis: '鍒嗘瀽', psychology: '蹇冪悊', risk: '椋庢帶' }
+const CATEGORY_LABELS = { strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型', basics: '基础', analysis: '分析', psychology: '心理', risk: '风控' }
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
 
 function hasEpisodeVideo(ep) {
@@ -2233,7 +2233,7 @@ async function syncArticleFrameTheme(frame = document.getElementById('articleFra
     doc.body.style.overflow = 'hidden'
     doc.body.style.overflowX = 'hidden'
     doc.body.style.margin = '0'
-    // 閬垮厤 body { min-height: 100vh } 涓?iframe 鑷€傚簲楂樺害褰㈡垚鍙嶉寰幆
+    // 避免 body { min-height: 100vh } 与 iframe 自适应高度形成反馈循环
     doc.body.style.minHeight = '0'
   }
   updateArticleFrameHeight(frame)
@@ -2265,33 +2265,33 @@ function renderEpisodeActions(ep, progressRecord) {
   if (!manifestReady) {
     return `
       <div class="video-actions">
-        <button class="btn btn-ghost btn-lg" disabled>璇剧▼璧勬枡鍔犺浇涓?..</button>
+        <button class="btn btn-ghost btn-lg" disabled>课程资料加载中...</button>
       </div>
     `
   }
 
   if (!hasQuiz && !hasMindmap && !hasKnowledge) return ''
 
-  const unlockItems = [hasQuiz ? '绛旈' : null, hasMindmap ? '鎬濈淮瀵煎浘' : null, hasKnowledge ? '鐭ヨ瘑鐐? : null].filter(Boolean).join('銆?)
+  const unlockItems = [hasQuiz ? '答题' : null, hasMindmap ? '思维导图' : null, hasKnowledge ? '知识点' : null].filter(Boolean).join('、')
 
   return `
     <div class="video-actions">
       ${!isPaid() ? `
-        ${hasQuiz ? '<button class="btn btn-ghost btn-lg paid-lock" disabled>馃敀 绛旈锛堜細鍛樹笓灞烇級</button>' : ''}
-        ${hasMindmap ? '<button class="btn btn-ghost btn-lg paid-lock" disabled>馃敀 鎬濈淮瀵煎浘锛堜細鍛樹笓灞烇級</button>' : ''}
-        ${hasKnowledge ? '<button class="btn btn-ghost btn-lg paid-lock" disabled>馃敀 鐭ヨ瘑鐐癸紙浼氬憳涓撳睘锛?/button>' : ''}
-        <p class="paid-hint">鍗囩骇浼氬憳瑙ｉ攣${unlockItems} <a class="paid-hint-link" id="goUpgrade">鏌ョ湅鏂规 鈫?/a></p>
+        ${hasQuiz ? '<button class="btn btn-ghost btn-lg paid-lock" disabled>🔒 答题（会员专属）</button>' : ''}
+        ${hasMindmap ? '<button class="btn btn-ghost btn-lg paid-lock" disabled>🔒 思维导图（会员专属）</button>' : ''}
+        ${hasKnowledge ? '<button class="btn btn-ghost btn-lg paid-lock" disabled>🔒 知识点（会员专属）</button>' : ''}
+        <p class="paid-hint">升级会员解锁${unlockItems} <a class="paid-hint-link" id="goUpgrade">查看方案 →</a></p>
       ` : `
         ${hasQuiz
           ? ((!ep.youtubeId && !hasPaidVideo)
-              ? '<button class="btn btn-primary btn-lg" id="startQuiz">寮€濮嬬瓟棰?/button>'
+              ? '<button class="btn btn-primary btn-lg" id="startQuiz">开始答题</button>'
               : !progressRecord?.completed
-                ? '<button class="btn btn-ghost btn-lg" disabled title="瑙傜湅60%鍚庤В閿?>瑙傜湅60%鍚庡彲绛旈</button>'
-                : '<button class="btn btn-primary btn-lg" id="startQuiz">寮€濮嬬瓟棰?/button>')
+                ? '<button class="btn btn-ghost btn-lg" disabled title="观看60%后解锁">观看60%后可答题</button>'
+                : '<button class="btn btn-primary btn-lg" id="startQuiz">开始答题</button>')
           : ''
         }
-        ${hasMindmap ? '<button class="btn btn-ghost btn-lg" id="showMindmap">鎬濈淮瀵煎浘</button>' : ''}
-        ${hasKnowledge ? '<button class="btn btn-ghost btn-lg" id="showKnowledge">鐭ヨ瘑鐐?/button>' : ''}
+        ${hasMindmap ? '<button class="btn btn-ghost btn-lg" id="showMindmap">思维导图</button>' : ''}
+        ${hasKnowledge ? '<button class="btn btn-ghost btn-lg" id="showKnowledge">知识点</button>' : ''}
       `}
     </div>
   `
@@ -2305,7 +2305,7 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
 
   mainContent.innerHTML = `
     <div class="${viewClass} fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖璇剧▼鍒楄〃</button>
+      <button class="back-btn" id="backHome">← 返回课程列表</button>
 
       ${mediaHtml}
 
@@ -2314,8 +2314,8 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
           <div class="watch-progress-fill" id="watchFill" style="width:${percent}%; ${progressRecord?.completed ? 'background:var(--accent-gradient)' : ''}"></div>
         </div>
         <div class="watch-progress-info">
-          <span id="watchText">${progressRecord?.completed ? `宸茶鐪?${percent}% 路 宸插畬鎴恅 : percent > 0 ? `宸茶鐪?${percent}% 路 闇€杈惧埌 60%` : '寮€濮嬭鐪嬭棰戯紝瑙傜湅 60% 鍗冲彲瀹屾垚璇剧▼'}</span>
-          <span class="complete-badge" id="completeBadge" style="display:${progressRecord?.completed ? 'inline-flex' : 'none'}">宸插畬鎴?/span>
+          <span id="watchText">${progressRecord?.completed ? `已观看 ${percent}% · 已完成` : percent > 0 ? `已观看 ${percent}% · 需达到 60%` : '开始观看视频，观看 60% 即可完成课程'}</span>
+          <span class="complete-badge" id="completeBadge" style="display:${progressRecord?.completed ? 'inline-flex' : 'none'}">已完成</span>
         </div>
       ` : ''}
 
@@ -2331,14 +2331,14 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
 function getFilteredEpisodes() {
   let list
   if (state.currentCategory === 'all') {
-    // 瑙嗛璇剧▼锛氭樉绀烘湁YouTube瑙嗛鎴朇F Stream浠樿垂瑙嗛鐨?
-    // 瑙嗛璇剧▼鍒嗙被锛氭枃绔犺绋嬪嵆浣挎寕浜嗚棰戣瑙ｄ篃涓嶆贩鍏ユ鍒楄〃
+    // 视频课程：显示有YouTube视频或CF Stream付费视频的
+    // 视频课程分类：文章课程即使挂了视频讲解也不混入此列表
     list = episodes.filter(ep => !isArticleEpisode(ep) && (ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)))
     list = [...list].sort((a, b) => state.sortOrder === 'latest'
       ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
       : new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
   } else {
-    // 鍏朵粬鍒嗙被锛氭枃绔犺绋嬪缁堜繚鐣欙紱鏃犺棰戠殑鍗犱綅璇剧▼涔熸樉绀?
+    // 其他分类：文章课程始终保留；无视频的占位课程也显示
     list = episodes.filter(ep => ep.category === state.currentCategory && (isArticleEpisode(ep) || (!ep.youtubeId && !ep.hasStreamVideo && !state.paidVideoEpisodes.includes(ep.id))))
     list = [...list].sort((a, b) => state.sortOrder === 'latest'
       ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
@@ -2362,28 +2362,28 @@ function renderArticle() {
     mediaHtml: `
       ${hasPaidVideo ? `
         <div class="article-video-section">
-          <h3 class="article-video-title">馃摵 瑙嗛璁茶В</h3>
+          <h3 class="article-video-title">📺 视频讲解</h3>
           <div class="video-container" id="videoContainer">
             ${hasAccess
               ? `<div class="video-placeholder" style="background: ${ep.gradient}" id="cfVideoLoading">
-                  <span style="color:rgba(255,255,255,0.7);font-size:14px;">姝ｅ湪鍔犺浇瑙嗛...</span>
+                  <span style="color:rgba(255,255,255,0.7);font-size:14px;">正在加载视频...</span>
                 </div>`
               : `<div class="video-placeholder video-paywall-overlay" style="background: ${ep.gradient}">
-                  <div class="video-lock-icon">馃敀</div>
-                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '浼氬憳涓撳睘瑙嗛')}</h3>
-                  <p class="video-lock-text">${!state.user ? '璇峰厛鐧诲綍鍚庢煡鐪? : '鍗囩骇浼氬憳鍗冲彲瑙傜湅'}</p>
-                  <button class="btn btn-primary" id="goUpgradeVideo">${!state.user ? '鐧诲綍' : '鍗囩骇浼氬憳'}</button>
+                  <div class="video-lock-icon">🔒</div>
+                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '会员专属视频')}</h3>
+                  <p class="video-lock-text">${!state.user ? '请先登录后查看' : '升级会员即可观看'}</p>
+                  <button class="btn btn-primary" id="goUpgradeVideo">${!state.user ? '登录' : '升级会员'}</button>
                 </div>`
             }
           </div>
         </div>
         <div class="article-study-order">
-          <span class="article-study-order-icon">馃摎</span>
-          <span class="article-study-order-text">瀛︿範椤哄簭锛氬厛鐪嬪浘瑙ｇ殑鏂囧瓧鐭ヨ瘑鐐癸紝鍐嶇湅瑙嗛鏁欏</span>
+          <span class="article-study-order-icon">📚</span>
+          <span class="article-study-order-text">学习顺序：先看图解的文字知识点，再看视频教学</span>
         </div>
       ` : ''}
       <div class="article-container" id="articleContainer">
-        <div class="article-loading">姝ｅ湪鍔犺浇鏂囩珷...</div>
+        <div class="article-loading">正在加载文章...</div>
         <iframe
           class="article-frame"
           id="articleFrame"
@@ -2398,11 +2398,11 @@ function renderArticle() {
 
   initArticleFrame(ep)
 
-  // 鑻ュ綋鍓嶇敤鎴峰彲瑙傜湅璇ユ枃绔犻厤濂楄棰戯紝鍒欐媺鍙?CF Stream 骞跺祵鍏ユ挱鏀?
+  // 若当前用户可观看该文章配套视频，则拉取 CF Stream 并嵌入播放
   if (hasPaidVideo && hasAccess) {
     api.get(`/api/video-stream?episode=${ep.id}`).then(r => {
       if (state.currentEpisode?.id !== ep.id) return
-      if (!r.ok) throw new Error(r.error || '瑙嗛鍔犺浇澶辫触')
+      if (!r.ok) throw new Error(r.error || '视频加载失败')
 
       // Priority: Bilibili > Local > Qiniu > YouTube
       if (r.bilibiliId) {
@@ -2417,14 +2417,14 @@ function renderArticle() {
       } else {
         const container = document.getElementById('videoContainer')
         if (container) {
-          container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;">鏆傛棤瑙嗛婧?/p></div></div>'
+          container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;">暂无视频源</p></div></div>'
         }
       }
     }).catch(err => {
       console.error('Video fetch error:', err)
       const container = document.getElementById('videoContainer')
       if (container) {
-        container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;margin-bottom:12px;">瑙嗛鍔犺浇澶辫触</p><button class="btn btn-primary" onclick="location.reload()">鐐瑰嚮閲嶈瘯</button></div></div>'
+        container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;margin-bottom:12px;">视频加载失败</p><button class="btn btn-primary" onclick="location.reload()">点击重试</button></div></div>'
       }
     }).catch(err => {
       console.error('CF Stream fetch error:', err)
@@ -2432,8 +2432,8 @@ function renderArticle() {
       if (container) {
         container.innerHTML = `<div class="video-placeholder" style="background:var(--bg-secondary)">
           <div style="text-align:center;color:var(--text-secondary);padding:20px;">
-            <p style="font-size:16px;margin-bottom:12px;">瑙嗛鍔犺浇澶辫触</p>
-            <button class="btn btn-primary" onclick="location.reload()">鐐瑰嚮閲嶈瘯</button>
+            <p style="font-size:16px;margin-bottom:12px;">视频加载失败</p>
+            <button class="btn btn-primary" onclick="location.reload()">点击重试</button>
           </div>
         </div>`
       }
@@ -2454,7 +2454,7 @@ function renderVideo() {
   if (_hasPaid && _hasAcc && document.getElementById('cfStreamPlayer')) return
   if (!_hasPaid && ep.youtubeId && ytPlayer) return
 
-  // 姣忔杩涘叆瑙嗛椤靛脊鍑哄涔犳彁閱掞紙鏃犺棰戠殑璇剧▼璺宠繃锛?
+  // 每次进入视频页弹出学习提醒（无视频的课程跳过）
   const hasVideo = hasEpisodeVideo(ep)
   if (hasVideo && !state._videoWarningShown) {
     state._videoWarningShown = true
@@ -2463,10 +2463,10 @@ function renderVideo() {
       overlay.className = 'warning-overlay active'
       overlay.innerHTML = `
         <div class="warning-modal">
-          <div class="warning-icon">鈿狅笍</div>
-          <h3 class="warning-title">琛楀摜璀﹀憡</h3>
-          <p class="warning-text">璇峰姟蹇呰€愬績銆佸畬鏁淬€佽繛缁湴瀛︿範锛岄伩鍏嶈烦璺冨紡瑙傜湅銆傜湅浼煎浼氬疄鎴樺嵈渚濈劧浜忛挶锛屽線寰€璇存槑骞舵病鏈夌湡姝ｆ帉鎻°€備笉瑕佽鑷繁鍋滅暀鍦ㄥ崐鎳備笉鎳傜殑鐘舵€侊紝瀛﹀緱鎱㈠苟涓嶅彲鑰伙紝鐪熸閲嶈鐨勬槸瀛︿細涔嬪悗鑳藉鐔熺粌杩愮敤銆?/p>
-          <button class="btn btn-primary btn-lg warning-confirm" id="warningConfirm">鎴戠煡閬撲簡锛岃鐪熷涔?/button>
+          <div class="warning-icon">⚠️</div>
+          <h3 class="warning-title">街哥警告</h3>
+          <p class="warning-text">请务必耐心、完整、连续地学习，避免跳跃式观看。看似学会实战却依然亏钱，往往说明并没有真正掌握。不要让自己停留在半懂不懂的状态，学得慢并不可耻，真正重要的是学会之后能够熟练运用。</p>
+          <button class="btn btn-primary btn-lg warning-confirm" id="warningConfirm">我知道了，认真学习</button>
         </div>
       `
       document.body.appendChild(overlay)
@@ -2488,23 +2488,23 @@ function renderVideo() {
       return `<div class="video-container" id="videoContainer">
         ${hasPaidVideo && hasAccess
           ? `<div class="video-placeholder" style="background: ${ep.gradient}" id="cfVideoLoading">
-              <span style="color:rgba(255,255,255,0.7);font-size:14px;">姝ｅ湪鍔犺浇瑙嗛...</span>
+              <span style="color:rgba(255,255,255,0.7);font-size:14px;">正在加载视频...</span>
             </div>`
           : ep.youtubeId && !hasPaidVideo
             ? (hasAccess
               ? '<div id="ytPlayer"></div>'
               : `<div class="video-placeholder video-paywall-overlay" style="background: ${ep.gradient}">
-                  <div class="video-lock-icon">馃敀</div>
-                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '鐧诲綍鍚庡彲瑙傜湅')}</h3>
-                  <p class="video-lock-text">璇峰厛鐧诲綍鍚庢煡鐪?/p>
-                  <button class="btn btn-primary" id="goUpgradeVideo">鐧诲綍</button>
+                  <div class="video-lock-icon">🔒</div>
+                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '登录后可观看')}</h3>
+                  <p class="video-lock-text">请先登录后查看</p>
+                  <button class="btn btn-primary" id="goUpgradeVideo">登录</button>
                 </div>`)
             : hasPaidVideo && !hasAccess
               ? `<div class="video-placeholder video-paywall-overlay" style="background: ${ep.gradient}">
-                  <div class="video-lock-icon">馃敀</div>
-                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '浼氬憳涓撳睘瑙嗛')}</h3>
-                  <p class="video-lock-text">${!state.user ? '璇峰厛鐧诲綍鍚庢煡鐪? : '鍗囩骇浼氬憳鍗冲彲瑙傜湅'}</p>
-                  <button class="btn btn-primary" id="goUpgradeVideo">${!state.user ? '鐧诲綍' : '鍗囩骇浼氬憳'}</button>
+                  <div class="video-lock-icon">🔒</div>
+                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '会员专属视频')}</h3>
+                  <p class="video-lock-text">${!state.user ? '请先登录后查看' : '升级会员即可观看'}</p>
+                  <button class="btn btn-primary" id="goUpgradeVideo">${!state.user ? '登录' : '升级会员'}</button>
                 </div>`
               : ''
         }
@@ -2517,7 +2517,7 @@ function renderVideo() {
     // Fetch cfStreamId from server (gated API)
     api.get(`/api/video-stream?episode=${ep.id}`).then(r => {
       if (state.currentEpisode?.id !== ep.id) return
-      if (!r.ok) throw new Error(r.error || '瑙嗛鍔犺浇澶辫触')
+      if (!r.ok) throw new Error(r.error || '视频加载失败')
 
       if (r.bilibiliId) {
         const container = document.getElementById('videoContainer')
@@ -2543,7 +2543,7 @@ function renderVideo() {
       console.error('Video fetch error:', err)
       const container = document.getElementById('videoContainer')
       if (container) {
-        container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;">瑙嗛鍔犺浇澶辫触</p><button class="btn btn-primary" onclick="location.reload()">鐐瑰嚮閲嶈瘯</button></div></div>'
+        container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;">视频加载失败</p><button class="btn btn-primary" onclick="location.reload()">点击重试</button></div></div>'
       }
     }).catch(err => {
       console.error('CF Stream fetch error:', err)
@@ -2551,8 +2551,8 @@ function renderVideo() {
       if (container) {
         container.innerHTML = `<div class="video-placeholder" style="background:var(--bg-secondary)">
           <div style="text-align:center;color:var(--text-secondary);padding:20px;">
-            <p style="font-size:16px;margin-bottom:12px;">瑙嗛鍔犺浇澶辫触</p>
-            <button class="btn btn-primary" onclick="location.reload()">鐐瑰嚮閲嶈瘯</button>
+            <p style="font-size:16px;margin-bottom:12px;">视频加载失败</p>
+            <button class="btn btn-primary" onclick="location.reload()">点击重试</button>
           </div>
         </div>`
       }
@@ -2582,19 +2582,19 @@ function renderQuizInsight(q, selectedAnswer, isCorrect) {
     <div class="quiz-insight">
       ${primaryExplanation ? `
         <div class="quiz-explanation">
-          <div class="quiz-insight-label">${isCorrect ? '瑙ｉ噴' : '浣犻€夋嫨鐨勮В閲?}</div>
+          <div class="quiz-insight-label">${isCorrect ? '解释' : '你选择的解释'}</div>
           <p>${escapeHtml(primaryExplanation)}</p>
         </div>
       ` : ''}
       ${showCorrectExplanation ? `
         <div class="quiz-explanation">
-          <div class="quiz-insight-label">姝ｇ‘鎬濊矾</div>
+          <div class="quiz-insight-label">正确思路</div>
           <p>${escapeHtml(correctExplanation)}</p>
         </div>
       ` : ''}
       ${q.hint ? `
         <details class="quiz-hint">
-          <summary>鏌ョ湅鎻愮ず</summary>
+          <summary>查看提示</summary>
           <p>${escapeHtml(q.hint)}</p>
         </details>
       ` : ''}
@@ -2613,7 +2613,7 @@ async function renderQuiz() {
     mainContent.innerHTML = `
       <div class="quiz-section fade-in">
         <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-        <div class="quiz-card">${courseContentLoadingHtml('姝ｅ湪鍔犺浇璇惧悗娴嬭瘯...')}</div>
+        <div class="quiz-card">${courseContentLoadingHtml('正在加载课后测试...')}</div>
       </div>
     `
     const questions = await courseContent.loadQuiz(ep.id)
@@ -2631,7 +2631,7 @@ function renderQuizContent(ep, questions) {
   const { currentQuestion, answered, wrongCount } = state.quizState
   const total = questions.length
 
-  // 鍏ㄩ儴绛斿畬 鈫?缁撴灉椤?
+  // 全部答完 → 结果页
   if (currentQuestion >= total) {
     const passed = wrongCount === 0
     if (passed) progress.setQuizPassed(ep.id)
@@ -2644,8 +2644,8 @@ function renderQuizContent(ep, questions) {
           <div class="quiz-result">
             <div class="score" style="${passed ? '' : 'background: linear-gradient(135deg, #ef4444, #f97316); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;'}">${total - wrongCount}/${total}</div>
             <p class="score-label">${passed
-              ? '馃帀 鍏ㄩ儴绛斿锛屽凡瑙ｉ攣涓嬩竴鏈熻绋嬶紒'
-              : `绛旈敊浜?${wrongCount} 棰橈紝闇€瑕佸叏閮ㄧ瓟瀵规墠鑳借В閿佷笅涓€鏈焋
+              ? '🎉 全部答对，已解锁下一期课程！'
+              : `答错了 ${wrongCount} 题，需要全部答对才能解锁下一期`
             }</p>
             <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
               ${passed && nextEp
@@ -2653,10 +2653,10 @@ function renderQuizContent(ep, questions) {
                 : ''
               }
               ${!passed
-                ? '<button class="btn btn-primary btn-lg" id="retryQuiz">閲嶆柊绛旈</button>'
+                ? '<button class="btn btn-primary btn-lg" id="retryQuiz">重新答题</button>'
                 : ''
               }
-              <button class="btn btn-ghost btn-lg" id="backVideo2">${getEpisodeBackLabel(ep).replace('鈫?', '')}</button>
+              <button class="btn btn-ghost btn-lg" id="backVideo2">${getEpisodeBackLabel(ep).replace('← ', '')}</button>
             </div>
           </div>
         </div>
@@ -2676,7 +2676,7 @@ function renderQuizContent(ep, questions) {
       <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
       <div class="quiz-card">
         <div class="quiz-header">
-          <h2>璇惧悗娴嬭瘯</h2>
+          <h2>课后测试</h2>
           <span class="quiz-progress-text">${currentQuestion + 1} / ${total}</span>
         </div>
         <div class="quiz-progress-bar">
@@ -2695,29 +2695,29 @@ function renderQuizContent(ep, questions) {
             <div class="quiz-option ${cls}" data-option="${i}" ${hasAnswered ? 'style="pointer-events:none"' : ''}>
               <span class="option-letter">${['A', 'B', 'C', 'D'][i]}</span>
               <span>${escapeHtml(opt)}</span>
-              ${hasAnswered && isCorrect && i === q.answer ? '<span class="option-check">鉁?/span>' : ''}
-              ${hasAnswered && i === selectedAnswer && !isCorrect ? '<span class="option-cross">鉁?/span>' : ''}
+              ${hasAnswered && isCorrect && i === q.answer ? '<span class="option-check">✓</span>' : ''}
+              ${hasAnswered && i === selectedAnswer && !isCorrect ? '<span class="option-cross">✗</span>' : ''}
             </div>`
           }).join('')}
         </div>
         ${hasAnswered ? `
           <div class="quiz-feedback ${isCorrect ? 'feedback-correct' : 'feedback-wrong'}">
             ${isCorrect
-              ? '鉁?鍥炵瓟姝ｇ‘锛?
+              ? '✅ 回答正确！'
               : state.quizState.attempt === 1
-                ? '鉂?绛旈敊浜嗭紝鍐嶇粰浣犱竴娆℃満浼?
-                : '鉂?涓ゆ閮界瓟閿欎簡锛岄渶瑕佷粠澶寸瓟棰?
+                ? '❌ 答错了，再给你一次机会'
+                : '❌ 两次都答错了，需要从头答题'
             }
           </div>
           ${renderQuizInsight(q, selectedAnswer, isCorrect)}
           <div class="quiz-actions">
             ${isCorrect
               ? (currentQuestion < total - 1
-                  ? '<button class="btn btn-primary" id="nextQ">涓嬩竴棰?鈫?/button>'
-                  : '<button class="btn btn-primary" id="finishQuiz">鏌ョ湅缁撴灉</button>')
+                  ? '<button class="btn btn-primary" id="nextQ">下一题 →</button>'
+                  : '<button class="btn btn-primary" id="finishQuiz">查看结果</button>')
               : state.quizState.attempt === 1
-                ? '<button class="btn btn-primary" id="retryThis">鍐嶈瘯涓€娆?/button>'
-                : '<button class="btn btn-primary" id="retryQuiz">浠庡ご绛旈</button>'
+                ? '<button class="btn btn-primary" id="retryThis">再试一次</button>'
+                : '<button class="btn btn-primary" id="retryQuiz">从头答题</button>'
             }
           </div>
         ` : ''}
@@ -2731,10 +2731,10 @@ function renderQuizContent(ep, questions) {
 function renderQuotes() {
   mainContent.innerHTML = `
     <div class="quotes-page fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖璇剧▼鍒楄〃</button>
+      <button class="back-btn" id="backHome">← 返回课程列表</button>
       <div class="quotes-header">
-        <h1 class="quotes-title">琛楀摜璇綍</h1>
-        <p class="quotes-subtitle">鍏?${allQuotes.length} 鏉′氦鏄撴櫤鎱?/p>
+        <h1 class="quotes-title">街哥语录</h1>
+        <p class="quotes-subtitle">共 ${allQuotes.length} 条交易智慧</p>
       </div>
       <div class="quotes-list">
         ${allQuotes.map((q, i) => `
@@ -2758,8 +2758,8 @@ async function renderKnowledge() {
     mainContent.innerHTML = `
       <div class="knowledge-section fade-in">
         <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-        <h2>鐭ヨ瘑鐐?/h2>
-        ${courseContentLoadingHtml('姝ｅ湪鍔犺浇鐭ヨ瘑鐐?..')}
+        <h2>知识点</h2>
+        ${courseContentLoadingHtml('正在加载知识点...')}
       </div>
     `
     const points = await courseContent.loadKnowledge(ep.id)
@@ -2775,7 +2775,7 @@ function renderKnowledgeContent(ep, knowledgePoints) {
   mainContent.innerHTML = `
     <div class="knowledge-section fade-in">
       <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-      <h2>鐭ヨ瘑鐐?/h2>
+      <h2>知识点</h2>
       <div class="knowledge-grid">
         ${knowledgePoints.length > 0
           ? knowledgePoints.map(kp => {
@@ -2790,7 +2790,7 @@ function renderKnowledgeContent(ep, knowledgePoints) {
                     <p>${escapeHtml(kp.content || '')}</p>
                   </div>`
             }).join('')
-          : '<p style="color: var(--text-3); padding: 24px 0;">鏈湡鏆傛棤鐭ヨ瘑鐐?/p>'
+          : '<p style="color: var(--text-3); padding: 24px 0;">本期暂无知识点</p>'
         }
       </div>
     </div>
@@ -2808,8 +2808,8 @@ async function renderMindmap() {
     mainContent.innerHTML = `
       <div class="mindmap-section fade-in">
         <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-        <h2>鎬濈淮瀵煎浘涓庣煡璇嗙偣</h2>
-        ${courseContentLoadingHtml('姝ｅ湪鍔犺浇鎬濈淮瀵煎浘...')}
+        <h2>思维导图与知识点</h2>
+        ${courseContentLoadingHtml('正在加载思维导图...')}
       </div>
     `
     const items = await courseContent.loadMindmaps(ep.id)
@@ -2825,11 +2825,11 @@ function renderMindmapContent(ep, mindmapItems) {
   mainContent.innerHTML = `
     <div class="mindmap-section fade-in">
       <button class="back-btn" id="backVideo">${getEpisodeBackLabel(ep)}</button>
-      <h2>鎬濈淮瀵煎浘涓庣煡璇嗙偣</h2>
+      <h2>思维导图与知识点</h2>
       <div class="mindmap-list">
         ${mindmapItems.length > 0
           ? mindmapItems.map(renderMindmapItemHtml).join('')
-          : '<p style="color: var(--text-3); padding: 24px 0;">鏈湡鏆傛棤鎬濈淮瀵煎浘</p>'
+          : '<p style="color: var(--text-3); padding: 24px 0;">本期暂无思维导图</p>'
         }
       </div>
     </div>
@@ -2838,7 +2838,7 @@ function renderMindmapContent(ep, mindmapItems) {
 }
 
 function renderMindmapItemHtml(item, index) {
-  const title = item.title || `鎬濈淮瀵煎浘 ${index + 1}`
+  const title = item.title || `思维导图 ${index + 1}`
   if (item.structure) {
     const structureJson = typeof item.structure === 'string' ? item.structure : JSON.stringify(item.structure)
     return `
@@ -2848,7 +2848,7 @@ function renderMindmapItemHtml(item, index) {
           data-mindmap-structure='${escapeHtml(structureJson)}'
           data-fallback-image="${escapeHtml(item.image || '')}"
           data-title="${escapeHtml(title)}">
-          ${courseContentLoadingHtml('姝ｅ湪缁樺埗缁撴瀯鍖栨€濈淮瀵煎浘...')}
+          ${courseContentLoadingHtml('正在绘制结构化思维导图...')}
         </div>
       </div>
     `
@@ -2860,7 +2860,7 @@ function renderMindmapItemHtml(item, index) {
       ${item.pdf
         ? `<div class="mindmap-pdf-wrapper">
             <iframe src="${escapeHtml(item.pdf)}" class="mindmap-pdf"></iframe>
-            <a href="${escapeHtml(item.pdf)}" target="_blank" class="btn btn-ghost btn-sm pdf-download">鍦ㄦ柊绐楀彛鎵撳紑 PDF</a>
+            <a href="${escapeHtml(item.pdf)}" target="_blank" class="btn btn-ghost btn-sm pdf-download">在新窗口打开 PDF</a>
           </div>`
         : `<div class="mindmap-image-wrapper">
             <img src="${escapeHtml(item.image || '')}" alt="${escapeHtml(title)}" class="mindmap-image" loading="lazy">
@@ -2914,11 +2914,11 @@ function renderStructuredMindmap(container, data) {
 
   container.innerHTML = `
     <div class="mindmap-structure-toolbar">
-      <span>${escapeHtml(data.mindmapTitle || data.notebookTitle || '缁撴瀯鍖栨€濈淮瀵煎浘')}</span>
+      <span>${escapeHtml(data.mindmapTitle || data.notebookTitle || '结构化思维导图')}</span>
       <div>
-        <button type="button" class="mindmap-tool" data-zoom="out" aria-label="缂╁皬">-</button>
-        <button type="button" class="mindmap-tool" data-zoom="in" aria-label="鏀惧ぇ">+</button>
-        <button type="button" class="mindmap-tool" data-zoom="fit" aria-label="閫傚簲">猡?/button>
+        <button type="button" class="mindmap-tool" data-zoom="out" aria-label="缩小">-</button>
+        <button type="button" class="mindmap-tool" data-zoom="in" aria-label="放大">+</button>
+        <button type="button" class="mindmap-tool" data-zoom="fit" aria-label="适应">⤢</button>
       </div>
     </div>
     <div class="mindmap-structure-canvas"></div>
@@ -3032,7 +3032,7 @@ function renderStructuredMindmap(container, data) {
 
 function renderMindmapFallback(container) {
   const image = container.dataset.fallbackImage
-  const title = container.dataset.title || '鎬濈淮瀵煎浘'
+  const title = container.dataset.title || '思维导图'
   if (image) {
     container.innerHTML = `
       <div class="mindmap-image-wrapper">
@@ -3040,7 +3040,7 @@ function renderMindmapFallback(container) {
       </div>
     `
   } else {
-    container.innerHTML = '<p class="course-content-loading">缁撴瀯鍖栨€濈淮瀵煎浘鍔犺浇澶辫触</p>'
+    container.innerHTML = '<p class="course-content-loading">结构化思维导图加载失败</p>'
   }
 }
 
@@ -3066,9 +3066,9 @@ function renderAdmin() {
   // Show loading state
   mainContent.innerHTML = `
     <div class="admin-dashboard fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖棣栭〉</button>
-      <h1 class="admin-title">馃搳 绠＄悊鍚庡彴</h1>
-      <div class="loading-spinner" style="padding:60px 0;text-align:center;">鍔犺浇鏁版嵁涓?..</div>
+      <button class="back-btn" id="backHome">← 返回首页</button>
+      <h1 class="admin-title">📊 管理后台</h1>
+      <div class="loading-spinner" style="padding:60px 0;text-align:center;">加载数据中...</div>
     </div>
   `
   document.getElementById('backHome')?.addEventListener('click', () => navigate('home'))
@@ -3076,7 +3076,7 @@ function renderAdmin() {
   // Fetch real data from backend
   api.get('/api/admin-users').then(data => {
     if (!data.ok || !data.stats) {
-      mainContent.querySelector('.loading-spinner').textContent = '鍔犺浇澶辫触: ' + (data.error || '鏈煡閿欒')
+      mainContent.querySelector('.loading-spinner').textContent = '加载失败: ' + (data.error || '未知错误')
       return
     }
     renderAdminContent(data)
@@ -3099,10 +3099,10 @@ function renderAdminCourseSection() {
   return `
     <div class="admin-section" id="adminCourseManager">
       <div class="admin-section-header">
-        <h2>璇剧▼绠＄悊</h2>
+        <h2>课程管理</h2>
         <div style="display:flex;gap:8px;align-items:center;">
-          <button class="btn btn-ghost btn-xs" id="refreshAdminCourses">鍒锋柊</button>
-          <button class="btn btn-primary btn-sm" id="addCourseBtn">+ 鏂板璇剧▼</button>
+          <button class="btn btn-ghost btn-xs" id="refreshAdminCourses">刷新</button>
+          <button class="btn btn-primary btn-sm" id="addCourseBtn">+ 新增课程</button>
         </div>
       </div>
       <div id="adminCourseList"></div>
@@ -3115,19 +3115,19 @@ function renderAdminQuizSection() {
   return `
     <div class="admin-section" id="adminQuizManager">
       <div class="admin-section-header">
-        <h2>棰樺簱绠＄悊</h2>
+        <h2>题库管理</h2>
       </div>
       <div class="stream-upload-form admin-quiz-toolbar">
         <select class="stream-input" id="adminQuizEpisode">
           ${renderCourseOptionList(state.adminQuizEpisodeId || episodes[0]?.id || '')}
         </select>
-        <button class="btn btn-primary" id="loadAdminQuiz" type="button">鍔犺浇棰樼洰</button>
+        <button class="btn btn-primary" id="loadAdminQuiz" type="button">加载题目</button>
       </div>
       <form class="admin-cms-form" id="adminQuizForm">
         <input type="hidden" id="quizQuestionId">
         <div class="admin-cms-grid">
-          <label>鎺掑簭<input class="stream-input" id="quizSortOrder" type="number" min="0" value="0"></label>
-          <label>姝ｇ‘绛旀
+          <label>排序<input class="stream-input" id="quizSortOrder" type="number" min="0" value="0"></label>
+          <label>正确答案
             <select class="stream-input" id="quizAnswer">
               <option value="0">A</option>
               <option value="1">B</option>
@@ -3135,27 +3135,27 @@ function renderAdminQuizSection() {
               <option value="3">D</option>
             </select>
           </label>
-          <label>鐘舵€?
+          <label>状态
             <select class="stream-input" id="quizStatus">
-              <option value="published">宸插彂甯?/option>
-              <option value="draft">鑽夌</option>
-              <option value="archived">宸插綊妗?/option>
+              <option value="published">已发布</option>
+              <option value="draft">草稿</option>
+              <option value="archived">已归档</option>
             </select>
           </label>
         </div>
-        <label>棰樺共<textarea class="stream-input admin-cms-textarea" id="quizQuestion" rows="2" required></textarea></label>
-        <label>閫夐」锛堟瘡琛屼竴涓級<textarea class="stream-input admin-cms-textarea" id="quizOptions" rows="4" required></textarea></label>
-        <label>閫愰」瑙ｆ瀽锛堟瘡琛屽搴斾竴涓€夐」锛?textarea class="stream-input admin-cms-textarea" id="quizExplanations" rows="4"></textarea></label>
-        <label>閫氱敤瑙ｉ噴<textarea class="stream-input admin-cms-textarea" id="quizExplanation" rows="2"></textarea></label>
-        <label>鎻愮ず<textarea class="stream-input admin-cms-textarea" id="quizHint" rows="2"></textarea></label>
+        <label>题干<textarea class="stream-input admin-cms-textarea" id="quizQuestion" rows="2" required></textarea></label>
+        <label>选项（每行一个）<textarea class="stream-input admin-cms-textarea" id="quizOptions" rows="4" required></textarea></label>
+        <label>逐项解析（每行对应一个选项）<textarea class="stream-input admin-cms-textarea" id="quizExplanations" rows="4"></textarea></label>
+        <label>通用解释<textarea class="stream-input admin-cms-textarea" id="quizExplanation" rows="2"></textarea></label>
+        <label>提示<textarea class="stream-input admin-cms-textarea" id="quizHint" rows="2"></textarea></label>
         <div class="admin-cms-actions">
-          <button class="btn btn-primary" type="submit">淇濆瓨棰樼洰</button>
-          <button class="btn btn-ghost" id="resetAdminQuiz" type="button">娓呯┖棰樼洰</button>
+          <button class="btn btn-primary" type="submit">保存题目</button>
+          <button class="btn btn-ghost" id="resetAdminQuiz" type="button">清空题目</button>
         </div>
         <div class="stream-upload-result" id="adminQuizResult" style="display:none"></div>
       </form>
       <div id="adminQuizList" class="admin-quiz-list">
-        <div class="comments-empty">閫夋嫨璇剧▼鍚庡姞杞介鐩?/div>
+        <div class="comments-empty">选择课程后加载题目</div>
       </div>
     </div>
   `
@@ -3186,45 +3186,45 @@ function renderAdminContent(data) {
 
   function orderPlanLabel(order) {
     const plan = order.plan === 'pro' ? 'PRO' : order.plan === 'plus' ? 'Plus' : (order.plan || '-')
-    const period = order.period === 'yearly' ? '骞翠粯' : order.period === 'monthly' ? '鏈堜粯' : (order.period || '')
+    const period = order.period === 'yearly' ? '年付' : order.period === 'monthly' ? '月付' : (order.period || '')
     return `${plan}${period ? ' ' + period : ''}`
   }
 
   function orderStatusLabel(status) {
-    if (status === 'paid') return '宸插畬鎴?
-    if (status === 'processing') return '澶勭悊涓?
-    if (status === 'pending') return '寰呮敮浠?
-    if (status === 'expired') return '宸茶繃鏈?
+    if (status === 'paid') return '已完成'
+    if (status === 'processing') return '处理中'
+    if (status === 'pending') return '待支付'
+    if (status === 'expired') return '已过期'
     return status || '-'
   }
 
   mainContent.innerHTML = `
     <div class="admin-dashboard fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖棣栭〉</button>
-      <h1 class="admin-title">馃搳 绠＄悊鍚庡彴</h1>
+      <button class="back-btn" id="backHome">← 返回首页</button>
+      <h1 class="admin-title">📊 管理后台</h1>
 
-      <div class="admin-board-tabs" role="tablist" aria-label="绠＄悊鍚庡彴鏉垮潡">
-        <button class="admin-board-tab active" type="button" data-admin-board="resources">璇剧▼璧勬簮</button>
-        <button class="admin-board-tab" type="button" data-admin-board="users">鐢ㄦ埛浼氬憳</button>
-        <button class="admin-board-tab" type="button" data-admin-board="referrals">杩斾剑閭€璇?/button>
-        <button class="admin-board-tab" type="button" data-admin-board="config">绯荤粺閰嶇疆</button>
+      <div class="admin-board-tabs" role="tablist" aria-label="管理后台板块">
+        <button class="admin-board-tab active" type="button" data-admin-board="resources">课程资源</button>
+        <button class="admin-board-tab" type="button" data-admin-board="users">用户会员</button>
+        <button class="admin-board-tab" type="button" data-admin-board="referrals">返佣邀请</button>
+        <button class="admin-board-tab" type="button" data-admin-board="config">系统配置</button>
       </div>
 
-      <div class="admin-presence-grid" aria-label="鍦ㄧ嚎浜烘暟缁熻">
+      <div class="admin-presence-grid" aria-label="在线人数统计">
         <div class="admin-presence-card">
-          <div class="admin-presence-label">瀹炴椂鍦ㄧ嚎浜烘暟</div>
+          <div class="admin-presence-label">实时在线人数</div>
           <div class="admin-presence-value">${realtimeOnlineUsers}</div>
-          <div class="admin-presence-sub">鏈€杩?${realtimeWindowMinutes} 鍒嗛挓娲昏穬</div>
+          <div class="admin-presence-sub">最近 ${realtimeWindowMinutes} 分钟活跃</div>
         </div>
         <div class="admin-presence-card">
-          <div class="admin-presence-label">浠婂ぉ鍦ㄧ嚎浜烘暟</div>
+          <div class="admin-presence-label">今天在线人数</div>
           <div class="admin-presence-value">${todayOnlineUsers}</div>
-          <div class="admin-presence-sub">鍖椾含鏃堕棿浠婃棩鍘婚噸鐢ㄦ埛</div>
+          <div class="admin-presence-sub">北京时间今日去重用户</div>
         </div>
         <div class="admin-presence-card">
-          <div class="admin-presence-label">鏈懆鍦ㄧ嚎浜烘暟</div>
+          <div class="admin-presence-label">本周在线人数</div>
           <div class="admin-presence-value">${weekOnlineUsers}</div>
-          <div class="admin-presence-sub">鍖椾含鏃堕棿鏈懆鍘婚噸鐢ㄦ埛</div>
+          <div class="admin-presence-sub">北京时间本周去重用户</div>
         </div>
       </div>
 
@@ -3236,84 +3236,84 @@ function renderAdminContent(data) {
 
       <div class="admin-stats-grid">
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="all">
-          <div class="admin-stat-icon">馃懃</div>
+          <div class="admin-stat-icon">👥</div>
           <div class="admin-stat-value">${stats.totalUsers}</div>
-          <div class="admin-stat-label">娉ㄥ唽鐢ㄦ埛鎬绘暟</div>
-          <div class="admin-stat-sub">浠婃棩鏂板 ${stats.todayNewUsers}</div>
+          <div class="admin-stat-label">注册用户总数</div>
+          <div class="admin-stat-sub">今日新增 ${stats.todayNewUsers}</div>
         </div>
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="members">
-          <div class="admin-stat-icon">猸?/div>
+          <div class="admin-stat-icon">⭐</div>
           <div class="admin-stat-value">${plusUsers.length}</div>
-          <div class="admin-stat-label">Plus 浼氬憳</div>
-          <div class="admin-stat-sub">杞寲鐜?${stats.totalUsers > 0 ? Math.round(plusUsers.length / stats.totalUsers * 100) : 0}%</div>
+          <div class="admin-stat-label">Plus 会员</div>
+          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(plusUsers.length / stats.totalUsers * 100) : 0}%</div>
         </div>
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="members">
-          <div class="admin-stat-icon">馃拵</div>
+          <div class="admin-stat-icon">💎</div>
           <div class="admin-stat-value">${proUsers.length}</div>
-          <div class="admin-stat-label">Pro 浼氬憳</div>
-          <div class="admin-stat-sub">杞寲鐜?${stats.totalUsers > 0 ? Math.round(proUsers.length / stats.totalUsers * 100) : 0}%</div>
+          <div class="admin-stat-label">Pro 会员</div>
+          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(proUsers.length / stats.totalUsers * 100) : 0}%</div>
         </div>
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="orders">
-          <div class="admin-stat-icon">馃挼</div>
+          <div class="admin-stat-icon">💵</div>
           <div class="admin-stat-value">$${stats.totalRevenue.toLocaleString()}</div>
-          <div class="admin-stat-label">鎬绘敹鍏?/div>
-          <div class="admin-stat-sub">${stats.paidOrderCount} 绗旇鍗?/div>
+          <div class="admin-stat-label">总收入</div>
+          <div class="admin-stat-sub">${stats.paidOrderCount} 笔订单</div>
         </div>
         <div class="admin-stat-card">
-          <div class="admin-stat-icon">馃摎</div>
+          <div class="admin-stat-icon">📚</div>
           <div class="admin-stat-value">${episodes.length}</div>
-          <div class="admin-stat-label">璇剧▼鎬绘暟</div>
-          <div class="admin-stat-sub">${episodes.filter(hasEpisodeVideo).length} 鏈熷凡涓婄嚎</div>
+          <div class="admin-stat-label">课程总数</div>
+          <div class="admin-stat-sub">${episodes.filter(hasEpisodeVideo).length} 期已上线</div>
         </div>
         <div class="admin-stat-card">
-          <div class="admin-stat-icon">馃挰</div>
+          <div class="admin-stat-icon">💬</div>
           <div class="admin-stat-value">${stats.totalComments || 0}</div>
-          <div class="admin-stat-label">鎬昏瘎璁烘暟</div>
-          <div class="admin-stat-sub">${stats.totalReplies || 0} 鏉″洖澶?/div>
+          <div class="admin-stat-label">总评论数</div>
+          <div class="admin-stat-sub">${stats.totalReplies || 0} 条回复</div>
         </div>
         <div class="admin-stat-card">
-          <div class="admin-stat-icon">馃摑</div>
+          <div class="admin-stat-icon">📝</div>
           <div class="admin-stat-value">${stats.totalPosts || 0}</div>
-          <div class="admin-stat-label">绀惧尯甯栧瓙</div>
-          <div class="admin-stat-sub">绀惧尯浜掑姩</div>
+          <div class="admin-stat-label">社区帖子</div>
+          <div class="admin-stat-sub">社区互动</div>
         </div>
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="learning">
-          <div class="admin-stat-icon">馃弳</div>
+          <div class="admin-stat-icon">🏆</div>
           <div class="admin-stat-value">${learningRanked.length}</div>
-          <div class="admin-stat-label">瀛︿範鎺掕姒?/div>
-          <div class="admin-stat-sub">${learningRanked.length > 0 ? '馃 ' + escapeHtml(learningRanked[0].name || '鏈懡鍚?) + ' 路 ' + learningRanked[0].progress.completed + '璇? : '鏆傛棤鏁版嵁'}</div>
+          <div class="admin-stat-label">学习排行榜</div>
+          <div class="admin-stat-sub">${learningRanked.length > 0 ? '🥇 ' + escapeHtml(learningRanked[0].name || '未命名') + ' · ' + learningRanked[0].progress.completed + '课' : '暂无数据'}</div>
         </div>
       </div>
 
-      <div class="admin-board-tabs admin-user-subtabs" id="adminUserSubTabs" role="tablist" aria-label="鐢ㄦ埛浼氬憳瀛愮増鍧?>
-        <button class="admin-board-tab active" type="button" data-admin-user-tab="all">鍏ㄩ儴鐢ㄦ埛鍒楄〃</button>
-        <button class="admin-board-tab" type="button" data-admin-user-tab="members">浼氬憳鍒楄〃</button>
-        <button class="admin-board-tab" type="button" data-admin-user-tab="orders">璁㈠崟鍏呭€?/button>
-        <button class="admin-board-tab" type="button" data-admin-user-tab="learning">瀛︿範杩涘害鎺掑悕</button>
+      <div class="admin-board-tabs admin-user-subtabs" id="adminUserSubTabs" role="tablist" aria-label="用户会员子版块">
+        <button class="admin-board-tab active" type="button" data-admin-user-tab="all">全部用户列表</button>
+        <button class="admin-board-tab" type="button" data-admin-user-tab="members">会员列表</button>
+        <button class="admin-board-tab" type="button" data-admin-user-tab="orders">订单充值</button>
+        <button class="admin-board-tab" type="button" data-admin-user-tab="learning">学习进度排名</button>
       </div>
 
-      <!-- 鐢ㄦ埛鍒楄〃 -->
+      <!-- 用户列表 -->
       <div class="admin-section admin-user-panel" id="adminUserList" data-admin-user-panel="all">
         <div class="admin-section-header">
-          <h2>鍏ㄩ儴鐢ㄦ埛鍒楄〃</h2>
+          <h2>全部用户列表</h2>
           <div style="display:flex;gap:8px;align-items:center;">
-            <input type="text" id="adminUserSearch" class="admin-plan-input" placeholder="鎼滅储閭鎴栨樀绉?.." style="width:200px;font-size:13px;padding:4px 8px;">
-            <span class="admin-section-badge" id="adminUserCount">${stats.totalUsers} 浜?/span>
+            <input type="text" id="adminUserSearch" class="admin-plan-input" placeholder="搜索邮箱或昵称..." style="width:200px;font-size:13px;padding:4px 8px;">
+            <span class="admin-section-badge" id="adminUserCount">${stats.totalUsers} 人</span>
           </div>
         </div>
         <div class="admin-table-wrapper" id="adminUserTableWrapper">
           <table class="admin-table">
             <thead>
               <tr>
-                <th>鐢ㄦ埛</th>
-                <th>閭</th>
-                <th>娉ㄥ唽鏃堕棿</th>
-                <th>浼氬憳</th>
-                <th>鍒版湡鏃?/th>
-                <th>浠樿垂</th>
-                <th>瀛︿範/浜掑姩</th>
-                <th>鏈€杩?/th>
-                <th>鎿嶄綔</th>
+                <th>用户</th>
+                <th>邮箱</th>
+                <th>注册时间</th>
+                <th>会员</th>
+                <th>到期日</th>
+                <th>付费</th>
+                <th>学习/互动</th>
+                <th>最近</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -3324,7 +3324,7 @@ function renderAdminContent(data) {
                       <div class="admin-user-cell">
                         <span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span>
                         <div>
-                          <div>${escapeHtml(u.name || '鏈懡鍚?)}${u.isAdmin ? ' <span class="admin-badge badge-admin">绠＄悊鍛?/span>' : ''}</div>
+                          <div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div>
                           <div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div>
                         </div>
                       </div>
@@ -3335,38 +3335,38 @@ function renderAdminContent(data) {
                     <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
                     <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
                     <td style="font-size:11px;white-space:nowrap;">
-                      ${u.progress?.total > 0 ? `鈻?{u.progress.total} ` : ''}${u.progress?.completed > 0 ? `鉁?{u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `馃幆${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `馃挰${u.commentCount} ` : ''}${u.postCount > 0 ? `馃摑${u.postCount} ` : ''}${u.replyCount > 0 ? `鈫?{u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
+                      ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
                     </td>
                     <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
                     <td>
                       <div class="admin-actions">
-                        <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">缂栬緫</button>
-                        <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">璁㈠崟</button>
+                        <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
+                        <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
                       </div>
                     </td>
                   </tr>`
                 ).join('')
-                : '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">鏆傛棤娉ㄥ唽鐢ㄦ埛</td></tr>'
+                : '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">暂无注册用户</td></tr>'
               }
             </tbody>
           </table>
         </div>
       </div>
 
-      <!-- 浼氬憳鍒楄〃 -->
+      <!-- 会员列表 -->
       <div class="admin-section admin-user-panel" id="adminMemberList" data-admin-user-panel="members" hidden>
         <div class="admin-section-header">
-          <h2>浼氬憳鍒楄〃</h2>
-          <span class="admin-section-badge">${memberUsers.length} 浜?/span>
+          <h2>会员列表</h2>
+          <span class="admin-section-badge">${memberUsers.length} 人</span>
         </div>
         ${memberUsers.length > 0
           ? `<div class="admin-table-wrapper">
               <table class="admin-table">
-                <thead><tr><th>鐢ㄦ埛</th><th>閭</th><th>UID</th><th>浼氬憳绛夌骇</th><th>鍒版湡鏃?/th><th>宸蹭粯</th><th>鎿嶄綔</th></tr></thead>
+                <thead><tr><th>用户</th><th>邮箱</th><th>UID</th><th>会员等级</th><th>到期日</th><th>已付</th><th>操作</th></tr></thead>
                 <tbody>
                   ${memberUsers.map(u => `
                     <tr>
-                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '鏈懡鍚?)}</div></div></div></td>
+                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}</div></div></div></td>
                       <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
                       <td class="admin-uid">${escapeHtml(u.uid || '-')}</td>
                       <td>${planLabel(u.plan, u.planExpiresAt)}</td>
@@ -3374,32 +3374,32 @@ function renderAdminContent(data) {
                       <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
                       <td>
                         <div class="admin-actions">
-                          <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">缂栬緫</button>
-                          <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">璁㈠崟</button>
+                          <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
+                          <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
                         </div>
                       </td>
                     </tr>`).join('')}
                 </tbody>
               </table>
             </div>`
-          : '<div class="comments-empty">鏆傛棤浼氬憳</div>'
+          : '<div class="comments-empty">暂无会员</div>'
         }
       </div>
 
-      <!-- 璁㈠崟鍏呭€?-->
+      <!-- 订单充值 -->
       <div class="admin-section admin-user-panel" id="adminPaidList" data-admin-user-panel="orders" hidden>
         <div class="admin-section-header">
-          <h2>璁㈠崟鍏呭€?/h2>
-          <span class="admin-section-badge">${paidOrderRows.length} 绗?/span>
+          <h2>订单充值</h2>
+          <span class="admin-section-badge">${paidOrderRows.length} 笔</span>
         </div>
         ${paidOrderRows.length > 0
           ? `<div class="admin-table-wrapper">
               <table class="admin-table">
-                <thead><tr><th>鐢ㄦ埛</th><th>UID</th><th>鏂规</th><th>閲戦</th><th>鐘舵€?/th><th>鏀粯/鍒涘缓鏃堕棿</th></tr></thead>
+                <thead><tr><th>用户</th><th>UID</th><th>方案</th><th>金额</th><th>状态</th><th>支付/创建时间</th></tr></thead>
                 <tbody>
                   ${paidOrderRows.map(({ user: u, order: o }) => `
                     <tr>
-                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '鏈懡鍚?)}</div></div></div></td>
+                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}</div></div></div></td>
                       <td class="admin-uid">${escapeHtml((u.uid || '').substring(0, 10))}</td>
                       <td><span class="admin-badge badge-paid">${escapeHtml(orderPlanLabel(o))}</span></td>
                       <td><strong>${formatMinorUsd(o.amountConfirmed || o.amount || 0)}</strong></td>
@@ -3409,27 +3409,27 @@ function renderAdminContent(data) {
                 </tbody>
               </table>
             </div>`
-          : '<div class="comments-empty">鏆傛棤浠樿垂璁板綍</div>'
+          : '<div class="comments-empty">暂无付费记录</div>'
         }
       </div>
 
-      <!-- 瀛︿範鎺掕姒?-->
+      <!-- 学习排行榜 -->
       <div class="admin-section admin-user-panel" id="adminLeaderboard" data-admin-user-panel="learning" hidden>
         <div class="admin-section-header">
-          <h2>馃弳 瀛︿範杩涘害鎺掑悕</h2>
-          <span class="admin-section-badge">${learningRanked.length} 浜哄畬鎴愯繃璇剧▼</span>
+          <h2>🏆 学习进度排名</h2>
+          <span class="admin-section-badge">${learningRanked.length} 人完成过课程</span>
         </div>
         ${learningRanked.length > 0
           ? `<div class="admin-table-wrapper">
               <table class="admin-table">
-                <thead><tr><th style="width:50px">鎺掑悕</th><th>鐢ㄦ埛</th><th>UID</th><th>浼氬憳</th><th style="text-align:center">鉁?瀹屾垚</th><th style="text-align:center">馃幆 绛旈</th><th style="text-align:center">鈻?瑙傜湅</th></tr></thead>
+                <thead><tr><th style="width:50px">排名</th><th>用户</th><th>UID</th><th>会员</th><th style="text-align:center">✅ 完成</th><th style="text-align:center">🎯 答题</th><th style="text-align:center">▶ 观看</th></tr></thead>
                 <tbody>
                   ${learningRanked.map((u, i) => {
-                    const medal = i === 0 ? '馃' : i === 1 ? '馃' : i === 2 ? '馃' : ''
+                    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : ''
                     return `
                     <tr${i < 3 ? ' style="background:var(--bg-2);"' : ''}>
                       <td style="text-align:center;font-weight:600;font-size:${i < 3 ? '18px' : '13px'};">${medal || (i + 1)}</td>
-                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '鏈懡鍚?)}</div></div></div></td>
+                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}</div></div></div></td>
                       <td class="admin-uid">${escapeHtml((u.uid || '').substring(0, 10))}</td>
                       <td>${planLabel(u.plan, u.planExpiresAt)}</td>
                       <td style="text-align:center;font-weight:700;font-size:16px;color:var(--accent);">${u.progress.completed}</td>
@@ -3440,49 +3440,49 @@ function renderAdminContent(data) {
                 </tbody>
               </table>
             </div>`
-          : '<div class="comments-empty">鏆傛棤瀛︿範璁板綍</div>'
+          : '<div class="comments-empty">暂无学习记录</div>'
         }
       </div>
 
-      <!-- 璁㈠崟璇︽儏寮圭獥 -->
+      <!-- 订单详情弹窗 -->
       <div class="admin-order-modal" id="adminOrderModal" style="display:none">
         <div class="admin-order-modal-content">
           <div class="admin-order-modal-header">
-            <h3 id="adminOrderModalTitle">璁㈠崟璇︽儏</h3>
+            <h3 id="adminOrderModalTitle">订单详情</h3>
             <button class="admin-order-modal-close" id="adminOrderModalClose">&times;</button>
           </div>
           <div id="adminOrderModalBody"></div>
         </div>
       </div>
 
-      <!-- 瀹¤鏃ュ織 -->
+      <!-- 审计日志 -->
       <div class="admin-section">
         <div class="admin-section-header">
-          <h2>馃搵 瀹¤鏃ュ織</h2>
+          <h2>📋 审计日志</h2>
         </div>
         <div class="audit-filters">
           <select id="auditDays" class="form-select">
-            <option value="all">鍏ㄩ儴鏃堕棿</option>
-            <option value="1">鏈€杩?澶?/option>
-            <option value="7">鏈€杩?澶?/option>
-            <option value="30">鏈€杩?0澶?/option>
+            <option value="all">全部时间</option>
+            <option value="1">最近1天</option>
+            <option value="7">最近7天</option>
+            <option value="30">最近30天</option>
           </select>
           <select id="auditActionType" class="form-select">
-            <option value="all">鍏ㄩ儴绫诲瀷</option>
-            <option value="login">鐧诲綍</option>
-            <option value="register">娉ㄥ唽</option>
-            <option value="profile_update">淇敼璧勬枡</option>
-            <option value="comment_create">鍙戣〃璇勮</option>
-            <option value="post_create">鍙戝笘</option>
-            <option value="reply_create">鍥炲</option>
-            <option value="admin_change_plan">绠＄悊濂楅</option>
-            <option value="trade_create">娣诲姞鎴樼哗</option>
+            <option value="all">全部类型</option>
+            <option value="login">登录</option>
+            <option value="register">注册</option>
+            <option value="profile_update">修改资料</option>
+            <option value="comment_create">发表评论</option>
+            <option value="post_create">发帖</option>
+            <option value="reply_create">回复</option>
+            <option value="admin_change_plan">管理套餐</option>
+            <option value="trade_create">添加战绩</option>
           </select>
-          <input type="text" id="auditSearch" class="form-input" placeholder="鎼滅储鐢ㄦ埛閭銆佹樀绉般€佽鎯?..">
-          <button class="btn btn-primary" id="loadAuditLogs">鏌ヨ</button>
+          <input type="text" id="auditSearch" class="form-input" placeholder="搜索用户邮箱、昵称、详情...">
+          <button class="btn btn-primary" id="loadAuditLogs">查询</button>
         </div>
         <div id="auditLogContainer" class="admin-audit-container">
-          <p style="color:var(--text-3);padding:12px 0;">鐐瑰嚮銆屾煡璇€嶆煡鐪嬫搷浣滆褰?/p>
+          <p style="color:var(--text-3);padding:12px 0;">点击「查询」查看操作记录</p>
         </div>
       </div>
       </div>
@@ -3511,46 +3511,46 @@ function renderAdminContent(data) {
     const loadAudit = async (page = 1) => {
       const container = document.getElementById('auditLogContainer')
       if (!container) return
-      container.innerHTML = '<div class="loading-spinner">鍔犺浇涓?..</div>'
+      container.innerHTML = '<div class="loading-spinner">加载中...</div>'
       const days = document.getElementById('auditDays')?.value || 'all'
       const action = document.getElementById('auditActionType')?.value || 'all'
       const search = document.getElementById('auditSearch')?.value || ''
       const r = await api.get(`/api/admin-audit?page=${page}&limit=30&days=${days}&action=${action}&search=${encodeURIComponent(search)}`)
       if (!r.logs) {
-        container.innerHTML = `<p style="color:var(--text-3);padding:12px 0;">${escapeHtml(r.error || '鍔犺浇澶辫触')}</p>`
+        container.innerHTML = `<p style="color:var(--text-3);padding:12px 0;">${escapeHtml(r.error || '加载失败')}</p>`
         return
       }
       if (r.logs.length === 0) {
-        container.innerHTML = '<p style="color:var(--text-3);padding:12px 0;">鏆傛棤鏃ュ織</p>'
+        container.innerHTML = '<p style="color:var(--text-3);padding:12px 0;">暂无日志</p>'
         return
       }
       const actionLabels = {
-        login: '鐧诲綍', register: '娉ㄥ唽', change_password: '淇敼瀵嗙爜',
-        profile_update: '淇敼璧勬枡', comment_create: '鍙戣〃璇勮', comment_delete: '鍒犻櫎璇勮',
-        post_create: '鍙戝笘', post_delete: '鍒犻櫎甯栧瓙', reply_create: '鍥炲',
-        reply_delete: '鍒犻櫎鍥炲', admin_change_plan: '绠＄悊濂楅',
-        admin_delete_comment: '绠＄悊鍛樺垹璇勮', admin_delete_post: '绠＄悊鍛樺垹甯?,
-        admin_delete_reply: '绠＄悊鍛樺垹鍥炲', trade_create: '娣诲姞鎴樼哗',
-        course_resources_upload: '涓婁紶璇剧▼璧勬枡',
-        trade_delete: '鍒犻櫎鎴樼哗', mt5_credentials_access: '鏌ョ湅MT5璐﹀彿',
-        smart_close: 'AI 鏅鸿兘骞充粨', smart_close_rule: 'AI 鏅鸿兘骞充粨',
+        login: '登录', register: '注册', change_password: '修改密码',
+        profile_update: '修改资料', comment_create: '发表评论', comment_delete: '删除评论',
+        post_create: '发帖', post_delete: '删除帖子', reply_create: '回复',
+        reply_delete: '删除回复', admin_change_plan: '管理套餐',
+        admin_delete_comment: '管理员删评论', admin_delete_post: '管理员删帖',
+        admin_delete_reply: '管理员删回复', trade_create: '添加战绩',
+        course_resources_upload: '上传课程资料',
+        trade_delete: '删除战绩', mt5_credentials_access: '查看MT5账号',
+        smart_close: 'AI 智能平仓', smart_close_rule: 'AI 智能平仓',
       }
       container.innerHTML = `
         <table class="admin-table" style="font-size:13px;">
-          <thead><tr><th>#</th><th>鏃堕棿</th><th>鎿嶄綔鑰?/th><th>IP</th><th>鎿嶄綔</th><th>璇︽儏</th></tr></thead>
+          <thead><tr><th>#</th><th>时间</th><th>操作者</th><th>IP</th><th>操作</th><th>详情</th></tr></thead>
           <tbody>${r.logs.map((l, i) => `<tr>
             <td>${(page - 1) * 30 + i + 1}</td>
             <td style="white-space:nowrap;">${l.created_at ? formatDateTime(l.created_at) : '-'}</td>
             <td>${escapeHtml(l.user_nickname || l.user_email || '-')}<br><span style="font-size:11px;color:var(--text-3);">${escapeHtml(l.user_email || '')}</span></td>
             <td style="font-family:monospace;font-size:11px;">${escapeHtml(l.ip || '-')}</td>
             <td>${escapeHtml(actionLabels[l.action] || l.action)}</td>
-            <td><button class="btn btn-ghost btn-xs audit-detail" data-id="${l.id}">璇︽儏</button></td>
+            <td><button class="btn btn-ghost btn-xs audit-detail" data-id="${l.id}">详情</button></td>
           </tr>`).join('')}</tbody>
         </table>
         <div style="display:flex;gap:8px;padding:12px 0;justify-content:center;">
-          ${page > 1 ? `<button class="btn btn-ghost btn-xs audit-page" data-page="${page - 1}">鈫?涓婁竴椤?/button>` : ''}
-          <span style="color:var(--text-3);font-size:13px;">绗?${page}/${r.totalPages} 椤?(鍏?${r.total} 鏉?</span>
-          ${page < r.totalPages ? `<button class="btn btn-ghost btn-xs audit-page" data-page="${page + 1}">涓嬩竴椤?鈫?/button>` : ''}
+          ${page > 1 ? `<button class="btn btn-ghost btn-xs audit-page" data-page="${page - 1}">← 上一页</button>` : ''}
+          <span style="color:var(--text-3);font-size:13px;">第 ${page}/${r.totalPages} 页 (共 ${r.total} 条)</span>
+          ${page < r.totalPages ? `<button class="btn btn-ghost btn-xs audit-page" data-page="${page + 1}">下一页 →</button>` : ''}
         </div>
       `
       container.querySelectorAll('.audit-page').forEach(btn => {
@@ -3560,7 +3560,7 @@ function renderAdminContent(data) {
         btn.addEventListener('click', () => {
           const log = r.logs.find(l => l.id === Number(btn.dataset.id))
           if (log) {
-            alert(`鎿嶄綔: ${actionLabels[log.action] || log.action}\n鐢ㄦ埛: ${log.user_nickname || log.user_email}\nIP: ${log.ip || '-'}\n鏃堕棿: ${formatDateTime(log.created_at)}\n璇︽儏: ${log.detail || '-'}`)
+            alert(`操作: ${actionLabels[log.action] || log.action}\n用户: ${log.user_nickname || log.user_email}\nIP: ${log.ip || '-'}\n时间: ${formatDateTime(log.created_at)}\n详情: ${log.detail || '-'}`)
           }
         })
       })
@@ -3595,27 +3595,27 @@ function renderAdminReferralsSection() {
   return `
     <div class="admin-section">
       <div class="admin-section-header">
-        <h2>杩斾剑閭€璇风鐞?/h2>
-        <button class="btn btn-ghost btn-xs" id="adminReferralRefresh">鍒锋柊</button>
+        <h2>返佣邀请管理</h2>
+        <button class="btn btn-ghost btn-xs" id="adminReferralRefresh">刷新</button>
       </div>
       <div id="adminReferralContent" class="admin-referral-content">
-        <div class="loading-spinner">鍔犺浇涓?..</div>
+        <div class="loading-spinner">加载中...</div>
       </div>
     </div>
   `
 }
 
 function adminReferralStatusBadge(status) {
-  if (status === 'approved') return '<span class="admin-badge badge-paid">宸插鏍?/span>'
-  if (status === 'voided') return '<span class="admin-badge badge-expired">宸蹭綔搴?/span>'
-  return '<span class="admin-badge badge-free">寰呯‘璁?/span>'
+  if (status === 'approved') return '<span class="admin-badge badge-paid">已审核</span>'
+  if (status === 'voided') return '<span class="admin-badge badge-expired">已作废</span>'
+  return '<span class="admin-badge badge-free">待确认</span>'
 }
 
 async function loadAdminReferrals() {
   const container = document.getElementById('adminReferralContent')
   if (!container) return
   const currentStatus = document.getElementById('adminReferralStatusFilter')?.value || ''
-  container.innerHTML = '<div class="loading-spinner">鍔犺浇涓?..</div>'
+  container.innerHTML = '<div class="loading-spinner">加载中...</div>'
   try {
     const statusQuery = currentStatus ? `?status=${encodeURIComponent(currentStatus)}` : ''
     const [overview, commissions, rules] = await Promise.all([
@@ -3624,7 +3624,7 @@ async function loadAdminReferrals() {
       api.get('/api/admin/referrals/rules'),
     ])
     if (!overview.ok || !commissions.ok || !rules.ok) {
-      container.innerHTML = `<div class="comments-empty">${escapeHtml(overview.error || commissions.error || rules.error || '鍔犺浇澶辫触')}</div>`
+      container.innerHTML = `<div class="comments-empty">${escapeHtml(overview.error || commissions.error || rules.error || '加载失败')}</div>`
       return
     }
     const stats = overview.stats || {}
@@ -3632,26 +3632,26 @@ async function loadAdminReferrals() {
     const ruleRows = rules.rules || []
     container.innerHTML = `
       <div class="admin-stats-grid admin-referral-stats">
-        <div class="admin-stat-card"><div class="admin-stat-value">${Number(stats.total_invites || 0)}</div><div class="admin-stat-label">鎬婚個璇锋暟</div></div>
-        <div class="admin-stat-card"><div class="admin-stat-value">${Number(stats.paid_invites || 0)}</div><div class="admin-stat-label">浠樿垂閭€璇?/div></div>
-        <div class="admin-stat-card"><div class="admin-stat-value">${formatMinorUsd(stats.pending_credit_cents)}</div><div class="admin-stat-label">寰呯‘璁よ繑浣?/div></div>
-        <div class="admin-stat-card"><div class="admin-stat-value">${formatMinorUsd(stats.available_credit_cents)}</div><div class="admin-stat-label">鍙敤杩斾剑</div></div>
+        <div class="admin-stat-card"><div class="admin-stat-value">${Number(stats.total_invites || 0)}</div><div class="admin-stat-label">总邀请数</div></div>
+        <div class="admin-stat-card"><div class="admin-stat-value">${Number(stats.paid_invites || 0)}</div><div class="admin-stat-label">付费邀请</div></div>
+        <div class="admin-stat-card"><div class="admin-stat-value">${formatMinorUsd(stats.pending_credit_cents)}</div><div class="admin-stat-label">待确认返佣</div></div>
+        <div class="admin-stat-card"><div class="admin-stat-value">${formatMinorUsd(stats.available_credit_cents)}</div><div class="admin-stat-label">可用返佣</div></div>
       </div>
 
       <div class="admin-section admin-referral-inner">
         <div class="admin-section-header">
-          <h2>杩斾剑璁板綍</h2>
+          <h2>返佣记录</h2>
           <select class="admin-plan-select" id="adminReferralStatusFilter">
-            <option value="">鍏ㄩ儴鐘舵€?/option>
-            <option value="pending" ${currentStatus === 'pending' ? 'selected' : ''}>寰呯‘璁?/option>
-            <option value="approved" ${currentStatus === 'approved' ? 'selected' : ''}>宸插鏍?/option>
-            <option value="voided" ${currentStatus === 'voided' ? 'selected' : ''}>宸蹭綔搴?/option>
+            <option value="">全部状态</option>
+            <option value="pending" ${currentStatus === 'pending' ? 'selected' : ''}>待确认</option>
+            <option value="approved" ${currentStatus === 'approved' ? 'selected' : ''}>已审核</option>
+            <option value="voided" ${currentStatus === 'voided' ? 'selected' : ''}>已作废</option>
           </select>
         </div>
         ${rows.length ? `
           <div class="admin-table-wrapper">
             <table class="admin-table">
-              <thead><tr><th>閭€璇蜂汉</th><th>琚個璇风敤鎴?/th><th>璁㈠崟</th><th>鐜伴噾瀹炰粯</th><th>杩斾剑閲戦</th><th>鐘舵€?/th><th>鍙敤鏃堕棿</th><th>鎿嶄綔</th></tr></thead>
+              <thead><tr><th>邀请人</th><th>被邀请用户</th><th>订单</th><th>现金实付</th><th>返佣金额</th><th>状态</th><th>可用时间</th><th>操作</th></tr></thead>
               <tbody>
                 ${rows.map(row => `
                   <tr>
@@ -3663,54 +3663,55 @@ async function loadAdminReferrals() {
                     <td>${adminReferralStatusBadge(row.status)}</td>
                     <td class="admin-uid">${escapeHtml(row.available_at || '-')}</td>
                     <td><div class="admin-actions">
-                      ${row.status === 'pending' ? `<button class="btn btn-primary btn-xs" data-referral-approve="${escapeHtml(row.id)}" >瀹℃牳閫氳繃</button>` : ''}
-                      ${row.status !== 'voided' ? `<button class="btn btn-ghost btn-xs" data-referral-void="${escapeHtml(row.id)}" >浣滃簾</button>` : ''}
+                      ${row.status === 'pending' ? `<button class="btn btn-primary btn-xs" data-referral-approve="${escapeHtml(row.id)}" >审核通过</button>` : ''}
+                      ${row.status !== 'voided' ? `<button class="btn btn-ghost btn-xs" data-referral-void="${escapeHtml(row.id)}" >作废</button>` : ''}
                     </div></td>
                   </tr>
                 `).join('')}
               </tbody>
             </table>
-          </div>` : '<div class="comments-empty">鏆傛棤杩斾剑璁板綍</div>'}
+          </div>` : '<div class="comments-empty">暂无返佣记录</div>'}
       </div>
 
       <div class="admin-section admin-referral-inner">
         <div class="admin-section-header">
-          <h2>杩斾剑姣斾緥瑙勫垯</h2>
-          <span class="admin-section-badge">涓婇檺 20%</span>
+          <h2>返佣比例规则</h2>
+          <span class="admin-section-badge">上限 20%</span>
         </div>
         <div class="admin-table-wrapper"><table class="admin-table">
-          <thead><tr><th>鏂规</th><th>鍛ㄦ湡</th><th>rate_bps</th><th>鍚敤</th><th>鎿嶄綔</th></tr></thead>
+          <thead><tr><th>方案</th><th>周期</th><th>rate_bps</th><th>启用</th><th>操作</th></tr></thead>
           <tbody>${ruleRows.map(rule => `
             <tr>
               <td>${escapeHtml(rule.plan)}</td>
               <td>${escapeHtml(rule.period)}</td>
               <td><input class="admin-plan-input admin-referral-rate" data-rule-rate="${escapeHtml(rule.plan)}_${escapeHtml(rule.period)}" value="${Number(rule.rate_bps || 0)}" type="number" min="0" max="2000" ></td>
               <td><select class="admin-plan-select admin-referral-enabled" data-rule-enabled="${escapeHtml(rule.plan)}_${escapeHtml(rule.period)}" >
-                <option value="1" ${Number(rule.enabled) === 1 ? 'selected' : ''}>鍚敤</option>
-                <option value="0" ${Number(rule.enabled) === 0 ? 'selected' : ''}>鍋滅敤</option>
+                <option value="1" ${Number(rule.enabled) === 1 ? 'selected' : ''}>启用</option>
+                <option value="0" ${Number(rule.enabled) === 0 ? 'selected' : ''}>停用</option>
               </select></td>
-              <td><button class="btn btn-primary btn-xs admin-referral-rule-save" data-plan="${escapeHtml(rule.plan)}" data-period="${escapeHtml(rule.period)}" >淇濆瓨</button></td>
+              <td><button class="btn btn-primary btn-xs admin-referral-rule-save" data-plan="${escapeHtml(rule.plan)}" data-period="${escapeHtml(rule.period)}" >保存</button></td>
             </tr>`).join('')}</tbody>
         </table></div>
       </div>`
 
     document.getElementById('adminReferralRefresh')?.addEventListener('click', loadAdminReferrals)
     document.getElementById('adminReferralStatusFilter')?.addEventListener('change', loadAdminReferrals)
+
     container.querySelectorAll('[data-referral-approve]').forEach(btn => {
       btn.addEventListener('click', async () => {
         btn.disabled = true
         const res = await api.patch(`/api/admin/referrals/commissions/${encodeURIComponent(btn.dataset.referralApprove)}`, { action: 'approve' })
-        if (!res.ok) alert(res.error || '瀹℃牳澶辫触')
+        if (!res.ok) alert(res.error || '审核失败')
         loadAdminReferrals()
       })
     })
     container.querySelectorAll('[data-referral-void]').forEach(btn => {
       btn.addEventListener('click', async () => {
-        const reason = prompt('璇疯緭鍏ヤ綔搴熷師鍥?)
+        const reason = prompt('请输入作废原因')
         if (!reason) return
         btn.disabled = true
         const res = await api.patch(`/api/admin/referrals/commissions/${encodeURIComponent(btn.dataset.referralVoid)}`, { action: 'void', reason })
-        if (!res.ok) alert(res.error || '浣滃簾澶辫触')
+        if (!res.ok) alert(res.error || '作废失败')
         loadAdminReferrals()
       })
     })
@@ -3723,13 +3724,13 @@ async function loadAdminReferrals() {
         const enabled = Number(container.querySelector(`[data-rule-enabled="${key}"]`)?.value || 0)
         btn.disabled = true
         const res = await api.put('/api/admin/referrals/rules', { rules: [{ plan, period, rate_bps: rate, enabled }] })
-        if (!res.ok) alert(res.error || '淇濆瓨澶辫触')
+        if (!res.ok) alert(res.error || '保存失败')
         loadAdminReferrals()
       })
     })
   } catch (err) {
     console.error('Load admin referrals error:', err)
-    container.innerHTML = '<div class="comments-empty">鍔犺浇澶辫触</div>'
+    container.innerHTML = '<div class="comments-empty">加载失败</div>'
   }
 }
 
@@ -3741,17 +3742,17 @@ function renderAdminConfigSection() {
   return `
     <div class="admin-section">
       <div class="admin-section-header">
-        <h2>绯荤粺閰嶇疆</h2>
-        <button class="btn btn-ghost btn-xs" id="adminConfigRefresh">鍒锋柊</button>
+        <h2>系统配置</h2>
+        <button class="btn btn-ghost btn-xs" id="adminConfigRefresh">刷新</button>
       </div>
-      <div class="admin-board-tabs admin-config-subtabs" role="tablist" aria-label="绯荤粺閰嶇疆鏉垮潡">
-        <button class="admin-board-tab active" type="button" data-config-tab="smtp">鍙戜欢閭</button>
-        <button class="admin-board-tab" type="button" data-config-tab="qiniu">涓冪墰浜戝瓨鍌?/button>
-        <button class="admin-board-tab" type="button" data-config-tab="toolbox">閲戣瀺宸ュ叿绠?/button>
-        <button class="admin-board-tab" type="button" data-config-tab="market_menu">鑲＄エ鐮旂┒鑿滃崟</button>
+      <div class="admin-board-tabs admin-config-subtabs" role="tablist" aria-label="系统配置板块">
+        <button class="admin-board-tab active" type="button" data-config-tab="smtp">发件邮箱</button>
+        <button class="admin-board-tab" type="button" data-config-tab="qiniu">七牛云存储</button>
+        <button class="admin-board-tab" type="button" data-config-tab="toolbox">金融工具箱</button>
+        <button class="admin-board-tab" type="button" data-config-tab="market_menu">股票研究菜单</button>
       </div>
       <div id="adminConfigContent" class="admin-config-content">
-        <div class="loading-spinner">鍔犺浇涓?..</div>
+        <div class="loading-spinner">加载中...</div>
       </div>
     </div>
   `
@@ -3811,39 +3812,39 @@ function renderSmtpConfig(container) {
   container.innerHTML = `
     <div class="admin-config-form">
       <div class="admin-config-row">
-        <label>SMTP 鏈嶅姟鍣?/label>
+        <label>SMTP 服务器</label>
         <input type="text" class="admin-plan-input" id="smtpHost" value="${escapeHtml(getVal('host'))}" placeholder="smtp.qq.com">
       </div>
       <div class="admin-config-row">
-        <label>绔彛</label>
+        <label>端口</label>
         <input type="text" class="admin-plan-input" id="smtpPort" value="${escapeHtml(getVal('port'))}" placeholder="587">
       </div>
       <div class="admin-config-row">
-        <label>鐢ㄦ埛鍚?/label>
+        <label>用户名</label>
         <input type="text" class="admin-plan-input" id="smtpUser" value="${escapeHtml(getVal('user'))}" placeholder="your@email.com">
       </div>
       <div class="admin-config-row">
-        <label>瀵嗙爜</label>
-        <input type="password" class="admin-plan-input" id="smtpPass" value="${escapeHtml(getVal('pass'))}" placeholder="鎺堟潈鐮?>
+        <label>密码</label>
+        <input type="password" class="admin-plan-input" id="smtpPass" value="${escapeHtml(getVal('pass'))}" placeholder="授权码">
       </div>
       <div class="admin-config-row">
-        <label>鍙戜欢浜洪偖绠?/label>
+        <label>发件人邮箱</label>
         <input type="text" class="admin-plan-input" id="smtpFrom" value="${escapeHtml(getVal('from'))}" placeholder="noreply@yourdomain.com">
       </div>
       <div class="admin-config-row">
-        <label>鍙戜欢浜哄悕绉?/label>
-        <input type="text" class="admin-plan-input" id="smtpFromName" value="${escapeHtml(getVal('from_name') || '琛楀摜璇惧爞')}" placeholder="琛楀摜璇惧爞">
+        <label>发件人名称</label>
+        <input type="text" class="admin-plan-input" id="smtpFromName" value="${escapeHtml(getVal('from_name') || '街哥课堂')}" placeholder="街哥课堂">
       </div>
       <div class="admin-config-row">
         <label>SSL/TLS</label>
         <select class="admin-plan-select" id="smtpSecure">
-          <option value="false" ${getVal('secure') === 'false' ? 'selected' : ''}>鍚?(STARTTLS)</option>
-          <option value="true" ${getVal('secure') === 'true' ? 'selected' : ''}>鏄?(SSL)</option>
+          <option value="false" ${getVal('secure') === 'false' ? 'selected' : ''}>否 (STARTTLS)</option>
+          <option value="true" ${getVal('secure') === 'true' ? 'selected' : ''}>是 (SSL)</option>
         </select>
       </div>
       <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveSmtpConfig">淇濆瓨閰嶇疆</button>
-        <button class="btn btn-ghost" id="testSmtpConfig">鍙戦€佹祴璇曢偖浠?/button>
+        <button class="btn btn-primary" id="saveSmtpConfig">保存配置</button>
+        <button class="btn btn-ghost" id="testSmtpConfig">发送测试邮件</button>
       </div>
       <div id="smtpTestResult" class="admin-config-test-result"></div>
     </div>
@@ -3851,33 +3852,33 @@ function renderSmtpConfig(container) {
 
   document.getElementById('saveSmtpConfig')?.addEventListener('click', async () => {
     const items = [
-      { key: 'host', value: document.getElementById('smtpHost').value, label: 'SMTP 鏈嶅姟鍣?, sort_order: 0 },
-      { key: 'port', value: document.getElementById('smtpPort').value, label: '绔彛', sort_order: 1 },
-      { key: 'user', value: document.getElementById('smtpUser').value, label: '鐢ㄦ埛鍚?, sort_order: 2 },
-      { key: 'pass', value: document.getElementById('smtpPass').value, label: '瀵嗙爜', sort_order: 3 },
-      { key: 'from', value: document.getElementById('smtpFrom').value, label: '鍙戜欢浜洪偖绠?, sort_order: 4 },
-      { key: 'from_name', value: document.getElementById('smtpFromName').value, label: '鍙戜欢浜哄悕绉?, sort_order: 5 },
+      { key: 'host', value: document.getElementById('smtpHost').value, label: 'SMTP 服务器', sort_order: 0 },
+      { key: 'port', value: document.getElementById('smtpPort').value, label: '端口', sort_order: 1 },
+      { key: 'user', value: document.getElementById('smtpUser').value, label: '用户名', sort_order: 2 },
+      { key: 'pass', value: document.getElementById('smtpPass').value, label: '密码', sort_order: 3 },
+      { key: 'from', value: document.getElementById('smtpFrom').value, label: '发件人邮箱', sort_order: 4 },
+      { key: 'from_name', value: document.getElementById('smtpFromName').value, label: '发件人名称', sort_order: 5 },
       { key: 'secure', value: document.getElementById('smtpSecure').value, label: 'SSL/TLS', sort_order: 6 },
     ]
     const res = await api.put('/api/system-config/smtp', { items })
     if (res.ok) {
-      alert('SMTP 閰嶇疆宸蹭繚瀛?)
+      alert('SMTP 配置已保存')
       loadAdminConfig()
     } else {
-      alert(res.error || '淇濆瓨澶辫触')
+      alert(res.error || '保存失败')
     }
   })
 
   document.getElementById('testSmtpConfig')?.addEventListener('click', async () => {
     const resultEl = document.getElementById('smtpTestResult')
-    const testEmail = prompt('璇疯緭鍏ユ祴璇曟敹浠堕偖绠憋細')
+    const testEmail = prompt('请输入测试收件邮箱：')
     if (!testEmail) return
-    resultEl.innerHTML = '<span style="color:var(--text-3)">鍙戦€佷腑...</span>'
+    resultEl.innerHTML = '<span style="color:var(--text-3)">发送中...</span>'
     const res = await api.post('/api/system-config/smtp/test', { to: testEmail })
     if (res.ok) {
-      resultEl.innerHTML = '<span style="color:#10b981">鉁?娴嬭瘯閭欢宸插彂閫侊紝璇锋鏌ユ敹浠剁</span>'
+      resultEl.innerHTML = '<span style="color:#10b981">✓ 测试邮件已发送，请检查收件箱</span>'
     } else {
-      resultEl.innerHTML = `<span style="color:#ef4444">鉁?${escapeHtml(res.error || '鍙戦€佸け璐?)}</span>`
+      resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
     }
   })
 }
@@ -3897,26 +3898,26 @@ function renderQiniuConfig(container) {
         <input type="password" class="admin-plan-input" id="qiniuSK" value="${escapeHtml(getVal('secret_key'))}" placeholder="Secret Key">
       </div>
       <div class="admin-config-row">
-        <label>瀛樺偍妗跺悕绉?/label>
+        <label>存储桶名称</label>
         <input type="text" class="admin-plan-input" id="qiniuBucket" value="${escapeHtml(getVal('bucket'))}" placeholder="my-bucket">
       </div>
       <div class="admin-config-row">
-        <label>璁块棶鍩熷悕</label>
+        <label>访问域名</label>
         <input type="text" class="admin-plan-input" id="qiniuDomain" value="${escapeHtml(getVal('domain'))}" placeholder="https://cdn.example.com">
       </div>
       <div class="admin-config-row">
-        <label>鍖哄煙</label>
+        <label>区域</label>
         <select class="admin-plan-select" id="qiniuRegion">
-          <option value="z0" ${getVal('region') === 'z0' ? 'selected' : ''}>鍗庝笢 (z0)</option>
-          <option value="cn-east" ${getVal('region') === 'cn-east' ? 'selected' : ''}>鍗庝笢 (cn-east)</option>
-          <option value="cn-south" ${getVal('region') === 'cn-south' ? 'selected' : ''}>鍗庡崡 (cn-south)</option>
-          <option value="cn-north" ${getVal('region') === 'cn-north' ? 'selected' : ''}>鍗庡寳 (cn-north)</option>
-          <option value="us-north" ${getVal('region') === 'us-north' ? 'selected' : ''}>鍖楃編 (us-north)</option>
-          <option value="ap-southeast" ${getVal('region') === 'ap-southeast' ? 'selected' : ''}>涓滃崡浜?(ap-southeast)</option>
+          <option value="z0" ${getVal('region') === 'z0' ? 'selected' : ''}>华东 (z0)</option>
+          <option value="cn-east" ${getVal('region') === 'cn-east' ? 'selected' : ''}>华东 (cn-east)</option>
+          <option value="cn-south" ${getVal('region') === 'cn-south' ? 'selected' : ''}>华南 (cn-south)</option>
+          <option value="cn-north" ${getVal('region') === 'cn-north' ? 'selected' : ''}>华北 (cn-north)</option>
+          <option value="us-north" ${getVal('region') === 'us-north' ? 'selected' : ''}>北美 (us-north)</option>
+          <option value="ap-southeast" ${getVal('region') === 'ap-southeast' ? 'selected' : ''}>东南亚 (ap-southeast)</option>
         </select>
       </div>
       <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveQiniuConfig">淇濆瓨閰嶇疆</button>
+        <button class="btn btn-primary" id="saveQiniuConfig">保存配置</button>
       </div>
     </div>
   `
@@ -3925,16 +3926,16 @@ function renderQiniuConfig(container) {
     const items = [
       { key: 'access_key', value: document.getElementById('qiniuAK').value, label: 'Access Key', sort_order: 0 },
       { key: 'secret_key', value: document.getElementById('qiniuSK').value, label: 'Secret Key', sort_order: 1 },
-      { key: 'bucket', value: document.getElementById('qiniuBucket').value, label: '瀛樺偍妗跺悕绉?, sort_order: 2 },
-      { key: 'domain', value: document.getElementById('qiniuDomain').value, label: '璁块棶鍩熷悕', sort_order: 3 },
-      { key: 'region', value: document.getElementById('qiniuRegion').value, label: '鍖哄煙', sort_order: 4 },
+      { key: 'bucket', value: document.getElementById('qiniuBucket').value, label: '存储桶名称', sort_order: 2 },
+      { key: 'domain', value: document.getElementById('qiniuDomain').value, label: '访问域名', sort_order: 3 },
+      { key: 'region', value: document.getElementById('qiniuRegion').value, label: '区域', sort_order: 4 },
     ]
     const res = await api.put('/api/system-config/qiniu', { items })
     if (res.ok) {
-      alert('涓冪墰浜戦厤缃凡淇濆瓨')
+      alert('七牛云配置已保存')
       loadAdminConfig()
     } else {
-      alert(res.error || '淇濆瓨澶辫触')
+      alert(res.error || '保存失败')
     }
   })
 }
@@ -3948,14 +3949,14 @@ function renderToolboxConfig(container) {
   container.innerHTML = `
     <div class="admin-config-form">
       <div class="admin-config-header-row">
-        <h3>閲戣瀺宸ュ叿绠遍厤缃?/h3>
-        <button class="btn btn-primary btn-sm" id="addToolCategory">+ 娣诲姞鍒嗙被</button>
+        <h3>金融工具箱配置</h3>
+        <button class="btn btn-primary btn-sm" id="addToolCategory">+ 添加分类</button>
       </div>
       <div id="toolboxCategories">
         ${categories.map((cat, ci) => renderToolboxCategory(cat, ci)).join('')}
       </div>
       <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveToolboxConfig">淇濆瓨鍏ㄩ儴</button>
+        <button class="btn btn-primary" id="saveToolboxConfig">保存全部</button>
       </div>
     </div>
   `
@@ -3967,13 +3968,13 @@ function renderToolboxCategory(cat, ci) {
   return `
     <div class="admin-toolbox-category" data-cat-index="${ci}">
       <div class="admin-toolbox-cat-header">
-        <input type="text" class="admin-plan-input admin-toolbox-cat-name" value="${escapeHtml(cat.category)}" placeholder="鍒嗙被鍚嶇О">
-        <button class="btn btn-ghost btn-xs admin-toolbox-cat-delete" data-ci="${ci}">鍒犻櫎鍒嗙被</button>
+        <input type="text" class="admin-plan-input admin-toolbox-cat-name" value="${escapeHtml(cat.category)}" placeholder="分类名称">
+        <button class="btn btn-ghost btn-xs admin-toolbox-cat-delete" data-ci="${ci}">删除分类</button>
       </div>
       <div class="admin-toolbox-items">
         ${(cat.items || []).map((item, ii) => renderToolboxItem(item, ci, ii)).join('')}
       </div>
-      <button class="btn btn-ghost btn-xs admin-toolbox-add-item" data-ci="${ci}">+ 娣诲姞宸ュ叿</button>
+      <button class="btn btn-ghost btn-xs admin-toolbox-add-item" data-ci="${ci}">+ 添加工具</button>
     </div>
   `
 }
@@ -3983,39 +3984,39 @@ function renderToolboxItem(item, ci, ii) {
     <div class="admin-toolbox-item" data-ci="${ci}" data-ii="${ii}">
       <div class="admin-toolbox-item-grid">
         <div class="admin-config-row">
-          <label>鍚嶇О</label>
+          <label>名称</label>
           <input type="text" class="admin-plan-input toolbox-field" data-field="name" value="${escapeHtml(item.name || '')}">
         </div>
         <div class="admin-config-row">
-          <label>鍥炬爣</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="馃獧">
+          <label>图标</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="🪙">
         </div>
         <div class="admin-config-row">
-          <label>閾炬帴</label>
+          <label>链接</label>
           <input type="text" class="admin-plan-input toolbox-field" data-field="url" value="${escapeHtml(item.url || '')}">
         </div>
         <div class="admin-config-row">
-          <label>鎻忚堪</label>
+          <label>描述</label>
           <input type="text" class="admin-plan-input toolbox-field" data-field="desc" value="${escapeHtml(item.desc || '')}">
         </div>
         <div class="admin-config-row">
-          <label>鏍囩</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="tag" value="${escapeHtml(item.tag || '')}" placeholder="鍙€?>
+          <label>标签</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="tag" value="${escapeHtml(item.tag || '')}" placeholder="可选">
         </div>
         <div class="admin-config-row">
-          <label>鏍囩棰滆壊</label>
+          <label>标签颜色</label>
           <input type="color" class="admin-plan-input toolbox-field" data-field="tagColor" value="${escapeHtml(item.tagColor || '#2563eb')}" style="height:36px;padding:2px 4px;">
         </div>
         <div class="admin-config-row">
-          <label>閭€璇风爜</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="code" value="${escapeHtml(item.code || '')}" placeholder="鍙€?>
+          <label>邀请码</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="code" value="${escapeHtml(item.code || '')}" placeholder="可选">
         </div>
         <div class="admin-config-row">
-          <label>杩斾剑</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="rebate" value="${escapeHtml(item.rebate || '')}" placeholder="鍙€?>
+          <label>返佣</label>
+          <input type="text" class="admin-plan-input toolbox-field" data-field="rebate" value="${escapeHtml(item.rebate || '')}" placeholder="可选">
         </div>
       </div>
-      <button class="btn btn-ghost btn-xs admin-toolbox-delete-item" data-ci="${ci}" data-ii="${ii}">鍒犻櫎</button>
+      <button class="btn btn-ghost btn-xs admin-toolbox-delete-item" data-ci="${ci}" data-ii="${ii}">删除</button>
     </div>
   `
 }
@@ -4039,7 +4040,7 @@ function setupToolboxEvents(categories) {
   }
 
   document.getElementById('addToolCategory')?.addEventListener('click', () => {
-    categories.push({ category: '鏂板垎绫?, items: [] })
+    categories.push({ category: '新分类', items: [] })
     document.getElementById('toolboxCategories').innerHTML = categories.map((cat, ci) => renderToolboxCategory(cat, ci)).join('')
     setupToolboxEvents(categories)
   })
@@ -4077,13 +4078,13 @@ function setupToolboxEvents(categories) {
 
   document.getElementById('saveToolboxConfig')?.addEventListener('click', async () => {
     categories = getCategories()
-    const items = [{ key: 'items', value: JSON.stringify(categories), label: '閲戣瀺宸ュ叿绠?, sort_order: 0 }]
+    const items = [{ key: 'items', value: JSON.stringify(categories), label: '金融工具箱', sort_order: 0 }]
     const res = await api.put('/api/system-config/toolbox', { items })
     if (res.ok) {
-      alert('閲戣瀺宸ュ叿绠遍厤缃凡淇濆瓨')
+      alert('金融工具箱配置已保存')
       loadAdminConfig()
     } else {
-      alert(res.error || '淇濆瓨澶辫触')
+      alert(res.error || '保存失败')
     }
   })
 }
@@ -4097,14 +4098,14 @@ function renderMarketMenuConfig(container) {
   container.innerHTML = `
     <div class="admin-config-form">
       <div class="admin-config-header-row">
-        <h3>鑲＄エ甯傚満鐮旂┒鑿滃崟</h3>
-        <button class="btn btn-primary btn-sm" id="addMenuItem">+ 娣诲姞鑿滃崟椤?/button>
+        <h3>股票市场研究菜单</h3>
+        <button class="btn btn-primary btn-sm" id="addMenuItem">+ 添加菜单项</button>
       </div>
       <div id="marketMenuItems">
         ${menuItems.map((item, i) => renderMarketMenuItem(item, i)).join('')}
       </div>
       <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveMarketMenuConfig">淇濆瓨鍏ㄩ儴</button>
+        <button class="btn btn-primary" id="saveMarketMenuConfig">保存全部</button>
       </div>
     </div>
   `
@@ -4117,19 +4118,19 @@ function renderMarketMenuItem(item, i) {
     <div class="admin-market-menu-item" data-index="${i}">
       <div class="admin-toolbox-item-grid">
         <div class="admin-config-row">
-          <label>鍚嶇О</label>
+          <label>名称</label>
           <input type="text" class="admin-plan-input menu-field" data-field="name" value="${escapeHtml(item.name || '')}">
         </div>
         <div class="admin-config-row">
-          <label>鍥炬爣</label>
-          <input type="text" class="admin-plan-input menu-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="馃搮">
+          <label>图标</label>
+          <input type="text" class="admin-plan-input menu-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="📅">
         </div>
         <div class="admin-config-row">
-          <label>閾炬帴</label>
+          <label>链接</label>
           <input type="text" class="admin-plan-input menu-field" data-field="url" value="${escapeHtml(item.url || '')}">
         </div>
       </div>
-      <button class="btn btn-ghost btn-xs admin-menu-delete-item" data-i="${i}">鍒犻櫎</button>
+      <button class="btn btn-ghost btn-xs admin-menu-delete-item" data-i="${i}">删除</button>
     </div>
   `
 }
@@ -4167,13 +4168,13 @@ function setupMarketMenuEvents(menuItems) {
 
   document.getElementById('saveMarketMenuConfig')?.addEventListener('click', async () => {
     menuItems = getItems()
-    const items = [{ key: 'items', value: JSON.stringify(menuItems), label: '鑲＄エ甯傚満鐮旂┒鑿滃崟', sort_order: 0 }]
+    const items = [{ key: 'items', value: JSON.stringify(menuItems), label: '股票市场研究菜单', sort_order: 0 }]
     const res = await api.put('/api/system-config/market_menu', { items })
     if (res.ok) {
-      alert('鑿滃崟閰嶇疆宸蹭繚瀛?)
+      alert('菜单配置已保存')
       loadAdminConfig()
     } else {
-      alert(res.error || '淇濆瓨澶辫触')
+      alert(res.error || '保存失败')
     }
   })
 }
@@ -4257,9 +4258,9 @@ async function refreshAdminUserTable(search = '') {
     const tbody = document.querySelector('#adminUserList .admin-table tbody')
     const countEl = document.getElementById('adminUserCount')
     if (!tbody) return
-    if (countEl) countEl.textContent = `${data.users.length} 浜篳
+    if (countEl) countEl.textContent = `${data.users.length} 人`
     if (data.users.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">鏈壘鍒板尮閰嶇敤鎴?/td></tr>'
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">未找到匹配用户</td></tr>'
       return
     }
     tbody.innerHTML = data.users.map(u => `
@@ -4268,7 +4269,7 @@ async function refreshAdminUserTable(search = '') {
           <div class="admin-user-cell">
             <span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span>
             <div>
-              <div>${escapeHtml(u.name || '鏈懡鍚?)}${u.isAdmin ? ' <span class="admin-badge badge-admin">绠＄悊鍛?/span>' : ''}</div>
+              <div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div>
               <div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div>
             </div>
           </div>
@@ -4279,13 +4280,13 @@ async function refreshAdminUserTable(search = '') {
         <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
         <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
         <td style="font-size:11px;white-space:nowrap;">
-          ${u.progress?.total > 0 ? `鈻?{u.progress.total} ` : ''}${u.progress?.completed > 0 ? `鉁?{u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `馃幆${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `馃挰${u.commentCount} ` : ''}${u.postCount > 0 ? `馃摑${u.postCount} ` : ''}${u.replyCount > 0 ? `鈫?{u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
+          ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
         </td>
         <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
         <td>
           <div class="admin-actions">
-            <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">缂栬緫</button>
-            <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">璁㈠崟</button>
+            <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
+            <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
           </div>
         </td>
       </tr>`).join('')
@@ -4326,7 +4327,7 @@ function syncAdminVideoUploadMode() {
   if (field) field.style.display = isNewVideo ? 'grid' : 'none'
   if (!isNewVideo) {
     if (input) input.value = ''
-    if (label) label.textContent = '涓婁紶鏂拌棰?
+    if (label) label.textContent = '上传新视频'
     if (progress) progress.style.display = 'none'
   }
 }
@@ -4346,13 +4347,13 @@ function updateResourceUploadFileLabels() {
     const firstPath = folderFiles[0]?.webkitRelativePath || folderFiles[0]?.name || ''
     const folderName = firstPath.split('/').filter(Boolean)[0]
     folderLabel.textContent = folderFiles.length
-      ? `${folderName || '宸查€夋枃浠跺す'} 路 ${folderFiles.length} 涓枃浠禶
-      : '閫夋嫨 NotebookLM 鏂囦欢澶?
+      ? `${folderName || '已选文件夹'} · ${folderFiles.length} 个文件`
+      : '选择 NotebookLM 文件夹'
   }
   if (looseLabel) {
     looseLabel.textContent = looseFiles.length
-      ? `琛ュ厖鏂囦欢 路 ${looseFiles.length} 涓猔
-      : '琛ュ厖閫夋嫨鍗曚釜鏂囦欢'
+      ? `补充文件 · ${looseFiles.length} 个`
+      : '补充选择单个文件'
   }
   applyNotebookMetadata(folderFiles)
 }
@@ -4420,15 +4421,15 @@ function getSelectedResourceEpisodeId() {
 
 function getMindmapItemStats(items = []) {
   const infoCount = items.filter(item =>
-    String(item.title || '').includes('淇℃伅鍥?) ||
-    String(item.image || '').includes('淇℃伅鍥?) ||
+    String(item.title || '').includes('信息图') ||
+    String(item.image || '').includes('信息图') ||
     String(item.image || '').toLowerCase().includes('infographic')
   ).length
   const structureCount = items.filter(item => item.structure).length
   const mindmapCount = items.filter(item =>
     item.structure ||
-    String(item.title || '').includes('鎬濈淮瀵煎浘') ||
-    String(item.image || '').includes('鎬濈淮瀵煎浘') ||
+    String(item.title || '').includes('思维导图') ||
+    String(item.image || '').includes('思维导图') ||
     String(item.image || '').toLowerCase().includes('mindmap')
   ).length
   return { infoCount, mindmapCount, structureCount }
@@ -4438,7 +4439,7 @@ function renderAdminResourceSummary(data, fallbackStats = null) {
   const el = document.getElementById('adminResourceSummary')
   if (!el) return
   if (!data?.ok) {
-    el.textContent = data?.error || '璧勬枡鐘舵€佸姞杞藉け璐?
+    el.textContent = data?.error || '资料状态加载失败'
     return
   }
   const assets = data.assets || []
@@ -4449,20 +4450,20 @@ function renderAdminResourceSummary(data, fallbackStats = null) {
   const mindmapCount = uploadedMindmapCount || fallbackStats?.mindmapCount || 0
   const structureCount = uploadedStructureCount || fallbackStats?.structureCount || 0
   el.innerHTML = `
-    <span>棰樼洰 ${Number(data.quizCount || 0)}</span>
-    <span>淇℃伅鍥?${infoCount}</span>
-    <span>鎬濈淮瀵煎浘 ${mindmapCount}</span>
-    <span>缁撴瀯 JSON ${structureCount}</span>
+    <span>题目 ${Number(data.quizCount || 0)}</span>
+    <span>信息图 ${infoCount}</span>
+    <span>思维导图 ${mindmapCount}</span>
+    <span>结构 JSON ${structureCount}</span>
   `
 }
 
 async function loadAdminCourseResources(episodeId = getSelectedResourceEpisodeId()) {
   const el = document.getElementById('adminResourceSummary')
   if (!episodeId) {
-    if (el) el.textContent = '閫夋嫨璇剧▼鍚庢煡鐪嬭祫鏂欑姸鎬?
+    if (el) el.textContent = '选择课程后查看资料状态'
     return
   }
-  if (el) el.textContent = '璧勬枡鐘舵€佸姞杞戒腑...'
+  if (el) el.textContent = '资料状态加载中...'
   const data = await api.get(`/api/admin-course-resources?episode=${episodeId}`)
   let fallbackStats = null
   if (data?.ok && !(data.assets || []).length) {
@@ -4490,7 +4491,7 @@ function renderAdminCourseList(courses) {
   const el = document.getElementById('adminCourseList')
   if (!el) return
   if (!courses.length) {
-    el.innerHTML = '<div class="comments-empty">鏆傛棤璇剧▼锛岀偣鍑烩€滄柊澧炶绋嬧€濆垱寤?/div>'
+    el.innerHTML = '<div class="comments-empty">暂无课程，点击“新增课程”创建</div>'
     return
   }
   const totalPages = Math.ceil(courses.length / ADMIN_COURSE_PAGE_SIZE)
@@ -4501,7 +4502,7 @@ function renderAdminCourseList(courses) {
 
   el.innerHTML = `
     <table class="admin-table">
-      <thead><tr><th>ID</th><th>璇剧▼</th><th>绫诲瀷</th><th>鍒嗙被</th><th>鍙戝竷鏃堕棿</th><th>鐘舵€?/th><th>鎿嶄綔</th></tr></thead>
+      <thead><tr><th>ID</th><th>课程</th><th>类型</th><th>分类</th><th>发布时间</th><th>状态</th><th>操作</th></tr></thead>
       <tbody>
         ${pageItems.map(course => `
           <tr>
@@ -4510,14 +4511,14 @@ function renderAdminCourseList(courses) {
               <strong>${escapeHtml(course.title)}</strong>
               <div class="admin-uid">${escapeHtml(course.duration || '-')}</div>
             </td>
-            <td>${course.contentType === 'article' ? '鏂囩珷' : '瑙嗛'}</td>
+            <td>${course.contentType === 'article' ? '文章' : '视频'}</td>
             <td>${escapeHtml(getCategoryLabel(course.category) || '-')}</td>
             <td style="font-size:12px;white-space:nowrap;">${escapeHtml(formatDateTime(course.createdAt))}</td>
-            <td><span class="admin-badge ${course.status === 'published' ? 'badge-paid' : course.status === 'draft' ? 'badge-free' : 'badge-expired'}">${course.status === 'published' ? '宸插彂甯? : course.status === 'draft' ? '鑽夌' : '宸插綊妗?}</span></td>
+            <td><span class="admin-badge ${course.status === 'published' ? 'badge-paid' : course.status === 'draft' ? 'badge-free' : 'badge-expired'}">${course.status === 'published' ? '已发布' : course.status === 'draft' ? '草稿' : '已归档'}</span></td>
             <td>
               <div class="admin-actions">
-                <button class="btn btn-primary btn-xs admin-course-edit" data-course-id="${course.id}">缂栬緫</button>
-                <button class="btn btn-ghost btn-xs admin-course-archive" data-course-id="${course.id}">鍒犻櫎</button>
+                <button class="btn btn-primary btn-xs admin-course-edit" data-course-id="${course.id}">编辑</button>
+                <button class="btn btn-ghost btn-xs admin-course-archive" data-course-id="${course.id}">删除</button>
               </div>
             </td>
           </tr>
@@ -4526,9 +4527,9 @@ function renderAdminCourseList(courses) {
     </table>
     ${totalPages > 1 ? `
       <div class="admin-course-pagination">
-        <button class="btn btn-ghost btn-xs" ${adminCoursePage <= 1 ? 'disabled' : ''} data-page="${adminCoursePage - 1}">涓婁竴椤?/button>
+        <button class="btn btn-ghost btn-xs" ${adminCoursePage <= 1 ? 'disabled' : ''} data-page="${adminCoursePage - 1}">上一页</button>
         <span class="admin-course-page-info">${adminCoursePage} / ${totalPages}</span>
-        <button class="btn btn-ghost btn-xs" ${adminCoursePage >= totalPages ? 'disabled' : ''} data-page="${adminCoursePage + 1}">涓嬩竴椤?/button>
+        <button class="btn btn-ghost btn-xs" ${adminCoursePage >= totalPages ? 'disabled' : ''} data-page="${adminCoursePage + 1}">下一页</button>
       </div>
     ` : ''}
   `
@@ -4540,12 +4541,12 @@ function renderAdminCourseList(courses) {
   })
   el.querySelectorAll('.admin-course-archive').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('纭畾鍒犻櫎杩欓棬璇剧▼锛熷垹闄ゅ悗涓嶅彲鎭㈠锛?)) return
+      if (!confirm('确定删除这门课程？删除后不可恢复！')) return
       const r = await api.del(`/api/admin-course-items?episode=${btn.dataset.courseId}`)
       if (r.ok) {
         await loadAdminCourses()
         await reloadCourseCatalog()
-      } else alert(r.error || '鍒犻櫎澶辫触')
+      } else alert(r.error || '删除失败')
     })
   })
   el.querySelectorAll('[data-page]').forEach(btn => {
@@ -4563,8 +4564,8 @@ function openCourseModal(course = null) {
   modal.innerHTML = `
     <div class="course-modal">
       <div class="course-modal-header">
-        <h3>${isEdit ? '缂栬緫璇剧▼' : '鏂板璇剧▼'}</h3>
-        <button class="course-modal-close" id="closeCourseModal">鉁?/button>
+        <h3>${isEdit ? '编辑课程' : '新增课程'}</h3>
+        <button class="course-modal-close" id="closeCourseModal">✕</button>
       </div>
       <div class="course-modal-body">
         <input type="hidden" id="courseEpisodeId" value="${isEdit ? course.id : ''}">
@@ -4579,73 +4580,73 @@ function openCourseModal(course = null) {
 
         <div class="course-form-grid">
           <div class="course-form-group">
-            <label>鏍囬 <span class="required">*</span></label>
-            <input class="stream-input" id="courseTitle" value="${isEdit ? escapeHtml(course.title) : ''}" placeholder="渚嬪锛氱63鏈?浜ゆ槗璁″垝" required>
+            <label>标题 <span class="required">*</span></label>
+            <input class="stream-input" id="courseTitle" value="${isEdit ? escapeHtml(course.title) : ''}" placeholder="例如：第63期 交易计划" required>
           </div>
           <div class="course-form-row">
             <div class="course-form-group">
-              <label>鍒嗙被</label>
+              <label>分类</label>
               <select class="stream-input" id="courseCategory">
                 ${['strategy','indicator','pattern','advanced'].map(v => `<option value="${v}" ${(isEdit ? course.category : 'strategy') === v ? 'selected' : ''}>${CATEGORY_LABELS[v]}</option>`).join('')}
               </select>
             </div>
             <div class="course-form-group">
-              <label>绫诲瀷</label>
+              <label>类型</label>
               <select class="stream-input" id="courseContentType">
-                <option value="video" ${(!isEdit || course.contentType === 'video') ? 'selected' : ''}>瑙嗛</option>
-                <option value="article" ${(isEdit && course.contentType === 'article') ? 'selected' : ''}>鏂囩珷</option>
+                <option value="video" ${(!isEdit || course.contentType === 'video') ? 'selected' : ''}>视频</option>
+                <option value="article" ${(isEdit && course.contentType === 'article') ? 'selected' : ''}>文章</option>
               </select>
             </div>
             <div class="course-form-group">
-              <label>鏉冮檺</label>
+              <label>权限</label>
               <select class="stream-input" id="courseAccessLevel">
-                ${['free','logged_in','plus_pro','pro_only'].map(v => `<option value="${v}" ${(isEdit ? course.accessLevel : 'plus_pro') === v ? 'selected' : ''}>${{free:'鍏紑鍏嶈垂',logged_in:'鐧诲綍鍙湅',plus_pro:'Plus/Pro',pro_only:'浠匬ro'}[v]}</option>`).join('')}
+                ${['free','logged_in','plus_pro','pro_only'].map(v => `<option value="${v}" ${(isEdit ? course.accessLevel : 'plus_pro') === v ? 'selected' : ''}>${{free:'公开免费',logged_in:'登录可看',plus_pro:'Plus/Pro',pro_only:'仅Pro'}[v]}</option>`).join('')}
               </select>
             </div>
           </div>
           <div class="course-form-group">
-            <label>B绔橞V鍙?/label>
+            <label>B站BV号</label>
             <input class="stream-input" id="courseBilibiliId" value="${isEdit ? escapeHtml(course.bilibiliId || '') : ''}" placeholder="BV1xx411c7mD">
           </div>
           <div class="course-form-group">
-            <label>鏂囩珷閾炬帴</label>
-            <input class="stream-input" id="courseArticleUrl" value="${isEdit ? escapeHtml(course.articleUrl || '') : ''}" placeholder="https://... 鎴?/articles/xxx.html">
+            <label>文章链接</label>
+            <input class="stream-input" id="courseArticleUrl" value="${isEdit ? escapeHtml(course.articleUrl || '') : ''}" placeholder="https://... 或 /articles/xxx.html">
           </div>
           <div class="course-form-group">
-            <label>瑙嗛鏂囦欢</label>
+            <label>视频文件</label>
             <label class="stream-file-label" id="adminVideoUploadField">
-              <span id="streamFileName">鐐瑰嚮閫夋嫨瑙嗛鏂囦欢</span>
+              <span id="streamFileName">点击选择视频文件</span>
               <input type="file" id="streamFileInput" accept="video/*" style="display:none">
             </label>
             <div class="stream-progress-wrap" id="streamProgressWrap" style="display:none">
               <div class="stream-progress-bar">
                 <div class="stream-progress-fill" id="streamProgressFill"></div>
               </div>
-              <span class="stream-progress-text" id="streamProgressText">鍑嗗涓婁紶...</span>
+              <span class="stream-progress-text" id="streamProgressText">准备上传...</span>
             </div>
           </div>
           <div class="course-form-group">
-            <label>璇剧▼璧勬簮锛堢瓟棰?/ 瀵煎浘 / 淇℃伅鍥撅級</label>
+            <label>课程资源（答题 / 导图 / 信息图）</label>
             <div style="display:flex;gap:12px;margin-bottom:8px;">
-              <label class="admin-resource-choice"><input type="checkbox" id="attachQuiz" checked><span>绛旈</span></label>
-              <label class="admin-resource-choice"><input type="checkbox" id="attachMindmap" checked><span>瀵煎浘</span></label>
-              <label class="admin-resource-choice"><input type="checkbox" id="attachInfographic" checked><span>淇℃伅鍥?/span></label>
+              <label class="admin-resource-choice"><input type="checkbox" id="attachQuiz" checked><span>答题</span></label>
+              <label class="admin-resource-choice"><input type="checkbox" id="attachMindmap" checked><span>导图</span></label>
+              <label class="admin-resource-choice"><input type="checkbox" id="attachInfographic" checked><span>信息图</span></label>
             </div>
             <label class="stream-file-label">
-              <span id="resourceBundleFileName">閫夋嫨 NotebookLM 鏂囦欢澶?/span>
+              <span id="resourceBundleFileName">选择 NotebookLM 文件夹</span>
               <input type="file" id="resourceBundleFiles" webkitdirectory directory multiple style="display:none">
             </label>
             <label class="stream-file-label secondary">
-              <span id="resourceLooseFileName">琛ュ厖鍗曚釜鏂囦欢</span>
+              <span id="resourceLooseFileName">补充单个文件</span>
               <input type="file" id="resourceLooseFiles" multiple accept=".json,application/json,image/*" style="display:none">
             </label>
-            <div id="adminResourceSummary" class="admin-resource-summary" style="margin-top:8px;">${isEdit ? '鍔犺浇涓?..' : ''}</div>
+            <div id="adminResourceSummary" class="admin-resource-summary" style="margin-top:8px;">${isEdit ? '加载中...' : ''}</div>
           </div>
         </div>
       </div>
       <div class="course-modal-footer">
-        <button class="btn btn-ghost" id="cancelCourseModal">鍙栨秷</button>
-        <button class="btn btn-primary" id="saveResourceAll">淇濆瓨</button>
+        <button class="btn btn-ghost" id="cancelCourseModal">取消</button>
+        <button class="btn btn-primary" id="saveResourceAll">保存</button>
       </div>
       <div class="stream-upload-result" id="adminCourseResult" style="display:none"></div>
     </div>
@@ -4666,7 +4667,7 @@ function openCourseModal(course = null) {
   const streamInput = document.getElementById('streamFileInput')
   if (streamInput) streamInput.addEventListener('change', () => {
     const label = document.getElementById('streamFileName')
-    if (label) label.textContent = streamInput.files?.[0]?.name || '鐐瑰嚮閫夋嫨瑙嗛鏂囦欢'
+    if (label) label.textContent = streamInput.files?.[0]?.name || '点击选择视频文件'
   })
   syncAdminResourceChoiceInputs()
   updateResourceUploadFileLabels()
@@ -4708,7 +4709,7 @@ function setStreamProgress(message, percent = null, error = false) {
 }
 
 async function uploadStreamVideoForResource(file, title) {
-  setStreamProgress('姝ｅ湪涓婁紶瑙嗛...', 5)
+  setStreamProgress('正在上传视频...', 5)
 
   const formData = new FormData()
   formData.append('file', file, file.name || 'video.mp4')
@@ -4719,24 +4720,24 @@ async function uploadStreamVideoForResource(file, title) {
     xhr.upload.addEventListener('progress', event => {
       if (event.lengthComputable) {
         const pct = Math.round(event.loaded / event.total * 100)
-        setStreamProgress(`姝ｅ湪涓婁紶瑙嗛 ${pct}%`, pct)
+        setStreamProgress(`正在上传视频 ${pct}%`, pct)
       }
     })
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 400) {
         try { resolve(JSON.parse(xhr.responseText)) }
-        catch { reject(new Error('涓婁紶鍝嶅簲瑙ｆ瀽澶辫触')) }
-      } else reject(new Error(`涓婁紶澶辫触: HTTP ${xhr.status}`))
+        catch { reject(new Error('上传响应解析失败')) }
+      } else reject(new Error(`上传失败: HTTP ${xhr.status}`))
     })
-    xhr.addEventListener('error', () => reject(new Error('涓婁紶缃戠粶閿欒')))
-    xhr.addEventListener('abort', () => reject(new Error('涓婁紶宸插彇娑?)))
+    xhr.addEventListener('error', () => reject(new Error('上传网络错误')))
+    xhr.addEventListener('abort', () => reject(new Error('上传已取消')))
     xhr.open('POST', '/api/video-upload')
     xhr.setRequestHeader('Authorization', 'Bearer ' + (localStorage.getItem('ws_token') || ''))
     xhr.send(formData)
   })
 
-  if (!uploadResult.ok) throw new Error(uploadResult.error || '涓婁紶澶辫触')
-  setStreamProgress('涓婁紶瀹屾垚', 100)
+  if (!uploadResult.ok) throw new Error(uploadResult.error || '上传失败')
+  setStreamProgress('上传完成', 100)
   return uploadResult.url
 }
 
@@ -4756,10 +4757,10 @@ function collectSelectedResourceFiles(episodeId) {
   const files = getAdminResourceUploadFiles()
 
   if (!quizChecked && !mindmapChecked && !infoChecked && files.length) {
-    throw new Error('璇烽€夋嫨瑕佸鍏ョ殑鍐呭绫诲瀷')
+    throw new Error('请选择要导入的内容类型')
   }
   if ((quizChecked || mindmapChecked || infoChecked) && !files.length) {
-    throw new Error('璇烽€夋嫨 NotebookLM 鏂囦欢澶规垨琛ュ厖鏂囦欢')
+    throw new Error('请选择 NotebookLM 文件夹或补充文件')
   }
 
   form.append('includeQuiz', quizChecked ? '1' : '0')
@@ -4779,21 +4780,21 @@ async function saveAdminResourceBundle() {
     if (videoFile && titleInput && !titleInput.value.trim()) {
       titleInput.value = videoFile.name.replace(/\.[^.]+$/, '')
     }
-    if (!selectedEpisodeId && !videoFile && !bilibiliId) throw new Error('璇烽€夋嫨宸叉湁瑙嗛銆佷笂浼犳柊瑙嗛銆佹垨濉啓B绔橞V鍙?)
-    if (!titleInput?.value.trim()) throw new Error('璇峰～鍐欐爣棰?)
+    if (!selectedEpisodeId && !videoFile && !bilibiliId) throw new Error('请选择已有视频、上传新视频、或填写B站BV号')
+    if (!titleInput?.value.trim()) throw new Error('请填写标题')
 
     saveBtn.disabled = true
-    saveBtn.textContent = '淇濆瓨涓?..'
+    saveBtn.textContent = '保存中...'
 
     let streamUid = null
     if (videoFile) {
-      setAdminInlineResult('adminCourseResult', '姝ｅ湪涓婁紶瑙嗛...')
+      setAdminInlineResult('adminCourseResult', '正在上传视频...')
       streamUid = await uploadStreamVideoForResource(videoFile, titleInput.value.trim())
     }
 
-    setAdminInlineResult('adminCourseResult', '姝ｅ湪淇濆瓨璇剧▼...')
+    setAdminInlineResult('adminCourseResult', '正在保存课程...')
     const courseRes = await api.post('/api/admin-course-items', getAdminCoursePayload())
-    if (!courseRes.ok || !courseRes.course) throw new Error(courseRes.error || '淇濆瓨璇剧▼澶辫触')
+    if (!courseRes.ok || !courseRes.course) throw new Error(courseRes.error || '保存课程失败')
 
     const episodeId = Number(courseRes.course.id)
     document.getElementById('courseEpisodeId').value = episodeId
@@ -4806,17 +4807,17 @@ async function saveAdminResourceBundle() {
         title: titleInput.value.trim(),
         accessLevel: document.getElementById('courseAccessLevel')?.value || 'plus_pro',
       })
-      if (!link.ok) throw new Error(link.error || '鍏宠仈 Stream 瑙嗛澶辫触')
+      if (!link.ok) throw new Error(link.error || '关联 Stream 视频失败')
     }
 
     const { form, count } = collectSelectedResourceFiles(episodeId)
     if (count > 0) {
-      setAdminInlineResult('adminCourseResult', '姝ｅ湪涓婁紶璧勬枡...')
+      setAdminInlineResult('adminCourseResult', '正在上传资料...')
       const resourceRes = await api.postForm('/api/admin-course-resources', form)
-      if (!resourceRes.ok) throw new Error(resourceRes.error || '涓婁紶璧勬枡澶辫触')
+      if (!resourceRes.ok) throw new Error(resourceRes.error || '上传资料失败')
       const skipped = Array.isArray(resourceRes.skipped) ? resourceRes.skipped.length : 0
       setAdminInlineResult('adminCourseResult',
-        `淇濆瓨瀹屾垚锛氶鐩?${resourceRes.quizFiles || 0}锛屾枃浠?${resourceRes.assetFiles || 0}${skipped ? `锛岃烦杩?${skipped}` : ''}`
+        `保存完成：题目 ${resourceRes.quizFiles || 0}，文件 ${resourceRes.assetFiles || 0}${skipped ? `，跳过 ${skipped}` : ''}`
       )
       courseContent.quizzes.delete(episodeId)
       courseContent.mindmaps.delete(episodeId)
@@ -4825,7 +4826,7 @@ async function saveAdminResourceBundle() {
 
     await loadAdminCourses()
     await reloadCourseCatalog()
-    setAdminInlineResult('adminCourseResult', '淇濆瓨瀹屾垚')
+    setAdminInlineResult('adminCourseResult', '保存完成')
     // Close modal after successful save
     const overlay = document.querySelector('.course-modal-overlay')
     if (overlay) {
@@ -4835,12 +4836,12 @@ async function saveAdminResourceBundle() {
   } catch (err) {
     console.error('[SaveAdminCourse] Error:', err)
     const progressVisible = document.getElementById('streamProgressWrap')?.style.display === 'block'
-    if (progressVisible) setStreamProgress(err.message || '淇濆瓨澶辫触', 100, true)
-    setAdminInlineResult('adminCourseResult', err.message || '淇濆瓨澶辫触', false)
+    if (progressVisible) setStreamProgress(err.message || '保存失败', 100, true)
+    setAdminInlineResult('adminCourseResult', err.message || '保存失败', false)
   } finally {
     if (saveBtn) {
       saveBtn.disabled = false
-      saveBtn.textContent = '淇濆瓨'
+      saveBtn.textContent = '保存'
     }
   }
 }
@@ -4879,7 +4880,7 @@ function renderAdminQuizList(questions) {
   const el = document.getElementById('adminQuizList')
   if (!el) return
   if (!questions.length) {
-    el.innerHTML = '<div class="comments-empty">鏆傛棤棰樼洰</div>'
+    el.innerHTML = '<div class="comments-empty">暂无题目</div>'
     return
   }
   el.innerHTML = questions.map((question, index) => `
@@ -4889,9 +4890,9 @@ function renderAdminQuizList(questions) {
         <div class="admin-uid">${escapeHtml((question.options || []).map((opt, i) => `${['A', 'B', 'C', 'D'][i] || i + 1}. ${opt}`).join(' / '))}</div>
       </div>
       <div class="admin-actions">
-        <span class="admin-badge ${question.status === 'published' ? 'badge-paid' : 'badge-free'}">${question.status === 'published' ? '宸插彂甯? : question.status}</span>
-        <button class="btn btn-primary btn-xs admin-quiz-edit" data-question-id="${question.id}">缂栬緫</button>
-        <button class="btn btn-ghost btn-xs admin-quiz-delete" data-question-id="${question.id}">鍒犻櫎</button>
+        <span class="admin-badge ${question.status === 'published' ? 'badge-paid' : 'badge-free'}">${question.status === 'published' ? '已发布' : question.status}</span>
+        <button class="btn btn-primary btn-xs admin-quiz-edit" data-question-id="${question.id}">编辑</button>
+        <button class="btn btn-ghost btn-xs admin-quiz-delete" data-question-id="${question.id}">删除</button>
       </div>
     </div>
   `).join('')
@@ -4903,14 +4904,14 @@ function renderAdminQuizList(questions) {
   })
   el.querySelectorAll('.admin-quiz-delete').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('纭畾鍒犻櫎杩欓亾棰橈紵')) return
+      if (!confirm('确定删除这道题？')) return
       const r = await api.del(`/api/admin-quiz?id=${encodeURIComponent(btn.dataset.questionId)}`)
       if (r.ok) {
         courseContent.quizzes.delete(Number(state.adminQuizEpisodeId))
         await loadAdminQuiz()
         await reloadCourseCatalog()
       }
-      else alert(r.error || '鍒犻櫎澶辫触')
+      else alert(r.error || '删除失败')
     })
   })
 }
@@ -4920,10 +4921,10 @@ async function loadAdminQuiz() {
   if (!episodeId) return
   state.adminQuizEpisodeId = Number(episodeId)
   const el = document.getElementById('adminQuizList')
-  if (el) el.innerHTML = '<div class="loading-spinner">鍔犺浇棰樼洰...</div>'
+  if (el) el.innerHTML = '<div class="loading-spinner">加载题目...</div>'
   const data = await api.get(`/api/admin-quiz?episode=${episodeId}`)
   if (!data.ok || !Array.isArray(data.questions)) {
-    if (el) el.innerHTML = `<div class="comments-empty">${escapeHtml(data.error || '鍔犺浇棰樼洰澶辫触')}</div>`
+    if (el) el.innerHTML = `<div class="comments-empty">${escapeHtml(data.error || '加载题目失败')}</div>`
     return
   }
   state.adminQuizQuestions = data.questions
@@ -4956,12 +4957,12 @@ function setupAdminQuizManager() {
     }
     const r = await api.post('/api/admin-quiz', payload)
     if (r.ok) {
-      setAdminInlineResult('adminQuizResult', '棰樼洰宸蹭繚瀛?)
+      setAdminInlineResult('adminQuizResult', '题目已保存')
       courseContent.quizzes.delete(Number(episodeId))
       await loadAdminQuiz()
       await reloadCourseCatalog()
     } else {
-      setAdminInlineResult('adminQuizResult', r.error || '淇濆瓨棰樼洰澶辫触', false)
+      setAdminInlineResult('adminQuizResult', r.error || '保存题目失败', false)
     }
   })
 }
@@ -4993,22 +4994,22 @@ async function startStreamUpload() {
   const resultDiv = document.getElementById('streamUploadResult')
 
   uploadBtn.disabled = true
-  uploadBtn.textContent = '涓婁紶涓?..'
+  uploadBtn.textContent = '上传中...'
   progressWrap.style.display = 'block'
   resultDiv.style.display = 'none'
 
   try {
     // Step 1: Get direct upload URL from our backend
-    progressText.textContent = '鑾峰彇涓婁紶閾炬帴...'
+    progressText.textContent = '获取上传链接...'
     const createRes = await api.post('/api/stream', { title })
     if (!createRes.ok && !createRes.uploadURL) {
-      throw new Error(createRes.error || '鑾峰彇涓婁紶閾炬帴澶辫触')
+      throw new Error(createRes.error || '获取上传链接失败')
     }
 
     const { uploadURL, uid } = createRes
 
     // Step 2: Upload file via XHR (for progress tracking)
-    progressText.textContent = '姝ｅ湪涓婁紶...'
+    progressText.textContent = '正在上传...'
     const uploadResult = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
 
@@ -5016,7 +5017,7 @@ async function startStreamUpload() {
         if (e.lengthComputable) {
           const pct = Math.round(e.loaded / e.total * 100)
           progressFill.style.width = pct + '%'
-          progressText.textContent = `涓婁紶涓?.. ${pct}% (${formatFileSize(e.loaded)} / ${formatFileSize(e.total)})`
+          progressText.textContent = `上传中... ${pct}% (${formatFileSize(e.loaded)} / ${formatFileSize(e.total)})`
         }
       })
 
@@ -5027,12 +5028,12 @@ async function startStreamUpload() {
             resolve(resp)
           } catch { resolve() }
         } else {
-          reject(new Error(`涓婁紶澶辫触: HTTP ${xhr.status}`))
+          reject(new Error(`上传失败: HTTP ${xhr.status}`))
         }
       })
 
-      xhr.addEventListener('error', () => reject(new Error('缃戠粶閿欒')))
-      xhr.addEventListener('abort', () => reject(new Error('涓婁紶琚彇娑?)))
+      xhr.addEventListener('error', () => reject(new Error('网络错误')))
+      xhr.addEventListener('abort', () => reject(new Error('上传被取消')))
 
       const formData = new FormData()
       formData.append('file', file)
@@ -5045,42 +5046,42 @@ async function startStreamUpload() {
     const uploadedVideo = { uid, duration: uploadResult?.duration || '', localPath: uploadResult?.url || '', cover: uploadResult?.cover || '' }
     progressFill.style.width = '100%'
     progressFill.style.background = 'var(--accent-gradient)'
-    progressText.textContent = '涓婁紶瀹屾垚锛佽棰戞鍦ㄥ鐞嗕腑...'
+    progressText.textContent = '上传完成！视频正在处理中...'
 
     resultDiv.style.display = 'block'
     const linkableCourses = state.adminCourses.length ? state.adminCourses : episodes
     const epOptions = linkableCourses.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
     resultDiv.innerHTML = `
       <div class="stream-result-success">
-        <div class="stream-result-title">鉁?涓婁紶鎴愬姛</div>
+        <div class="stream-result-title">✅ 上传成功</div>
         <div class="stream-result-row">
           <span>Video ID:</span>
           <code class="stream-uid-code">${uid}</code>
-          <button class="btn btn-ghost btn-xs" id="copyStreamUid">澶嶅埗</button>
+          <button class="btn btn-ghost btn-xs" id="copyStreamUid">复制</button>
         </div>
         <div class="stream-result-row" style="margin-top:8px">
-          <span>鍏宠仈鍒拌绋嬶細</span>
+          <span>关联到课程：</span>
           <select id="streamLinkEpisode" class="stream-input" style="flex:1;min-width:120px">
-            <option value="">-- 閫夋嫨闆嗘暟 --</option>
+            <option value="">-- 选择集数 --</option>
             ${epOptions}
           </select>
-          <button class="btn btn-primary btn-xs" id="streamLinkBtn">鍏宠仈</button>
+          <button class="btn btn-primary btn-xs" id="streamLinkBtn">关联</button>
         </div>
       </div>
     `
 
     document.getElementById('copyStreamUid')?.addEventListener('click', () => {
       navigator.clipboard.writeText(uid).then(() => {
-        document.getElementById('copyStreamUid').textContent = '宸插鍒?'
-        setTimeout(() => { document.getElementById('copyStreamUid').textContent = '澶嶅埗' }, 2000)
+        document.getElementById('copyStreamUid').textContent = '已复制!'
+        setTimeout(() => { document.getElementById('copyStreamUid').textContent = '复制' }, 2000)
       })
     })
 
     document.getElementById('streamLinkBtn')?.addEventListener('click', async () => {
       const epId = document.getElementById('streamLinkEpisode')?.value
-      if (!epId) { alert('璇烽€夋嫨闆嗘暟'); return }
+      if (!epId) { alert('请选择集数'); return }
       const linkBtn = document.getElementById('streamLinkBtn')
-      linkBtn.disabled = true; linkBtn.textContent = '鍏宠仈涓?..'
+      linkBtn.disabled = true; linkBtn.textContent = '关联中...'
       const r = await api.post('/api/video-stream', {
         episodeId: Number(epId),
         title,
@@ -5089,7 +5090,7 @@ async function startStreamUpload() {
         cover: uploadedVideo.cover,
       })
       if (r.ok) {
-        linkBtn.textContent = '鉁?宸插叧鑱?
+        linkBtn.textContent = '✓ 已关联'
         // Refresh paid video list + access map
         const listRes = await api.get('/api/video-stream')
         if (listRes.episodes) {
@@ -5097,7 +5098,7 @@ async function startStreamUpload() {
           state.videoAccessMap = {}
           listRes.episodes.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
         }
-      } else { alert(r.error || '鍏宠仈澶辫触'); linkBtn.disabled = false; linkBtn.textContent = '鍏宠仈' }
+      } else { alert(r.error || '关联失败'); linkBtn.disabled = false; linkBtn.textContent = '关联' }
     })
 
     // Refresh video list after a short delay
@@ -5105,11 +5106,11 @@ async function startStreamUpload() {
 
   } catch (err) {
     console.error('Stream upload error:', err)
-    progressText.textContent = '涓婁紶澶辫触: ' + err.message
+    progressText.textContent = '上传失败: ' + err.message
     progressFill.style.width = '100%'
     progressFill.style.background = '#ef4444'
   } finally {
-    uploadBtn.textContent = '涓婁紶瑙嗛'
+    uploadBtn.textContent = '上传视频'
     uploadBtn.disabled = false
   }
 }
@@ -5130,11 +5131,11 @@ async function loadStreamVideos() {
     epList.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
 
     if (videos.length === 0) {
-      listEl.innerHTML = '<div class="comments-empty">鏆傛棤瑙嗛锛屼笂浼犵涓€涓惂</div>'
+      listEl.innerHTML = '<div class="comments-empty">暂无视频，上传第一个吧</div>'
       return
     }
 
-    // Build reverse map: cfStreamId 鈫?{ episodeId, access_level }
+    // Build reverse map: cfStreamId → { episodeId, access_level }
     let streamToEp = {}
     let epToAccess = {}
     try {
@@ -5144,19 +5145,19 @@ async function loadStreamVideos() {
         epToAccess[m.episode_id] = m.access_level || 'plus_pro'
       })
     } catch {}
-    const accessLevelOptions = `<option value="free">鍏紑</option><option value="logged_in">鐧诲綍鍙湅</option><option value="plus_pro">Plus/Pro浼氬憳</option><option value="pro_only">浠匬ro</option>`
+    const accessLevelOptions = `<option value="free">公开</option><option value="logged_in">登录可看</option><option value="plus_pro">Plus/Pro会员</option><option value="pro_only">仅Pro</option>`
 
     const linkableCourses = state.adminCourses.length ? state.adminCourses : episodes
     const epOptions = linkableCourses.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
 
     listEl.innerHTML = videos.map(v => {
       const linkedEp = streamToEp[v.uid]
-      const linkedLabel = linkedEp ? '宸插叧鑱? : ''
+      const linkedLabel = linkedEp ? '已关联' : ''
       return `
       <div class="stream-video-card" data-stream-uid="${v.uid}">
         <div class="stream-video-thumb">
-          ${v.thumbnail ? `<img src="${escapeHtml(v.thumbnail)}" alt="${escapeHtml(v.name)}">` : '<div class="stream-thumb-placeholder">馃幀</div>'}
-          ${v.readyToStream ? '<span class="stream-status-badge ready">鍙挱鏀?/span>' : `<span class="stream-status-badge processing">${v.status === 'inprogress' ? `澶勭悊涓?${v.pctComplete || ''}` : v.status}</span>`}
+          ${v.thumbnail ? `<img src="${escapeHtml(v.thumbnail)}" alt="${escapeHtml(v.name)}">` : '<div class="stream-thumb-placeholder">🎬</div>'}
+          ${v.readyToStream ? '<span class="stream-status-badge ready">可播放</span>' : `<span class="stream-status-badge processing">${v.status === 'inprogress' ? `处理中 ${v.pctComplete || ''}` : v.status}</span>`}
         </div>
         <div class="stream-video-info">
           <div class="stream-video-name">${escapeHtml(v.name)}</div>
@@ -5171,14 +5172,14 @@ async function loadStreamVideos() {
                  <select class="stream-access-select" data-access-ep="${linkedEp}" style="font-size:12px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;margin:0 4px">
                    ${accessLevelOptions.replace(`value="${epToAccess[linkedEp] || 'plus_pro'}"`, `value="${epToAccess[linkedEp] || 'plus_pro'}" selected`)}
                  </select>
-                 <button class="btn btn-ghost btn-xs stream-unlink-btn" data-unlink-ep="${linkedEp}" style="color:#ef4444">鍙栨秷鍏宠仈</button>`
+                 <button class="btn btn-ghost btn-xs stream-unlink-btn" data-unlink-ep="${linkedEp}" style="color:#ef4444">取消关联</button>`
               : `<select class="stream-link-select" data-link-uid="${v.uid}" style="font-size:12px;padding:2px 4px;border:1px solid #ddd;border-radius:4px">
-                  <option value="">鍏宠仈鍒伴泦鏁?/option>
+                  <option value="">关联到集数</option>
                   ${epOptions}
                 </select>
-                <button class="btn btn-ghost btn-xs stream-link-save-btn" data-link-uid="${v.uid}">鍏宠仈</button>`}
-            <button class="btn btn-ghost btn-xs stream-copy-btn" data-copy-uid="${v.uid}">澶嶅埗ID</button>
-            <button class="btn btn-ghost btn-xs stream-delete-btn" data-del-uid="${v.uid}" style="color:#ef4444">鍒犻櫎</button>
+                <button class="btn btn-ghost btn-xs stream-link-save-btn" data-link-uid="${v.uid}">关联</button>`}
+            <button class="btn btn-ghost btn-xs stream-copy-btn" data-copy-uid="${v.uid}">复制ID</button>
+            <button class="btn btn-ghost btn-xs stream-delete-btn" data-del-uid="${v.uid}" style="color:#ef4444">删除</button>
           </div>
         </div>
       </div>`
@@ -5191,10 +5192,10 @@ async function loadStreamVideos() {
         const uid = btn.dataset.linkUid
         const select = listEl.querySelector(`.stream-link-select[data-link-uid="${uid}"]`)
         const epId = select?.value
-        if (!epId) { alert('璇烽€夋嫨闆嗘暟'); return }
-        btn.disabled = true; btn.textContent = '鍏宠仈涓?..'
+        if (!epId) { alert('请选择集数'); return }
+        btn.disabled = true; btn.textContent = '关联中...'
         const r = await api.post('/api/video-stream', { episodeId: Number(epId), cfStreamId: uid })
-        if (r.ok) { loadStreamVideos() } else { alert(r.error || '鍏宠仈澶辫触'); btn.disabled = false; btn.textContent = '鍏宠仈' }
+        if (r.ok) { loadStreamVideos() } else { alert(r.error || '关联失败'); btn.disabled = false; btn.textContent = '关联' }
       })
     })
 
@@ -5209,17 +5210,17 @@ async function loadStreamVideos() {
           state.videoAccessMap[Number(epId)] = newLevel
           sel.style.borderColor = 'var(--primary)'
           setTimeout(() => { sel.style.borderColor = '#ddd' }, 1500)
-        } else { alert(r.error || '淇敼澶辫触') }
+        } else { alert(r.error || '修改失败') }
       })
     })
 
     listEl.querySelectorAll('.stream-unlink-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation()
-        if (!confirm('纭畾鍙栨秷鍏宠仈锛?)) return
-        btn.disabled = true; btn.textContent = '鍙栨秷涓?..'
+        if (!confirm('确定取消关联？')) return
+        btn.disabled = true; btn.textContent = '取消中...'
         const r = await api.del(`/api/video-stream?episode=${btn.dataset.unlinkEp}`)
-        if (r.ok) { loadStreamVideos() } else { alert(r.error || '鍙栨秷澶辫触'); btn.disabled = false; btn.textContent = '鍙栨秷鍏宠仈' }
+        if (r.ok) { loadStreamVideos() } else { alert(r.error || '取消失败'); btn.disabled = false; btn.textContent = '取消关联' }
       })
     })
 
@@ -5228,8 +5229,8 @@ async function loadStreamVideos() {
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
         navigator.clipboard.writeText(btn.dataset.copyUid).then(() => {
-          btn.textContent = '宸插鍒?'
-          setTimeout(() => { btn.textContent = '澶嶅埗ID' }, 2000)
+          btn.textContent = '已复制!'
+          setTimeout(() => { btn.textContent = '复制ID' }, 2000)
         })
       })
     })
@@ -5237,28 +5238,28 @@ async function loadStreamVideos() {
     listEl.querySelectorAll('.stream-delete-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation()
-        if (!confirm('纭畾鍒犻櫎杩欎釜瑙嗛锛熷垹闄ゅ悗涓嶅彲鎭㈠銆?)) return
-        btn.textContent = '鍒犻櫎涓?..'
+        if (!confirm('确定删除这个视频？删除后不可恢复。')) return
+        btn.textContent = '删除中...'
         btn.disabled = true
         try {
           const res = await api.del(`/api/stream?uid=${btn.dataset.delUid}`)
           if (res.ok || res.success) {
             btn.closest('.stream-video-card')?.remove()
           } else {
-            alert(res.error || '鍒犻櫎澶辫触')
-            btn.textContent = '鍒犻櫎'
+            alert(res.error || '删除失败')
+            btn.textContent = '删除'
             btn.disabled = false
           }
         } catch (err) {
-          alert('鍒犻櫎澶辫触')
-          btn.textContent = '鍒犻櫎'
+          alert('删除失败')
+          btn.textContent = '删除'
           btn.disabled = false
         }
       })
     })
   } catch (err) {
     console.error('Load stream videos error:', err)
-    listEl.innerHTML = '<div class="comments-empty">鍔犺浇瑙嗛鍒楄〃澶辫触</div>'
+    listEl.innerHTML = '<div class="comments-empty">加载视频列表失败</div>'
   }
 }
 
@@ -5321,154 +5322,154 @@ function renderMembership() {
 
   mainContent.innerHTML = `
     <div class="membership-page fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖璇剧▼鍒楄〃</button>
+      <button class="back-btn" id="backHome">← 返回课程列表</button>
 
       <div class="membership-header">
-        <h1 class="membership-title">閫夋嫨浣犵殑浼氬憳璁″垝</h1>
-        <p class="membership-subtitle">瑙ｉ攣琛楀摜鍏ㄩ儴鎶€鏈垎鏋愯绋嬶紝绯荤粺鎺屾彙浜ゆ槗鎶€鏈?/p>
+        <h1 class="membership-title">选择你的会员计划</h1>
+        <p class="membership-subtitle">解锁街哥全部技术分析课程，系统掌握交易技术</p>
       </div>
 
       <div id="membershipCreditSummary" class="membership-credit-summary">
-        ${state.user ? '<div class="billing-loading">姝ｅ湪璇诲彇杩斾剑閭€璇蜂俊鎭?..</div>' : '<span>鐧诲綍鍚庡彲鏌ョ湅杩斾剑閭€璇蜂俊鎭?/span>'}
+        ${state.user ? '<div class="billing-loading">正在读取返佣邀请信息...</div>' : '<span>登录后可查看返佣邀请信息</span>'}
       </div>
 
       <div class="membership-cards">
-        <!-- 浣撻獙鐗?-->
+        <!-- 体验版 -->
         <div class="mem-card ${currentPlan === 'free' ? 'mem-current' : ''}">
           <div class="mem-card-header mem-free">
-            <span class="mem-icon">馃啌</span>
-            <h3 class="mem-plan-name">浣撻獙鐗?/h3>
-            <p class="mem-plan-desc">鍒濇鎰熷彈璇剧▼璐ㄩ噺</p>
+            <span class="mem-icon">🆓</span>
+            <h3 class="mem-plan-name">体验版</h3>
+            <p class="mem-plan-desc">初步感受课程质量</p>
           </div>
           <div class="mem-price-section">
-            <span class="mem-price">鍏嶈垂</span>
+            <span class="mem-price">免费</span>
           </div>
           <ul class="mem-features">
-            <li class="mem-feat"><span class="mem-check">鉁?/span>宸插叕寮€鐨?9鏈熻绋嬭棰戯紙闄嗙画涓婁紶锛?/li>
-            <li class="mem-feat"><span class="mem-check">鉁?/span>琛楀摜閲戣瀺 / 鐢熸椿鎰熸偀璇綍锛堥檰缁洿鏂帮級</li>
-            <li class="mem-feat"><span class="mem-check">鉁?/span>瑙傜湅鍘嗗彶璁板綍</li>
-            <li class="mem-feat disabled"><span class="mem-x">鉁?/span>鏂拌棰戝嵆鏃惰В閿?/li>
-            <li class="mem-feat disabled"><span class="mem-x">鉁?/span>鐭ヨ瘑鍥捐В & 妗嗘灦</li>
-            <li class="mem-feat disabled"><span class="mem-x">鉁?/span>璇惧悗娴嬮獙 + 瑙ｆ瀽</li>
-            <li class="mem-feat disabled"><span class="mem-x">鉁?/span>涓撳睘琛楀鍐涜韩浠芥爣璇?/li>
+            <li class="mem-feat"><span class="mem-check">✓</span>已公开的59期课程视频（陆续上传）</li>
+            <li class="mem-feat"><span class="mem-check">✓</span>街哥金融 / 生活感悟语录（陆续更新）</li>
+            <li class="mem-feat"><span class="mem-check">✓</span>观看历史记录</li>
+            <li class="mem-feat disabled"><span class="mem-x">✗</span>新视频即时解锁</li>
+            <li class="mem-feat disabled"><span class="mem-x">✗</span>知识图解 & 框架</li>
+            <li class="mem-feat disabled"><span class="mem-x">✗</span>课后测验 + 解析</li>
+            <li class="mem-feat disabled"><span class="mem-x">✗</span>专属街家军身份标识</li>
           </ul>
           <div class="mem-action">
             ${currentPlan === 'free'
-              ? '<button class="btn mem-btn mem-btn-current" disabled>褰撳墠鏂规</button>'
-              : '<button class="btn mem-btn mem-btn-free">褰撳墠宸叉槸鏇撮珮鏂规</button>'}
+              ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
+              : '<button class="btn mem-btn mem-btn-free">当前已是更高方案</button>'}
           </div>
         </div>
 
         <!-- Plus -->
         <div class="mem-card ${currentPlan === 'plus' ? 'mem-current' : ''}">
           <div class="mem-card-header mem-plus">
-            <span class="mem-icon">猸?/span>
+            <span class="mem-icon">⭐</span>
             <h3 class="mem-plan-name">Plus</h3>
-            <p class="mem-plan-desc">绯荤粺瀛︿範鎶€鏈垎鏋?/p>
+            <p class="mem-plan-desc">系统学习技术分析</p>
           </div>
           <div class="mem-price-section">
             <div class="mem-price-toggle">
-              <button class="price-tab active" data-period="monthly">鏈堜粯</button>
-              <button class="price-tab" data-period="yearly">骞翠粯</button>
+              <button class="price-tab active" data-period="monthly">月付</button>
+              <button class="price-tab" data-period="yearly">年付</button>
             </div>
             <div class="mem-price-display">
               <span class="mem-price-original" data-monthly="100" data-yearly="1000">$100</span>
               <span class="mem-price" data-monthly="50" data-yearly="500">$50</span>
-              <span class="mem-price-unit" data-monthly="/鏈? data-yearly="/骞?>/ 鏈?/span>
+              <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            <div class="mem-price-discount">闄愭椂 5 鎶?/div>
-            <div class="mem-price-save" style="display:none">骞翠粯绔嬬渷 $100锛屼綆鑷?$50/鏈?/div>
+            <div class="mem-price-discount">限时 5 折</div>
+            <div class="mem-price-save" style="display:none">年付立省 $100，低至 $50/月</div>
           </div>
           <ul class="mem-features">
-            <li class="mem-feat"><span class="mem-check">鉁?/span>鏂拌棰戜笂绾垮嵆鏃惰В閿?/li>
-            <li class="mem-feat"><span class="mem-check">鉁?/span>楂樻竻鐭ヨ瘑鍥捐В & 妗嗘灦</li>
-            <li class="mem-feat"><span class="mem-check">鉁?/span>鍏ㄩ儴璇惧悗娴嬮獙 + 瑙ｆ瀽</li>
-            <li class="mem-feat disabled"><span class="mem-x">鉁?/span>AI鍏ㄨ嚜鍔ㄤ氦鏄?/li>
+            <li class="mem-feat"><span class="mem-check">✓</span>新视频上线即时解锁</li>
+            <li class="mem-feat"><span class="mem-check">✓</span>高清知识图解 & 框架</li>
+            <li class="mem-feat"><span class="mem-check">✓</span>全部课后测验 + 解析</li>
+            <li class="mem-feat disabled"><span class="mem-x">✗</span>AI全自动交易</li>
           </ul>
           <div class="mem-action">
             ${currentPlan === 'pro'
-              ? '<button class="btn mem-btn mem-btn-free" disabled>褰撳墠宸叉槸鏇撮珮鏂规</button>'
+              ? '<button class="btn mem-btn mem-btn-free" disabled>当前已是更高方案</button>'
               : currentPlan === 'plus'
                 ? (currentPeriod === 'yearly'
-                  ? '<button class="btn mem-btn mem-btn-current" disabled>褰撳墠鏂规</button>'
-                  : `<button class="btn mem-btn mem-btn-plus" data-plan="plus" data-force-yearly="1">鏆傚叧闂?/button>`)
-                : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">鏆傚叧闂?/button>`}
+                  ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
+                  : `<button class="btn mem-btn mem-btn-plus" data-plan="plus" data-force-yearly="1">暂关闭</button>`)
+                : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">暂关闭</button>`}
           </div>
         </div>
 
         <!-- Pro -->
         <div class="mem-card ${currentPlan === 'pro' ? 'mem-current' : ''}">
           <div class="mem-card-header mem-pro">
-            <span class="mem-icon">馃拵</span>
+            <span class="mem-icon">💎</span>
             <h3 class="mem-plan-name">Pro</h3>
-            <p class="mem-plan-desc">娣卞害瀛︿範 路 浜ゆ槗杩涢樁</p>
+            <p class="mem-plan-desc">深度学习 · 交易进阶</p>
           </div>
           <div class="mem-price-section">
             <div class="mem-price-toggle">
-              <button class="price-tab active" data-period="monthly">鏈堜粯</button>
-              <button class="price-tab" data-period="yearly">骞翠粯</button>
+              <button class="price-tab active" data-period="monthly">月付</button>
+              <button class="price-tab" data-period="yearly">年付</button>
             </div>
             <div class="mem-price-display">
               <span class="mem-price-original" data-monthly="200" data-yearly="2000">$200</span>
               <span class="mem-price" data-monthly="100" data-yearly="1000">$100</span>
-              <span class="mem-price-unit" data-monthly="/鏈? data-yearly="/骞?>/ 鏈?/span>
+              <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            <div class="mem-price-discount">闄愭椂 5 鎶?/div>
-            <div class="mem-price-save" style="display:none">骞翠粯绔嬬渷 $200锛屼綆鑷?$100/鏈?/div>
+            <div class="mem-price-discount">限时 5 折</div>
+            <div class="mem-price-save" style="display:none">年付立省 $200，低至 $100/月</div>
           </div>
           <ul class="mem-features">
-            <li class="mem-feat"><span class="mem-check">鉁?/span>鍖呭惈 Plus 鍏ㄩ儴鏉冮檺</li>
-            <li class="mem-feat"><span class="mem-check pro">鉁?/span>AI鍏ㄨ嚜鍔ㄤ氦鏄?/li>
+            <li class="mem-feat"><span class="mem-check">✓</span>包含 Plus 全部权限</li>
+            <li class="mem-feat"><span class="mem-check pro">✓</span>AI全自动交易</li>
           </ul>
           <div class="mem-action">
             ${currentPlan === 'pro'
               ? (currentPeriod === 'yearly'
-                ? '<button class="btn mem-btn mem-btn-current" disabled>褰撳墠鏂规</button>'
-                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro" data-force-yearly="1">鏆傚叧闂?/button>`)
-              : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">鏆傚叧闂?/button>`}
+                ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
+                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro" data-force-yearly="1">暂关闭</button>`)
+              : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">暂关闭</button>`}
           </div>
         </div>
       </div>
 
       <div class="membership-comparison">
-        <h3 class="faq-title">鏉冪泭瀵规瘮</h3>
+        <h3 class="faq-title">权益对比</h3>
         <table class="comparison-table">
           <thead>
             <tr>
-              <th>鍔熻兘</th>
-              <th>浣撻獙鐗?/th>
+              <th>功能</th>
+              <th>体验版</th>
               <th>Plus</th>
               <th>Pro</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>鍏紑璇剧▼瑙嗛</td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>琛楀摜璇綍</td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>瑙傜湅鍘嗗彶</td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>鏂拌棰戝嵆鏃惰В閿?/td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>鐭ヨ瘑鍥捐В & 妗嗘灦</td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>璇惧悗娴嬮獙 + 瑙ｆ瀽</td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>涓撳睘琛楀鍐涙爣璇?/td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>AI鍏ㄨ嚜鍔ㄤ氦鏄?/td><td>鉁?/td><td>鉁?/td><td>鉁?/td></tr>
-            <tr><td>鏈堜粯浠锋牸</td><td>鍏嶈垂</td><td>$50/鏈?/td><td>$100/鏈?/td></tr>
+            <tr><td>公开课程视频</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>街哥语录</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>观看历史</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>新视频即时解锁</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>知识图解 & 框架</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>课后测验 + 解析</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>专属街家军标识</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>AI全自动交易</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>月付价格</td><td>免费</td><td>$50/月</td><td>$100/月</td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="membership-faq">
-        <h3 class="faq-title">甯歌闂</h3>
+        <h3 class="faq-title">常见问题</h3>
         <div class="faq-list">
           <div class="faq-item">
-            <div class="faq-q">鍙互闅忔椂鏇存崲鏂规鍚楋紵</div>
-            <div class="faq-a">鍙互銆傚崌绾х珛鍗崇敓鏁堬紝宸环鑷姩琛ラ綈銆?/div>
+            <div class="faq-q">可以随时更换方案吗？</div>
+            <div class="faq-a">可以。升级立即生效，差价自动补齐。</div>
           </div>
           <div class="faq-item">
-            <div class="faq-q">鏀寔鍝簺鏀粯鏂瑰紡锛?/div>
-            <div class="faq-a">鏀寔 USDT / USDC 鍔犲瘑璐у竵鏀粯锛岃鐩?Ethereum銆乀ron銆丼olana銆丅SC 绛変富娴侀摼銆?/div>
+            <div class="faq-q">支持哪些支付方式？</div>
+            <div class="faq-a">支持 USDT / USDC 加密货币支付，覆盖 Ethereum、Tron、Solana、BSC 等主流链。</div>
           </div>
           <div class="faq-item">
-            <div class="faq-q">璇剧▼鍐呭浼氭寔缁洿鏂板悧锛?/div>
-            <div class="faq-a">鏄殑銆傝鍝ユ瘡鍛ㄤ細鏇存柊浠栧褰撲笅琛屾儏鎬濊矾鐨勮棰戙€?/div>
+            <div class="faq-q">课程内容会持续更新吗？</div>
+            <div class="faq-a">是的。街哥每周会更新他对当下行情思路的视频。</div>
           </div>
         </div>
       </div>
@@ -5484,10 +5485,10 @@ async function loadMembershipCreditSummary() {
   try {
     const res = await api.get('/api/referrals/me')
     if (!res.ok || !res.stats) {
-      el.innerHTML = `<span>${escapeHtml(res.error || '杩斾剑閭€璇蜂俊鎭殏鏃舵棤娉曡鍙?)}</span>`
+      el.innerHTML = `<span>${escapeHtml(res.error || '返佣邀请信息暂时无法读取')}</span>`
       return
     }
-    if (false) {
+    if (false && res.disabled) {
       if (res.mode === 'disabled') {
         el.style.display = 'none'
         return
@@ -5495,22 +5496,22 @@ async function loadMembershipCreditSummary() {
       el.classList.add('membership-credit-summary-preview')
       el.innerHTML = `
         <div class="membership-credit-preview-text">
-          <strong>閭€璇疯繑浣ｅ姛鑳藉嵆灏嗗紑鏀?/strong>
-          <span>褰撳墠浠呭睍绀哄姛鑳借鏄庯紝杩斾剑閭€璇锋殏鏈惎鐢ㄣ€?/span>
+          <strong>邀请返佣功能即将开放</strong>
+          <span>当前仅展示功能说明，返佣邀请暂未启用。</span>
         </div>
-        <div class="membership-credit-item"><span>寰呯‘璁よ繑浣?/span><strong>$0.00</strong></div>
-        <div class="membership-credit-item"><span>鍙敤杩斾剑</span><strong>$0.00</strong></div>
-        <div class="membership-credit-item"><span>宸蹭娇鐢ㄨ繑浣?/span><strong>$0.00</strong></div>`
+        <div class="membership-credit-item"><span>待确认返佣</span><strong>$0.00</strong></div>
+        <div class="membership-credit-item"><span>可用返佣</span><strong>$0.00</strong></div>
+        <div class="membership-credit-item"><span>已使用返佣</span><strong>$0.00</strong></div>`
       return
     }
     const stats = res.stats
     el.innerHTML = `
-      <div class="membership-credit-item"><span>寰呯‘璁よ繑浣?/span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
-      <div class="membership-credit-item"><span>鍙敤杩斾剑</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
-      <div class="membership-credit-item"><span>宸蹭娇鐢ㄨ繑浣?/span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
-      <div class="membership-credit-link">寮€鏀惧悗涓嬪崟鏃惰嚜鍔ㄨ绠楀彲鐢ㄨ繑浣?/div>`
+      <div class="membership-credit-item"><span>待确认返佣</span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
+      <div class="membership-credit-item"><span>可用返佣</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
+      <div class="membership-credit-item"><span>已使用返佣</span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
+      <div class="membership-credit-link">开放后下单时自动计算可用返佣</div>`
   } catch {
-    el.innerHTML = '<span>杩斾剑閭€璇蜂俊鎭殏鏃舵棤娉曡鍙?/span>'
+    el.innerHTML = '<span>返佣邀请信息暂时无法读取</span>'
   }
 }
 
@@ -5518,79 +5519,79 @@ async function loadMembershipCreditSummary() {
 function renderTos() {
   mainContent.innerHTML = `
     <div class="tos-page fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖</button>
+      <button class="back-btn" id="backHome">← 返回</button>
       <div class="tos-card">
-        <h1 class="tos-title">鐢ㄦ埛鏈嶅姟鍗忚</h1>
-        <p class="tos-update">鏈€鍚庢洿鏂版棩鏈燂細2026骞?鏈?2鏃?/p>
+        <h1 class="tos-title">用户服务协议</h1>
+        <p class="tos-update">最后更新日期：2026年4月12日</p>
 
         <div class="tos-content">
-          <p>娆㈣繋浣跨敤 wall-street-skill.com锛堜互涓嬬畝绉?鏈綉绔?锛夈€傛湰缃戠珯鐢卞崕灏旇娌℃湁鍚嶅瓧锛?a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a>锛屼互涓嬬畝绉?琛楀摜"锛夎繍钀ャ€傚湪娉ㄥ唽銆佽闂垨浣跨敤鏈綉绔欎箣鍓嶏紝璇蜂粩缁嗛槄璇讳互涓嬫潯娆俱€傛敞鍐屽嵆琛ㄧず鎮ㄥ凡闃呰銆佺悊瑙ｅ苟鍚屾剰鍙楁湰鍗忚绾︽潫銆?/p>
+          <p>欢迎使用 wall-street-skill.com（以下简称"本网站"）。本网站由华尔街没有名字（<a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a>，以下简称"街哥"）运营。在注册、访问或使用本网站之前，请仔细阅读以下条款。注册即表示您已阅读、理解并同意受本协议约束。</p>
 
-          <h2>涓€銆佹湇鍔″唴瀹?/h2>
+          <h2>一、服务内容</h2>
           <ol>
-            <li>鏈綉绔欐彁渚涙妧鏈垎鏋愭暀瀛﹁棰戙€佽鎯呮€濊矾鍒嗕韩銆佺煡璇嗗浘瑙ｃ€佽鍚庢祴楠岀瓑<strong>鏁欒偛绫诲唴瀹?/strong>銆?/li>
-            <li>鎵€鏈夊唴瀹瑰潎涓鸿鍝ヤ釜浜哄甯傚満琛屾儏鐨勬€濊€冨拰鎶€鏈暀瀛︽紨绀猴紝<strong>涓嶆瀯鎴愪换浣曞舰寮忕殑鎶曡祫寤鸿銆佷氦鏄撴寚瀵兼垨璧勪骇閰嶇疆鏂规</strong>銆?/li>
-            <li>鏈綉绔?strong>涓嶆彁渚涘甫鍗曟湇鍔°€佽窡鍗曚俊鍙枫€佷唬瀹㈢悊璐㈡垨浠讳綍褰㈠紡鐨勬姇璧勯【闂湇鍔?/strong>銆?/li>
+            <li>本网站提供技术分析教学视频、行情思路分享、知识图解、课后测验等<strong>教育类内容</strong>。</li>
+            <li>所有内容均为街哥个人对市场行情的思考和技术教学演示，<strong>不构成任何形式的投资建议、交易指导或资产配置方案</strong>。</li>
+            <li>本网站<strong>不提供带单服务、跟单信号、代客理财或任何形式的投资顾问服务</strong>。</li>
           </ol>
 
-          <h2>浜屻€佸厤璐ｅ０鏄?/h2>
+          <h2>二、免责声明</h2>
           <ol>
-            <li><strong>闈炴姇璧勫缓璁?/strong>锛氭湰缃戠珯鍙戝竷鐨勬墍鏈夎棰戙€佹枃瀛椼€佸浘琛ㄣ€佸垎鏋愬強浠讳綍褰㈠紡鐨勫唴瀹癸紝鍧囦负琛楀摜涓汉瀵硅鎯呯殑鎬濊€冨拰鏁欏婕旂ず锛屼粎渚涘涔犲弬鑰冿紝<strong>涓嶆瀯鎴愬浠讳綍閲戣瀺浜у搧鐨勪拱鍗栧缓璁?/strong>銆?/li>
-            <li><strong>鎶曡祫椋庨櫓鑷媴</strong>锛氬姞瀵嗚揣甯併€佽吹閲戝睘鍙婂叾浠栭噾铻嶅競鍦轰氦鏄撳叿鏈夐珮搴﹂闄╋紝鍙兘瀵艰嚧鍏ㄩ儴鏈噾鎹熷け銆傜敤鎴峰洜鍙傝€冩湰缃戠珯鍐呭鑰屽仛鍑虹殑浠讳綍鎶曡祫鍐崇瓥锛?strong>椋庨櫓鍜屽悗鏋滅敱鐢ㄦ埛鑷鎵挎媴</strong>锛屼笌鏈綉绔欏強琛楀摜鏃犲叧銆?/li>
-            <li><strong>淇℃伅鍑嗙‘鎬?/strong>锛氭垜浠敖鍔涚‘淇濆唴瀹圭殑鍑嗙‘鎬у拰鏃舵晥鎬э紝浣嗕笉瀵瑰唴瀹圭殑瀹屾暣鎬с€佸噯纭€с€佸彲闈犳€ф垨閫傜敤鎬т綔浠讳綍鏄庣ず鎴栨殫绀虹殑淇濊瘉銆傚競鍦虹灛鎭竾鍙橈紝杩囧線鍒嗘瀽涓嶄唬琛ㄦ湭鏉ヨ〃鐜般€?/li>
-            <li><strong>绗笁鏂瑰伐鍏?/strong>锛氭湰缃戠珯鍙兘鍖呭惈鎸囧悜绗笁鏂圭綉绔欐垨骞冲彴鐨勯摼鎺ワ紙濡?TradingView銆佷氦鏄撴墍绛夛級锛岃繖浜涢摼鎺ヤ粎涓轰究鍒╃敤鎴疯€屾彁渚涖€傛垜浠笉瀵圭涓夋柟缃戠珯鐨勫唴瀹广€佸畨鍏ㄦ€ф垨鏈嶅姟璐ㄩ噺鎵挎媴浠讳綍璐ｄ换銆?/li>
+            <li><strong>非投资建议</strong>：本网站发布的所有视频、文字、图表、分析及任何形式的内容，均为街哥个人对行情的思考和教学演示，仅供学习参考，<strong>不构成对任何金融产品的买卖建议</strong>。</li>
+            <li><strong>投资风险自担</strong>：加密货币、贵金属及其他金融市场交易具有高度风险，可能导致全部本金损失。用户因参考本网站内容而做出的任何投资决策，<strong>风险和后果由用户自行承担</strong>，与本网站及街哥无关。</li>
+            <li><strong>信息准确性</strong>：我们尽力确保内容的准确性和时效性，但不对内容的完整性、准确性、可靠性或适用性作任何明示或暗示的保证。市场瞬息万变，过往分析不代表未来表现。</li>
+            <li><strong>第三方工具</strong>：本网站可能包含指向第三方网站或平台的链接（如 TradingView、交易所等），这些链接仅为便利用户而提供。我们不对第三方网站的内容、安全性或服务质量承担任何责任。</li>
           </ol>
 
-          <h2>涓夈€佷粯璐规湇鍔′笌閫€娆炬斂绛?/h2>
+          <h2>三、付费服务与退款政策</h2>
           <ol>
-            <li>鏈綉绔欐彁渚涘厤璐逛綋楠岀増鍙婁粯璐逛細鍛樻湇鍔★紙Plus銆丳ro锛夈€?/li>
-            <li><strong>浠樿垂浼氬憳涓€缁忚喘涔帮紝鍗虫椂鐢熸晥锛屼笉鏀寔閫€娆俱€?/strong>璇峰湪璐拱鍓嶅厖鍒嗕簡瑙ｅ悇鏂规鍐呭銆?/li>
-            <li>鎴戜滑淇濈暀闅忔椂璋冩暣浼氬憳浠锋牸鍜屾潈鐩婂唴瀹圭殑鏉冨埄锛屽凡璐拱鐨勪細鍛樺湪鏈夋晥鏈熷唴涓嶅彈浠锋牸璋冩暣褰卞搷銆?/li>
-            <li>鑻ュ洜鎶€鏈師鍥犲鑷存湇鍔′腑鏂紝鎴戜滑灏嗗湪鍚堢悊鏃堕棿鍐呮仮澶嶆湇鍔★紝浣嗕笉鎵挎媴鍥犳浜х敓鐨勪换浣曟崯澶便€?/li>
+            <li>本网站提供免费体验版及付费会员服务（Plus、Pro）。</li>
+            <li><strong>付费会员一经购买，即时生效，不支持退款。</strong>请在购买前充分了解各方案内容。</li>
+            <li>我们保留随时调整会员价格和权益内容的权利，已购买的会员在有效期内不受价格调整影响。</li>
+            <li>若因技术原因导致服务中断，我们将在合理时间内恢复服务，但不承担因此产生的任何损失。</li>
           </ol>
 
-          <h2>鍥涖€佺敤鎴疯涓鸿鑼?/h2>
+          <h2>四、用户行为规范</h2>
           <ol>
-            <li>鐢ㄦ埛搴旀彁渚涚湡瀹炪€佸噯纭殑娉ㄥ唽淇℃伅锛屽苟濡ュ杽淇濈璐﹀彿鍜屽瘑鐮併€?/li>
-            <li>鐢ㄦ埛涓嶅緱灏嗘湰缃戠珯鐨勪粯璐瑰唴瀹硅繘琛屽綍鍒躲€佹埅灞忋€佷笅杞姐€佷紶鎾€佽浆鍞垨浠ヤ换浣曟柟寮忓垎浜粰鏈巿鏉冪殑绗笁鏂广€?/li>
-            <li>鐢ㄦ埛涓嶅緱鍒╃敤鏈綉绔欏彂甯冭繚娉曘€佷井杈辨€с€侀獨鎵版€ф垨渚垫潈鍐呭銆?/li>
-            <li>杩濆弽涓婅堪瑙勫畾鐨勭敤鎴凤紝鎴戜滑鏈夋潈绔嬪嵆缁堟鍏惰处鍙峰苟涓嶄簣閫€娆俱€?/li>
+            <li>用户应提供真实、准确的注册信息，并妥善保管账号和密码。</li>
+            <li>用户不得将本网站的付费内容进行录制、截屏、下载、传播、转售或以任何方式分享给未授权的第三方。</li>
+            <li>用户不得利用本网站发布违法、侮辱性、骚扰性或侵权内容。</li>
+            <li>违反上述规定的用户，我们有权立即终止其账号并不予退款。</li>
           </ol>
 
-          <h2>浜斻€佺煡璇嗕骇鏉?/h2>
+          <h2>五、知识产权</h2>
           <ol>
-            <li>鏈綉绔欑殑鎵€鏈夊唴瀹癸紝鍖呮嫭浣嗕笉闄愪簬瑙嗛銆佹枃瀛椼€佸浘琛ㄣ€佸浘鐗囥€佺晫闈㈣璁°€佸晢鏍囧強鏍囪瘑锛屽潎鍙楃煡璇嗕骇鏉冩硶寰嬩繚鎶ゃ€?/li>
-            <li>鏈粡涔﹂潰璁稿彲锛屼换浣曚釜浜烘垨缁勭粐涓嶅緱澶嶅埗銆佷慨鏀广€佸垎鍙戙€佸睍绀烘垨浠ヤ换浣曟柟寮忎娇鐢ㄦ湰缃戠珯鐨勫唴瀹广€?/li>
+            <li>本网站的所有内容，包括但不限于视频、文字、图表、图片、界面设计、商标及标识，均受知识产权法律保护。</li>
+            <li>未经书面许可，任何个人或组织不得复制、修改、分发、展示或以任何方式使用本网站的内容。</li>
           </ol>
 
-          <h2>鍏€侀殣绉佷繚鎶?/h2>
+          <h2>六、隐私保护</h2>
           <ol>
-            <li>鎴戜滑閲嶈鐢ㄦ埛闅愮锛屾敹闆嗙殑淇℃伅锛堥偖绠便€佹樀绉般€佸涔犺繘搴︾瓑锛変粎鐢ㄤ簬鎻愪緵鍜屾敼鍠勬湇鍔°€?/li>
-            <li>鎴戜滑涓嶄細灏嗙敤鎴蜂釜浜轰俊鎭嚭鍞垨鎻愪緵缁欑涓夋柟锛屾硶寰嬭姹傞櫎澶栥€?/li>
-            <li>鐢ㄦ埛鐨勫瘑鐮佺粡鍔犲瘑瀛樺偍锛屾垜浠棤娉曚篃涓嶄細鏌ョ湅鐢ㄦ埛鐨勫師濮嬪瘑鐮併€?/li>
+            <li>我们重视用户隐私，收集的信息（邮箱、昵称、学习进度等）仅用于提供和改善服务。</li>
+            <li>我们不会将用户个人信息出售或提供给第三方，法律要求除外。</li>
+            <li>用户的密码经加密存储，我们无法也不会查看用户的原始密码。</li>
           </ol>
 
-          <h2>涓冦€佽矗浠婚檺鍒?/h2>
+          <h2>七、责任限制</h2>
           <ol>
-            <li><strong>鍦ㄦ硶寰嬪厑璁哥殑鏈€澶ц寖鍥村唴锛屾湰缃戠珯鍙婅鍝ヤ笉瀵圭敤鎴峰洜浣跨敤鎴栨棤娉曚娇鐢ㄦ湰缃戠珯鑰屼骇鐢熺殑浠讳綍鐩存帴銆侀棿鎺ャ€侀檮甯︺€佺壒娈婃垨鎯╃綒鎬ф崯瀹虫壙鎷呰矗浠?/strong>锛屽寘鎷絾涓嶉檺浜庢姇璧勬崯澶便€佹暟鎹涪澶辨垨涓氬姟涓柇銆?/li>
-            <li>鏈綉绔欐彁渚涚殑鏈嶅姟鎸?鐜扮姸"鍜?鍙敤鎬?鎻愪緵锛屼笉闄勫甫浠讳綍褰㈠紡鐨勬槑绀烘垨鏆楃ず淇濊瘉銆?/li>
+            <li><strong>在法律允许的最大范围内，本网站及街哥不对用户因使用或无法使用本网站而产生的任何直接、间接、附带、特殊或惩罚性损害承担责任</strong>，包括但不限于投资损失、数据丢失或业务中断。</li>
+            <li>本网站提供的服务按"现状"和"可用性"提供，不附带任何形式的明示或暗示保证。</li>
           </ol>
 
-          <h2>鍏€佸崗璁彉鏇?/h2>
+          <h2>八、协议变更</h2>
           <ol>
-            <li>鎴戜滑淇濈暀闅忔椂淇敼鏈崗璁殑鏉冨埄銆備慨鏀瑰悗鐨勫崗璁皢鍦ㄧ綉绔欎笂鍏竷锛岀户缁娇鐢ㄦ湰缃戠珯鍗宠涓烘帴鍙椾慨鏀瑰悗鐨勬潯娆俱€?/li>
-            <li>閲嶅ぇ鍙樻洿灏嗛€氳繃缃戠珯閫氱煡鏂瑰紡鍛婄煡鐢ㄦ埛銆?/li>
+            <li>我们保留随时修改本协议的权利。修改后的协议将在网站上公布，继续使用本网站即视为接受修改后的条款。</li>
+            <li>重大变更将通过网站通知方式告知用户。</li>
           </ol>
 
-          <h2>涔濄€佷簤璁В鍐?/h2>
+          <h2>九、争议解决</h2>
           <ol>
-            <li>鏈崗璁殑瑙ｉ噴鍜屾墽琛岄€傜敤鐩稿叧娉曞緥娉曡銆?/li>
-            <li>鍥犳湰鍗忚寮曡捣鐨勪换浣曚簤璁紝鍙屾柟搴旈鍏堝弸濂藉崗鍟嗚В鍐炽€傚崗鍟嗕笉鎴愮殑锛屼换浣曚竴鏂瑰潎鏈夋潈鍚戞湁绠¤緰鏉冪殑娉曢櫌鎻愯捣璇夎銆?/li>
+            <li>本协议的解释和执行适用相关法律法规。</li>
+            <li>因本协议引起的任何争议，双方应首先友好协商解决。协商不成的，任何一方均有权向有管辖权的法院提起诉讼。</li>
           </ol>
 
-          <h2>鍗併€佽仈绯绘柟寮?/h2>
-          <p>濡傚鏈崗璁湁浠讳綍鐤戦棶锛岃閫氳繃浠ヤ笅鏂瑰紡鑱旂郴鎴戜滑锛?/p>
-          <p>X (Twitter)锛?a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a></p>
+          <h2>十、联系方式</h2>
+          <p>如对本协议有任何疑问，请通过以下方式联系我们：</p>
+          <p>X (Twitter)：<a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a></p>
         </div>
       </div>
     </div>
@@ -5613,80 +5614,80 @@ async function renderTools() {
   if (!tools.length) {
     tools = [
     {
-      category: '浜ゆ槗鎵€',
+      category: '交易所',
       items: [
         {
-          name: 'Binance锛堝竵瀹夛級',
-          desc: '鍏ㄧ悆鏈€澶х殑浜ゆ槗鎵€锛屼氦鏄撻噺鍜屾祦鍔ㄦ€у厖娌涳紝棣栭€?,
-          icon: '馃獧',
+          name: 'Binance（币安）',
+          desc: '全球最大的交易所，交易量和流动性充沛，首选',
+          icon: '🪙',
           url: 'https://www.bsmkweb.cc/join?ref=WSBNONAME',
-          tag: '棣栭€?,
+          tag: '首选',
           tagColor: '#f0b90b',
           code: 'WSBNONAME',
-          rebate: '杩斾剑 20%',
+          rebate: '返佣 20%',
         },
         {
-          name: 'OKX锛堟鏄擄級',
-          desc: '浠呮浜庡竵瀹夌殑浜ゆ槗鎵€锛屽悎绾︽祦鍔ㄦ€уソ锛屾湡鏉冨姛鑳藉畬鍠?,
-          icon: '馃數',
+          name: 'OKX（欧易）',
+          desc: '仅次于币安的交易所，合约流动性好，期权功能完善',
+          icon: '🔵',
           url: 'https://www.promooboost.com/join/CRYPTO618',
           tag: '',
           tagColor: '',
           code: 'CRYPTO618',
-          rebate: '杩斾剑 20%',
+          rebate: '返佣 20%',
         },
         {
           name: 'Bybit',
-          desc: '閫傚悎浜ゆ槗榛勯噾鐧介摱澶栨眹锛孴radFi 鏉垮潡鎵嬬画璐逛綆',
-          icon: '馃煛',
+          desc: '适合交易黄金白银外汇，TradFi 板块手续费低',
+          icon: '🟡',
           url: 'https://partner.bybit.com/b/CRYPTO618',
           tag: '',
           tagColor: '',
           code: 'CRYPTO618',
-          rebate: '杩斾剑 33%',
-          note: '娉ㄥ唽闇€浣跨敤姊瓙锛堝彴婀俱€侀煩鍥姐€佹境澶у埄浜氱瓑鍦板尯IP锛涗笉鑳戒娇鐢ㄩ娓€佹柊鍔犲潯銆佺編鍥姐€佹棩鏈€佹娲茬殑IP锛夈€傜櫥褰曞悗鍥藉唴IP鍙甯镐娇鐢ㄣ€傝璇佹敮鎸佽韩浠借瘉銆侀┚鐓с€佹姢鐓э紝娉ㄥ唽鏃跺厛閫夊眳浣忓湴涓哄彴婀炬垨婢冲ぇ鍒╀簹绛夛紝鎻愪氦璇佷欢鏃堕€夋嫨 China 姝ｅ父鎻愪氦銆?,
+          rebate: '返佣 33%',
+          note: '注册需使用梯子（台湾、韩国、澳大利亚等地区IP；不能使用香港、新加坡、美国、日本、欧洲的IP）。登录后国内IP可正常使用。认证支持身份证、驾照、护照，注册时先选居住地为台湾或澳大利亚等，提交证件时选择 China 正常提交。',
         },
         {
           name: 'Bitget',
-          desc: '璺熷崟浜ゆ槗骞冲彴锛屼竴閿窡闅忎紭璐ㄤ氦鏄撳憳绛栫暐',
-          icon: '馃煝',
+          desc: '跟单交易平台，一键跟随优质交易员策略',
+          icon: '🟢',
           url: 'https://partner.hdmune.cn/bg/v8ju2ccn',
           tag: '',
           tagColor: '',
           code: 'WallStreet',
-          rebate: '杩斾剑 40%',
+          rebate: '返佣 40%',
         },
         {
-          name: 'BIT 缇庤偂浜ゆ槗鎵€',
-          desc: '缇庤偂浜ゆ槗鎵€寮€鎴烽摼鎺ワ紝閫傚悎缇庤偂鐩稿叧浜ゆ槗浣跨敤',
-          icon: '馃嚭馃嚫',
+          name: 'BIT 美股交易所',
+          desc: '美股交易所开户链接，适合美股相关交易使用',
+          icon: '🇺🇸',
           url: 'https://bit.bshareweb.com/newRegister/cn?invite_code=CY3DKV',
-          tag: '缇庤偂',
+          tag: '美股',
           tagColor: '#2563eb',
           code: 'CY3DKV',
         },
       ],
     },
     {
-      category: '鐪嬬洏宸ュ叿',
+      category: '看盘工具',
       items: [
         {
           name: 'TradingView',
-          desc: '琛楀摜鑷敤鐨勪笓涓氱湅鐩樿蒋浠讹紝鏀寔鎶€鏈寚鏍囥€佺敾绾垮伐鍏枫€佸鍥捐〃甯冨眬锛屾柊鎵嬪繀澶?,
-          icon: '馃搳',
+          desc: '街哥自用的专业看盘软件，支持技术指标、画线工具、多图表布局，新手必备',
+          icon: '📊',
           url: 'https://cn.tradingview.com/?aff_id=158703',
-          tag: '琛楀摜鑷敤',
+          tag: '街哥自用',
           tagColor: '#f7931a',
         },
       ],
     },
     {
-      category: '鏁版嵁宸ュ叿',
+      category: '数据工具',
       items: [
         {
           name: 'CoinAnk',
-          desc: '涓撲笟鍔犲瘑璐у竵鏁版嵁鍒嗘瀽骞冲彴锛岄摼涓婃暟鎹€佽祫閲戞祦鍚戙€佸競鍦烘儏缁垎鏋?,
-          icon: '馃搳',
+          desc: '专业加密货币数据分析平台，链上数据、资金流向、市场情绪分析',
+          icon: '📊',
           url: 'https://coinank.com/zh/invite/register?referral=1458068',
           tag: '',
           tagColor: '',
@@ -5694,16 +5695,16 @@ async function renderTools() {
         },
         {
           name: 'CoinGlass',
-          desc: '鍚堢害鏁版嵁鐪嬫澘锛岀垎浠撴暟鎹€佽祫閲戣垂鐜囥€佹寔浠撻噺涓€鐩簡鐒?,
-          icon: '馃搱',
+          desc: '合约数据看板，爆仓数据、资金费率、持仓量一目了然',
+          icon: '📈',
           url: 'https://www.coinglass.com/?ref_code=YDHYYF',
           tag: '',
           tagColor: '',
         },
         {
           name: 'CoinMarketCap',
-          desc: '鍔犲瘑璐у竵甯傚€兼帓鍚嶃€佷环鏍艰拷韪€侀」鐩俊鎭煡璇?,
-          icon: '馃捁',
+          desc: '加密货币市值排名、价格追踪、项目信息查询',
+          icon: '💹',
           url: 'https://coinmarketcap.com/',
           tag: '',
           tagColor: '',
@@ -5715,11 +5716,11 @@ async function renderTools() {
 
   mainContent.innerHTML = `
     <div class="tools-page fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖璇剧▼鍒楄〃</button>
+      <button class="back-btn" id="backHome">← 返回课程列表</button>
 
       <div class="tools-header">
-        <h1 class="tools-title">馃О 閲戣瀺宸ュ叿绠?/h1>
-        <p class="tools-subtitle">杩欎簺鏄垜骞虫椂鐪嬬洏銆佷氦鏄撱€佸垎鏋愮敤鍒扮殑宸ュ叿鍜屽钩鍙帮紝鍒嗕韩缁欏ぇ瀹?/p>
+        <h1 class="tools-title">🧰 金融工具箱</h1>
+        <p class="tools-subtitle">这些是我平时看盘、交易、分析用到的工具和平台，分享给大家</p>
       </div>
 
       ${tools.map(cat => `
@@ -5734,9 +5735,9 @@ async function renderTools() {
                 </div>
                 <h3 class="tool-name">${t.name} ${t.rebate ? `<span class="tool-rebate">${t.rebate}</span>` : ''}</h3>
                 <p class="tool-desc">${t.desc}</p>
-                ${t.code ? `<div class="tool-code">閭€璇风爜锛?span class="tool-code-val">${t.code}</span></div>` : ''}
+                ${t.code ? `<div class="tool-code">邀请码：<span class="tool-code-val">${t.code}</span></div>` : ''}
                 ${t.note ? `<div class="tool-note">${t.note}</div>` : ''}
-                <span class="tool-link">娉ㄥ唽/璁块棶 鈫?/span>
+                <span class="tool-link">注册/访问 ↗</span>
               </a>
             `).join('')}
           </div>
@@ -5744,7 +5745,7 @@ async function renderTools() {
       `).join('')}
 
       <div class="tools-disclaimer">
-        <p>浠ヤ笂閾炬帴浠呬负涓汉鍒嗕韩锛屼笉鏋勬垚浠讳綍鎶曡祫寤鸿銆傝鑷鍒ゆ柇椋庨櫓銆?/p>
+        <p>以上链接仅为个人分享，不构成任何投资建议。请自行判断风险。</p>
       </div>
     </div>
   `
@@ -5755,40 +5756,40 @@ let settingsTab = 'profile'
 
 function renderProfile() {
   const currentPlan = getEffectivePlan()
-  const planNames = { free: '浣撻獙鐗堬紙鍏嶈垂锛?, plus: '猸?Plus', pro: '馃拵 Pro' }
+  const planNames = { free: '体验版（免费）', plus: '⭐ Plus', pro: '💎 Pro' }
 
   mainContent.innerHTML = `
     <div class="settings-page fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖璇剧▼鍒楄〃</button>
+      <button class="back-btn" id="backHome">← 返回课程列表</button>
       <div class="settings-layout">
         <nav class="settings-nav">
-          <div class="settings-nav-title">璁剧疆鍜岃处鍗?/div>
+          <div class="settings-nav-title">设置和账单</div>
           <a class="settings-nav-item ${settingsTab === 'profile' ? 'active' : ''}" data-tab="profile">
-            <span class="settings-nav-icon">馃懁</span>涓汉璧勬枡
+            <span class="settings-nav-icon">👤</span>个人资料
           </a>
           <a class="settings-nav-item ${settingsTab === 'account' ? 'active' : ''}" data-tab="account">
-            <span class="settings-nav-icon">馃攼</span>璐﹀彿璁剧疆
+            <span class="settings-nav-icon">🔐</span>账号设置
           </a>
           <a class="settings-nav-item ${settingsTab === 'notifications' ? 'active' : ''}" data-tab="notifications">
-            <span class="settings-nav-icon">馃У</span>璁哄潧閫氱煡
+            <span class="settings-nav-icon">🧵</span>论坛通知
             ${state.notificationUnread ? `<span class="settings-nav-badge">${state.notificationUnread > 99 ? '99+' : state.notificationUnread}</span>` : ''}
           </a>
           <div class="settings-nav-divider"></div>
-          <div class="settings-nav-section">璐﹀崟</div>
+          <div class="settings-nav-section">账单</div>
           <a class="settings-nav-item ${settingsTab === 'subscription' ? 'active' : ''}" data-tab="subscription">
-            <span class="settings-nav-icon">馃挸</span>璁㈤槄
+            <span class="settings-nav-icon">💳</span>订阅
           </a>
           <a class="settings-nav-item ${settingsTab === 'credits' ? 'active' : ''}" data-tab="credits">
-            <span class="settings-nav-icon">馃師锔?/span>杩斾剑閭€璇?
+            <span class="settings-nav-icon">🎟️</span>返佣邀请
           </a>
         </nav>
 
         <div class="settings-content">
           ${settingsTab === 'profile' ? `
-            <!-- 涓汉璧勬枡 -->
+            <!-- 个人资料 -->
             <div class="settings-section">
-              <h2 class="settings-section-title">涓汉璧勬枡</h2>
-              <p class="settings-section-desc">绠＄悊浣犵殑澶村儚鍜屾樀绉?/p>
+              <h2 class="settings-section-title">个人资料</h2>
+              <p class="settings-section-desc">管理你的头像和昵称</p>
 
               <div class="settings-card">
                 <div class="profile-avatar-section">
@@ -5800,20 +5801,20 @@ function renderProfile() {
                   </div>
                   <div class="profile-avatar-info">
                     <label class="btn btn-ghost btn-sm profile-upload-btn">
-                      鏇存崲澶村儚
+                      更换头像
                       <input type="file" accept="image/*" id="avatarInput" style="display:none">
                     </label>
-                    <p class="settings-hint">鏀寔 JPG銆丳NG锛岃嚜鍔ㄥ帇缂╄嚦 200脳200</p>
+                    <p class="settings-hint">支持 JPG、PNG，自动压缩至 200×200</p>
                   </div>
                 </div>
               </div>
 
               <div class="settings-card">
                 <div class="form-group">
-                  <label class="form-label">鏄电О</label>
+                  <label class="form-label">昵称</label>
                   <div class="form-row">
                     <input type="text" class="form-input" id="profileName" value="${state.user.name}">
-                    <button class="btn-send-code" id="saveNameBtn">淇濆瓨</button>
+                    <button class="btn-send-code" id="saveNameBtn">保存</button>
                   </div>
                 </div>
               </div>
@@ -5821,169 +5822,169 @@ function renderProfile() {
               <div class="settings-card settings-info-card">
                 <div class="profile-info-item">
                   <span class="profile-info-label">UID</span>
-                  <span class="profile-info-value" style="font-family:monospace;letter-spacing:1px">${state.user.uid || '鈥?}</span>
+                  <span class="profile-info-value" style="font-family:monospace;letter-spacing:1px">${state.user.uid || '—'}</span>
                 </div>
                 <div class="profile-info-item">
-                  <span class="profile-info-label">褰撳墠鏂规</span>
-                  <span class="profile-info-value">${planNames[currentPlan] || '浣撻獙鐗?}</span>
+                  <span class="profile-info-label">当前方案</span>
+                  <span class="profile-info-value">${planNames[currentPlan] || '体验版'}</span>
                 </div>
                 <div class="profile-info-item">
-                  <span class="profile-info-label">Telegram 缁戝畾</span>
+                  <span class="profile-info-label">Telegram 绑定</span>
                   <span class="profile-info-value">${escapeHtml(getTelegramBindingLabel(state.user?.telegramBinding))}</span>
                 </div>
                 <div class="profile-info-item">
-                  <span class="profile-info-label">宸插畬鎴愯绋?/span>
-                  <span class="profile-info-value">${progress.getCompletedCount()} 璇?/span>
+                  <span class="profile-info-label">已完成课程</span>
+                  <span class="profile-info-value">${progress.getCompletedCount()} 课</span>
                 </div>
                 <div class="profile-info-item">
-                  <span class="profile-info-label">瀛︿範涓?/span>
-                  <span class="profile-info-value">${progress.getInProgressCount()} 璇?/span>
+                  <span class="profile-info-label">学习中</span>
+                  <span class="profile-info-value">${progress.getInProgressCount()} 课</span>
                 </div>
               </div>
             </div>
           ` : settingsTab === 'account' ? `
-            <!-- 璐﹀彿璁剧疆 -->
+            <!-- 账号设置 -->
             <div class="settings-section">
-              <h2 class="settings-section-title">璐﹀彿璁剧疆</h2>
-              <p class="settings-section-desc">绠＄悊浣犵殑閭鍜屽瘑鐮?/p>
+              <h2 class="settings-section-title">账号设置</h2>
+              <p class="settings-section-desc">管理你的邮箱和密码</p>
 
               <div class="settings-card">
                 <div class="form-group">
-                  <label class="form-label">鐢靛瓙閭</label>
+                  <label class="form-label">电子邮箱</label>
                   <input type="email" class="form-input" value="${state.user.email}" disabled style="opacity:0.6">
-                  <p class="settings-hint">鏆備笉鏀寔鏇存敼閭锛屽闇€鏇存敼璇疯仈绯荤鐞嗗憳</p>
+                  <p class="settings-hint">暂不支持更改邮箱，如需更改请联系管理员</p>
                 </div>
               </div>
 
               <div class="settings-card">
-                <h3 class="settings-card-title">鏇存敼瀵嗙爜</h3>
+                <h3 class="settings-card-title">更改密码</h3>
                 <div class="pwd-change-tabs">
-                  <button class="pwd-tab active" data-pwd-mode="old">浣跨敤鍘熷瘑鐮?/button>
-                  <button class="pwd-tab" data-pwd-mode="email">浣跨敤閭楠岃瘉</button>
+                  <button class="pwd-tab active" data-pwd-mode="old">使用原密码</button>
+                  <button class="pwd-tab" data-pwd-mode="email">使用邮箱验证</button>
                 </div>
 
                 <div id="pwdChangeForm">
                   <div id="pwdOldMode">
                     <div class="form-group">
-                      <label class="form-label">鍘熷瘑鐮?/label>
-                      <input type="password" class="form-input" id="oldPassword" placeholder="杈撳叆褰撳墠瀵嗙爜">
+                      <label class="form-label">原密码</label>
+                      <input type="password" class="form-input" id="oldPassword" placeholder="输入当前密码">
                     </div>
                   </div>
                   <div id="pwdEmailMode" style="display:none">
                     <div class="form-group">
-                      <label class="form-label">閭楠岃瘉</label>
+                      <label class="form-label">邮箱验证</label>
                       <div class="form-row">
                         <input type="text" class="form-input" value="${state.user.email}" disabled style="opacity:0.6;flex:1">
-                        <button class="btn-send-code" id="pwdSendCode">鍙戦€侀獙璇佺爜</button>
+                        <button class="btn-send-code" id="pwdSendCode">发送验证码</button>
                       </div>
                     </div>
                     <div class="form-group">
-                      <label class="form-label">楠岃瘉鐮?/label>
-                      <input type="text" class="form-input" id="pwdVerifyCode" placeholder="杈撳叆6浣嶉獙璇佺爜" maxlength="6">
+                      <label class="form-label">验证码</label>
+                      <input type="text" class="form-input" id="pwdVerifyCode" placeholder="输入6位验证码" maxlength="6">
                     </div>
                   </div>
                   <div class="form-group">
-                    <label class="form-label">鏂板瘑鐮?/label>
-                    <input type="password" class="form-input" id="newPassword" placeholder="8~32涓瓧绗?>
+                    <label class="form-label">新密码</label>
+                    <input type="password" class="form-input" id="newPassword" placeholder="8~32个字符">
                   </div>
                   <div class="form-group">
-                    <label class="form-label">纭鏂板瘑鐮?/label>
-                    <input type="password" class="form-input" id="confirmPassword" placeholder="鍐嶆杈撳叆鏂板瘑鐮?>
+                    <label class="form-label">确认新密码</label>
+                    <input type="password" class="form-input" id="confirmPassword" placeholder="再次输入新密码">
                   </div>
-                  <button class="btn btn-primary" id="savePasswordBtn" style="width:100%;margin-top:8px">鏇存敼瀵嗙爜</button>
+                  <button class="btn btn-primary" id="savePasswordBtn" style="width:100%;margin-top:8px">更改密码</button>
                   <div id="pwdChangeMsg" class="settings-msg" style="display:none"></div>
                 </div>
               </div>
             </div>
           ` : settingsTab === 'notifications' ? `
             <div class="settings-section">
-              <h2 class="settings-section-title">璁哄潧閫氱煡</h2>
-              <p class="settings-section-desc">鏈変汉鍥炲浣犮€佸紩鐢ㄤ綘鏃讹紝浼氬湪杩欓噷鎻愰啋銆?/p>
+              <h2 class="settings-section-title">论坛通知</h2>
+              <p class="settings-section-desc">有人回复你、引用你时，会在这里提醒。</p>
 
               <div class="settings-card">
                 <div class="forum-notifications-head">
                   <div class="forum-notifications-meta">
-                    <span class="forum-notifications-unread">鏈 ${state.notificationUnread || 0}</span>
-                    <span class="settings-hint">绯荤粺浼氬湪浣犳墦寮€閫氱煡鍚庤嚜鍔ㄦ爣璁板凡璇?/span>
+                    <span class="forum-notifications-unread">未读 ${state.notificationUnread || 0}</span>
+                    <span class="settings-hint">系统会在你打开通知后自动标记已读</span>
                   </div>
-                  <button class="btn btn-ghost btn-sm" id="forumReadAllBtn">鍏ㄩ儴宸茶</button>
+                  <button class="btn btn-ghost btn-sm" id="forumReadAllBtn">全部已读</button>
                 </div>
                 <div id="forumNotificationsList" class="forum-notifications-list">
-                  <div class="billing-loading">鍔犺浇涓?..</div>
+                  <div class="billing-loading">加载中...</div>
                 </div>
               </div>
             </div>
           ` : settingsTab === 'subscription' ? `
-            <!-- 璁㈤槄 -->
+            <!-- 订阅 -->
             <div class="settings-section">
-              <h2 class="settings-section-title">璁㈤槄</h2>
-              <p class="settings-section-desc">绠＄悊浣犵殑浼氬憳鏂规</p>
+              <h2 class="settings-section-title">订阅</h2>
+              <p class="settings-section-desc">管理你的会员方案</p>
 
               <div class="settings-card sub-current-card">
                 <div class="sub-current-header">
                   <div>
-                    <div class="sub-current-plan">${planNames[currentPlan] || '浣撻獙鐗?}</div>
-                    <div class="sub-current-desc">${currentPlan === 'free' ? '鍏紑瑙嗛 + 璇綍' : currentPlan === 'plus' ? '鏂拌棰戝嵆鏃惰В閿?+ 鍥捐В + 娴嬮獙' : '鍏ㄩ儴鏉冮檺 + AI淇″彿'}</div>
-                    ${state.user?.planExpiresAt ? `<div class="sub-expires">鍒版湡鏃堕棿锛?{formatDateTime(state.user.planExpiresAt)}</div>` : ''}
+                    <div class="sub-current-plan">${planNames[currentPlan] || '体验版'}</div>
+                    <div class="sub-current-desc">${currentPlan === 'free' ? '公开视频 + 语录' : currentPlan === 'plus' ? '新视频即时解锁 + 图解 + 测验' : '全部权限 + AI信号'}</div>
+                    ${state.user?.planExpiresAt ? `<div class="sub-expires">到期时间：${formatDateTime(state.user.planExpiresAt)}</div>` : ''}
                   </div>
-                  <span class="sub-current-badge sub-badge-${currentPlan}">${currentPlan === 'free' ? '鍏嶈垂' : currentPlan === 'plus' ? 'Plus' : 'Pro'}</span>
+                  <span class="sub-current-badge sub-badge-${currentPlan}">${currentPlan === 'free' ? '免费' : currentPlan === 'plus' ? 'Plus' : 'Pro'}</span>
                 </div>
               </div>
 
               <div class="settings-card">
-                <h3 class="settings-card-title">鏇存敼鏂规</h3>
+                <h3 class="settings-card-title">更改方案</h3>
                 <div class="sub-plans">
                   <div class="sub-plan-row ${currentPlan === 'free' ? 'sub-plan-active' : ''}" data-plan="free">
                     <div class="sub-plan-info">
-                      <span class="sub-plan-icon">馃啌</span>
+                      <span class="sub-plan-icon">🆓</span>
                       <div>
-                        <div class="sub-plan-name">浣撻獙鐗?/div>
-                        <div class="sub-plan-desc">鍏紑瑙嗛 + 璇綍</div>
+                        <div class="sub-plan-name">体验版</div>
+                        <div class="sub-plan-desc">公开视频 + 语录</div>
                       </div>
                     </div>
-                    <div class="sub-plan-price">鍏嶈垂</div>
-                    ${currentPlan === 'free' ? '<span class="sub-plan-current">褰撳墠</span>' : ''}
+                    <div class="sub-plan-price">免费</div>
+                    ${currentPlan === 'free' ? '<span class="sub-plan-current">当前</span>' : ''}
                   </div>
                   <div class="sub-plan-row ${currentPlan === 'plus' ? 'sub-plan-active' : ''} ${currentPlan === 'pro' ? 'sub-plan-disabled' : ''}" data-plan="plus">
                     <div class="sub-plan-info">
-                      <span class="sub-plan-icon">猸?/span>
+                      <span class="sub-plan-icon">⭐</span>
                       <div>
                         <div class="sub-plan-name">Plus</div>
-                        <div class="sub-plan-desc">鏂拌棰戝嵆鏃惰В閿?+ 鍥捐В + 娴嬮獙</div>
+                        <div class="sub-plan-desc">新视频即时解锁 + 图解 + 测验</div>
                       </div>
                     </div>
-                    <div class="sub-plan-price">$50/鏈?/div>
-                    ${currentPlan === 'plus' ? '<span class="sub-plan-current">褰撳墠</span>' : currentPlan === 'pro' ? '' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>鏆傚叧闂?/button>'}
+                    <div class="sub-plan-price">$50/月</div>
+                    ${currentPlan === 'plus' ? '<span class="sub-plan-current">当前</span>' : currentPlan === 'pro' ? '' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>暂关闭</button>'}
                   </div>
                   <div class="sub-plan-row ${currentPlan === 'pro' ? 'sub-plan-active' : ''}" data-plan="pro">
                     <div class="sub-plan-info">
-                      <span class="sub-plan-icon">馃拵</span>
+                      <span class="sub-plan-icon">💎</span>
                       <div>
                         <div class="sub-plan-name">Pro</div>
-                        <div class="sub-plan-desc">鍏ㄩ儴鏉冮檺 + AI淇″彿</div>
+                        <div class="sub-plan-desc">全部权限 + AI信号</div>
                       </div>
                     </div>
-                    <div class="sub-plan-price">$100/鏈?/div>
-                    ${currentPlan === 'pro' ? '<span class="sub-plan-current">褰撳墠</span>' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>鏆傚叧闂?/button>'}
+                    <div class="sub-plan-price">$100/月</div>
+                    ${currentPlan === 'pro' ? '<span class="sub-plan-current">当前</span>' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>暂关闭</button>'}
                   </div>
                 </div>
               </div>
 
               <div class="settings-card">
-                <h3 class="settings-card-title">璐﹀崟鍘嗗彶</h3>
+                <h3 class="settings-card-title">账单历史</h3>
                 <div id="billingHistory" class="billing-history">
-                  <div class="billing-loading">鍔犺浇涓?..</div>
+                  <div class="billing-loading">加载中...</div>
                 </div>
               </div>
 
-              <a class="settings-link" id="goMembershipPage">鏌ョ湅瀹屾暣鏂规瀵规瘮 鈫?/a>
+              <a class="settings-link" id="goMembershipPage">查看完整方案对比 →</a>
             </div>
           ` : settingsTab === 'credits' ? `
             <div class="settings-section">
-              <h2 class="settings-section-title">杩斾剑閭€璇?/h2>
-              <p class="settings-section-desc">閭€璇锋柊鐢ㄦ埛璁㈤槄鍚庣敓鎴愯繑浣ｅ鍔憋紝鍔熻兘姝ｅ紡寮€鏀惧悗鍙敤浜庡悗缁?Plus 鎴?Pro 璁㈤槄銆?/p>
+              <h2 class="settings-section-title">返佣邀请</h2>
+              <p class="settings-section-desc">邀请新用户订阅后生成返佣奖励，功能正式开放后可用于后续 Plus 或 Pro 订阅。</p>
               <div id="subscriptionCreditCenter" class="subscription-credit-center">
-                <div class="billing-loading">鍔犺浇涓?..</div>
+                <div class="billing-loading">加载中...</div>
               </div>
             </div>
           ` : ''}
@@ -6022,29 +6023,29 @@ function renderProfile() {
   if (pwdSendBtn) {
     pwdSendBtn.addEventListener('click', async () => {
       pwdSendBtn.disabled = true
-      pwdSendBtn.textContent = '鍙戦€佷腑...'
+      pwdSendBtn.textContent = '发送中...'
       try {
         const res = await api.post('/api/send-code', {
           email: state.user.email,
           purpose: 'change_password',
         })
         if (res.ok) {
-          showFormMsgProfile('楠岃瘉鐮佸凡鍙戦€?, 'ok')
+          showFormMsgProfile('验证码已发送', 'ok')
           let cd = 60
           const timer = setInterval(() => {
             cd--
             pwdSendBtn.textContent = `${cd}s`
-            if (cd <= 0) { clearInterval(timer); pwdSendBtn.textContent = '鍙戦€侀獙璇佺爜'; pwdSendBtn.disabled = false }
+            if (cd <= 0) { clearInterval(timer); pwdSendBtn.textContent = '发送验证码'; pwdSendBtn.disabled = false }
           }, 1000)
         } else {
-          showFormMsgProfile(res.error || '鍙戦€佸け璐?, 'err')
+          showFormMsgProfile(res.error || '发送失败', 'err')
           pwdSendBtn.disabled = false
-          pwdSendBtn.textContent = '鍙戦€侀獙璇佺爜'
+          pwdSendBtn.textContent = '发送验证码'
         }
       } catch {
-        showFormMsgProfile('鍙戦€佸け璐?, 'err')
+        showFormMsgProfile('发送失败', 'err')
         pwdSendBtn.disabled = false
-        pwdSendBtn.textContent = '鍙戦€侀獙璇佺爜'
+        pwdSendBtn.textContent = '发送验证码'
       }
     })
   }
@@ -6062,7 +6063,7 @@ function renderProfile() {
         showPwdMsg(msgDiv, passwordError, 'err'); return
       }
       if (newPwd !== confirmPwd) {
-        showPwdMsg(msgDiv, '涓ゆ杈撳叆鐨勫瘑鐮佷笉涓€鑷?, 'err'); return
+        showPwdMsg(msgDiv, '两次输入的密码不一致', 'err'); return
       }
 
       const activeMode = mainContent.querySelector('.pwd-tab.active')?.dataset.pwdMode || 'old'
@@ -6070,23 +6071,23 @@ function renderProfile() {
 
       if (activeMode === 'old') {
         const oldPwd = document.getElementById('oldPassword')?.value
-        if (!oldPwd) { showPwdMsg(msgDiv, '璇疯緭鍏ュ師瀵嗙爜', 'err'); return }
+        if (!oldPwd) { showPwdMsg(msgDiv, '请输入原密码', 'err'); return }
         body.oldPassword = oldPwd
       } else {
         const code = document.getElementById('pwdVerifyCode')?.value
-        if (!code || code.length !== 6) { showPwdMsg(msgDiv, '璇疯緭鍏?浣嶉獙璇佺爜', 'err'); return }
+        if (!code || code.length !== 6) { showPwdMsg(msgDiv, '请输入6位验证码', 'err'); return }
         // First verify code to get token
         const vRes = await api.post('/api/verify-code', {
           email: state.user.email,
           code,
           purpose: 'change_password',
         })
-        if (!vRes.ok) { showPwdMsg(msgDiv, vRes.error || '楠岃瘉鐮侀敊璇?, 'err'); return }
+        if (!vRes.ok) { showPwdMsg(msgDiv, vRes.error || '验证码错误', 'err'); return }
         body.verifyToken = vRes.token
       }
 
       savePwdBtn.disabled = true
-      savePwdBtn.textContent = '淇敼涓?..'
+      savePwdBtn.textContent = '修改中...'
       try {
         const res = await api.post('/api/change-password', body)
         if (res.ok) {
@@ -6100,20 +6101,20 @@ function renderProfile() {
             updateAuthUI()
             state.currentView = 'home'
             renderView()
-            showAuthModal('login_password', { email, message: '瀵嗙爜淇敼鎴愬姛锛岃閲嶆柊鐧诲綍' })
+            showAuthModal('login_password', { email, message: '密码修改成功，请重新登录' })
             return
           }
-          showPwdMsg(msgDiv, '瀵嗙爜淇敼鎴愬姛', 'ok')
+          showPwdMsg(msgDiv, '密码修改成功', 'ok')
           const fields = ['oldPassword', 'newPassword', 'confirmPassword', 'pwdVerifyCode']
           fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = '' })
         } else {
-          showPwdMsg(msgDiv, res.error || '淇敼澶辫触', 'err')
+          showPwdMsg(msgDiv, res.error || '修改失败', 'err')
         }
       } catch {
-        showPwdMsg(msgDiv, '淇敼澶辫触锛岃绋嶅悗閲嶈瘯', 'err')
+        showPwdMsg(msgDiv, '修改失败，请稍后重试', 'err')
       }
       savePwdBtn.disabled = false
-      savePwdBtn.textContent = '鏇存敼瀵嗙爜'
+      savePwdBtn.textContent = '更改密码'
     })
   }
 
@@ -6148,7 +6149,7 @@ function renderProfile() {
   if (forumReadAllBtn) {
     forumReadAllBtn.addEventListener('click', async () => {
       forumReadAllBtn.disabled = true
-      forumReadAllBtn.textContent = '澶勭悊涓?..'
+      forumReadAllBtn.textContent = '处理中...'
       try {
         const res = await api.patch('/api/notifications', { markAll: true })
         if (res.ok) {
@@ -6156,13 +6157,13 @@ function renderProfile() {
           updateAuthUI()
           renderProfile()
         } else {
-          alert(res.error || '鎿嶄綔澶辫触')
+          alert(res.error || '操作失败')
         }
       } catch {
-        alert('鎿嶄綔澶辫触锛岃绋嶅悗閲嶈瘯')
+        alert('操作失败，请稍后重试')
       }
       forumReadAllBtn.disabled = false
-      forumReadAllBtn.textContent = '鍏ㄩ儴宸茶'
+      forumReadAllBtn.textContent = '全部已读'
     })
   }
 
@@ -6178,28 +6179,28 @@ function renderProfile() {
     signalInvBtn.addEventListener('click', async () => {
       const msgDiv = document.getElementById('signalMsg')
       signalInvBtn.disabled = true
-      signalInvBtn.textContent = '鐢熸垚涓?..'
+      signalInvBtn.textContent = '生成中...'
       try {
         const res = await api.post('/api/telegram-entry')
         if (res.success && res.botUrl) {
           window.open(res.botUrl, '_blank', 'noopener')
           if (msgDiv) {
             const bindingHint = state.user?.telegramBinding
-              ? '璇峰姟蹇呬娇鐢ㄥ綋鍓嶅凡缁戝畾鐨?Telegram 璐﹀彿鎵撳紑鏈哄櫒浜猴紝鍚﹀垯鏈哄櫒浜轰細鎷掔粷鍙戦摼銆?
-              : '鍦ㄦ満鍣ㄤ汉閲岀偣 Start 鍚庯紝瀹冧細缁欎綘鍙戦€佷笓灞炲叆缇ら摼鎺ャ€?
-            msgDiv.innerHTML = '鏈哄櫒浜哄叆鍙ｅ凡鐢熸垚锛? + escapeHtml(String(res.expiresInSeconds || 600)) + ' 绉掑唴鏈夋晥锛夛細<a href="' + escapeHtml(res.botUrl) + '" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;text-decoration:underline;word-break:break-all;">鐐瑰嚮鎵撳紑 Telegram 鏈哄櫒浜?/a><br>' + escapeHtml(bindingHint)
+              ? '请务必使用当前已绑定的 Telegram 账号打开机器人，否则机器人会拒绝发链。'
+              : '在机器人里点 Start 后，它会给你发送专属入群链接。'
+            msgDiv.innerHTML = '机器人入口已生成（' + escapeHtml(String(res.expiresInSeconds || 600)) + ' 秒内有效）：<a href="' + escapeHtml(res.botUrl) + '" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;text-decoration:underline;word-break:break-all;">点击打开 Telegram 机器人</a><br>' + escapeHtml(bindingHint)
             msgDiv.className = 'signal-msg signal-msg-ok'
             msgDiv.style.display = 'block'
           }
-          signalInvBtn.textContent = '宸茬敓鎴?
+          signalInvBtn.textContent = '已生成'
           setTimeout(() => { signalInvBtn.textContent = getTelegramEntryButtonLabel(state.user); signalInvBtn.disabled = false }, 10000)
         } else {
-          if (msgDiv) { msgDiv.textContent = res.error || '鐢熸垚澶辫触'; msgDiv.className = 'signal-msg signal-msg-err'; msgDiv.style.display = 'block' }
+          if (msgDiv) { msgDiv.textContent = res.error || '生成失败'; msgDiv.className = 'signal-msg signal-msg-err'; msgDiv.style.display = 'block' }
           signalInvBtn.disabled = false
           signalInvBtn.textContent = getTelegramEntryButtonLabel(state.user)
         }
       } catch {
-        if (msgDiv) { msgDiv.textContent = '鐢熸垚澶辫触锛岃绋嶅悗閲嶈瘯'; msgDiv.className = 'signal-msg signal-msg-err'; msgDiv.style.display = 'block' }
+        if (msgDiv) { msgDiv.textContent = '生成失败，请稍后重试'; msgDiv.className = 'signal-msg signal-msg-err'; msgDiv.style.display = 'block' }
         signalInvBtn.disabled = false
         signalInvBtn.textContent = getTelegramEntryButtonLabel(state.user)
       }
@@ -6211,22 +6212,22 @@ function renderProfile() {
     signalRefreshBtn.addEventListener('click', async () => {
       const msgDiv = document.getElementById('signalMsg')
       signalRefreshBtn.disabled = true
-      signalRefreshBtn.textContent = '鍒锋柊涓?..'
+      signalRefreshBtn.textContent = '刷新中...'
       try {
         const user = await refreshCurrentUserProfile({ rerender: true, syncTelegram: true })
         const nextMsgDiv = document.getElementById('signalMsg')
         if (user && nextMsgDiv) {
-          nextMsgDiv.textContent = `鐘舵€佸凡鍒锋柊锛屽綋鍓嶇粦瀹氾細${getTelegramBindingLabel(user.telegramBinding)}`
+          nextMsgDiv.textContent = `状态已刷新，当前绑定：${getTelegramBindingLabel(user.telegramBinding)}`
           nextMsgDiv.className = 'signal-msg signal-msg-ok'
           nextMsgDiv.style.display = 'block'
         } else if (msgDiv) {
-          msgDiv.textContent = '鐘舵€佸凡鍒锋柊'
+          msgDiv.textContent = '状态已刷新'
           msgDiv.className = 'signal-msg signal-msg-ok'
           msgDiv.style.display = 'block'
         }
       } catch {
         if (msgDiv) {
-          msgDiv.textContent = '鍒锋柊澶辫触锛岃绋嶅悗閲嶈瘯'
+          msgDiv.textContent = '刷新失败，请稍后重试'
           msgDiv.className = 'signal-msg signal-msg-err'
           msgDiv.style.display = 'block'
         }
@@ -6234,7 +6235,7 @@ function renderProfile() {
       const latestRefreshBtn = document.getElementById('signalRefreshStatus')
       if (latestRefreshBtn) {
         latestRefreshBtn.disabled = false
-        latestRefreshBtn.textContent = '鍒锋柊鐘舵€?
+        latestRefreshBtn.textContent = '刷新状态'
       }
     })
   }
@@ -6246,15 +6247,15 @@ async function loadBillingHistory(container) {
     const data = await api.get('/api/orders')
 
     if (!data.orders || data.orders.length === 0) {
-      container.innerHTML = '<div class="billing-empty">鏆傛棤璐﹀崟璁板綍</div>'
+      container.innerHTML = '<div class="billing-empty">暂无账单记录</div>'
       return
     }
 
     const statusMap = {
-      paid: { label: '宸插畬鎴?, cls: 'billing-paid' },
-      pending: { label: '寰呮敮浠?, cls: 'billing-pending' },
-      processing: { label: '澶勭悊涓?, cls: 'billing-pending' },
-      expired: { label: '宸茶繃鏈?, cls: 'billing-expired' },
+      paid: { label: '已完成', cls: 'billing-paid' },
+      pending: { label: '待支付', cls: 'billing-pending' },
+      processing: { label: '处理中', cls: 'billing-pending' },
+      expired: { label: '已过期', cls: 'billing-expired' },
     }
 
     container.innerHTML = data.orders.map(o => {
@@ -6269,7 +6270,7 @@ async function loadBillingHistory(container) {
         <div class="billing-row">
           <div class="billing-info">
             <div class="billing-plan">${o.planLabel} ${o.periodLabel}</div>
-            <div class="billing-date">${displayDate}${orderIdShort ? ` 路 <span class="billing-oid" title="${o.orderId}">#${orderIdShort}</span>` : ''}</div>
+            <div class="billing-date">${displayDate}${orderIdShort ? ` · <span class="billing-oid" title="${o.orderId}">#${orderIdShort}</span>` : ''}</div>
           </div>
           <div class="billing-right">
             <span class="billing-amount">${formatMinorUsd(paidAmount)}${amountDiff}</span>
@@ -6279,7 +6280,7 @@ async function loadBillingHistory(container) {
     }).join('')
   } catch (err) {
     console.error('Load billing error:', err)
-    container.innerHTML = '<div class="billing-empty">鍔犺浇澶辫触</div>'
+    container.innerHTML = '<div class="billing-empty">加载失败</div>'
   }
 }
 
@@ -6288,92 +6289,92 @@ async function loadSubscriptionCreditCenter(container) {
   try {
     const res = await api.get('/api/referrals/me')
     if (!res.ok || !res.stats) {
-      container.innerHTML = `<div class="billing-empty">${escapeHtml(res.error || '鍔犺浇澶辫触')}</div>`
+      container.innerHTML = `<div class="billing-empty">${escapeHtml(res.error || '加载失败')}</div>`
       return
     }
     const stats = res.stats
     const recent = Array.isArray(res.recent_commissions) ? res.recent_commissions : []
     const invited = Array.isArray(res.recent_invited_users) ? res.recent_invited_users : []
-    if (false) {
+    if (false && res.disabled) {
       if (res.mode === 'disabled') {
-        container.innerHTML = '<div class="billing-empty">閭€璇疯繑浣ｅ姛鑳芥殏鏈紑鏀?/div>'
+        container.innerHTML = '<div class="billing-empty">邀请返佣功能暂未开放</div>'
         return
       }
       container.innerHTML = `
         <div class="subscription-credit-link-card subscription-credit-disabled" data-referral-disabled="1">
           <div>
-            <div class="subscription-credit-label">鎴戠殑閭€璇烽摼鎺?/div>
-            <div class="subscription-credit-link">姝ｅ紡寮€鏀惧悗鐢熸垚涓撳睘閭€璇烽摼鎺?/div>
+            <div class="subscription-credit-label">我的邀请链接</div>
+            <div class="subscription-credit-link">正式开放后生成专属邀请链接</div>
           </div>
-          <button class="btn btn-primary btn-sm" id="copyReferralLink" disabled>澶嶅埗閾炬帴</button>
+          <button class="btn btn-primary btn-sm" id="copyReferralLink" disabled>复制链接</button>
         </div>
         <div class="subscription-credit-preview-note">
-          <strong>閭€璇疯繑浣ｅ姛鑳藉嵆灏嗗紑鏀?/strong>
-          <span>褰撳墠浠呭睍绀哄姛鑳借鏄庯紝鏆傛湭寮€鏀句娇鐢ㄣ€傛寮忓紑鏀惧悗锛屽彲閫氳繃閭€璇峰ソ鍙嬭幏寰楄繑浣ｅ鍔便€?/span>
+          <strong>邀请返佣功能即将开放</strong>
+          <span>当前仅展示功能说明，暂未开放使用。正式开放后，可通过邀请好友获得返佣奖励。</span>
         </div>
         <div class="subscription-credit-grid">
-          <div class="subscription-credit-stat"><span>閭€璇蜂汉鏁?/span><strong>0</strong></div>
-          <div class="subscription-credit-stat"><span>浠樿垂閭€璇?/span><strong>0</strong></div>
-          <div class="subscription-credit-stat"><span>寰呯‘璁よ繑浣?/span><strong>$0.00</strong></div>
-          <div class="subscription-credit-stat"><span>鍙敤杩斾剑</span><strong>$0.00</strong></div>
-          <div class="subscription-credit-stat"><span>澶勭悊涓繑浣?/span><strong>$0.00</strong></div>
-          <div class="subscription-credit-stat"><span>宸蹭娇鐢ㄨ繑浣?/span><strong>$0.00</strong></div>
+          <div class="subscription-credit-stat"><span>邀请人数</span><strong>0</strong></div>
+          <div class="subscription-credit-stat"><span>付费邀请</span><strong>0</strong></div>
+          <div class="subscription-credit-stat"><span>待确认返佣</span><strong>$0.00</strong></div>
+          <div class="subscription-credit-stat"><span>可用返佣</span><strong>$0.00</strong></div>
+          <div class="subscription-credit-stat"><span>处理中返佣</span><strong>$0.00</strong></div>
+          <div class="subscription-credit-stat"><span>已使用返佣</span><strong>$0.00</strong></div>
         </div>
-        <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">鏈€杩戣繑浣ｈ褰?/h3><div class="billing-empty">鍔熻兘寮€鏀惧悗灞曠ず杩斾剑璁板綍</div></div>
-        <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">鏈€杩戦個璇风敤鎴?/h3><div class="billing-empty">鍔熻兘寮€鏀惧悗灞曠ず閭€璇风敤鎴?/div></div>`
-      container.querySelector('[data-referral-disabled]')?.addEventListener('click', () => showFormMsgProfile(res.message || '閭€璇疯繑浣ｅ姛鑳芥殏鏈紑鏀?, 'ok'))
+        <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近返佣记录</h3><div class="billing-empty">功能开放后展示返佣记录</div></div>
+        <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近邀请用户</h3><div class="billing-empty">功能开放后展示邀请用户</div></div>`
+      container.querySelector('[data-referral-disabled]')?.addEventListener('click', () => showFormMsgProfile(res.message || '邀请返佣功能暂未开放', 'ok'))
       return
     }
     container.innerHTML = `
       <div class="subscription-credit-link-card">
         <div>
-          <div class="subscription-credit-label">鎴戠殑閭€璇烽摼鎺?/div>
+          <div class="subscription-credit-label">我的邀请链接</div>
           <div class="subscription-credit-link" title="${escapeHtml(res.referral_link)}">${escapeHtml(res.referral_link)}</div>
         </div>
-        <button class="btn btn-primary btn-sm" id="copyReferralLink">澶嶅埗閾炬帴</button>
+        <button class="btn btn-primary btn-sm" id="copyReferralLink">复制链接</button>
       </div>
       <div class="subscription-credit-grid">
-        <div class="subscription-credit-stat"><span>閭€璇蜂汉鏁?/span><strong>${Number(stats.invited_count || 0)}</strong></div>
-        <div class="subscription-credit-stat"><span>浠樿垂閭€璇?/span><strong>${Number(stats.paid_invited_count || 0)}</strong></div>
-        <div class="subscription-credit-stat"><span>寰呯‘璁よ繑浣?/span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>鍙敤杩斾剑</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>澶勭悊涓繑浣?/span><strong>${formatMinorUsd(stats.reserved_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>宸蹭娇鐢ㄨ繑浣?/span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
+        <div class="subscription-credit-stat"><span>邀请人数</span><strong>${Number(stats.invited_count || 0)}</strong></div>
+        <div class="subscription-credit-stat"><span>付费邀请</span><strong>${Number(stats.paid_invited_count || 0)}</strong></div>
+        <div class="subscription-credit-stat"><span>待确认返佣</span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
+        <div class="subscription-credit-stat"><span>可用返佣</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
+        <div class="subscription-credit-stat"><span>处理中返佣</span><strong>${formatMinorUsd(stats.reserved_credit_cents)}</strong></div>
+        <div class="subscription-credit-stat"><span>已使用返佣</span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
       </div>
-      <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">鏈€杩戣繑浣ｈ褰?/h3>
+      <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近返佣记录</h3>
         ${recent.length ? `<div class="subscription-credit-list">${recent.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${formatDateTime(item.created_at) || ''} 路 ${escapeHtml(item.invited_user?.email_masked || '宸查個璇风敤鎴?)}</div></div><div class="subscription-credit-row-right"><span>${formatMinorUsd(item.amount_cents)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">鏆傛棤杩斾剑璁板綍</div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${formatDateTime(item.created_at) || ''} · ${escapeHtml(item.invited_user?.email_masked || '已邀请用户')}</div></div><div class="subscription-credit-row-right"><span>${formatMinorUsd(item.amount_cents)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无返佣记录</div>'}
       </div>
-      <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">鏈€杩戦個璇风敤鎴?/h3>
+      <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近邀请用户</h3>
         ${invited.length ? `<div class="subscription-credit-list">${invited.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '宸查個璇风敤鎴?)}</strong><div class="billing-date">${formatDateTime(item.attributed_at) || ''}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '宸茶闃? : '鏈闃?}</span><em>${formatMinorUsd(item.credit_cents)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">鏆傛棤閭€璇风敤鎴?/div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '已邀请用户')}</strong><div class="billing-date">${formatDateTime(item.attributed_at) || ''}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '已订阅' : '未订阅'}</span><em>${formatMinorUsd(item.credit_cents)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无邀请用户</div>'}
       </div>`
     container.querySelector('#copyReferralLink')?.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(res.referral_link); showFormMsgProfile('閭€璇烽摼鎺ュ凡澶嶅埗', 'ok') }
-      catch { showFormMsgProfile('澶嶅埗澶辫触锛岃鎵嬪姩澶嶅埗閾炬帴', 'err') }
+      try { await navigator.clipboard.writeText(res.referral_link); showFormMsgProfile('邀请链接已复制', 'ok') }
+      catch { showFormMsgProfile('复制失败，请手动复制链接', 'err') }
     })
   } catch (err) {
     console.error('Load subscription credit center error:', err)
-    container.innerHTML = '<div class="billing-empty">鍔犺浇澶辫触</div>'
+    container.innerHTML = '<div class="billing-empty">加载失败</div>'
   }
 }
 
 function getNotificationText(notification) {
   if (notification.type === 'reply_quote') {
     return {
-      title: '鏈変汉寮曠敤浜嗕綘鐨勫洖澶?,
-      subtitle: notification.meta?.excerpt || notification.postTitle || '鍘荤湅鐪嬫柊鐨勫紩鐢ㄥ唴瀹?,
+      title: '有人引用了你的回复',
+      subtitle: notification.meta?.excerpt || notification.postTitle || '去看看新的引用内容',
     }
   }
   if (notification.type === 'system') {
     return {
-      title: notification.title || '绯荤粺閫氱煡',
+      title: notification.title || '系统通知',
       subtitle: notification.message || '',
     }
   }
   return {
-    title: '浣犵殑甯栧瓙鏈変簡鏂板洖澶?,
-    subtitle: notification.meta?.excerpt || notification.postTitle || '鍘荤湅鐪嬫柊鐨勮璁哄唴瀹?,
+    title: '你的帖子有了新回复',
+    subtitle: notification.meta?.excerpt || notification.postTitle || '去看看新的讨论内容',
   }
 }
 
@@ -6381,7 +6382,7 @@ async function loadForumNotifications(container) {
   try {
     const res = await api.get('/api/notifications?limit=20')
     if (!res.ok || !Array.isArray(res.notifications)) {
-      container.innerHTML = '<div class="billing-empty">鍔犺浇澶辫触</div>'
+      container.innerHTML = '<div class="billing-empty">加载失败</div>'
       return
     }
 
@@ -6389,7 +6390,7 @@ async function loadForumNotifications(container) {
     updateAuthUI()
 
     if (!res.notifications.length) {
-      container.innerHTML = '<div class="billing-empty">鏆傛椂杩樻病鏈夎鍧涢€氱煡</div>'
+      container.innerHTML = '<div class="billing-empty">暂时还没有论坛通知</div>'
       return
     }
 
@@ -6398,11 +6399,11 @@ async function loadForumNotifications(container) {
       return `
         <button class="forum-notification-item ${notification.isRead ? '' : 'unread'}" data-open-forum-notification="${notification.postId || ''}" data-notification-id="${notification.id}">
           <div class="forum-notification-avatar">
-            ${notification.actor?.avatar ? `<img src="${escapeHtml(notification.actor.avatar)}" class="avatar-img">` : escapeHtml((notification.actor?.name || '绯?).charAt(0).toUpperCase())}
+            ${notification.actor?.avatar ? `<img src="${escapeHtml(notification.actor.avatar)}" class="avatar-img">` : escapeHtml((notification.actor?.name || '系').charAt(0).toUpperCase())}
           </div>
           <div class="forum-notification-content">
             <div class="forum-notification-title">${escapeHtml(text.title)}</div>
-            <div class="forum-notification-subtitle">${escapeHtml(notification.actor?.name || '绯荤粺')} 路 ${escapeHtml(text.subtitle)}</div>
+            <div class="forum-notification-subtitle">${escapeHtml(notification.actor?.name || '系统')} · ${escapeHtml(text.subtitle)}</div>
             <div class="forum-notification-time">${formatDateTime(notification.createdAt)}</div>
           </div>
           ${notification.isRead ? '' : '<span class="forum-notification-dot"></span>'}
@@ -6422,7 +6423,7 @@ async function loadForumNotifications(container) {
             state.notificationUnread = res.unreadCount || 0
             updateAuthUI()
             const headEl = document.querySelector('.forum-notifications-unread')
-            if (headEl) headEl.textContent = `鏈 ${state.notificationUnread}`
+            if (headEl) headEl.textContent = `未读 ${state.notificationUnread}`
           }
         }
         const postId = btn.dataset.openForumNotification
@@ -6435,7 +6436,7 @@ async function loadForumNotifications(container) {
     })
   } catch (err) {
     console.error('Load forum notifications error:', err)
-    container.innerHTML = '<div class="billing-empty">鍔犺浇澶辫触</div>'
+    container.innerHTML = '<div class="billing-empty">加载失败</div>'
   }
 }
 
@@ -6449,16 +6450,16 @@ function showPwdMsg(el, msg, type) {
 
 function getPasswordRuleError(password) {
   if (!password || password.length < 8 || password.length > 32) {
-    return '瀵嗙爜闀垮害闇€瑕?8-32 涓瓧绗?
+    return '密码长度需要 8-32 个字符'
   }
   if (!/[A-Z]/.test(password)) {
-    return '瀵嗙爜闇€瑕佸寘鍚嚦灏戜竴涓ぇ鍐欏瓧姣?
+    return '密码需要包含至少一个大写字母'
   }
   if (!/[0-9]/.test(password)) {
-    return '瀵嗙爜闇€瑕佸寘鍚嚦灏戜竴涓暟瀛?
+    return '密码需要包含至少一个数字'
   }
   if (!/[^A-Za-z0-9\s]/.test(password)) {
-    return '瀵嗙爜闇€瑕佸寘鍚嚦灏戜竴涓壒娈婂瓧绗?
+    return '密码需要包含至少一个特殊字符'
   }
   return null
 }
@@ -6500,9 +6501,9 @@ function compressImage(file, maxSize = 200, quality = 0.8) {
 document.addEventListener('change', async (e) => {
   if (e.target.id === 'avatarInput' && e.target.files[0]) {
     const file = e.target.files[0]
-    showFormMsgProfile('姝ｅ湪澶勭悊澶村儚...', 'ok')
+    showFormMsgProfile('正在处理头像...', 'ok')
     const compressed = await compressImage(file, 200, 0.85)
-    showFormMsgProfile('姝ｅ湪涓婁紶澶村儚...', 'ok')
+    showFormMsgProfile('正在上传头像...', 'ok')
 
     try {
       await api.put('/api/profile', { avatar: compressed })
@@ -6510,10 +6511,10 @@ document.addEventListener('change', async (e) => {
       localStorage.setItem('ws_user', JSON.stringify(state.user))
       updateAuthUI()
       renderProfile()
-      showFormMsgProfile('澶村儚宸叉洿鏂?, 'ok')
+      showFormMsgProfile('头像已更新', 'ok')
     } catch (err) {
       console.error('Avatar upload error:', err)
-      showFormMsgProfile('澶村儚涓婁紶澶辫触锛岃閲嶈瘯', 'err')
+      showFormMsgProfile('头像上传失败，请重试', 'err')
     }
   }
 })
@@ -6521,33 +6522,33 @@ document.addEventListener('change', async (e) => {
 // ===== Email Verification Helpers =====
 const AUTH_MODE_META = {
   login_password: {
-    title: '鐧诲綍',
-    submitLabel: '鐧诲綍',
+    title: '登录',
+    submitLabel: '登录',
     codePurpose: null,
-    passwordLabel: '瀵嗙爜',
-    passwordPlaceholder: '璇疯緭鍏ュ瘑鐮?,
+    passwordLabel: '密码',
+    passwordPlaceholder: '请输入密码',
   },
   login_code: {
-    title: '閭楠岃瘉鐮佺櫥褰?,
-    submitLabel: '鐧诲綍',
+    title: '邮箱验证码登录',
+    submitLabel: '登录',
     codePurpose: 'login',
   },
   register: {
-    title: '娉ㄥ唽',
-    submitLabel: '娉ㄥ唽',
+    title: '注册',
+    submitLabel: '注册',
     codePurpose: 'register',
-    passwordLabel: '瀵嗙爜',
-    passwordPlaceholder: '8-32浣嶏紝鍚ぇ鍐欏瓧姣嶃€佹暟瀛椼€佺壒娈婂瓧绗?,
+    passwordLabel: '密码',
+    passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
     showPasswordRules: true,
     showConfirmPassword: true,
     showTos: true,
   },
   reset_password: {
-    title: '蹇樿瀵嗙爜',
-    submitLabel: '閲嶇疆瀵嗙爜',
+    title: '忘记密码',
+    submitLabel: '重置密码',
     codePurpose: 'reset',
-    passwordLabel: '鏂板瘑鐮?,
-    passwordPlaceholder: '8-32浣嶏紝鍚ぇ鍐欏瓧姣嶃€佹暟瀛椼€佺壒娈婂瓧绗?,
+    passwordLabel: '新密码',
+    passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
     showPasswordRules: true,
     showConfirmPassword: true,
   },
@@ -6572,24 +6573,24 @@ function renderAuthModeLinks(mode) {
   if (mode === 'login_password') {
     return `
       <div class="auth-mode-links">
-        <a data-auth-mode="login_code">浣跨敤閭楠岃瘉鐮佺櫥褰?/a>
-        <a data-auth-mode="reset_password">蹇樿瀵嗙爜</a>
+        <a data-auth-mode="login_code">使用邮箱验证码登录</a>
+        <a data-auth-mode="reset_password">忘记密码</a>
       </div>
     `
   }
   if (mode === 'login_code') {
     return `
       <div class="auth-mode-links">
-        <a data-auth-mode="login_password">浣跨敤瀵嗙爜鐧诲綍</a>
-        <a data-auth-mode="reset_password">蹇樿瀵嗙爜</a>
+        <a data-auth-mode="login_password">使用密码登录</a>
+        <a data-auth-mode="reset_password">忘记密码</a>
       </div>
     `
   }
   if (mode === 'reset_password') {
     return `
       <div class="auth-mode-links">
-        <a data-auth-mode="login_password">杩斿洖瀵嗙爜鐧诲綍</a>
-        <a data-auth-mode="login_code">浣跨敤楠岃瘉鐮佺櫥褰?/a>
+        <a data-auth-mode="login_password">返回密码登录</a>
+        <a data-auth-mode="login_code">使用验证码登录</a>
       </div>
     `
   }
@@ -6598,9 +6599,9 @@ function renderAuthModeLinks(mode) {
 
 function renderAuthFooter(mode) {
   if (mode === 'register') {
-    return '宸叉湁璐﹀彿锛?a data-auth-mode="login_password">绔嬪嵆鐧诲綍</a>'
+    return '已有账号？<a data-auth-mode="login_password">立即登录</a>'
   }
-  return '杩樻病鏈夎处鍙凤紵<a data-auth-mode="register">绔嬪嵆娉ㄥ唽</a>'
+  return '还没有账号？<a data-auth-mode="register">立即注册</a>'
 }
 
 async function handleSendCode() {
@@ -6612,13 +6613,13 @@ async function handleSendCode() {
   const codeGroup = document.getElementById('codeGroup')
 
   if (!emailInput || !emailInput.value || !emailInput.value.includes('@')) {
-    showFormMsg('璇峰厛杈撳叆鏈夋晥鐨勯偖绠卞湴鍧€', 'err')
+    showFormMsg('请先输入有效的邮箱地址', 'err')
     return
   }
 
   if (state._codeSending) return
   state._codeSending = true
-  sendBtn.textContent = '鍙戦€佷腑...'
+  sendBtn.textContent = '发送中...'
   sendBtn.disabled = true
 
   try {
@@ -6628,8 +6629,8 @@ async function handleSendCode() {
     })
 
     if (!res.ok) {
-      showFormMsg(res.error || '鍙戦€佸け璐ワ紝璇风◢鍚庨噸璇?, 'err')
-      sendBtn.textContent = '鍙戦€侀獙璇佺爜'
+      showFormMsg(res.error || '发送失败，请稍后重试', 'err')
+      sendBtn.textContent = '发送验证码'
       sendBtn.disabled = false
       state._codeSending = false
       return
@@ -6637,7 +6638,7 @@ async function handleSendCode() {
 
     // Show code input group
     if (codeGroup) codeGroup.style.display = 'block'
-    showFormMsg(res.message || '楠岃瘉鐮佸凡鍙戦€佸埌鎮ㄧ殑閭', 'ok')
+    showFormMsg(res.message || '验证码已发送到您的邮箱', 'ok')
     state._emailVerified = false
     state._verifyToken = null
 
@@ -6652,7 +6653,7 @@ async function handleSendCode() {
       state._codeCountdown--
       if (state._codeCountdown <= 0) {
         clearAuthCodeTimer()
-        sendBtn.textContent = '閲嶆柊鍙戦€?
+        sendBtn.textContent = '重新发送'
         sendBtn.disabled = false
         state._codeSending = false
       } else {
@@ -6661,8 +6662,8 @@ async function handleSendCode() {
     }, 1000)
 
   } catch (err) {
-    showFormMsg('缃戠粶閿欒锛岃妫€鏌ョ綉缁滃悗閲嶈瘯', 'err')
-    sendBtn.textContent = '鍙戦€侀獙璇佺爜'
+    showFormMsg('网络错误，请检查网络后重试', 'err')
+    sendBtn.textContent = '发送验证码'
     sendBtn.disabled = false
     state._codeSending = false
   }
@@ -6690,20 +6691,20 @@ async function handleCodeVerify(code) {
     if (res.ok) {
       state._emailVerified = true
       state._verifyToken = res.token
-      if (codeStatus) { codeStatus.textContent = '鉁?; codeStatus.className = 'code-status code-status-ok' }
-      if (codeHint) { codeHint.textContent = '閭楠岃瘉鎴愬姛'; codeHint.className = 'form-hint form-hint-ok' }
+      if (codeStatus) { codeStatus.textContent = '✓'; codeStatus.className = 'code-status code-status-ok' }
+      if (codeHint) { codeHint.textContent = '邮箱验证成功'; codeHint.className = 'form-hint form-hint-ok' }
     } else {
       state._emailVerified = false
       state._verifyToken = null
-      if (codeStatus) { codeStatus.textContent = '鉁?; codeStatus.className = 'code-status code-status-err' }
-      if (codeHint) { codeHint.textContent = res.error || '楠岃瘉鐮侀敊璇?; codeHint.className = 'form-hint form-hint-err' }
+      if (codeStatus) { codeStatus.textContent = '✗'; codeStatus.className = 'code-status code-status-err' }
+      if (codeHint) { codeHint.textContent = res.error || '验证码错误'; codeHint.className = 'form-hint form-hint-err' }
     }
   } catch (err) {
     console.error('Verify error:', err)
     state._emailVerified = false
     state._verifyToken = null
-    if (codeStatus) { codeStatus.textContent = '鉁?; codeStatus.className = 'code-status code-status-err' }
-    if (codeHint) { codeHint.textContent = '楠岃瘉澶辫触锛岃閲嶈瘯'; codeHint.className = 'form-hint form-hint-err' }
+    if (codeStatus) { codeStatus.textContent = '✗'; codeStatus.className = 'code-status code-status-err' }
+    if (codeHint) { codeHint.textContent = '验证失败，请重试'; codeHint.className = 'form-hint form-hint-err' }
   }
 }
 
@@ -6747,33 +6748,33 @@ function showAuthModal(mode, options = {}) {
       <div class="form-msg" id="formMsg" style="display:none"></div>
       ${mode === 'register' && referralCode ? `
         <div class="auth-referral-box">
-          <label class="form-label">閭€璇风爜</label>
+          <label class="form-label">邀请码</label>
           <input type="text" class="form-input auth-referral-code" value="${escapeHtml(referralCode)}" readonly aria-readonly="true" tabindex="-1">
-          <p class="form-hint">璇ラ個璇风爜鏉ヨ嚜閭€璇烽摼鎺ワ紝娉ㄥ唽鍚庣敱鍚庣鑷姩褰掑洜锛屼笉鑳戒慨鏀广€?/p>
+          <p class="form-hint">该邀请码来自邀请链接，注册后由后端自动归因，不能修改。</p>
         </div>
       ` : ''}
       <div class="form-group">
-        <label class="form-label">閭</label>
+        <label class="form-label">邮箱</label>
         ${meta.codePurpose ? `
           <div class="form-row">
-            <input type="email" class="form-input" name="email" id="authEmail" required placeholder="璇疯緭鍏ラ偖绠? value="${escapeHtml(prefillEmail)}">
-            <button type="button" class="btn-send-code" id="sendCodeBtn">鍙戦€侀獙璇佺爜</button>
+            <input type="email" class="form-input" name="email" id="authEmail" required placeholder="请输入邮箱" value="${escapeHtml(prefillEmail)}">
+            <button type="button" class="btn-send-code" id="sendCodeBtn">发送验证码</button>
           </div>
         ` : `
-          <input type="email" class="form-input" name="email" id="authEmail" required placeholder="璇疯緭鍏ラ偖绠? value="${escapeHtml(prefillEmail)}">
+          <input type="email" class="form-input" name="email" id="authEmail" required placeholder="请输入邮箱" value="${escapeHtml(prefillEmail)}">
         `}
       </div>
       ${mode === 'register' ? `
         <div class="form-group">
-          <label class="form-label">鏄电О</label>
-          <input type="text" class="form-input" name="nickname" id="authNickname" placeholder="缁欒嚜宸卞彇涓悕瀛楋紙閫夊～锛?>
+          <label class="form-label">昵称</label>
+          <input type="text" class="form-input" name="nickname" id="authNickname" placeholder="给自己取个名字（选填）">
         </div>
       ` : ''}
       ${meta.codePurpose ? `
         <div class="form-group" id="codeGroup" style="display:none">
-          <label class="form-label">楠岃瘉鐮?/label>
+          <label class="form-label">验证码</label>
           <div class="code-input-wrap">
-            <input type="text" class="form-input form-input-code" name="code" placeholder="璇疯緭鍏?浣嶉獙璇佺爜" maxlength="6" inputmode="numeric" id="codeInput" autocomplete="one-time-code">
+            <input type="text" class="form-input form-input-code" name="code" placeholder="请输入6位验证码" maxlength="6" inputmode="numeric" id="codeInput" autocomplete="one-time-code">
             <span class="code-status" id="codeStatus"></span>
           </div>
           <p class="form-hint" id="codeHint"></p>
@@ -6783,19 +6784,19 @@ function showAuthModal(mode, options = {}) {
         <div class="form-group">
           <label class="form-label">${meta.passwordLabel}</label>
           <input type="password" class="form-input" name="password" ${mode === 'login_password' ? 'required' : ''} placeholder="${meta.passwordPlaceholder}">
-          ${meta.showPasswordRules ? '<p class="form-hint pwd-rules" id="pwdRules">闇€鍖呭惈锛氬ぇ鍐欏瓧姣嶃€佹暟瀛椼€佺壒娈婂瓧绗︼紙濡?!@#$%锛?/p>' : ''}
+          ${meta.showPasswordRules ? '<p class="form-hint pwd-rules" id="pwdRules">需包含：大写字母、数字、特殊字符（如 !@#$%）</p>' : ''}
         </div>
       ` : ''}
       ${meta.showConfirmPassword ? `
         <div class="form-group">
-          <label class="form-label">纭瀵嗙爜</label>
-          <input type="password" class="form-input" name="confirmPassword" required placeholder="璇峰啀娆¤緭鍏ュ瘑鐮?>
+          <label class="form-label">确认密码</label>
+          <input type="password" class="form-input" name="confirmPassword" required placeholder="请再次输入密码">
         </div>
       ` : ''}
       ${meta.showTos ? `
         <label class="tos-check">
           <input type="checkbox" id="tosAgree">
-          <span>鎴戝凡闃呰骞跺悓鎰?<a class="tos-link" id="openTos">銆婄敤鎴锋湇鍔″崗璁€?/a></span>
+          <span>我已阅读并同意 <a class="tos-link" id="openTos">《用户服务协议》</a></span>
         </label>
       ` : ''}
       ${renderAuthModeLinks(mode)}
@@ -6852,17 +6853,17 @@ function renderTrades() {
 
 
   const tradeTimeline = [
-    { date: '2025骞?0鏈堝簳', text: '榛勯噾3900鐪嬫定4240锛屽畬缇庛€?, links: ['https://t.co/EQi8J3DsVT'], result: 'win' },
-    { date: '2025骞?0鏈堝簳', text: '4240鍋氱┖4280姝㈡崯锛屽悗缁?400-5500涓诲崌娴笍绌恒€?, links: [], result: 'loss' },
-    { date: '2026骞?鏈堝簳', text: '鐧介摱99鍒€鏃舵槑纭彂鏂囦笉鑳戒拱鍏ラ粍閲戠櫧閾讹紝鐧介摱2骞村唴瑕佸洖鍒?0銆?, links: ['https://t.co/FhjDzyxqxj'], result: 'win' },
-    { date: '2026骞?鏈堝簳', text: '鎵嬫妸鎵?18鍋氱┖鐧介摱锛岀泩鍒?0涓囧垁銆?, links: ['https://t.co/Ufd06Tmol8', 'https://t.co/88zb1axEGn', 'https://t.co/jzMJM35nvp'], result: 'win' },
-    { date: '2026骞?鏈?鏃?, text: '杞悜榛勯噾澶氬ご锛岃涓鸿鍙嶅脊鍒癡WAP锛屽埌浣嶅钩澶氥€?, links: ['https://t.co/TwZ8EZK7lD', 'https://t.co/FXmGZxeFcA'], result: 'win' },
-    { date: '2026骞?鏈?鏃?, text: '鍒昏垷姹傚墤瀵绘壘鐧介摱78-88锛岄粍閲?100-5300鏈轰細銆?, links: ['https://t.co/Szd8T1is5e', 'https://t.co/QEgqVRSYWQ', 'https://t.co/uQVOStHBkK', 'https://t.co/jpeMotHR3L'], result: 'win' },
-    { date: '2026骞?鏈堝垵', text: '閰嶅悎鏈哄櫒浜?0绌哄埌79.9骞崇┖锛屼竴鎶?0涓囧垁鐩堝埄銆?, links: ['https://t.co/XdiBkFUs1H', 'https://t.co/Eeam1LziQG', 'https://t.co/zBug0ki4hk'], result: 'win' },
-    { date: '2026骞?鏈堜腑鏃?, text: '榛勯噾鐮翠綅锛岀湅绌?050鍒?791銆備腑闂?619鎶勫簳涓€娆℃鎹熴€?, links: ['https://t.co/FQUfUfj5iq', 'https://t.co/QJV6FztXKZ', 'https://t.co/31S3phsofJ'], result: 'win' },
-    { date: '2026骞?鏈?2鏃?, text: '榛勯噾4550鐨勬椂鍊欒涓轰笅璺岀骇鍒斁澶э紝鍒ゆ柇瑕佸幓4180-4250锛屾墜鎶婃墜甯︾潃鍦?150鎶勫簳锛岃涓烘湭鏉ヤ細閲嶅洖4800-5000銆?, links: ['https://t.co/oJzzusqsSv', 'https://t.co/tiobsJUH73', 'https://t.co/w0LVe24WJW', 'https://t.co/rCJ5uqLP0F', 'https://t.co/37cgAAezUm'], result: 'win' },
-    { date: '2026骞?鏈?5鏃?, text: '榛勯噾涓婃定鍒?580锛屽崠鍑?200涔扮殑绾搁粍閲戝拰鏉犳潌锛岄檮瑙嗛瑙ｆ瀽+鏈潵閲嶅洖4800-5000灞曟湜銆?, links: ['https://t.co/yCimZeBZfd', 'https://t.co/JZUJLVxHX4'], result: 'win' },
-    { date: '-', text: 'TRUMP鐖嗘媺50%锛屾彁鍓嶅垽鏂苟鍙備笌銆?, links: ['https://t.co/0DuoMRA32f', 'https://t.co/9AJNoHF7YD'], result: 'win' },
+    { date: '2025年10月底', text: '黄金3900看涨4240，完美。', links: ['https://t.co/EQi8J3DsVT'], result: 'win' },
+    { date: '2025年10月底', text: '4240做空4280止损，后续4400-5500主升浪踏空。', links: [], result: 'loss' },
+    { date: '2026年1月底', text: '白银99刀时明确发文不能买入黄金白银，白银2年内要回到50。', links: ['https://t.co/FhjDzyxqxj'], result: 'win' },
+    { date: '2026年1月底', text: '手把手118做空白银，盈利60万刀。', links: ['https://t.co/Ufd06Tmol8', 'https://t.co/88zb1axEGn', 'https://t.co/jzMJM35nvp'], result: 'win' },
+    { date: '2026年2月2日', text: '转向黄金多头，认为要反弹到VWAP，到位平多。', links: ['https://t.co/TwZ8EZK7lD', 'https://t.co/FXmGZxeFcA'], result: 'win' },
+    { date: '2026年2月5日', text: '刻舟求剑寻找白银78-88，黄金5100-5300机会。', links: ['https://t.co/Szd8T1is5e', 'https://t.co/QEgqVRSYWQ', 'https://t.co/uQVOStHBkK', 'https://t.co/jpeMotHR3L'], result: 'win' },
+    { date: '2026年3月初', text: '配合机器人90空到79.9平空，一把70万刀盈利。', links: ['https://t.co/XdiBkFUs1H', 'https://t.co/Eeam1LziQG', 'https://t.co/zBug0ki4hk'], result: 'win' },
+    { date: '2026年3月中旬', text: '黄金破位，看空5050到4791。中间4619抄底一次止损。', links: ['https://t.co/FQUfUfj5iq', 'https://t.co/QJV6FztXKZ', 'https://t.co/31S3phsofJ'], result: 'win' },
+    { date: '2026年3月22日', text: '黄金4550的时候认为下跌级别放大，判断要去4180-4250，手把手带着在4150抄底，认为未来会重回4800-5000。', links: ['https://t.co/oJzzusqsSv', 'https://t.co/tiobsJUH73', 'https://t.co/w0LVe24WJW', 'https://t.co/rCJ5uqLP0F', 'https://t.co/37cgAAezUm'], result: 'win' },
+    { date: '2026年3月25日', text: '黄金上涨到4580，卖出4200买的纸黄金和杠杆，附视频解析+未来重回4800-5000展望。', links: ['https://t.co/yCimZeBZfd', 'https://t.co/JZUJLVxHX4'], result: 'win' },
+    { date: '-', text: 'TRUMP爆拉50%，提前判断并参与。', links: ['https://t.co/0DuoMRA32f', 'https://t.co/9AJNoHF7YD'], result: 'win' },
   ]
 
   const wins = tradeTimeline.filter(t => t.result === 'win').length
@@ -6870,35 +6871,35 @@ function renderTrades() {
 
   mainContent.innerHTML = `
     <div class="trades-page fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖璇剧▼鍒楄〃</button>
+      <button class="back-btn" id="backHome">← 返回课程列表</button>
 
       <div class="trades-header">
-        <h1 class="trades-title">馃搳 琛楀摜鍘嗗彶鎴樼哗</h1>
-        <p class="trades-subtitle">浠ヤ笅鍐呭鏁寸悊鑷鍝ュ湪鎺ㄧ壒 X 鍏紑鍙戝竷鐨勪氦鏄撹鐐广€佹搷浣滄€濊矾銆佸疄鐩樿棰戜笌閮ㄥ垎鎴樼哗璁板綍銆?br>杩欎簺鍐呭鍙戝竷鏃堕棿鏃╀簬閮ㄥ垎琛屾儏楠岃瘉鑺傜偣锛岃兘澶熷府鍔╂柊鐢ㄦ埛鏇寸洿瑙傚湴浜嗚В琛楀摜鐨勫垎鏋愭鏋躲€佹墽琛岃兘鍔涘拰浜ゆ槗椋庢牸銆?br>缃戠珯鐨勬剰涔夊緢鏄庣‘锛?br>鎶婂師鏈垎鏁ｅ湪鍏紑骞冲彴涓婄殑瑙嗛鎬濊矾銆佺粡楠屻€佸鐩橈紝绯荤粺鍖栧湴鏁寸悊鍑烘潵锛屾彁渚涚粰鐪熸鏈夐渶瑕佺殑浜恒€?br>浣犱负鏈嶅姟浠樿垂锛屾垜鎻愪緵琛屾儏鎬濊矾锛屼负璁ょ煡鎻愬崌璐熻矗锛屼负浜ゆ槗鎵ц闂鎻愪緵甯姪銆?/p>
+        <h1 class="trades-title">📊 街哥历史战绩</h1>
+        <p class="trades-subtitle">以下内容整理自街哥在推特 X 公开发布的交易观点、操作思路、实盘视频与部分战绩记录。<br>这些内容发布时间早于部分行情验证节点，能够帮助新用户更直观地了解街哥的分析框架、执行能力和交易风格。<br>网站的意义很明确：<br>把原本分散在公开平台上的视频思路、经验、复盘，系统化地整理出来，提供给真正有需要的人。<br>你为服务付费，我提供行情思路，为认知提升负责，为交易执行问题提供帮助。</p>
       </div>
 
       <div class="trades-stats">
         <div class="trades-stat-card">
           <div class="trades-stat-num">${tradeTimeline.length}</div>
-          <div class="trades-stat-label">鍏紑浜ゆ槗</div>
+          <div class="trades-stat-label">公开交易</div>
         </div>
         <div class="trades-stat-card win">
           <div class="trades-stat-num">${wins}</div>
-          <div class="trades-stat-label">鐩堝埄</div>
+          <div class="trades-stat-label">盈利</div>
         </div>
         <div class="trades-stat-card loss">
           <div class="trades-stat-num">${losses}</div>
-          <div class="trades-stat-label">浜忔崯</div>
+          <div class="trades-stat-label">亏损</div>
         </div>
         <div class="trades-stat-card rate">
           <div class="trades-stat-num">${Math.round(wins / tradeTimeline.length * 100)}%</div>
-          <div class="trades-stat-label">鑳滅巼</div>
+          <div class="trades-stat-label">胜率</div>
         </div>
       </div>
 
       <div class="trades-section">
-        <h2 class="trades-section-title">浜ゆ槗鏃堕棿绾?/h2>
-        <p class="trades-section-desc">鍘诲勾10鏈堝彂鐜板竵鍦堣蛋鐔婏紝娴佸姩鎬ф瀬宸紝榛勯噾鐧介摱澶勪簬涓诲崌娴粨鏉熺殑绗竴娈垫毚璺岋紝璧勯噾娌¤蛋瀛曡偛鐫€宸ㄥぇ鏈轰細锛屽紑濮嬭浆鍚戣吹閲戝睘銆?/p>
+        <h2 class="trades-section-title">交易时间线</h2>
+        <p class="trades-section-desc">去年10月发现币圈走熊，流动性极差，黄金白银处于主升浪结束的第一段暴跌，资金没走孕育着巨大机会，开始转向贵金属。</p>
         <div class="trades-timeline">
           ${tradeTimeline.map(t => `
             <div class="timeline-item ${t.result}">
@@ -6906,7 +6907,7 @@ function renderTrades() {
               <div class="timeline-content">
                 <div class="timeline-date">${t.date}</div>
                 <div class="timeline-text">${escapeHtml(t.text)}</div>
-                ${t.links.length > 0 ? `<div class="timeline-links">${t.links.map((l, i) => `<a href="${escapeHtml(l)}" target="_blank" rel="noopener noreferrer">澶嶇洏閾炬帴${t.links.length > 1 ? i + 1 : ''}</a>`).join(' ')}</div>` : ''}
+                ${t.links.length > 0 ? `<div class="timeline-links">${t.links.map((l, i) => `<a href="${escapeHtml(l)}" target="_blank" rel="noopener noreferrer">复盘链接${t.links.length > 1 ? i + 1 : ''}</a>`).join(' ')}</div>` : ''}
               </div>
             </div>
           `).join('')}
@@ -6914,47 +6915,47 @@ function renderTrades() {
       </div>
 
       <div class="trades-section">
-        <h2 class="trades-section-title">MT5 浜ゆ槗鎶ュ憡</h2>
-        <p class="trades-section-desc">浠ヤ笅涓?MT5 瀹炵洏浜ゆ槗鎶ュ憡鎴浘锛屽寘鍚畬鏁翠氦鏄撹褰曘€?/p>
+        <h2 class="trades-section-title">MT5 交易报告</h2>
+        <p class="trades-section-desc">以下为 MT5 实盘交易报告截图，包含完整交易记录。</p>
         <div class="trades-reports">
           <div class="trades-report-img">
-            <img src="/trades/report1.jpeg" alt="MT5浜ゆ槗鎶ュ憡1" loading="lazy">
+            <img src="/trades/report1.jpeg" alt="MT5交易报告1" loading="lazy">
           </div>
           <div class="trades-report-img">
-            <img src="/trades/report2.jpeg" alt="MT5浜ゆ槗鎶ュ憡2" loading="lazy">
+            <img src="/trades/report2.jpeg" alt="MT5交易报告2" loading="lazy">
           </div>
         </div>
       </div>
 
       ${adminUser ? `
         <div class="trades-section">
-          <h2 class="trades-section-title">绠＄悊锛氭坊鍔犳垬缁╄褰?/h2>
+          <h2 class="trades-section-title">管理：添加战绩记录</h2>
           <div class="trades-admin-form" id="tradesAdminForm" style="display:none">
             <div class="trades-form-grid">
               <input type="date" id="tradeDate" class="trades-input" required>
-              <input type="text" id="tradeSymbol" class="trades-input" placeholder="鏍囩殑锛圔TC/GOLD/ETH锛?>
+              <input type="text" id="tradeSymbol" class="trades-input" placeholder="标的（BTC/GOLD/ETH）">
               <select id="tradeDirection" class="trades-input">
-                <option value="long">鍋氬 Long</option>
-                <option value="short">鍋氱┖ Short</option>
+                <option value="long">做多 Long</option>
+                <option value="short">做空 Short</option>
               </select>
               <select id="tradeResult" class="trades-input">
-                <option value="win">鐩堝埄</option>
-                <option value="loss">浜忔崯</option>
+                <option value="win">盈利</option>
+                <option value="loss">亏损</option>
               </select>
-              <input type="text" id="tradeEntry" class="trades-input" placeholder="鍏ュ満浠?>
-              <input type="text" id="tradeExit" class="trades-input" placeholder="鍑哄満浠?>
-              <input type="text" id="tradeProfit" class="trades-input" placeholder="鐩堜簭姣斾緥锛堝 +12.5%锛?>
-              <input type="text" id="tradeScreenshot" class="trades-input" placeholder="鎴浘閾炬帴锛堝彲閫夛級">
+              <input type="text" id="tradeEntry" class="trades-input" placeholder="入场价">
+              <input type="text" id="tradeExit" class="trades-input" placeholder="出场价">
+              <input type="text" id="tradeProfit" class="trades-input" placeholder="盈亏比例（如 +12.5%）">
+              <input type="text" id="tradeScreenshot" class="trades-input" placeholder="截图链接（可选）">
             </div>
-            <input type="text" id="tradeNotes" class="trades-input" placeholder="澶囨敞锛堝彲閫夛級" style="width:100%;margin-top:8px">
+            <input type="text" id="tradeNotes" class="trades-input" placeholder="备注（可选）" style="width:100%;margin-top:8px">
             <div style="margin-top:12px;display:flex;gap:8px">
-              <button class="btn btn-primary" id="submitTrade">娣诲姞</button>
-              <button class="btn btn-ghost" id="cancelAddTrade">鍙栨秷</button>
+              <button class="btn btn-primary" id="submitTrade">添加</button>
+              <button class="btn btn-ghost" id="cancelAddTrade">取消</button>
             </div>
           </div>
-          <button class="btn btn-primary" id="showAddTrade">+ 娣诲姞鎴樼哗</button>
+          <button class="btn btn-primary" id="showAddTrade">+ 添加战绩</button>
           <div class="trades-list" id="tradesList" style="margin-top:16px">
-            <div class="loading-spinner">鍔犺浇涓?..</div>
+            <div class="loading-spinner">加载中...</div>
           </div>
         </div>
       ` : ''}
@@ -6974,7 +6975,7 @@ function renderTrades() {
     })
     document.getElementById('submitTrade')?.addEventListener('click', async () => {
       const btn = document.getElementById('submitTrade')
-      btn.disabled = true; btn.textContent = '鎻愪氦涓?..'
+      btn.disabled = true; btn.textContent = '提交中...'
       const data = {
         trade_date: document.getElementById('tradeDate').value,
         symbol: document.getElementById('tradeSymbol').value.trim().toUpperCase(),
@@ -6986,14 +6987,14 @@ function renderTrades() {
         notes: document.getElementById('tradeNotes').value.trim(),
         screenshot_url: document.getElementById('tradeScreenshot').value.trim(),
       }
-      if (!data.trade_date || !data.symbol) { alert('璇峰～鍐欐棩鏈熷拰鏍囩殑'); btn.disabled = false; btn.textContent = '娣诲姞'; return }
+      if (!data.trade_date || !data.symbol) { alert('请填写日期和标的'); btn.disabled = false; btn.textContent = '添加'; return }
       const res = await api.post('/api/trades', data)
       if (res.ok) {
         document.getElementById('tradesAdminForm').style.display = 'none'
         document.getElementById('showAddTrade').style.display = 'block'
         loadTradeRecords()
-      } else { alert(res.error || '娣诲姞澶辫触') }
-      btn.disabled = false; btn.textContent = '娣诲姞'
+      } else { alert(res.error || '添加失败') }
+      btn.disabled = false; btn.textContent = '添加'
     })
   }
 }
@@ -7017,25 +7018,25 @@ async function loadTradeRecords() {
       statsEl.innerHTML = `
         <div class="trades-stat-card">
           <div class="trades-stat-num">${total}</div>
-          <div class="trades-stat-label">鎬讳氦鏄?/div>
+          <div class="trades-stat-label">总交易</div>
         </div>
         <div class="trades-stat-card win">
           <div class="trades-stat-num">${wins}</div>
-          <div class="trades-stat-label">鐩堝埄</div>
+          <div class="trades-stat-label">盈利</div>
         </div>
         <div class="trades-stat-card loss">
           <div class="trades-stat-num">${losses}</div>
-          <div class="trades-stat-label">浜忔崯</div>
+          <div class="trades-stat-label">亏损</div>
         </div>
         <div class="trades-stat-card rate">
           <div class="trades-stat-num">${winRate}%</div>
-          <div class="trades-stat-label">鑳滅巼</div>
+          <div class="trades-stat-label">胜率</div>
         </div>
       `
     }
 
     if (trades.length === 0) {
-      listEl.innerHTML = '<div class="comments-empty">鏆傛棤浜ゆ槗璁板綍</div>'
+      listEl.innerHTML = '<div class="comments-empty">暂无交易记录</div>'
       return
     }
 
@@ -7044,45 +7045,45 @@ async function loadTradeRecords() {
       <div class="trade-row ${escapeHtml(t.result)}">
         <div class="trade-date">${escapeHtml(t.trade_date)}</div>
         <div class="trade-symbol">${escapeHtml(t.symbol)}</div>
-        <div class="trade-direction ${escapeHtml(t.direction)}">${t.direction === 'long' ? '鍋氬' : '鍋氱┖'}</div>
+        <div class="trade-direction ${escapeHtml(t.direction)}">${t.direction === 'long' ? '做多' : '做空'}</div>
         <div class="trade-prices">
-          ${t.entry_price ? `<span class="trade-entry">鍏?${escapeHtml(t.entry_price)}</span>` : ''}
-          ${t.exit_price ? `<span class="trade-exit">鍑?${escapeHtml(t.exit_price)}</span>` : ''}
+          ${t.entry_price ? `<span class="trade-entry">入 ${escapeHtml(t.entry_price)}</span>` : ''}
+          ${t.exit_price ? `<span class="trade-exit">出 ${escapeHtml(t.exit_price)}</span>` : ''}
         </div>
         <div class="trade-profit ${escapeHtml(t.result)}">${escapeHtml(t.profit_pct) || '-'}</div>
-        <div class="trade-result ${escapeHtml(t.result)}">${t.result === 'win' ? '鉁?鐩堝埄' : '鉂?浜忔崯'}</div>
+        <div class="trade-result ${escapeHtml(t.result)}">${t.result === 'win' ? '✅ 盈利' : '❌ 亏损'}</div>
         ${t.notes ? `<div class="trade-notes">${escapeHtml(t.notes)}</div>` : ''}
-        ${t.screenshot_url ? `<a class="trade-screenshot" href="${escapeHtml(t.screenshot_url)}" target="_blank" rel="noopener noreferrer">馃摳 鏌ョ湅鎴浘</a>` : ''}
-        ${adminUser ? `<button class="btn btn-ghost btn-xs trade-del-btn" data-trade-id="${t.id}" style="color:#ef4444">鍒犻櫎</button>` : ''}
+        ${t.screenshot_url ? `<a class="trade-screenshot" href="${escapeHtml(t.screenshot_url)}" target="_blank" rel="noopener noreferrer">📸 查看截图</a>` : ''}
+        ${adminUser ? `<button class="btn btn-ghost btn-xs trade-del-btn" data-trade-id="${t.id}" style="color:#ef4444">删除</button>` : ''}
       </div>
     `).join('')
 
     // Admin delete handlers
     listEl.querySelectorAll('.trade-del-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
-        if (!confirm('纭畾鍒犻櫎锛?)) return
+        if (!confirm('确定删除？')) return
         btn.disabled = true
         const r = await api.del(`/api/trades?id=${btn.dataset.tradeId}`)
         if (r.ok) loadTradeRecords()
-        else { alert('鍒犻櫎澶辫触'); btn.disabled = false }
+        else { alert('删除失败'); btn.disabled = false }
       })
     })
   } catch (err) {
     console.error('Load trades error:', err)
-    listEl.innerHTML = '<div class="comments-empty">鍔犺浇澶辫触</div>'
+    listEl.innerHTML = '<div class="comments-empty">加载失败</div>'
   }
 }
 
 // ===== Community View =====
 const boardMap = {
-  ideas: '閲戣瀺鎬濊矾鍒嗕韩',
-  review: '鏍囩殑澶嶇洏',
-  discussion: '浜ゆ祦浜掔浉甯姪',
+  ideas: '金融思路分享',
+  review: '标的复盘',
+  discussion: '交流互相帮助',
 }
 const forumSortOptions = [
-  { key: 'active', label: '鏈€鏂板洖澶? },
-  { key: 'newest', label: '鏈€鏂板彂甯? },
-  { key: 'hot', label: '鏈€鐑? },
+  { key: 'active', label: '最新回复' },
+  { key: 'newest', label: '最新发布' },
+  { key: 'hot', label: '最热' },
 ]
 
 function formatDate(dateStr) {
@@ -7108,10 +7109,10 @@ function formatDateTime(dateStr) {
 function formatRelativeTime(dateStr) {
   if (!dateStr) return ''
   const diff = Date.now() - new Date(dateStr).getTime()
-  if (diff < 60 * 1000) return '鍒氬垰'
-  if (diff < 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / 60000))} 鍒嗛挓鍓峘
-  if (diff < 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / 3600000))} 灏忔椂鍓峘
-  if (diff < 30 * 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / 86400000))} 澶╁墠`
+  if (diff < 60 * 1000) return '刚刚'
+  if (diff < 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / 60000))} 分钟前`
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / 3600000))} 小时前`
+  if (diff < 30 * 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / 86400000))} 天前`
   return formatDate(dateStr)
 }
 
@@ -7125,11 +7126,11 @@ function renderForumAvatar(user, className = '') {
 
 function renderIdentityBadge(user, { compact = false } = {}) {
   if (!user) return ''
-  if (user.isAdmin) return `<span class="forum-role-badge admin ${compact ? 'compact' : ''}">绠＄悊鍛?/span>`
+  if (user.isAdmin) return `<span class="forum-role-badge admin ${compact ? 'compact' : ''}">管理员</span>`
   const plan = getEffectivePlan(user)
   if (plan === 'pro') return `<span class="plan-badge pro ${compact ? 'compact' : ''}">Pro</span>`
   if (plan === 'plus') return `<span class="plan-badge plus ${compact ? 'compact' : ''}">Plus</span>`
-  return `<span class="forum-role-badge free ${compact ? 'compact' : ''}">鎴愬憳</span>`
+  return `<span class="forum-role-badge free ${compact ? 'compact' : ''}">成员</span>`
 }
 
 function renderForumTags(tags = [], extraClass = '') {
@@ -7142,7 +7143,7 @@ function renderForumTags(tags = [], extraClass = '') {
 function renderParticipantAvatars(participants = []) {
   if (!participants.length) return ''
   return `
-    <div class="forum-participants" title="鏈€杩戝弬涓庤€?>
+    <div class="forum-participants" title="最近参与者">
       ${participants.map(user => `
         <div class="forum-participant-avatar" title="${escapeHtml(user.name)}">
           ${user.avatar ? `<img src="${escapeHtml(user.avatar)}" class="avatar-img">` : escapeHtml((user.name || 'U').charAt(0).toUpperCase())}
@@ -7154,10 +7155,10 @@ function renderParticipantAvatars(participants = []) {
 
 function renderThreadBadges(post) {
   const badges = []
-  if (post.isSticky) badges.push('<span class="forum-label sticky">缃《</span>')
-  if (post.isFeatured) badges.push('<span class="forum-label featured">绮惧崕</span>')
-  if (post.isLocked || post.threadLocked) badges.push('<span class="forum-label locked">閿佸笘</span>')
-  badges.push(`<span class="forum-label board">${escapeHtml(boardMap[post.board] || '绀惧尯')}</span>`)
+  if (post.isSticky) badges.push('<span class="forum-label sticky">置顶</span>')
+  if (post.isFeatured) badges.push('<span class="forum-label featured">精华</span>')
+  if (post.isLocked || post.threadLocked) badges.push('<span class="forum-label locked">锁帖</span>')
+  badges.push(`<span class="forum-label board">${escapeHtml(boardMap[post.board] || '社区')}</span>`)
   return badges.join('')
 }
 
@@ -7169,15 +7170,15 @@ function renderForumPagination(currentPage, totalPages, dataAttr = 'data-page') 
   }
   const items = []
   const prevPage = currentPage > 1 ? currentPage - 1 : null
-  items.push(`<button class="page-btn page-btn-nav" ${prevPage ? `${dataAttr}="${prevPage}"` : 'disabled'}>涓婁竴椤?/button>`)
+  items.push(`<button class="page-btn page-btn-nav" ${prevPage ? `${dataAttr}="${prevPage}"` : 'disabled'}>上一页</button>`)
   let lastPage = 0
   for (const page of pages) {
-    if (lastPage && page - lastPage > 1) items.push('<span class="page-ellipsis">鈥?/span>')
+    if (lastPage && page - lastPage > 1) items.push('<span class="page-ellipsis">…</span>')
     items.push(`<button class="page-btn ${page === currentPage ? 'active' : ''}" ${dataAttr}="${page}">${page}</button>`)
     lastPage = page
   }
   const nextPage = currentPage < totalPages ? currentPage + 1 : null
-  items.push(`<button class="page-btn page-btn-nav" ${nextPage ? `${dataAttr}="${nextPage}"` : 'disabled'}>涓嬩竴椤?/button>`)
+  items.push(`<button class="page-btn page-btn-nav" ${nextPage ? `${dataAttr}="${nextPage}"` : 'disabled'}>下一页</button>`)
   return items.join('')
 }
 
@@ -7209,10 +7210,10 @@ function renderReplyQuoteComposer() {
   wrap.style.display = 'flex'
   wrap.innerHTML = `
     <div class="reply-quote-box-inner">
-      <div class="reply-quote-box-meta">寮曠敤 #${state.replyQuote.floorNumber} 路 ${escapeHtml(state.replyQuote.user?.name || '鍖垮悕鐢ㄦ埛')}</div>
+      <div class="reply-quote-box-meta">引用 #${state.replyQuote.floorNumber} · ${escapeHtml(state.replyQuote.user?.name || '匿名用户')}</div>
       <div class="reply-quote-box-text">${escapeHtml(state.replyQuote.text || '').replace(/\n/g, '<br>')}</div>
     </div>
-    <button type="button" class="reply-quote-box-close" id="clearReplyQuote" aria-label="鍙栨秷寮曠敤">脳</button>
+    <button type="button" class="reply-quote-box-close" id="clearReplyQuote" aria-label="取消引用">×</button>
   `
 }
 
@@ -7266,21 +7267,21 @@ function renderCommunity() {
   resetReplyQuote()
   mainContent.innerHTML = `
     <div class="community-page forum-page fade-in">
-      <button class="back-btn" id="backHome">鈫?杩斿洖璇剧▼鍒楄〃</button>
+      <button class="back-btn" id="backHome">← 返回课程列表</button>
       <div class="community-header forum-header">
         <div>
-          <div class="forum-header-kicker">浼氬憳鐗堣创鍚?/div>
-          <h1 class="community-title">馃挰 浜ゆ槗璁ㄨ鍖?/h1>
-          <p class="community-subtitle">鏇撮珮淇℃伅瀵嗗害銆佹洿鍍忔ゼ灞傜殑鍥炲銆佹洿鍍忕ぞ鍖虹殑璁ㄨ姘涘洿銆?/p>
+          <div class="forum-header-kicker">会员版贴吧</div>
+          <h1 class="community-title">💬 交易讨论区</h1>
+          <p class="community-subtitle">更高信息密度、更像楼层的回复、更像社区的讨论氛围。</p>
         </div>
         <div class="forum-header-meta">
           <div class="forum-header-stat">
-            <span class="forum-header-stat-num">${state.communityTotal || '鈥?}</span>
-            <span class="forum-header-stat-label">褰撳墠鏉垮潡甯栧瓙</span>
+            <span class="forum-header-stat-num">${state.communityTotal || '—'}</span>
+            <span class="forum-header-stat-label">当前板块帖子</span>
           </div>
           <div class="forum-header-stat">
-            <span class="forum-header-stat-num">${state.communitySort === 'hot' ? '鐑' : state.communitySort === 'newest' ? '鏂板笘' : '娲昏穬'}</span>
-            <span class="forum-header-stat-label">褰撳墠鎺掑簭</span>
+            <span class="forum-header-stat-num">${state.communitySort === 'hot' ? '热榜' : state.communitySort === 'newest' ? '新帖' : '活跃'}</span>
+            <span class="forum-header-stat-label">当前排序</span>
           </div>
         </div>
       </div>
@@ -7303,15 +7304,15 @@ function renderCommunity() {
               type="search"
               class="forum-search-input"
               id="communitySearchInput"
-              placeholder="鎼滅储鏍囬鎴栨鏂囨憳瑕?
+              placeholder="搜索标题或正文摘要"
               value="${escapeHtml(state.communityQuery)}"
               maxlength="40"
             >
-            <button class="forum-search-btn" type="submit">鎼滅储</button>
+            <button class="forum-search-btn" type="submit">搜索</button>
           </form>
         </div>
         <div class="forum-filter-row">
-          <button class="forum-tag-filter ${!state.communityTag ? 'active' : ''}" data-tag-filter="">鍏ㄩ儴璇濋</button>
+          <button class="forum-tag-filter ${!state.communityTag ? 'active' : ''}" data-tag-filter="">全部话题</button>
           ${state.communityTags.map(tag => `
             <button class="forum-tag-filter ${state.communityTag === tag.slug ? 'active' : ''}" data-tag-filter="${escapeHtml(tag.slug)}">
               #${escapeHtml(tag.label)} <span>${tag.count || 0}</span>
@@ -7321,34 +7322,34 @@ function renderCommunity() {
       </div>
       ${isPaid() ? `
         <div class="community-create forum-create-box">
-          <button class="btn btn-primary" id="showCreatePost">鉁忥笍 鍙戝竷鏂板笘</button>
-          <div class="forum-create-copy">鏀寔瀵屾枃鏈€佹爣绛惧拰鏈€澶?${MAX_POST_IMAGES} 寮犲浘鐗?/div>
+          <button class="btn btn-primary" id="showCreatePost">✏️ 发布新帖</button>
+          <div class="forum-create-copy">支持富文本、标签和最多 ${MAX_POST_IMAGES} 张图片</div>
         </div>
         <div class="create-post-form" id="createPostForm" style="display:none">
           <div class="forum-create-head">
             <div>
-              <div class="forum-create-title">鏂板缓涓婚</div>
-              <div class="forum-create-subtitle">鎶婁綘鐨勪氦鏄撹鐐广€佸鐩樺拰闂鍐欐垚涓€涓洿鍍忚鍧涚殑甯栧瓙</div>
+              <div class="forum-create-title">新建主题</div>
+              <div class="forum-create-subtitle">把你的交易观点、复盘和问题写成一个更像论坛的帖子</div>
             </div>
             <div class="forum-create-identity">${renderIdentityBadge(state.user)}</div>
           </div>
-          <input type="text" class="post-title-input" id="postTitleInput" placeholder="甯栧瓙鏍囬锛屽敖閲忓叿浣撲竴鐐? maxlength="200">
-          <input type="text" class="post-title-input post-tags-input" id="postTagsInput" placeholder="鏍囩锛岄€楀彿鍒嗛殧锛屼緥濡傦細榛勯噾, 姣旂壒甯? 鐭嚎" maxlength="60">
+          <input type="text" class="post-title-input" id="postTitleInput" placeholder="帖子标题，尽量具体一点" maxlength="200">
+          <input type="text" class="post-title-input post-tags-input" id="postTagsInput" placeholder="标签，逗号分隔，例如：黄金, 比特币, 短线" maxlength="60">
           <div class="post-editor-shell">
             <div id="postEditor" class="post-editor"></div>
           </div>
           <div class="post-editor-meta">
-            <span class="post-editor-hint">鏀寔鏍囬銆佸紩鐢ㄣ€佸垪琛ㄣ€侀摼鎺ュ拰鍥剧墖锛屾渶澶?${MAX_POST_IMAGES} 寮犲浘</span>
-            <span class="post-editor-hint">鍗曞紶鍥剧墖涓嶈秴杩?5MB</span>
+            <span class="post-editor-hint">支持标题、引用、列表、链接和图片，最多 ${MAX_POST_IMAGES} 张图</span>
+            <span class="post-editor-hint">单张图片不超过 5MB</span>
           </div>
           <div class="create-post-actions">
-            <button class="btn btn-ghost" id="cancelCreatePost">鍙栨秷</button>
-            <button class="btn btn-primary" id="submitPost">鍙戝竷</button>
+            <button class="btn btn-ghost" id="cancelCreatePost">取消</button>
+            <button class="btn btn-primary" id="submitPost">发布</button>
           </div>
         </div>
       ` : ''}
       <div class="community-posts-list" id="communityPostsList">
-        <div class="loading-spinner">鍔犺浇涓?..</div>
+        <div class="loading-spinner">加载中...</div>
       </div>
       <div class="community-pagination" id="communityPagination"></div>
     </div>
@@ -7378,9 +7379,9 @@ function renderCommunityPosts() {
   if (!state.communityPosts.length) {
     listEl.innerHTML = `
       <div class="community-empty forum-empty">
-        <div class="forum-empty-icon">馃У</div>
-        <div class="forum-empty-title">杩欎釜鏉垮潡鏆傛椂杩樻病鏈夌鍚堟潯浠剁殑甯栧瓙</div>
-        <div class="forum-empty-desc">${state.communityQuery || state.communityTag ? '鎹釜鍏抽敭璇嶆垨璇濋璇曡瘯锛屾垨鑰呯洿鎺ュ彂绗竴绡囥€? : '鐜板湪鍙戜竴绡囷紝璁╄璁虹湡姝ｅ姩璧锋潵銆?}</div>
+        <div class="forum-empty-icon">🧵</div>
+        <div class="forum-empty-title">这个板块暂时还没有符合条件的帖子</div>
+        <div class="forum-empty-desc">${state.communityQuery || state.communityTag ? '换个关键词或话题试试，或者直接发第一篇。' : '现在发一篇，让讨论真正动起来。'}</div>
       </div>
     `
   } else {
@@ -7392,7 +7393,7 @@ function renderCommunityPosts() {
               ${renderThreadBadges(post)}
               ${renderForumTags(post.tags || [], 'inline')}
             </div>
-            <div class="forum-thread-last-active">鏈€鍚庢椿璺?${formatRelativeTime(post.lastRepliedAt)}</div>
+            <div class="forum-thread-last-active">最后活跃 ${formatRelativeTime(post.lastRepliedAt)}</div>
           </div>
           <h3 class="post-card-title forum-thread-title">${escapeHtml(post.title)}</h3>
           <p class="post-card-preview forum-thread-preview">${escapeHtml(post.preview || '')}</p>
@@ -7401,17 +7402,17 @@ function renderCommunityPosts() {
               ${renderForumAvatar(post.user, 'forum-thread-avatar')}
               <div class="forum-thread-authorinfo">
                 <div class="forum-thread-authorname">${escapeHtml(post.user.name)} ${renderIdentityBadge(post.user, { compact: true })}</div>
-                <div class="forum-thread-authorsub">鍙戣〃浜?${formatDateTime(post.createdAt)}${post.lastReplyUser ? ` 路 鏈€鍚庡洖澶?${escapeHtml(post.lastReplyUser.name)}` : ''}</div>
+                <div class="forum-thread-authorsub">发表于 ${formatDateTime(post.createdAt)}${post.lastReplyUser ? ` · 最后回复 ${escapeHtml(post.lastReplyUser.name)}` : ''}</div>
               </div>
             </div>
             ${renderParticipantAvatars(post.participants || [])}
           </div>
         </div>
         <div class="forum-thread-stats">
-          <div class="forum-thread-stat"><span>鍥炲</span><strong>${post.replyCount || 0}</strong></div>
-          <div class="forum-thread-stat"><span>娴忚</span><strong>${post.viewCount || 0}</strong></div>
-          <div class="forum-thread-stat"><span>鍥剧墖</span><strong>${post.imageCount || 0}</strong></div>
-          ${post.canDelete ? `<button class="post-delete-btn forum-delete-btn" data-delete-post="${post.id}" title="鍒犻櫎甯栧瓙">鍒犻櫎</button>` : ''}
+          <div class="forum-thread-stat"><span>回复</span><strong>${post.replyCount || 0}</strong></div>
+          <div class="forum-thread-stat"><span>浏览</span><strong>${post.viewCount || 0}</strong></div>
+          <div class="forum-thread-stat"><span>图片</span><strong>${post.imageCount || 0}</strong></div>
+          ${post.canDelete ? `<button class="post-delete-btn forum-delete-btn" data-delete-post="${post.id}" title="删除帖子">删除</button>` : ''}
         </div>
       </article>
     `).join('')
@@ -7436,21 +7437,21 @@ function renderReplyItem(reply) {
           </div>
           <div class="forum-floor-meta">
             <span class="forum-floor-number">#${reply.floorNumber || 0}</span>
-            ${reply.canDelete ? `<button class="reply-delete-btn" data-delete-reply="${reply.id}" title="鍒犻櫎">鉁?/button>` : ''}
+            ${reply.canDelete ? `<button class="reply-delete-btn" data-delete-reply="${reply.id}" title="删除">✕</button>` : ''}
           </div>
         </div>
         ${reply.quote ? `
           <button class="forum-floor-quote" data-quote-reply="${reply.quote.id}">
-            <span class="forum-floor-quote-label">寮曠敤 #${reply.quote.floorNumber}</span>
-            <span class="forum-floor-quote-text">${escapeHtml(reply.quote.user?.name || '')}锛?{escapeHtml(reply.quote.text || '')}</span>
+            <span class="forum-floor-quote-label">引用 #${reply.quote.floorNumber}</span>
+            <span class="forum-floor-quote-text">${escapeHtml(reply.quote.user?.name || '')}：${escapeHtml(reply.quote.text || '')}</span>
           </button>
         ` : ''}
         <div class="reply-body ${reply.contentHtml ? 'reply-body-rich post-detail-content-rich' : ''}">
           ${reply.contentHtml || escapeHtml(reply.content || '').replace(/\n/g, '<br>')}
         </div>
         <div class="forum-floor-actions">
-          <button class="forum-floor-action" data-open-reply-quote="${reply.id}">寮曠敤</button>
-          <button class="forum-floor-action" data-report-reply="${reply.id}">涓炬姤</button>
+          <button class="forum-floor-action" data-open-reply-quote="${reply.id}">引用</button>
+          <button class="forum-floor-action" data-report-reply="${reply.id}">举报</button>
         </div>
       </div>
     </article>
@@ -7472,8 +7473,8 @@ async function renderPost() {
 
   mainContent.innerHTML = `
     <div class="post-page fade-in">
-      <button class="back-btn" id="backCommunity">鈫?杩斿洖绀惧尯</button>
-      <div class="loading-spinner">鍔犺浇涓?..</div>
+      <button class="back-btn" id="backCommunity">← 返回社区</button>
+      <div class="loading-spinner">加载中...</div>
     </div>
   `
 
@@ -7484,8 +7485,8 @@ async function renderPost() {
     if (!post) {
       mainContent.innerHTML = `
         <div class="post-page fade-in">
-          <button class="back-btn" id="backCommunity">鈫?杩斿洖绀惧尯</button>
-          <div class="community-empty">甯栧瓙涓嶅瓨鍦?/div>
+          <button class="back-btn" id="backCommunity">← 返回社区</button>
+          <div class="community-empty">帖子不存在</div>
         </div>`
       return
     }
@@ -7496,7 +7497,7 @@ async function renderPost() {
 
     mainContent.innerHTML = `
       <div class="post-page forum-thread-page fade-in">
-        <button class="back-btn" id="backCommunity">鈫?杩斿洖绀惧尯</button>
+        <button class="back-btn" id="backCommunity">← 返回社区</button>
         <div class="post-detail-card forum-thread-detail">
           <div class="forum-thread-detail-top">
             <div class="forum-thread-badges">${renderThreadBadges(post)}</div>
@@ -7506,34 +7507,34 @@ async function renderPost() {
             ${renderForumAvatar(post.user, 'forum-thread-detail-avatar')}
             <div class="post-card-meta forum-thread-detail-meta">
               <span class="post-card-author">${escapeHtml(post.user.name)} ${renderIdentityBadge(post.user)}</span>
-              <span class="post-card-time">鍙戝竷浜?${formatDateTime(post.createdAt)}${post.lastRepliedAt ? ` 路 鏈€鍚庢椿璺?${formatRelativeTime(post.lastRepliedAt)}` : ''}</span>
+              <span class="post-card-time">发布于 ${formatDateTime(post.createdAt)}${post.lastRepliedAt ? ` · 最后活跃 ${formatRelativeTime(post.lastRepliedAt)}` : ''}</span>
             </div>
             <div class="forum-thread-detail-participants">${renderParticipantAvatars(post.participants || [])}</div>
           </div>
           <div class="forum-thread-detail-stats">
-            <span class="forum-thread-stat-pill">鍥炲 ${post.replyCount || 0}</span>
-            <span class="forum-thread-stat-pill">娴忚 ${post.viewCount || 0}</span>
-            <span class="forum-thread-stat-pill">鍥剧墖 ${post.imageCount || 0}</span>
+            <span class="forum-thread-stat-pill">回复 ${post.replyCount || 0}</span>
+            <span class="forum-thread-stat-pill">浏览 ${post.viewCount || 0}</span>
+            <span class="forum-thread-stat-pill">图片 ${post.imageCount || 0}</span>
           </div>
           <div class="forum-thread-detail-actions">
-            <button class="forum-action-btn" data-post-report="${post.id}">涓炬姤</button>
+            <button class="forum-action-btn" data-post-report="${post.id}">举报</button>
             ${post.canModerate ? `
-              <button class="forum-action-btn admin ${post.isSticky ? 'active' : ''}" data-post-pin="${post.id}" data-next-pin="${post.isSticky ? '0' : '1'}">${post.isSticky ? '鍙栨秷缃《' : '缃《'}</button>
-              <button class="forum-action-btn admin ${post.isFeatured ? 'active' : ''}" data-post-feature="${post.id}" data-next-feature="${post.isFeatured ? '0' : '1'}">${post.isFeatured ? '鍙栨秷绮惧崕' : '璁句负绮惧崕'}</button>
-              <button class="forum-action-btn admin ${post.threadLocked ? 'active' : ''}" data-post-lock="${post.id}" data-next-lock="${post.threadLocked ? '0' : '1'}">${post.threadLocked ? '瑙ｉ攣涓婚' : '閿佸畾涓婚'}</button>
+              <button class="forum-action-btn admin ${post.isSticky ? 'active' : ''}" data-post-pin="${post.id}" data-next-pin="${post.isSticky ? '0' : '1'}">${post.isSticky ? '取消置顶' : '置顶'}</button>
+              <button class="forum-action-btn admin ${post.isFeatured ? 'active' : ''}" data-post-feature="${post.id}" data-next-feature="${post.isFeatured ? '0' : '1'}">${post.isFeatured ? '取消精华' : '设为精华'}</button>
+              <button class="forum-action-btn admin ${post.threadLocked ? 'active' : ''}" data-post-lock="${post.id}" data-next-lock="${post.threadLocked ? '0' : '1'}">${post.threadLocked ? '解锁主题' : '锁定主题'}</button>
             ` : ''}
-            ${post.canDelete ? `<button class="post-delete-detail-btn" data-delete-post="${post.id}">鍒犻櫎甯栧瓙</button>` : ''}
+            ${post.canDelete ? `<button class="post-delete-detail-btn" data-delete-post="${post.id}">删除帖子</button>` : ''}
           </div>
           <h1 class="post-detail-title">${escapeHtml(post.title)}</h1>
           <div class="post-detail-body-wrap">
             ${locked && !paid ? `
-              <div class="post-blur-content">${escapeHtml(post.preview || '姝ゅ唴瀹逛粎闄愪粯璐逛細鍛樻煡鐪?..').replace(/\n/g, '<br>')}</div>
+              <div class="post-blur-content">${escapeHtml(post.preview || '此内容仅限付费会员查看...').replace(/\n/g, '<br>')}</div>
               <div class="post-paywall-overlay">
                 <div class="post-paywall-box">
-                  <div class="post-paywall-icon">馃敀</div>
-                  <h3>浠呴檺浠樿垂浼氬憳鏌ョ湅</h3>
-                  <p>鍗囩骇浼氬憳瑙ｉ攣鍏ㄩ儴绀惧尯鍐呭</p>
-                  <button class="btn btn-primary" id="goUpgradeCommunity">鍗囩骇浼氬憳</button>
+                  <div class="post-paywall-icon">🔒</div>
+                  <h3>仅限付费会员查看</h3>
+                  <p>升级会员解锁全部社区内容</p>
+                  <button class="btn btn-primary" id="goUpgradeCommunity">升级会员</button>
                 </div>
               </div>
             ` : `
@@ -7543,40 +7544,40 @@ async function renderPost() {
         </div>
         ${locked && !paid ? `
           <div class="post-replies-section post-replies-locked">
-            <h3 class="replies-title">鍥炲</h3>
-            <p class="reply-login-hint">${state.user ? '鍗囩骇浠樿垂浼氬憳鍚庡彲鏌ョ湅鍥炲骞跺弬涓庤璁? : '鐧诲綍骞跺崌绾т細鍛樺悗鍙煡鐪嬪洖澶嶄笌鍙備笌璁ㄨ'}</p>
+            <h3 class="replies-title">回复</h3>
+            <p class="reply-login-hint">${state.user ? '升级付费会员后可查看回复并参与讨论' : '登录并升级会员后可查看回复与参与讨论'}</p>
             <div class="reply-locked-actions">
-              ${state.user ? '' : '<button class="btn btn-ghost btn-sm" id="commentLoginBtn">鐧诲綍</button>'}
-              <button class="btn btn-primary btn-sm" id="goUpgradeCommunityReplies">鍗囩骇浼氬憳</button>
+              ${state.user ? '' : '<button class="btn btn-ghost btn-sm" id="commentLoginBtn">登录</button>'}
+              <button class="btn btn-primary btn-sm" id="goUpgradeCommunityReplies">升级会员</button>
             </div>
           </div>
         ` : `
           <div class="post-replies-section">
             <div class="forum-replies-head">
               <div>
-                <h3 class="replies-title">鍏ㄩ儴鍥炲</h3>
-                <p class="forum-replies-subtitle">${post.threadLocked ? '褰撳墠涓婚宸查攣甯栵紝鍙兘闃呰鍘嗗彶鍥炲銆? : '鎸夋ゼ灞傞『搴忔煡鐪嬶紝姣忎竴灞傞兘鍍忕湡姝ｈ鍧涢噷閭ｆ牱鍙紩鐢ㄣ€佸彲甯﹀浘銆?}</p>
+                <h3 class="replies-title">全部回复</h3>
+                <p class="forum-replies-subtitle">${post.threadLocked ? '当前主题已锁帖，只能阅读历史回复。' : '按楼层顺序查看，每一层都像真正论坛里那样可引用、可带图。'}</p>
               </div>
-              <div class="forum-replies-summary">${post.replyCount || 0} 妤?/div>
+              <div class="forum-replies-summary">${post.replyCount || 0} 楼</div>
             </div>
-            <div id="repliesList" class="replies-list"><div class="replies-loading">鍔犺浇鍥炲涓?..</div></div>
+            <div id="repliesList" class="replies-list"><div class="replies-loading">加载回复中...</div></div>
             <div class="community-pagination reply-pagination" id="replyPagination"></div>
             ${paid && !post.threadLocked ? `
               <div class="reply-input-wrap">
-                <textarea id="replyInput" class="reply-textarea" placeholder="鍐欎笅浣犵殑鍥炲锛屽彲闄勪笂鍥剧墖..." rows="3"></textarea>
+                <textarea id="replyInput" class="reply-textarea" placeholder="写下你的回复，可附上图片..." rows="3"></textarea>
                 <div id="replyQuoteBox" class="reply-quote-box" style="display:none"></div>
                 <div class="reply-toolbar">
-                  <button type="button" class="btn btn-ghost btn-sm" id="replyImageBtn">娣诲姞鍥剧墖</button>
-                  <span class="reply-toolbar-hint">鍙坊鍔犲寮犲浘鐗囷紝鍗曞紶涓嶈秴杩?5MB</span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="replyImageBtn">添加图片</button>
+                  <span class="reply-toolbar-hint">可添加多张图片，单张不超过 5MB</span>
                   <input type="file" id="replyImageInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
                 </div>
                 <div id="replyImageList" class="reply-image-list"></div>
                 <div class="reply-input-footer">
-                  <span class="reply-char-count" id="replyCharCount">0 瀛?路 0 鍥?/span>
-                  <button class="btn btn-primary btn-sm" id="submitReplyBtn">鍙戝竷鍥炲</button>
+                  <span class="reply-char-count" id="replyCharCount">0 字 · 0 图</span>
+                  <button class="btn btn-primary btn-sm" id="submitReplyBtn">发布回复</button>
                 </div>
               </div>
-            ` : `<p class="reply-login-hint">${post.threadLocked ? '甯栧瓙宸查攣瀹氾紝褰撳墠涓嶆帴鍙楁柊鍥炲' : (state.user ? '鍗囩骇浠樿垂浼氬憳鍙備笌鍥炲' : '鐧诲綍鍚庡弬涓庡洖澶?)}</p>`}
+            ` : `<p class="reply-login-hint">${post.threadLocked ? '帖子已锁定，当前不接受新回复' : (state.user ? '升级付费会员参与回复' : '登录后参与回复')}</p>`}
           </div>
         `}
       </div>
@@ -7592,7 +7593,7 @@ async function renderPost() {
         const listEl = document.getElementById('repliesList')
         if (!listEl || state.currentView !== 'post') return
         if (!replyData.replies?.length) {
-          listEl.innerHTML = '<p class="replies-empty">鏆傛棤鍥炲锛屾潵鍙戣〃绗竴鏉″洖澶嶅惂</p>'
+          listEl.innerHTML = '<p class="replies-empty">暂无回复，来发表第一条回复吧</p>'
         } else {
           listEl.innerHTML = replyData.replies.map(renderReplyItem).join('')
           enhanceReplyImageLayouts(listEl)
@@ -7607,7 +7608,7 @@ async function renderPost() {
       } catch (err) {
         console.error('Load replies error:', err)
         const listEl = document.getElementById('repliesList')
-        if (listEl) listEl.innerHTML = '<p class="replies-empty">鍔犺浇鍥炲澶辫触</p>'
+        if (listEl) listEl.innerHTML = '<p class="replies-empty">加载回复失败</p>'
       }
 
       renderReplyDraftImages()
@@ -7618,8 +7619,8 @@ async function renderPost() {
     console.error('Load post error:', err)
     mainContent.innerHTML = `
       <div class="post-page fade-in">
-        <button class="back-btn" id="backCommunity">鈫?杩斿洖绀惧尯</button>
-        <div class="community-empty">鍔犺浇澶辫触锛岃绋嶅悗閲嶈瘯</div>
+        <button class="back-btn" id="backCommunity">← 返回社区</button>
+        <div class="community-empty">加载失败，请稍后重试</div>
       </div>`
   }
 }
@@ -7658,7 +7659,7 @@ function setupGlobalEvents() {
   function setMarketMenuOpen(isOpen) {
     if (!marketToggle || !marketMenu) return
     marketToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false')
-    marketToggle.setAttribute('aria-label', isOpen ? '鍏抽棴鑲＄エ甯傚満鐮旂┒鑿滃崟' : '鎵撳紑鑲＄エ甯傚満鐮旂┒鑿滃崟')
+    marketToggle.setAttribute('aria-label', isOpen ? '关闭股票市场研究菜单' : '打开股票市场研究菜单')
     marketMenu.classList.toggle('active', isOpen)
     marketMenu.setAttribute('aria-hidden', isOpen ? 'false' : 'true')
     marketMenuItems.forEach((item) => {
@@ -7714,7 +7715,7 @@ function setupGlobalEvents() {
     toggleMarketMenu()
   })
   bindProtectedMarketNav('#navEarnings', '/earnings/')
-  bindProtectedMarketNav('#navAiBubble', '/ai娉℃搏鍛ㄦ姤/')
+  bindProtectedMarketNav('#navAiBubble', '/ai泡沫周报/')
   bindProtectedMarketNav('#navAiWeekly', '/weekly/')
   bindProtectedMarketNav('#navResearch', '/research/')
   $('#navTools').addEventListener('click', () => {
@@ -7740,7 +7741,7 @@ function setupGlobalEvents() {
   $('#registerBtn').addEventListener('click', () => showAuthModal('register'))
   $('#adminBtn').addEventListener('click', () => navigate('admin'))
 
-  // User dropdown menu 鈥?click to toggle, click elsewhere to close
+  // User dropdown menu — click to toggle, click elsewhere to close
   $('#userMenuTrigger').addEventListener('click', (e) => {
     e.stopPropagation()
     userDropdown.classList.toggle('active')
@@ -7786,10 +7787,10 @@ function setupGlobalEvents() {
     const dropdownLabel = $('#themeLabel')
     const headerIcon = $('#headerThemeIcon')
     const headerLabel = $('#headerThemeLabel')
-    if (dropdownIcon) dropdownIcon.textContent = dark ? '鈽€锔? : '馃寵'
-    if (dropdownLabel) dropdownLabel.textContent = dark ? '娴呰壊妯″紡' : '娣辫壊妯″紡'
-    if (headerIcon) headerIcon.textContent = dark ? '鈽€锔? : '馃寵'
-    if (headerLabel) headerLabel.textContent = dark ? '娴呰壊' : '娣辫壊'
+    if (dropdownIcon) dropdownIcon.textContent = dark ? '☀️' : '🌙'
+    if (dropdownLabel) dropdownLabel.textContent = dark ? '浅色模式' : '深色模式'
+    if (headerIcon) headerIcon.textContent = dark ? '☀️' : '🌙'
+    if (headerLabel) headerLabel.textContent = dark ? '浅色' : '深色'
     syncArticleFrameTheme()
   }
   function toggleTheme() {
@@ -7890,17 +7891,17 @@ function setupGlobalEvents() {
     const setSubmitting = (submitting) => {
       if (!submitBtn || !submitBtn.isConnected) return
       submitBtn.disabled = submitting
-      submitBtn.textContent = submitting ? '鎻愪氦涓?..' : getAuthModeMeta(mode).submitLabel
+      submitBtn.textContent = submitting ? '提交中...' : getAuthModeMeta(mode).submitLabel
     }
 
     if (mode === 'register') {
       const tosCheck = document.getElementById('tosAgree')
       if (!tosCheck?.checked) {
-        showFormMsg('璇烽槄璇诲苟鍚屾剰銆婄敤鎴锋湇鍔″崗璁€?, 'err')
+        showFormMsg('请阅读并同意《用户服务协议》', 'err')
         return
       }
       if (!state._emailVerified) {
-        showFormMsg('璇峰厛瀹屾垚閭楠岃瘉', 'err')
+        showFormMsg('请先完成邮箱验证', 'err')
         return
       }
       const pwdError = getPasswordRuleError(data.password)
@@ -7909,7 +7910,7 @@ function setupGlobalEvents() {
         return
       }
       if (data.password !== data.confirmPassword) {
-        showFormMsg('涓ゆ杈撳叆鐨勫瘑鐮佷笉涓€鑷?, 'err')
+        showFormMsg('两次输入的密码不一致', 'err')
         return
       }
 
@@ -7926,10 +7927,10 @@ function setupGlobalEvents() {
         if (result.ok) {
           persistAuthSession(result)
         } else {
-          showFormMsg(result.error || '娉ㄥ唽澶辫触锛岃绋嶅悗閲嶈瘯', 'err')
+          showFormMsg(result.error || '注册失败，请稍后重试', 'err')
         }
       } catch (err) {
-        showFormMsg('鏈嶅姟鍣ㄨ繛鎺ュけ璐ワ紝璇锋鏌ョ綉缁滃悗閲嶈瘯', 'err')
+        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
       } finally {
         setSubmitting(false)
       }
@@ -7938,7 +7939,7 @@ function setupGlobalEvents() {
 
     if (mode === 'login_password') {
       if (!data.password) {
-        showFormMsg('璇疯緭鍏ュ瘑鐮?, 'err')
+        showFormMsg('请输入密码', 'err')
         return
       }
 
@@ -7952,10 +7953,10 @@ function setupGlobalEvents() {
         if (result.ok) {
           persistAuthSession(result, { syncProgress: true })
         } else {
-          showFormMsg(result.error || '鐧诲綍澶辫触锛岄偖绠辨垨瀵嗙爜閿欒', 'err')
+          showFormMsg(result.error || '登录失败，邮箱或密码错误', 'err')
         }
       } catch (err) {
-        showFormMsg('鏈嶅姟鍣ㄨ繛鎺ュけ璐ワ紝璇锋鏌ョ綉缁滃悗閲嶈瘯', 'err')
+        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
       } finally {
         setSubmitting(false)
       }
@@ -7964,7 +7965,7 @@ function setupGlobalEvents() {
 
     if (mode === 'login_code') {
       if (!state._emailVerified || !state._verifyToken) {
-        showFormMsg('璇峰厛瀹屾垚閭楠岃瘉', 'err')
+        showFormMsg('请先完成邮箱验证', 'err')
         return
       }
 
@@ -7978,10 +7979,10 @@ function setupGlobalEvents() {
         if (result.ok) {
           persistAuthSession(result, { syncProgress: true })
         } else {
-          showFormMsg(result.error || '鐧诲綍澶辫触锛岃绋嶅悗閲嶈瘯', 'err')
+          showFormMsg(result.error || '登录失败，请稍后重试', 'err')
         }
       } catch (err) {
-        showFormMsg('鏈嶅姟鍣ㄨ繛鎺ュけ璐ワ紝璇锋鏌ョ綉缁滃悗閲嶈瘯', 'err')
+        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
       } finally {
         setSubmitting(false)
       }
@@ -7990,7 +7991,7 @@ function setupGlobalEvents() {
 
     if (mode === 'reset_password') {
       if (!state._emailVerified || !state._verifyToken) {
-        showFormMsg('璇峰厛瀹屾垚閭楠岃瘉', 'err')
+        showFormMsg('请先完成邮箱验证', 'err')
         return
       }
 
@@ -8000,7 +8001,7 @@ function setupGlobalEvents() {
         return
       }
       if (data.password !== data.confirmPassword) {
-        showFormMsg('涓ゆ杈撳叆鐨勫瘑鐮佷笉涓€鑷?, 'err')
+        showFormMsg('两次输入的密码不一致', 'err')
         return
       }
 
@@ -8014,13 +8015,13 @@ function setupGlobalEvents() {
         if (result.ok) {
           showAuthModal('login_password', {
             email: data.email,
-            message: result.message || '瀵嗙爜宸叉洿鏂帮紝璇烽噸鏂扮櫥褰?,
+            message: result.message || '密码已更新，请重新登录',
           })
         } else {
-          showFormMsg(result.error || '閲嶇疆澶辫触锛岃绋嶅悗閲嶈瘯', 'err')
+          showFormMsg(result.error || '重置失败，请稍后重试', 'err')
         }
       } catch (err) {
-        showFormMsg('鏈嶅姟鍣ㄨ繛鎺ュけ璐ワ紝璇锋鏌ョ綉缁滃悗閲嶈瘯', 'err')
+        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
       } finally {
         setSubmitting(false)
       }
@@ -8102,7 +8103,7 @@ function setupGlobalEvents() {
     if (target.id === 'backHome') { navigate('home'); return }
     if (target.closest('.quotes-card')) { if (!requireLogin()) return; navigate('quotes'); return }
 
-    // 绠＄悊鍚庡彴锛氱偣鍑荤粺璁″崱鐗囪烦杞埌瀵瑰簲鍖哄煙
+    // 管理后台：点击统计卡片跳转到对应区域
     const statCard = target.closest('.admin-stat-clickable')
     if (statCard) {
       if (statCard.dataset.adminUserTab) {
@@ -8115,7 +8116,7 @@ function setupGlobalEvents() {
       return
     }
 
-    // 绠＄悊鍚庡彴锛氭墦寮€缂栬緫鐢ㄦ埛寮圭獥
+    // 管理后台：打开编辑用户弹窗
     const editUserBtn = target.closest('.admin-edit-user')
     if (editUserBtn) {
       const userId = Number(editUserBtn.dataset.userId)
@@ -8129,53 +8130,53 @@ function setupGlobalEvents() {
       const modalBody = document.getElementById('adminOrderModalBody')
       const modalTitle = document.getElementById('adminOrderModalTitle')
       if (!modal) return
-      modalTitle.textContent = `缂栬緫鐢ㄦ埛 - ${userName} (${userUid})`
+      modalTitle.textContent = `编辑用户 - ${userName} (${userUid})`
       const defaultExpiry = new Date(Date.now() + 365 * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
       modalBody.innerHTML = `
         <div class="admin-plan-form" style="display:flex;flex-direction:column;gap:14px;">
           <div class="admin-plan-field">
-            <label>UID锛?/label>
+            <label>UID：</label>
             <span style="font-family:monospace;">${escapeHtml(userUid)}</span>
           </div>
           <div class="admin-plan-field">
-            <label for="editUserEmail">閭锛?/label>
+            <label for="editUserEmail">邮箱：</label>
             <input type="email" id="editUserEmail" class="admin-plan-input" value="${escapeHtml(userEmail)}">
           </div>
           <div class="admin-plan-field">
-            <label for="editUserNickname">鏄电О锛?/label>
+            <label for="editUserNickname">昵称：</label>
             <input type="text" id="editUserNickname" class="admin-plan-input" value="${escapeHtml(userName)}">
           </div>
           <div class="admin-plan-field">
-            <label for="editUserPassword">鏂板瘑鐮侊紙鐣欑┖涓嶄慨鏀癸級锛?/label>
-            <input type="password" id="editUserPassword" class="admin-plan-input" placeholder="鐣欑┖鍒欎笉淇敼">
+            <label for="editUserPassword">新密码（留空不修改）：</label>
+            <input type="password" id="editUserPassword" class="admin-plan-input" placeholder="留空则不修改">
           </div>
           <div class="admin-plan-field">
-            <label for="editUserPlan">濂楅锛?/label>
+            <label for="editUserPlan">套餐：</label>
             <select id="editUserPlan" class="admin-plan-select">
-              <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>鍏嶈垂 (Free)</option>
-              <option value="plus" ${currentPlan === 'plus' ? 'selected' : ''}>Plus 浼氬憳</option>
-              <option value="pro" ${currentPlan === 'pro' ? 'selected' : ''}>Pro 浼氬憳</option>
+              <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>免费 (Free)</option>
+              <option value="plus" ${currentPlan === 'plus' ? 'selected' : ''}>Plus 会员</option>
+              <option value="pro" ${currentPlan === 'pro' ? 'selected' : ''}>Pro 会员</option>
             </select>
           </div>
           <div class="admin-plan-field" id="editUserExpiresField">
-            <label for="editUserExpires">鍒版湡鏃ユ湡锛?/label>
+            <label for="editUserExpires">到期日期：</label>
             <input type="date" id="editUserExpires" class="admin-plan-input" value="${currentExpires || defaultExpiry}">
             <div class="admin-plan-shortcuts">
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="30">+1涓湀</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="90">+3涓湀</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="180">+鍗婂勾</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="365">+1骞?/button>
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="30">+1个月</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="90">+3个月</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="180">+半年</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="365">+1年</button>
             </div>
           </div>
           <div class="admin-plan-actions">
-            <button class="btn btn-primary" id="adminEditUserSaveBtn" data-user-id="${userId}">淇濆瓨</button>
-            <button class="btn btn-ghost" id="adminEditUserCancelBtn">鍙栨秷</button>
+            <button class="btn btn-primary" id="adminEditUserSaveBtn" data-user-id="${userId}">保存</button>
+            <button class="btn btn-ghost" id="adminEditUserCancelBtn">取消</button>
           </div>
           <div style="border-top:1px solid var(--border-1);padding-top:12px;margin-top:4px;">
-            <button class="btn btn-xs" id="adminEditUserDeleteBtn" data-user-id="${userId}" data-name="${escapeHtml(userName)}" style="color:#ef4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);">鍒犻櫎鐢ㄦ埛</button>
-            <span id="adminDeleteConfirm" style="display:none;margin-left:8px;font-size:12px;">纭鍒犻櫎锛熸鎿嶄綔涓嶅彲鎭㈠锛?
-              <button class="btn btn-xs" id="adminDeleteConfirmYes" style="color:#fff;background:#ef4444;margin-left:4px;">纭鍒犻櫎</button>
-              <button class="btn btn-xs btn-ghost" id="adminDeleteConfirmNo">鍙栨秷</button>
+            <button class="btn btn-xs" id="adminEditUserDeleteBtn" data-user-id="${userId}" data-name="${escapeHtml(userName)}" style="color:#ef4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);">删除用户</button>
+            <span id="adminDeleteConfirm" style="display:none;margin-left:8px;font-size:12px;">确认删除？此操作不可恢复！
+              <button class="btn btn-xs" id="adminDeleteConfirmYes" style="color:#fff;background:#ef4444;margin-left:4px;">确认删除</button>
+              <button class="btn btn-xs btn-ghost" id="adminDeleteConfirmNo">取消</button>
             </span>
           </div>
           <div id="adminEditUserResult" style="display:none"></div>
@@ -8186,7 +8187,7 @@ function setupGlobalEvents() {
       document.getElementById('adminEditUserCancelBtn')?.addEventListener('click', () => modal.style.display = 'none')
       document.getElementById('adminEditUserSaveBtn')?.addEventListener('click', async () => {
         const btn = document.getElementById('adminEditUserSaveBtn')
-        btn.disabled = true; btn.textContent = '淇濆瓨涓?..'
+        btn.disabled = true; btn.textContent = '保存中...'
         const resultEl = document.getElementById('adminEditUserResult')
         try {
           const payload = { userId }
@@ -8200,8 +8201,8 @@ function setupGlobalEvents() {
           if (password) {
             if (password.length < 6) {
               resultEl.style.display = 'block'
-              resultEl.innerHTML = '<div class="stream-result-success error">瀵嗙爜鑷冲皯闇€瑕?浣?/div>'
-              btn.disabled = false; btn.textContent = '淇濆瓨'
+              resultEl.innerHTML = '<div class="stream-result-success error">密码至少需要6位</div>'
+              btn.disabled = false; btn.textContent = '保存'
               return
             }
             payload.password = password
@@ -8211,17 +8212,17 @@ function setupGlobalEvents() {
           const r = await api.put('/api/admin-users', payload)
           if (r.ok) {
             resultEl.style.display = 'block'
-            resultEl.innerHTML = '<div class="stream-result-success">淇濆瓨鎴愬姛</div>'
+            resultEl.innerHTML = '<div class="stream-result-success">保存成功</div>'
             setTimeout(() => { modal.style.display = 'none'; refreshAdminUserTable() }, 800)
           } else {
             resultEl.style.display = 'block'
-            resultEl.innerHTML = `<div class="stream-result-success error">${escapeHtml(r.error || '淇濆瓨澶辫触')}</div>`
+            resultEl.innerHTML = `<div class="stream-result-success error">${escapeHtml(r.error || '保存失败')}</div>`
           }
         } catch (e) {
           resultEl.style.display = 'block'
-          resultEl.innerHTML = `<div class="stream-result-success error">璇锋眰澶辫触</div>`
+          resultEl.innerHTML = `<div class="stream-result-success error">请求失败</div>`
         }
-        btn.disabled = false; btn.textContent = '淇濆瓨'
+        btn.disabled = false; btn.textContent = '保存'
       })
 
       // Expiry shortcuts
@@ -8249,22 +8250,22 @@ function setupGlobalEvents() {
       const deleteYes = document.getElementById('adminDeleteConfirmYes')
       if (deleteYes) {
         deleteYes.addEventListener('click', async () => {
-          deleteYes.disabled = true; deleteYes.textContent = '鍒犻櫎涓?..'
+          deleteYes.disabled = true; deleteYes.textContent = '删除中...'
           try {
             const r = await api.del(`/api/admin-users/${userId}`)
             if (r.ok) {
               modal.style.display = 'none'
               refreshAdminUserTable()
             } else {
-              alert(r.error || '鍒犻櫎澶辫触')
+              alert(r.error || '删除失败')
             }
-          } catch { alert('鍒犻櫎澶辫触') }
+          } catch { alert('删除失败') }
         })
       }
       return
     }
 
-    // 绠＄悊鍚庡彴锛氭墦寮€濂楅绠＄悊寮圭獥
+    // 管理后台：打开套餐管理弹窗
     const editPlanBtn = target.closest('.admin-edit-plan')
     if (editPlanBtn) {
       const userId = Number(editPlanBtn.dataset.userId)
@@ -8275,36 +8276,36 @@ function setupGlobalEvents() {
       const modalBody = document.getElementById('adminOrderModalBody')
       const modalTitle = document.getElementById('adminOrderModalTitle')
       if (!modal) return
-      modalTitle.textContent = `绠＄悊濂楅 - ${userName} (ID: ${userId})`
+      modalTitle.textContent = `管理套餐 - ${userName} (ID: ${userId})`
       // Default expiry: 1 year from now
       const defaultExpiry = new Date(Date.now() + 365 * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
       modalBody.innerHTML = `
         <div class="admin-plan-form">
           <div class="admin-plan-field">
-            <label>褰撳墠鐘舵€侊細</label>
-            <span>${currentPlan === 'free' ? '鍏嶈垂鐢ㄦ埛' : currentPlan.toUpperCase() + ' 浼氬憳'}${currentExpires ? '锛屽埌鏈熸棩 ' + currentExpires : ''}</span>
+            <label>当前状态：</label>
+            <span>${currentPlan === 'free' ? '免费用户' : currentPlan.toUpperCase() + ' 会员'}${currentExpires ? '，到期日 ' + currentExpires : ''}</span>
           </div>
           <div class="admin-plan-field">
-            <label for="adminPlanSelect">璁剧疆濂楅锛?/label>
+            <label for="adminPlanSelect">设置套餐：</label>
             <select id="adminPlanSelect" class="admin-plan-select">
-              <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>鍏嶈垂 (Free)</option>
-              <option value="plus" ${currentPlan === 'plus' ? 'selected' : ''}>Plus 浼氬憳</option>
-              <option value="pro" ${currentPlan === 'pro' ? 'selected' : ''}>Pro 浼氬憳</option>
+              <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>免费 (Free)</option>
+              <option value="plus" ${currentPlan === 'plus' ? 'selected' : ''}>Plus 会员</option>
+              <option value="pro" ${currentPlan === 'pro' ? 'selected' : ''}>Pro 会员</option>
             </select>
           </div>
           <div class="admin-plan-field" id="adminExpiresField">
-            <label for="adminExpiresInput">鍒版湡鏃ユ湡锛?/label>
+            <label for="adminExpiresInput">到期日期：</label>
             <input type="date" id="adminExpiresInput" class="admin-plan-input" value="${currentExpires || defaultExpiry}">
             <div class="admin-plan-shortcuts">
-              <button class="btn btn-xs admin-expires-shortcut" data-days="30">+1涓湀</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-days="90">+3涓湀</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-days="180">+鍗婂勾</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-days="365">+1骞?/button>
+              <button class="btn btn-xs admin-expires-shortcut" data-days="30">+1个月</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-days="90">+3个月</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-days="180">+半年</button>
+              <button class="btn btn-xs admin-expires-shortcut" data-days="365">+1年</button>
             </div>
           </div>
           <div class="admin-plan-actions">
-            <button class="btn btn-primary" id="adminPlanSaveBtn" data-user-id="${userId}">淇濆瓨</button>
-            <button class="btn btn-ghost" id="adminPlanCancelBtn">鍙栨秷</button>
+            <button class="btn btn-primary" id="adminPlanSaveBtn" data-user-id="${userId}">保存</button>
+            <button class="btn btn-ghost" id="adminPlanCancelBtn">取消</button>
           </div>
         </div>
       `
@@ -8318,7 +8319,7 @@ function setupGlobalEvents() {
       return
     }
 
-    // 绠＄悊鍚庡彴锛氬埌鏈熸棩鏈熷揩鎹锋寜閽?
+    // 管理后台：到期日期快捷按钮
     const expiresShortcut = target.closest('.admin-expires-shortcut')
     if (expiresShortcut) {
       const days = Number(expiresShortcut.dataset.days)
@@ -8330,34 +8331,34 @@ function setupGlobalEvents() {
       return
     }
 
-    // 绠＄悊鍚庡彴锛氫繚瀛樺椁?
+    // 管理后台：保存套餐
     if (target.id === 'adminPlanSaveBtn') {
       const userId = Number(target.dataset.userId)
       const plan = document.getElementById('adminPlanSelect')?.value
       const expiresAt = document.getElementById('adminExpiresInput')?.value
       if (!plan) return
       target.disabled = true
-      target.textContent = '淇濆瓨涓?..'
+      target.textContent = '保存中...'
       api.post('/api/admin-users', { userId, plan, expiresAt: plan === 'free' ? null : expiresAt }).then(r => {
         if (r.ok) {
           document.getElementById('adminOrderModal').style.display = 'none'
           renderAdmin()
         } else {
-          alert('鎿嶄綔澶辫触: ' + (r.error || '鏈煡閿欒'))
+          alert('操作失败: ' + (r.error || '未知错误'))
           target.disabled = false
-          target.textContent = '淇濆瓨'
+          target.textContent = '保存'
         }
       })
       return
     }
 
-    // 绠＄悊鍚庡彴锛氬彇娑堝脊绐?
+    // 管理后台：取消弹窗
     if (target.id === 'adminPlanCancelBtn') {
       document.getElementById('adminOrderModal').style.display = 'none'
       return
     }
 
-    // 绠＄悊鍚庡彴锛氭煡鐪嬬敤鎴疯鍗?
+    // 管理后台：查看用户订单
     const viewOrdersBtn = target.closest('.admin-view-orders')
     if (viewOrdersBtn) {
       const uid = viewOrdersBtn.dataset.uid
@@ -8366,21 +8367,21 @@ function setupGlobalEvents() {
       const modalBody = document.getElementById('adminOrderModalBody')
       const modalTitle = document.getElementById('adminOrderModalTitle')
       if (!modal || !uid) return
-      modalTitle.textContent = `${name} 鐨勮鍗曡褰昤
-      modalBody.innerHTML = '<div class="loading-spinner">鍔犺浇涓?..</div>'
+      modalTitle.textContent = `${name} 的订单记录`
+      modalBody.innerHTML = '<div class="loading-spinner">加载中...</div>'
       modal.style.display = 'flex'
       api.get(`/api/orders?uid=${uid}`).then(r => {
         if (!r.ok || !r.orders) {
-          modalBody.innerHTML = `<p style="color:var(--text-3);text-align:center;padding:20px;">${escapeHtml(r.error || '鑾峰彇澶辫触')}</p>`
+          modalBody.innerHTML = `<p style="color:var(--text-3);text-align:center;padding:20px;">${escapeHtml(r.error || '获取失败')}</p>`
           return
         }
         if (r.orders.length === 0) {
-          modalBody.innerHTML = '<p style="color:var(--text-3);text-align:center;padding:20px;">鏆傛棤璁㈠崟</p>'
+          modalBody.innerHTML = '<p style="color:var(--text-3);text-align:center;padding:20px;">暂无订单</p>'
           return
         }
         modalBody.innerHTML = `
           <table class="admin-table" style="margin:0;">
-            <thead><tr><th>璁㈠崟鍙?/th><th>鏂规</th><th>閲戦</th><th>瀹炰粯</th><th>鐘舵€?/th><th>鏃堕棿</th></tr></thead>
+            <thead><tr><th>订单号</th><th>方案</th><th>金额</th><th>实付</th><th>状态</th><th>时间</th></tr></thead>
             <tbody>
               ${r.orders.map(o => `<tr>
                 <td style="font-size:12px;">${escapeHtml(o.orderId || '-')}</td>
@@ -8397,7 +8398,7 @@ function setupGlobalEvents() {
       return
     }
 
-    // 鍏抽棴璁㈠崟寮圭獥
+    // 关闭订单弹窗
     if (target.id === 'adminOrderModalClose' || target.classList.contains('admin-order-modal')) {
       const modal = document.getElementById('adminOrderModal')
       if (modal) modal.style.display = 'none'
@@ -8406,11 +8407,11 @@ function setupGlobalEvents() {
     if (target.id === 'goUpgrade' || target.id === 'goUpgrade2' || target.id === 'goUpgradeCommunity' || target.id === 'goUpgradeCommunityReplies') { navigate('membership'); return }
     if (target.id === 'goUpgradeVideo') { if (!state.user) { showAuthModal('login_password') } else { navigate('membership') }; return }
 
-    // Membership: subscribe button 鈥?currently disabled
+    // Membership: subscribe button — currently disabled
     if (target.closest('.mem-btn-plus, .mem-btn-pro')) {
-      alert('鏀粯鍔熻兘鏆傚叧闂紝璇疯仈绯荤鐞嗗憳寮€閫氥€?)
+      alert('支付功能暂关闭，请联系管理员开通。')
       return
-    }// Membership price toggle (鏈堜粯/骞翠粯)
+    }// Membership price toggle (月付/年付)
     const priceTab = target.closest('.price-tab')
     if (priceTab) {
       const card = priceTab.closest('.mem-card')
@@ -8424,7 +8425,7 @@ function setupGlobalEvents() {
       const saveEl = card.querySelector('.mem-price-save')
       if (priceEl) priceEl.textContent = '$' + priceEl.dataset[period]
       if (originalEl) originalEl.textContent = '$' + originalEl.dataset[period]
-      if (unitEl) unitEl.textContent = '/ ' + (period === 'monthly' ? '鏈? : '骞?)
+      if (unitEl) unitEl.textContent = '/ ' + (period === 'monthly' ? '月' : '年')
       if (saveEl) saveEl.style.display = period === 'yearly' ? 'block' : 'none'
       return
     }
@@ -8464,7 +8465,7 @@ function setupGlobalEvents() {
     const deleteBtn = target.closest('[data-delete-post]')
     if (deleteBtn) {
       const postId = deleteBtn.dataset.deletePost
-      if (!confirm('纭畾瑕佸垹闄よ繖绡囧笘瀛愬悧锛熷垹闄ゅ悗涓嶅彲鎭㈠銆?)) return
+      if (!confirm('确定要删除这篇帖子吗？删除后不可恢复。')) return
       try {
         const res = await api.del(`/api/posts?id=${postId}`)
         if (res.ok || res.success) {
@@ -8474,11 +8475,11 @@ function setupGlobalEvents() {
             renderCommunity()
           }
         } else {
-          alert(res.error || '鍒犻櫎澶辫触')
+          alert(res.error || '删除失败')
         }
       } catch (err) {
         console.error('Delete post error:', err)
-        alert('鍒犻櫎澶辫触锛岃妫€鏌ョ綉缁?)
+        alert('删除失败，请检查网络')
       }
       return
     }
@@ -8490,7 +8491,7 @@ function setupGlobalEvents() {
       if (!text && replyDraftImages.length === 0) return
       const btn = target
       btn.disabled = true
-      btn.textContent = '鍙戝竷涓?..'
+      btn.textContent = '发布中...'
       let uploadedAssetIds = []
       try {
         const payload = {
@@ -8514,16 +8515,16 @@ function setupGlobalEvents() {
           renderPost()
         } else {
           await cleanupTemporaryPostImages(uploadedAssetIds)
-          alert(res.error || '鍙戝竷澶辫触')
+          alert(res.error || '发布失败')
           btn.disabled = false
-          btn.textContent = '鍙戝竷鍥炲'
+          btn.textContent = '发布回复'
         }
       } catch (err) {
         await cleanupTemporaryPostImages(uploadedAssetIds)
         console.error('Submit reply error:', err)
-        alert(err?.message || '鍙戝竷澶辫触锛岃妫€鏌ョ綉缁?)
+        alert(err?.message || '发布失败，请检查网络')
         btn.disabled = false
-        btn.textContent = '鍙戝竷鍥炲'
+        btn.textContent = '发布回复'
       }
       return
     }
@@ -8547,18 +8548,18 @@ function setupGlobalEvents() {
     // Community: delete reply
     const deleteReplyBtn = target.closest('[data-delete-reply]')
     if (deleteReplyBtn) {
-      if (!confirm('纭畾瑕佸垹闄よ繖鏉″洖澶嶅悧锛?)) return
+      if (!confirm('确定要删除这条回复吗？')) return
       const replyId = deleteReplyBtn.dataset.deleteReply
       try {
         const res = await api.del(`/api/post-replies?id=${replyId}`)
         if (res.success) {
           renderPost()
         } else {
-          alert(res.error || '鍒犻櫎澶辫触')
+          alert(res.error || '删除失败')
         }
       } catch (err) {
         console.error('Delete reply error:', err)
-        alert('鍒犻櫎澶辫触锛岃妫€鏌ョ綉缁?)
+        alert('删除失败，请检查网络')
       }
       return
     }
@@ -8584,11 +8585,11 @@ function setupGlobalEvents() {
     const reportReplyBtn = target.closest('[data-report-reply]')
     if (reportReplyBtn) {
       if (!requireLogin()) return
-      const reason = prompt('璇疯緭鍏ヤ妇鎶ュ師鍥狅紝渚嬪锛氬箍鍛娿€佽颈楠傘€佷汉韬敾鍑汇€佸埛灞?)
+      const reason = prompt('请输入举报原因，例如：广告、辱骂、人身攻击、刷屏')
       if (!reason) return
-      const detail = prompt('琛ュ厖璇存槑锛堥€夊～锛?) || ''
+      const detail = prompt('补充说明（选填）') || ''
       const res = await api.post('/api/post-reports', { replyId: reportReplyBtn.dataset.reportReply, reason, detail })
-      alert(res.ok ? (res.message || '涓炬姤宸叉彁浜?) : (res.error || '涓炬姤澶辫触'))
+      alert(res.ok ? (res.message || '举报已提交') : (res.error || '举报失败'))
       return
     }
 
@@ -8644,19 +8645,19 @@ function setupGlobalEvents() {
       const tags = document.getElementById('postTagsInput')?.value || ''
       const editor = initCommunityEditor()
       const plainText = normalizePlainText(editor?.getText() || '')
-      if (!title || !plainText) { alert('鏍囬鍜屽唴瀹逛笉鑳戒负绌?); return }
+      if (!title || !plainText) { alert('标题和内容不能为空'); return }
       if ((editor?.root && getPostImageCount(editor.root) > MAX_POST_IMAGES)) {
-        alert(`鏈€澶氫笂浼?${MAX_POST_IMAGES} 寮犲浘鐗嘸)
+        alert(`最多上传 ${MAX_POST_IMAGES} 张图片`)
         return
       }
       const btn = target
       btn.disabled = true
-      btn.textContent = '鍙戝竷涓?..'
+      btn.textContent = '发布中...'
       const uploadedAssetIds = []
       try {
         const editorRoot = editor?.root?.cloneNode(true)
         if (!editorRoot) {
-          throw new Error('缂栬緫鍣ㄥ垵濮嬪寲澶辫触')
+          throw new Error('编辑器初始化失败')
         }
 
         const newAssetIds = await uploadEditorImages(editorRoot, btn)
@@ -8677,15 +8678,15 @@ function setupGlobalEvents() {
           renderCommunity()
         } else {
           await cleanupTemporaryPostImages(uploadedAssetIds)
-          alert(res.error || '鍙戝笘澶辫触')
+          alert(res.error || '发帖失败')
           btn.disabled = false
-          btn.textContent = '鍙戝竷'
+          btn.textContent = '发布'
         }
       } catch (error) {
         await cleanupTemporaryPostImages(uploadedAssetIds)
-        alert(error?.message || '鍙戝笘澶辫触锛岃妫€鏌ョ綉缁?)
+        alert(error?.message || '发帖失败，请检查网络')
         btn.disabled = false
-        btn.textContent = '鍙戝竷'
+        btn.textContent = '发布'
       }
       return
     }
@@ -8693,11 +8694,11 @@ function setupGlobalEvents() {
     const postReportBtn = target.closest('[data-post-report]')
     if (postReportBtn) {
       if (!requireLogin()) return
-      const reason = prompt('璇疯緭鍏ヤ妇鎶ュ師鍥狅紝渚嬪锛氬箍鍛娿€佽颈楠傘€佷汉韬敾鍑汇€佸埛灞?)
+      const reason = prompt('请输入举报原因，例如：广告、辱骂、人身攻击、刷屏')
       if (!reason) return
-      const detail = prompt('琛ュ厖璇存槑锛堥€夊～锛?) || ''
+      const detail = prompt('补充说明（选填）') || ''
       const res = await api.post('/api/post-reports', { postId: postReportBtn.dataset.postReport, reason, detail })
-      alert(res.ok ? (res.message || '涓炬姤宸叉彁浜?) : (res.error || '涓炬姤澶辫触'))
+      alert(res.ok ? (res.message || '举报已提交') : (res.error || '举报失败'))
       return
     }
 
@@ -8708,7 +8709,7 @@ function setupGlobalEvents() {
         sticky: postPinBtn.dataset.nextPin === '1',
       })
       if (!res.ok) {
-        alert(res.error || '鎿嶄綔澶辫触')
+        alert(res.error || '操作失败')
         return
       }
       renderPost()
@@ -8722,7 +8723,7 @@ function setupGlobalEvents() {
         featured: postFeatureBtn.dataset.nextFeature === '1',
       })
       if (!res.ok) {
-        alert(res.error || '鎿嶄綔澶辫触')
+        alert(res.error || '操作失败')
         return
       }
       renderPost()
@@ -8736,7 +8737,7 @@ function setupGlobalEvents() {
         locked: postLockBtn.dataset.nextLock === '1',
       })
       if (!res.ok) {
-        alert(res.error || '鎿嶄綔澶辫触')
+        alert(res.error || '操作失败')
         return
       }
       renderPost()
@@ -8745,7 +8746,7 @@ function setupGlobalEvents() {
 
     const richImage = target.closest('.post-rich-image, .reply-rich-image')
     if (richImage && richImage.getAttribute('src')) {
-      showPostImageLightbox(richImage.getAttribute('src'), richImage.getAttribute('alt') || '甯栧瓙鍥剧墖')
+      showPostImageLightbox(richImage.getAttribute('src'), richImage.getAttribute('alt') || '帖子图片')
       return
     }
 
@@ -8782,10 +8783,10 @@ function setupGlobalEvents() {
           state.user.name = newName
           localStorage.setItem('ws_user', JSON.stringify(state.user))
           updateAuthUI()
-          showFormMsgProfile('鐢ㄦ埛鍚嶅凡鏇存柊', 'ok')
+          showFormMsgProfile('用户名已更新', 'ok')
         } catch (err) {
           console.error('Name update error:', err)
-          showFormMsgProfile('鏇存柊澶辫触锛岃妫€鏌ョ綉缁?, 'err')
+          showFormMsgProfile('更新失败，请检查网络', 'err')
         }
       }
       return
@@ -8812,7 +8813,7 @@ function setupGlobalEvents() {
         if (state.quizState.attempt >= 2) state.quizState.wrongCount++
       }
       renderQuiz()
-      // 甯﹁В閲?鎻愮ず鐨勯鐩仠鐣欏湪褰撳墠棰橈紝璁╃敤鎴疯瀹屽悗鎵嬪姩缁х画銆?
+      // 带解释/提示的题目停留在当前题，让用户读完后手动继续。
       if (isCorrect && !hasQuizInsight(q)) {
         setTimeout(() => {
           state.quizState.currentQuestion++
@@ -8862,13 +8863,13 @@ function setupGlobalEvents() {
     }
   })
 
-  // ===== 鍥炲埌椤堕儴 娴姩鎸夐挳锛堟墍鏈夐〉闈㈤€氱敤锛屾粦鍔ㄨ秴杩?400px 鏄剧ず锛?====
+  // ===== 回到顶部 浮动按钮（所有页面通用，滑动超过 400px 显示）=====
   if (!document.getElementById('backToTopBtn')) {
     const btn = document.createElement('button')
     btn.id = 'backToTopBtn'
     btn.className = 'back-to-top-btn'
-    btn.setAttribute('aria-label', '鍥炲埌椤堕儴')
-    btn.innerHTML = '鈫?
+    btn.setAttribute('aria-label', '回到顶部')
+    btn.innerHTML = '↑'
     document.body.appendChild(btn)
 
     let ticking = false
