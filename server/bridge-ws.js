@@ -141,7 +141,7 @@ function handleBridge(ws, url) {
   }
   // Admin defaults to tradeEnabled=true, others false
   const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), lastTradeMode: -1 }); ws._userId = userId
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), _marketStatusKnown: false }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
@@ -189,39 +189,38 @@ function handleBridge(ws, url) {
           const prevMs = parseT(prev)
           const curMs = parseT(msg.quote.time)
           if (prevMs && curMs) {
-            // Time advanced > 60s → trading; same or within 60s → keep previous state
-            // Only mark closed if time is identical AND hasn't changed for 5 minutes
             if (curMs - prevMs > 60000) {
               bridge.lastTradeMode = 4
             } else if (curMs === prevMs) {
-              // Same tick time — only mark closed if stuck for > 10s
               if (!bridge._sameTickStart) bridge._sameTickStart = now
               if (now - bridge._sameTickStart > 10000) bridge.lastTradeMode = 0
             } else {
-              // Time advanced but < 60s — normal trading
               bridge.lastTradeMode = 4
               bridge._sameTickStart = null
             }
           }
         } else {
           // First tick after bridge connect: parse MT5 time to detect staleness
-          // Format: "YYYY.MM.DD HH:mm:ss" (Beijing time from bridge)
           const parts = msg.quote.time.split(/[. :]/)
           if (parts.length >= 6) {
             const mt5Date = new Date(
               parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]),
               parseInt(parts[3]), parseInt(parts[4]), parseInt(parts[5])
             )
-            // If MT5 time is > 60s old, market is likely closed
             if ((now - mt5Date.getTime()) > 60000) {
               bridge.lastTradeMode = 0
+            } else {
+              bridge.lastTradeMode = 4
             }
           }
         }
+        bridge._marketStatusKnown = true
       }
       // Data relay — push to browsers, include server-detected trade_mode
       const tradeMode = bridge ? bridge.lastTradeMode : undefined
-      sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
+      const payload = { type: 'data', ...msg }
+      if (typeof tradeMode === 'number') payload.trade_mode = tradeMode
+      sendToBrowsers(userId, payload)
     } else if (msg.type === 'hb' || msg.type === 'pong') {
       // Bridge heartbeat/pong — lastSeen already updated
       if (bridge) bridge.lastPong = Date.now()
@@ -872,7 +871,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (enabled) {
           // Check market status
           const tradeMode = await getBridgeTradeMode(userId)
-          if (tradeMode <= 0) {
+          if (tradeMode == null || tradeMode <= 0) {
             paused = true
             pauseReason = tradeMode === 0 ? 'market_closed' : 'market_unknown'
           } else {
