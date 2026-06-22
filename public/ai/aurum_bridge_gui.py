@@ -39,7 +39,7 @@ else:
 def resource_path(relative):
     return os.path.join(BUNDLE_DIR, relative)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
-DEFAULT_SERVER = "http://127.0.0.1:3000"
+DEFAULT_SERVER = "https://www.cnfxtrade.com/"
 
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
