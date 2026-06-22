@@ -114,6 +114,13 @@ router.post('/send-code', async (req, res) => {
     const { email, purpose } = req.body
     const targetEmail = email || req.user?.email
     if (!targetEmail) return res.json({ ok: false, error: '请输入邮箱' })
+
+    // 注册前检查邮箱是否已注册
+    if (purpose === 'register') {
+      const existing = await queryOne('SELECT id FROM users WHERE email = ?', [targetEmail])
+      if (existing) return res.json({ ok: false, error: '该邮箱已注册' })
+    }
+
     const code = String(Math.floor(100000 + Math.random() * 900000))
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
 
