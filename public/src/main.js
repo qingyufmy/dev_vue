@@ -5742,9 +5742,6 @@ function renderProfile() {
           <a class="settings-nav-item ${settingsTab === 'credits' ? 'active' : ''}" data-tab="credits">
             <span class="settings-nav-icon">🎟️</span>返佣邀请
           </a>
-          <a class="settings-nav-item ${settingsTab === 'alerts' ? 'active' : ''}" data-tab="alerts">
-            <span class="settings-nav-icon">🔔</span>Agent信号推送
-          </a>
         </nav>
 
         <div class="settings-content">
@@ -5948,60 +5945,6 @@ function renderProfile() {
               <p class="settings-section-desc">邀请新用户订阅后生成返佣奖励，功能正式开放后可用于后续 Plus 或 Pro 订阅。</p>
               <div id="subscriptionCreditCenter" class="subscription-credit-center">
                 <div class="billing-loading">加载中...</div>
-              </div>
-            </div>
-          ` : settingsTab === 'alerts' ? `
-            <!-- 信号推送 -->
-            <div class="settings-section">
-              <h2 class="settings-section-title">信号推送</h2>
-              <p class="settings-section-desc">接收街哥的交易信号和市场提醒</p>
-
-              ${currentPlan !== 'pro' ? `
-                <div class="settings-card signal-upgrade">
-                  <div class="signal-upgrade-icon">🔒</div>
-                  <h3 class="signal-upgrade-title">Pro 会员专属功能</h3>
-                  <p class="signal-upgrade-desc">升级到 Pro 会员即可加入街哥的 Telegram 信号群，接收实时交易警报和市场信号推送。</p>
-                  <button class="btn btn-primary" id="signalGoUpgrade">升级 Pro 会员</button>
-                </div>
-              ` : `
-                <div class="settings-card signal-telegram">
-                  <div class="signal-tg-header">
-                    <img class="signal-tg-icon" src="/tg-signal.jpg" alt="信号群" />
-                    <div>
-                      <h3 class="signal-tg-title">Telegram 信号群</h3>
-                      <p class="signal-tg-subtitle">街哥AI信号推送 · Pro 会员专属</p>
-                    </div>
-                  </div>
-                  <p class="signal-tg-desc">${state.user?.telegramBinding
-                    ? `当前已永久绑定 ${escapeHtml(getTelegramBindingLabel(state.user.telegramBinding))}。系统后续只认这个 Telegram 账号，不支持更换。`
-                    : '点击下方按钮先联系 Telegram 机器人。机器人会识别你的网站账号，并私聊发送专属入群链接。'}</p>
-                  ${state.user?.telegramBinding ? `
-                    <div class="signal-tg-binding">
-                      绑定账号：${escapeHtml(getTelegramBindingLabel(state.user.telegramBinding))}
-                      ${state.user.telegramBinding.name && state.user.telegramBinding.username ? ` · ${escapeHtml(state.user.telegramBinding.name)}` : ''}
-                      <br>当前状态：${escapeHtml(getTelegramBindingStatus(state.user.telegramBinding) || 'bound')}
-                      ${state.user.telegramBinding.lastInviteSentAt ? ` · 最近发链：${escapeHtml(state.user.telegramBinding.lastInviteSentAt)}` : ''}
-                      <br>绑定规则：一个网站账号只认一个 Telegram 账号，不支持更换。
-                      ${getTelegramBindingHint(state.user.telegramBinding) ? `<br>${escapeHtml(getTelegramBindingHint(state.user.telegramBinding))}` : ''}
-                    </div>
-                  ` : ''}
-                  ${(state.user?.telegramBinding || canGenerateTelegramEntry(state.user)) ? `
-                    <div class="signal-tg-actions">
-                      ${canGenerateTelegramEntry(state.user) ? `<button class="btn btn-primary" id="signalGetInvite">${escapeHtml(getTelegramEntryButtonLabel(state.user))}</button>` : ''}
-                      ${state.user?.telegramBinding ? '<button class="btn btn-ghost" id="signalRefreshStatus">刷新状态</button>' : ''}
-                    </div>
-                  ` : ''}
-                  <div class="signal-msg" id="signalMsg"></div>
-                </div>
-              `}
-
-              <div class="settings-card signal-features">
-                <h3 class="signal-features-title">推送内容包括</h3>
-                <ul class="signal-features-list">
-                  <li>📊 街哥训练的AI机器人信号推送，根据街哥的交易模型匹配大机会</li>
-                  <li>🎬 新课程上线通知</li>
-                  <li>📢 Pro会员专属公告</li>
-                </ul>
               </div>
             </div>
           ` : ''}
