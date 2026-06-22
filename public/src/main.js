@@ -8233,7 +8233,7 @@ function setupGlobalEvents() {
         deleteYes.addEventListener('click', async () => {
           deleteYes.disabled = true; deleteYes.textContent = '删除中...'
           try {
-            const r = await api.delete(`/api/admin-users/${userId}`)
+            const r = await api.del(`/api/admin-users/${userId}`)
             if (r.ok) {
               modal.style.display = 'none'
               refreshAdminUserTable()
