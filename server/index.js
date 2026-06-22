@@ -64,23 +64,34 @@ app.use('/uploads', express.static(join(__dirname, uploadDir)))
 import https from 'https'
 app.get('/api/bilibili-proxy', (req, res) => {
   const imageUrl = req.query.url
-  if (!imageUrl || !imageUrl.startsWith('https://i') || !imageUrl.includes('.hdslb.com/')) {
+  if (!imageUrl || !imageUrl.includes('.hdslb.com/')) {
     return res.status(400).end()
   }
-  const proxyReq = https.get(imageUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' },
-    timeout: 10000
-  }, (proxyRes) => {
-    if (proxyRes.statusCode !== 200) {
-      console.error(`[bilibili-proxy] ${imageUrl} → ${proxyRes.statusCode}`)
-      return res.status(502).end()
+  // Try multiple CDN nodes: original → i0 → i1 → i2
+  const nodes = [imageUrl]
+  const m = imageUrl.match(/^https:\/\/(i\d)\.hdslb\.com\/(.+)$/)
+  if (m) {
+    for (const n of ['i0', 'i1', 'i2']) {
+      if (n !== m[1]) nodes.push(`https://${n}.hdslb.com/${m[2]}`)
     }
-    res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'image/jpeg')
-    res.setHeader('Cache-Control', 'public, max-age=86400')
-    proxyRes.pipe(res)
-  })
-  proxyReq.on('error', (e) => { console.error('[bilibili-proxy] error:', e.code || e.message || JSON.stringify(e)); res.status(502).end() })
-  proxyReq.on('timeout', () => { console.error('[bilibili-proxy] timeout:', imageUrl); proxyReq.destroy(); res.status(502).end() })
+  }
+  let tried = 0
+  function tryNext() {
+    if (tried >= nodes.length) return res.status(502).end()
+    const url = nodes[tried++]
+    const proxyReq = https.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' },
+      timeout: 8000
+    }, (proxyRes) => {
+      if (proxyRes.statusCode !== 200) return tryNext()
+      res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'image/jpeg')
+      res.setHeader('Cache-Control', 'public, max-age=86400')
+      proxyRes.pipe(res)
+    })
+    proxyReq.on('error', () => tryNext())
+    proxyReq.on('timeout', () => { proxyReq.destroy(); tryNext() })
+  }
+  tryNext()
 })
 
 // Serve frontend static files
