@@ -25,7 +25,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v1.9.5"
+APP_VERSION = "v1.9.6"
 APP_NAME = "AURUM Bridge"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
@@ -255,31 +255,18 @@ class EyeToggleButton(QPushButton):
 
 
 class GearButton(QPushButton):
-    """设置按钮 - QPainter 绘制齿轮图标"""
+    """设置按钮"""
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(36, 32)
+        super().__init__("⚙ 设置", parent)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("设置")
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor("#94a3b8"), 2)
-        p.setPen(pen)
-        cx, cy = self.width() // 2, self.height() // 2
-        # Simple gear: circle + teeth
-        p.drawEllipse(cx - 8, cy - 8, 16, 16)
-        p.drawEllipse(cx - 4, cy - 4, 8, 8)
-        for angle in range(0, 360, 45):
-            import math
-            rad = math.radians(angle)
-            x1 = cx + int(8 * math.cos(rad))
-            y1 = cy + int(8 * math.sin(rad))
-            x2 = cx + int(12 * math.cos(rad))
-            y2 = cy + int(12 * math.sin(rad))
-            p.drawLine(x1, y1, x2, y2)
-        p.end()
+        self.setFixedHeight(32)
+        self.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: 1px solid #475569; border-radius: 6px;
+                color: #94a3b8; font-size: 13px; padding: 0 12px;
+            }
+            QPushButton:hover { border-color: #3b82f6; color: #e2e8f0; }
+        """)
 
 # ══════════════════════════════════════════════════════════
 #  Bridge Worker (QThread)
