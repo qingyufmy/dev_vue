@@ -1328,7 +1328,7 @@ async function loadAccount() {
   const data = await wsApi("account");
   const rawServer = data.server || data.company || "服务器 --";
   // 观摩账户：服务器名含 Demo 时显示为 Live
-  const server = state._usingFallback ? rawServer.replace(/Demo/gi, 'Live') : rawServer;
+  const server = rawServer;
   const currency = data.currency || "USD";
   setText("mt5Server", server);
   setText("accountServerName", server);
@@ -1765,6 +1765,8 @@ function applyRoleUI() {
   // Hide observation banner
   const banner = document.getElementById("observeBanner");
   if (banner) banner.classList.add("hidden");
+  // Re-enable symbol selectors
+  document.querySelectorAll('.sym-input').forEach(el => { el.disabled = false; el.title = ''; });
   const tradeMode = document.getElementById("tradeMode");
   if (tradeMode) { tradeMode.classList.add("clickable-badge"); tradeMode.title = ""; }
   const autoMode = document.getElementById("autoAnalyzeMode");

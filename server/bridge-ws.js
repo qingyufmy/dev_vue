@@ -835,7 +835,10 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'close_status': {
         // Report smart close scheduler status including pause reasons
-        const closeCfg = await ai.getCloseConfig(userId)
+        // In observation mode, show admin's close config
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const closeUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
+        const closeCfg = await ai.getCloseConfig(closeUserId)
         const enabled = !!(closeCfg?.enabled)
         const intervalSec = closeCfg?.check_interval_seconds || 30
         let paused = false
