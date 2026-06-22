@@ -845,15 +845,15 @@ async function handleBrowserCommand(ws, userId, msg) {
         let pauseReason = ''
 
         if (enabled) {
-          // Check market status
-          const tradeMode = await getBridgeTradeMode(userId)
-          if (tradeMode == null || tradeMode <= 0) {
+          // Check market status — use closeUserId for bridge data in observation mode
+          const tradeMode = await getBridgeTradeMode(closeUserId)
+          if (tradeMode !== 4) {
             paused = true
             pauseReason = tradeMode === 0 ? 'market_closed' : 'market_unknown'
           } else {
-            // Check positions
+            // Check positions — use closeUserId's bridge
             try {
-              const posData = await sendBridgeCommand(userId, 'positions', {})
+              const posData = await sendBridgeCommand(closeUserId, 'positions', {})
               const positions = posData?.positions || []
               if (positions.length === 0) {
                 paused = true
