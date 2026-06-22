@@ -597,6 +597,12 @@ class BridgeWorker(QThread):
                     self.log_signal.emit("WebSocket 已连接")
                     break
                 except Exception as e:
+                    err_str = str(e)
+                    # Plan rejection — stop retrying
+                    if '4003' in err_str or '会员' in err_str or 'Pro' in err_str:
+                        self.log_signal.emit(f"❌ {err_str}")
+                        self.status_signal.emit("会员等级不足", "#ef4444", "")
+                        return
                     rc = int(elapsed // RETRY_INT) + 1
                     self.log_signal.emit(f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
                     self.status_signal.emit(f"重连中... ({rc})", "#f59e0b", "")
@@ -974,6 +980,7 @@ class LoginPage(QWidget):
                 cfg["saved_password"] = password
             else:
                 cfg.pop("saved_password", None)
+            cfg["plan"] = data.get("user", {}).get("plan", "free")
             save_config(cfg)
 
             self.login_success.emit(email, token)
@@ -1107,6 +1114,10 @@ class BridgePage(QWidget):
             self._log("桥接已停止")
         else:
             cfg = load_config()
+            plan = cfg.get("plan", "free")
+            if plan in ("free", "plus"):
+                QMessageBox.warning(self, "会员等级不足", f"当前会员等级: {plan.upper()}\n\n桥接功能仅限 Pro 会员使用，请联系管理员升级。")
+                return
             server = cfg.get("server_url", DEFAULT_SERVER)
             token = cfg.get("token", "")
             if not server or not token:
@@ -1535,6 +1546,8 @@ class MainWindow(QMainWindow):
         if token:
             status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5)
             if status_code == 200:
+                cfg["plan"] = data.get("user", data).get("plan", "free")
+                save_config(cfg)
                 self._on_login_success(email, token)
                 return
 
@@ -1547,7 +1560,7 @@ class MainWindow(QMainWindow):
                 {"email": email, "password": password}, timeout=10)
             if status_code == 200 and data.get("token"):
                 new_token = data["token"]
-                update_config({"token": new_token})
+                update_config({"token": new_token, "plan": data.get("user", {}).get("plan", "free")})
                 self._on_login_success(email, new_token)
                 return
 

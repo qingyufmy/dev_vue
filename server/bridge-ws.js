@@ -133,6 +133,28 @@ function handleBridge(ws, url) {
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
+  // Check user plan — only Pro allowed (async, blocks bridge setup)
+  queryOne('SELECT plan, plan_expires_at, role FROM users WHERE id = ?', [userId]).then(user => {
+    if (!user) { ws.close(4002, 'User not found'); return }
+    if (user.role !== 'admin') {
+      const now = new Date()
+      const expired = user.plan_expires_at && new Date(user.plan_expires_at) < now
+      if (user.plan === 'free' || user.plan === 'plus' || expired) {
+        const reason = expired ? '会员已过期，请续费后重试' : `当前会员等级(${user.plan})不可使用桥接，请升级Pro会员`
+        console.log(`[BridgeWS] User ${userId} rejected: ${reason}`)
+        ws.close(4003, reason)
+        return
+      }
+    }
+    _initBridge(ws, userId)
+  }).catch(err => {
+    console.error('[BridgeWS] Plan check error:', err)
+    ws.close(4002, 'Server error')
+  })
+}
+
+function _initBridge(ws, userId) {
+
   const existing = bridges.get(userId)
   // Close old bridge connection if still open (one bridge per account)
   if (existing && existing.ws && existing.ws.readyState === 1) {
