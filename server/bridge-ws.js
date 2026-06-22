@@ -141,7 +141,7 @@ function handleBridge(ws, url) {
   }
   // Admin defaults to tradeEnabled=true, others false
   const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), _marketStatusKnown: false }); ws._userId = userId
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), lastTradeMode: 4 }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
@@ -173,52 +173,27 @@ function handleBridge(ws, url) {
     if (bridge) bridge.lastSeen = Date.now()
 
     if (msg.type === 'data') {
-      // Real-time market status detection via MT5 time string comparison
+      // Real-time market status detection: compare consecutive tick times
       if (bridge && msg.quote && typeof msg.quote.time === 'string') {
         const now = Date.now()
         bridge.lastTickMs = now
         const prev = bridge.mt5TimeStr
         bridge.mt5TimeStr = msg.quote.time
         if (prev !== undefined) {
-          // Parse both timestamps to compare with tolerance
-          const parseT = (s) => {
-            const p = s.split(/[. :]/)
-            if (p.length >= 6) return new Date(parseInt(p[0]), parseInt(p[1])-1, parseInt(p[2]), parseInt(p[3]), parseInt(p[4]), parseInt(p[5])).getTime()
-            return 0
-          }
-          const prevMs = parseT(prev)
-          const curMs = parseT(msg.quote.time)
-          if (prevMs && curMs) {
-            if (curMs - prevMs > 60000) {
-              bridge.lastTradeMode = 4
-            } else if (curMs === prevMs) {
-              if (!bridge._sameTickStart) bridge._sameTickStart = now
-              if (now - bridge._sameTickStart > 10000) bridge.lastTradeMode = 0
-            } else {
-              bridge.lastTradeMode = 4
-              bridge._sameTickStart = null
-            }
-          }
-        } else {
-          // First tick after bridge connect: parse MT5 time to detect staleness
-          const parts = msg.quote.time.split(/[. :]/)
-          if (parts.length >= 6) {
-            const mt5Date = new Date(
-              parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]),
-              parseInt(parts[3]), parseInt(parts[4]), parseInt(parts[5])
-            )
-            if ((now - mt5Date.getTime()) > 60000) {
-              bridge.lastTradeMode = 0
-            } else {
-              bridge.lastTradeMode = 4
-            }
+          if (msg.quote.time !== prev) {
+            // Time changed → trading
+            bridge.lastTradeMode = 4
+            bridge._sameTickStart = null
+          } else {
+            // Same tick time — mark closed after 5s
+            if (!bridge._sameTickStart) bridge._sameTickStart = now
+            if (now - bridge._sameTickStart > 5000) bridge.lastTradeMode = 0
           }
         }
-        bridge._marketStatusKnown = true
       }
       // Data relay — push to browsers, include server-detected trade_mode
-      const tradeMode = bridge ? bridge.lastTradeMode : undefined
-      sendToBrowsers(userId, { type: 'data', trade_mode: typeof tradeMode === 'number' ? tradeMode : -1, ...msg })
+      const tradeMode = bridge ? bridge.lastTradeMode : -1
+      sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
     } else if (msg.type === 'hb' || msg.type === 'pong') {
       // Bridge heartbeat/pong — lastSeen already updated
       if (bridge) bridge.lastPong = Date.now()
