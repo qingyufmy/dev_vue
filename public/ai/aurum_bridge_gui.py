@@ -689,6 +689,13 @@ class BridgeWorker(QThread):
                             self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
                 except websocket.WebSocketTimeoutException: pass
                 except websocket.WebSocketConnectionClosedException:
+                    # Check close code for plan rejection
+                    cc = getattr(ws, 'close_code', None)
+                    cr = getattr(ws, 'close_reason', '')
+                    if cc == 4003:
+                        self.log_signal.emit(f"❌ 连接被拒绝: {cr}")
+                        self.status_signal.emit("会员等级不足", "#ef4444", "")
+                        return
                     self.log_signal.emit("WebSocket 连接已断开"); break
                 except Exception as e:
                     self.log_signal.emit(f"接收错误: {e}"); break
