@@ -8153,6 +8153,13 @@ function setupGlobalEvents() {
             <button class="btn btn-primary" id="adminEditUserSaveBtn" data-user-id="${userId}">保存</button>
             <button class="btn btn-ghost" id="adminEditUserCancelBtn">取消</button>
           </div>
+          <div style="border-top:1px solid var(--border-1);padding-top:12px;margin-top:4px;">
+            <button class="btn btn-xs" id="adminEditUserDeleteBtn" data-user-id="${userId}" data-name="${escapeHtml(userName)}" style="color:#ef4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);">删除用户</button>
+            <span id="adminDeleteConfirm" style="display:none;margin-left:8px;font-size:12px;">确认删除？此操作不可恢复！
+              <button class="btn btn-xs" id="adminDeleteConfirmYes" style="color:#fff;background:#ef4444;margin-left:4px;">确认删除</button>
+              <button class="btn btn-xs btn-ghost" id="adminDeleteConfirmNo">取消</button>
+            </span>
+          </div>
           <div id="adminEditUserResult" style="display:none"></div>
         </div>
       `
@@ -8210,6 +8217,32 @@ function setupGlobalEvents() {
           }
         })
       })
+
+      // Delete user
+      const deleteBtn = document.getElementById('adminEditUserDeleteBtn')
+      const deleteConfirm = document.getElementById('adminDeleteConfirm')
+      if (deleteBtn) {
+        deleteBtn.addEventListener('click', () => { deleteBtn.style.display = 'none'; deleteConfirm.style.display = 'inline' })
+      }
+      const deleteNo = document.getElementById('adminDeleteConfirmNo')
+      if (deleteNo) {
+        deleteNo.addEventListener('click', () => { deleteBtn.style.display = 'inline-block'; deleteConfirm.style.display = 'none' })
+      }
+      const deleteYes = document.getElementById('adminDeleteConfirmYes')
+      if (deleteYes) {
+        deleteYes.addEventListener('click', async () => {
+          deleteYes.disabled = true; deleteYes.textContent = '删除中...'
+          try {
+            const r = await api.delete(`/api/admin-users/${userId}`)
+            if (r.ok) {
+              modal.style.display = 'none'
+              refreshAdminUserTable()
+            } else {
+              alert(r.error || '删除失败')
+            }
+          } catch { alert('删除失败') }
+        })
+      }
       return
     }
 

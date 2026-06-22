@@ -232,6 +232,25 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   }
 })
 
+router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const userId = Number(req.params.id)
+    if (!userId) return res.json({ ok: false, error: '缺少用户ID' })
+    const user = await queryOne('SELECT id, email, role FROM users WHERE id = ?', [userId])
+    if (!user) return res.json({ ok: false, error: '用户不存在' })
+    if (user.role === 'admin') return res.json({ ok: false, error: '不能删除管理员账号' })
+    await queryRun('DELETE FROM notifications WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
+    await queryRun('DELETE FROM orders WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM verification_codes WHERE email = ?', [user.email])
+    await queryRun('DELETE FROM users WHERE id = ?', [userId])
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Delete user error:', err)
+    res.json({ ok: false, error: err.sqlMessage || '删除失败' })
+  }
+})
+
 router.get('/admin-audit', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { page = 1, limit = 30, action, search, days } = req.query
