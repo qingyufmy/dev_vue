@@ -601,6 +601,16 @@ class BridgeWorker(QThread):
             self.log_signal.emit("错误: websocket-client 未安装")
             return
 
+        # Check plan status before connecting
+        self.log_signal.emit("检查会员状态...")
+        plan, expired, reason = self.check_plan()
+        if expired:
+            self.log_signal.emit(f"❌ {reason}")
+            self.plan_expired_signal.emit(reason)
+            self.mt5.shutdown()
+            return
+        self.log_signal.emit(f"会员等级: {plan.upper()}，开始连接...")
+
         server = self.server_url.replace("http://","ws://").replace("https://","wss://").rstrip("/")
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
@@ -1167,10 +1177,6 @@ class BridgePage(QWidget):
             self._log("桥接已停止")
         else:
             cfg = load_config()
-            plan = cfg.get("plan", "free")
-            if plan in ("free", "plus"):
-                QMessageBox.warning(self, "会员等级不足", f"当前会员等级: {plan.upper()}\n\n桥接功能仅限 Pro 会员使用，请联系管理员升级。")
-                return
             server = cfg.get("server_url", DEFAULT_SERVER)
             token = cfg.get("token", "")
             if not server or not token:
@@ -1180,11 +1186,6 @@ class BridgePage(QWidget):
             self._worker.log_signal.connect(self._log)
             self._worker.status_signal.connect(self._set_status)
             self._worker.plan_expired_signal.connect(self._on_plan_expired)
-            # Check plan before starting
-            plan, expired, msg = self._worker.check_plan()
-            if expired:
-                QMessageBox.warning(self, "会员等级不足", msg)
-                return
             self._worker.start()
             self.btn_start.setText("■  停止桥接")
             self.btn_start.setStyleSheet("background-color: #ef4444;")
