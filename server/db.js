@@ -539,6 +539,19 @@ export async function initDB() {
       created_at DATETIME DEFAULT (NOW()),
       UNIQUE KEY uk_original_ticket (user_id, original_ticket)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS site_updates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      date DATE NOT NULL,
+      icon VARCHAR(20) DEFAULT '·',
+      title VARCHAR(200) NOT NULL,
+      content TEXT NULL,
+      target_type VARCHAR(20) DEFAULT 'episode',
+      target_id INT DEFAULT NULL,
+      target_url VARCHAR(500) DEFAULT NULL,
+      sort_order INT DEFAULT 0,
+      created_at DATETIME DEFAULT (NOW())
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ]
 
   for (const sql of tables) {

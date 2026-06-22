@@ -1,5 +1,5 @@
 // 网站最近更新日志
-// 显示在首页侧边栏「最近更新」板块，按日期倒序显示最新 8 条
+// 显示在首页侧边栏「最近更新」板块，按日期倒序显示最新 5 条
 //
 // ⚠️ 原则：这里只写「用户能感知的内容/功能更新」，让学员知道有新东西可学
 //    ✅ 可以写的：新视频上线、新文章、新专题、新知识点、新社区功能、新会员权益
@@ -16,6 +16,7 @@
 //
 // 新增更新时，直接往数组顶部加一条即可，越新越靠前。
 
+// 静态数据作为后备（API 不可用时使用）
 export const siteUpdates = [
   {
     date: '2026-05-31',
@@ -372,3 +373,19 @@ export const siteUpdates = [
     target: { type: 'path', url: '/community' },
   },
 ]
+
+/**
+ * 从 API 加载最近更新（只取 5 条）。
+ * API 不可用时退回静态数据。
+ */
+export async function loadSiteUpdates(limit = 5) {
+  try {
+    const res = await fetch(`/api/site-updates?limit=${limit}`)
+    const data = await res.json()
+    if (data.ok && Array.isArray(data.items) && data.items.length > 0) {
+      return data.items
+    }
+  } catch (_) { /* fall through to static */ }
+  // Fallback: use static data (also 5 items)
+  return siteUpdates.slice(0, limit)
+}

@@ -144,4 +144,82 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
   }
 })
 
+// ===== Site Updates (public) =====
+// Get recent site updates for sidebar display
+router.get('/site-updates', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 5, 20)
+    const rows = await queryAll(
+      'SELECT id, date, icon, title, content, target_type, target_id, target_url FROM site_updates ORDER BY date DESC, sort_order DESC, id DESC LIMIT ?',
+      [limit]
+    )
+    // Transform to match frontend expected format
+    const items = rows.map(r => {
+      const target = {}
+      if (r.target_type === 'path' || r.target_type === 'category') {
+        target.type = r.target_type
+        if (r.target_url) target.url = r.target_url
+        if (r.target_id) target.id = r.target_id
+      } else if (r.target_type && r.target_id) {
+        target.type = r.target_type
+        target.id = r.target_id
+        if (r.target_url) target.url = r.target_url
+      } else if (r.target_url) {
+        target.url = r.target_url
+      }
+      const tgt = Object.keys(target).length ? target : undefined
+      return { id: r.id, date: r.date, icon: r.icon, title: r.title, content: r.content, target: tgt }
+    })
+    res.json({ ok: true, items })
+  } catch (err) {
+    res.json({ ok: false, error: err.message })
+  }
+})
+
+// Admin: add site update
+router.post('/site-updates', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { date, icon, title, content, target_type, target_id, target_url } = req.body
+    if (!date || !title) return res.json({ ok: false, error: '日期和标题必填' })
+    await queryRun(
+      'INSERT INTO site_updates (date, icon, title, content, target_type, target_id, target_url) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [date, icon || '·', title, content || '', target_type || null, target_id || null, target_url || null]
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.json({ ok: false, error: err.message })
+  }
+})
+
+// Admin: update site update
+router.put('/site-updates/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { date, icon, title, content, target_type, target_id, target_url } = req.body
+    const fields = []; const values = []
+    if (date !== undefined) { fields.push('date = ?'); values.push(date) }
+    if (icon !== undefined) { fields.push('icon = ?'); values.push(icon) }
+    if (title !== undefined) { fields.push('title = ?'); values.push(title) }
+    if (content !== undefined) { fields.push('content = ?'); values.push(content) }
+    if (target_type !== undefined) { fields.push('target_type = ?'); values.push(target_type) }
+    if (target_id !== undefined) { fields.push('target_id = ?'); values.push(target_id) }
+    if (target_url !== undefined) { fields.push('target_url = ?'); values.push(target_url) }
+    if (!fields.length) return res.json({ ok: false, error: '没有可更新的字段' })
+    values.push(req.params.id)
+    await queryRun(`UPDATE site_updates SET ${fields.join(', ')} WHERE id = ?`, values)
+    res.json({ ok: true })
+  } catch (err) {
+    res.json({ ok: false, error: err.message })
+  }
+})
+
+// Admin: delete site update
+router.delete('/site-updates/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    await queryRun('DELETE FROM site_updates WHERE id = ?', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) {
+    res.json({ ok: false, error: err.message })
+  }
+})
+
 export default router

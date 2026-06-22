@@ -1,5 +1,5 @@
 import { episodes as staticEpisodes, categories } from './data/episodes.js'
-import { siteUpdates } from './data/updates.js'
+import { siteUpdates, loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
 import Quill from 'https://esm.sh/quill@2.0.3'
@@ -1892,6 +1892,9 @@ function renderHome() {
     </div>
   `
 
+  // 异步从 API 加载最新更新（用真实数据替换静态后备）
+  refreshSidebarUpdates()
+
 }
 
 function getCardBackground(ep) {
@@ -1986,13 +1989,14 @@ function renderSidebarQuotes() {
   `
 }
 
-function renderSidebarUpdates() {
-  if (!siteUpdates || siteUpdates.length === 0) return ''
-  const items = siteUpdates.slice(0, 8)
+function renderSidebarUpdates(data = null) {
+  const updates = data || siteUpdates
+  if (!updates || updates.length === 0) return ''
+  const items = updates.slice(0, 5)
   const now = new Date()
 
   return `
-    <div class="sidebar-card sidebar-updates-card">
+    <div class="sidebar-card sidebar-updates-card" id="sidebar-updates-card">
       <h3>📢 最近更新</h3>
       <ul class="updates-list">
         ${items.map((u, idx) => {
@@ -2032,6 +2036,29 @@ function formatUpdateDate(dateStr, now) {
   const [y, m, d] = dateStr.split('-')
   if (String(now.getFullYear()) !== y) return `${y}.${m}.${d}`
   return `${m}.${d}`
+}
+
+async function refreshSidebarUpdates() {
+  const card = document.getElementById('sidebar-updates-card')
+  if (!card) return
+  const updates = await loadSiteUpdates(5)
+  if (!updates || updates.length === 0) return
+  const now = new Date()
+  const html = updates.map(u => {
+    const isNew = isRecent(u.date, now, 3)
+    const targetAttr = u.target ? `data-update-target='${escapeHtml(JSON.stringify(u.target))}'` : ''
+    return `
+      <li class="update-item" ${targetAttr}>
+        <div class="update-icon">${u.icon || '\u00B7'}</div>
+        <div class="update-info">
+          <div class="update-title">${escapeHtml(u.title)}${isNew ? '<span class="update-new-badge">新</span>' : ''}</div>
+          <div class="update-date">${formatUpdateDate(u.date, now)}</div>
+        </div>
+      </li>
+    `
+  }).join('')
+  const list = card.querySelector('.updates-list')
+  if (list) list.innerHTML = html
 }
 
 function renderSidebarHistory() {
