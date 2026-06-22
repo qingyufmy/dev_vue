@@ -1712,11 +1712,11 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: '1.9.6',
     build_date: '2026-06-22',
-    changelog: '桥接连接稳定性优化、ping/pong心跳、设置按钮文字显示',
+    changelog: '观摩模式文案优化、退出登录重登修复、市场状态检测优化',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 71165267,
-    md5: '5e3df752eb120fa67fddd06075a9cc13'
+    file_size: 71165477,
+    md5: '11123ec93db970846e9d42bac9eeaa7c'
   })
 })
 
