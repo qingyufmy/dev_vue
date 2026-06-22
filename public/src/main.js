@@ -5362,10 +5362,12 @@ function renderMembership() {
               <button class="price-tab" data-period="yearly">年付</button>
             </div>
             <div class="mem-price-display">
-              <span class="mem-price" data-monthly="50" data-yearly="480">$50</span>
+              <span class="mem-price-original" data-monthly="100" data-yearly="1000">$100</span>
+              <span class="mem-price" data-monthly="50" data-yearly="500">$50</span>
               <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            <div class="mem-price-save" style="display:none">年付立省 $120，低至 $40/月</div>
+            <div class="mem-price-discount">限时 5 折</div>
+            <div class="mem-price-save" style="display:none">年付立省 $100，低至 $50/月</div>
           </div>
           <ul class="mem-features">
             <li class="mem-feat"><span class="mem-check">✓</span>新视频上线即时解锁</li>
@@ -5397,10 +5399,12 @@ function renderMembership() {
               <button class="price-tab" data-period="yearly">年付</button>
             </div>
             <div class="mem-price-display">
-              <span class="mem-price" data-monthly="100" data-yearly="960">$100</span>
+              <span class="mem-price-original" data-monthly="200" data-yearly="2000">$200</span>
+              <span class="mem-price" data-monthly="100" data-yearly="1000">$100</span>
               <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            <div class="mem-price-save" style="display:none">年付立省 $240，低至 $80/月</div>
+            <div class="mem-price-discount">限时 5 折</div>
+            <div class="mem-price-save" style="display:none">年付立省 $200，低至 $100/月</div>
           </div>
           <ul class="mem-features">
             <li class="mem-feat"><span class="mem-check">✓</span>包含 Plus 全部权限</li>
@@ -5414,6 +5418,31 @@ function renderMembership() {
               : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">暂关闭</button>`}
           </div>
         </div>
+      </div>
+
+      <div class="membership-comparison">
+        <h3 class="faq-title">权益对比</h3>
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>功能</th>
+              <th>体验版</th>
+              <th>Plus</th>
+              <th>Pro</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>公开课程视频</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>街哥语录</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>观看历史</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>新视频即时解锁</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>知识图解 & 框架</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>课后测验 + 解析</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>专属街家军标识</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>AI 信号推送</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>月付价格</td><td>免费</td><td>$50/月</td><td>$100/月</td></tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="membership-faq">
@@ -7680,6 +7709,7 @@ function setupGlobalEvents() {
     state.communityPage = 1
     navigate('community')
   })
+  $('#navMembership').addEventListener('click', () => navigate('membership'))
   $('#navAI').addEventListener('click', (e) => {
     e.preventDefault()
     if (!requireLogin()) return
@@ -8338,9 +8368,11 @@ function setupGlobalEvents() {
       card.querySelectorAll('.price-tab').forEach(t => t.classList.remove('active'))
       priceTab.classList.add('active')
       const priceEl = card.querySelector('.mem-price')
+      const originalEl = card.querySelector('.mem-price-original')
       const unitEl = card.querySelector('.mem-price-unit')
       const saveEl = card.querySelector('.mem-price-save')
       if (priceEl) priceEl.textContent = '$' + priceEl.dataset[period]
+      if (originalEl) originalEl.textContent = '$' + originalEl.dataset[period]
       if (unitEl) unitEl.textContent = '/ ' + (period === 'monthly' ? '月' : '年')
       if (saveEl) saveEl.style.display = period === 'yearly' ? 'block' : 'none'
       return
