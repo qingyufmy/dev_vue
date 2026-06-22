@@ -911,9 +911,9 @@ function handleHeartbeat(msg) {
 
   if (usingFallback) {
     if (state.isPlusReadOnly) {
-      setBadge("gatewayMode", "观摩模式-管理员账户", "warning");
+      setBadge("gatewayMode", "观摩模式-数据同步中", "warning");
     } else {
-      setBadge("gatewayMode", "观摩模式-管理员账户（请连接您的MT5）", "warning");
+      setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
     }
   } else {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
@@ -1110,7 +1110,7 @@ async function loadStatus() {
 
   // Gateway badge — bridge connection status
   if (usingFallback) {
-    setBadge("gatewayMode", "观摩模式-管理员账户", "warning");
+    setBadge("gatewayMode", "观摩模式-数据同步中", "warning");
   } else {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
   }
