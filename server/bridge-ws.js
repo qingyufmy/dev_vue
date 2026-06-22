@@ -829,7 +829,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'get_close_config': {
-        const cfg = await ai.getCloseConfig(userId)
+        // In observation mode, show admin's close config
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const closeUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
+        const cfg = await ai.getCloseConfig(closeUserId)
         result = { status: 'success', config: cfg || { enabled: false, check_interval_seconds: 30, model_name: 'deepseek-chat' } }
         break
       }

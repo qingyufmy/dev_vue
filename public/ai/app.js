@@ -1328,7 +1328,7 @@ async function loadAccount() {
   const data = await wsApi("account");
   const rawServer = data.server || data.company || "服务器 --";
   // 观摩账户：服务器名含 Demo 时显示为 Live
-  const server = rawServer;
+  const server = state._usingFallback ? rawServer.replace(/Demo/gi, 'Live') : rawServer;
   const currency = data.currency || "USD";
   setText("mt5Server", server);
   setText("accountServerName", server);
