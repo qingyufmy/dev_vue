@@ -1124,7 +1124,10 @@ class BridgePage(QWidget):
     def stop_bridge(self):
         if self._worker and self._worker.isRunning():
             self._worker.stop()
-            self._worker.wait(3000)
+            if not self._worker.wait(3000):
+                # Worker didn't stop in time — force terminate
+                self._worker.terminate()
+                self._worker.wait(1000)
             self._worker = None
         self.btn_start.setText("▶  启动桥接")
         self.btn_start.setStyleSheet("background-color: #3b82f6;")
@@ -1563,6 +1566,8 @@ class MainWindow(QMainWindow):
         self.bridge_page._set_status("已断开", "#6b7280")
         self.bridge_page.lbl_update_hint.setVisible(False)
         self.stack.setCurrentIndex(1)
+        # Force UI repaint after page switch
+        QApplication.processEvents()
         # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
         QTimer.singleShot(3000, self._auto_check_update)
         self._update_timer.start(30 * 60 * 1000)
@@ -1594,6 +1599,7 @@ class MainWindow(QMainWindow):
         self.login_page.load_config()
         self.login_page.lbl_status.setText("")
         self.stack.setCurrentIndex(0)
+        QApplication.processEvents()
 
     def _init_tray(self):
         ico_path = resource_path("aurum_icon.ico")
