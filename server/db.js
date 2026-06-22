@@ -539,10 +539,31 @@ export async function initDB() {
       created_at DATETIME DEFAULT (NOW()),
       UNIQUE KEY uk_original_ticket (user_id, original_ticket)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS referral_rules (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      plan VARCHAR(20) NOT NULL,
+      period VARCHAR(20) NOT NULL,
+      rate_bps INT NOT NULL DEFAULT 1000,
+      enabled TINYINT NOT NULL DEFAULT 1,
+      UNIQUE KEY uk_plan_period (plan, period)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ]
 
   for (const sql of tables) {
     await p.query(sql)
+  }
+
+  // Seed referral_rules if empty
+  const [ruleRows] = await p.query('SELECT COUNT(*) as c FROM referral_rules')
+  if (ruleRows[0].c === 0) {
+    await p.query(`
+      INSERT IGNORE INTO referral_rules (plan, period, rate_bps, enabled) VALUES
+      ('plus', 'monthly', 1000, 1),
+      ('plus', 'yearly', 1000, 1),
+      ('pro', 'monthly', 1000, 1),
+      ('pro', 'yearly', 1000, 1)
+    `)
   }
 
   // Seed demo data if empty
