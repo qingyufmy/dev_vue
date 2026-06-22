@@ -5373,7 +5373,7 @@ function renderMembership() {
             <li class="mem-feat"><span class="mem-check">✓</span>新视频上线即时解锁</li>
             <li class="mem-feat"><span class="mem-check">✓</span>高清知识图解 & 框架</li>
             <li class="mem-feat"><span class="mem-check">✓</span>全部课后测验 + 解析</li>
-            <li class="mem-feat disabled"><span class="mem-x">✗</span>AI 机器人信号推送</li>
+            <li class="mem-feat disabled"><span class="mem-x">✗</span>AI全自动交易</li>
           </ul>
           <div class="mem-action">
             ${currentPlan === 'pro'
@@ -5408,7 +5408,7 @@ function renderMembership() {
           </div>
           <ul class="mem-features">
             <li class="mem-feat"><span class="mem-check">✓</span>包含 Plus 全部权限</li>
-            <li class="mem-feat"><span class="mem-check pro">✓</span>华尔街 AI 机器人信号专属推送</li>
+            <li class="mem-feat"><span class="mem-check pro">✓</span>AI全自动交易</li>
           </ul>
           <div class="mem-action">
             ${currentPlan === 'pro'
@@ -5439,7 +5439,7 @@ function renderMembership() {
             <tr><td>知识图解 & 框架</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>课后测验 + 解析</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>专属街家军标识</td><td>✗</td><td>✓</td><td>✓</td></tr>
-            <tr><td>AI 信号推送</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>AI全自动交易</td><td>✗</td><td>✗</td><td>✓</td></tr>
             <tr><td>月付价格</td><td>免费</td><td>$50/月</td><td>$100/月</td></tr>
           </tbody>
         </table>
