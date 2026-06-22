@@ -1491,8 +1491,13 @@ async function loadKlineData() {
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
+    // MT5 time is UTC+3; browser is UTC+8 → to show MT5 time, subtract 5h from UTC
+    const mt5ToDisplay = (mt5Str) => {
+      const utcMs = new Date(mt5Str.replace(' ', 'T') + 'Z').getTime();
+      return Math.floor((utcMs - 5 * 3600000) / 1000);
+    };
     const candles = data.rates.map(b => ({
-      time: Math.floor(new Date(b.time.replace(' ', 'T')).getTime() / 1000),
+      time: mt5ToDisplay(b.time),
       open: Number(b.open),
       high: Number(b.high),
       low: Number(b.low),
@@ -1500,7 +1505,7 @@ async function loadKlineData() {
     }));
 
     const volumes = data.rates.map(b => ({
-      time: Math.floor(new Date(b.time.replace(' ', 'T')).getTime() / 1000),
+      time: mt5ToDisplay(b.time),
       value: Number(b.tick_volume || b.volume || 0),
       color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
