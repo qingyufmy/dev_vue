@@ -621,10 +621,16 @@ class BridgeWorker(QThread):
                 self._resolved_symbol = self._resolve_symbol("XAUUSD")
             except:
                 self._resolved_symbol = "XAUUSD"
-            last_hb = 0; last_data = 0
+            last_hb = 0; last_data = 0; last_server_msg = time.time()
 
             while self.running:
                 now = time.time()
+
+                # Detect server silence — no data/ping for 20s = dead connection
+                if now - last_server_msg > 20:
+                    self.log_signal.emit("服务端心跳超时(20s无响应)，强制重连")
+                    break
+
                 if now - last_data >= 1.0:
                     try:
                         acc = self.mt5.account_info()
@@ -659,6 +665,9 @@ class BridgeWorker(QThread):
                                 "swap": p.swap, "commission": getattr(p,'commission',0)} for p in positions],
                             "live_trading_enabled": self._trade_enabled}
                         ws.send(json.dumps(dm))
+                        if not ws.connected:
+                            self.log_signal.emit("发送后检测到连接断开")
+                            break
                         if acc:
                             self.status_signal.emit("MT5桥接-已连接", "#22c55e",
                                                    f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
@@ -674,8 +683,12 @@ class BridgeWorker(QThread):
                 try:
                     data = ws.recv()
                     if data:
+                        last_server_msg = time.time()
                         msg = json.loads(data)
-                        if msg.get("type") == "command":
+                        if msg.get("type") == "ping":
+                            try: ws.send(json.dumps({"type": "pong", "ts": msg.get("ts", 0)}))
+                            except: pass
+                        elif msg.get("type") == "command":
                             self.log_signal.emit(f"执行: {msg['action']}")
                             try: resp = self._process_command(msg)
                             except Exception as ce: resp = {"status": "error", "message": str(ce)}

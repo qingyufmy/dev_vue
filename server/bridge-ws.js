@@ -141,11 +141,29 @@ function handleBridge(ws, url) {
   }
   // Admin defaults to tradeEnabled=true, others false
   const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade }); ws._userId = userId
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now() }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true })
+
+  // Server-side ping every 15s — if bridge doesn't reply within 30s, close
+  const pingInterval = setInterval(() => {
+    const bridge = bridges.get(userId)
+    if (!bridge || bridge.ws !== ws) { clearInterval(pingInterval); return }
+    if (Date.now() - bridge.lastPong > 30000) {
+      console.log(`[BridgeWS] User ${userId} bridge ping timeout, closing`)
+      try { ws.close(4003, 'Ping timeout') } catch {}
+      clearInterval(pingInterval)
+      return
+    }
+    try { ws.send(JSON.stringify({ type: 'ping', ts: Date.now() })) } catch {}
+  }, 15000)
+
+  ws.on('pong', () => {
+    const bridge = bridges.get(userId)
+    if (bridge) { bridge.lastSeen = Date.now(); bridge.lastPong = Date.now() }
+  })
 
   ws.on('message', (data) => {
     let msg
@@ -183,8 +201,9 @@ function handleBridge(ws, url) {
       // Data relay — push to browsers, include server-detected trade_mode
       const tradeMode = bridge ? bridge.lastTradeMode : undefined
       sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
-    } else if (msg.type === 'hb') {
-      // Bridge heartbeat — lastSeen already updated
+    } else if (msg.type === 'hb' || msg.type === 'pong') {
+      // Bridge heartbeat/pong — lastSeen already updated
+      if (bridge) bridge.lastPong = Date.now()
     } else if (msg.type === 'result') {
       // Command result from bridge
       if (msg.command_id) {
@@ -201,6 +220,7 @@ function handleBridge(ws, url) {
   })
 
   ws.on('close', async () => {
+    clearInterval(pingInterval)
     bridges.delete(userId)
     console.log(`[BridgeWS] User ${userId} bridge disconnected`)
     // Notify browsers
