@@ -224,7 +224,11 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     res.json({ ok: true })
   } catch (err) {
     console.error('Admin update user error:', err)
-    res.json({ ok: false, error: '更新失败' })
+    let msg = '更新失败'
+    if (err.code === 'ER_DUP_ENTRY') msg = '邮箱已被其他用户使用'
+    else if (err.code === 'ER_DATA_TOO_LONG') msg = '数据超长'
+    else if (err.sqlMessage) msg = err.sqlMessage
+    res.json({ ok: false, error: msg })
   }
 })
 

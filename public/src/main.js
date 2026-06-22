@@ -99,6 +99,15 @@ function formatMinorUsd(cents) {
   return `$${(Math.max(0, value) / 100).toFixed(2)}`
 }
 
+function planLabel(plan, expiresAt) {
+  if (!plan || plan === 'free') return '<span class="admin-badge badge-free">免费</span>'
+  const label = plan === 'pro' ? 'PRO' : 'Plus'
+  const expStr = expiresAt instanceof Date ? expiresAt.toISOString().substring(0, 10) : String(expiresAt || '').substring(0, 10)
+  const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
+  if (expired) return `<span class="admin-badge badge-expired">${label} (已过期)</span>`
+  return `<span class="admin-badge badge-paid">${label}</span>`
+}
+
 let communityEditor = null
 const postImageObjectUrls = new Set()
 const replyDraftObjectUrls = new Set()
@@ -3172,14 +3181,8 @@ function renderAdminContent(data) {
     .sort((a, b) => String(b.order.paidAt || b.order.createdAt || '').localeCompare(String(a.order.paidAt || a.order.createdAt || '')))
 
   // Plan label helper
-  function planLabel(plan, expiresAt) {
-    if (!plan || plan === 'free') return '<span class="admin-badge badge-free">免费</span>'
-    const label = plan === 'pro' ? 'PRO' : 'Plus'
-    const expStr = expiresAt instanceof Date ? expiresAt.toISOString().substring(0, 10) : String(expiresAt || '').substring(0, 10)
-const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
-    if (expired) return `<span class="admin-badge badge-expired">${label} (已过期)</span>`
-    return `<span class="admin-badge badge-paid">${label}</span>`
-  }
+    // planLabel is now at module level
+
 
   function orderPlanLabel(order) {
     const plan = order.plan === 'pro' ? 'PRO' : order.plan === 'plus' ? 'Plus' : (order.plan || '-')
