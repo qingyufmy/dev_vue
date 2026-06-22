@@ -979,6 +979,7 @@ async function refreshTabData(tabId) {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
   } else if (tabId === "dashboard") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadKlineData()]);
+    startKlineRefreshTimer();
   } else if (tabId === "history") {
     await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
   } else if (tabId === "audit") {
@@ -1491,7 +1492,7 @@ async function loadKlineData() {
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
     const candles = data.rates.map(b => ({
-      time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
+      time: Math.floor(new Date(b.time.replace(' ', 'T')).getTime() / 1000),
       open: Number(b.open),
       high: Number(b.high),
       low: Number(b.low),
@@ -1499,7 +1500,7 @@ async function loadKlineData() {
     }));
 
     const volumes = data.rates.map(b => ({
-      time: Math.floor(new Date(b.time.replace(' ', 'T') + '+03:00').getTime() / 1000),
+      time: Math.floor(new Date(b.time.replace(' ', 'T')).getTime() / 1000),
       value: Number(b.tick_volume || b.volume || 0),
       color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
@@ -1538,9 +1539,10 @@ async function refreshKlineVolume() {
 function updateKlineTick(bid, ask) {
   if (!_klineSeries || state.marketTradeMode === 0) return;
   const price = Number(bid);
-  const nowUtc = Math.floor(Date.now() / 1000);
+  // MT5 broker time = UTC+3; browser is UTC+8 → offset -5h
+  const nowMt5Sec = Math.floor(Date.now() / 1000) - 5 * 3600;
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
-  const barTime = Math.floor(nowUtc / tfSeconds) * tfSeconds;
+  const barTime = Math.floor(nowMt5Sec / tfSeconds) * tfSeconds;
 
   if (!_klineLastBar) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
@@ -1560,6 +1562,14 @@ function updateKlineTick(bid, ask) {
   setText('klineLastPrice', Number(bid).toFixed(2));
 }
 
+// Periodic refresh for higher timeframes (H4/D1 don't change on every M5 bar)
+let _klineRefreshTimer = null;
+function startKlineRefreshTimer() {
+  clearInterval(_klineRefreshTimer);
+  const intervalMs = { M1: 30000, M5: 30000, M15: 60000, M30: 60000, H1: 120000, H4: 300000, D1: 600000 }[_klineTimeframe] || 60000;
+  _klineRefreshTimer = setInterval(() => { loadKlineData().catch(() => {}); }, intervalMs);
+}
+
 // Period button click → reload K-line data
 function switchKlineTimeframe(tf) {
   _klineTimeframe = tf;
@@ -1567,6 +1577,7 @@ function switchKlineTimeframe(tf) {
     b.classList.toggle('active', b.dataset.tf === tf);
   });
   loadKlineData();
+  startKlineRefreshTimer();
 }
 
 function renderPositionRows(positions, withAction) {
