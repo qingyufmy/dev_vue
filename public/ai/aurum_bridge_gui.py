@@ -276,6 +276,7 @@ class BridgeWorker(QThread):
     log_signal = Signal(str)
     status_signal = Signal(str, str, str)  # text, color, account
     connected_signal = Signal()
+    plan_expired_signal = Signal(str)  # reason message
 
     def __init__(self, server_url, token):
         super().__init__()
@@ -287,6 +288,30 @@ class BridgeWorker(QThread):
         self.mt5 = None
         self._ws = None
         self._acc_lost_warned = False
+
+    def check_plan(self):
+        """Check plan status via auth/me. Returns (plan, expired, message)."""
+        try:
+            server = self.server_url.replace("ws://", "http://").replace("wss://", "https://").rstrip("/")
+            url = f"{server}/aurum-api/auth/me"
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {self.token}",
+                "User-Agent": "AURUM-Bridge/1.0"
+            })
+            with urllib.request.urlopen(req, timeout=10, context=_get_ssl_context()) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            plan = data.get("plan", "free")
+            expires_at = data.get("plan_expires_at", "")
+            if plan in ("free", "plus"):
+                return plan, True, f"当前会员等级: {plan.upper()}，桥接功能仅限 Pro 会员"
+            if expires_at:
+                from datetime import datetime
+                exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if exp <= datetime.now(exp.tzinfo):
+                    return plan, True, f"会员已过期({expires_at[:10]})，请续费后重试"
+            return plan, False, ""
+        except Exception as e:
+            return "unknown", False, f"检查会员状态失败: {e}"
 
     def _mt5_time(self, ts):
         if not ts: return ''
@@ -614,7 +639,7 @@ class BridgeWorker(QThread):
                 self._resolved_symbol = self._resolve_symbol("XAUUSD")
             except:
                 self._resolved_symbol = "XAUUSD"
-            last_hb = 0; last_data = 0; last_server_msg = time.time()
+            last_hb = 0; last_data = 0; last_server_msg = time.time(); last_plan_check = time.time()
 
             while self.running:
                 now = time.time()
@@ -671,6 +696,15 @@ class BridgeWorker(QThread):
                 if now - last_hb > 10:
                     try: ws.send(json.dumps({"type": "hb"})); last_hb = now
                     except Exception as e: self.log_signal.emit(f"心跳错误: {e}")
+
+                # Hourly plan check
+                if now - last_plan_check > 3600:
+                    last_plan_check = now
+                    plan, expired, reason = self.check_plan()
+                    if expired:
+                        self.log_signal.emit(f"❌ {reason}")
+                        self.plan_expired_signal.emit(reason)
+                        break
 
                 ws.settimeout(0.3)
                 try:
@@ -1109,6 +1143,18 @@ class BridgePage(QWidget):
         self.lbl_status_dot.setStyleSheet(f"color: {color}; font-size: 18px; background: transparent;")
         self.lbl_account.setText(account)
 
+    def _on_plan_expired(self, reason):
+        """Called when plan check detects expiry during bridge operation."""
+        QMessageBox.warning(self, "会员已过期", reason)
+        if self._worker and self._worker.isRunning():
+            self._worker.stop()
+            self._worker.wait(3000)
+            self._worker = None
+            self.btn_start.setText("▶  启动桥接")
+            self.btn_start.setStyleSheet("background-color: #3b82f6;")
+            self._set_status("会员过期", "#ef4444")
+            self._log(f"桥接已断开: {reason}")
+
     def _toggle_bridge(self):
         if self._worker and self._worker.isRunning():
             # Stop
@@ -1133,6 +1179,12 @@ class BridgePage(QWidget):
             self._worker = BridgeWorker(server, token)
             self._worker.log_signal.connect(self._log)
             self._worker.status_signal.connect(self._set_status)
+            self._worker.plan_expired_signal.connect(self._on_plan_expired)
+            # Check plan before starting
+            plan, expired, msg = self._worker.check_plan()
+            if expired:
+                QMessageBox.warning(self, "会员等级不足", msg)
+                return
             self._worker.start()
             self.btn_start.setText("■  停止桥接")
             self.btn_start.setStyleSheet("background-color: #ef4444;")
