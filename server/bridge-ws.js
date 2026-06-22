@@ -180,8 +180,29 @@ function handleBridge(ws, url) {
         const prev = bridge.mt5TimeStr
         bridge.mt5TimeStr = msg.quote.time
         if (prev !== undefined) {
-          // Second+ tick: time changed → trading (4), same → closed (0)
-          bridge.lastTradeMode = msg.quote.time !== prev ? 4 : 0
+          // Parse both timestamps to compare with tolerance
+          const parseT = (s) => {
+            const p = s.split(/[. :]/)
+            if (p.length >= 6) return new Date(parseInt(p[0]), parseInt(p[1])-1, parseInt(p[2]), parseInt(p[3]), parseInt(p[4]), parseInt(p[5])).getTime()
+            return 0
+          }
+          const prevMs = parseT(prev)
+          const curMs = parseT(msg.quote.time)
+          if (prevMs && curMs) {
+            // Time advanced > 60s → trading; same or within 60s → keep previous state
+            // Only mark closed if time is identical AND hasn't changed for 5 minutes
+            if (curMs - prevMs > 60000) {
+              bridge.lastTradeMode = 4
+            } else if (curMs === prevMs) {
+              // Same tick time — only mark closed if stuck for > 5 min
+              if (!bridge._sameTickStart) bridge._sameTickStart = now
+              if (now - bridge._sameTickStart > 300000) bridge.lastTradeMode = 0
+            } else {
+              // Time advanced but < 60s — normal trading
+              bridge.lastTradeMode = 4
+              bridge._sameTickStart = null
+            }
+          }
         } else {
           // First tick after bridge connect: parse MT5 time to detect staleness
           // Format: "YYYY.MM.DD HH:mm:ss" (Beijing time from bridge)
