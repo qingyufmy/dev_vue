@@ -36,7 +36,7 @@ router.post('/register', async (req, res) => {
     }
 
     const result = await queryRun(`
-      INSERT INTO users (email, password, nickname, referral_code, referred_by, uid) VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO users (email, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at) VALUES (?, ?, ?, ?, ?, ?, 'pro', DATE_ADD(NOW(), INTERVAL 1 MONTH))
     `, [email, hash, nickname || email.split('@')[0], code, referredBy, 'WS' + String(Date.now()).slice(-6)])
 
     const token = generateToken(result.insertId)
