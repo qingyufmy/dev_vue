@@ -1710,13 +1710,13 @@ export async function initAutoSchedulers() {
 // ── Bridge 版本检查端点 ──
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '1.9.6',
+    version: '1.9.7',
     build_date: '2026-06-22',
-    changelog: '智能平仓暂时屏蔽、观摩模式文案优化、退出登录修复、市场状态检测优化',
+    changelog: '桥接会员等级校验(Pro专属)、主站字体优化、K线图修复',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 71165477,
-    md5: '11123ec93db970846e9d42bac9eeaa7c'
+    file_size: 71164749,
+    md5: '359ac40785855bf342ab7d1eae44d454'
   })
 })
 
