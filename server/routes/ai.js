@@ -1705,8 +1705,8 @@ router.get('/bridge/version', (req, res) => {
     changelog: '桥接连接稳定性优化、ping/pong心跳、设置按钮文字显示',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 59202591,
-    md5: '493d641de0a2d9d7fa172b8d606a3629'
+    file_size: 59211590,
+    md5: '156628b30b02311a3a0a0dfa352d0b50'
   })
 })
 
