@@ -67,8 +67,9 @@ app.get('/api/bilibili-proxy', (req, res) => {
   if (!imageUrl || !imageUrl.startsWith('https://i') || !imageUrl.includes('.hdslb.com/')) {
     return res.status(400).end()
   }
-  https.get(imageUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+  const proxyReq = https.get(imageUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' },
+    timeout: 10000
   }, (proxyRes) => {
     if (proxyRes.statusCode !== 200) {
       console.error(`[bilibili-proxy] ${imageUrl} → ${proxyRes.statusCode}`)
@@ -77,7 +78,9 @@ app.get('/api/bilibili-proxy', (req, res) => {
     res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'image/jpeg')
     res.setHeader('Cache-Control', 'public, max-age=86400')
     proxyRes.pipe(res)
-  }).on('error', (e) => { console.error('[bilibili-proxy] error:', e.message); res.status(502).end() })
+  })
+  proxyReq.on('error', (e) => { console.error('[bilibili-proxy] error:', e.code || e.message || JSON.stringify(e)); res.status(502).end() })
+  proxyReq.on('timeout', () => { console.error('[bilibili-proxy] timeout:', imageUrl); proxyReq.destroy(); res.status(502).end() })
 })
 
 // Serve frontend static files
