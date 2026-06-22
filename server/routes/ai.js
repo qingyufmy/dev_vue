@@ -1617,6 +1617,11 @@ export async function startSmartCloseScheduler(userId) {
 
   const tick = async () => {
     if (!closeSchedulerState[userId]?.running) return
+    // Skip if market status unknown or closed
+    try {
+      const tradeMode = await getBridgeTradeMode(userId)
+      if (tradeMode <= 0) { closeSchedulerState[userId].timer = setTimeout(tick, intervalMs); return }
+    } catch {}
     try { await runSmartCloseCycle(userId) } catch (e) { console.error(`[SmartClose] User ${userId} tick error:`, e.message) }
     if (closeSchedulerState[userId]?.running) {
       closeSchedulerState[userId].timer = setTimeout(tick, intervalMs)
@@ -1656,6 +1661,11 @@ async function startAutoScheduler(userId) {
 
   const tick = async () => {
     if (!autoSchedulerState[userId]?.running) return
+    // Skip if market status unknown or closed
+    try {
+      const tradeMode = await getBridgeTradeMode(userId)
+      if (tradeMode <= 0) { autoSchedulerState[userId].timer = setTimeout(tick, intervalMs); return }
+    } catch {}
     try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler] ${symbol}/M5 tick error:`, e.message) }
     if (autoSchedulerState[userId]?.running) {
       autoSchedulerState[userId].timer = setTimeout(tick, intervalMs)

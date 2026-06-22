@@ -141,7 +141,7 @@ function handleBridge(ws, url) {
   }
   // Admin defaults to tradeEnabled=true, others false
   const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now() }); ws._userId = userId
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), lastTradeMode: -1 }); ws._userId = userId
   console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
@@ -194,9 +194,9 @@ function handleBridge(ws, url) {
             if (curMs - prevMs > 60000) {
               bridge.lastTradeMode = 4
             } else if (curMs === prevMs) {
-              // Same tick time — only mark closed if stuck for > 5 min
+              // Same tick time — only mark closed if stuck for > 10s
               if (!bridge._sameTickStart) bridge._sameTickStart = now
-              if (now - bridge._sameTickStart > 300000) bridge.lastTradeMode = 0
+              if (now - bridge._sameTickStart > 10000) bridge.lastTradeMode = 0
             } else {
               // Time advanced but < 60s — normal trading
               bridge.lastTradeMode = 4
@@ -872,9 +872,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (enabled) {
           // Check market status
           const tradeMode = await getBridgeTradeMode(userId)
-          if (tradeMode === 0) {
+          if (tradeMode <= 0) {
             paused = true
-            pauseReason = 'market_closed'
+            pauseReason = tradeMode === 0 ? 'market_closed' : 'market_unknown'
           } else {
             // Check positions
             try {
@@ -992,10 +992,8 @@ export async function getBridgeTradeMode(userId) {
   if (!bridge || bridge.ws.readyState !== 1) return -1
   // Use real-time trade mode detected from MT5 tick_time advancement
   if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
-  // Fallback: if no tick data yet, check staleness from last tick timestamp
-  if (bridge.lastTickMs && (Date.now() - bridge.lastTickMs) > 300000) return 0
-  // Bridge connected, data is fresh → assume trading
-  return 4
+  // No trade mode data yet → unknown
+  return -1
 }
 
 // Get bridge status for a user
