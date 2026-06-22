@@ -1,5 +1,5 @@
 import { episodes as staticEpisodes, categories } from './data/episodes.js'
-import { siteUpdates, loadSiteUpdates } from './data/updates.js'
+import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
 import Quill from 'https://esm.sh/quill@2.0.3'
@@ -1990,8 +1990,18 @@ function renderSidebarQuotes() {
 }
 
 function renderSidebarUpdates(data = null) {
-  const updates = data || siteUpdates
-  if (!updates || updates.length === 0) return ''
+  const updates = data || []
+  if (!updates || updates.length === 0) {
+    // 页面加载时异步获取，先显示占位
+    return `
+      <div class="sidebar-card sidebar-updates-card" id="sidebar-updates-card">
+        <h3>最近更新</h3>
+        <ul class="updates-list">
+          <li class="update-item" style="justify-content:center;opacity:0.5">加载中…</li>
+        </ul>
+      </div>
+    `
+  }
   const items = updates.slice(0, 5)
   const now = new Date()
 
