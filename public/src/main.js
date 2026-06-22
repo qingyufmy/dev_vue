@@ -3293,9 +3293,12 @@ const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
       <div class="admin-section admin-user-panel" id="adminUserList" data-admin-user-panel="all">
         <div class="admin-section-header">
           <h2>全部用户列表</h2>
-          <span class="admin-section-badge">${stats.totalUsers} 人</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="adminUserSearch" class="admin-plan-input" placeholder="搜索邮箱或昵称..." style="width:200px;font-size:13px;padding:4px 8px;">
+            <span class="admin-section-badge" id="adminUserCount">${stats.totalUsers} 人</span>
+          </div>
         </div>
-        <div class="admin-table-wrapper">
+        <div class="admin-table-wrapper" id="adminUserTableWrapper">
           <table class="admin-table">
             <thead>
               <tr>
@@ -3493,6 +3496,7 @@ const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
 
   setupAdminBoardTabs()
   setupAdminUserTabs()
+  setupAdminUserSearch()
   setupAdminCourseManager()
   loadAdminReferrals()
   loadAdminConfig()
@@ -4227,6 +4231,62 @@ function setupAdminUserTabs() {
   const tabs = [...document.querySelectorAll('#adminUserSubTabs [data-admin-user-tab]')]
   tabs.forEach(tab => {
     tab.addEventListener('click', () => activateAdminUserTab(tab.dataset.adminUserTab))
+  })
+}
+
+// Re-fetch and re-render the user table body (used after edit and for search)
+let _adminSearchTimer = null
+async function refreshAdminUserTable(search = '') {
+  try {
+    const qs = search ? `?search=${encodeURIComponent(search)}` : ''
+    const data = await api.get(`/api/admin-users${qs}`)
+    if (!data.ok || !data.users) return
+    const tbody = document.querySelector('#adminUserList .admin-table tbody')
+    const countEl = document.getElementById('adminUserCount')
+    if (!tbody) return
+    if (countEl) countEl.textContent = `${data.users.length} 人`
+    if (data.users.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">未找到匹配用户</td></tr>'
+      return
+    }
+    tbody.innerHTML = data.users.map(u => `
+      <tr>
+        <td>
+          <div class="admin-user-cell">
+            <span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span>
+            <div>
+              <div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div>
+              <div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div>
+            </div>
+          </div>
+        </td>
+        <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
+        <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
+        <td>${planLabel(u.plan, u.planExpiresAt)}</td>
+        <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
+        <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
+        <td style="font-size:11px;white-space:nowrap;">
+          ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
+        </td>
+        <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
+        <td>
+          <div class="admin-actions">
+            <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
+            <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
+          </div>
+        </td>
+      </tr>`).join('')
+  } catch (e) {
+    console.error('refreshAdminUserTable error:', e)
+  }
+}
+
+function setupAdminUserSearch() {
+  const input = document.getElementById('adminUserSearch')
+  if (!input) return
+  input.addEventListener('input', () => {
+    clearTimeout(_adminSearchTimer)
+    _adminSearchTimer = setTimeout(() => refreshAdminUserTable(input.value.trim()), 300)
   })
 }
 
@@ -8136,14 +8196,22 @@ function setupGlobalEvents() {
           const expiresAt = document.getElementById('editUserExpires').value
           if (email) payload.email = email
           if (nickname) payload.nickname = nickname
-          if (password) payload.password = password
+          if (password) {
+            if (password.length < 6) {
+              resultEl.style.display = 'block'
+              resultEl.innerHTML = '<div class="stream-result-success error">密码至少需要6位</div>'
+              btn.disabled = false; btn.textContent = '保存'
+              return
+            }
+            payload.password = password
+          }
           payload.plan = plan
           if (plan !== 'free') payload.expiresAt = expiresAt
           const r = await api.put('/api/admin-users', payload)
           if (r.ok) {
             resultEl.style.display = 'block'
             resultEl.innerHTML = '<div class="stream-result-success">保存成功</div>'
-            setTimeout(() => { modal.style.display = 'none'; activateAdminUserTab('all') }, 800)
+            setTimeout(() => { modal.style.display = 'none'; refreshAdminUserTable() }, 800)
           } else {
             resultEl.style.display = 'block'
             resultEl.innerHTML = `<div class="stream-result-success error">${escapeHtml(r.error || '保存失败')}</div>`

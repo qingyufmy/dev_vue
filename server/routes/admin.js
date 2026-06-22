@@ -203,7 +203,10 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     const params = []
     if (email) { updates.push('email = ?'); params.push(email) }
     if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
-    if (password && password.length >= 6) { updates.push('password = ?'); params.push(bcrypt.hashSync(password, 10)) }
+    if (password) {
+      if (password.length < 6) return res.json({ ok: false, error: '密码至少需要6位' })
+      updates.push('password = ?'); params.push(bcrypt.hashSync(password, 10))
+    }
     if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar) }
     if (role) { updates.push('role = ?'); params.push(role) }
     if (plan) {
