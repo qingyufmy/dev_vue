@@ -832,6 +832,7 @@ let _lastSignalId = null;
 // UI-only timer: refresh signal timing displays every second (no network calls)
 // Also polls for new signals every 5s when bridge is not pushing data
 let _uiTimerPollCounter = 0;
+let _statusRefreshCounter = 0;
 setInterval(() => {
   const s = state.selectedSignal;
   if (s) {
@@ -847,6 +848,11 @@ setInterval(() => {
   if (++_uiTimerPollCounter >= 5) {
     _uiTimerPollCounter = 0;
     if (state.token) _maybeRefreshSignal();
+  }
+  // Refresh topbar badges (auto/close/trade) every 15s
+  if (++_statusRefreshCounter >= 15) {
+    _statusRefreshCounter = 0;
+    if (state.token) loadStatus().catch(() => {});
   }
 }, 1000);
 
