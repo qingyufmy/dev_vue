@@ -96,6 +96,22 @@ app.get('/api/bilibili-proxy', (req, res) => {
   tryNext()
 })
 
+// Proxy Cloudflare Fonts → Google Fonts CDN (main site uses /cf-fonts/ paths)
+app.get('/cf-fonts/*', (req, res) => {
+  const gfontUrl = `https://fonts.gstatic.com${req.path}`
+  const proxyReq = https.get(gfontUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+    timeout: 8000
+  }, (proxyRes) => {
+    if (proxyRes.statusCode !== 200) return res.status(404).end()
+    res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'font/woff2')
+    res.setHeader('Cache-Control', 'public, max-age=604800')
+    proxyRes.pipe(res)
+  })
+  proxyReq.on('error', () => res.status(404).end())
+  proxyReq.on('timeout', () => { proxyReq.destroy(); res.status(404).end() })
+})
+
 // Serve frontend static files
 const publicDir = join(__dirname, '..', 'public')
 app.use(express.static(publicDir, {
