@@ -6405,8 +6405,13 @@ async function loadForumNotifications(container) {
         const notificationId = btn.dataset.notificationId
         if (notificationId) {
           await api.patch('/api/notifications', { notificationId })
+          btn.classList.remove('unread')
+          const dot = btn.querySelector('.forum-notification-dot')
+          if (dot) dot.remove()
+          await refreshNotificationUnread()
+          const headEl = document.querySelector('.forum-notifications-unread')
+          if (headEl) headEl.textContent = `未读 ${state.notificationUnread || 0}`
         }
-        await refreshNotificationUnread()
         const postId = btn.dataset.openForumNotification
         if (postId) {
           state.currentPost = postId
