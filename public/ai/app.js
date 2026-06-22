@@ -751,10 +751,7 @@ function handleBridgeData(msg) {
       setText("quoteAsk", q.ask);
       setText("quoteSpread", q.spread);
       setText("quoteTime", formatTime(q.time));
-      // q.time is UTC from bridge; MT5 broker = UTC+3
-      const _mt5t = q.time ? new Date(q.time.replace(' ', 'T') + 'Z') : null;
-      if (_mt5t) { _mt5t.setHours(_mt5t.getHours() + 3); setText("mt5ServerTime", _mt5t.toISOString().slice(11, 19)); }
-      else setText("mt5ServerTime", "--");
+      setText("mt5ServerTime", formatTime(q.time).split(" ").pop() || "--");
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
       flashPrice("quoteBid", bidDir);
