@@ -218,9 +218,7 @@ function handleBridge(ws, url) {
       }
       // Data relay — push to browsers, include server-detected trade_mode
       const tradeMode = bridge ? bridge.lastTradeMode : undefined
-      const payload = { type: 'data', ...msg }
-      if (typeof tradeMode === 'number') payload.trade_mode = tradeMode
-      sendToBrowsers(userId, payload)
+      sendToBrowsers(userId, { type: 'data', trade_mode: typeof tradeMode === 'number' ? tradeMode : -1, ...msg })
     } else if (msg.type === 'hb' || msg.type === 'pong') {
       // Bridge heartbeat/pong — lastSeen already updated
       if (bridge) bridge.lastPong = Date.now()

@@ -697,13 +697,21 @@ function updateMarketStatus(tradeMode) {
   const text = document.getElementById('marketStatusText');
   if (!dot || !text) return;
   state.marketTradeMode = tradeMode;
-  if (tradeMode < 0) { // bridge disconnected
+  if (tradeMode < 0) { // bridge disconnected or status unknown
     dot.className = 'market-dot market-dot-unknown';
     text.className = 'market-status-text market-status-text-unknown';
-    text.textContent = '未连接';
-    setBadge('marketStatus', '未连接', 'neutral');
-    const b = document.getElementById('marketStatus');
-    if (b) b.title = '市场状态：MT5 桥接未连接';
+    if (state._lastGatewayLive) {
+      // Bridge connected but market status not yet determined
+      text.textContent = '检测中...';
+      setBadge('marketStatus', '检测中...', 'warning');
+      const b = document.getElementById('marketStatus');
+      if (b) b.title = '市场状态：正在检测市场状态';
+    } else {
+      text.textContent = '未连接';
+      setBadge('marketStatus', '未连接', 'neutral');
+      const b = document.getElementById('marketStatus');
+      if (b) b.title = '市场状态：MT5 桥接未连接';
+    }
     return;
   }
   const map = {
