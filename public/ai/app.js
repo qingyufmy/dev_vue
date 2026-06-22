@@ -1494,10 +1494,9 @@ async function loadKlineData() {
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
 
-    // MT5 time is UTC+3; browser is UTC+8 → to show MT5 time, subtract 5h from UTC
+    // MT5 time is UTC+3; chart displays UTC internally — convert MT5→UTC by parsing as +03:00
     const mt5ToDisplay = (mt5Str) => {
-      const utcMs = new Date(mt5Str.replace(' ', 'T') + 'Z').getTime();
-      return Math.floor((utcMs - 5 * 3600000) / 1000);
+      return Math.floor(new Date(mt5Str.replace(' ', 'T') + '+03:00').getTime() / 1000);
     };
     const candles = data.rates.map(b => ({
       time: mt5ToDisplay(b.time),
@@ -1547,8 +1546,8 @@ async function refreshKlineVolume() {
 function updateKlineTick(bid, ask) {
   if (!_klineSeries || state.marketTradeMode === 0) return;
   const price = Number(bid);
-  // MT5 broker time = UTC+3; browser is UTC+8 → offset -5h
-  const nowMt5Sec = Math.floor(Date.now() / 1000) - 5 * 3600;
+  // MT5 broker time = UTC+3; convert current time to MT5 display
+  const nowMt5Sec = Math.floor(Date.now() / 1000) + 3 * 3600;
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
   const barTime = Math.floor(nowMt5Sec / tfSeconds) * tfSeconds;
 
