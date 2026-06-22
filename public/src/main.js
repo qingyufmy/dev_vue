@@ -1246,13 +1246,6 @@ let ytPlayer = null
 let watchTimer = null
 let accumulatedTime = 0
 
-const ytReady = new Promise(resolve => {
-  if (window.YT && window.YT.Player) { resolve(); return }
-  window.onYouTubeIframeAPIReady = resolve
-  const tag = document.createElement('script')
-  tag.src = 'https://www.youtube.com/iframe_api'
-  document.head.appendChild(tag)
-})
 
 // ===== Bilibili Player =====
 let biliPlayer = null
@@ -1410,7 +1403,7 @@ function updateProgressUI(entry, duration) {
 }
 
 async function initYouTubePlayer(videoId) {
-  await ytReady
+  if (!window.YT || !window.YT.Player) return
 
   const ep = state.currentEpisode
   if (ep) {
