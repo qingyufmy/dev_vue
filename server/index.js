@@ -70,11 +70,14 @@ app.get('/api/bilibili-proxy', (req, res) => {
   https.get(imageUrl, {
     headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
   }, (proxyRes) => {
-    if (proxyRes.statusCode !== 200) return res.status(502).end()
+    if (proxyRes.statusCode !== 200) {
+      console.error(`[bilibili-proxy] ${imageUrl} → ${proxyRes.statusCode}`)
+      return res.status(502).end()
+    }
     res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'image/jpeg')
     res.setHeader('Cache-Control', 'public, max-age=86400')
     proxyRes.pipe(res)
-  }).on('error', () => res.status(502).end())
+  }).on('error', (e) => { console.error('[bilibili-proxy] error:', e.message); res.status(502).end() })
 })
 
 // Serve frontend static files
