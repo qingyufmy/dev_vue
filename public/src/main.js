@@ -4205,12 +4205,30 @@ function setupAdminBoardTabs() {
         board.hidden = !active
         board.classList.toggle('admin-board-active', active)
       })
+      localStorage.setItem('adminActiveBoard', target)
       // Auto-activate first sub-tab when switching to users board
       if (target === 'users') {
         activateAdminUserTab('all')
       }
     })
   })
+
+  // Restore active board from localStorage
+  const savedBoard = localStorage.getItem('adminActiveBoard')
+  if (savedBoard && boards[savedBoard]) {
+    tabs.forEach(item => item.classList.toggle('active', item.dataset.adminBoard === savedBoard))
+    Object.entries(boards).forEach(([key, board]) => {
+      if (!board) return
+      const active = key === savedBoard
+      board.hidden = !active
+      board.classList.toggle('admin-board-active', active)
+    })
+    // Restore sub-tab for users board
+    if (savedBoard === 'users') {
+      const savedUserTab = localStorage.getItem('adminActiveUserTab') || 'all'
+      activateAdminUserTab(savedUserTab)
+    }
+  }
 }
 
 function activateAdminUserTab(target, { scroll = false } = {}) {
@@ -4224,6 +4242,7 @@ function activateAdminUserTab(target, { scroll = false } = {}) {
     panel.hidden = !active
     panel.classList.toggle('admin-user-panel-active', active)
   })
+  localStorage.setItem('adminActiveUserTab', target)
 
   if (scroll) {
     document.getElementById('adminUserSubTabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
