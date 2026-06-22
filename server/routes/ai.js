@@ -1710,7 +1710,7 @@ export async function initAutoSchedulers() {
 // ── Bridge 版本检查端点 ──
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '1.9.7',
+    version: '1.9.6',
     build_date: '2026-06-22',
     changelog: '智能平仓暂时屏蔽、观摩模式文案优化、退出登录修复、市场状态检测优化',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
