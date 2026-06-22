@@ -6404,13 +6404,16 @@ async function loadForumNotifications(container) {
       btn.addEventListener('click', async () => {
         const notificationId = btn.dataset.notificationId
         if (notificationId) {
-          await api.patch('/api/notifications', { notificationId })
+          const res = await api.patch('/api/notifications', { id: notificationId })
           btn.classList.remove('unread')
           const dot = btn.querySelector('.forum-notification-dot')
           if (dot) dot.remove()
-          await refreshNotificationUnread()
-          const headEl = document.querySelector('.forum-notifications-unread')
-          if (headEl) headEl.textContent = `未读 ${state.notificationUnread || 0}`
+          if (res.ok) {
+            state.notificationUnread = res.unreadCount || 0
+            updateAuthUI()
+            const headEl = document.querySelector('.forum-notifications-unread')
+            if (headEl) headEl.textContent = `未读 ${state.notificationUnread}`
+          }
         }
         const postId = btn.dataset.openForumNotification
         if (postId) {
