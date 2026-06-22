@@ -107,6 +107,33 @@ router.post('/payment', authMiddleware, async (req, res) => {
       await queryRun("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
     }
 
+    // Calculate referral commission: find pending referral for this user, update with actual order amount
+    try {
+      const referral = await queryOne(
+        "SELECT r.id, r.referrer_id, r.status FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
+        [req.user.id]
+      )
+      if (referral) {
+        const rule = await queryOne(
+          'SELECT rate_bps FROM referral_rules WHERE plan = ? AND period = ? AND enabled = 1',
+          [plan, periodKey]
+        )
+        const rateBps = rule ? rule.rate_bps : 1000
+        const commissionCents = Math.round(finalAmount * rateBps / 10000)
+        await queryRun(
+          'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
+          [finalAmount, commissionCents, planInfo.name, referral.id]
+        )
+        // Notify referrer
+        await queryRun(
+          'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
+          [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${(finalAmount/100).toFixed(2)}，返佣 $${(commissionCents/100).toFixed(2)} 待审核确认`]
+        )
+      }
+    } catch (refErr) {
+      console.error('Referral commission error:', refErr.message)
+    }
+
     // If paid fully with credit
     if (finalAmount === 0 && (credit > 0 || referralCredit > 0)) {
       return res.json({ ok: true, paid_with_credit: true, orderNo })

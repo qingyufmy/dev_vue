@@ -341,40 +341,66 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
 
 router.put('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { status, action } = req.body
-    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : status
-    await queryRun("UPDATE referrals SET status = ?, commission = CASE WHEN ? = 'approved' THEN 500 ELSE 0 END WHERE id = ?", [finalStatus, finalStatus, req.params.id])
+    const { action } = req.body
+    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : req.body.status
+    const referral = await queryOne('SELECT referrer_id, commission FROM referrals WHERE id = ?', [req.params.id])
+    if (!referral) return res.json({ ok: false, error: '记录不存在' })
+    await queryRun('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
+    // Credit referrer on approval
+    if (finalStatus === 'approved' && referral.commission > 0) {
+      await queryRun('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
+    }
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '操作失败' }) }
 })
 
 router.patch('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { status, action } = req.body
-    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : status
-    await queryRun("UPDATE referrals SET status = ?, commission = CASE WHEN ? = 'approved' THEN 500 ELSE 0 END WHERE id = ?", [finalStatus, finalStatus, req.params.id])
+    const { action } = req.body
+    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : req.body.status
+    const referral = await queryOne('SELECT referrer_id, commission FROM referrals WHERE id = ?', [req.params.id])
+    if (!referral) return res.json({ ok: false, error: '记录不存在' })
+    await queryRun('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
+    if (finalStatus === 'approved' && referral.commission > 0) {
+      await queryRun('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
+    }
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '操作失败' }) }
 })
 
-router.get('/admin/referrals/rules', authMiddleware, adminOnly, (req, res) => {
-  res.json({
-    ok: true,
-    rules: [
-      { plan: 'plus', period: 'monthly', rate_bps: 1000, enabled: 1 },
-      { plan: 'plus', period: 'yearly', rate_bps: 1000, enabled: 1 },
-      { plan: 'pro', period: 'monthly', rate_bps: 1000, enabled: 1 },
-      { plan: 'pro', period: 'yearly', rate_bps: 1000, enabled: 1 },
-    ],
-  })
+router.get('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const rules = await queryAll('SELECT plan, period, rate_bps, enabled FROM referral_rules ORDER BY plan, period')
+    res.json({ ok: true, rules })
+  } catch (err) { res.json({ ok: false, error: '获取规则失败' }) }
 })
 
-router.put('/admin/referrals/rules', authMiddleware, adminOnly, (req, res) => {
-  res.json({ ok: true, message: '规则已更新' })
+router.put('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rules } = req.body
+    if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
+    for (const r of rules) {
+      await queryRun(
+        'INSERT INTO referral_rules (plan, period, rate_bps, enabled) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE rate_bps = VALUES(rate_bps), enabled = VALUES(enabled)',
+        [r.plan, r.period, r.rate_bps || 1000, r.enabled ? 1 : 0]
+      )
+    }
+    res.json({ ok: true, message: '规则已更新' })
+  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
 })
 
-router.patch('/admin/referrals/rules', authMiddleware, adminOnly, (req, res) => {
-  res.json({ ok: true, message: '规则已更新' })
+router.patch('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rules } = req.body
+    if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
+    for (const r of rules) {
+      await queryRun(
+        'INSERT INTO referral_rules (plan, period, rate_bps, enabled) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE rate_bps = VALUES(rate_bps), enabled = VALUES(enabled)',
+        [r.plan, r.period, r.rate_bps || 1000, r.enabled ? 1 : 0]
+      )
+    }
+    res.json({ ok: true, message: '规则已更新' })
+  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
 })
 
 // Admin: course items
