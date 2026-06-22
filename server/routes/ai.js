@@ -1226,9 +1226,18 @@ async function handleAnalyze(userId, params) {
 
 // Auth/me endpoint for frontend compatibility
 router.get('/auth/me', authMiddleware, async (req, res) => {
-  const user = await queryOne('SELECT id, email, nickname, role, plan FROM users WHERE id = ?', [req.userId])
+  const user = await queryOne('SELECT id, email, nickname, role, plan, plan_expires_at FROM users WHERE id = ?', [req.userId])
   if (!user) return res.status(404).json({ status: 'error', message: 'User not found' })
-  res.json({ id: user.id, username: user.email, nickname: user.nickname, role: user.role, plan: user.plan, is_active: 1, source: 'wss' })
+  // Check if plan has expired
+  const now = new Date()
+  const expiresAt = user.plan_expires_at ? new Date(user.plan_expires_at) : null
+  let plan = user.plan
+  if (expiresAt && expiresAt <= now && plan !== 'free') {
+    // Plan expired — downgrade to free in DB
+    plan = 'free'
+    await queryRun('UPDATE users SET plan = ? WHERE id = ?', ['free', user.id])
+  }
+  res.json({ id: user.id, username: user.email, nickname: user.nickname, role: user.role, plan, plan_expires_at: user.plan_expires_at || '', is_active: 1, source: 'wss' })
 })
 
 // ============ Trade Review API Endpoints ============

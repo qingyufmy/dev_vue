@@ -1029,6 +1029,26 @@ async function bootstrap() {
       return;
     }
     state.user = await api("/aurum-api/auth/me");
+    // Check if plan expired (backend also downgrades, but show specific message here)
+    const expiresAt = state.user?.plan_expires_at;
+    if (expiresAt && new Date(expiresAt) <= new Date()) {
+      // Plan expired — show expired overlay instead of generic upgrade
+      document.getElementById('proOverlay')?.classList.remove('hidden');
+      const overlay = document.getElementById('proOverlay');
+      if (overlay) {
+        overlay.innerHTML = `
+          <div class="pro-overlay-content">
+            <div class="pro-overlay-icon">⏰</div>
+            <h2>会员已过期</h2>
+            <p>您的会员已于 ${new Date(expiresAt).toLocaleDateString('zh-CN')} 到期</p>
+            <p>请联系管理员续费以继续使用</p>
+            <button onclick="logout()" style="margin-top:16px;padding:8px 24px;border:none;border-radius:6px;background:#e6a756;color:#1a1a2e;cursor:pointer;font-size:14px">返回首页</button>
+          </div>
+        `;
+      }
+      showApp(false);
+      return;
+    }
     // Access check: admin/pro/plus can access
     const role = state.user?.role;
     const plan = state.user?.plan;
