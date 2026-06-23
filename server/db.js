@@ -34,6 +34,25 @@ export function getDB() {
   if (!pool) {
     const cfg = getDBConfig()
     pool = mysql.createPool(cfg)
+
+    // Pool-level error handling — log but don't crash
+    pool.on('error', (err) => {
+      console.error('[DB] Pool error:', err.message)
+      if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNREFUSED') {
+        console.error('[DB] Connection lost — pool will auto-reconnect on next query')
+      }
+    })
+
+    // Keepalive: ping every 30 minutes to prevent idle timeout
+    setInterval(async () => {
+      try {
+        const conn = await pool.getConnection()
+        await conn.ping()
+        conn.release()
+      } catch (e) {
+        console.error('[DB] Keepalive ping failed:', e.message)
+      }
+    }, 30 * 60 * 1000)
   }
   return pool
 }

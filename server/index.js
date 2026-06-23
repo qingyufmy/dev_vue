@@ -1,5 +1,6 @@
 import express from 'express'
 import cors from 'cors'
+import rateLimit from 'express-rate-limit'
 import multer from 'multer'
 import jwt from 'jsonwebtoken'
 import http from 'http'
@@ -64,6 +65,28 @@ app.use(cors({
 }))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
+
+// Rate limiting — prevent brute force and DoS
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: '请求过于频繁，请稍后再试' }
+})
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // stricter for login/register
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: '操作过于频繁，请稍后再试' }
+})
+app.use('/api', apiLimiter)
+app.use('/api/login', authLimiter)
+app.use('/api/register', authLimiter)
+app.use('/api/send-code', authLimiter)
+app.use('/api/verify-code', authLimiter)
+app.use('/api/reset-password', authLimiter)
 
 // Serve uploaded files
 app.use('/uploads', express.static(join(__dirname, uploadDir), {
@@ -275,3 +298,14 @@ initBridgeWS(server)
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })
 })()
+
+// Crash protection — log and restart gracefully
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message)
+  if (err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
+    console.error(err.stack)
+  }
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason?.message || reason)
+})

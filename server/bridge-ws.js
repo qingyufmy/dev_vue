@@ -277,11 +277,17 @@ function sendToBrowsers(userId, data) {
     }
   }
   // If this is admin's bridge data, also forward to users without their own bridge
+  // Throttle: max 4 broadcasts per second per user to prevent flooding browsers
   if (userId === adminUserId && data.type === 'data') {
+    if (!_broadcastThrottle) _broadcastThrottle = new Map()
     const adminJson = JSON.stringify({ ...data, _source: 'admin_fallback' })
+    const now = Date.now()
     for (const [uid, browserSet] of browsers) {
       if (uid === adminUserId) continue
       if (bridges.has(uid)) continue // user has their own bridge
+      const last = _broadcastThrottle.get(uid) || 0
+      if (now - last < 250) continue // skip if < 250ms since last broadcast
+      _broadcastThrottle.set(uid, now)
       for (const ws of browserSet) {
         if (ws.readyState === 1) {
           try { ws.send(adminJson) } catch {}
