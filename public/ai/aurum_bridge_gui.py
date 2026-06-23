@@ -463,8 +463,17 @@ class BridgeWorker(QThread):
                 import math
                 page = params.get("page", 1); page_size = params.get("page_size", 20)
                 deposit = withdrawal = credit = 0.0
-                date_to = datetime.utcnow() + timedelta(days=1)
-                date_from = date_to - timedelta(days=31)
+                # Use caller-supplied date range, default to last 31 days
+                if "date_to" in params:
+                    try: date_to = datetime.strptime(params["date_to"][:10], "%Y-%m-%d") + timedelta(days=1)
+                    except: date_to = datetime.utcnow() + timedelta(days=1)
+                else:
+                    date_to = datetime.utcnow() + timedelta(days=1)
+                if "date_from" in params:
+                    try: date_from = datetime.strptime(params["date_from"][:10], "%Y-%m-%d")
+                    except: date_from = date_to - timedelta(days=31)
+                else:
+                    date_from = date_to - timedelta(days=31)
                 deals = self.mt5.history_deals_get(date_from, date_to)
                 if deals is None: return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
                 deal_rows = [d._asdict() for d in deals]

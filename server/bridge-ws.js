@@ -406,46 +406,51 @@ async function handleBrowserCommand(ws, userId, msg) {
           bridgeOk = true
           historyUserId = adminUserId
         }
-        // Check if any filter is active
-        const hasFilter = params.entry_from || params.entry_to || params.close_from || params.close_to || params.direction || params.profit_filter
         if (bridgeOk) {
-          // When filtering, fetch all data (large page_size) so we can filter server-side
-          const bridgePageSize = hasFilter ? 9999 : (params.page_size || 20)
-          result = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: bridgePageSize })
-          // Apply filters if present
-          if (hasFilter && result?.status === 'success' && Array.isArray(result.orders)) {
-            let orders = result.orders
-            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '') >= params.entry_from)
-            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '') <= params.entry_to + 'T23:59:59')
-            if (params.close_from) orders = orders.filter(o => (o.close_time || o.time || '') >= params.close_from)
-            if (params.close_to) orders = orders.filter(o => (o.close_time || o.time || '') <= params.close_to + 'T23:59:59')
-            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
-            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit) > 0)
-            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit) < 0)
-            // Recalculate statistics from filtered data
-            const tp = orders.reduce((s, o) => s + Number(o.profit || 0), 0)
-            const stats = result.statistics || {}
-            result.statistics = {
-              ...stats,
-              total_profit: Math.round(tp * 100) / 100,
-              net_result: Math.round((tp + (stats.credit || 0) + (stats.deposit || 0) - (stats.withdrawal || 0)) * 100) / 100,
-              trade_count: orders.length
-            }
-            // Paginate filtered results
+          // Fetch all orders from bridge (no date filter on bridge — server handles filtering)
+          const hRes = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: 9999 })
+          if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
+            let orders = hRes.orders
+            const stats = hRes.statistics || {}
+            const _ordDate = o => (o.close_time || o.time || '')
+            const _ordType = o => (o.type || '')
+            const _ordProfit = o => Number(o.profit || 0)
+
+            // Apply close-time filters
+            if (params.close_from) orders = orders.filter(o => _ordDate(o).slice(0, 10) >= params.close_from)
+            if (params.close_to) orders = orders.filter(o => _ordDate(o).slice(0, 10) <= params.close_to)
+
+            // Apply entry-time filters
+            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) >= params.entry_from)
+            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) <= params.entry_to)
+
+            // Apply direction / profit filters
+            if (params.direction) orders = orders.filter(o => _ordType(o).toUpperCase() === params.direction)
+            if (params.profit_filter === 'profit') orders = orders.filter(o => _ordProfit(o) > 0)
+            if (params.profit_filter === 'loss') orders = orders.filter(o => _ordProfit(o) < 0)
+
+            // Sort by close_time DESC — newest first (page 1 = latest 20)
+            orders.sort((a, b) => _ordDate(b).localeCompare(_ordDate(a)))
+
+            // Paginate
             const page = params.page || 1
             const pageSize = params.page_size || 20
             const si = (page - 1) * pageSize
-            result.orders = orders.slice(si, si + pageSize)
-            result.pagination = {
-              current_page: page,
-              page_size: pageSize,
-              total_count: orders.length,
-              total_pages: Math.max(Math.ceil(orders.length / pageSize), 1)
+
+            result = {
+              status: 'success',
+              orders: orders.slice(si, si + pageSize),
+              statistics: stats,
+              pagination: {
+                current_page: page,
+                page_size: pageSize,
+                total_count: orders.length,
+                total_pages: Math.max(Math.ceil(orders.length / pageSize), 1)
+              }
             }
+          } else {
+            result = hRes || { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 }, chart: { daily: [] } }
           }
-          // TEMP DIAG: check order lookup
-          const diag = result?._diag
-          if (diag) console.log(`[OrdDiag] lookup_count=${diag.order_lookup_count} first_keys=${JSON.stringify(diag.order_diag?.first_keys)} sample_tp=${diag.order_diag?.sample_tp} sample_sl=${diag.order_diag?.sample_sl} via_attr_tp=${diag.order_diag?.via_attr_tp} via_attr_sl=${diag.order_diag?.via_attr_sl} has_tp=${diag.order_diag?.has_tp_attr} has_sl=${diag.order_diag?.has_sl_attr} ticket=${diag.order_diag?.ticket_sample}`)
         } else {
           result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
         }
@@ -459,53 +464,89 @@ async function handleBrowserCommand(ws, userId, msg) {
           hcUserId = adminUserId
         }
         if (bridgeOk) {
-          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999, compact: true })
+          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999 })
           if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
-            let orders = hcResult.orders
-            // Apply filters (compact uses short keys: t=time, p=profit, y=type)
-            if (params.close_from) orders = orders.filter(o => (o.t || '') >= params.close_from)
-            if (params.close_to) orders = orders.filter(o => (o.t || '') <= params.close_to + 'T23:59:59')
-            if (params.direction) orders = orders.filter(o => (o.y || '').toUpperCase() === params.direction)
-            if (params.profit_filter === 'profit') orders = orders.filter(o => o.p > 0)
-            if (params.profit_filter === 'loss') orders = orders.filter(o => o.p < 0)
+            // Compute initCapital from ALL orders (before filtering), using account balance
+            const allOrders = hcResult.orders;
+            const totalProfit = allOrders.reduce((s, o) => s + Number(o.profit || 0), 0);
+            let initCapital = 0;
+            let acct = null;
+            try {
+              acct = await ai.mt5Bridge(hcUserId, 'account', {});
+              if (acct?.status === 'success' && acct.balance != null) {
+                initCapital = Math.max(0, acct.balance - totalProfit);
+              }
+            } catch (e) { /* fall through, initCapital=0 */ }
+            console.log('[MDD debug] balance:', acct?.balance, 'totalProfit:', Math.round(totalProfit*100)/100, 'initCapital:', Math.round(initCapital*100)/100);
 
-            // Aggregate by close date
-            const dailyMap = {};
-            orders.forEach(o => {
-              const d = (o.t || '').slice(0, 10);
+            // Default chart date range: last 30 days
+            const now = new Date()
+            const defaultFrom = new Date(now); defaultFrom.setDate(defaultFrom.getDate() - 30)
+            const dateFrom = params.close_from || defaultFrom.toISOString().slice(0, 10)
+            const dateTo = params.close_to || now.toISOString().slice(0, 10)
+
+            // Daily aggregation on ALL orders (for daily bars display, up to 30 days)
+            const allDailyMap = {};
+            hcResult.orders.forEach(o => {
+              const d = (o.close_time || '').slice(0, 10);
               if (!d) return;
-              dailyMap[d] = (dailyMap[d] || 0) + o.p;
-            });
-            const dates = Object.keys(dailyMap).sort();
-            const daily = dates.map(d => ({ date: d, profit: Math.round(dailyMap[d] * 100) / 100 }));
+              if (!allDailyMap[d]) allDailyMap[d] = { profit: 0, trade_count: 0, wins: 0, losses: 0 }
+              const p = Number(o.profit || 0)
+              allDailyMap[d].profit += p
+              allDailyMap[d].trade_count++
+              if (p > 0) allDailyMap[d].wins++
+              else if (p < 0) allDailyMap[d].losses++
+            })
+            const allDates = Object.keys(allDailyMap).sort()
+            // Only show dates within the selected range
+            const shownDates = allDates.filter(d => d >= dateFrom && d <= dateTo)
+            const daily = shownDates.map(d => ({
+              date: d,
+              profit: Math.round(allDailyMap[d].profit * 100) / 100,
+              trade_count: allDailyMap[d].trade_count,
+              wins: allDailyMap[d].wins,
+              losses: allDailyMap[d].losses
+            }))
+
+            // Filter orders for cumulative/drawdown/stats (within selected range)
+            let orders = hcResult.orders.filter(o => {
+              const d = (o.close_time || '').slice(0, 10)
+              return d >= dateFrom && d <= dateTo
+            })
+
+            // Apply additional chart filters (direction, profit)
+            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
+            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit || 0) > 0)
+            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit || 0) < 0)
 
             // Sort orders by close time (mandatory for correct drawdown)
-            orders.sort((a, b) => (a.t || '').localeCompare(b.t || ''));
+            orders.sort((a, b) => (a.close_time || '').localeCompare(b.close_time || ''));
 
-            // Cumulative + drawdown per day (aligned with daily chart labels)
+            // Cumulative + drawdown per day (aligned with shownDates daily chart labels)
+            // Drawdown based on equity = initCapital + cum, not raw profit
             const cumulative = [];
             const drawdown = [];
-            let cum = 0, peak = 0, maxDD = 0;
+            let cum = 0, peak = initCapital, maxDD = 0;
             let orderIdx = 0;
-            dates.forEach(d => {
-              // Advance through all orders that close on this day
-              while (orderIdx < orders.length && (orders[orderIdx].t || '').slice(0, 10) === d) {
-                cum += orders[orderIdx].p;
+            shownDates.forEach(d => {
+              while (orderIdx < orders.length && (orders[orderIdx].close_time || '').slice(0, 10) === d) {
+                cum += Number(orders[orderIdx].profit || 0);
                 orderIdx++;
               }
               cum = Math.round(cum * 100) / 100;
               cumulative.push(cum);
-              if (cum > peak) peak = cum;
-              const dd = peak > 0 ? Math.round((peak - cum) / peak * 10000) / 100 : 0;
+              const equity = initCapital + cum;
+              if (equity > peak) peak = equity;
+              const dd = peak > 0 ? Math.round((1 - equity / peak) * 10000) / 100 : 0;
               drawdown.push(dd);
               if (dd > maxDD) maxDD = dd;
             });
 
-            // Win/loss stats
-            const wins = orders.filter(o => o.p > 0)
-            const losses = orders.filter(o => o.p < 0)
-            const grossProfit = wins.reduce((s, o) => s + o.p, 0)
-            const grossLoss = Math.abs(losses.reduce((s, o) => s + o.p, 0))
+            // Win/loss stats (per-trade, avg_win/avg_loss)
+            const wins = orders.filter(o => Number(o.profit || 0) > 0)
+            const losses = orders.filter(o => Number(o.profit || 0) < 0)
+            const grossProfit = wins.reduce((s, o) => s + Number(o.profit || 0), 0)
+            const grossLoss = Math.abs(losses.reduce((s, o) => s + Number(o.profit || 0), 0))
             const avgWin = wins.length > 0 ? grossProfit / wins.length : 0
             const avgLoss = losses.length > 0 ? grossLoss / losses.length : 0
 

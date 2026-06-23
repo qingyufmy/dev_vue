@@ -791,6 +791,7 @@ function handleBridgeData(msg) {
           loadPositions();
           loadAccount();
           loadHistory();
+          loadHistoryChart();
         }, 500);
       }
     }
@@ -1090,6 +1091,7 @@ async function refreshAll() {
       loadConfig(),
       loadSignals(),
       loadHistory(),
+      loadHistoryChart(),
       loadAudit(),
       loadKlineData(),
     ]);
@@ -2611,7 +2613,7 @@ async function submitManualOrder() {
     const result = await wsApi("open", order.payload);
     closeManualOrderModal();
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadAudit(), loadStatus()]);
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -2624,7 +2626,7 @@ async function closePosition(ticket) {
   try {
     const result = await wsApi("close", { ticket: Number(ticket), confirm: true });
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadAudit(), loadStatus()]);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2867,6 +2869,29 @@ function _applyHistoryData(data) {
   setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
 }
 
+// ---- Chart-only fetch: independent of table filters, defaults to 30 days ----
+async function loadHistoryChart(forceRefresh) {
+  try {
+    const from = document.getElementById('chartDateFrom')?.value || '';
+    const to = document.getElementById('chartDateTo')?.value || '';
+    const params = {};
+    if (from) params.close_from = from;
+    if (to) params.close_to = to;
+
+    const filterKey = JSON.stringify(params);
+    if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
+      _renderHistoryChart(_historyChartCache.data);
+      return;
+    }
+
+    const data = await wsApi("history_chart_data", params);
+    if (data?.status === 'success') {
+      _historyChartCache = { filters: filterKey, data };
+      _renderHistoryChart(data);
+    }
+  } catch (e) { console.error("loadHistoryChart:", e); }
+}
+
 function _renderHistoryRows(rows, tickets, closeTickets) {
   $("historyBody").innerHTML = rows.length ? rows.map((row) => {
     const dir = signalType(row.type);
@@ -2890,7 +2915,7 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="num">${(() => { const ep = parseFloat(row.entry_price); const xp = parseFloat(exitPrice); if (!ep || !xp || ep === 0) return '--'; const pct = String(row.type || '').toUpperCase() === 'BUY' ? ((xp - ep) / ep * 100) : ((ep - xp) / ep * 100); const cls = pct >= 0 ? 'pnl-positive' : 'pnl-negative'; const sign = pct >= 0 ? '+' : ''; return `<span class="${cls}">${sign}${pct.toFixed(2)}%</span>`; })()}</td>
+      <td class="${profitClass(row.profit_points || 0)}">${row.profit_points != null ? fmt(row.profit_points, 0) : '--'}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>  `;
   }).join("") : '<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>';
@@ -2901,8 +2926,6 @@ let _historyChart = null;
 /* ---- History Profit Chart ---- */
 
 /* ---- Chart date range state ---- */
-let _chartDateFrom = '';
-let _chartDateTo = '';
 
 /* ---- Data labels plugin (show values on bars when few points) ---- */
 const barLabelPlugin = {
@@ -2944,37 +2967,6 @@ const zeroLinePlugin = {
   }
 };
 
-
-async function loadHistoryChart(forceRefresh) {
-  try {
-    const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
-    const entryTo = document.getElementById('filterEntryTo')?.value || '';
-    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
-    const closeTo = document.getElementById('filterCloseTo')?.value || '';
-    const direction = document.getElementById('filterDirection')?.value || '';
-    const profit = document.getElementById('filterProfit')?.value || '';
-    const filterParams = {};
-    if (entryFrom) filterParams.entry_from = entryFrom;
-    if (entryTo) filterParams.entry_to = entryTo;
-    if (closeFrom) filterParams.close_from = closeFrom;
-    if (closeTo) filterParams.close_to = closeTo;
-    if (direction) filterParams.direction = direction;
-    if (profit) filterParams.profit_filter = profit;
-    if (_chartDateFrom) filterParams.close_from = _chartDateFrom;
-    if (_chartDateTo) filterParams.close_to = _chartDateTo;
-
-    // Cache check
-    const filterKey = JSON.stringify(filterParams);
-    if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
-      _renderHistoryChart(_historyChartCache.data);
-      return;
-    }
-
-    const data = await wsApi('history_chart_data', filterParams);
-    _historyChartCache = { filters: filterKey, data };
-    _renderHistoryChart(data);
-  } catch (e) { console.error("loadHistoryChart:", e); }
-}
 
 function _renderHistoryChart(data) {
   const { daily = [], cumulative = [], drawdown = [], stats = {} } = data;
@@ -3064,12 +3056,11 @@ function _renderHistoryChart(data) {
         const idx = elements[0].index;
         const date = daily[idx]?.date;
         if (!date) return;
-        const fromEl = document.getElementById('filterEntryFrom');
-        const toEl = document.getElementById('filterEntryTo');
-        if (fromEl) fromEl.value = date;
-        if (toEl) toEl.value = date;
+        // Set TABLE close-date filter, reload table only — chart stays unchanged
+        document.getElementById('filterCloseFrom') && (document.getElementById('filterCloseFrom').value = date);
+        document.getElementById('filterCloseTo') && (document.getElementById('filterCloseTo').value = date);
+        state.historyFilters.page = 1;
         _historyCache = null;
-        _historyChartCache = null;
         loadHistory(true);
       },
       plugins: {
@@ -3353,36 +3344,31 @@ function bindEvents() {
     if (closeButton) closePosition(closeButton.dataset.closeTicket);
   });
 
-  // History filter buttons
+  // History table filter buttons (only affect table, not chart)
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     state.historyFilters.page = 1;
-    _historyCache = null; _historyChartCache = null;
-    loadHistory();
-    loadHistoryChart();
+    _historyCache = null;
+    loadHistory(true);
   });
   document.getElementById('historyFilterReset')?.addEventListener('click', () => {
     ['filterEntryFrom','filterEntryTo','filterCloseFrom','filterCloseTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
-    _historyCache = null; _historyChartCache = null;
-    loadHistory();
-    loadHistoryChart();
+    _historyCache = null;
+    loadHistory(true);
   });
-  // Chart date range filter
+  // Chart date range filter (only affects chart, not table)
   document.getElementById('chartDateApply')?.addEventListener('click', () => {
-    _chartDateFrom = document.getElementById('chartDateFrom')?.value || '';
-    _chartDateTo = document.getElementById('chartDateTo')?.value || '';
     _historyChartCache = null;
-    loadHistoryChart();
+    loadHistoryChart(true);
   });
   document.getElementById('chartDateReset')?.addEventListener('click', () => {
-    _chartDateFrom = '';
-    _chartDateTo = '';
     const ef = document.getElementById('chartDateFrom');
     const et = document.getElementById('chartDateTo');
     if (ef) ef.value = '';
     if (et) et.value = '';
-    loadHistoryChart();
+    _historyChartCache = null;
+    loadHistoryChart(true);
   });
 }
 
