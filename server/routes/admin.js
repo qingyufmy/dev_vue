@@ -339,21 +339,6 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
-router.put('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { action } = req.body
-    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : req.body.status
-    const referral = await queryOne('SELECT referrer_id, commission FROM referrals WHERE id = ?', [req.params.id])
-    if (!referral) return res.json({ ok: false, error: '记录不存在' })
-    await queryRun('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
-    // Credit referrer on approval
-    if (finalStatus === 'approved' && referral.commission > 0) {
-      await queryRun('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
-    }
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
-})
-
 router.patch('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { action } = req.body
@@ -376,20 +361,6 @@ router.get('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res)
 })
 
 router.put('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { rules } = req.body
-    if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
-    for (const r of rules) {
-      await queryRun(
-        'INSERT INTO referral_rules (plan, period, rate_bps, enabled) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE rate_bps = VALUES(rate_bps), enabled = VALUES(enabled)',
-        [r.plan, r.period, r.rate_bps || 1000, r.enabled ? 1 : 0]
-      )
-    }
-    res.json({ ok: true, message: '规则已更新' })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
-})
-
-router.patch('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { rules } = req.body
     if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
@@ -718,16 +689,6 @@ router.post('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
 
     res.json({ ok: true, id: result.insertId })
   } catch (err) { res.json({ ok: false, error: '保存失败' }) }
-})
-
-router.put('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { id, question, options, answer, correctIndex, explanation, explanations, hint, status, sortOrder } = req.body
-    await queryRun(`
-      UPDATE quiz_questions SET question=?, options=?, answer=?, correct_index=?, explanation=?, explanations=?, hint=?, status=?, sort_order=? WHERE id=?
-    `, [question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id])
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
 })
 
 router.delete('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {

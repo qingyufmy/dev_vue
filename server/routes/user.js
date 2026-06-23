@@ -121,46 +121,7 @@ router.patch('/notifications', authMiddleware, async (req, res) => {
   }
 })
 
-router.put('/notifications', authMiddleware, async (req, res) => {
-  try {
-    const { id } = req.body
-    if (id) {
-      await queryRun('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?', [id, req.user.id])
-    } else {
-      await queryRun('UPDATE notifications SET is_read = 1 WHERE user_id = ?', [req.user.id])
-    }
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
-})
-
-// User notices (for public alpha notice etc.)
-router.post('/user-notices', authMiddleware, async (req, res) => {
-  try {
-    const { noticeId, source } = req.body
-
-    const existing = await queryOne('SELECT id FROM user_notices WHERE user_id = ? AND notice_id = ?', [req.user.id, noticeId])
-    if (existing) {
-      return res.json({ ok: true, shouldShow: false })
-    }
-
-    await queryRun('INSERT INTO user_notices (user_id, notice_id, source) VALUES (?, ?, ?)', [req.user.id, noticeId, source || 'popup'])
-    res.json({ ok: true, shouldShow: true })
-  } catch (err) {
-    res.json({ ok: false, error: '操作失败' })
-  }
-})
-
-router.get('/user-notices', authMiddleware, async (req, res) => {
-  try {
-    const notices = await queryAll('SELECT * FROM user_notices WHERE user_id = ? ORDER BY created_at DESC LIMIT 20', [req.user.id])
-    res.json({ ok: true, notices })
-  } catch (err) {
-    res.json({ ok: false, error: '获取失败' })
-  }
-})
-
-// Progress
-router.get('/progress', authMiddleware, async (req, res) => {
+router.patch('/notifications', authMiddleware, async (req, res) => {
   try {
     const progress = await queryAll('SELECT * FROM progress WHERE user_id = ?', [req.user.id])
     res.json({ ok: true, progress })

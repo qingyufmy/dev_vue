@@ -452,7 +452,6 @@ async function handleBrowserCommand(ws, userId, msg) {
             // 结余 = 本金 + 入金 + 累计收益(到 close_to 日期)
             const deposit = Number(origStats.deposit) || 0
             const netToDate = Math.round((initCapital + deposit + cumToDate) * 100) / 100
-            console.log('[history stats] balance:', balance, 'initCapital:', Math.round(initCapital*100)/100, 'deposit:', deposit, 'cumToDate:', Math.round(cumToDate*100)/100, 'netToDate:', Math.round(netToDate*100)/100)
 
             // Paginate
             const page = params.page || 1
@@ -505,7 +504,6 @@ async function handleBrowserCommand(ws, userId, msg) {
                 initCapital = Math.max(0, acct.balance - totalProfit);
               }
             } catch (e) { /* fall through, initCapital=0 */ }
-            console.log('[MDD debug] balance:', acct?.balance, 'totalProfit:', Math.round(totalProfit*100)/100, 'initCapital:', Math.round(initCapital*100)/100);
 
             // Default chart date range: last 30 days
             const now = new Date()

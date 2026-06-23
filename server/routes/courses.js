@@ -96,23 +96,6 @@ router.get('/course-items/:id/resources', authMiddleware, async (req, res) => {
 })
 
 // Get Bilibili video duration by BV ID
-router.get('/bilibili-duration/:bvid', async (req, res) => {
-  try {
-    const bvid = req.params.bvid
-    const resp = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
-    })
-    const data = await resp.json()
-    if (data.code === 0 && data.data?.duration) {
-      res.json({ ok: true, duration: data.data.duration, cover: data.data.pic || '' })
-    } else {
-      res.json({ ok: false, error: '获取时长失败' })
-    }
-  } catch (err) {
-    res.json({ ok: false, error: 'Bilibili API 请求失败' })
-  }
-})
-
 // Get Bilibili video cover + duration by BV ID (proxy for CORS)
 router.get('/bilibili-info/:bvid', async (req, res) => {
   try {
