@@ -479,32 +479,27 @@ async function handleBrowserCommand(ws, userId, msg) {
             const dates = Object.keys(dailyMap).sort()
             const daily = dates.map(d => ({ date: d, profit: Math.round(dailyMap[d] * 100) / 100 }))
 
-            // Cumulative + drawdown
-            let cum = 0, peak = 0, maxDD = 0
+            // Cumulative + drawdown (逐单计算，捕获日内回撤)
             const cumulative = []
             const drawdown = []
-            daily.forEach(d => {
-              cum += d.profit
+            let cum = 0, peak = 0
+            orders.forEach(o => {
+              cum += o.p
               cum = Math.round(cum * 100) / 100
               cumulative.push(cum)
               if (cum > peak) peak = cum
-              let dd = 0
-              if (peak > 0) {
-                // 从高点回落的百分比
-                dd = Math.round((peak - cum) / peak * 10000) / 100
-              } else if (cum < 0) {
-                // 从未盈利过，亏损即回撤（以 1 为基数避免除零）
-                dd = Math.round((-cum) * 100) / 100
-              }
+              const dd = peak > 0 ? Math.round((peak - cum) / peak * 10000) / 100 : 0
               drawdown.push(dd)
-              if (dd > maxDD) maxDD = dd
             })
+            const maxDD = drawdown.length > 0 ? Math.max(...drawdown) : 0
 
             // Win/loss stats
             const wins = orders.filter(o => o.p > 0)
             const losses = orders.filter(o => o.p < 0)
             const grossProfit = wins.reduce((s, o) => s + o.p, 0)
             const grossLoss = Math.abs(losses.reduce((s, o) => s + o.p, 0))
+            const avgWin = wins.length > 0 ? grossProfit / wins.length : 0
+            const avgLoss = losses.length > 0 ? grossLoss / losses.length : 0
 
             result = {
               status: 'success',
@@ -514,7 +509,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               stats: {
                 total_trades: orders.length,
                 win_rate: orders.length > 0 ? Math.round(wins.length / orders.length * 10000) / 100 : 0,
-                profit_factor: grossLoss > 0 ? Math.round(grossProfit / grossLoss * 100) / 100 : grossProfit > 0 ? 999 : 0,
+                profit_factor: avgLoss > 0 ? Math.round(avgWin / avgLoss * 100) / 100 : avgWin > 0 ? 999 : 0,
                 max_drawdown: maxDD,
                 gross_profit: Math.round(grossProfit * 100) / 100,
                 gross_loss: Math.round(grossLoss * 100) / 100,
