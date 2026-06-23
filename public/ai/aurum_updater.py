@@ -4,6 +4,20 @@ AURUM Updater - 独立更新器 (GUI版)
 用法: aurum_updater.exe <server_url> <dst_exe> <old_pid>
 """
 import sys
+import ssl
+
+def _get_ssl_context():
+    """安全获取 SSL context，不使用 CERT_NONE 降级"""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    try:
+        return ssl.create_default_context()
+    except Exception:
+        pass
+    raise RuntimeError("SSL 证书验证不可用，请安装 certifi (pip install certifi)")
 import os
 import time
 import subprocess
@@ -93,13 +107,7 @@ def main():
 
     def do_update():
         # --- SSL ---
-        ctx = ssl.create_default_context()
-        try:
-            import certifi
-            ctx.load_verify_locations(certifi.where())
-        except Exception:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+        ctx = _get_ssl_context()
 
         # --- 1. Check version ---
         gui.set_status("正在检查版本...", MUTED)

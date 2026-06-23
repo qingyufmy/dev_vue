@@ -75,14 +75,22 @@ import urllib.request, urllib.error
 def _get_ssl_context():
     """PySide6 frozen EXE 中 SSL 证书可能不全，提供兼容 context"""
     import ssl
-    ctx = ssl.create_default_context()
     try:
         import certifi
-        ctx.load_verify_locations(certifi.where())
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        return ctx
     except ImportError:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+        pass
+    # Fallback to system default — works on normal Python installs
+    try:
+        ctx = ssl.create_default_context()
+        return ctx
+    except Exception:
+        pass
+    # Last resort: warn instead of silently disabling verification
+    raise RuntimeError(
+        "SSL 证书验证不可用。请检查 Python 安装或安装 certifi 包 (pip install certifi)"
+    )
 
 def http_get_json(url, timeout=10):
     try:
@@ -788,14 +796,7 @@ class UpdateDownloader(QThread):
 
     def run(self):
         try:
-            import ssl
-            ctx = ssl.create_default_context()
-            try:
-                import certifi
-                ctx.load_verify_locations(certifi.where())
-            except ImportError:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+            ctx = _get_ssl_context()
             req = urllib.request.Request(self.url, headers={"User-Agent": "AURUM-Bridge/1.0"})
             with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
@@ -1515,12 +1516,8 @@ class SettingsPage(QWidget):
         # Download updater from Qiniu
         updater_tmp = os.path.join(CONFIG_DIR, "aurum_updater.exe")
         try:
-            import ssl, urllib.request, shutil
-            ctx = ssl.create_default_context()
-            try:
-                import certifi; ctx.load_verify_locations(certifi.where())
-            except:
-                ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+            import urllib.request, shutil
+            ctx = _get_ssl_context()
             req = urllib.request.Request(updater_url, headers={"User-Agent": "AURUM-Bridge/1.0"})
             with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
