@@ -589,6 +589,8 @@ class BridgeWorker(QThread):
             self.mt5.shutdown()
             return
 
+        self.log_signal.emit(f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
+
         terminal = self.mt5.terminal_info()
         if terminal and not terminal.trade_allowed:
             self.log_signal.emit("⚠️ 算法交易未开启：MT5 → 工具 → 选项 → EA交易 → 允许算法交易")
@@ -599,15 +601,19 @@ class BridgeWorker(QThread):
             self.log_signal.emit("错误: websocket-client 未安装")
             return
 
+        # Check plan status before connecting
+        self.log_signal.emit("检查会员状态...")
         plan, expired, reason = self.check_plan()
         if expired:
             self.log_signal.emit(f"❌ {reason}")
             self.plan_expired_signal.emit(reason)
             self.mt5.shutdown()
             return
+        self.log_signal.emit(f"会员等级: {plan.upper()}，开始连接...")
 
         server = self.server_url.replace("http://","ws://").replace("https://","wss://").rstrip("/")
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
+        self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
         MAX_RETRY = 300; RETRY_INT = 5
 
@@ -623,6 +629,7 @@ class BridgeWorker(QThread):
                 try:
                     ws = websocket.create_connection(ws_url, timeout=10, header=["Origin: http://localhost"])
                     self._ws = ws; connected = True
+                    self.log_signal.emit("WebSocket 已连接")
                     break
                 except Exception as e:
                     err_str = str(e)
@@ -661,6 +668,7 @@ class BridgeWorker(QThread):
                             self.log_signal.emit("⚠️ MT5账户已断开，请重新登录后重启桥接")
                         if acc and self._acc_lost_warned:
                             self._acc_lost_warned = False
+                            self.log_signal.emit("MT5账户已恢复")
                         tick = self.mt5.symbol_info_tick(sym)
                         info = self.mt5.symbol_info(sym)
                         positions = self.mt5.positions_get() or []
@@ -686,6 +694,7 @@ class BridgeWorker(QThread):
                             "live_trading_enabled": self._trade_enabled}
                         ws.send(json.dumps(dm))
                         if not ws.connected:
+                            self.log_signal.emit("发送后检测到连接断开")
                             break
                         if acc:
                             self.status_signal.emit("MT5桥接-已连接", "#22c55e",
@@ -717,9 +726,11 @@ class BridgeWorker(QThread):
                             try: ws.send(json.dumps({"type": "pong", "ts": msg.get("ts", 0)}))
                             except: pass
                         elif msg.get("type") == "command":
+                            self.log_signal.emit(f"执行: {msg['action']}")
                             try: resp = self._process_command(msg)
                             except Exception as ce: resp = {"status": "error", "message": str(ce)}
                             ws.send(json.dumps({"type": "result", "command_id": msg["command_id"], "result": resp}))
+                            self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
                 except websocket.WebSocketTimeoutException: pass
                 except websocket.WebSocketConnectionClosedException:
                     # Check close code for plan rejection
@@ -729,7 +740,7 @@ class BridgeWorker(QThread):
                         self.log_signal.emit(f"❌ 连接被拒绝: {cr}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
                         return
-                    break
+                    self.log_signal.emit("WebSocket 连接已断开"); break
                 except Exception as e:
                     self.log_signal.emit(f"接收错误: {e}"); break
 
@@ -739,10 +750,12 @@ class BridgeWorker(QThread):
             except: pass
             self._ws = None
             if not self.running: break
+            self.log_signal.emit(f"连接断开，{RETRY_INT}秒后自动重连...")
             self.status_signal.emit("重连中...", "#f59e0b", "")
             time.sleep(RETRY_INT)
 
         if self.mt5: self.mt5.shutdown()
+        self.log_signal.emit("MT5 已断开")
 
     def stop(self):
         self.running = False
@@ -1167,6 +1180,7 @@ class BridgePage(QWidget):
             self.btn_start.setText("▶  启动桥接")
             self.btn_start.setStyleSheet("background-color: #3b82f6;")
             self._set_status("已停止", "#ef4444")
+            self._log("桥接已停止")
         else:
             cfg = load_config()
             server = cfg.get("server_url", DEFAULT_SERVER)
@@ -1183,6 +1197,7 @@ class BridgePage(QWidget):
             self.btn_start.setText("■  停止桥接")
             self.btn_start.setStyleSheet("background-color: #ef4444;")
             self._set_status("连接中...", "#f59e0b")
+            self._log("启动桥接...")
 
     def stop_bridge(self):
         if self._worker and self._worker.isRunning():

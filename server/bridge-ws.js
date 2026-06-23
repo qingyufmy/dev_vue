@@ -70,7 +70,7 @@ export function initBridgeWS(server) {
     ws.close(4000, 'Unknown type')
   })
 
-  console.log('[BridgeWS] WebSocket bridge initialized')
+
   return wss
 }
 
@@ -159,12 +159,10 @@ function _initBridge(ws, userId) {
   // Close old bridge connection if still open (one bridge per account)
   if (existing && existing.ws && existing.ws.readyState === 1) {
     try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
-    console.log(`[BridgeWS] User ${userId} old bridge replaced`)
   }
   // Admin defaults to tradeEnabled=true, others false
   const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
   bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), lastTradeMode: 4 }); ws._userId = userId
-  console.log(`[BridgeWS] User ${userId} bridge connected`)
 
   // Notify browsers
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true })
@@ -174,7 +172,6 @@ function _initBridge(ws, userId) {
     const bridge = bridges.get(userId)
     if (!bridge || bridge.ws !== ws) { clearInterval(pingInterval); return }
     if (Date.now() - bridge.lastPong > 30000) {
-      console.log(`[BridgeWS] User ${userId} bridge ping timeout, closing`)
       try { ws.close(4003, 'Ping timeout') } catch {}
       clearInterval(pingInterval)
       return
@@ -230,14 +227,12 @@ function _initBridge(ws, userId) {
         }
       }
     } else {
-      console.log('[BridgeWS] User ' + userId + ' unknown type:', msg.type)
     }
   })
 
   ws.on('close', async () => {
     clearInterval(pingInterval)
     bridges.delete(userId)
-    console.log(`[BridgeWS] User ${userId} bridge disconnected`)
     // Notify browsers
     sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
     // Reject pending commands
@@ -256,7 +251,6 @@ function _initBridge(ws, userId) {
         await ai.upsertAutoConfig(null, userId, null, false)
         ai.stopAutoScheduler(userId)
         sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
-        console.log(`[BridgeWS] User ${userId} auto-reasoning disabled: bridge disconnected`)
       }
     } catch (e) {
       console.error('[BridgeWS] Failed to disable auto-reasoning on disconnect:', e.message)

@@ -34,15 +34,10 @@ try {
       const [key, ...val] = line.split('=')
       if (key && val.length) process.env[key.trim()] = val.join('=').trim()
     })
-    console.log('[ENV] Loaded:', envPath)
-    console.log('[ENV] MYSQL_HOST:', process.env.MYSQL_HOST)
-    console.log('[ENV] MYSQL_PORT:', process.env.MYSQL_PORT)
-    console.log('[ENV] MYSQL_USER:', process.env.MYSQL_USER)
-    console.log('[ENV] MYSQL_DATABASE:', process.env.MYSQL_DATABASE)
   } else {
-    console.log('[ENV] .env not found at:', envPath)
+    console.warn('[ENV] .env not found at:', envPath)
   }
-} catch (e) { console.log('[ENV] Error:', e.message) }
+} catch (e) { console.error('[ENV] Error:', e.message) }
 
 // Ensure upload dir
 const uploadDir = process.env.UPLOAD_DIR || './uploads'

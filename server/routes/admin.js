@@ -422,9 +422,7 @@ router.get('/admin-course-items', authMiddleware, adminOnly, async (req, res) =>
 
 router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) => {
   try {
-    console.log('[AdminCourse] body:', JSON.stringify(req.body))
     const { episodeId, number, title, description, category, contentType, duration, youtubeId, bilibiliId, cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status } = req.body
-    console.log('[AdminCourse] episodeId:', episodeId, 'title:', title)
 
     // Shared: auto-fetch Bilibili cover + duration
     let finalCover = cover, finalDuration = duration

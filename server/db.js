@@ -33,7 +33,6 @@ function getDBConfig() {
 export function getDB() {
   if (!pool) {
     const cfg = getDBConfig()
-    console.log('[DB] Creating pool →', cfg.host + ':' + cfg.port, cfg.user + '/' + cfg.database)
     pool = mysql.createPool(cfg)
   }
   return pool
@@ -585,7 +584,7 @@ export async function initDB() {
   for (const col of badCols) {
     await p.query(`ALTER TABLE \`${col.TABLE_NAME}\` ALTER COLUMN \`${col.COLUMN_NAME}\` SET DEFAULT (NOW())`)
   }
-  if (badCols.length) console.log(`[DB] Fixed ${badCols.length} columns with +8h defaults`)
+  if (badCols.length) {}
 
   // v1.7: global_auto_config + cleanup
   const [gacExists] = await p.query('SELECT COUNT(*) as c FROM global_auto_config')
@@ -600,7 +599,6 @@ export async function initDB() {
         g.temperature || 0.3, g.max_tokens || 2000, g.risk_level || 'medium',
         g.max_position_size || 0.05, g.selected_take_profit || 2, g.system_prompt || null
       ])
-      console.log('[DB] Migrated global auto config from auto_scheduler')
     } else {
       await p.query('INSERT INTO global_auto_config (id) VALUES (1)')
     }
@@ -623,7 +621,6 @@ export async function initDB() {
     const [eacCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_auto_config' AND COLUMN_NAME = 'enable_auto_trade'`)
     if (eacCols.length === 0) {
       await p.query('ALTER TABLE global_auto_config ADD COLUMN enable_auto_trade TINYINT NOT NULL DEFAULT 0 AFTER selected_take_profit')
-      console.log('[DB] Added enable_auto_trade to global_auto_config')
     }
   } catch {}
 
@@ -632,7 +629,6 @@ export async function initDB() {
     const [acCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_config_override'`)
     if (acCols.length === 0) {
       await p.query('ALTER TABLE ai_configs ADD COLUMN auto_config_override TINYINT NOT NULL DEFAULT 0 AFTER model_sharing_enabled')
-      console.log('[DB] Added auto_config_override to ai_configs')
     }
   } catch {}
 
@@ -641,19 +637,16 @@ export async function initDB() {
     const [symCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_symbols'`)
     if (symCols.length === 0) {
       await p.query('ALTER TABLE ai_configs ADD COLUMN auto_symbols VARCHAR(100) DEFAULT NULL AFTER auto_config_override')
-      console.log('[DB] Added auto_symbols to ai_configs')
     }
     const [ivCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_interval_minutes'`)
     if (ivCols.length === 0) {
       await p.query('ALTER TABLE ai_configs ADD COLUMN auto_interval_minutes INT DEFAULT NULL AFTER auto_symbols')
-      console.log('[DB] Added auto_interval_minutes to ai_configs')
     }
   } catch {}
 
   // v1.8.3: fix Bilibili http:// covers to https:// (mixed content)
   try {
     await p.query("UPDATE courses SET cover = REPLACE(cover, 'http://', 'https://') WHERE cover LIKE 'http://i%.hdslb.com/%'")
-    console.log('[DB] Fixed http→https Bilibili covers')
   } catch {}
 
   // v1.8.5: add engine fields to close_config
@@ -665,11 +658,10 @@ export async function initDB() {
       await p.query('ALTER TABLE close_config ADD COLUMN api_key_encrypted VARCHAR(500) DEFAULT NULL AFTER api_base_url')
       await p.query('ALTER TABLE close_config ADD COLUMN temperature DOUBLE DEFAULT 0.3 AFTER api_key_encrypted')
       await p.query('ALTER TABLE close_config ADD COLUMN max_tokens INT DEFAULT 1500 AFTER temperature')
-      console.log('[DB] Added engine fields to close_config')
     }
   } catch {}
 
-  console.log('[DB] MySQL initialized')
+  }
 }
 
 async function seedData(p) {

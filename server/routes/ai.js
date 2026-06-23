@@ -521,7 +521,6 @@ async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, m
   if (!response.ok) throw new Error(`LLM HTTP ${response.status}`)
   const data = await response.json()
   const content = data.choices[0].message.content
-  console.log(`[AI] LLM raw response (${content.length} chars):`, content.substring(0, 500))
   try {
     return parseJsonObject(content)
   } catch (exc) {
@@ -725,13 +724,11 @@ function startTradeReviewScheduler(userId) {
     }
   }
   tradeReviewState[userId].timer = setTimeout(tick, 30000) // first run after 30s
-  console.log(`[TradeReview] Started for user ${userId} (interval=14400s)`)
 }
 
 function stopTradeReviewScheduler(userId) {
   if (tradeReviewState[userId]?.timer) clearTimeout(tradeReviewState[userId].timer)
   tradeReviewState[userId] = null
-  console.log(`[TradeReview] Stopped for user ${userId}`)
 }
 
 // ============ Rule-Based Signal ============
@@ -779,7 +776,6 @@ async function maybeAiSignal(db, config, market) {
       throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
     }
     parsed._inference_source = 'ai'
-    console.log(`[AI] ${market.symbol} ${market.timeframe} raw: type=${parsed.signal_type} conf=${parsed.confidence} prompt_len=${prompt.length} ai_payload=${JSON.stringify(aiPayload).length}B full_market=${JSON.stringify(market).length}B`)
     return normalizeAiSignal(parsed, config, market)
   } catch (exc) {
     return aiFailureHold(market, exc.message)
@@ -823,7 +819,6 @@ function normalizeAiSignal(parsed, config, market) {
 
   // Confidence gate: downgrade to hold if below risk_level threshold
   if (signalType !== 'hold' && parsed.confidence < risk.minConfidence) {
-    console.log(`[AI] ${market.symbol} ${market.timeframe} confidence ${parsed.confidence} < ${risk.minConfidence} (${riskLevel}), downgrading ${signalType} → hold`)
     signalType = 'hold'
     parsed.signal_type = 'hold'
     parsed.recommended_volume = 0
@@ -927,11 +922,9 @@ async function runSmartClose(userId, closeConfig, account, positions) {
   // Reasoning models need more tokens for chain-of-thought
   if (/reason|think|flash/i.test(model) && maxTokens < 8000) {
     maxTokens = Math.min(maxTokens * 2, 8000)
-    console.log(`[SmartClose] Reasoning model detected, maxTokens bumped to ${maxTokens}`)
   }
 
   try {
-    console.log(`[SmartClose] Calling AI: ${baseUrl}/v1/chat/completions, model=${model}, positions=${positions.length}`)
     const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -951,7 +944,6 @@ async function runSmartClose(userId, closeConfig, account, positions) {
     if (!content) {
       const reasoning = data.choices?.[0]?.message?.reasoning_content || ''
       if (reasoning) {
-        console.log('[SmartClose] content empty, extracting from reasoning_content')
         // Try to find JSON in reasoning content
         const jsonMatch = reasoning.match(/\{[\s\S]*"positions"[\s\S]*\]/)
         if (jsonMatch) {
@@ -1032,7 +1024,6 @@ async function runSmartClose(userId, closeConfig, account, positions) {
 
         // Audit
         await insertAudit(null, userId, 'smart_close', symbol, { ticket: pos.ticket, reason: item.reason, confidence: item.confidence }, closeResult, 'success')
-        console.log(`[SmartClose] Audit logged: ticket=${pos.ticket} action=smart_close`)
       } catch (e) {
         results.push({ ticket: pos.ticket, success: false, error: e.message })
         await insertAudit(null, userId, 'smart_close', symbol, { ticket: pos.ticket, error: e.message }, null, 'error')
@@ -1181,7 +1172,6 @@ async function handleAnalyze(userId, params) {
   const config = await getActiveConfig(null, userId, session_id)
   const prompt = prompt_override || config?.system_prompt || ''
   const tags = parseTimeframeTags(prompt)
-  console.log(`[handleAnalyze] userId=${userId} session=${session_id} prompt_len=${prompt.length} tags=${tags.map(t=>t.tf+':'+t.count).join(',')} prompt_source=ai_configs`)
 
   const account = await mt5Bridge(userId, 'account', {})
   const positionsData = include_positions ? await mt5Bridge(userId, 'positions', { symbol }) : { positions: [] }
@@ -1370,21 +1360,18 @@ async function runAutoCycle(userId, symbol, timeframe) {
   // Use global auto inference config
   const config = await getAutoInferenceConfig(userId)
   if (!config || !config.api_key_encrypted) {
-    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: no API key in auto config`)
     return
   }
 
-  // Check Pro permission (defense in depth: also guarded at WS layer)
+  // Check Pro permission
   const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
   if (!user || user.plan !== 'pro') {
-    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: user ${userId} not Pro (plan=${user?.plan})`)
     return
   }
 
-  // Check market status — skip unless actively trading
+  // Check market status
   const tradeMode = await getBridgeTradeMode(userId)
   if (tradeMode !== 4) {
-    console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: market not trading (trade_mode=${tradeMode})`)
     return
   }
 
@@ -1438,7 +1425,6 @@ async function runAutoCycle(userId, symbol, timeframe) {
       // Check bridge alive and trade enabled
       const bridgeAlive = isBridgeAlive(userId)
       if (!bridgeAlive) {
-        console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: bridge not alive`)
       } else {
         const order = signalOrderPayload(signal, config, market, true)
         const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
@@ -1447,7 +1433,6 @@ async function runAutoCycle(userId, symbol, timeframe) {
         }
       }
     } else if (market.inference_source !== 'ai') {
-      console.log(`[AutoScheduler] ${symbol}/${timeframe} skipped: non-AI signal (source=${market.inference_source})`)
     }
 
     // Audit log
@@ -1522,7 +1507,6 @@ async function runSmartCloseCycle(userId) {
   // Check market status — pause unless actively trading
   const tradeMode = await getBridgeTradeMode(userId)
   if (tradeMode !== 4) {
-    console.log(`[SmartClose] User ${userId}: market not trading (trade_mode=${tradeMode}), skipping`)
     return
   }
 
@@ -1560,7 +1544,6 @@ async function runSmartCloseCycle(userId) {
   try {
     const aiResults = await runSmartClose(userId, closeCfg, account, remaining)
     if (aiResults.length > 0) {
-      console.log(`[SmartClose] User ${userId}: ${aiResults.filter(r => r.success).length}/${aiResults.length} closed by AI`)
     }
   } catch (e) {
     console.error(`[SmartClose] User ${userId} AI cycle error:`, e.message)
@@ -1628,14 +1611,12 @@ export async function startSmartCloseScheduler(userId) {
     }
   }
   closeSchedulerState[userId].timer = setTimeout(tick, 5000)
-  console.log(`[SmartClose] Started for user ${userId}: interval=${intervalMs/1000}s`)
 }
 
 export function stopSmartCloseScheduler(userId) {
   const state = closeSchedulerState[userId]
   if (state?.timer) clearTimeout(state.timer)
   closeSchedulerState[userId] = null
-  console.log(`[SmartClose] Stopped for user ${userId}`)
 }
 
 async function startAutoScheduler(userId) {
@@ -1672,7 +1653,6 @@ async function startAutoScheduler(userId) {
     }
   }
   autoSchedulerState[userId].timer = setTimeout(tick, 5000)
-  console.log(`[AutoScheduler] Started for user ${userId}: ${symbol}, M5, interval=${intervalMs/1000}s`)
 
   // Also start trade review scheduler
   startTradeReviewScheduler(userId)
@@ -1683,7 +1663,6 @@ function stopAutoScheduler(userId) {
   if (state?.timer) clearTimeout(state.timer)
   if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
   autoSchedulerState[userId] = null
-  console.log(`[AutoScheduler] Stopped for user ${userId}`)
   stopTradeReviewScheduler(userId)
 }
 
@@ -1693,7 +1672,6 @@ export async function initAutoSchedulers() {
     for (const row of rows) {
       await startAutoScheduler(row.user_id)
     }
-    if (rows.length) console.log(`[AutoScheduler] Restored ${rows.length} scheduler(s)`)
   } catch {}
 
   // Restore smart close schedulers
@@ -1702,7 +1680,6 @@ export async function initAutoSchedulers() {
     for (const row of closeRows) {
       await startSmartCloseScheduler(row.user_id)
     }
-    if (closeRows.length) console.log(`[SmartClose] Restored ${closeRows.length} scheduler(s)`)
   } catch {}
 }
 
