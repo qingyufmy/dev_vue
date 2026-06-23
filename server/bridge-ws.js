@@ -445,9 +445,14 @@ async function handleBrowserCommand(ws, userId, msg) {
               .filter(o => _ordDate(o).slice(0, 10) <= closeTo)
               .reduce((s, o) => s + _ordProfit(o), 0) * 100) / 100
 
-            // initCapital from bridge: account_principal = current_balance - net_result (constant)
-            const initCapital = Number(origStats.account_principal) || 0
-            const netToDate = Math.round((initCapital + cumToDate) * 100) / 100
+            // initCapital: 本金 = 当前余额 - 全网累计净结果
+            const allTimeNet = (Number(origStats.total_profit) || 0) + (Number(origStats.credit) || 0) + (Number(origStats.deposit) || 0) - (Number(origStats.withdrawal) || 0)
+            const balance = Number(origStats.account_balance) || 0
+            const initCapital = Math.max(0, balance - allTimeNet)
+            // 结余 = 本金 + 入金 + 累计收益(到 close_to 日期)
+            const deposit = Number(origStats.deposit) || 0
+            const netToDate = Math.round((initCapital + deposit + cumToDate) * 100) / 100
+            console.log('[history stats] balance:', balance, 'initCapital:', Math.round(initCapital*100)/100, 'deposit:', deposit, 'cumToDate:', Math.round(cumToDate*100)/100, 'netToDate:', Math.round(netToDate*100)/100)
 
             // Paginate
             const page = params.page || 1
