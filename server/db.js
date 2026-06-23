@@ -283,6 +283,7 @@ export async function initDB() {
       purpose VARCHAR(20) DEFAULT 'login',
       expires_at DATETIME NOT NULL,
       used TINYINT DEFAULT 0,
+      verify_token VARCHAR(36) DEFAULT NULL,
       created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -552,6 +553,14 @@ export async function initDB() {
   for (const sql of tables) {
     await p.query(sql)
   }
+
+  // Migration: add verify_token to verification_codes (for existing DBs)
+  try {
+    const [cols] = await p.query("SHOW COLUMNS FROM verification_codes LIKE 'verify_token'")
+    if (!cols.length) {
+      await p.query('ALTER TABLE verification_codes ADD COLUMN verify_token VARCHAR(36) DEFAULT NULL AFTER used')
+    }
+  } catch (e) { /* column already exists or table not yet created */ }
 
   // Seed referral_rules if empty
   const [ruleRows] = await p.query('SELECT COUNT(*) as c FROM referral_rules')
