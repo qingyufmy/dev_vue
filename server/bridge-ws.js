@@ -470,28 +470,36 @@ async function handleBrowserCommand(ws, userId, msg) {
             if (params.profit_filter === 'loss') orders = orders.filter(o => o.p < 0)
 
             // Aggregate by close date
-            const dailyMap = {}
+            const dailyMap = {};
             orders.forEach(o => {
-              const d = (o.t || '').slice(0, 10)
-              if (!d) return
-              dailyMap[d] = (dailyMap[d] || 0) + o.p
-            })
-            const dates = Object.keys(dailyMap).sort()
-            const daily = dates.map(d => ({ date: d, profit: Math.round(dailyMap[d] * 100) / 100 }))
+              const d = (o.t || '').slice(0, 10);
+              if (!d) return;
+              dailyMap[d] = (dailyMap[d] || 0) + o.p;
+            });
+            const dates = Object.keys(dailyMap).sort();
+            const daily = dates.map(d => ({ date: d, profit: Math.round(dailyMap[d] * 100) / 100 }));
 
-            // Cumulative + drawdown (逐单计算，捕获日内回撤)
-            const cumulative = []
-            const drawdown = []
-            let cum = 0, peak = 0
-            orders.forEach(o => {
-              cum += o.p
-              cum = Math.round(cum * 100) / 100
-              cumulative.push(cum)
-              if (cum > peak) peak = cum
-              const dd = peak > 0 ? Math.round((peak - cum) / peak * 10000) / 100 : 0
-              drawdown.push(dd)
-            })
-            const maxDD = drawdown.length > 0 ? Math.max(...drawdown) : 0
+            // Sort orders by close time (mandatory for correct drawdown)
+            orders.sort((a, b) => (a.t || '').localeCompare(b.t || ''));
+
+            // Cumulative + drawdown per day (aligned with daily chart labels)
+            const cumulative = [];
+            const drawdown = [];
+            let cum = 0, peak = 0, maxDD = 0;
+            let orderIdx = 0;
+            dates.forEach(d => {
+              // Advance through all orders that close on this day
+              while (orderIdx < orders.length && (orders[orderIdx].t || '').slice(0, 10) === d) {
+                cum += orders[orderIdx].p;
+                orderIdx++;
+              }
+              cum = Math.round(cum * 100) / 100;
+              cumulative.push(cum);
+              if (cum > peak) peak = cum;
+              const dd = peak > 0 ? Math.round((peak - cum) / peak * 10000) / 100 : 0;
+              drawdown.push(dd);
+              if (dd > maxDD) maxDD = dd;
+            });
 
             // Win/loss stats
             const wins = orders.filter(o => o.p > 0)
