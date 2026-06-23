@@ -2937,8 +2937,10 @@ const barLabelPlugin = {
     ctx.save();
     ctx.font = '9px sans-serif';
     ctx.textAlign = 'center';
-    meta.data.forEach((bar, i) => {
-      const val = chart.data.datasets[0].data[i];
+    const dataset = chart.data.datasets[0];
+    meta.data.forEach((bar) => {
+      const idx = bar.index; // Chart.js 内部数据索引，避免 forEach 循环索引错位
+      const val = dataset.data[idx];
       if (val === undefined) return;
       ctx.fillStyle = val >= 0 ? '#ef4444' : '#10b981';
       ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(2), bar.x, bar.y - 5);
