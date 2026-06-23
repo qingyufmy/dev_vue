@@ -691,8 +691,8 @@ export async function initDB() {
 }
 
 async function seedData(p) {
-  const hash = bcrypt.hashSync('admin123', 10)
-  const demoHash = bcrypt.hashSync('demo123', 10)
+  const hash = await bcrypt.hash('admin123', 10)
+  const demoHash = await bcrypt.hash('demo123', 10)
 
   await p.query(`INSERT INTO users (email, password, nickname, role, plan, plan_expires_at, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ['admin@wallstreetskill.com', hash, '街哥', 'admin', 'pro', '2027-12-31', 'ADMIN001'])

@@ -25,7 +25,7 @@ router.post('/register', async (req, res) => {
     const existing = await queryOne('SELECT id FROM users WHERE email = ?', [email])
     if (existing) return res.json({ ok: false, error: '该邮箱已注册' })
 
-    const hash = bcrypt.hashSync(password, 10)
+    const hash = await bcrypt.hash(password, 10)
     const code = referralCode || generateReferralCode()
     const ref = referral || null
 
@@ -72,7 +72,7 @@ router.post('/login', async (req, res) => {
     // Password login
     if (!method || method === 'password') {
       if (!password) return res.json({ ok: false, error: '请输入密码' })
-      if (!bcrypt.compareSync(password, user.password)) return res.json({ ok: false, error: '邮箱或密码错误' })
+      if (!await bcrypt.compare(password, user.password)) return res.json({ ok: false, error: '邮箱或密码错误' })
     }
     // Code login — verifyToken must match a server-issued token
     else if (method === 'code') {
@@ -203,7 +203,7 @@ router.post('/reset-password', async (req, res) => {
       )
       if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
 
-      const hash = bcrypt.hashSync(newPassword, 10)
+      const hash = await bcrypt.hash(newPassword, 10)
       await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, email])
       return res.json({ ok: true, message: '密码已重置' })
     }
@@ -217,7 +217,7 @@ router.post('/reset-password', async (req, res) => {
 
     if (!record) return res.json({ ok: false, error: '验证码无效或已过期' })
 
-    const hash = bcrypt.hashSync(newPassword, 10)
+    const hash = await bcrypt.hash(newPassword, 10)
     await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, email])
     await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [record.id])
 
@@ -235,7 +235,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
     const user = await queryOne('SELECT password FROM users WHERE id = ?', [req.user.id])
 
     if (oldPassword) {
-      if (!bcrypt.compareSync(oldPassword, user.password)) return res.json({ ok: false, error: '原密码错误' })
+      if (!await bcrypt.compare(oldPassword, user.password)) return res.json({ ok: false, error: '原密码错误' })
     } else if (!verifyToken) {
       return res.json({ ok: false, error: '请提供原密码或验证码' })
     } else {
@@ -247,7 +247,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
       if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
     }
 
-    const hash = bcrypt.hashSync(newPassword, 10)
+    const hash = await bcrypt.hash(newPassword, 10)
     await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", [hash, req.user.id])
 
     res.json({ ok: true, relogin: true, message: '密码已修改' })

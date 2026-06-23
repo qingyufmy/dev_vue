@@ -76,57 +76,81 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
 
     // Enrich each user with progress, orders, and content counts
     const enrichedUsers = []
+    // Batch load all user stats in parallel (avoid N+1 queries)
+    const userIds = users.map(u => u.id)
+    const placeholders = userIds.map(() => '?').join(',')
+    const batchParams = userIds
+
+    const [progressRows, orderRows, contentRows, activityRows] = await Promise.all([
+      // Progress stats grouped by user
+      queryAll(
+        `SELECT user_id, COUNT(*) as total, SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) as completed, SUM(CASE WHEN quiz_passed = 1 THEN 1 ELSE 0 END) as quizPassed FROM progress WHERE user_id IN (${placeholders}) GROUP BY user_id`,
+        batchParams
+      ),
+      // Orders
+      queryAll(
+        `SELECT * FROM orders WHERE user_id IN (${placeholders}) ORDER BY user_id, created_at DESC`,
+        batchParams
+      ),
+      // Content counts
+      queryAll(
+        `SELECT u.id as uid,
+          (SELECT COUNT(*) FROM comments WHERE user_id = u.id) as commentCount,
+          (SELECT COUNT(*) FROM posts WHERE user_id = u.id) as postCount,
+          (SELECT COUNT(*) FROM post_replies WHERE user_id = u.id) as replyCount
+         FROM (SELECT DISTINCT id FROM users WHERE id IN (${placeholders})) u`,
+        batchParams
+      ),
+      // Last activity
+      queryAll(
+        `SELECT u.id as uid,
+          GREATEST(
+            COALESCE(u.last_seen_at, '1970-01-01'),
+            COALESCE(MAX(c.created_at), '1970-01-01'),
+            COALESCE(MAX(p.created_at), '1970-01-01'),
+            COALESCE(MAX(r.created_at), '1970-01-01')
+          ) as lastActivity
+         FROM (SELECT id, last_seen_at FROM users WHERE id IN (${placeholders})) u
+         LEFT JOIN comments c ON c.user_id = u.id
+         LEFT JOIN posts p ON p.user_id = u.id
+         LEFT JOIN post_replies r ON r.user_id = u.id
+         GROUP BY u.id, u.last_seen_at`,
+        batchParams
+      ),
+    ])
+
+    // Index results by user_id for O(1) lookup
+    const progressMap = new Map()
+    for (const r of progressRows) progressMap.set(r.user_id, { completed: r.completed || 0, quizPassed: r.quizPassed || 0, total: r.total || 0 })
+
+    const contentMap = new Map()
+    for (const r of contentRows) contentMap.set(r.uid, { commentCount: r.commentCount || 0, postCount: r.postCount || 0, replyCount: r.replyCount || 0 })
+
+    const activityMap = new Map()
+    for (const r of activityRows) activityMap.set(r.uid, r.lastActivity !== '1970-01-01' ? r.lastActivity : null)
+
     for (const u of users) {
-      // Get progress stats
-      let progressData = { completed: 0, quizPassed: 0, total: 0 }
-      try {
-        const completed = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND completed = 1', [u.id])).c
-        const quizPassed = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND quiz_passed = 1', [u.id])).c
-        const total = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ?', [u.id])).c
-        progressData = { completed, quizPassed, total }
-      } catch {}
+      const progressData = progressMap.get(u.id) || { completed: 0, quizPassed: 0, total: 0 }
+      const contentData = contentMap.get(u.id) || { commentCount: 0, postCount: 0, replyCount: 0 }
 
-      // Get orders
-      let orders = []
-      try {
-        const orderRows = await queryAll('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC', [u.id])
-        orders = orderRows.map(o => ({
-          orderId: o.order_id || o.order_no,
-          plan: o.plan,
-          planLabel: o.plan_label || o.plan,
-          period: o.period,
-          periodLabel: o.period_label || o.period,
-          amount: o.amount,
-          amountConfirmed: o.amount_confirmed || o.amount,
-          status: o.status,
-          statusLabel: o.status_label || o.status,
-          paidAt: o.paid_at,
-          createdAt: o.created_at,
-        }))
-      } catch {}
+      // Filter orders for this user
+      const userOrders = orderRows.filter(o => o.user_id === u.id).map(o => ({
+        orderId: o.order_id || o.order_no,
+        plan: o.plan,
+        planLabel: o.plan_label || o.plan,
+        period: o.period,
+        periodLabel: o.period_label || o.period,
+        amount: o.amount,
+        amountConfirmed: o.amount_confirmed || o.amount,
+        status: o.status,
+        statusLabel: o.status_label || o.status,
+        paidAt: o.paid_at,
+        createdAt: o.created_at,
+      }))
 
-      // Get total paid
-      let totalPaid = 0
-      try {
-        totalPaid = (await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as t FROM orders WHERE user_id = ? AND status = 'paid'", [u.id])).t
-      } catch {}
-
-      // Get content counts
-      let commentCount = 0, postCount = 0, replyCount = 0
-      try {
-        commentCount = (await queryOne('SELECT COUNT(*) as c FROM comments WHERE user_id = ?', [u.id])).c
-        postCount = (await queryOne('SELECT COUNT(*) as c FROM posts WHERE user_id = ?', [u.id])).c
-        replyCount = (await queryOne('SELECT COUNT(*) as c FROM post_replies WHERE user_id = ?', [u.id])).c
-      } catch {}
-
-      // Get last activity
-      let lastActivity = u.last_seen_at || null
-      try {
-        const lastComment = (await queryOne('SELECT MAX(created_at) as m FROM comments WHERE user_id = ?', [u.id])).m
-        const lastPost = (await queryOne('SELECT MAX(created_at) as m FROM posts WHERE user_id = ?', [u.id])).m
-        const lastReply = (await queryOne('SELECT MAX(created_at) as m FROM post_replies WHERE user_id = ?', [u.id])).m
-        lastActivity = [u.last_seen_at, lastComment, lastPost, lastReply].filter(Boolean).sort().pop() || null
-      } catch {}
+      const totalPaid = userOrders
+        .filter(o => o.status === 'paid')
+        .reduce((sum, o) => sum + (Number(o.amountConfirmed) || 0), 0)
 
       enrichedUsers.push({
         id: u.id,
@@ -145,12 +169,12 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
         telegramId: u.telegram_id,
         createdAt: u.created_at,
         progress: progressData,
-        orders,
+        orders: userOrders,
         totalPaid,
-        commentCount,
-        postCount,
-        replyCount,
-        lastActivity,
+        commentCount: contentData.commentCount,
+        postCount: contentData.postCount,
+        replyCount: contentData.replyCount,
+        lastActivity: activityMap.get(u.id) || u.last_seen_at || null,
       })
     }
 
