@@ -3,6 +3,7 @@ import cors from 'cors'
 import multer from 'multer'
 import jwt from 'jsonwebtoken'
 import http from 'http'
+import { JWT_SECRET } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
@@ -236,7 +237,7 @@ app.post('/api/presence', async (req, res) => {
     const auth = req.headers.authorization
     if (auth && auth.startsWith('Bearer ')) {
       const token = auth.slice(7)
-      const payload = jwt.verify(token, 'wall-street-skill-secret')
+      const payload = jwt.verify(token, JWT_SECRET)
       if (payload && payload.userId) {
         await queryRun("UPDATE users SET last_seen_at = NOW() WHERE id = ?", [payload.userId])
       }

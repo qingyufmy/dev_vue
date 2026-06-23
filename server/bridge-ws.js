@@ -27,7 +27,7 @@ function toMt5Time(str) {
   } catch { return str }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
+import { JWT_SECRET } from './config.js'
 
 // Per-user state
 const bridges = new Map()       // userId -> { ws, lastSeen }

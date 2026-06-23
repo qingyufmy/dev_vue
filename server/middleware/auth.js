@@ -1,7 +1,6 @@
 import jwt from 'jsonwebtoken'
 import { queryOne } from '../db.js'
-
-const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
+import { JWT_SECRET } from '../config.js'
 
 export function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization

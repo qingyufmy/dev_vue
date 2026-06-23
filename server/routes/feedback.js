@@ -2,8 +2,7 @@ import { Router } from 'express'
 import nodemailer from 'nodemailer'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import jwt from 'jsonwebtoken'
-
-const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
+import { JWT_SECRET } from '../config.js'
 
 function withAuth(req, res, next) {
   const authHeader = req.headers.authorization
