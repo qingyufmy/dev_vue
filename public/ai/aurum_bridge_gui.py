@@ -995,8 +995,6 @@ class LoginPage(QWidget):
         cfg = load_config()
         self.input_server.setText(cfg.get("server_url", DEFAULT_SERVER))
         self.input_email.setText(cfg.get("email", ""))
-        if cfg.get("saved_password"):
-            self.input_password.setText(cfg.get("saved_password", ""))
         self.chk_remember.setChecked(cfg.get("remember", False))
         self.chk_auto_login.setChecked(cfg.get("auto_login", False))
 
@@ -1037,10 +1035,8 @@ class LoginPage(QWidget):
             cfg["token"] = token
             cfg["remember"] = self.chk_remember.isChecked()
             cfg["auto_login"] = self.chk_auto_login.isChecked()
-            if self.chk_remember.isChecked():
-                cfg["saved_password"] = password
-            else:
-                cfg.pop("saved_password", None)
+            # 不再存储密码 — token 已足够保持登录状态
+            cfg.pop("saved_password", None)
             cfg["plan"] = data.get("user", {}).get("plan", "free")
             save_config(cfg)
 
@@ -1604,7 +1600,6 @@ class MainWindow(QMainWindow):
         server = cfg.get("server_url", DEFAULT_SERVER)
         token = cfg.get("token", "")
         email = cfg.get("email", "")
-        password = cfg.get("saved_password", "")
         if not server or not email:
             self.login_page.load_config()
             return
@@ -1615,7 +1610,7 @@ class MainWindow(QMainWindow):
         self.login_page.lbl_status.setProperty("muted", True)
         self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
 
-        # 先验证 token
+        # 验证 token
         if token:
             status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5)
             if status_code == 200:
@@ -1624,21 +1619,8 @@ class MainWindow(QMainWindow):
                 self._on_login_success(email, token)
                 return
 
-        # token 无效，尝试用保存的密码重新登录
-        if password:
-            self.login_page.input_password.setText(password)
-            self.login_page.lbl_status.setText("Token 过期，正在重新登录...")
-            QApplication.processEvents()
-            status_code, data = http_post_json(f"{server.rstrip('/')}/api/login",
-                {"email": email, "password": password}, timeout=10)
-            if status_code == 200 and data.get("token"):
-                new_token = data["token"]
-                update_config({"token": new_token, "plan": data.get("user", {}).get("plan", "free")})
-                self._on_login_success(email, new_token)
-                return
-
-        # 都失败了，回到登录页
-        self.login_page.lbl_status.setText("自动登录失败，请手动登录")
+        # Token 无效，回到登录页手动输入密码
+        self.login_page.lbl_status.setText("登录已过期，请重新登录")
         self.login_page.lbl_status.setProperty("warning", True)
         self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
         self.login_page.load_config()
