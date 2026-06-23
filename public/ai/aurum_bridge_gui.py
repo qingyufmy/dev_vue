@@ -1156,14 +1156,20 @@ class BridgePage(QWidget):
     def _on_plan_expired(self, reason):
         """Called when plan check detects expiry during bridge operation."""
         QMessageBox.warning(self, "会员已过期", reason)
+        self._reset_bridge_ui()
+
+    def _on_worker_finished(self):
+        """Called when BridgeWorker thread exits (normal stop or early exit)."""
+        self._reset_bridge_ui()
+
+    def _reset_bridge_ui(self):
         if self._worker and self._worker.isRunning():
             self._worker.stop()
             self._worker.wait(3000)
-            self._worker = None
-            self.btn_start.setText("▶  启动桥接")
-            self.btn_start.setStyleSheet("background-color: #3b82f6;")
-            self._set_status("会员过期", "#ef4444")
-            self._log(f"桥接已断开: {reason}")
+        self._worker = None
+        self.btn_start.setText("▶  启动桥接")
+        self.btn_start.setStyleSheet("background-color: #3b82f6;")
+        self._set_status("已断开", "#6b7280")
 
     def _toggle_bridge(self):
         if self._worker and self._worker.isRunning():
@@ -1186,6 +1192,7 @@ class BridgePage(QWidget):
             self._worker.log_signal.connect(self._log)
             self._worker.status_signal.connect(self._set_status)
             self._worker.plan_expired_signal.connect(self._on_plan_expired)
+            self._worker.finished.connect(self._on_worker_finished)
             self._worker.start()
             self.btn_start.setText("■  停止桥接")
             self.btn_start.setStyleSheet("background-color: #ef4444;")

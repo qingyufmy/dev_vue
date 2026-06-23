@@ -1715,8 +1715,8 @@ router.get('/bridge/version', (req, res) => {
     changelog: '桥接会员等级校验(Pro专属)、主站字体优化、K线图修复',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 71168958,
-    md5: '09e5585ee0997fab49516e14c4bc11d7'
+    file_size: 71167867,
+    md5: '36db00fb5757113c509cd5cdf55b3ffd'
   })
 })
 
