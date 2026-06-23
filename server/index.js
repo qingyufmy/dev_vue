@@ -49,7 +49,19 @@ const upload = multer({ dest: join(__dirname, uploadDir), limits: { fileSize: 10
 const app = express()
 app.set('trust proxy', true)
 
-app.use(cors())
+// CORS: restrict to known origins
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8080').split(',').map(s => s.trim())
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
+      cb(null, true)
+    } else {
+      cb(new Error('CORS not allowed'))
+    }
+  },
+  credentials: true,
+  maxAge: 86400
+}))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 
