@@ -410,8 +410,9 @@ async function handleBrowserCommand(ws, userId, msg) {
           // Fetch all orders from bridge (no date filter on bridge — server handles filtering)
           const hRes = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: 9999 })
           if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
-            let orders = hRes.orders
-            const stats = hRes.statistics || {}
+            const allOrders = hRes.orders          // preserve ALL orders for cumulative calc
+            let orders = [...allOrders]
+            const origStats = hRes.statistics || {}
             const _ordDate = o => (o.close_time || o.time || '')
             const _ordType = o => (o.type || '')
             const _ordProfit = o => Number(o.profit || 0)
@@ -432,6 +433,22 @@ async function handleBrowserCommand(ws, userId, msg) {
             // Sort by close_time DESC — newest first (page 1 = latest 20)
             orders.sort((a, b) => _ordDate(b).localeCompare(_ordDate(a)))
 
+            // ---- Recalculate stats from filtered orders ----
+            // total_profit: only filtered orders (date range + direction + profit_filter)
+            const filteredProfit = Math.round(orders.reduce((s, o) => s + _ordProfit(o), 0) * 100) / 100
+
+            // net_result: 本金 + 从开始到筛选结束日期的累计收益
+            // (cumulative from ALL orders, not affected by direction/profit_filter)
+            const closeTo = params.close_to
+              || (allOrders.length > 0 ? allOrders.reduce((max, o) => { const d = _ordDate(o).slice(0,10); return d > max ? d : max; }, '') : '')
+            const cumToDate = Math.round(allOrders
+              .filter(o => _ordDate(o).slice(0, 10) <= closeTo)
+              .reduce((s, o) => s + _ordProfit(o), 0) * 100) / 100
+
+            // initCapital from bridge: account_principal = current_balance - net_result (constant)
+            const initCapital = Number(origStats.account_principal) || 0
+            const netToDate = Math.round((initCapital + cumToDate) * 100) / 100
+
             // Paginate
             const page = params.page || 1
             const pageSize = params.page_size || 20
@@ -440,7 +457,13 @@ async function handleBrowserCommand(ws, userId, msg) {
             result = {
               status: 'success',
               orders: orders.slice(si, si + pageSize),
-              statistics: stats,
+              statistics: {
+                total_profit: filteredProfit,
+                credit: origStats.credit || 0,
+                deposit: origStats.deposit || 0,
+                withdrawal: origStats.withdrawal || 0,
+                net_result: netToDate,
+              },
               pagination: {
                 current_page: page,
                 page_size: pageSize,
@@ -449,7 +472,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               }
             }
           } else {
-            result = hRes || { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 }, chart: { daily: [] } }
+            result = hRes || { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
           }
         } else {
           result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
