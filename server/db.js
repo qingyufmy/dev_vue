@@ -660,8 +660,6 @@ export async function initDB() {
       await p.query('ALTER TABLE close_config ADD COLUMN max_tokens INT DEFAULT 1500 AFTER temperature')
     }
   } catch {}
-
-  }
 }
 
 async function seedData(p) {
