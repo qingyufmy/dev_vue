@@ -638,6 +638,7 @@ function connectBridgeStatusWs(onReady) {
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
   ws.onopen = () => {
+    state._reconnectAttempts = 0; // reset backoff on successful connection
 
     state._hbSeq = 0;
     if (state._hbTimer) clearInterval(state._hbTimer);
@@ -686,7 +687,16 @@ function connectBridgeStatusWs(onReady) {
     // Prevent duplicate reconnect timers
     if (state._reconnectTimer) clearTimeout(state._reconnectTimer);
     setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
-    if (state.token) state._reconnectTimer = setTimeout(() => { state._reconnectTimer = null; connectBridgeStatusWs(); }, 3000);
+    if (state.token) {
+      state._reconnectAttempts = (state._reconnectAttempts || 0) + 1;
+      // Exponential backoff: 3s → 6s → 12s → ... max 30s, with ±20% jitter
+      const delay = Math.min(3000 * Math.pow(2, state._reconnectAttempts - 1), 30000);
+      const jitter = delay * (0.8 + Math.random() * 0.4); // 80%-120% of delay
+      state._reconnectTimer = setTimeout(() => {
+        state._reconnectTimer = null;
+        connectBridgeStatusWs();
+      }, jitter);
+    }
   };
   ws.onerror = () => {};
 }
@@ -2848,6 +2858,7 @@ async function loadHistory(forceRefresh) {
 }
 
 function _applyHistoryData(data) {
+  if (!data) return;
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
   setText("historyCredit", fmt(stats.credit));
