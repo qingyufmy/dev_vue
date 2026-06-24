@@ -662,12 +662,16 @@ function connectBridgeStatusWs(onReady) {
       } else if (msg.type === 'disconnect') {
         handleDisconnect(msg);
       } else if (msg.type === 'auto_state') {
-        // Server pushed auto-reasoning state change (e.g. bridge disconnected)
+        // Server pushed auto-reasoning state change (e.g. bridge disconnected/reconnected)
         state.autoEnabled = !!msg.enabled;
         const autoSwitch = $("autoAnalyzeMode");
         if (autoSwitch) autoSwitch.checked = state.autoEnabled;
         if (msg.reason === 'bridge_disconnected' && !msg.enabled) {
           toast('MT5桥接断开，自动推理已自动关闭', 'warning');
+        }
+        // Refresh full auto status to get symbols/interval info (bridge reconnected etc.)
+        if (msg.enabled || msg.reason === 'bridge_connected') {
+          loadStatus().catch(() => {});
         }
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
@@ -942,10 +946,19 @@ function handleHeartbeat(msg) {
     setBadge("tradeMode", "请先启动桥接", "neutral");
   }
 
-  // Update auto badge from heartbeat data
+  // Update auto badge from heartbeat data — preserve symbols/interval from autoConfig
   if (typeof msg.auto_reasoning_enabled === 'boolean') {
-    setBadge("autoAnalyzeMode", msg.auto_reasoning_enabled ? "自动推理开启" : "自动推理关闭", msg.auto_reasoning_enabled ? "active" : "neutral");
     state.autoEnabled = msg.auto_reasoning_enabled;
+    // Only overwrite badge if state actually changed (avoid heartbeat flash)
+    if (msg.auto_reasoning_enabled && state.autoConfig) {
+      const sym = (state.autoConfig.symbols && state.autoConfig.symbols[0]) || 'XAUUSD';
+      const intervalMin = state.autoConfig.interval_minutes || 5;
+      const label = `自动推理运行中 · ${sym} · ${intervalMin}分钟`;
+      setBadge("autoAnalyzeMode", label, "active");
+    } else if (!msg.auto_reasoning_enabled) {
+      setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
+    }
+    // If enabled but no autoConfig loaded yet, keep current badge — don't flash to bare text
   }
 
   state._lastGatewayLive = isLive;
