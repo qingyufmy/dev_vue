@@ -116,14 +116,17 @@ app.get('/api/bilibili-proxy', (req, res) => {
     }
   }
   let tried = 0
+  let responded = false
   function tryNext() {
-    if (tried >= nodes.length) return res.status(502).end()
+    if (responded || res.headersSent) return
+    if (tried >= nodes.length) { responded = true; return res.status(502).end() }
     const url = nodes[tried++]
     const proxyReq = https.get(url, {
       headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' },
       timeout: 8000
     }, (proxyRes) => {
       if (proxyRes.statusCode !== 200) return tryNext()
+      responded = true
       res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'image/jpeg')
       res.setHeader('Cache-Control', 'public, max-age=86400')
       proxyRes.pipe(res)
