@@ -709,19 +709,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.handleAnalyze(userId, params)
         break
       case 'ai_config': {
-        const row = await ai.getActiveConfig(null, userId, params.session_id || 'default')
+        // skipFallbacks: manual config UI must show ONLY the user's own settings.
+        // No API key / model / system_prompt leakage from admin model_sharing,
+        // system_config, or global_auto_config.
+        const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', null, { skipFallbacks: true })
         const cfg = ai.configPublic(row)
-        // Fill override defaults from global auto config when user hasn't customized
-        if (cfg) {
-          if (!cfg.auto_symbols || !cfg.auto_interval_minutes) {
-            const globalAutoCfg = await ai.getGlobalAutoConfig()
-            if (globalAutoCfg) {
-              const defaultSyms = parseSymbols(globalAutoCfg.symbols)
-              cfg.auto_symbols = cfg.auto_symbols || (defaultSyms[0] || 'XAUUSD')
-              cfg.auto_interval_minutes = cfg.auto_interval_minutes ?? (globalAutoCfg.interval_minutes || 5)
-            }
-          }
-        }
         result = { status: 'success', config: cfg }
         break
       }
@@ -849,7 +841,9 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'execute': {
         const signal = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [params.signal_id, userId])
         if (!signal) return reply({ status: 'error', message: 'Signal not found' })
-        const config = await ai.getActiveConfig(null, userId, params.session_id || 'default')
+        // Targeted risk-param fetch: auto signal → global config (or user override), manual signal → user's config
+        // No fallback, no penetration, no API key leak
+        const config = await ai.getExecuteRiskConfig(userId, signal)
         if (!config || !config.enable_auto_trade) {
           result = { status: 'rejected', message: 'auto_trade_disabled', details: { enable_auto_trade: config?.enable_auto_trade ?? 0 } }
           await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, result.status)
