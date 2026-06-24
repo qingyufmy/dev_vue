@@ -205,6 +205,8 @@ router.post('/reset-password', async (req, res) => {
 
       const hash = await bcrypt.hash(newPassword, 10)
       await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, email])
+      // 标记 verifyToken 已使用，防止重复利用
+      await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
       return res.json({ ok: true, message: '密码已重置' })
     }
 

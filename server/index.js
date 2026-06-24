@@ -48,7 +48,7 @@ if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
 const upload = multer({ dest: join(__dirname, uploadDir), limits: { fileSize: 10 * 1024 * 1024 } })
 
 const app = express()
-app.set('trust proxy', true)
+app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避免 IP 欺骗
 
 // CORS: restrict to known origins
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8080').split(',').map(s => s.trim())
@@ -97,7 +97,13 @@ app.use('/uploads', express.static(join(__dirname, uploadDir), {
 import https from 'https'
 app.get('/api/bilibili-proxy', (req, res) => {
   const imageUrl = req.query.url
-  if (!imageUrl || !imageUrl.includes('.hdslb.com/')) {
+  // 严格校验: 必须是 https 协议且 hostname 属于 hdslb.com（防 SSRF）
+  try {
+    const u = new URL(imageUrl)
+    if (u.protocol !== 'https:' || (!u.hostname.endsWith('.hdslb.com') && u.hostname !== 'hdslb.com')) {
+      return res.status(400).end()
+    }
+  } catch {
     return res.status(400).end()
   }
   // Try multiple CDN nodes: original → i0 → i1 → i2
@@ -232,7 +238,9 @@ app.get('/ai/bridge/:platform', async (req, res) => {
       '',
       'REM --- Write config ---',
       'echo Writing config...',
-      'echo ' + configData + ' > "%~dp0config.json"',
+      'echo ' + Buffer.from(configData).toString('base64') + ' > "%~dp0config.json.b64"',
+      'certutil -decode "%~dp0config.json.b64" "%~dp0config.json" >nul',
+      'del "%~dp0config.json.b64"',
       '',
       'REM --- Launch ---',
       'echo Starting AURUM Bridge...',

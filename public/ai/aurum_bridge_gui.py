@@ -319,7 +319,8 @@ class BridgeWorker(QThread):
                     return plan, True, f"会员已过期({expires_at[:10]})，请续费后重试"
             return plan, False, ""
         except Exception as e:
-            return "unknown", False, f"检查会员状态失败: {e}"
+            # fail-safe：检查失败时视为已过期，阻止连接而非放行
+            return "unknown", True, f"会员状态检查失败，请稍后重试: {e}"
 
     def _mt5_time(self, ts):
         if not ts: return ''
@@ -388,22 +389,38 @@ class BridgeWorker(QThread):
                 else:
                     sym = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
                     positions = self.mt5.positions_get(symbol=sym) if sym else self.mt5.positions_get()
-                    if not positions: return {"status": "success", "message": "No positions"}
+                    if positions is None:
+                        return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
+                    if len(positions) == 0:
+                        return {"status": "success", "message": "No positions", "closed": 0}
+                    closed, failed = 0, []
                     for pos in positions:
                         ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                        self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
+                        result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                             "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
                             "type_filling": self._get_filling_mode(pos.symbol)})
-                    return {"status": "success", "closed": len(positions)}
+                        if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                            closed += 1
+                        else:
+                            failed.append({"ticket": pos.ticket, "error": result.comment if result else "order_send failed"})
+                    return {"status": "success" if not failed else "partial", "closed": closed, "failed": failed}
             elif action == "close_all":
                 positions = self.mt5.positions_get()
-                if not positions: return {"status": "success", "closed": 0}
+                if positions is None:
+                    return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
+                if len(positions) == 0:
+                    return {"status": "success", "closed": 0}
+                closed, failed = 0, []
                 for pos in positions:
                     ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                    self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
+                    result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                         "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
                         "type_filling": self._get_filling_mode(pos.symbol)})
-                return {"status": "success", "closed": len(positions)}
+                    if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                        closed += 1
+                    else:
+                        failed.append({"ticket": pos.ticket, "error": result.comment if result else "order_send failed"})
+                return {"status": "success" if not failed else "partial", "closed": closed, "failed": failed}
             elif action == "rates":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
@@ -469,7 +486,14 @@ class BridgeWorker(QThread):
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
             elif action == "history":
                 import math
-                page = params.get("page", 1); page_size = params.get("page_size", 20)
+                # 防止 page/page_size 类型错误或除零
+                try:
+                    page = int(params.get("page", 1))
+                    page_size = int(params.get("page_size", 20))
+                except (ValueError, TypeError):
+                    page, page_size = 1, 20
+                if page < 1: page = 1
+                if page_size < 1: page_size = 20
                 deposit = withdrawal = credit = 0.0
                 # Use caller-supplied date range, default to last 31 days
                 if "date_to" in params:
@@ -614,8 +638,9 @@ class BridgeWorker(QThread):
 
         try:
             import websocket
-        except:
+        except ImportError:
             self.log_signal.emit("错误: websocket-client 未安装")
+            self.mt5.shutdown()  # 释放 MT5 连接，防止资源泄漏
             return
 
         # Check plan status before connecting
@@ -743,11 +768,16 @@ class BridgeWorker(QThread):
                             try: ws.send(json.dumps({"type": "pong", "ts": msg.get("ts", 0)}))
                             except: pass
                         elif msg.get("type") == "command":
-                            self.log_signal.emit(f"执行: {msg['action']}")
-                            try: resp = self._process_command(msg)
-                            except Exception as ce: resp = {"status": "error", "message": str(ce)}
-                            ws.send(json.dumps({"type": "result", "command_id": msg["command_id"], "result": resp}))
-                            self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
+                            action = msg.get("action")
+                            cmd_id = msg.get("command_id")
+                            if not action or cmd_id is None:
+                                self.log_signal.emit(f"⚠️ 收到格式错误的命令消息，已跳过: {data[:100]}")
+                            else:
+                                self.log_signal.emit(f"执行: {action}")
+                                try: resp = self._process_command(msg)
+                                except Exception as ce: resp = {"status": "error", "message": str(ce)}
+                                ws.send(json.dumps({"type": "result", "command_id": cmd_id, "result": resp}))
+                                self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
                 except websocket.WebSocketTimeoutException: pass
                 except websocket.WebSocketConnectionClosedException:
                     # Check close code for plan rejection

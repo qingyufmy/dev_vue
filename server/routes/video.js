@@ -108,12 +108,15 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
     let duration = ''
     let cover = ''
     try {
-      const { execSync } = await import('child_process')
-      const result = execSync(
-        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
-        { encoding: 'utf8', timeout: 5000 }
-      )
-      const seconds = parseFloat(result.trim())
+      const { execFile } = await import('child_process')
+      // 异步调用 ffprobe，不阻塞 Node.js 事件循环
+      const probeResult = await new Promise((resolve, reject) => {
+        execFile('ffprobe', [
+          '-v', 'error', '-show_entries', 'format=duration',
+          '-of', 'default=noprint_wrappers=1:nokey=1', filePath
+        ], { encoding: 'utf8', timeout: 5000 }, (err, stdout) => err ? reject(err) : resolve(stdout))
+      })
+      const seconds = parseFloat(probeResult.trim())
       if (seconds > 0) {
         const mins = Math.floor(seconds / 60)
         const secs = Math.floor(seconds % 60)
@@ -125,7 +128,13 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
         const coverPath = join(coversDir, coverFilename)
         const seekTime = Math.min(5, Math.floor(seconds * 0.1))
         try {
-          execSync(`ffmpeg -ss ${seekTime} -i "${filePath}" -vframes 1 -q:v 2 -y "${coverPath}"`, { timeout: 10000 })
+          // 异步调用 ffmpeg 截取封面
+          await new Promise((resolve, reject) => {
+            execFile('ffmpeg', [
+              '-ss', String(seekTime), '-i', filePath,
+              '-vframes', '1', '-q:v', '2', '-y', coverPath
+            ], { timeout: 10000 }, (err) => err ? reject(err) : resolve())
+          })
           cover = `/uploads/covers/${coverFilename}`
         } catch {}
       }

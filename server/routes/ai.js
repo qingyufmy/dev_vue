@@ -1,11 +1,11 @@
 import { Router } from 'express'
 import { query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import jwt from 'jsonwebtoken'
+import { JWT_SECRET } from '../config.js'
 
 import { sendBridgeCommand, isBridgeAlive, isTradeEnabled, getBridgeStatus, getAllBridges, getBridgeTradeMode } from '../bridge-ws.js'
 
 const router = Router()
-const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
 const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 

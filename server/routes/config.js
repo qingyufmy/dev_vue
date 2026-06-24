@@ -4,10 +4,17 @@ import { authMiddleware, adminOnly } from '../middleware/auth.js'
 
 const router = Router()
 
+// 仅允许这些公开类别，敏感类别（smtp、qiniu、ai_provider 等）不可通过此接口访问
+const PUBLIC_CATEGORIES = new Set(['toolbox', 'market_menu', 'announcements', 'features'])
+
 // Public: get config by category (for toolbox and market menu)
 router.get('/system-config-public/:category', async (req, res) => {
+  const category = req.params.category
+  if (!PUBLIC_CATEGORIES.has(category)) {
+    return res.status(403).json({ ok: false, error: 'Forbidden' })
+  }
   try {
-    const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [req.params.category])
+    const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [category])
     res.json({ ok: true, items: rows })
   } catch (err) {
     res.json({ ok: false, error: err.message })

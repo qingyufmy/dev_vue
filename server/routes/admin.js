@@ -78,6 +78,12 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     const enrichedUsers = []
     // Batch load all user stats in parallel (avoid N+1 queries)
     const userIds = users.map(u => u.id)
+
+    // 空列表时提前返回，避免 WHERE id IN () 语法错误
+    if (userIds.length === 0) {
+      return res.json({ ok: true, users: [], total: 0, page, limit, totalPages: 0 })
+    }
+
     const placeholders = userIds.map(() => '?').join(',')
     const batchParams = userIds
 
@@ -229,7 +235,8 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
     if (password) {
       if (password.length < 6) return res.json({ ok: false, error: '密码至少需要6位' })
-      updates.push('password = ?'); params.push(bcrypt.hashSync(password, 10))
+      const pwHash = await bcrypt.hash(password, 10)
+      updates.push('password = ?'); params.push(pwHash)
     }
     if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar) }
     if (role) { updates.push('role = ?'); params.push(role) }
@@ -263,10 +270,23 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
     const user = await queryOne('SELECT id, email, role FROM users WHERE id = ?', [userId])
     if (!user) return res.json({ ok: false, error: '用户不存在' })
     if (user.role === 'admin') return res.json({ ok: false, error: '不能删除管理员账号' })
+    // 级联删除所有关联数据，避免孤立记录
     await queryRun('DELETE FROM notifications WHERE user_id = ?', [userId])
     await queryRun('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
     await queryRun('DELETE FROM orders WHERE user_id = ?', [userId])
     await queryRun('DELETE FROM verification_codes WHERE email = ?', [user.email])
+    await queryRun('DELETE FROM progress WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM comments WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM comment_likes WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM post_replies WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM posts WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM feedback WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM ai_configs WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM ai_signals WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM auto_scheduler WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM close_config WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
+    await queryRun('DELETE FROM ui_configs WHERE user_id = ?', [userId])
     await queryRun('DELETE FROM users WHERE id = ?', [userId])
     res.json({ ok: true })
   } catch (err) {

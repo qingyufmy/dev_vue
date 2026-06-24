@@ -37,6 +37,15 @@ let adminUserId = null          // cached admin userId for fallback
 
 let cmdCounter = 0
 let wss = null
+const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
+
+// 每 10 分钟清理超过 30 秒未使用的广播节流条目
+setInterval(() => {
+  const cutoff = Date.now() - 30000
+  for (const [uid, last] of _broadcastThrottle) {
+    if (last < cutoff) _broadcastThrottle.delete(uid)
+  }
+}, 10 * 60 * 1000)
 
 async function getAdminUserId() {
   if (adminUserId) return adminUserId
@@ -133,8 +142,14 @@ function handleBridge(ws, url) {
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
+  // 在计划检查完成之前先缓存消息，防止竞态条件（消息先于 _initBridge 到达）
+  const msgQueue = []
+  const queueMsg = (data) => msgQueue.push(data)
+  ws.on('message', queueMsg)
+
   // Check user plan — only Pro allowed (async, blocks bridge setup)
   queryOne('SELECT plan, plan_expires_at, role FROM users WHERE id = ?', [userId]).then(user => {
+    ws.off('message', queueMsg) // 移除缓存监听器
     if (!user) { ws.close(4002, 'User not found'); return }
     if (user.role !== 'admin') {
       const now = new Date()
@@ -147,7 +162,10 @@ function handleBridge(ws, url) {
       }
     }
     _initBridge(ws, userId)
+    // 重放缓存消息
+    for (const msg of msgQueue) ws.emit('message', msg)
   }).catch(err => {
+    ws.off('message', queueMsg)
     console.error('[BridgeWS] Plan check error:', err)
     ws.close(4002, 'Server error')
   })
@@ -279,7 +297,6 @@ function sendToBrowsers(userId, data) {
   // If this is admin's bridge data, also forward to users without their own bridge
   // Throttle: max 4 broadcasts per second per user to prevent flooding browsers
   if (userId === adminUserId && data.type === 'data') {
-    if (!_broadcastThrottle) _broadcastThrottle = new Map()
     const adminJson = JSON.stringify({ ...data, _source: 'admin_fallback' })
     const now = Date.now()
     for (const [uid, browserSet] of browsers) {

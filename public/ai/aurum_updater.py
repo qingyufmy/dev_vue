@@ -75,16 +75,17 @@ class UpdaterGUI:
         self.lbl_detail.pack(pady=(0, 10))
 
     def set_status(self, text, color=FG):
-        self.lbl_status.config(text=text, fg=color)
-        self.root.update_idletasks()
+        # 使用 after() 将 GUI 操作调度到主线程（Tkinter 不是线程安全的）
+        self.root.after(0, lambda: self.lbl_status.config(text=text, fg=color))
 
     def set_progress(self, value):
+        self.root.after(0, lambda v=value: self._set_progress_safe(v))
+
+    def _set_progress_safe(self, value):
         self.progress["value"] = value
-        self.root.update_idletasks()
 
     def set_detail(self, text):
-        self.lbl_detail.config(text=text)
-        self.root.update_idletasks()
+        self.root.after(0, lambda: self.lbl_detail.config(text=text))
 
     def run(self, task_fn):
         """Run task_fn in background thread, GUI stays responsive."""
@@ -101,7 +102,13 @@ def main():
 
     server_url = sys.argv[1].rstrip("/")
     dst_exe = sys.argv[2]
-    old_pid = int(sys.argv[3])
+    try:
+        old_pid = int(sys.argv[3])
+    except ValueError:
+        tk.Tk().withdraw()
+        from tkinter import messagebox
+        messagebox.showerror("AURUM 更新器", f"无效的进程PID: {sys.argv[3]}")
+        return
 
     gui = UpdaterGUI()
 

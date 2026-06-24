@@ -64,6 +64,10 @@ router.get('/payment', authMiddleware, async (req, res) => {
 })
 
 router.post('/payment', authMiddleware, async (req, res) => {
+  // ⚠️ 支付功能尚未对接真实支付网关，暂时禁用，防止绕过支付免费获取会员
+  return res.status(503).json({ ok: false, error: '支付功能暂时维护中，请联系客服' })
+
+  // eslint-disable-next-line no-unreachable
   try {
     const { plan, period, use_referral_credit } = req.body
     const planInfo = PLANS[plan]

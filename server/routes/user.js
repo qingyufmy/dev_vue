@@ -121,7 +121,7 @@ router.patch('/notifications', authMiddleware, async (req, res) => {
   }
 })
 
-router.patch('/notifications', authMiddleware, async (req, res) => {
+router.get('/progress', authMiddleware, async (req, res) => {
   try {
     const progress = await queryAll('SELECT * FROM progress WHERE user_id = ?', [req.user.id])
     res.json({ ok: true, progress })

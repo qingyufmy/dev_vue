@@ -1821,8 +1821,6 @@ function applyProviderPreset(provider) {
   if (!currentModel || allModels.includes(currentModel)) modelInput.value = preset.models[0];
 }
 
-$('apiProvider').addEventListener('change', e => applyProviderPreset(e.target.value));
-
 async function loadConfig() {
   const data = await wsApi("ai_config");
   const cfg = data.config;
@@ -3227,6 +3225,7 @@ async function loadAudit() {
 
 function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
+  $('apiProvider')?.addEventListener('change', e => applyProviderPreset(e.target.value));
   $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
