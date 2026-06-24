@@ -1087,6 +1087,143 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', tickets: map }
         break
       }
+      case 'export_history': {
+        // Admin-only: export all history + reasoning as structured data
+        const adminUser = user
+        if (adminUser?.role !== 'admin') {
+          result = { status: 'error', message: '仅管理员可操作' }
+          break
+        }
+        let expUserId = adminUserId || userId
+        let bridgeOk = bridges.get(expUserId)?.ws?.readyState === 1
+        if (!bridgeOk && bridges.get(userId)?.ws?.readyState === 1) {
+          expUserId = userId; bridgeOk = true
+        }
+        if (!bridgeOk) {
+          result = { status: 'error', message: '桥接未连接，无法导出历史数据' }
+          break
+        }
+        // Fetch all orders from MT5 bridge
+        const expRes = await ai.mt5Bridge(expUserId, 'history', { page: 1, page_size: 9999 })
+        if (expRes?.status !== 'success' || !Array.isArray(expRes.orders)) {
+          result = { status: 'error', message: '获取历史订单失败' }
+          break
+        }
+        let orders = [...expRes.orders]
+        // Apply same filters as history page
+        const _od = o => (o.close_time || o.time || '')
+        const _ot = o => (o.type || '')
+        const _op = o => Number(o.profit || 0)
+        if (params.close_from) orders = orders.filter(o => _od(o).slice(0, 10) >= params.close_from)
+        if (params.close_to) orders = orders.filter(o => _od(o).slice(0, 10) <= params.close_to)
+        if (params.entry_from) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) >= params.entry_from)
+        if (params.entry_to) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) <= params.entry_to)
+        if (params.direction) orders = orders.filter(o => _ot(o).toUpperCase() === params.direction)
+        if (params.profit_filter === 'profit') orders = orders.filter(o => _op(o) > 0)
+        if (params.profit_filter === 'loss') orders = orders.filter(o => _op(o) < 0)
+        orders.sort((a, b) => _od(b).localeCompare(_od(a)))
+
+        // Collect all tickets to batch-query ai_signals
+        const tickets = orders.map(o => String(o.ticket || o.order || '')).filter(Boolean)
+        const ticketSet = new Set(tickets)
+        // Batch query signals by trade_ticket
+        let signalMap = {}
+        let closeSignalMap = {}
+        if (tickets.length > 0) {
+          const placeholders = tickets.map(() => '?').join(',')
+          const signalRows = await queryAll(
+            `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+                    stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+                    session_id, is_executed, execution_result, created_at
+             FROM ai_signals WHERE trade_ticket IN (${placeholders}) ORDER BY created_at DESC`,
+            tickets
+          )
+          for (const s of signalRows) {
+            const tk = String(s.trade_ticket)
+            if (!signalMap[tk]) signalMap[tk] = []
+            signalMap[tk].push({
+              id: s.id, type: s.signal_type, confidence: s.confidence,
+              volume: s.recommended_volume, analysis: s.analysis, reasoning: s.reasoning,
+              stop_loss: s.stop_loss_price, tp1: s.take_profit_1_price,
+              tp2: s.take_profit_2_price, tp3: s.take_profit_3_price,
+              session: s.session_id || 'default',
+              executed: !!s.is_executed, exec_result: s.execution_result,
+              created_at: s.created_at
+            })
+          }
+          // Also get close signals via close_signal_tickets table
+          const closeRows = await queryAll(
+            `SELECT cst.original_ticket, cst.close_price,
+                    s.id as signal_id, s.signal_type, s.confidence, s.analysis, s.reasoning, s.created_at
+             FROM close_signal_tickets cst
+             LEFT JOIN ai_signals s ON s.id = cst.close_signal_id
+             WHERE cst.original_ticket IN (${placeholders})`,
+            tickets
+          )
+          for (const r of closeRows) {
+            const otk = String(r.original_ticket)
+            if (!closeSignalMap[otk]) closeSignalMap[otk] = []
+            closeSignalMap[otk].push({
+              signal_id: r.signal_id, type: r.signal_type,
+              confidence: r.confidence, close_price: r.close_price,
+              analysis: r.analysis, reasoning: r.reasoning, created_at: r.created_at
+            })
+          }
+        }
+
+        // Build export rows: one order + reasoning = one row
+        const exportRows = orders.map(o => {
+          const tk = String(o.ticket || o.order || '')
+          const signals = signalMap[tk] || []
+          const closeSignals = closeSignalMap[tk] || []
+          const mainSignal = signals.find(s => s.session === 'default') || signals[0] || {}
+          const closeSignal = closeSignals[0] || {}
+          return {
+            // Order fields
+            ticket: tk,
+            symbol: o.symbol || '',
+            direction: (o.type || '').toUpperCase(),
+            volume: o.volume || 0,
+            entry_price: o.entry_price ?? o.open_price ?? '',
+            entry_time: o.entry_time || o.time || '',
+            exit_price: o.close_price ?? '',
+            close_time: o.close_time || '',
+            stop_loss: o.stop_loss ?? o.sl ?? '',
+            take_profit: o.take_profit ?? o.tp ?? '',
+            profit: o.profit ?? 0,
+            profit_points: o.profit_points ?? 0,
+            comment: o.comment || '',
+            // Reasoning fields
+            signal_id: mainSignal.id || '',
+            signal_type: mainSignal.type || '',
+            signal_confidence: mainSignal.confidence ?? '',
+            signal_volume: mainSignal.volume ?? '',
+            signal_analysis: mainSignal.analysis || '',
+            signal_reasoning: mainSignal.reasoning || '',
+            signal_stop_loss: mainSignal.stop_loss ?? '',
+            signal_tp1: mainSignal.tp1 ?? '',
+            signal_tp2: mainSignal.tp2 ?? '',
+            signal_tp3: mainSignal.tp3 ?? '',
+            signal_executed: mainSignal.executed ? '是' : '否',
+            signal_created: mainSignal.created_at || '',
+            // Close signal reasoning
+            close_signal_id: closeSignal.signal_id || '',
+            close_signal_type: closeSignal.type || '',
+            close_signal_confidence: closeSignal.confidence ?? '',
+            close_signal_analysis: closeSignal.analysis || '',
+            close_signal_reasoning: closeSignal.reasoning || '',
+            close_signal_created: closeSignal.created_at || '',
+          }
+        })
+
+        result = {
+          status: 'success',
+          rows: exportRows,
+          total: exportRows.length,
+          export_time: new Date().toISOString()
+        }
+        break
+      }
       case 'toggle_close': {
         const enabled = !!params.enabled
         const existing = await ai.getCloseConfig(userId)
