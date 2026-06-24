@@ -1717,6 +1717,20 @@ async function loadPositions() {
   initIcons();
 }
 
+/* ---- Sidebar 观摩提示 ---- */
+function showSidebarObserveHint(html) {
+  const hint = $("sidebarObserveHint");
+  const text = $("sidebarObserveHintText");
+  if (!hint || !text) return;
+  hint.classList.remove("hidden");
+  text.innerHTML = html;
+}
+
+function hideSidebarObserveHint() {
+  const hint = $("sidebarObserveHint");
+  if (hint) hint.classList.add("hidden");
+}
+
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
   const isPlusReadOnly = state.isPlusReadOnly;
@@ -1759,6 +1773,7 @@ function applyRoleUI() {
 
   // Plus read-only: disable all action buttons, hide bridge download
   if (isPlusReadOnly) {
+    showSidebarObserveHint('您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a>');
     document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, [data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
       el.title = 'Plus 会员仅可查看';
@@ -1774,6 +1789,7 @@ function applyRoleUI() {
 
   // === Pro without bridge: 观摩模式，可打开下载页，模型页只显示自有数据 ===
   if (isProNoBridge) {
+    showSidebarObserveHint('观摩模式 · 请 <a href="#" id="sidebarBridgeLink">下载并启动MT5桥接</a> 后使用完整功能');
     // Disable trade-related buttons
     document.querySelectorAll('[data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
@@ -1793,10 +1809,19 @@ function applyRoleUI() {
       el.disabled = true;
       el.title = '请先连接您的 MT5 账户';
     });
+    // 绑定 sidebar 观摩提示中的下载链接
+    setTimeout(() => {
+      document.getElementById("sidebarBridgeLink")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        handleGatewayModeClick();
+      });
+    }, 100);
     return;
   }
 
   // === Pro with bridge / Admin: full access ===
+  // Hide observation hint
+  hideSidebarObserveHint();
   // Re-enable symbol selectors
   document.querySelectorAll('.sym-input').forEach(el => { el.disabled = false; el.title = ''; });
   const tradeMode = document.getElementById("tradeMode");
@@ -1883,9 +1908,7 @@ async function loadConfig() {
   if (isAdmin && $("modelSharingEnabled")) {
     $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
   }
-  // Auto config override toggle (all users with config)
-  const overrideWrap = $("autoConfigOverrideWrap");
-  if (overrideWrap) overrideWrap.style.display = state.currentConfigHasApiKey ? "" : "none";
+  // Auto config override toggle - restore state first (visibility set after sharing check)
   if ($("autoConfigOverride")) $("autoConfigOverride").checked = Boolean(cfg.auto_config_override);
   // Restore per-user auto symbol + interval (backend fills defaults from global auto config)
   if ($("overrideSymbolSelect")) $("overrideSymbolSelect").value = cfg.auto_symbols;
@@ -1907,6 +1930,10 @@ async function loadConfig() {
     $("apiKey").style.opacity = "";
   }
   state._isUsingSharedModel = isUsingShared;
+  // 自动推理配置覆盖开关：有自有API Key / 使用共享模型 / Pro会员 均可使用
+  const overrideWrap = $("autoConfigOverrideWrap");
+  const isPro = state.user?.plan === 'pro';
+  if (overrideWrap) overrideWrap.style.display = (state.currentConfigHasApiKey || isUsingShared || isPro) ? "" : "none";
 }
 
 async function saveConfig() {

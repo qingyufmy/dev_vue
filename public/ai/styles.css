@@ -3829,6 +3829,27 @@ a.signal-link:hover {
 /* ===== 需求反馈 ===== */
 .nav-group-bottom { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.04); }
 
+/* ===== Sidebar 观摩提示 ===== */
+.sidebar-observe-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  margin: 4px 10px 6px;
+  border-radius: 6px;
+  background: rgba(234, 179, 8, 0.1);
+  color: #eab308;
+  font-size: 11px;
+  font-weight: 500;
+  border-left: 2px solid rgba(234, 179, 8, 0.4);
+}
+.sidebar-observe-hint.hidden { display: none; }
+.sidebar-observe-hint a {
+  color: #fbbf24;
+  text-decoration: underline;
+}
+.sidebar-observe-hint a:hover { color: #facc15; }
+
 .feedback-form { display: flex; flex-direction: column; gap: 16px; }
 .feedback-type-group { display: flex; flex-wrap: wrap; gap: 8px; }
 .feedback-type-option { cursor: pointer; }
