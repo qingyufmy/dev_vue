@@ -26,7 +26,7 @@ from PySide6.QtGui import (
 )
 
 APP_VERSION = "v1.9.8"
-APP_NAME = "AURUM Bridge"
+APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 
