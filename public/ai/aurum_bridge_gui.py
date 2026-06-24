@@ -366,7 +366,8 @@ class BridgeWorker(QThread):
                 req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
                        "volume": float(params.get("lot") or params.get("volume") or 0.01),
                        "type": ot, "magic": 234000, "comment": params.get("comment", "AURUM"),
-                       "type_time": self.mt5.ORDER_TIME_GTC, "type_filling": self._get_filling_mode(symbol)}
+                       "type_time": self.mt5.ORDER_TIME_GTC, "type_filling": self._get_filling_mode(symbol),
+                       "price": tick.ask if ot == self.mt5.ORDER_TYPE_BUY else tick.bid}
                 if params.get("sl"): req["sl"] = float(params["sl"])
                 if params.get("tp"): req["tp"] = float(params["tp"])
                 result = self.mt5.order_send(req)
@@ -380,9 +381,11 @@ class BridgeWorker(QThread):
                     if not positions: return {"status": "error", "message": f"Position {ticket} not found"}
                     pos = positions[0]
                     ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                    tick_c = self.mt5.symbol_info_tick(pos.symbol)
+                    price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
                     result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "position": pos.ticket,
                         "symbol": pos.symbol, "volume": pos.volume, "type": ct, "magic": 234000,
-                        "type_filling": self._get_filling_mode(pos.symbol)})
+                        "type_filling": self._get_filling_mode(pos.symbol), "price": price_c})
                     if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                         return {"status": "success", "ticket": pos.ticket}
                     return {"status": "error", "message": result.comment if result else "close failed"}
@@ -396,9 +399,11 @@ class BridgeWorker(QThread):
                     closed, failed = 0, []
                     for pos in positions:
                         ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                        tick_c = self.mt5.symbol_info_tick(pos.symbol)
+                        price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
                         result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                             "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
-                            "type_filling": self._get_filling_mode(pos.symbol)})
+                            "type_filling": self._get_filling_mode(pos.symbol), "price": price_c})
                         if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                             closed += 1
                         else:
@@ -413,9 +418,11 @@ class BridgeWorker(QThread):
                 closed, failed = 0, []
                 for pos in positions:
                     ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                    tick_c = self.mt5.symbol_info_tick(pos.symbol)
+                    price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
                     result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                         "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
-                        "type_filling": self._get_filling_mode(pos.symbol)})
+                        "type_filling": self._get_filling_mode(pos.symbol), "price": price_c})
                     if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                         closed += 1
                     else:
