@@ -210,6 +210,58 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
   return row
 }
 
+// Get API key config for manual reasoning (handleAnalyze).
+// Only fallback: admin model_sharing. NO system_config, NO global_auto_config.
+// Admin's system_prompt is never leaked — only API key + model settings are shared.
+async function getAnalyzeApiKey(userId, sessionId) {
+  // Get user's own config
+  const userConfig = await queryOne(
+    'SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1',
+    [userId, sessionId]
+  )
+
+  // Check if admin has model sharing enabled
+  const adminConfig = await queryOne(
+    "SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
+  )
+
+  if (adminConfig && adminConfig.api_key_encrypted) {
+    // Model sharing: use admin's API key + model settings.
+    // User's own system_prompt is preserved (admin's prompt is NEVER leaked).
+    if (userConfig) {
+      return {
+        ...userConfig,
+        api_key_encrypted: adminConfig.api_key_encrypted,
+        api_provider: adminConfig.api_provider || 'deepseek',
+        model_name: adminConfig.model_name || 'deepseek-chat',
+        api_base_url: adminConfig.api_base_url || null,
+        temperature: adminConfig.temperature ?? 0.7,
+        max_tokens: adminConfig.max_tokens ?? 2000,
+        _model_shared: true,
+      }
+    }
+    // User has no config → use admin's model settings, default system prompt
+    return {
+      api_key_encrypted: adminConfig.api_key_encrypted,
+      api_provider: adminConfig.api_provider || 'deepseek',
+      model_name: adminConfig.model_name || 'deepseek-chat',
+      api_base_url: adminConfig.api_base_url || null,
+      temperature: adminConfig.temperature ?? 0.7,
+      max_tokens: adminConfig.max_tokens ?? 2000,
+      system_prompt: DEFAULT_PROMPT,
+      enable_auto_trade: false,
+      max_position_size: 0.05,
+      selected_take_profit: 1,
+      risk_level: 'medium',
+      _model_shared: true,
+    }
+  }
+
+  // No model sharing → use user's own config only (no fallback)
+  if (!userConfig) return null
+  return userConfig
+}
+
 async function insertAudit(db, userId, action, symbol, request, result, status) {
   await queryRun(`
     INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
@@ -1000,7 +1052,8 @@ async function handleAnalyze(userId, params) {
   const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true, prompt_override } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
 
-  const config = await getActiveConfig(null, userId, session_id)
+  // Only two sources of API key: admin model_sharing, or user's own config. No other fallback.
+  const config = await getAnalyzeApiKey(userId, session_id)
   const prompt = prompt_override || config?.system_prompt || ''
   const tags = parseTimeframeTags(prompt)
 
@@ -1041,6 +1094,30 @@ async function handleAnalyze(userId, params) {
   signal.market_data = market
   signal.is_executed = false
   attachSignalTiming(signal)
+
+  // Auto-execute: if user has enable_auto_trade=1 and signal is actionable, execute immediately
+  if (signal.signal_type !== 'hold' && config && config.enable_auto_trade) {
+    try {
+      const riskCfg = {
+        enable_auto_trade: true,
+        selected_take_profit: config.selected_take_profit ?? 1,
+        max_position_size: config.max_position_size ?? 0.05,
+      }
+      const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
+      const execResult = await mt5Bridge(userId, 'open', orderPayload)
+      if (execResult && execResult.status === 'success') {
+        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
+          [utcNow(), execResult.ticket || null, signal.id])
+        signal.is_executed = true
+        signal.executed_at = utcNow()
+        signal.trade_ticket = execResult.ticket || null
+        signal.auto_executed = true
+      }
+      await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto' }, execResult, execResult?.status || 'error')
+    } catch (e) {
+      console.error('[Analyze] Auto-execute failed:', e.message)
+    }
+  }
 
   return { status: 'success', signal, market }
 }
@@ -1588,7 +1665,7 @@ router.get('/bridge/version', (req, res) => {
 })
 
 export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
-  insertAudit, getActiveConfig, configPublic, mt5Bridge,
+  insertAudit, getActiveConfig, getAnalyzeApiKey, configPublic, mt5Bridge,
   getAutoConfig, upsertAutoConfig, runAutoCycle, DEFAULT_PROMPT,
   signalOrderPayload, attachSignalTiming, handleAnalyze,
   timeframeIntervalMs, startAutoScheduler, stopAutoScheduler,
