@@ -57,6 +57,7 @@ app.use(cors({
     if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
       cb(null, true)
     } else {
+      console.error(`[CORS] Rejected origin: "${origin}" — allowed: [${ALLOWED_ORIGINS.join(', ')}]`)
       cb(new Error('CORS not allowed'))
     }
   },
