@@ -95,7 +95,7 @@ router.post('/feedback', withAuth, async (req, res) => {
         const userInfo = `${req.user.nickname || req.user.email} (${req.user.email})`
 
         await transporter.sendMail({
-          from: { name: smtpConfig.from_name || '街哥课堂', address: smtpConfig.from || smtpConfig.user },
+          from: { name: smtpConfig.from_name || '量见课堂', address: smtpConfig.from || smtpConfig.user },
           to: adminEmail,
           subject: `[${typeLabel}] ${title}`,
           html: `

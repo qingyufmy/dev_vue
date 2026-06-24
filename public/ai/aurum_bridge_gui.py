@@ -368,7 +368,7 @@ class BridgeWorker(QThread):
                 ot = self.mt5.ORDER_TYPE_BUY if dir_str == "buy" else self.mt5.ORDER_TYPE_SELL
                 req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
                        "volume": float(params.get("lot") or params.get("volume") or 0.01),
-                       "type": ot, "magic": 234000, "comment": params.get("comment", "AURUM"),
+                       "type": ot, "magic": 234000, "comment": params.get("comment", "AI交易实验室"),
                        "type_time": self.mt5.ORDER_TIME_GTC, "type_filling": self._get_filling_mode(symbol),
                        "price": tick.ask if ot == self.mt5.ORDER_TYPE_BUY else tick.bid}
                 if params.get("sl"): req["sl"] = float(params["sl"])
@@ -907,7 +907,7 @@ class UpdateDialog(QDialog):
         super().__init__(parent)
         self.download_url = download_url
         self.temp_path = temp_path
-        self.setWindowTitle("AURUM Bridge 更新")
+        self.setWindowTitle("AI交易实验室 Bridge 更新")
         self.setFixedSize(400, 180)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -984,7 +984,7 @@ class LoginPage(QWidget):
         layout.setSpacing(12)
 
         # Title
-        title = QLabel("AURUM MT5 Bridge")
+        title = QLabel("AI交易实验室 · MT5 Bridge")
         title.setFont(QFont("Segoe UI", 20, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("color: #3b82f6; background: transparent;")
@@ -1061,7 +1061,7 @@ class LoginPage(QWidget):
         layout.addStretch()
 
         # Footer
-        footer = QLabel(f"AURUM AI · wall-street-skill.com · {APP_VERSION}")
+        footer = QLabel(f"AI交易实验室 · wall-street-skill.com · {APP_VERSION}")
         footer.setProperty("muted", True)
         footer.setAlignment(Qt.AlignCenter)
         layout.addWidget(footer)
@@ -1151,7 +1151,7 @@ class BridgePage(QWidget):
 
         # Top row
         top_row = QHBoxLayout()
-        title = QLabel("⚡ AURUM MT5 Bridge")
+        title = QLabel("⚡ AI交易实验室 · MT5 Bridge")
         title.setFont(QFont("Segoe UI", 16, QFont.Bold))
         title.setStyleSheet("color: #3b82f6; background: transparent;")
         top_row.addWidget(title)
@@ -1219,7 +1219,7 @@ class BridgePage(QWidget):
         layout.addWidget(self.log_area, 1)
 
         # Footer
-        footer = QLabel(f"AURUM AI · wall-street-skill.com · {APP_VERSION}")
+        footer = QLabel(f"AI交易实验室 · wall-street-skill.com · {APP_VERSION}")
         footer.setProperty("muted", True)
         footer.setStyleSheet("color: #475569; font-size: 11px; background: transparent;")
         footer.setAlignment(Qt.AlignCenter)

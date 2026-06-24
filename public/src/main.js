@@ -532,7 +532,7 @@ async function hydrateProtectedPostImages(container, options = {}) {
   }))
 }
 
-// ===== 街哥语录 =====
+// ===== 量见语录 =====
 const allQuotes = [
   '太阳底下没有新鲜事，人性不会变，大多数人会在类似的位置犯同样的错。',
   '放弃太拥挤的交易，大多数时间假突破后参与反向，比追突破胜率高。',
@@ -1955,7 +1955,7 @@ function renderSidebarQuotes() {
 
   return `
     <div class="sidebar-card sidebar-quote-card quotes-card" style="cursor:pointer">
-      <h3>街哥语录</h3>
+      <h3>量见语录</h3>
       <ul class="sidebar-quote-list">
         ${sidebarQuotes.map((q, i) => `
           <li class="sidebar-quote-item">
@@ -2430,7 +2430,7 @@ function renderVideo() {
       overlay.innerHTML = `
         <div class="warning-modal">
           <div class="warning-icon">⚠️</div>
-          <h3 class="warning-title">街哥警告</h3>
+          <h3 class="warning-title">量见警告</h3>
           <p class="warning-text">请务必耐心、完整、连续地学习，避免跳跃式观看。看似学会实战却依然亏钱，往往说明并没有真正掌握。不要让自己停留在半懂不懂的状态，学得慢并不可耻，真正重要的是学会之后能够熟练运用。</p>
           <button class="btn btn-primary btn-lg warning-confirm" id="warningConfirm">我知道了，认真学习</button>
         </div>
@@ -2686,7 +2686,7 @@ function renderQuotes() {
     <div class="quotes-page fade-in">
       <button class="back-btn" id="backHome">← 返回课程列表</button>
       <div class="quotes-header">
-        <h1 class="quotes-title">街哥语录</h1>
+        <h1 class="quotes-title">量见语录</h1>
         <p class="quotes-subtitle">共 ${allQuotes.length} 条交易智慧</p>
       </div>
       <div class="quotes-list">
@@ -3786,7 +3786,7 @@ function renderSmtpConfig(container) {
       </div>
       <div class="admin-config-row">
         <label>发件人名称</label>
-        <input type="text" class="admin-plan-input" id="smtpFromName" value="${escapeHtml(getVal('from_name') || '街哥课堂')}" placeholder="街哥课堂">
+        <input type="text" class="admin-plan-input" id="smtpFromName" value="${escapeHtml(getVal('from_name') || '量见课堂')}" placeholder="量见课堂">
       </div>
       <div class="admin-config-row">
         <label>SSL/TLS</label>
@@ -5274,7 +5274,7 @@ function renderMembership() {
 
       <div class="membership-header">
         <h1 class="membership-title">选择你的会员计划</h1>
-        <p class="membership-subtitle">解锁街哥全部技术分析课程，系统掌握交易技术</p>
+        <p class="membership-subtitle">解锁量见全部技术分析课程，系统掌握交易技术</p>
       </div>
 
       <div id="membershipCreditSummary" class="membership-credit-summary">
@@ -5294,7 +5294,7 @@ function renderMembership() {
           </div>
           <ul class="mem-features">
             <li class="mem-feat"><span class="mem-check">✓</span>已公开的59期课程视频（陆续上传）</li>
-            <li class="mem-feat"><span class="mem-check">✓</span>街哥金融 / 生活感悟语录（陆续更新）</li>
+            <li class="mem-feat"><span class="mem-check">✓</span>量见金融 / 生活感悟语录（陆续更新）</li>
             <li class="mem-feat"><span class="mem-check">✓</span>观看历史记录</li>
             <li class="mem-feat disabled"><span class="mem-x">✗</span>新视频即时解锁</li>
             <li class="mem-feat disabled"><span class="mem-x">✗</span>知识图解 & 框架</li>
@@ -5392,7 +5392,7 @@ function renderMembership() {
           </thead>
           <tbody>
             <tr><td>公开课程视频</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>街哥语录</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>量见语录</td><td>✓</td><td>✓</td><td>✓</td></tr>
             <tr><td>观看历史</td><td>✓</td><td>✓</td><td>✓</td></tr>
             <tr><td>新视频即时解锁</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>知识图解 & 框架</td><td>✗</td><td>✓</td><td>✓</td></tr>
@@ -5417,7 +5417,7 @@ function renderMembership() {
           </div>
           <div class="faq-item">
             <div class="faq-q">课程内容会持续更新吗？</div>
-            <div class="faq-a">是的。街哥每周会更新他对当下行情思路的视频。</div>
+            <div class="faq-a">是的。量见每周会更新他对当下行情思路的视频。</div>
           </div>
         </div>
       </div>
@@ -5473,19 +5473,19 @@ function renderTos() {
         <p class="tos-update">最后更新日期：2026年4月12日</p>
 
         <div class="tos-content">
-          <p>欢迎使用 wall-street-skill.com（以下简称"本网站"）。本网站由华尔街没有名字（<a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a>，以下简称"街哥"）运营。在注册、访问或使用本网站之前，请仔细阅读以下条款。注册即表示您已阅读、理解并同意受本协议约束。</p>
+          <p>欢迎使用 wall-street-skill.com（以下简称"本网站"）。本网站由华尔街没有名字（<a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a>，以下简称"量见"）运营。在注册、访问或使用本网站之前，请仔细阅读以下条款。注册即表示您已阅读、理解并同意受本协议约束。</p>
 
           <h2>一、服务内容</h2>
           <ol>
             <li>本网站提供技术分析教学视频、行情思路分享、知识图解、课后测验等<strong>教育类内容</strong>。</li>
-            <li>所有内容均为街哥个人对市场行情的思考和技术教学演示，<strong>不构成任何形式的投资建议、交易指导或资产配置方案</strong>。</li>
+            <li>所有内容均为量见个人对市场行情的思考和技术教学演示，<strong>不构成任何形式的投资建议、交易指导或资产配置方案</strong>。</li>
             <li>本网站<strong>不提供带单服务、跟单信号、代客理财或任何形式的投资顾问服务</strong>。</li>
           </ol>
 
           <h2>二、免责声明</h2>
           <ol>
-            <li><strong>非投资建议</strong>：本网站发布的所有视频、文字、图表、分析及任何形式的内容，均为街哥个人对行情的思考和教学演示，仅供学习参考，<strong>不构成对任何金融产品的买卖建议</strong>。</li>
-            <li><strong>投资风险自担</strong>：加密货币、贵金属及其他金融市场交易具有高度风险，可能导致全部本金损失。用户因参考本网站内容而做出的任何投资决策，<strong>风险和后果由用户自行承担</strong>，与本网站及街哥无关。</li>
+            <li><strong>非投资建议</strong>：本网站发布的所有视频、文字、图表、分析及任何形式的内容，均为量见个人对行情的思考和教学演示，仅供学习参考，<strong>不构成对任何金融产品的买卖建议</strong>。</li>
+            <li><strong>投资风险自担</strong>：加密货币、贵金属及其他金融市场交易具有高度风险，可能导致全部本金损失。用户因参考本网站内容而做出的任何投资决策，<strong>风险和后果由用户自行承担</strong>，与本网站及量见无关。</li>
             <li><strong>信息准确性</strong>：我们尽力确保内容的准确性和时效性，但不对内容的完整性、准确性、可靠性或适用性作任何明示或暗示的保证。市场瞬息万变，过往分析不代表未来表现。</li>
             <li><strong>第三方工具</strong>：本网站可能包含指向第三方网站或平台的链接（如 TradingView、交易所等），这些链接仅为便利用户而提供。我们不对第三方网站的内容、安全性或服务质量承担任何责任。</li>
           </ol>
@@ -5521,7 +5521,7 @@ function renderTos() {
 
           <h2>七、责任限制</h2>
           <ol>
-            <li><strong>在法律允许的最大范围内，本网站及街哥不对用户因使用或无法使用本网站而产生的任何直接、间接、附带、特殊或惩罚性损害承担责任</strong>，包括但不限于投资损失、数据丢失或业务中断。</li>
+            <li><strong>在法律允许的最大范围内，本网站及量见不对用户因使用或无法使用本网站而产生的任何直接、间接、附带、特殊或惩罚性损害承担责任</strong>，包括但不限于投资损失、数据丢失或业务中断。</li>
             <li>本网站提供的服务按"现状"和"可用性"提供，不附带任何形式的明示或暗示保证。</li>
           </ol>
 
@@ -5621,10 +5621,10 @@ async function renderTools() {
       items: [
         {
           name: 'TradingView',
-          desc: '街哥自用的专业看盘软件，支持技术指标、画线工具、多图表布局，新手必备',
+          desc: '量见自用的专业看盘软件，支持技术指标、画线工具、多图表布局，新手必备',
           icon: '📊',
           url: 'https://cn.tradingview.com/?aff_id=158703',
-          tag: '街哥自用',
+          tag: '量见自用',
           tagColor: '#f7931a',
         },
       ],
@@ -6822,8 +6822,8 @@ function renderTrades() {
       <button class="back-btn" id="backHome">← 返回课程列表</button>
 
       <div class="trades-header">
-        <h1 class="trades-title">📊 街哥历史战绩</h1>
-        <p class="trades-subtitle">以下内容整理自街哥在推特 X 公开发布的交易观点、操作思路、实盘视频与部分战绩记录。<br>这些内容发布时间早于部分行情验证节点，能够帮助新用户更直观地了解街哥的分析框架、执行能力和交易风格。<br>网站的意义很明确：<br>把原本分散在公开平台上的视频思路、经验、复盘，系统化地整理出来，提供给真正有需要的人。<br>你为服务付费，我提供行情思路，为认知提升负责，为交易执行问题提供帮助。</p>
+        <h1 class="trades-title">📊 量见历史战绩</h1>
+        <p class="trades-subtitle">以下内容整理自量见在推特 X 公开发布的交易观点、操作思路、实盘视频与部分战绩记录。<br>这些内容发布时间早于部分行情验证节点，能够帮助新用户更直观地了解量见的分析框架、执行能力和交易风格。<br>网站的意义很明确：<br>把原本分散在公开平台上的视频思路、经验、复盘，系统化地整理出来，提供给真正有需要的人。<br>你为服务付费，我提供行情思路，为认知提升负责，为交易执行问题提供帮助。</p>
       </div>
 
       <div class="trades-stats">

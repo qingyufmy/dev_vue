@@ -662,12 +662,16 @@ function connectBridgeStatusWs(onReady) {
       } else if (msg.type === 'disconnect') {
         handleDisconnect(msg);
       } else if (msg.type === 'auto_state') {
-        // Server pushed auto-reasoning state change (e.g. bridge disconnected)
+        // Server pushed auto-reasoning state change (e.g. bridge disconnected/reconnected)
         state.autoEnabled = !!msg.enabled;
         const autoSwitch = $("autoAnalyzeMode");
         if (autoSwitch) autoSwitch.checked = state.autoEnabled;
         if (msg.reason === 'bridge_disconnected' && !msg.enabled) {
           toast('MT5桥接断开，自动推理已自动关闭', 'warning');
+        }
+        // Refresh full auto status to get symbols/interval info (bridge reconnected etc.)
+        if (msg.enabled || msg.reason === 'bridge_connected') {
+          loadStatus().catch(() => {});
         }
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
@@ -933,7 +937,29 @@ function handleHeartbeat(msg) {
   } else {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
   }
-  if (!isLive && !usingFallback) setBadge("tradeMode", "请先启动桥接", "neutral");
+
+  // Update trade badge from heartbeat data (bridge just connected/state changed)
+  if (typeof msg.trade_enabled === 'boolean') {
+    const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
+    setBadge("tradeMode", tradeText, msg.trade_enabled ? "danger" : "neutral");
+  } else if (!isLive && !usingFallback) {
+    setBadge("tradeMode", "请先启动桥接", "neutral");
+  }
+
+  // Update auto badge from heartbeat data — preserve symbols/interval from autoConfig
+  if (typeof msg.auto_reasoning_enabled === 'boolean') {
+    state.autoEnabled = msg.auto_reasoning_enabled;
+    // Only overwrite badge if state actually changed (avoid heartbeat flash)
+    if (msg.auto_reasoning_enabled && state.autoConfig) {
+      const sym = (state.autoConfig.symbols && state.autoConfig.symbols[0]) || 'XAUUSD';
+      const intervalMin = state.autoConfig.interval_minutes || 5;
+      const label = `自动推理运行中 · ${sym} · ${intervalMin}分钟`;
+      setBadge("autoAnalyzeMode", label, "active");
+    } else if (!msg.auto_reasoning_enabled) {
+      setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
+    }
+    // If enabled but no autoConfig loaded yet, keep current badge — don't flash to bare text
+  }
 
   state._lastGatewayLive = isLive;
   state._lastUsingFallback = usingFallback;
@@ -1230,12 +1256,12 @@ function initBridgeModal() {
       const url = data.download_url || "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe";
       const a = document.createElement("a");
       a.href = url; a.download = "AURUM_Bridge.exe"; a.click();
-      toast("正在下载 AURUM Bridge", "success");
+      toast("正在下载 MT5 桥接客户端", "success");
     } catch {
       const a = document.createElement("a");
       a.href = "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe";
       a.download = "AURUM_Bridge.exe"; a.click();
-      toast("正在下载 AURUM Bridge", "success");
+      toast("正在下载 MT5 桥接客户端", "success");
     }
     modal.classList.add("hidden");
   });

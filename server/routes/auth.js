@@ -49,7 +49,7 @@ router.post('/register', async (req, res) => {
       if (referrer) await queryRun('INSERT INTO referrals (referrer_id, referred_id, status) VALUES (?, ?, ?)', [referrer.id, result.insertId, 'pending'])
     }
 
-    await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入街哥课堂', '您的账户已创建成功，开始学习吧！'])
+    await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
     await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', '已为您赠送 1 个月 Pro 会员体验，尽享全部课程和 AI 全自动交易！'])
 
     logAudit({ userId: result.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
@@ -147,9 +147,9 @@ router.post('/send-code', async (req, res) => {
             auth: { user: smtpConfig.user, pass: smtpConfig.pass },
           })
           await transporter.sendMail({
-            from: { name: smtpConfig.from_name || '街哥课堂', address: smtpConfig.from || smtpConfig.user },
+            from: { name: smtpConfig.from_name || '量见课堂', address: smtpConfig.from || smtpConfig.user },
             to: targetEmail,
-            subject: '街哥课堂 - 验证码',
+            subject: '量见课堂 - 验证码',
             html: `<p>您的验证码是：<strong>${code}</strong>，10分钟内有效。</p>`,
           })
           emailSent = true

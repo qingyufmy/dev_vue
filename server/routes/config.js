@@ -133,12 +133,12 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
     })
 
     await transporter.sendMail({
-      from: { name: cfg.from_name || '街哥课堂', address: cfg.from || cfg.user },
+      from: { name: cfg.from_name || '量见课堂', address: cfg.from || cfg.user },
       to,
-      subject: '街哥课堂 - 测试邮件',
+      subject: '量见课堂 - 测试邮件',
       html: `<div style="font-family:sans-serif;padding:20px;">
         <h2 style="color:#2563eb;">🎉 SMTP 配置成功！</h2>
-        <p>这是一封来自<strong>街哥课堂</strong>的测试邮件。</p>
+        <p>这是一封来自<strong>量见课堂</strong>的测试邮件。</p>
         <p>您的邮件服务已正常工作。</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
         <p style="color:#94a3b8;font-size:12px;">发送时间：${new Date().toLocaleString('zh-CN')}</p>
