@@ -225,6 +225,8 @@ async function getAnalyzeApiKey(userId, sessionId) {
     "SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
   )
 
+  console.log(`[getAnalyzeApiKey] userId=${userId} sessionId=${sessionId} userConfig=${!!userConfig} adminConfig=${!!adminConfig} model_shared=${!!(adminConfig?.api_key_encrypted)}`)
+
   if (adminConfig && adminConfig.api_key_encrypted) {
     // Model sharing: use admin's API key + model settings.
     // User's own system_prompt is preserved (admin's prompt is NEVER leaked).
@@ -257,6 +259,7 @@ async function getAnalyzeApiKey(userId, sessionId) {
     }
   }
 
+  console.log(`[getAnalyzeApiKey] model_sharing NOT active for userId=${userId}`)
   // No model sharing → use user's own config only (no fallback)
   if (!userConfig) return null
   return userConfig
