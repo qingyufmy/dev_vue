@@ -1125,10 +1125,8 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // Collect all tickets to batch-query ai_signals
         const tickets = orders.map(o => String(o.ticket || o.order || '')).filter(Boolean)
-        const ticketSet = new Set(tickets)
         // Batch query signals by trade_ticket
         let signalMap = {}
-        let closeSignalMap = {}
         if (tickets.length > 0) {
           const placeholders = tickets.map(() => '?').join(',')
           const signalRows = await queryAll(
@@ -1151,33 +1149,13 @@ async function handleBrowserCommand(ws, userId, msg) {
               created_at: s.created_at
             })
           }
-          // Also get close signals via close_signal_tickets table
-          const closeRows = await queryAll(
-            `SELECT cst.original_ticket, cst.close_price,
-                    s.id as signal_id, s.signal_type, s.confidence, s.analysis, s.reasoning, s.created_at
-             FROM close_signal_tickets cst
-             LEFT JOIN ai_signals s ON s.id = cst.close_signal_id
-             WHERE cst.original_ticket IN (${placeholders})`,
-            tickets
-          )
-          for (const r of closeRows) {
-            const otk = String(r.original_ticket)
-            if (!closeSignalMap[otk]) closeSignalMap[otk] = []
-            closeSignalMap[otk].push({
-              signal_id: r.signal_id, type: r.signal_type,
-              confidence: r.confidence, close_price: r.close_price,
-              analysis: r.analysis, reasoning: r.reasoning, created_at: r.created_at
-            })
-          }
         }
 
         // Build export rows: one order + reasoning = one row
         const exportRows = orders.map(o => {
           const tk = String(o.ticket || o.order || '')
           const signals = signalMap[tk] || []
-          const closeSignals = closeSignalMap[tk] || []
           const mainSignal = signals.find(s => s.session === 'default') || signals[0] || {}
-          const closeSignal = closeSignals[0] || {}
           return {
             // Order fields
             ticket: tk,
@@ -1206,13 +1184,6 @@ async function handleBrowserCommand(ws, userId, msg) {
             signal_tp3: mainSignal.tp3 ?? '',
             signal_executed: mainSignal.executed ? '是' : '否',
             signal_created: mainSignal.created_at || '',
-            // Close signal reasoning
-            close_signal_id: closeSignal.signal_id || '',
-            close_signal_type: closeSignal.type || '',
-            close_signal_confidence: closeSignal.confidence ?? '',
-            close_signal_analysis: closeSignal.analysis || '',
-            close_signal_reasoning: closeSignal.reasoning || '',
-            close_signal_created: closeSignal.created_at || '',
           }
         })
 

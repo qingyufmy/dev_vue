@@ -3200,9 +3200,7 @@ async function exportHistory() {
       '信号ID', '信号类型', '信号置信度', '信号建议手数',
       '信号分析', '信号推理',
       '信号止损', '信号止盈1', '信号止盈2', '信号止盈3',
-      '信号已执行', '信号时间',
-      '平仓信号ID', '平仓信号类型', '平仓信号置信度',
-      '平仓信号分析', '平仓信号推理', '平仓信号时间'
+      '信号已执行', '信号时间'
     ];
     const sheetData = [headers];
     for (const r of rows) {
@@ -3213,9 +3211,7 @@ async function exportHistory() {
         r.signal_id || '', r.signal_type || '', r.signal_confidence ?? '', r.signal_volume ?? '',
         r.signal_analysis || '', r.signal_reasoning || '',
         r.signal_stop_loss ?? '', r.signal_tp1 ?? '', r.signal_tp2 ?? '', r.signal_tp3 ?? '',
-        r.signal_executed || '', r.signal_created || '',
-        r.close_signal_id || '', r.close_signal_type || '', r.close_signal_confidence ?? '',
-        r.close_signal_analysis || '', r.close_signal_reasoning || '', r.close_signal_created || ''
+        r.signal_executed || '', r.signal_created || ''
       ]);
     }
     const ws1 = XLSX.utils.aoa_to_sheet(sheetData);
@@ -3225,8 +3221,6 @@ async function exportHistory() {
     // Make analysis/reasoning columns wider
     colWidths[18].wch = 40; // 信号分析
     colWidths[19].wch = 40; // 信号推理
-    colWidths[26].wch = 30; // 平仓信号分析
-    colWidths[27].wch = 30; // 平仓信号推理
     ws1['!cols'] = colWidths;
 
     XLSX.utils.book_append_sheet(wb, ws1, '交易记录');
