@@ -344,15 +344,55 @@ class BridgeWorker(QThread):
                 return item.name
         raise RuntimeError(f"Symbol not found in MT5: {requested}")
 
+    # MT5 retcodes that merit a price-refresh retry (requote / price moved)
+    _RETRYABLE_RETCODES = {
+        10003,  # TRADE_RETCODE_PRICE_CHANGED  — 价格已变
+        10004,  # TRADE_RETCODE_REQUOTE         — 重新报价
+        10006,  # TRADE_RETCODE_PRICE_OFF       — 报价错误
+        10024,  # TRADE_RETCODE_REQUOTE_SENT    — 请求重报
+    }
+    _MAX_RETRY = 3
+    _RETRY_DELAY = 0.15  # seconds
+
     def _get_filling_mode(self, symbol):
         info = self.mt5.symbol_info(symbol)
         if not info: return self.mt5.ORDER_FILLING_IOC
         fm = int(getattr(info, "filling_mode", 0) or 0)
         cands = []
-        if fm & 1: cands.append(self.mt5.ORDER_FILLING_FOK)
-        if fm & 2: cands.append(self.mt5.ORDER_FILLING_IOC)
-        if not cands: cands = [self.mt5.ORDER_FILLING_RETURN, self.mt5.ORDER_FILLING_FOK, self.mt5.ORDER_FILLING_IOC]
-        return self.mt5.ORDER_FILLING_FOK if self.mt5.ORDER_FILLING_FOK in cands else cands[0]
+        if fm & 2: cands.append(self.mt5.ORDER_FILLING_IOC)   # IOC 优先 — 容忍微小滑点
+        if fm & 1: cands.append(self.mt5.ORDER_FILLING_FOK)   # FOK 备选
+        if not cands: cands = [self.mt5.ORDER_FILLING_IOC, self.mt5.ORDER_FILLING_RETURN]
+        return cands[0]
+
+    def _order_send_with_retry(self, build_req_fn):
+        """带价格刷新重试的 order_send 包装器。
+        build_req_fn(tick) → dict: 根据当前 tick 构建 req，返回 (req, price_for_log)
+        可重试码 (REQUOTE/PRICE_OFF/PRICE_CHANGED) 时刷新 tick 重试最多 _MAX_RETRY 次
+        返回 (result_or_None, comment)
+        """
+        for attempt in range(self._MAX_RETRY + 1):
+            tick = self.mt5.symbol_info_tick(req.get("symbol"))
+            if not tick:
+                return None, "tick unavailable"
+            req, log_price = build_req_fn(tick)
+            req["price"] = log_price
+            result = self.mt5.order_send(req)
+            if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                return result, None
+            code = result.retcode if result else -1
+            if code in self._RETRYABLE_RETCODES and attempt < self._MAX_RETRY:
+                self.log_signal.emit(
+                    f"报价已过期 (retcode={code})，尝试刷新价格重试 ({attempt+1}/{self._MAX_RETRY})..."
+                )
+                time.sleep(self._RETRY_DELAY)
+                # Re-select symbol to keep it hot
+                try:
+                    self.mt5.symbol_select(req["symbol"], True)
+                except Exception:
+                    pass
+                continue
+            return result, result.comment if result else "order_send failed"
+        return None, "max retry exceeded"
 
     def _process_command(self, cmd):
         action = cmd.get("action"); params = cmd.get("params", {})
@@ -360,24 +400,32 @@ class BridgeWorker(QThread):
             if action == "open":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
-                info = self.mt5.symbol_info(symbol); tick = self.mt5.symbol_info_tick(symbol)
+                info = self.mt5.symbol_info(symbol)
                 if not info: return {"status": "error", "message": f"Symbol not available: {symbol}"}
-                if not tick: return {"status": "error", "message": f"Invalid live quote for {symbol}"}
+                tick0 = self.mt5.symbol_info_tick(symbol)
+                if not tick0: return {"status": "error", "message": f"Invalid live quote for {symbol}"}
                 dir_str = (params.get("type") or params.get("order_type") or "").strip().lower()
                 if dir_str not in ("buy", "sell"):
                     return {"status": "error", "message": "order type is required (buy/sell)"}
                 ot = self.mt5.ORDER_TYPE_BUY if dir_str == "buy" else self.mt5.ORDER_TYPE_SELL
-                req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
-                       "volume": float(params.get("lot") or params.get("volume") or 0.01),
-                       "type": ot, "magic": 234000, "comment": params.get("comment", "AI交易实验室"),
-                       "type_time": self.mt5.ORDER_TIME_GTC, "type_filling": self._get_filling_mode(symbol),
-                       "price": tick.ask if ot == self.mt5.ORDER_TYPE_BUY else tick.bid}
-                if params.get("sl"): req["sl"] = float(params["sl"])
-                if params.get("tp"): req["tp"] = float(params["tp"])
-                result = self.mt5.order_send(req)
-                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                volume = float(params.get("lot") or params.get("volume") or 0.01)
+                sl = float(params["sl"]) if params.get("sl") else None
+                tp = float(params["tp"]) if params.get("tp") else None
+                base_req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
+                            "volume": volume, "type": ot, "magic": 234000,
+                            "comment": params.get("comment", "AI交易实验室"),
+                            "type_time": self.mt5.ORDER_TIME_GTC,
+                            "type_filling": self._get_filling_mode(symbol)}
+                if sl: base_req["sl"] = sl
+                if tp: base_req["tp"] = tp
+                def _build(tick):
+                    req = dict(base_req)
+                    req["price"] = tick.ask if ot == self.mt5.ORDER_TYPE_BUY else tick.bid
+                    return req, req["price"]
+                result, comment = self._order_send_with_retry(_build)
+                if result:
                     return {"status": "success", "order": result.order, "price": result.price}
-                return {"status": "error", "message": result.comment if result else "order_send failed"}
+                return {"status": "error", "message": comment or "order_send failed"}
             elif action == "close":
                 ticket = params.get("ticket")
                 if ticket:
@@ -385,14 +433,18 @@ class BridgeWorker(QThread):
                     if not positions: return {"status": "error", "message": f"Position {ticket} not found"}
                     pos = positions[0]
                     ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                    tick_c = self.mt5.symbol_info_tick(pos.symbol)
-                    price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
-                    result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "position": pos.ticket,
-                        "symbol": pos.symbol, "volume": pos.volume, "type": ct, "magic": 234000,
-                        "type_filling": self._get_filling_mode(pos.symbol), "price": price_c})
-                    if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                    self.mt5.symbol_select(pos.symbol, True)
+                    sym = pos.symbol; vol = pos.volume; fill = self._get_filling_mode(sym)
+                    def _close(tick):
+                        price = tick.bid if ct == self.mt5.ORDER_TYPE_SELL else tick.ask
+                        req = {"action": self.mt5.TRADE_ACTION_DEAL, "position": pos.ticket,
+                               "symbol": sym, "volume": vol, "type": ct, "magic": 234000,
+                               "type_filling": fill, "price": price}
+                        return req, price
+                    result, comment = self._order_send_with_retry(_close)
+                    if result:
                         return {"status": "success", "ticket": pos.ticket}
-                    return {"status": "error", "message": result.comment if result else "close failed"}
+                    return {"status": "error", "message": comment or "close failed"}
                 else:
                     sym = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
                     positions = self.mt5.positions_get(symbol=sym) if sym else self.mt5.positions_get()
