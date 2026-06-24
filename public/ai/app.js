@@ -1917,10 +1917,11 @@ async function loadConfig() {
   if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
   // Sync override section visibility
   syncOverrideSection();
-  // Pro 无桥接时：模型页只显示用户自己的数据，不显示管理员共享
-  const isProNoBridge = state.user?.plan === 'pro' && !isAdmin && state._usingFallback;
+  // 模型共享：仅当确认未处于观摩模式（t桥接已连接）才显示管理员共享
+  // _usingFallback===undefined 时保守处理（不显示），等 loadStatus/heartbeat 确定后再判断
+  const isObserve = state.user?.plan === 'pro' && !isAdmin && state._usingFallback !== false;
   if (sharedInfo) {
-    if (!isAdmin && cfg._model_shared && !isProNoBridge) {
+    if (!isAdmin && cfg._model_shared && !isObserve) {
       sharedInfo.style.display = "";
       // API Key 显示隐藏字符，提示使用管理员共享
       $("apiKey").type = "text";
@@ -1935,8 +1936,8 @@ async function loadConfig() {
       $("apiKey").value = "";
       $("apiKey").disabled = false;
       $("apiKey").style.opacity = "";
-      // Pro 无桥接 + 无自有配置：回退到默认状态
-      if (isProNoBridge && !state.currentConfigHasApiKey) {
+      // Pro 无桥接 + 无自有 API Key：回退到默认提示
+      if (isObserve && !state.currentConfigHasApiKey && !cfg?._model_shared) {
         setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
         $("apiKey").placeholder = "输入 API Key 后保存";
       }
