@@ -1263,6 +1263,8 @@ class LoginPage(QWidget):
         self.input_email.setText(cfg.get("email", ""))
         self.chk_remember.setChecked(cfg.get("remember", False))
         self.chk_auto_login.setChecked(cfg.get("auto_login", False))
+        if cfg.get("remember") and cfg.get("saved_password"):
+            self.input_password.setText(cfg["saved_password"])
 
     def _do_login(self):
         server = self.input_server.text().strip()
@@ -1301,8 +1303,10 @@ class LoginPage(QWidget):
             cfg["token"] = token
             cfg["remember"] = self.chk_remember.isChecked()
             cfg["auto_login"] = self.chk_auto_login.isChecked()
-            # 不再存储密码 — token 已足够保持登录状态
-            cfg.pop("saved_password", None)
+            if self.chk_remember.isChecked():
+                cfg["saved_password"] = password  # token 过期后自动填充
+            else:
+                cfg.pop("saved_password", None)
             cfg["plan"] = data.get("user", {}).get("plan", "free")
             save_config(cfg)
 
