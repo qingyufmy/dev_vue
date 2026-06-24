@@ -169,13 +169,18 @@ function configPublic(row) {
   return data
 }
 
-async function getActiveConfig(db, userId, sessionId = 'default', provider = null) {
+async function getActiveConfig(db, userId, sessionId = 'default', provider = null, opts = {}) {
   let row
   if (provider) {
     row = await queryOne('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND api_provider = ?', [userId, sessionId, provider])
   } else {
     row = await queryOne('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1', [userId, sessionId])
   }
+
+  // skipFallbacks: when called from the manual config UI (ai_config command),
+  // return ONLY the user's own settings. No API key, model, or prompt leakage
+  // from admin model_sharing / system_config / global_auto_config.
+  if (opts.skipFallbacks) return row
 
   // Model sharing: if user has no custom config, fall back to admin's model settings
   const userHasOwnConfig = row && row.api_key_encrypted
@@ -222,8 +227,6 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
       row.model_name = row.model_name || globalCfg.model_name || 'deepseek-chat'
       row.temperature = row.temperature ?? globalCfg.temperature
       row.max_tokens = row.max_tokens ?? globalCfg.max_tokens
-      // system_prompt must NOT fall back to global_auto_config — that is admin's auto-reasoning strategy,
-      // and leaking it to all users' manual reasoning config is a data isolation breach.
     }
   }
 
