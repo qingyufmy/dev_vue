@@ -1657,13 +1657,13 @@ export async function initAutoSchedulers() {
 // ── Bridge 版本检查端点 ──
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '1.9.10',
+    version: '1.9.11',
     build_date: '2026-06-24',
-    changelog: '全面修复: 移除MT5 DLL注入(numpy冲突) + _order_send_with_retry req未定义(开仓失败) + 记住密码保存 + 自动推理重启恢复 + MT5资源泄露 + 批量重试 + 路径持久化 + None安全处理',
-    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v1.9.10.exe',
+    changelog: 'v1.9.11: 修复登录后页面跳转bug + model_sharing前端显示优化 + 观摩模式三级分层 + 共享模型API Key可自行填写覆盖',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v1.9.11.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65342042,
-    md5: 'a01a577f1d35001f2ae4c22bdede6039'
+    file_size: 72351744,
+    md5: 'db57acd3fcd26a3db6f99cf862321340'
   })
 })
 
