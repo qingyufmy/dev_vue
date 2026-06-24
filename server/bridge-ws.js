@@ -148,7 +148,7 @@ function handleBridge(ws, url) {
   ws.on('message', queueMsg)
 
   // Check user plan — only Pro allowed (async, blocks bridge setup)
-  queryOne('SELECT plan, plan_expires_at, role FROM users WHERE id = ?', [userId]).then(user => {
+  queryOne('SELECT plan, plan_expires_at, role FROM users WHERE id = ?', [userId]).then(async user => {
     ws.off('message', queueMsg) // 移除缓存监听器
     if (!user) { ws.close(4002, 'User not found'); return }
     if (user.role !== 'admin') {
@@ -161,7 +161,7 @@ function handleBridge(ws, url) {
         return
       }
     }
-    _initBridge(ws, userId)
+    await _initBridge(ws, userId)
     // 重放缓存消息
     for (const msg of msgQueue) ws.emit('message', msg)
   }).catch(err => {
@@ -171,19 +171,49 @@ function handleBridge(ws, url) {
   })
 }
 
-function _initBridge(ws, userId) {
+async function _initBridge(ws, userId) {
 
   const existing = bridges.get(userId)
   // Close old bridge connection if still open (one bridge per account)
   if (existing && existing.ws && existing.ws.readyState === 1) {
     try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
   }
-  // Admin defaults to tradeEnabled=true, others false
-  const defaultTrade = userId === (adminUserId || -1) ? true : (existing?.tradeEnabled ?? false)
+
+  // Read bridge settings from DB (trade_send / auto_reasoning state)
+  let dbTradeEnabled = false
+  let dbAutoReasoningEnabled = false
+  try {
+    const row = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
+    dbTradeEnabled = row ? !!row.trade_send_enabled : false
+    dbAutoReasoningEnabled = row ? !!row.auto_reasoning_enabled : false
+  } catch (e) {
+    console.error(`[BridgeWS] Failed to read user_bridge_settings for user ${userId}:`, e.message)
+  }
+  // Admin defaults to tradeEnabled=true (overridden by DB if explicitly disabled), others use DB value
+  const defaultTrade = userId === (adminUserId || -1) ? (dbTradeEnabled || true) : dbTradeEnabled
   bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), lastTradeMode: 4 }); ws._userId = userId
 
-  // Notify browsers
-  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true })
+  // Notify browsers with current trade/auto state
+  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled })
+
+  // Restore auto-reasoning if it was enabled before bridge disconnect
+  if (dbAutoReasoningEnabled) {
+    try {
+      const ai = await import('./routes/ai.js')
+      const cfg = await ai.getAutoConfig(null, userId)
+      if (!cfg?.enabled) {
+        const globalCfg = await ai.getGlobalAutoConfig()
+        const symbols = globalCfg?.symbols || 'XAUUSD'
+        await ai.upsertAutoConfig(null, userId, symbols, true)
+      }
+      ai.stopAutoScheduler(userId)
+      await ai.startAutoScheduler(userId)
+      console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
+      sendToBrowsers(userId, { type: 'auto_state', enabled: true, reason: 'bridge_connected' })
+    } catch (e) {
+      console.error(`[BridgeWS] Failed to restore auto-reasoning for user ${userId}:`, e.message)
+    }
+  }
 
   // Server-side ping every 15s — if bridge doesn't reply within 30s, close
   const pingInterval = setInterval(() => {
@@ -262,6 +292,13 @@ function _initBridge(ws, userId) {
       }
     }
     // Auto-disable auto-reasoning when bridge disconnects
+    // Also persist disabled state to DB so reconnect doesn't restore it
+    try {
+      await queryRun(
+        'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, trade_send_enabled) VALUES (?, 0, 0) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 0, trade_send_enabled = 0, updated_at = NOW()',
+        [userId]
+      )
+    } catch (e) { console.error('[BridgeWS] Failed to reset bridge settings on disconnect:', e.message) }
     try {
       const ai = await import('./routes/ai.js')
       const cfg = await ai.getAutoConfig(null, userId)
@@ -406,6 +443,14 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Update local trade state
         const bridge = bridges.get(userId)
         if (bridge && result.status === 'success') bridge.tradeEnabled = !!params.enable
+        // Persist to DB
+        const newEnabled = !!params.enable
+        try {
+          await queryRun(
+            'INSERT INTO user_bridge_settings (user_id, trade_send_enabled) VALUES (?, ?) ON DUPLICATE KEY UPDATE trade_send_enabled = ?, updated_at = NOW()',
+            [userId, newEnabled ? 1 : 0, newEnabled ? 1 : 0]
+          )
+        } catch (e) { console.error('[BridgeWS] Failed to persist trade_send_enabled:', e.message) }
         break
       }
       case 'set_quote_symbol': {
@@ -816,6 +861,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (newEnabled) {
           await ai.startAutoScheduler(userId)
         }
+        // Persist auto-reasoning state to DB
+        try {
+          await queryRun(
+            'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = NOW()',
+            [userId, newEnabled ? 1 : 0, newEnabled ? 1 : 0]
+          )
+        } catch (e) { console.error('[BridgeWS] Failed to persist auto_reasoning_enabled:', e.message) }
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
         break
       }

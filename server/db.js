@@ -485,6 +485,13 @@ export async function initDB() {
       updated_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    `CREATE TABLE IF NOT EXISTS user_bridge_settings (
+      user_id INT PRIMARY KEY,
+      trade_send_enabled TINYINT NOT NULL DEFAULT 0,
+      auto_reasoning_enabled TINYINT NOT NULL DEFAULT 0,
+      updated_at DATETIME NOT NULL DEFAULT (NOW())
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
     `CREATE TABLE IF NOT EXISTS auto_scheduler (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL UNIQUE,
@@ -713,7 +720,7 @@ async function seedData(p) {
   const demoHash = await bcrypt.hash('demo123', 10)
 
   await p.query(`INSERT INTO users (email, password, nickname, role, plan, plan_expires_at, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ['admin@wallstreetskill.com', hash, '街哥', 'admin', 'pro', '2027-12-31', 'ADMIN001'])
+    ['admin@wallstreetskill.com', hash, '量见', 'admin', 'pro', '2027-12-31', 'ADMIN001'])
 
   await p.query(`INSERT INTO users (email, password, nickname, role, plan, referral_code) VALUES (?, ?, ?, ?, ?, ?)`,
     ['demo@example.com', demoHash, 'Demo User', 'user', 'free', 'DEMO001'])
@@ -765,7 +772,7 @@ async function seedData(p) {
   const sysConfigs = [
     ['smtp', 'host', '', 'SMTP 服务器', 0], ['smtp', 'port', '587', '端口', 1],
     ['smtp', 'user', '', '用户名', 2], ['smtp', 'pass', '', '密码', 3],
-    ['smtp', 'from', '', '发件人邮箱', 4], ['smtp', 'from_name', '街哥课堂', '发件人名称', 5],
+    ['smtp', 'from', '', '发件人邮箱', 4], ['smtp', 'from_name', '量见课堂', '发件人名称', 5],
     ['smtp', 'secure', 'false', 'SSL/TLS', 6],
     ['qiniu', 'access_key', '', 'Access Key', 0], ['qiniu', 'secret_key', '', 'Secret Key', 1],
     ['qiniu', 'bucket', '', '存储桶名称', 2], ['qiniu', 'domain', '', '访问域名', 3],
@@ -786,7 +793,7 @@ async function seedData(p) {
         { name: 'BIT 美股交易所', desc: '美股交易所开户链接，适合美股相关交易使用', icon: '🇺🇸', url: 'https://bit.bshareweb.com/newRegister/cn?invite_code=CY3DKV', tag: '美股', tagColor: '#2563eb', code: 'CY3DKV' }
       ]},
       { category: '看盘工具', items: [
-        { name: 'TradingView', desc: '街哥自用的专业看盘软件，支持技术指标、画线工具、多图表布局，新手必备', icon: '📊', url: 'https://cn.tradingview.com/?aff_id=158703', tag: '街哥自用', tagColor: '#f7931a' }
+        { name: 'TradingView', desc: '量见自用的专业看盘软件，支持技术指标、画线工具、多图表布局，新手必备', icon: '📊', url: 'https://cn.tradingview.com/?aff_id=158703', tag: '量见自用', tagColor: '#f7931a' }
       ]},
       { category: '数据工具', items: [
         { name: 'CoinAnk', desc: '专业加密货币数据分析平台，链上数据、资金流向、市场情绪分析', icon: '📊', url: 'https://coinank.com/zh/invite/register?referral=1458068', code: '1458068' },

@@ -933,7 +933,20 @@ function handleHeartbeat(msg) {
   } else {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
   }
-  if (!isLive && !usingFallback) setBadge("tradeMode", "请先启动桥接", "neutral");
+
+  // Update trade badge from heartbeat data (bridge just connected/state changed)
+  if (typeof msg.trade_enabled === 'boolean') {
+    const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
+    setBadge("tradeMode", tradeText, msg.trade_enabled ? "danger" : "neutral");
+  } else if (!isLive && !usingFallback) {
+    setBadge("tradeMode", "请先启动桥接", "neutral");
+  }
+
+  // Update auto badge from heartbeat data
+  if (typeof msg.auto_reasoning_enabled === 'boolean') {
+    setBadge("autoAnalyzeMode", msg.auto_reasoning_enabled ? "自动推理开启" : "自动推理关闭", msg.auto_reasoning_enabled ? "active" : "neutral");
+    state.autoEnabled = msg.auto_reasoning_enabled;
+  }
 
   state._lastGatewayLive = isLive;
   state._lastUsingFallback = usingFallback;
@@ -1230,12 +1243,12 @@ function initBridgeModal() {
       const url = data.download_url || "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe";
       const a = document.createElement("a");
       a.href = url; a.download = "AURUM_Bridge.exe"; a.click();
-      toast("正在下载 AURUM Bridge", "success");
+      toast("正在下载 MT5 桥接客户端", "success");
     } catch {
       const a = document.createElement("a");
       a.href = "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe";
       a.download = "AURUM_Bridge.exe"; a.click();
-      toast("正在下载 AURUM Bridge", "success");
+      toast("正在下载 MT5 桥接客户端", "success");
     }
     modal.classList.add("hidden");
   });
