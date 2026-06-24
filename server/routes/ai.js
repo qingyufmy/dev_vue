@@ -1752,13 +1752,13 @@ export async function initAutoSchedulers() {
 // ── Bridge 版本检查端点 ──
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '1.9.9',
+    version: '1.9.10',
     build_date: '2026-06-24',
-    changelog: '修复MT5导入.pyd DLL依赖(PATH环境变量)。修复\"记住密码\"实际保存密码。修复自动推理重启后不恢复(双表源检查)。修复bridge close handler不重置DB。修复信号trade_ticket绑定。修复审计日志虚假成功。',
-    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v1.9.9.exe',
+    changelog: '紧急修复: _order_send_with_retry req未定义导致所有开仓失败 + MT5 PATH优先级导致numpy DLL冲突 + “记住密码”保存 + 自动推理重启恢复',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v1.9.10.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65343239,
-    md5: 'd4a102842df91e2726dc480e5db3d29d'
+    file_size: 65341802,
+    md5: '41dfe8db4e96ab1e740f6a08ccc6b083'
   })
 })
 

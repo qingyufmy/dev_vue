@@ -25,7 +25,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v1.9.9"
+APP_VERSION = "v1.9.10"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
@@ -364,14 +364,14 @@ class BridgeWorker(QThread):
         if not cands: cands = [self.mt5.ORDER_FILLING_IOC, self.mt5.ORDER_FILLING_RETURN]
         return cands[0]
 
-    def _order_send_with_retry(self, build_req_fn):
+    def _order_send_with_retry(self, symbol, build_req_fn):
         """带价格刷新重试的 order_send 包装器。
         build_req_fn(tick) → dict: 根据当前 tick 构建 req，返回 (req, price_for_log)
         可重试码 (REQUOTE/PRICE_OFF/PRICE_CHANGED) 时刷新 tick 重试最多 _MAX_RETRY 次
         返回 (result_or_None, comment)
         """
         for attempt in range(self._MAX_RETRY + 1):
-            tick = self.mt5.symbol_info_tick(req.get("symbol"))
+            tick = self.mt5.symbol_info_tick(symbol)
             if not tick:
                 return None, "tick unavailable"
             req, log_price = build_req_fn(tick)
@@ -428,7 +428,7 @@ class BridgeWorker(QThread):
                     req = dict(base_req)
                     req["price"] = tick.ask if ot == self.mt5.ORDER_TYPE_BUY else tick.bid
                     return req, req["price"]
-                result, comment = self._order_send_with_retry(_build)
+                result, comment = self._order_send_with_retry(symbol, _build)
                 if result:
                     resp = {"status": "success", "order": result.order, "price": result.price}
                     if comment: resp["warning"] = comment
@@ -449,7 +449,7 @@ class BridgeWorker(QThread):
                                "symbol": sym, "volume": vol, "type": ct, "magic": 234000,
                                "type_filling": fill, "price": price}
                         return req, price
-                    result, comment = self._order_send_with_retry(_close)
+                    result, comment = self._order_send_with_retry(sym, _close)
                     if result:
                         resp = {"status": "success", "ticket": pos.ticket}
                         if comment: resp["warning"] = comment
@@ -827,15 +827,14 @@ class BridgeWorker(QThread):
                     self.log_signal.emit(f"[DLL] 添加搜索路径: {d}")
                 except Exception:
                     pass
-        # Add to PATH for .pyd dependency resolution
-        if mt5_dirs:
-            existing_path = os.environ.get("PATH", "")
-            new_entries = ";".join(mt5_dirs)
-            if new_entries not in existing_path:
-                os.environ["PATH"] = new_entries + ";" + existing_path
-                self.log_signal.emit(f"[PATH] 添加MT5目录到环境变量")
+        # ⚠️  IMPORTANT: do NOT prepend MT5 to PATH before importing MetaTrader5!
+        #    Prepending causes Windows to find MT5's bundled MSVC/openblas DLLs BEFORE
+        #    the PyInstaller-bundled ones that numpy 2.5.0 needs, resulting in:
+        #      ImportError: numpy._core.multiarray failed to import
+        #    Fix: import MetaTrader5 first (numpy loads from PyInstaller bundle),
+        #    then append MT5 to PATH (lower priority) for mt5.initialize() calls.
 
-        # Import MT5
+        # Import MT5 FIRST — before modifying PATH — so numpy DLLs load from PyInstaller bundle
         try:
             import MetaTrader5 as mt5
             self.mt5 = mt5
@@ -853,6 +852,15 @@ class BridgeWorker(QThread):
                 self.log_signal.emit(f"提示: 请确保MT5安装目录包含 terminal64.exe 所需的所有DLL文件，或尝试重新安装MT5")
             self.status_signal.emit("MT5 未安装", "#ef4444", "请安装MT5终端后重试")
             return
+
+        # NOW append MT5 to PATH for mt5.initialize() terminal DLL resolution.
+        # Appending (not prepending) ensures PyInstaller-bundled DLLs take priority.
+        if mt5_dirs:
+            existing_path = os.environ.get("PATH", "")
+            new_entries = ";".join(mt5_dirs)
+            if new_entries not in existing_path:
+                os.environ["PATH"] = existing_path + ";" + new_entries
+                self.log_signal.emit(f"[PATH] 追加MT5目录 (保留PyInstaller DLL优先)")
 
         if not self.mt5.initialize():
             self.log_signal.emit(f"MT5 初始化失败: {self.mt5.last_error()}")
