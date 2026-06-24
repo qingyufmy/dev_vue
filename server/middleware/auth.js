@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken'
-import { queryOne } from '../db.js'
+import { queryOne, queryRun } from '../db.js'
 import { JWT_SECRET } from '../config.js'
 
 export function authMiddleware(req, res, next) {
@@ -12,9 +12,18 @@ export function authMiddleware(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
     queryOne('SELECT id, email, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit, telegram_id FROM users WHERE id = ?', [decoded.userId])
-      .then(user => {
+      .then(async user => {
         if (!user) {
           return res.status(401).json({ ok: false, error: '用户不存在' })
+        }
+        // Auto-downgrade expired plan once per middleware pass
+        const now = new Date()
+        const expiresAt = user.plan_expires_at ? new Date(user.plan_expires_at) : null
+        if (expiresAt && expiresAt <= now && user.plan !== 'free') {
+          user.plan = 'free'
+          user.plan_expires_at = null
+          // Fire and forget — best-effort DB update
+          queryRun('UPDATE users SET plan = ?, plan_expires_at = NULL WHERE id = ?', ['free', user.id]).catch(() => {})
         }
         req.user = user
         next()
