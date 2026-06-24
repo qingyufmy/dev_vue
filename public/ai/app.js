@@ -1759,13 +1759,6 @@ function applyRoleUI() {
 
   // Plus read-only: disable all action buttons, hide bridge download
   if (isPlusReadOnly) {
-    // Show observation banner
-    const banner = document.getElementById("observeBanner");
-    if (banner) {
-      banner.classList.remove("hidden");
-      const bannerText = document.getElementById("observeBannerText");
-      if (bannerText) bannerText.innerHTML = '您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a>';
-    }
     document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, [data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
       el.title = 'Plus 会员仅可查看';
@@ -1781,13 +1774,6 @@ function applyRoleUI() {
 
   // === Pro without bridge: 观摩模式，可打开下载页，模型页只显示自有数据 ===
   if (isProNoBridge) {
-    // Show observation banner (不同文案)
-    const banner = document.getElementById("observeBanner");
-    if (banner) {
-      banner.classList.remove("hidden");
-      const bannerText = document.getElementById("observeBannerText");
-      if (bannerText) bannerText.innerHTML = '您正在以观摩模式查看实时数据，请 <a href="#" id="observeBridgeDownload">下载并启动MT5桥接</a> 后使用 AI 推理和交易功能';
-    }
     // Disable trade-related buttons
     document.querySelectorAll('[data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
@@ -1807,20 +1793,10 @@ function applyRoleUI() {
       el.disabled = true;
       el.title = '请先连接您的 MT5 账户';
     });
-    // 绑定观摩横幅中的下载链接
-    setTimeout(() => {
-      document.getElementById("observeBridgeDownload")?.addEventListener("click", (e) => {
-        e.preventDefault();
-        handleGatewayModeClick();
-      });
-    }, 100);
     return;
   }
 
   // === Pro with bridge / Admin: full access ===
-  // Hide observation banner
-  const banner = document.getElementById("observeBanner");
-  if (banner) banner.classList.add("hidden");
   // Re-enable symbol selectors
   document.querySelectorAll('.sym-input').forEach(el => { el.disabled = false; el.title = ''; });
   const tradeMode = document.getElementById("tradeMode");
@@ -1917,10 +1893,7 @@ async function loadConfig() {
   // Sync override section visibility
   syncOverrideSection();
   // 模型共享：只要管理员开启了共享且当前用户非管理员，API Key 为空就共享
-  console.log('🔍 [loadConfig] cfg:', cfg);
-  console.log('🔍 [loadConfig] isAdmin:', isAdmin, '_model_shared:', cfg._model_shared, 'has_api_key:', cfg.has_api_key, 'currentConfigHasApiKey:', state.currentConfigHasApiKey);
   const isUsingShared = !isAdmin && cfg._model_shared;
-  console.log('🔍 [loadConfig] isUsingShared:', isUsingShared);
   if (isUsingShared) {
     $("apiKey").type = "text";
     $("apiKey").value = "••••••••••••";
