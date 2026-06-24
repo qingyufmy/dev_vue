@@ -816,32 +816,21 @@ class BridgeWorker(QThread):
         if not mt5_dirs:
             self.log_signal.emit("[探测] 未找到任何 MT5 安装目录")
 
-        # Add MT5 directories to DLL search — use both approaches:
-        # 1. os.add_dll_directory() — works for ctypes / LoadLibraryEx (Python 3.8+)
-        # 2. PATH  environment variable — required by .pyd extension modules
-        #    (Python C extensions use Windows default DLL search order, which includes PATH)
-        if hasattr(os, "add_dll_directory"):
-            for d in mt5_dirs:
-                try:
-                    os.add_dll_directory(d)
-                    self.log_signal.emit(f"[DLL] 添加搜索路径: {d}")
-                except Exception:
-                    pass
-        # ⚠️  IMPORTANT: do NOT prepend MT5 to PATH before importing MetaTrader5!
-        #    Prepending causes Windows to find MT5's bundled MSVC/openblas DLLs BEFORE
-        #    the PyInstaller-bundled ones that numpy 2.5.0 needs, resulting in:
+        # ⚠️  CRITICAL: NEVER add MT5 directories to DLL search path or PATH
+        #    before importing MetaTrader5/numpy. MT5 installations bundle their own
+        #    openblas.dll / msvcp140.dll which conflict with PyInstaller-bundled versions
+        #    that numpy 2.5+ requires, causing:
         #      ImportError: numpy._core.multiarray failed to import
-        #    Fix: import MetaTrader5 first (numpy loads from PyInstaller bundle),
-        #    then append MT5 to PATH (lower priority) for mt5.initialize() calls.
+        #    PyInstaller already bundles all needed DLLs. mt5.initialize() connects to
+        #    the running terminal via IPC — it does NOT need MT5's install dir DLLs.
 
-        # Import MT5 FIRST — before modifying PATH — so numpy DLLs load from PyInstaller bundle
+        # Import MT5 — PyInstaller resolves all DLLs from its own bundle
         try:
             import MetaTrader5 as mt5
             self.mt5 = mt5
         except Exception as e:
             full_tb = traceback.format_exc().strip()
             self.log_signal.emit(f"错误: MetaTrader5 导入失败")
-            # Show last meaningful line of traceback
             tb_lines = full_tb.split("\n")
             for line in tb_lines[-5:]:
                 if line.strip():
@@ -849,18 +838,8 @@ class BridgeWorker(QThread):
             self.log_signal.emit(f"请确认 MT5 终端已安装。下载: https://www.metatrader5.com/")
             if mt5_dirs:
                 self.log_signal.emit(f"已探测到目录: {', '.join(mt5_dirs)}")
-                self.log_signal.emit(f"提示: 请确保MT5安装目录包含 terminal64.exe 所需的所有DLL文件，或尝试重新安装MT5")
             self.status_signal.emit("MT5 未安装", "#ef4444", "请安装MT5终端后重试")
             return
-
-        # NOW append MT5 to PATH for mt5.initialize() terminal DLL resolution.
-        # Appending (not prepending) ensures PyInstaller-bundled DLLs take priority.
-        if mt5_dirs:
-            existing_path = os.environ.get("PATH", "")
-            new_entries = ";".join(mt5_dirs)
-            if new_entries not in existing_path:
-                os.environ["PATH"] = existing_path + ";" + new_entries
-                self.log_signal.emit(f"[PATH] 追加MT5目录 (保留PyInstaller DLL优先)")
 
         if not self.mt5.initialize():
             self.log_signal.emit(f"MT5 初始化失败: {self.mt5.last_error()}")
