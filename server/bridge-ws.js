@@ -1102,7 +1102,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           tp2: s.take_profit_2_price, tp3: s.take_profit_3_price,
           session: s.session_id || 'default',
           executed: !!s.is_executed, exec_result: s.execution_result,
-          created_at: s.created_at
+          created_at: s.created_at, symbol: s.symbol,
         })
 
         // Normalize MT5 symbol: strip .s/.m/.c suffix for comparison
