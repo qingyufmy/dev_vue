@@ -81,10 +81,10 @@
         </div>
       </header>
 
-      <!-- Observation mode banner (Plus only) -->
+      <!-- Observation mode banner -->
       <div id="observeBanner" class="observe-banner hidden">
         <i data-lucide="eye" size="16"></i>
-        <span>您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a></span>
+        <span id="observeBannerText">您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a></span>
       </div>
 
       <aside class="sidebar">
@@ -379,7 +379,7 @@
                 </label>
                 <div id="modelSharedInfo" class="model-shared-info" style="display:none">
                   <i data-lucide="info" size="14"></i>
-                  <span>当前使用管理员共享的模型设置，请自行配置模型以使用自定义设置</span>
+                  <span>当前使用管理员共享的API Key</span>
                 </div>
                 <div class="config-grid">
                   <label><span>模型供应商</span><select id="apiProvider">
@@ -924,6 +924,6 @@
     <script src="/ai/js/lightweight-charts.standalone.production.js"></script>
     <script src="/ai/js/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="/ai/app.js?v=20260624"></script>
+    <script src="/ai/app.js?v=20260624b"></script>
   </body>
 </html>

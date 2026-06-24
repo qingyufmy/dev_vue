@@ -1761,7 +1761,11 @@ function applyRoleUI() {
   if (isPlusReadOnly) {
     // Show observation banner
     const banner = document.getElementById("observeBanner");
-    if (banner) banner.classList.remove("hidden");
+    if (banner) {
+      banner.classList.remove("hidden");
+      const bannerText = document.getElementById("observeBannerText");
+      if (bannerText) bannerText.innerHTML = '您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a>';
+    }
     document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, [data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
       el.title = 'Plus 会员仅可查看';
@@ -1772,17 +1776,18 @@ function applyRoleUI() {
       el.title = 'Plus 会员仅可查看';
     });
     // Keep clickable-badge on all topbar badges (for pointer cursor) — guards in click handlers block action
-    // [disabled] 智能平仓
-    // const closeConfig = document.getElementById("close-config");
-    // if (closeConfig) closeConfig.style.display = "none";
     return;
   }
 
-  // === Pro without bridge: data visible, trade disabled, bridge download allowed ===
+  // === Pro without bridge: 观摩模式，可打开下载页，模型页只显示自有数据 ===
   if (isProNoBridge) {
-    // Hide observation banner
+    // Show observation banner (不同文案)
     const banner = document.getElementById("observeBanner");
-    if (banner) banner.classList.add("hidden");
+    if (banner) {
+      banner.classList.remove("hidden");
+      const bannerText = document.getElementById("observeBannerText");
+      if (bannerText) bannerText.innerHTML = '您正在以观摩模式查看实时数据，请 <a href="#" id="observeBridgeDownload">下载并启动MT5桥接</a> 后使用 AI 推理和交易功能';
+    }
     // Disable trade-related buttons
     document.querySelectorAll('[data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
@@ -1797,14 +1802,18 @@ function applyRoleUI() {
     // Allow execute button but show disabled state
     const execBtn = document.getElementById("executeSignalBtn");
     if (execBtn) { execBtn.disabled = true; execBtn.title = "请先连接 MT5 账户"; }
-    // [disabled] 智能平仓
-    // const scMode = document.getElementById("smartCloseMode");
-    // if (scMode) { scMode.classList.add("clickable-badge"); scMode.title = "请先连接 MT5 账户"; }
     // Disable symbol selectors (observe mode)
     document.querySelectorAll('.sym-input').forEach(el => {
       el.disabled = true;
       el.title = '请先连接您的 MT5 账户';
     });
+    // 绑定观摩横幅中的下载链接
+    setTimeout(() => {
+      document.getElementById("observeBridgeDownload")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        handleGatewayModeClick();
+      });
+    }, 100);
     return;
   }
 
@@ -1908,20 +1917,39 @@ async function loadConfig() {
   if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
   // Sync override section visibility
   syncOverrideSection();
+  // Pro 无桥接时：模型页只显示用户自己的数据，不显示管理员共享
+  const isProNoBridge = state.user?.plan === 'pro' && !isAdmin && state._usingFallback;
   if (sharedInfo) {
-    if (!isAdmin && cfg._model_shared) {
+    if (!isAdmin && cfg._model_shared && !isProNoBridge) {
       sharedInfo.style.display = "";
-      setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 使用管理员共享模型`);
+      // API Key 显示隐藏字符，提示使用管理员共享
+      $("apiKey").type = "text";
+      $("apiKey").value = "••••••••••••";
+      $("apiKey").disabled = true;
+      $("apiKey").style.opacity = "0.6";
+      setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 当前使用管理员共享的API Key`);
     } else {
       sharedInfo.style.display = "none";
+      // 恢复 API Key 输入
+      $("apiKey").type = "password";
+      $("apiKey").value = "";
+      $("apiKey").disabled = false;
+      $("apiKey").style.opacity = "";
+      // Pro 无桥接 + 无自有配置：回退到默认状态
+      if (isProNoBridge && !state.currentConfigHasApiKey) {
+        setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
+        $("apiKey").placeholder = "输入 API Key 后保存";
+      }
     }
   }
 }
 
 async function saveConfig() {
-  const apiKey = $("apiKey").value.trim();
+  const apiKeyRaw = $("apiKey").value.trim();
   const sharedInfo = $("modelSharedInfo");
   const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
+  // 使用共享模型时 apiKey 显示隐藏字符，实际为空
+  const apiKey = isUsingShared ? "" : apiKeyRaw;
   if (!apiKey && !state.currentConfigHasApiKey && !isUsingShared) {
     toast("请先填写 API Key", "warning");
     $("apiKey").focus();

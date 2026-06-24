@@ -1276,8 +1276,6 @@ class LoginPage(QWidget):
         self.chk_auto_login.setChecked(cfg.get("auto_login", False))
         if cfg.get("remember") and cfg.get("saved_password"):
             self.input_password.setText(cfg["saved_password"])
-        else:
-            self.input_password.clear()
 
     def _do_login(self):
         server = self.input_server.text().strip()
