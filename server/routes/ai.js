@@ -1754,11 +1754,11 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: '1.9.10',
     build_date: '2026-06-24',
-    changelog: '紧急修复: _order_send_with_retry req未定义导致所有开仓失败 + MT5 PATH优先级导致numpy DLL冲突 + “记住密码”保存 + 自动推理重启恢复',
+    changelog: '全面修复: 移除MT5 DLL注入(numpy冲突) + _order_send_with_retry req未定义(开仓失败) + 记住密码保存 + 自动推理重启恢复 + MT5资源泄露 + 批量重试 + 路径持久化 + None安全处理',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v1.9.10.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65341802,
-    md5: '41dfe8db4e96ab1e740f6a08ccc6b083'
+    file_size: 65342042,
+    md5: 'a01a577f1d35001f2ae4c22bdede6039'
   })
 })
 
