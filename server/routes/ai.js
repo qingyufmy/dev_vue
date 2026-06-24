@@ -1716,9 +1716,9 @@ export async function initAutoSchedulers() {
 // ── Bridge 版本检查端点 ──
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '1.9.8',
+    version: '1.9.9',
     build_date: '2026-06-24',
-    changelog: '品牌升级: 量见/AI交易实验室。修复开关DB持久化、心跳覆盖、CORS白名单、历史图表筛选。MT5路径选择器移至设置页、多层级MT5探测。按钮宽度修复。',
+    changelog: '修复MT5报价错误Reqoute重试(IOC填单+3次刷新tick)。修复信号trade_ticket绑定。修复交易复盘API Key兜底。修复ai_auto_scan审计虚假成功。',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
     file_size: 65335672,
