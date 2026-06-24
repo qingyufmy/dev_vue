@@ -311,18 +311,18 @@ async function _initBridge(ws, userId) {
       }
     }
     // Bridge disconnected — stop auto scheduler (no bridge to execute trades)
-    // DO NOT reset switch states in DB: user preferences must persist across disconnects
-    // When bridge reconnects, _initBridge reads DB and restores both switches correctly
+    // CRITICAL: Do NOT touch auto_scheduler.enabled! The enabled flag reflects user's
+    // intent, not bridge connectivity. Resetting it on disconnect causes:
+    // 1. Server restart → all enabled flags get zeroed → initAutoSchedulers starts nothing
+    // 2. Bridge reconnect → UI shows ON (from user_bridge_settings) but DB says OFF
+    //    → _initBridge restores it, but potential race with async close handler
+    // Just stop the in-memory scheduler; enabled state stays intact in DB.
     try {
       const ai = await import('./routes/ai.js')
-      const cfg = await ai.getAutoConfig(null, userId)
-      if (cfg?.enabled) {
-        await ai.upsertAutoConfig(null, userId, null, false)
-        ai.stopAutoScheduler(userId)
-        sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
-      }
+      ai.stopAutoScheduler(userId)
+      sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
     } catch (e) {
-      console.error('[BridgeWS] Failed to disable auto-reasoning on disconnect:', e.message)
+      console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
     }
   })
 
