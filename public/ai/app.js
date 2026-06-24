@@ -637,6 +637,8 @@ function connectBridgeStatusWs(onReady) {
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
+  let _readyFired = false;
+  const _fireReady = () => { if (!_readyFired && typeof onReady === 'function') { _readyFired = true; onReady(); } };
   ws.onopen = () => {
     state._reconnectAttempts = 0; // reset backoff on successful connection
 
@@ -647,7 +649,7 @@ function connectBridgeStatusWs(onReady) {
         try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq })); } catch {}
       }
     }, 1000);
-    if (typeof onReady === 'function') onReady();
+    _fireReady();
   };
   ws.onmessage = (e) => {
     try {
@@ -682,6 +684,7 @@ function connectBridgeStatusWs(onReady) {
     if (state.bridgeWs === ws) state.bridgeWs = null;
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
+    _fireReady(); // ensure bootstrap() doesn't hang when WS fails to connect
     // Auth failure (server closed with 4002) -> don't retry
     if (e.code === 4002) { setBadge("gatewayMode", "认证失败，请重新登录", "danger"); return; }
     // Prevent duplicate reconnect timers
@@ -698,7 +701,7 @@ function connectBridgeStatusWs(onReady) {
       }, jitter);
     }
   };
-  ws.onerror = () => {};
+  ws.onerror = () => { _fireReady(); };
 }
 
 // Market status display helper
