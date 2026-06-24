@@ -1304,51 +1304,6 @@ class BridgePage(QWidget):
         self.lbl_update_hint.mousePressEvent = lambda _: self.request_settings.emit()
         layout.addWidget(self.lbl_update_hint)
 
-        # MT5 安装路径选择器
-        mt5_path_card = QFrame()
-        mt5_path_card.setProperty("card", True)
-        mt5_path_layout = QVBoxLayout(mt5_path_card)
-        mt5_path_layout.setContentsMargins(12, 8, 12, 8)
-        mt5_path_layout.setSpacing(6)
-        mt5_path_header = QHBoxLayout()
-        lbl_mt5 = QLabel("MT5 安装路径")
-        lbl_mt5.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        lbl_mt5.setStyleSheet("color: #e2e8f0; background: transparent;")
-        mt5_path_header.addWidget(lbl_mt5)
-        mt5_path_header.addStretch()
-        self.lbl_mt5_source = QLabel("")
-        self.lbl_mt5_source.setProperty("muted", True)
-        self.lbl_mt5_source.setStyleSheet("font-size: 11px; background: transparent;")
-        mt5_path_header.addWidget(self.lbl_mt5_source)
-        mt5_path_layout.addLayout(mt5_path_header)
-        mt5_row = QHBoxLayout()
-        mt5_row.setSpacing(6)
-        self.combo_mt5 = QComboBox()
-        self.combo_mt5.setEditable(True)
-        self.combo_mt5.setInsertPolicy(QComboBox.NoInsert)
-        self.combo_mt5.setStyleSheet(
-            "QComboBox{background:#1e293b;color:#e2e8f0;border:1px solid #334155;"
-            "border-radius:6px;padding:8px 12px;font-size:12px;font-family:Consolas,'Microsoft YaHei',sans-serif;}"
-            "QComboBox:focus{border-color:#3b82f6;}"
-            "QComboBox QAbstractItemView{background:#1e293b;color:#e2e8f0;border:1px solid #334155;"
-            "selection-background-color:#3b82f6;padding:4px;}"
-            "QComboBox::drop-down{border:none;width:24px;}"
-        )
-        self.combo_mt5.currentIndexChanged.connect(self._on_mt5_path_changed)
-        mt5_row.addWidget(self.combo_mt5, 1)
-        btn_browse = QPushButton("浏览...")
-        btn_browse.setProperty("secondary", True)
-        btn_browse.setFixedWidth(70)
-        btn_browse.clicked.connect(self._browse_mt5_path)
-        mt5_row.addWidget(btn_browse)
-        mt5_path_layout.addLayout(mt5_row)
-        layout.addWidget(mt5_path_card)
-
-        # 首次显示时自动探测
-        self._mt5_installations = []
-        self._manual_mt5_path = None
-        QTimer.singleShot(100, self._refresh_mt5_paths)
-
         # Start button
         self.btn_start = QPushButton("▶  启动桥接")
         self.btn_start.setFixedHeight(48)
@@ -1410,85 +1365,6 @@ class BridgePage(QWidget):
         self.btn_start.setStyleSheet("background-color: #3b82f6;")
         self._set_status("已断开", "#6b7280")
 
-    def _refresh_mt5_paths(self):
-        """探测所有 MT5 安装并填充下拉列表"""
-        self._mt5_installations = BridgeWorker._find_mt5_installations()
-        self.combo_mt5.blockSignals(True)
-        self.combo_mt5.clear()
-        if not self._mt5_installations:
-            self.combo_mt5.addItem("未检测到MT5，请手动浏览...")
-            self.combo_mt5.setCurrentIndex(0)
-            self.lbl_mt5_source.setText("未找到")
-        else:
-            for path, source in self._mt5_installations:
-                label = f"{source} — {path}"
-                self.combo_mt5.addItem(label, path)
-            # 优先选第一个（注册表 HKCU 已按优先级排序）
-            self.combo_mt5.setCurrentIndex(0)
-            first_source = self._mt5_installations[0][1]
-            self.lbl_mt5_source.setText(first_source)
-        self.combo_mt5.blockSignals(False)
-        # 恢复手动选择的路径（从 config 读取）
-        saved_path = load_config().get("mt5_path", "")
-        if saved_path and os.path.isdir(saved_path):
-            self._set_mt5_manual(saved_path)
-        elif self._manual_mt5_path:
-            self._set_mt5_manual(self._manual_mt5_path)
-
-    def _on_mt5_path_changed(self, idx):
-        """Combo 切换时更新来源标签"""
-        if idx >= 0 and idx < len(self._mt5_installations):
-            _, source = self._mt5_installations[idx]
-            self.lbl_mt5_source.setText(source)
-            self._manual_mt5_path = None  # 选的是自动探测到的，清除手动
-
-    def _browse_mt5_path(self):
-        """手动浏览 MT5 目录"""
-        dlg = QFileDialog(self, "选择 MT5 安装目录（包含 terminal64.exe 的文件夹）")
-        dlg.setFileMode(QFileDialog.Directory)
-        dlg.setOption(QFileDialog.ShowDirsOnly, True)
-        # 优先从当前选择的路径开始
-        start_dir = self._get_selected_mt5_path()
-        if start_dir and os.path.isdir(start_dir):
-            dlg.setDirectory(start_dir)
-        elif self._mt5_installations:
-            dlg.setDirectory(self._mt5_installations[0][0])
-        else:
-            dlg.setDirectory("C:\\")
-        if dlg.exec():
-            selected = dlg.selectedFiles()
-            if selected:
-                path = os.path.normpath(selected[0])
-                self._set_mt5_manual(path)
-
-    def _set_mt5_manual(self, path):
-        """将手动指定的路径加入下拉列表并选中，同时持久化到 config"""
-        self._manual_mt5_path = path
-        self.combo_mt5.blockSignals(True)
-        # 检查是否已在列表中
-        found_idx = -1
-        for i in range(self.combo_mt5.count()):
-            if self.combo_mt5.itemData(i) == path:
-                found_idx = i
-                break
-        if found_idx < 0:
-            self.combo_mt5.insertItem(0, f"手动指定 — {path}", path)
-            found_idx = 0
-        self.combo_mt5.setCurrentIndex(found_idx)
-        self.lbl_mt5_source.setText("手动指定")
-        self.combo_mt5.blockSignals(False)
-        # 持久化到 config
-        update_config({"mt5_path": path})
-
-    def _get_selected_mt5_path(self):
-        """返回当前选中的 MT5 路径，或 None"""
-        idx = self.combo_mt5.currentIndex()
-        if idx >= 0:
-            path = self.combo_mt5.itemData(idx)
-            if path and os.path.isdir(path):
-                return path
-        return None
-
     def _toggle_bridge(self):
         if self._worker and self._worker.isRunning():
             # Stop
@@ -1506,9 +1382,11 @@ class BridgePage(QWidget):
             if not server or not token:
                 QMessageBox.warning(self, "信息不完整", "请先登录或配置服务器地址和Token。")
                 return
-            mt5_path = self._get_selected_mt5_path()
-            if mt5_path:
+            mt5_path = cfg.get("mt5_path", "")
+            if mt5_path and os.path.isdir(mt5_path):
                 self._log(f"MT5 路径: {mt5_path}")
+            else:
+                mt5_path = None
             self._worker = BridgeWorker(server, token, mt5_path)
             self._worker.log_signal.connect(self._log)
             self._worker.status_signal.connect(self._set_status)
@@ -1544,6 +1422,9 @@ class SettingsPage(QWidget):
         super().__init__()
         self._downloader = None
         self._pending_update = None
+        self._mt5_installations = []
+        self._manual_mt5_path = None
+        self._mt5_loaded = False
         self._init_ui()
 
     def _init_ui(self):
@@ -1631,6 +1512,47 @@ class SettingsPage(QWidget):
 
         layout.addWidget(account_card)
 
+        # ── MT5 安装路径 ──
+        mt5_path_card = QFrame()
+        mt5_path_card.setProperty("card", True)
+        mt5_path_layout = QVBoxLayout(mt5_path_card)
+        mt5_path_layout.setSpacing(8)
+        mt5_path_layout.setContentsMargins(16, 12, 16, 12)
+
+        mt5_path_header = QHBoxLayout()
+        lbl_mt5 = QLabel("MT5 安装路径")
+        lbl_mt5.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        mt5_path_header.addWidget(lbl_mt5)
+        mt5_path_header.addStretch()
+        self.lbl_mt5_source = QLabel("")
+        self.lbl_mt5_source.setProperty("muted", True)
+        self.lbl_mt5_source.setStyleSheet("font-size: 11px; background: transparent;")
+        mt5_path_header.addWidget(self.lbl_mt5_source)
+        mt5_path_layout.addLayout(mt5_path_header)
+
+        mt5_row = QHBoxLayout()
+        mt5_row.setSpacing(6)
+        self.combo_mt5 = QComboBox()
+        self.combo_mt5.setEditable(True)
+        self.combo_mt5.setInsertPolicy(QComboBox.NoInsert)
+        self.combo_mt5.setStyleSheet(
+            "QComboBox{background:#1e293b;color:#e2e8f0;border:1px solid #334155;"
+            "border-radius:6px;padding:8px 12px;font-size:12px;font-family:Consolas,'Microsoft YaHei',sans-serif;}"
+            "QComboBox:focus{border-color:#3b82f6;}"
+            "QComboBox QAbstractItemView{background:#1e293b;color:#e2e8f0;border:1px solid #334155;"
+            "selection-background-color:#3b82f6;padding:4px;}"
+            "QComboBox::drop-down{border:none;width:24px;}"
+        )
+        self.combo_mt5.currentIndexChanged.connect(self._on_mt5_path_changed)
+        mt5_row.addWidget(self.combo_mt5, 1)
+        btn_browse = QPushButton("浏览")
+        btn_browse.setProperty("secondary", True)
+        btn_browse.setFixedWidth(60)
+        btn_browse.clicked.connect(self._browse_mt5_path)
+        mt5_row.addWidget(btn_browse)
+        mt5_path_layout.addLayout(mt5_row)
+        layout.addWidget(mt5_path_card)
+
         # ── 版本信息（紧凑单行） ──
         version_card = QFrame()
         version_card.setProperty("card", True)
@@ -1714,6 +1636,11 @@ class SettingsPage(QWidget):
         else:
             self.lbl_user.setText("未登录")
 
+        # 首次进入设置页时探测 MT5
+        if not self._mt5_loaded:
+            self._mt5_loaded = True
+            QTimer.singleShot(50, self._refresh_mt5_paths)
+
     def _test_connection(self):
         server = self.input_server.text().strip()
         if not server:
@@ -1750,6 +1677,83 @@ class SettingsPage(QWidget):
         cfg["auto_login"] = False
         save_config(cfg)
         self.logout_signal.emit()
+
+    # ── MT5 路径选择 ──
+
+    def _refresh_mt5_paths(self):
+        """探测所有 MT5 安装并填充下拉列表"""
+        self._mt5_installations = BridgeWorker._find_mt5_installations()
+        self.combo_mt5.blockSignals(True)
+        self.combo_mt5.clear()
+        if not self._mt5_installations:
+            self.combo_mt5.addItem("未检测到MT5，请手动选择")
+            self.combo_mt5.setCurrentIndex(0)
+            self.lbl_mt5_source.setText("未找到")
+        else:
+            for path, source in self._mt5_installations:
+                label = f"{source} — {path}"
+                self.combo_mt5.addItem(label, path)
+            self.combo_mt5.setCurrentIndex(0)
+            first_source = self._mt5_installations[0][1]
+            self.lbl_mt5_source.setText(first_source)
+        self.combo_mt5.blockSignals(False)
+        # 恢复手动选择的路径（从 config 读取）
+        saved_path = load_config().get("mt5_path", "")
+        if saved_path and os.path.isdir(saved_path):
+            self._set_mt5_manual(saved_path)
+        elif self._manual_mt5_path:
+            self._set_mt5_manual(self._manual_mt5_path)
+
+    def _on_mt5_path_changed(self, idx):
+        """Combo 切换时更新来源标签"""
+        if idx >= 0 and idx < len(self._mt5_installations):
+            _, source = self._mt5_installations[idx]
+            self.lbl_mt5_source.setText(source)
+            self._manual_mt5_path = None
+
+    def _browse_mt5_path(self):
+        """手动浏览 MT5 目录"""
+        dlg = QFileDialog(self, "选择 MT5 安装目录（包含 terminal64.exe 的文件夹）")
+        dlg.setFileMode(QFileDialog.Directory)
+        dlg.setOption(QFileDialog.ShowDirsOnly, True)
+        start_dir = self._get_selected_mt5_path()
+        if start_dir and os.path.isdir(start_dir):
+            dlg.setDirectory(start_dir)
+        elif self._mt5_installations:
+            dlg.setDirectory(self._mt5_installations[0][0])
+        else:
+            dlg.setDirectory("C:\\")
+        if dlg.exec():
+            selected = dlg.selectedFiles()
+            if selected:
+                path = os.path.normpath(selected[0])
+                self._set_mt5_manual(path)
+
+    def _set_mt5_manual(self, path):
+        """将手动指定的路径加入下拉列表并选中，同时持久化到 config"""
+        self._manual_mt5_path = path
+        self.combo_mt5.blockSignals(True)
+        found_idx = -1
+        for i in range(self.combo_mt5.count()):
+            if self.combo_mt5.itemData(i) == path:
+                found_idx = i
+                break
+        if found_idx < 0:
+            self.combo_mt5.insertItem(0, f"手动指定 — {path}", path)
+            found_idx = 0
+        self.combo_mt5.setCurrentIndex(found_idx)
+        self.lbl_mt5_source.setText("手动指定")
+        self.combo_mt5.blockSignals(False)
+        update_config({"mt5_path": path})
+
+    def _get_selected_mt5_path(self):
+        """返回当前选中的 MT5 路径，或 None"""
+        idx = self.combo_mt5.currentIndex()
+        if idx >= 0:
+            path = self.combo_mt5.itemData(idx)
+            if path and os.path.isdir(path):
+                return path
+        return None
 
     def _check_update(self):
         cfg = load_config()
