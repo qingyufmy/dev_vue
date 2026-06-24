@@ -534,7 +534,8 @@ function showSignalNotification(signal) {
   const dirLabel = dir.toUpperCase() + " " + directionText(dir);
   const node = document.createElement("div");
   node.className = "toast signal-notification";
-  node.innerHTML = `<div class="notif-header">🔔 新信号</div><div class="notif-body"><span class="notif-symbol">${escapeHtml(signal.symbol)}</span> <span class="notif-dir tag ${dir}">${dirLabel}</span> <span class="notif-tf">${escapeHtml(signal.timeframe)}</span> <span class="notif-conf">${(signal.confidence * 100).toFixed(0)}%</span></div>`;
+  const conf = typeof signal.confidence === 'number' ? (signal.confidence > 1 ? signal.confidence : signal.confidence * 100) : 0;
+  node.innerHTML = `<div class="notif-header">🔔 新信号</div><div class="notif-body"><span class="notif-symbol">${escapeHtml(signal.symbol)}</span> <span class="notif-dir tag ${dir}">${dirLabel}</span> <span class="notif-tf">${escapeHtml(signal.timeframe)}</span> <span class="notif-conf">${conf.toFixed(0)}%</span></div>`;
   node.style.cursor = "pointer";
   node.onclick = () => {
     node.remove();
@@ -2290,7 +2291,8 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     const rows = closePositions.map(p => {
       const actionClass = p.action === 'close' ? 'close-action' : 'hold-action';
       const actionLabel = p.action === 'close' ? '🔴 平仓' : '🟢 持有';
-      const pct = ((p.confidence || 0) * 100).toFixed(0);
+      const raw = p.confidence || 0;
+      const pct = (raw > 1 ? raw : raw * 100).toFixed(0);
       const confClass = Number(pct) >= 70 ? 'confidence-high' : Number(pct) >= 40 ? 'confidence-mid' : 'confidence-low';
       const ticket = String(p.ticket);
       return `<tr>
