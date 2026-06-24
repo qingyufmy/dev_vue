@@ -380,6 +380,12 @@ class BridgeWorker(QThread):
             if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                 return result, None
             code = result.retcode if result else -1
+            # Edge case: broker auto-filled despite non-DONE retcode (e.g. requote with auto-fill)
+            if result and (result.order or 0) > 0:
+                self.log_signal.emit(
+                    f"⚠ 订单已成交但返回码非DONE (retcode={code}, ticket={result.order}) — 不重试避免重复开仓"
+                )
+                return result, result.comment if result else "order_send failed"
             if code in self._RETRYABLE_RETCODES and attempt < self._MAX_RETRY:
                 self.log_signal.emit(
                     f"报价已过期 (retcode={code})，尝试刷新价格重试 ({attempt+1}/{self._MAX_RETRY})..."
@@ -424,7 +430,9 @@ class BridgeWorker(QThread):
                     return req, req["price"]
                 result, comment = self._order_send_with_retry(_build)
                 if result:
-                    return {"status": "success", "order": result.order, "price": result.price}
+                    resp = {"status": "success", "order": result.order, "price": result.price}
+                    if comment: resp["warning"] = comment
+                    return resp
                 return {"status": "error", "message": comment or "order_send failed"}
             elif action == "close":
                 ticket = params.get("ticket")
@@ -443,7 +451,9 @@ class BridgeWorker(QThread):
                         return req, price
                     result, comment = self._order_send_with_retry(_close)
                     if result:
-                        return {"status": "success", "ticket": pos.ticket}
+                        resp = {"status": "success", "ticket": pos.ticket}
+                        if comment: resp["warning"] = comment
+                        return resp
                     return {"status": "error", "message": comment or "close failed"}
                 else:
                     sym = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None

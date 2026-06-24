@@ -700,6 +700,13 @@ async function runTradeReviewCycle(userId, trigger) {
     const windowEnd = utcNow()
 
     const context = await buildTradeReviewContext(userId, symbol, windowStart, windowEnd)
+    const hasSignals = (context.executed_signals || []).length > 0
+    const hasClosed = (context.closed_orders || []).length > 0
+    const hasPositions = (context.open_positions || []).length > 0
+    if (!hasSignals && !hasClosed && !hasPositions) {
+      tradeReviewState[userId].running = false
+      return { status: 'skipped', reason: 'nothing_to_review', summary: '窗口内无信号、无成交、无持仓，跳过复盘。' }
+    }
     const review = await reviewTrades(config, context)
 
     const result = {
@@ -739,7 +746,7 @@ function startTradeReviewScheduler(userId) {
       tradeReviewState[userId].timer = setTimeout(tick, intervalMs)
     }
   }
-  tradeReviewState[userId].timer = setTimeout(tick, 30000) // first run after 30s
+  tradeReviewState[userId].timer = setTimeout(tick, 300000) // first run after 5 min (prevent aggressive re-trigger on scheduler restart)
 }
 
 function stopTradeReviewScheduler(userId) {
@@ -1447,7 +1454,8 @@ async function runAutoCycle(userId, symbol, timeframe) {
         execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
         if (execResult.status === 'success') {
           signal.is_executed = true
-          await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?', [JSON.stringify(execResult), signal.id])
+          const ticket = execResult.order || execResult.ticket || null
+          await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ?, trade_ticket = ?, executed_at = NOW() WHERE id = ?', [JSON.stringify(execResult), ticket, signal.id])
         }
       }
     } else if (market.inference_source !== 'ai') {
