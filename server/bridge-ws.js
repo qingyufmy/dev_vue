@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { query, queryOne, queryAll, queryRun, logAudit } from './db.js'
+import { query, queryOne, queryAll, queryRun, logAudit, withTransaction } from './db.js'
 
 // Parse symbols from DB: handles legacy JSON array or plain comma-separated text
 function parseSymbols(raw) {
@@ -27,7 +27,7 @@ function toMt5Time(str) {
   } catch { return str }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
+import { JWT_SECRET } from './config.js'
 
 // Per-user state
 const bridges = new Map()       // userId -> { ws, lastSeen }
@@ -37,6 +37,15 @@ let adminUserId = null          // cached admin userId for fallback
 
 let cmdCounter = 0
 let wss = null
+const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
+
+// 每 10 分钟清理超过 30 秒未使用的广播节流条目
+setInterval(() => {
+  const cutoff = Date.now() - 30000
+  for (const [uid, last] of _broadcastThrottle) {
+    if (last < cutoff) _broadcastThrottle.delete(uid)
+  }
+}, 10 * 60 * 1000)
 
 async function getAdminUserId() {
   if (adminUserId) return adminUserId
@@ -133,8 +142,14 @@ function handleBridge(ws, url) {
   try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
+  // 在计划检查完成之前先缓存消息，防止竞态条件（消息先于 _initBridge 到达）
+  const msgQueue = []
+  const queueMsg = (data) => msgQueue.push(data)
+  ws.on('message', queueMsg)
+
   // Check user plan — only Pro allowed (async, blocks bridge setup)
   queryOne('SELECT plan, plan_expires_at, role FROM users WHERE id = ?', [userId]).then(user => {
+    ws.off('message', queueMsg) // 移除缓存监听器
     if (!user) { ws.close(4002, 'User not found'); return }
     if (user.role !== 'admin') {
       const now = new Date()
@@ -147,7 +162,10 @@ function handleBridge(ws, url) {
       }
     }
     _initBridge(ws, userId)
+    // 重放缓存消息
+    for (const msg of msgQueue) ws.emit('message', msg)
   }).catch(err => {
+    ws.off('message', queueMsg)
     console.error('[BridgeWS] Plan check error:', err)
     ws.close(4002, 'Server error')
   })
@@ -277,11 +295,16 @@ function sendToBrowsers(userId, data) {
     }
   }
   // If this is admin's bridge data, also forward to users without their own bridge
+  // Throttle: max 4 broadcasts per second per user to prevent flooding browsers
   if (userId === adminUserId && data.type === 'data') {
     const adminJson = JSON.stringify({ ...data, _source: 'admin_fallback' })
+    const now = Date.now()
     for (const [uid, browserSet] of browsers) {
       if (uid === adminUserId) continue
       if (bridges.has(uid)) continue // user has their own bridge
+      const last = _broadcastThrottle.get(uid) || 0
+      if (now - last < 250) continue // skip if < 250ms since last broadcast
+      _broadcastThrottle.set(uid, now)
       for (const ws of browserSet) {
         if (ws.readyState === 1) {
           try { ws.send(adminJson) } catch {}
@@ -406,46 +429,78 @@ async function handleBrowserCommand(ws, userId, msg) {
           bridgeOk = true
           historyUserId = adminUserId
         }
-        // Check if any filter is active
-        const hasFilter = params.entry_from || params.entry_to || params.close_from || params.close_to || params.direction || params.profit_filter
         if (bridgeOk) {
-          // When filtering, fetch all data (large page_size) so we can filter server-side
-          const bridgePageSize = hasFilter ? 9999 : (params.page_size || 20)
-          result = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: bridgePageSize })
-          // Apply filters if present
-          if (hasFilter && result?.status === 'success' && Array.isArray(result.orders)) {
-            let orders = result.orders
-            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '') >= params.entry_from)
-            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '') <= params.entry_to + 'T23:59:59')
-            if (params.close_from) orders = orders.filter(o => (o.close_time || o.time || '') >= params.close_from)
-            if (params.close_to) orders = orders.filter(o => (o.close_time || o.time || '') <= params.close_to + 'T23:59:59')
-            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
-            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit) > 0)
-            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit) < 0)
-            // Recalculate statistics from filtered data
-            const tp = orders.reduce((s, o) => s + Number(o.profit || 0), 0)
-            const stats = result.statistics || {}
-            result.statistics = {
-              ...stats,
-              total_profit: Math.round(tp * 100) / 100,
-              net_result: Math.round((tp + (stats.credit || 0) + (stats.deposit || 0) - (stats.withdrawal || 0)) * 100) / 100,
-              trade_count: orders.length
-            }
-            // Paginate filtered results
+          // Fetch all orders from bridge (no date filter on bridge — server handles filtering)
+          const hRes = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: 9999 })
+          if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
+            const allOrders = hRes.orders          // preserve ALL orders for cumulative calc
+            let orders = [...allOrders]
+            const origStats = hRes.statistics || {}
+            const _ordDate = o => (o.close_time || o.time || '')
+            const _ordType = o => (o.type || '')
+            const _ordProfit = o => Number(o.profit || 0)
+
+            // Apply close-time filters
+            if (params.close_from) orders = orders.filter(o => _ordDate(o).slice(0, 10) >= params.close_from)
+            if (params.close_to) orders = orders.filter(o => _ordDate(o).slice(0, 10) <= params.close_to)
+
+            // Apply entry-time filters
+            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) >= params.entry_from)
+            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) <= params.entry_to)
+
+            // Apply direction / profit filters
+            if (params.direction) orders = orders.filter(o => _ordType(o).toUpperCase() === params.direction)
+            if (params.profit_filter === 'profit') orders = orders.filter(o => _ordProfit(o) > 0)
+            if (params.profit_filter === 'loss') orders = orders.filter(o => _ordProfit(o) < 0)
+
+            // Sort by close_time DESC — newest first (page 1 = latest 20)
+            orders.sort((a, b) => _ordDate(b).localeCompare(_ordDate(a)))
+
+            // ---- Recalculate stats from filtered orders ----
+            // total_profit: only filtered orders (date range + direction + profit_filter)
+            const filteredProfit = Math.round(orders.reduce((s, o) => s + _ordProfit(o), 0) * 100) / 100
+
+            // net_result: 本金 + 从开始到筛选结束日期的累计收益
+            // (cumulative from ALL orders, not affected by direction/profit_filter)
+            const closeTo = params.close_to
+              || (allOrders.length > 0 ? allOrders.reduce((max, o) => { const d = _ordDate(o).slice(0,10); return d > max ? d : max; }, '') : '')
+            const cumToDate = Math.round(allOrders
+              .filter(o => _ordDate(o).slice(0, 10) <= closeTo)
+              .reduce((s, o) => s + _ordProfit(o), 0) * 100) / 100
+
+            // initCapital: 本金 = 当前余额 - 全网累计净结果
+            const allTimeNet = (Number(origStats.total_profit) || 0) + (Number(origStats.credit) || 0) + (Number(origStats.deposit) || 0) - (Number(origStats.withdrawal) || 0)
+            const balance = Number(origStats.account_balance) || 0
+            const initCapital = Math.max(0, balance - allTimeNet)
+            // 结余 = 本金 + 入金 + 累计收益(到 close_to 日期)
+            const deposit = Number(origStats.deposit) || 0
+            const netToDate = Math.round((initCapital + deposit + cumToDate) * 100) / 100
+
+            // Paginate
             const page = params.page || 1
             const pageSize = params.page_size || 20
             const si = (page - 1) * pageSize
-            result.orders = orders.slice(si, si + pageSize)
-            result.pagination = {
-              current_page: page,
-              page_size: pageSize,
-              total_count: orders.length,
-              total_pages: Math.max(Math.ceil(orders.length / pageSize), 1)
+
+            result = {
+              status: 'success',
+              orders: orders.slice(si, si + pageSize),
+              statistics: {
+                total_profit: filteredProfit,
+                credit: origStats.credit || 0,
+                deposit: origStats.deposit || 0,
+                withdrawal: origStats.withdrawal || 0,
+                net_result: netToDate,
+              },
+              pagination: {
+                current_page: page,
+                page_size: pageSize,
+                total_count: orders.length,
+                total_pages: Math.max(Math.ceil(orders.length / pageSize), 1)
+              }
             }
+          } else {
+            result = hRes || { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
           }
-          // TEMP DIAG: check order lookup
-          const diag = result?._diag
-          if (diag) console.log(`[OrdDiag] lookup_count=${diag.order_lookup_count} first_keys=${JSON.stringify(diag.order_diag?.first_keys)} sample_tp=${diag.order_diag?.sample_tp} sample_sl=${diag.order_diag?.sample_sl} via_attr_tp=${diag.order_diag?.via_attr_tp} via_attr_sl=${diag.order_diag?.via_attr_sl} has_tp=${diag.order_diag?.has_tp_attr} has_sl=${diag.order_diag?.has_sl_attr} ticket=${diag.order_diag?.ticket_sample}`)
         } else {
           result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
         }
@@ -459,53 +514,88 @@ async function handleBrowserCommand(ws, userId, msg) {
           hcUserId = adminUserId
         }
         if (bridgeOk) {
-          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999, compact: true })
+          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999 })
           if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
-            let orders = hcResult.orders
-            // Apply filters (compact uses short keys: t=time, p=profit, y=type)
-            if (params.close_from) orders = orders.filter(o => (o.t || '') >= params.close_from)
-            if (params.close_to) orders = orders.filter(o => (o.t || '') <= params.close_to + 'T23:59:59')
-            if (params.direction) orders = orders.filter(o => (o.y || '').toUpperCase() === params.direction)
-            if (params.profit_filter === 'profit') orders = orders.filter(o => o.p > 0)
-            if (params.profit_filter === 'loss') orders = orders.filter(o => o.p < 0)
+            // Compute initCapital from ALL orders (before filtering), using account balance
+            const allOrders = hcResult.orders;
+            const totalProfit = allOrders.reduce((s, o) => s + Number(o.profit || 0), 0);
+            let initCapital = 0;
+            let acct = null;
+            try {
+              acct = await ai.mt5Bridge(hcUserId, 'account', {});
+              if (acct?.status === 'success' && acct.balance != null) {
+                initCapital = Math.max(0, acct.balance - totalProfit);
+              }
+            } catch (e) { /* fall through, initCapital=0 */ }
 
-            // Aggregate by close date
-            const dailyMap = {};
-            orders.forEach(o => {
-              const d = (o.t || '').slice(0, 10);
+            // Default chart date range: last 30 days
+            const now = new Date()
+            const defaultFrom = new Date(now); defaultFrom.setDate(defaultFrom.getDate() - 30)
+            const dateFrom = params.close_from || defaultFrom.toISOString().slice(0, 10)
+            const dateTo = params.close_to || now.toISOString().slice(0, 10)
+
+            // Daily aggregation on ALL orders (for daily bars display, up to 30 days)
+            const allDailyMap = {};
+            hcResult.orders.forEach(o => {
+              const d = (o.close_time || '').slice(0, 10);
               if (!d) return;
-              dailyMap[d] = (dailyMap[d] || 0) + o.p;
-            });
-            const dates = Object.keys(dailyMap).sort();
-            const daily = dates.map(d => ({ date: d, profit: Math.round(dailyMap[d] * 100) / 100 }));
+              if (!allDailyMap[d]) allDailyMap[d] = { profit: 0, trade_count: 0, wins: 0, losses: 0 }
+              const p = Number(o.profit || 0)
+              allDailyMap[d].profit += p
+              allDailyMap[d].trade_count++
+              if (p > 0) allDailyMap[d].wins++
+              else if (p < 0) allDailyMap[d].losses++
+            })
+            const allDates = Object.keys(allDailyMap).sort()
+            // Only show dates within the selected range
+            const shownDates = allDates.filter(d => d >= dateFrom && d <= dateTo)
+            const daily = shownDates.map(d => ({
+              date: d,
+              profit: Math.round(allDailyMap[d].profit * 100) / 100,
+              trade_count: allDailyMap[d].trade_count,
+              wins: allDailyMap[d].wins,
+              losses: allDailyMap[d].losses
+            }))
+
+            // Filter orders for cumulative/drawdown/stats (within selected range)
+            let orders = hcResult.orders.filter(o => {
+              const d = (o.close_time || '').slice(0, 10)
+              return d >= dateFrom && d <= dateTo
+            })
+
+            // Apply additional chart filters (direction, profit)
+            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
+            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit || 0) > 0)
+            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit || 0) < 0)
 
             // Sort orders by close time (mandatory for correct drawdown)
-            orders.sort((a, b) => (a.t || '').localeCompare(b.t || ''));
+            orders.sort((a, b) => (a.close_time || '').localeCompare(b.close_time || ''));
 
-            // Cumulative + drawdown per day (aligned with daily chart labels)
+            // Cumulative + drawdown per day (aligned with shownDates daily chart labels)
+            // Drawdown based on equity = initCapital + cum, not raw profit
             const cumulative = [];
             const drawdown = [];
-            let cum = 0, peak = 0, maxDD = 0;
+            let cum = 0, peak = initCapital, maxDD = 0;
             let orderIdx = 0;
-            dates.forEach(d => {
-              // Advance through all orders that close on this day
-              while (orderIdx < orders.length && (orders[orderIdx].t || '').slice(0, 10) === d) {
-                cum += orders[orderIdx].p;
+            shownDates.forEach(d => {
+              while (orderIdx < orders.length && (orders[orderIdx].close_time || '').slice(0, 10) === d) {
+                cum += Number(orders[orderIdx].profit || 0);
                 orderIdx++;
               }
               cum = Math.round(cum * 100) / 100;
               cumulative.push(cum);
-              if (cum > peak) peak = cum;
-              const dd = peak > 0 ? Math.round((peak - cum) / peak * 10000) / 100 : 0;
+              const equity = initCapital + cum;
+              if (equity > peak) peak = equity;
+              const dd = peak > 0 ? Math.round((1 - equity / peak) * 10000) / 100 : 0;
               drawdown.push(dd);
               if (dd > maxDD) maxDD = dd;
             });
 
-            // Win/loss stats
-            const wins = orders.filter(o => o.p > 0)
-            const losses = orders.filter(o => o.p < 0)
-            const grossProfit = wins.reduce((s, o) => s + o.p, 0)
-            const grossLoss = Math.abs(losses.reduce((s, o) => s + o.p, 0))
+            // Win/loss stats (per-trade, avg_win/avg_loss)
+            const wins = orders.filter(o => Number(o.profit || 0) > 0)
+            const losses = orders.filter(o => Number(o.profit || 0) < 0)
+            const grossProfit = wins.reduce((s, o) => s + Number(o.profit || 0), 0)
+            const grossLoss = Math.abs(losses.reduce((s, o) => s + Number(o.profit || 0), 0))
             const avgWin = wins.length > 0 ? grossProfit / wins.length : 0
             const avgLoss = losses.length > 0 ? grossLoss / losses.length : 0
 
@@ -561,29 +651,32 @@ async function handleBrowserCommand(ws, userId, msg) {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
         const now = localNow()
-        await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
-        await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
-          temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override,
-          auto_symbols, auto_interval_minutes, system_prompt, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-          ON DUPLICATE KEY UPDATE
-            api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
-            api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
-            max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
-            enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
-            max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
-            model_sharing_enabled = VALUES(model_sharing_enabled), auto_config_override = VALUES(auto_config_override),
-            auto_symbols = VALUES(auto_symbols), auto_interval_minutes = VALUES(auto_interval_minutes),
-            system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
-            is_active = 1, updated_at = VALUES(updated_at)`,
-          [userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
-            cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
-            cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-            cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
-            cfg.auto_config_override ? 1 : 0,
-            cfg.auto_symbols || null, cfg.auto_interval_minutes || null,
-            cfg.system_prompt || null, now, now])
+        const sid = params.session_id || 'default'
+        await withTransaction(async (run) => {
+          await run('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, sid])
+          await run(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
+            temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
+            max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override,
+            auto_symbols, auto_interval_minutes, system_prompt, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
+              api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
+              max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
+              enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
+              max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
+              model_sharing_enabled = VALUES(model_sharing_enabled), auto_config_override = VALUES(auto_config_override),
+              auto_symbols = VALUES(auto_symbols), auto_interval_minutes = VALUES(auto_interval_minutes),
+              system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
+              is_active = 1, updated_at = VALUES(updated_at)`,
+            [userId, sid, cfg.api_provider || 'deepseek', cfg.api_key || null,
+              cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
+              cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
+              cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
+              cfg.auto_config_override ? 1 : 0,
+              cfg.auto_symbols || null, cfg.auto_interval_minutes || null,
+              cfg.system_prompt || null, now, now])
+        })
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
         break

@@ -2,8 +2,17 @@ import { Router } from 'express'
 import nodemailer from 'nodemailer'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import jwt from 'jsonwebtoken'
+import { JWT_SECRET } from '../config.js'
 
-const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
+function escapeHtml(text) {
+  if (!text) return ''
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
 
 function withAuth(req, res, next) {
   const authHeader = req.headers.authorization
@@ -91,12 +100,12 @@ router.post('/feedback', withAuth, async (req, res) => {
           subject: `[${typeLabel}] ${title}`,
           html: `
             <div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:600px;margin:0 auto">
-              <h2 style="color:#d4af37;border-bottom:2px solid #d4af37;padding-bottom:8px">📨 ${typeLabel}</h2>
-              <p><strong>标题：</strong>${title}</p>
-              <p><strong>提交人：</strong>${userInfo}</p>
-              <p><strong>联系方式：</strong>${contact || '未填写'}</p>
+              <h2 style="color:#d4af37;border-bottom:2px solid #d4af37;padding-bottom:8px">📨 ${escapeHtml(typeLabel)}</h2>
+              <p><strong>标题：</strong>${escapeHtml(title)}</p>
+              <p><strong>提交人：</strong>${escapeHtml(userInfo)}</p>
+              <p><strong>联系方式：</strong>${escapeHtml(contact) || '未填写'}</p>
               <hr style="border:none;border-top:1px solid #333" />
-              <div style="background:#f8f8f8;padding:16px;border-radius:8px;white-space:pre-wrap">${description.replace(/</g, '&lt;')}</div>
+              <div style="background:#f8f8f8;padding:16px;border-radius:8px;white-space:pre-wrap">${escapeHtml(description)}</div>
               <p style="color:#999;font-size:12px;margin-top:20px">反馈ID: #${feedbackId} · 来源: ${req.get('origin') || 'AURUM AI'}</p>
             </div>
           `

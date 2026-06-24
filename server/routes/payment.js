@@ -27,7 +27,7 @@ router.get('/payment', authMiddleware, async (req, res) => {
 
     // Calculate credit from existing plan
     let credit = 0
-    const user = await queryOne('SELECT plan, plan_expires_at FROM users WHERE id = ?', [req.user.id])
+    const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
     if (user?.plan && user.plan !== 'free' && user.plan_expires_at) {
       const expiresAt = new Date(user.plan_expires_at + 'T23:59:59+08:00')
       const now = new Date()
@@ -64,6 +64,10 @@ router.get('/payment', authMiddleware, async (req, res) => {
 })
 
 router.post('/payment', authMiddleware, async (req, res) => {
+  // ⚠️ 支付功能尚未对接真实支付网关，暂时禁用，防止绕过支付免费获取会员
+  return res.status(503).json({ ok: false, error: '支付功能暂时维护中，请联系客服' })
+
+  // eslint-disable-next-line no-unreachable
   try {
     const { plan, period, use_referral_credit } = req.body
     const planInfo = PLANS[plan]

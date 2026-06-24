@@ -534,7 +534,8 @@ function showSignalNotification(signal) {
   const dirLabel = dir.toUpperCase() + " " + directionText(dir);
   const node = document.createElement("div");
   node.className = "toast signal-notification";
-  node.innerHTML = `<div class="notif-header">🔔 新信号</div><div class="notif-body"><span class="notif-symbol">${escapeHtml(signal.symbol)}</span> <span class="notif-dir tag ${dir}">${dirLabel}</span> <span class="notif-tf">${escapeHtml(signal.timeframe)}</span> <span class="notif-conf">${(signal.confidence * 100).toFixed(0)}%</span></div>`;
+  const conf = typeof signal.confidence === 'number' ? (signal.confidence > 1 ? signal.confidence : signal.confidence * 100) : 0;
+  node.innerHTML = `<div class="notif-header">🔔 新信号</div><div class="notif-body"><span class="notif-symbol">${escapeHtml(signal.symbol)}</span> <span class="notif-dir tag ${dir}">${dirLabel}</span> <span class="notif-tf">${escapeHtml(signal.timeframe)}</span> <span class="notif-conf">${conf.toFixed(0)}%</span></div>`;
   node.style.cursor = "pointer";
   node.onclick = () => {
     node.remove();
@@ -637,7 +638,10 @@ function connectBridgeStatusWs(onReady) {
   const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
+  let _readyFired = false;
+  const _fireReady = () => { if (!_readyFired && typeof onReady === 'function') { _readyFired = true; onReady(); } };
   ws.onopen = () => {
+    state._reconnectAttempts = 0; // reset backoff on successful connection
 
     state._hbSeq = 0;
     if (state._hbTimer) clearInterval(state._hbTimer);
@@ -646,7 +650,7 @@ function connectBridgeStatusWs(onReady) {
         try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq })); } catch {}
       }
     }, 1000);
-    if (typeof onReady === 'function') onReady();
+    _fireReady();
   };
   ws.onmessage = (e) => {
     try {
@@ -681,14 +685,24 @@ function connectBridgeStatusWs(onReady) {
     if (state.bridgeWs === ws) state.bridgeWs = null;
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
+    _fireReady(); // ensure bootstrap() doesn't hang when WS fails to connect
     // Auth failure (server closed with 4002) -> don't retry
     if (e.code === 4002) { setBadge("gatewayMode", "认证失败，请重新登录", "danger"); return; }
     // Prevent duplicate reconnect timers
     if (state._reconnectTimer) clearTimeout(state._reconnectTimer);
     setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
-    if (state.token) state._reconnectTimer = setTimeout(() => { state._reconnectTimer = null; connectBridgeStatusWs(); }, 3000);
+    if (state.token) {
+      state._reconnectAttempts = (state._reconnectAttempts || 0) + 1;
+      // Exponential backoff: 3s → 6s → 12s → ... max 30s, with ±20% jitter
+      const delay = Math.min(3000 * Math.pow(2, state._reconnectAttempts - 1), 30000);
+      const jitter = delay * (0.8 + Math.random() * 0.4); // 80%-120% of delay
+      state._reconnectTimer = setTimeout(() => {
+        state._reconnectTimer = null;
+        connectBridgeStatusWs();
+      }, jitter);
+    }
   };
-  ws.onerror = () => {};
+  ws.onerror = () => { _fireReady(); };
 }
 
 // Market status display helper
@@ -791,6 +805,7 @@ function handleBridgeData(msg) {
           loadPositions();
           loadAccount();
           loadHistory();
+          loadHistoryChart();
         }, 500);
       }
     }
@@ -1090,6 +1105,7 @@ async function refreshAll() {
       loadConfig(),
       loadSignals(),
       loadHistory(),
+      loadHistoryChart(),
       loadAudit(),
       loadKlineData(),
     ]);
@@ -1809,8 +1825,6 @@ function applyProviderPreset(provider) {
   if (!currentModel || allModels.includes(currentModel)) modelInput.value = preset.models[0];
 }
 
-$('apiProvider').addEventListener('change', e => applyProviderPreset(e.target.value));
-
 async function loadConfig() {
   const data = await wsApi("ai_config");
   const cfg = data.config;
@@ -2277,7 +2291,8 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     const rows = closePositions.map(p => {
       const actionClass = p.action === 'close' ? 'close-action' : 'hold-action';
       const actionLabel = p.action === 'close' ? '🔴 平仓' : '🟢 持有';
-      const pct = ((p.confidence || 0) * 100).toFixed(0);
+      const raw = p.confidence || 0;
+      const pct = (raw > 1 ? raw : raw * 100).toFixed(0);
       const confClass = Number(pct) >= 70 ? 'confidence-high' : Number(pct) >= 40 ? 'confidence-mid' : 'confidence-low';
       const ticket = String(p.ticket);
       return `<tr>
@@ -2611,7 +2626,7 @@ async function submitManualOrder() {
     const result = await wsApi("open", order.payload);
     closeManualOrderModal();
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadAudit(), loadStatus()]);
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -2624,7 +2639,7 @@ async function closePosition(ticket) {
   try {
     const result = await wsApi("close", { ticket: Number(ticket), confirm: true });
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadAudit(), loadStatus()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadAudit(), loadStatus()]);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2846,6 +2861,7 @@ async function loadHistory(forceRefresh) {
 }
 
 function _applyHistoryData(data) {
+  if (!data) return;
   const stats = data.statistics || {};
   setText("historyProfit", fmt(stats.total_profit));
   setText("historyCredit", fmt(stats.credit));
@@ -2865,6 +2881,29 @@ function _applyHistoryData(data) {
   const pg = data.pagination || {};
   renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, pg.total_count || 0, "history");
   setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
+}
+
+// ---- Chart-only fetch: independent of table filters, defaults to 30 days ----
+async function loadHistoryChart(forceRefresh) {
+  try {
+    const from = document.getElementById('chartDateFrom')?.value || '';
+    const to = document.getElementById('chartDateTo')?.value || '';
+    const params = {};
+    if (from) params.close_from = from;
+    if (to) params.close_to = to;
+
+    const filterKey = JSON.stringify(params);
+    if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
+      _renderHistoryChart(_historyChartCache.data);
+      return;
+    }
+
+    const data = await wsApi("history_chart_data", params);
+    if (data?.status === 'success') {
+      _historyChartCache = { filters: filterKey, data };
+      _renderHistoryChart(data);
+    }
+  } catch (e) { console.error("loadHistoryChart:", e); }
 }
 
 function _renderHistoryRows(rows, tickets, closeTickets) {
@@ -2890,7 +2929,7 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="num">${(() => { const ep = parseFloat(row.entry_price); const xp = parseFloat(exitPrice); if (!ep || !xp || ep === 0) return '--'; const pct = String(row.type || '').toUpperCase() === 'BUY' ? ((xp - ep) / ep * 100) : ((ep - xp) / ep * 100); const cls = pct >= 0 ? 'pnl-positive' : 'pnl-negative'; const sign = pct >= 0 ? '+' : ''; return `<span class="${cls}">${sign}${pct.toFixed(2)}%</span>`; })()}</td>
+      <td class="${profitClass(row.profit_points || 0)}">${row.profit_points != null ? fmt(row.profit_points, 0) : '--'}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>  `;
   }).join("") : '<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>';
@@ -2901,8 +2940,6 @@ let _historyChart = null;
 /* ---- History Profit Chart ---- */
 
 /* ---- Chart date range state ---- */
-let _chartDateFrom = '';
-let _chartDateTo = '';
 
 /* ---- Data labels plugin (show values on bars when few points) ---- */
 const barLabelPlugin = {
@@ -2914,8 +2951,10 @@ const barLabelPlugin = {
     ctx.save();
     ctx.font = '9px sans-serif';
     ctx.textAlign = 'center';
-    meta.data.forEach((bar, i) => {
-      const val = chart.data.datasets[0].data[i];
+    const dataset = chart.data.datasets[0];
+    meta.data.forEach((bar) => {
+      const idx = bar.index; // Chart.js 内部数据索引，避免 forEach 循环索引错位
+      const val = dataset.data[idx];
       if (val === undefined) return;
       ctx.fillStyle = val >= 0 ? '#ef4444' : '#10b981';
       ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(2), bar.x, bar.y - 5);
@@ -2944,37 +2983,6 @@ const zeroLinePlugin = {
   }
 };
 
-
-async function loadHistoryChart(forceRefresh) {
-  try {
-    const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
-    const entryTo = document.getElementById('filterEntryTo')?.value || '';
-    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
-    const closeTo = document.getElementById('filterCloseTo')?.value || '';
-    const direction = document.getElementById('filterDirection')?.value || '';
-    const profit = document.getElementById('filterProfit')?.value || '';
-    const filterParams = {};
-    if (entryFrom) filterParams.entry_from = entryFrom;
-    if (entryTo) filterParams.entry_to = entryTo;
-    if (closeFrom) filterParams.close_from = closeFrom;
-    if (closeTo) filterParams.close_to = closeTo;
-    if (direction) filterParams.direction = direction;
-    if (profit) filterParams.profit_filter = profit;
-    if (_chartDateFrom) filterParams.close_from = _chartDateFrom;
-    if (_chartDateTo) filterParams.close_to = _chartDateTo;
-
-    // Cache check
-    const filterKey = JSON.stringify(filterParams);
-    if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
-      _renderHistoryChart(_historyChartCache.data);
-      return;
-    }
-
-    const data = await wsApi('history_chart_data', filterParams);
-    _historyChartCache = { filters: filterKey, data };
-    _renderHistoryChart(data);
-  } catch (e) { console.error("loadHistoryChart:", e); }
-}
 
 function _renderHistoryChart(data) {
   const { daily = [], cumulative = [], drawdown = [], stats = {} } = data;
@@ -3064,12 +3072,11 @@ function _renderHistoryChart(data) {
         const idx = elements[0].index;
         const date = daily[idx]?.date;
         if (!date) return;
-        const fromEl = document.getElementById('filterEntryFrom');
-        const toEl = document.getElementById('filterEntryTo');
-        if (fromEl) fromEl.value = date;
-        if (toEl) toEl.value = date;
+        // Set TABLE close-date filter, reload table only — chart stays unchanged
+        document.getElementById('filterCloseFrom') && (document.getElementById('filterCloseFrom').value = date);
+        document.getElementById('filterCloseTo') && (document.getElementById('filterCloseTo').value = date);
+        state.historyFilters.page = 1;
         _historyCache = null;
-        _historyChartCache = null;
         loadHistory(true);
       },
       plugins: {
@@ -3223,6 +3230,7 @@ async function loadAudit() {
 
 function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
+  $('apiProvider')?.addEventListener('change', e => applyProviderPreset(e.target.value));
   $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
@@ -3353,36 +3361,31 @@ function bindEvents() {
     if (closeButton) closePosition(closeButton.dataset.closeTicket);
   });
 
-  // History filter buttons
+  // History table filter buttons (only affect table, not chart)
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     state.historyFilters.page = 1;
-    _historyCache = null; _historyChartCache = null;
-    loadHistory();
-    loadHistoryChart();
+    _historyCache = null;
+    loadHistory(true);
   });
   document.getElementById('historyFilterReset')?.addEventListener('click', () => {
     ['filterEntryFrom','filterEntryTo','filterCloseFrom','filterCloseTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
-    _historyCache = null; _historyChartCache = null;
-    loadHistory();
-    loadHistoryChart();
+    _historyCache = null;
+    loadHistory(true);
   });
-  // Chart date range filter
+  // Chart date range filter (only affects chart, not table)
   document.getElementById('chartDateApply')?.addEventListener('click', () => {
-    _chartDateFrom = document.getElementById('chartDateFrom')?.value || '';
-    _chartDateTo = document.getElementById('chartDateTo')?.value || '';
     _historyChartCache = null;
-    loadHistoryChart();
+    loadHistoryChart(true);
   });
   document.getElementById('chartDateReset')?.addEventListener('click', () => {
-    _chartDateFrom = '';
-    _chartDateTo = '';
     const ef = document.getElementById('chartDateFrom');
     const et = document.getElementById('chartDateTo');
     if (ef) ef.value = '';
     if (et) et.value = '';
-    loadHistoryChart();
+    _historyChartCache = null;
+    loadHistoryChart(true);
   });
 }
 

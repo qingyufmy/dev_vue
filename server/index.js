@@ -1,8 +1,10 @@
 import express from 'express'
 import cors from 'cors'
+import rateLimit from 'express-rate-limit'
 import multer from 'multer'
 import jwt from 'jsonwebtoken'
 import http from 'http'
+import { JWT_SECRET } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
@@ -46,11 +48,45 @@ if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
 const upload = multer({ dest: join(__dirname, uploadDir), limits: { fileSize: 10 * 1024 * 1024 } })
 
 const app = express()
-app.set('trust proxy', true)
+app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避免 IP 欺骗
 
-app.use(cors())
+// CORS: restrict to known origins
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8080').split(',').map(s => s.trim())
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
+      cb(null, true)
+    } else {
+      cb(new Error('CORS not allowed'))
+    }
+  },
+  credentials: true,
+  maxAge: 86400
+}))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
+
+// Rate limiting — prevent brute force and DoS
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: '请求过于频繁，请稍后再试' }
+})
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // stricter for login/register
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: '操作过于频繁，请稍后再试' }
+})
+app.use('/api', apiLimiter)
+app.use('/api/login', authLimiter)
+app.use('/api/register', authLimiter)
+app.use('/api/send-code', authLimiter)
+app.use('/api/verify-code', authLimiter)
+app.use('/api/reset-password', authLimiter)
 
 // Serve uploaded files
 app.use('/uploads', express.static(join(__dirname, uploadDir), {
@@ -61,7 +97,13 @@ app.use('/uploads', express.static(join(__dirname, uploadDir), {
 import https from 'https'
 app.get('/api/bilibili-proxy', (req, res) => {
   const imageUrl = req.query.url
-  if (!imageUrl || !imageUrl.includes('.hdslb.com/')) {
+  // 严格校验: 必须是 https 协议且 hostname 属于 hdslb.com（防 SSRF）
+  try {
+    const u = new URL(imageUrl)
+    if (u.protocol !== 'https:' || (!u.hostname.endsWith('.hdslb.com') && u.hostname !== 'hdslb.com')) {
+      return res.status(400).end()
+    }
+  } catch {
     return res.status(400).end()
   }
   // Try multiple CDN nodes: original → i0 → i1 → i2
@@ -196,7 +238,9 @@ app.get('/ai/bridge/:platform', async (req, res) => {
       '',
       'REM --- Write config ---',
       'echo Writing config...',
-      'echo ' + configData + ' > "%~dp0config.json"',
+      'echo ' + Buffer.from(configData).toString('base64') + ' > "%~dp0config.json.b64"',
+      'certutil -decode "%~dp0config.json.b64" "%~dp0config.json" >nul',
+      'del "%~dp0config.json.b64"',
       '',
       'REM --- Launch ---',
       'echo Starting AURUM Bridge...',
@@ -236,7 +280,7 @@ app.post('/api/presence', async (req, res) => {
     const auth = req.headers.authorization
     if (auth && auth.startsWith('Bearer ')) {
       const token = auth.slice(7)
-      const payload = jwt.verify(token, 'wall-street-skill-secret')
+      const payload = jwt.verify(token, JWT_SECRET)
       if (payload && payload.userId) {
         await queryRun("UPDATE users SET last_seen_at = NOW() WHERE id = ?", [payload.userId])
       }
@@ -262,3 +306,14 @@ initBridgeWS(server)
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })
 })()
+
+// Crash protection — log and restart gracefully
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message)
+  if (err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
+    console.error(err.stack)
+  }
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason?.message || reason)
+})

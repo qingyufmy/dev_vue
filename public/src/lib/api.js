@@ -19,29 +19,38 @@ export const api = {
     }
   },
 
+  async _safeJson(res) {
+    try {
+      const data = await res.json()
+      return { ok: res.ok, ...data, httpStatus: res.status }
+    } catch {
+      return { ok: false, httpStatus: res.status, error: `HTTP ${res.status}` }
+    }
+  },
+
   async post(url, body) {
     const res = await fetch(url, { method: 'POST', headers: this._headers(), body: JSON.stringify(body) })
-    return { ok: res.ok, ...(await res.json()) }
+    return this._safeJson(res)
   },
 
   async put(url, body) {
     const res = await fetch(url, { method: 'PUT', headers: this._headers(), body: JSON.stringify(body) })
-    return { ok: res.ok, ...(await res.json()) }
+    return this._safeJson(res)
   },
 
   async del(url) {
     const res = await fetch(url, { method: 'DELETE', headers: this._headers(false) })
-    return { ok: res.ok, ...(await res.json()) }
+    return this._safeJson(res)
   },
 
   async patch(url, body) {
     const res = await fetch(url, { method: 'PATCH', headers: this._headers(), body: JSON.stringify(body) })
-    return { ok: res.ok, ...(await res.json()) }
+    return this._safeJson(res)
   },
 
   async postForm(url, formData) {
     const res = await fetch(url, { method: 'POST', headers: this._headers(false), body: formData })
-    return { ok: res.ok, ...(await res.json()) }
+    return this._safeJson(res)
   },
 
   async fetchJson(url) {

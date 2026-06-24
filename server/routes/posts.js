@@ -241,38 +241,7 @@ router.patch('/posts/lock', authMiddleware, async (req, res) => {
     if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
     await queryRun('UPDATE posts SET locked = ? WHERE id = ?', [locked ? 1 : 0, postId])
     res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
-})
-
-// Also support POST for pin/feature/lock (frontend uses both)
-router.post('/posts/pin', authMiddleware, async (req, res) => {
-  try {
-    const { postId, sticky } = req.body
-    if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
-    const post = await queryOne('SELECT pinned FROM posts WHERE id = ?', [postId])
-    await queryRun('UPDATE posts SET pinned = ? WHERE id = ?', [post?.pinned ? 0 : 1, postId])
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
-})
-
-router.post('/posts/feature', authMiddleware, async (req, res) => {
-  try {
-    const { postId } = req.body
-    if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
-    const post = await queryOne('SELECT featured FROM posts WHERE id = ?', [postId])
-    await queryRun('UPDATE posts SET featured = ? WHERE id = ?', [post?.featured ? 0 : 1, postId])
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
-})
-
-router.post('/posts/lock', authMiddleware, async (req, res) => {
-  try {
-    const { postId } = req.body
-    if (req.user.role !== 'admin') return res.json({ ok: false, error: '需要管理员权限' })
-    const post = await queryOne('SELECT locked FROM posts WHERE id = ?', [postId])
-    await queryRun('UPDATE posts SET locked = ? WHERE id = ?', [post?.locked ? 0 : 1, postId])
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
+      } catch (err) { res.json({ ok: false, error: '操作失败' }) }
 })
 
 // Get post replies

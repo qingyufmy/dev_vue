@@ -1279,14 +1279,26 @@ function initBiliPlayer(bvid) {
   const container = document.getElementById('videoContainer')
   if (!container) return
 
-  // Bilibili embed iframe
-  container.innerHTML = '<iframe id="biliPlayer" src="//player.bilibili.com/player.html?bvid=' + bvid + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
+  // Bilibili embed iframe — validate BV id format first
+  const safeBvid = /^BV[a-zA-Z0-9]+$/.test(bvid) ? bvid : ''
+  if (!safeBvid) {
+    container.innerHTML = '<div class="video-error">无效的视频 ID</div>'
+    return
+  }
+  container.innerHTML = '<iframe id="biliPlayer" src="//player.bilibili.com/player.html?bvid=' + safeBvid + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
 
   biliPlayer = document.getElementById('biliPlayer')
   // Bilibili doesn't have a JS API for progress tracking,
   // so we use a timer-based approach
   startWatchTimer()
 }
+
+// Event delegation for video retry buttons (avoids inline onclick XSS risk)
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.video-retry-btn')) {
+    location.reload()
+  }
+})
 
 function initLocalPlayer(videoUrl) {
   const ep = state.currentEpisode
@@ -2417,7 +2429,7 @@ function renderArticle() {
       console.error('Video fetch error:', err)
       const container = document.getElementById('videoContainer')
       if (container) {
-        container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;margin-bottom:12px;">视频加载失败</p><button class="btn btn-primary" onclick="location.reload()">点击重试</button></div></div>'
+        container.innerHTML = '<div class="video-placeholder" style="background:var(--bg-secondary)"><div style="text-align:center;color:var(--text-secondary);padding:20px;"><p style="font-size:16px;margin-bottom:12px;">视频加载失败</p><button class="btn btn-primary video-retry-btn">点击重试</button></div></div>'
       }
     }).catch(err => {
       console.error('CF Stream fetch error:', err)
@@ -2426,7 +2438,7 @@ function renderArticle() {
         container.innerHTML = `<div class="video-placeholder" style="background:var(--bg-secondary)">
           <div style="text-align:center;color:var(--text-secondary);padding:20px;">
             <p style="font-size:16px;margin-bottom:12px;">视频加载失败</p>
-            <button class="btn btn-primary" onclick="location.reload()">点击重试</button>
+            <button class="btn btn-primary video-retry-btn">点击重试</button>
           </div>
         </div>`
       }
@@ -2545,7 +2557,7 @@ function renderVideo() {
         container.innerHTML = `<div class="video-placeholder" style="background:var(--bg-secondary)">
           <div style="text-align:center;color:var(--text-secondary);padding:20px;">
             <p style="font-size:16px;margin-bottom:12px;">视频加载失败</p>
-            <button class="btn btn-primary" onclick="location.reload()">点击重试</button>
+            <button class="btn btn-primary video-retry-btn">点击重试</button>
           </div>
         </div>`
       }

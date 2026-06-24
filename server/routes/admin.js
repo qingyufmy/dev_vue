@@ -4,7 +4,7 @@ import multer from 'multer'
 import { join, dirname, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
-import { queryOne, queryAll, queryRun } from '../db.js'
+import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -76,57 +76,87 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
 
     // Enrich each user with progress, orders, and content counts
     const enrichedUsers = []
+    // Batch load all user stats in parallel (avoid N+1 queries)
+    const userIds = users.map(u => u.id)
+
+    // 空列表时提前返回，避免 WHERE id IN () 语法错误
+    if (userIds.length === 0) {
+      return res.json({ ok: true, users: [], total: 0, page, limit, totalPages: 0 })
+    }
+
+    const placeholders = userIds.map(() => '?').join(',')
+    const batchParams = userIds
+
+    const [progressRows, orderRows, contentRows, activityRows] = await Promise.all([
+      // Progress stats grouped by user
+      queryAll(
+        `SELECT user_id, COUNT(*) as total, SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) as completed, SUM(CASE WHEN quiz_passed = 1 THEN 1 ELSE 0 END) as quizPassed FROM progress WHERE user_id IN (${placeholders}) GROUP BY user_id`,
+        batchParams
+      ),
+      // Orders
+      queryAll(
+        `SELECT * FROM orders WHERE user_id IN (${placeholders}) ORDER BY user_id, created_at DESC`,
+        batchParams
+      ),
+      // Content counts
+      queryAll(
+        `SELECT u.id as uid,
+          (SELECT COUNT(*) FROM comments WHERE user_id = u.id) as commentCount,
+          (SELECT COUNT(*) FROM posts WHERE user_id = u.id) as postCount,
+          (SELECT COUNT(*) FROM post_replies WHERE user_id = u.id) as replyCount
+         FROM (SELECT DISTINCT id FROM users WHERE id IN (${placeholders})) u`,
+        batchParams
+      ),
+      // Last activity
+      queryAll(
+        `SELECT u.id as uid,
+          GREATEST(
+            COALESCE(u.last_seen_at, '1970-01-01'),
+            COALESCE(MAX(c.created_at), '1970-01-01'),
+            COALESCE(MAX(p.created_at), '1970-01-01'),
+            COALESCE(MAX(r.created_at), '1970-01-01')
+          ) as lastActivity
+         FROM (SELECT id, last_seen_at FROM users WHERE id IN (${placeholders})) u
+         LEFT JOIN comments c ON c.user_id = u.id
+         LEFT JOIN posts p ON p.user_id = u.id
+         LEFT JOIN post_replies r ON r.user_id = u.id
+         GROUP BY u.id, u.last_seen_at`,
+        batchParams
+      ),
+    ])
+
+    // Index results by user_id for O(1) lookup
+    const progressMap = new Map()
+    for (const r of progressRows) progressMap.set(r.user_id, { completed: r.completed || 0, quizPassed: r.quizPassed || 0, total: r.total || 0 })
+
+    const contentMap = new Map()
+    for (const r of contentRows) contentMap.set(r.uid, { commentCount: r.commentCount || 0, postCount: r.postCount || 0, replyCount: r.replyCount || 0 })
+
+    const activityMap = new Map()
+    for (const r of activityRows) activityMap.set(r.uid, r.lastActivity !== '1970-01-01' ? r.lastActivity : null)
+
     for (const u of users) {
-      // Get progress stats
-      let progressData = { completed: 0, quizPassed: 0, total: 0 }
-      try {
-        const completed = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND completed = 1', [u.id])).c
-        const quizPassed = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ? AND quiz_passed = 1', [u.id])).c
-        const total = (await queryOne('SELECT COUNT(*) as c FROM progress WHERE user_id = ?', [u.id])).c
-        progressData = { completed, quizPassed, total }
-      } catch {}
+      const progressData = progressMap.get(u.id) || { completed: 0, quizPassed: 0, total: 0 }
+      const contentData = contentMap.get(u.id) || { commentCount: 0, postCount: 0, replyCount: 0 }
 
-      // Get orders
-      let orders = []
-      try {
-        const orderRows = await queryAll('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC', [u.id])
-        orders = orderRows.map(o => ({
-          orderId: o.order_id || o.order_no,
-          plan: o.plan,
-          planLabel: o.plan_label || o.plan,
-          period: o.period,
-          periodLabel: o.period_label || o.period,
-          amount: o.amount,
-          amountConfirmed: o.amount_confirmed || o.amount,
-          status: o.status,
-          statusLabel: o.status_label || o.status,
-          paidAt: o.paid_at,
-          createdAt: o.created_at,
-        }))
-      } catch {}
+      // Filter orders for this user
+      const userOrders = orderRows.filter(o => o.user_id === u.id).map(o => ({
+        orderId: o.order_id || o.order_no,
+        plan: o.plan,
+        planLabel: o.plan_label || o.plan,
+        period: o.period,
+        periodLabel: o.period_label || o.period,
+        amount: o.amount,
+        amountConfirmed: o.amount_confirmed || o.amount,
+        status: o.status,
+        statusLabel: o.status_label || o.status,
+        paidAt: o.paid_at,
+        createdAt: o.created_at,
+      }))
 
-      // Get total paid
-      let totalPaid = 0
-      try {
-        totalPaid = (await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as t FROM orders WHERE user_id = ? AND status = 'paid'", [u.id])).t
-      } catch {}
-
-      // Get content counts
-      let commentCount = 0, postCount = 0, replyCount = 0
-      try {
-        commentCount = (await queryOne('SELECT COUNT(*) as c FROM comments WHERE user_id = ?', [u.id])).c
-        postCount = (await queryOne('SELECT COUNT(*) as c FROM posts WHERE user_id = ?', [u.id])).c
-        replyCount = (await queryOne('SELECT COUNT(*) as c FROM post_replies WHERE user_id = ?', [u.id])).c
-      } catch {}
-
-      // Get last activity
-      let lastActivity = u.last_seen_at || null
-      try {
-        const lastComment = (await queryOne('SELECT MAX(created_at) as m FROM comments WHERE user_id = ?', [u.id])).m
-        const lastPost = (await queryOne('SELECT MAX(created_at) as m FROM posts WHERE user_id = ?', [u.id])).m
-        const lastReply = (await queryOne('SELECT MAX(created_at) as m FROM post_replies WHERE user_id = ?', [u.id])).m
-        lastActivity = [u.last_seen_at, lastComment, lastPost, lastReply].filter(Boolean).sort().pop() || null
-      } catch {}
+      const totalPaid = userOrders
+        .filter(o => o.status === 'paid')
+        .reduce((sum, o) => sum + (Number(o.amountConfirmed) || 0), 0)
 
       enrichedUsers.push({
         id: u.id,
@@ -145,12 +175,12 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
         telegramId: u.telegram_id,
         createdAt: u.created_at,
         progress: progressData,
-        orders,
+        orders: userOrders,
         totalPaid,
-        commentCount,
-        postCount,
-        replyCount,
-        lastActivity,
+        commentCount: contentData.commentCount,
+        postCount: contentData.postCount,
+        replyCount: contentData.replyCount,
+        lastActivity: activityMap.get(u.id) || u.last_seen_at || null,
       })
     }
 
@@ -205,7 +235,8 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
     if (password) {
       if (password.length < 6) return res.json({ ok: false, error: '密码至少需要6位' })
-      updates.push('password = ?'); params.push(bcrypt.hashSync(password, 10))
+      const pwHash = await bcrypt.hash(password, 10)
+      updates.push('password = ?'); params.push(pwHash)
     }
     if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar) }
     if (role) { updates.push('role = ?'); params.push(role) }
@@ -239,11 +270,26 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
     const user = await queryOne('SELECT id, email, role FROM users WHERE id = ?', [userId])
     if (!user) return res.json({ ok: false, error: '用户不存在' })
     if (user.role === 'admin') return res.json({ ok: false, error: '不能删除管理员账号' })
-    await queryRun('DELETE FROM notifications WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
-    await queryRun('DELETE FROM orders WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM verification_codes WHERE email = ?', [user.email])
-    await queryRun('DELETE FROM users WHERE id = ?', [userId])
+    // 级联删除所有关联数据，使用事务确保原子性
+    await withTransaction(async (run) => {
+      await run('DELETE FROM notifications WHERE user_id = ?', [userId])
+      await run('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
+      await run('DELETE FROM orders WHERE user_id = ?', [userId])
+      await run('DELETE FROM verification_codes WHERE email = ?', [user.email])
+      await run('DELETE FROM progress WHERE user_id = ?', [userId])
+      await run('DELETE FROM comments WHERE user_id = ?', [userId])
+      await run('DELETE FROM comment_likes WHERE user_id = ?', [userId])
+      await run('DELETE FROM post_replies WHERE user_id = ?', [userId])
+      await run('DELETE FROM posts WHERE user_id = ?', [userId])
+      await run('DELETE FROM feedback WHERE user_id = ?', [userId])
+      await run('DELETE FROM ai_configs WHERE user_id = ?', [userId])
+      await run('DELETE FROM ai_signals WHERE user_id = ?', [userId])
+      await run('DELETE FROM auto_scheduler WHERE user_id = ?', [userId])
+      await run('DELETE FROM close_config WHERE user_id = ?', [userId])
+      await run('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
+      await run('DELETE FROM ui_configs WHERE user_id = ?', [userId])
+      await run('DELETE FROM users WHERE id = ?', [userId])
+    })
     res.json({ ok: true })
   } catch (err) {
     console.error('Delete user error:', err)
@@ -339,21 +385,6 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
-router.put('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { action } = req.body
-    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : req.body.status
-    const referral = await queryOne('SELECT referrer_id, commission FROM referrals WHERE id = ?', [req.params.id])
-    if (!referral) return res.json({ ok: false, error: '记录不存在' })
-    await queryRun('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
-    // Credit referrer on approval
-    if (finalStatus === 'approved' && referral.commission > 0) {
-      await queryRun('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
-    }
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
-})
-
 router.patch('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { action } = req.body
@@ -376,20 +407,6 @@ router.get('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res)
 })
 
 router.put('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { rules } = req.body
-    if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
-    for (const r of rules) {
-      await queryRun(
-        'INSERT INTO referral_rules (plan, period, rate_bps, enabled) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE rate_bps = VALUES(rate_bps), enabled = VALUES(enabled)',
-        [r.plan, r.period, r.rate_bps || 1000, r.enabled ? 1 : 0]
-      )
-    }
-    res.json({ ok: true, message: '规则已更新' })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
-})
-
-router.patch('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { rules } = req.body
     if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
@@ -718,16 +735,6 @@ router.post('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
 
     res.json({ ok: true, id: result.insertId })
   } catch (err) { res.json({ ok: false, error: '保存失败' }) }
-})
-
-router.put('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { id, question, options, answer, correctIndex, explanation, explanations, hint, status, sortOrder } = req.body
-    await queryRun(`
-      UPDATE quiz_questions SET question=?, options=?, answer=?, correct_index=?, explanation=?, explanations=?, hint=?, status=?, sort_order=? WHERE id=?
-    `, [question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id])
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
 })
 
 router.delete('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {

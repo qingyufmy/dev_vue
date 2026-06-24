@@ -25,7 +25,7 @@ router.post('/register', async (req, res) => {
     const existing = await queryOne('SELECT id FROM users WHERE email = ?', [email])
     if (existing) return res.json({ ok: false, error: '该邮箱已注册' })
 
-    const hash = bcrypt.hashSync(password, 10)
+    const hash = await bcrypt.hash(password, 10)
     const code = referralCode || generateReferralCode()
     const ref = referral || null
 
@@ -72,12 +72,16 @@ router.post('/login', async (req, res) => {
     // Password login
     if (!method || method === 'password') {
       if (!password) return res.json({ ok: false, error: '请输入密码' })
-      if (!bcrypt.compareSync(password, user.password)) return res.json({ ok: false, error: '邮箱或密码错误' })
+      if (!await bcrypt.compare(password, user.password)) return res.json({ ok: false, error: '邮箱或密码错误' })
     }
-    // Code login (verifyToken already verified)
+    // Code login — verifyToken must match a server-issued token
     else if (method === 'code') {
       if (!verifyToken) return res.json({ ok: false, error: '请先完成邮箱验证' })
-      // In local mode, accept any non-empty verifyToken
+      const tokenRecord = await queryOne(
+        'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+        [email, verifyToken, 'login']
+      )
+      if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
     }
 
     const token = generateToken(user.id)
@@ -176,10 +180,10 @@ router.post('/verify-code', async (req, res) => {
     `, [targetEmail, code, purpose || 'login'])
 
     if (!record) return res.json({ ok: false, error: '验证码无效或已过期' })
-    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [record.id])
 
-    // Generate a temporary token for the verified email
+    // Generate a temporary token for the verified email (store it server-side)
     const verifyToken = uuidv4()
+    await queryRun('UPDATE verification_codes SET used = 1, verify_token = ? WHERE id = ?', [verifyToken, record.id])
     res.json({ ok: true, message: '验证成功', token: verifyToken })
   } catch (err) {
     res.json({ ok: false, error: '验证失败' })
@@ -191,10 +195,18 @@ router.post('/reset-password', async (req, res) => {
     const { email, code, newPassword, verifyToken } = req.body
     if (!email || !newPassword) return res.json({ ok: false, error: '参数不完整' })
 
-    // If verifyToken provided (code-based flow), accept it
+    // verifyToken flow: validate server-issued token
     if (verifyToken) {
-      const hash = bcrypt.hashSync(newPassword, 10)
+      const tokenRecord = await queryOne(
+        'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+        [email, verifyToken, 'reset']
+      )
+      if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
+
+      const hash = await bcrypt.hash(newPassword, 10)
       await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, email])
+      // 标记 verifyToken 已使用，防止重复利用
+      await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
       return res.json({ ok: true, message: '密码已重置' })
     }
 
@@ -207,7 +219,7 @@ router.post('/reset-password', async (req, res) => {
 
     if (!record) return res.json({ ok: false, error: '验证码无效或已过期' })
 
-    const hash = bcrypt.hashSync(newPassword, 10)
+    const hash = await bcrypt.hash(newPassword, 10)
     await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, email])
     await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [record.id])
 
@@ -225,12 +237,19 @@ router.post('/change-password', authMiddleware, async (req, res) => {
     const user = await queryOne('SELECT password FROM users WHERE id = ?', [req.user.id])
 
     if (oldPassword) {
-      if (!bcrypt.compareSync(oldPassword, user.password)) return res.json({ ok: false, error: '原密码错误' })
+      if (!await bcrypt.compare(oldPassword, user.password)) return res.json({ ok: false, error: '原密码错误' })
     } else if (!verifyToken) {
       return res.json({ ok: false, error: '请提供原密码或验证码' })
+    } else {
+      // Validate server-issued verifyToken
+      const tokenRecord = await queryOne(
+        'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+        [req.user.email, verifyToken, 'change']
+      )
+      if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
     }
 
-    const hash = bcrypt.hashSync(newPassword, 10)
+    const hash = await bcrypt.hash(newPassword, 10)
     await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", [hash, req.user.id])
 
     res.json({ ok: true, relogin: true, message: '密码已修改' })

@@ -34,6 +34,25 @@ export function getDB() {
   if (!pool) {
     const cfg = getDBConfig()
     pool = mysql.createPool(cfg)
+
+    // Pool-level error handling — log but don't crash
+    pool.on('error', (err) => {
+      console.error('[DB] Pool error:', err.message)
+      if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNREFUSED') {
+        console.error('[DB] Connection lost — pool will auto-reconnect on next query')
+      }
+    })
+
+    // Keepalive: ping every 30 minutes to prevent idle timeout
+    setInterval(async () => {
+      try {
+        const conn = await pool.getConnection()
+        await conn.ping()
+        conn.release()
+      } catch (e) {
+        console.error('[DB] Keepalive ping failed:', e.message)
+      }
+    }, 30 * 60 * 1000)
   }
   return pool
 }
@@ -60,6 +79,24 @@ export async function queryAll(sql, params = []) {
 export async function queryRun(sql, params = []) {
   const [result] = await query(sql, params)
   return { changes: result.affectedRows, insertId: result.insertId }
+}
+
+/** Execute a callback within a MySQL transaction */
+export async function withTransaction(fn) {
+  const p = getDB()
+  const conn = await p.getConnection()
+  try {
+    await conn.beginTransaction()
+    const runner = (sql, params = []) => conn.query(sql, params)
+    const result = await fn(runner)
+    await conn.commit()
+    return result
+  } catch (err) {
+    await conn.rollback()
+    throw err
+  } finally {
+    conn.release()
+  }
 }
 
 export async function logAudit({ userId, action, targetType, targetId, detail, ip, userAgent } = {}) {
@@ -283,6 +320,7 @@ export async function initDB() {
       purpose VARCHAR(20) DEFAULT 'login',
       expires_at DATETIME NOT NULL,
       used TINYINT DEFAULT 0,
+      verify_token VARCHAR(36) DEFAULT NULL,
       created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -553,6 +591,14 @@ export async function initDB() {
     await p.query(sql)
   }
 
+  // Migration: add verify_token to verification_codes (for existing DBs)
+  try {
+    const [cols] = await p.query("SHOW COLUMNS FROM verification_codes LIKE 'verify_token'")
+    if (!cols.length) {
+      await p.query('ALTER TABLE verification_codes ADD COLUMN verify_token VARCHAR(36) DEFAULT NULL AFTER used')
+    }
+  } catch (e) { /* column already exists or table not yet created */ }
+
   // Seed referral_rules if empty
   const [ruleRows] = await p.query('SELECT COUNT(*) as c FROM referral_rules')
   if (ruleRows[0].c === 0) {
@@ -663,8 +709,8 @@ export async function initDB() {
 }
 
 async function seedData(p) {
-  const hash = bcrypt.hashSync('admin123', 10)
-  const demoHash = bcrypt.hashSync('demo123', 10)
+  const hash = await bcrypt.hash('admin123', 10)
+  const demoHash = await bcrypt.hash('demo123', 10)
 
   await p.query(`INSERT INTO users (email, password, nickname, role, plan, plan_expires_at, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ['admin@wallstreetskill.com', hash, '街哥', 'admin', 'pro', '2027-12-31', 'ADMIN001'])

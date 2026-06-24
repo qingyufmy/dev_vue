@@ -1,11 +1,11 @@
 import { Router } from 'express'
 import { query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import jwt from 'jsonwebtoken'
-import { JWT_SECRET } from '../config.js'
 
 import { sendBridgeCommand, isBridgeAlive, isTradeEnabled, getBridgeStatus, getAllBridges, getBridgeTradeMode } from '../bridge-ws.js'
 
 const router = Router()
+const JWT_SECRET = process.env.JWT_SECRET || 'wall-street-skill-secret'
 
 const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
@@ -1687,13 +1687,13 @@ export async function initAutoSchedulers() {
 // ── Bridge 版本检查端点 ──
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '1.9.8',
-    build_date: '2026-06-24',
-    changelog: '修复开仓/平仓缺price字段、WS断连卡死、会员过期检查、下单方向校验、止损止盈修改',
+    version: '1.9.7',
+    build_date: '2026-06-22',
+    changelog: '桥接会员等级校验(Pro专属)、主站字体优化、K线图修复',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65197229,
-    md5: '8fb41bceea2f58ed3f2f06811d9366d8'
+    file_size: 71167867,
+    md5: '36db00fb5757113c509cd5cdf55b3ffd'
   })
 })
 

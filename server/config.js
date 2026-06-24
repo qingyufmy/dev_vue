@@ -1,0 +1,15 @@
+// Shared server configuration — single source of truth
+import { config as dotenvConfig } from 'dotenv'
+import { resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+// Load .env from server/ directory BEFORE any config reads
+dotenvConfig({ path: resolve(dirname(fileURLToPath(import.meta.url)), '.env') })
+
+const secret = process.env.JWT_SECRET
+if (!secret) {
+  console.error('[FATAL] JWT_SECRET 环境变量未设置，服务无法启动')
+  process.exit(1)
+}
+
+export const JWT_SECRET = secret
