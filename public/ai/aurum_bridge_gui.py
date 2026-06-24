@@ -639,13 +639,39 @@ class BridgeWorker(QThread):
             return {"status": "error", "message": str(e)}
 
     def run(self):
+        # ── 尝试探测 MT5 安装目录，加入 DLL 搜索路径 ──
+        import traceback, subprocess, glob
+        mt5_dirs = []
+        # 常见安装路径
+        for base in [os.environ.get("ProgramFiles", "C:\\Program Files"),
+                     os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                     "C:\\", "D:\\"]:
+            try:
+                for d in glob.glob(os.path.join(base, "MetaTrader*")):
+                    if os.path.isdir(d):
+                        mt5_dirs.append(d)
+            except:
+                pass
+        # 优先加入 DLL 搜索 (Python ≥ 3.8)
+        if hasattr(os, "add_dll_directory"):
+            for d in mt5_dirs:
+                try:
+                    os.add_dll_directory(d)
+                    self.log_signal.emit(f"[DLL] 添加搜索路径: {d}")
+                except Exception:
+                    pass
+
         # Import MT5
         try:
             import MetaTrader5 as mt5
             self.mt5 = mt5
-        except:
-            self.log_signal.emit("错误: MetaTrader5 未安装")
-            self.status_signal.emit("MT5 未安装", "#ef4444", "")
+        except Exception as e:
+            err = traceback.format_exc().strip().split("\n")[-1] if traceback else str(e)
+            self.log_signal.emit(f"错误: MetaTrader5 导入失败 — {err}")
+            self.log_signal.emit(f"请确认 MT5 终端已安装。下载: https://www.metatrader5.com/")
+            if mt5_dirs:
+                self.log_signal.emit(f"已探测到目录: {', '.join(mt5_dirs)}")
+            self.status_signal.emit("MT5 未安装", "#ef4444", "请安装MT5终端后重试")
             return
 
         if not self.mt5.initialize():

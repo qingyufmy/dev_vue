@@ -1692,8 +1692,8 @@ router.get('/bridge/version', (req, res) => {
     changelog: '修复开仓/平仓缺price字段、WS断连卡死、会员过期检查、下单方向校验、止损止盈修改',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65197229,
-    md5: '8fb41bceea2f58ed3f2f06811d9366d8'
+    file_size: 65334040,
+    md5: 'df7eccc3b10a1a539a16e0edce1c4b39'
   })
 })
 
