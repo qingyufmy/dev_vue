@@ -52,14 +52,14 @@ def load_config():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except: pass
+        except Exception: pass
     return {}
 
 def save_config(cfg):
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except: pass
+    except Exception: pass
 
 def update_config(patch):
     cfg = load_config()
@@ -328,7 +328,9 @@ class BridgeWorker(QThread):
         return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
 
     def _resolve_symbol(self, symbol):
-        requested = str(symbol or "").strip()
+        if symbol is None:
+            raise RuntimeError("Symbol is required")
+        requested = str(symbol).strip()
         if not requested: raise RuntimeError("Symbol is required")
         symbols = self.mt5.symbols_get()
         if symbols is None: raise RuntimeError("MT5 symbols_get failed")
@@ -400,6 +402,24 @@ class BridgeWorker(QThread):
             return result, result.comment if result else "order_send failed"
         return None, "max retry exceeded"
 
+    def _order_send_simple_retry(self, req, ct_map=None):
+        """简单重试包装器，用于批量平仓/修改等预构建 req 场景。
+        对可重试码刷新 tick 重试最多 _MAX_RETRY 次，返回 result 对象。"""
+        for attempt in range(self._MAX_RETRY + 1):
+            if attempt > 0:
+                tick = self.mt5.symbol_info_tick(req["symbol"])
+                if tick and ct_map:
+                    req["price"] = tick.bid if ct_map.get("type") == self.mt5.ORDER_TYPE_SELL else tick.ask
+                time.sleep(0.15)
+            result = self.mt5.order_send(req)
+            if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                return result
+            if result and result.retcode in self._RETRYABLE_RETCODES and attempt < self._MAX_RETRY:
+                self.mt5.symbol_select(req["symbol"], True)
+                continue
+            return result
+        return None
+
     def _process_command(self, cmd):
         action = cmd.get("action"); params = cmd.get("params", {})
         try:
@@ -467,9 +487,10 @@ class BridgeWorker(QThread):
                         ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
                         tick_c = self.mt5.symbol_info_tick(pos.symbol)
                         price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
-                        result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
+                        result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                             "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
-                            "type_filling": self._get_filling_mode(pos.symbol), "price": price_c})
+                            "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
+                            ct_map={"type": ct})
                         if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                             closed += 1
                         else:
@@ -486,9 +507,10 @@ class BridgeWorker(QThread):
                     ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
                     tick_c = self.mt5.symbol_info_tick(pos.symbol)
                     price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
-                    result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
+                    result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                         "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
-                        "type_filling": self._get_filling_mode(pos.symbol), "price": price_c})
+                        "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
+                        ct_map={"type": ct})
                     if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                         closed += 1
                     else:
@@ -571,12 +593,12 @@ class BridgeWorker(QThread):
                 # Use caller-supplied date range, default to last 31 days
                 if "date_to" in params:
                     try: date_to = datetime.strptime(params["date_to"][:10], "%Y-%m-%d") + timedelta(days=1)
-                    except: date_to = datetime.utcnow() + timedelta(days=1)
+                    except (ValueError, KeyError, TypeError): date_to = datetime.utcnow() + timedelta(days=1)
                 else:
                     date_to = datetime.utcnow() + timedelta(days=1)
                 if "date_from" in params:
                     try: date_from = datetime.strptime(params["date_from"][:10], "%Y-%m-%d")
-                    except: date_from = date_to - timedelta(days=31)
+                    except (ValueError, KeyError, TypeError): date_from = date_to - timedelta(days=31)
                 else:
                     date_from = date_to - timedelta(days=31)
                 deals = self.mt5.history_deals_get(date_from, date_to)
@@ -902,6 +924,7 @@ class BridgeWorker(QThread):
                     if '4003' in err_str or '会员' in err_str or 'Pro' in err_str:
                         self.log_signal.emit(f"❌ {err_str}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
+                        if self.mt5: self.mt5.shutdown()
                         return
                     rc = int(elapsed // RETRY_INT) + 1
                     self.log_signal.emit(f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
@@ -912,7 +935,7 @@ class BridgeWorker(QThread):
 
             try:
                 self._resolved_symbol = self._resolve_symbol("XAUUSD")
-            except:
+            except Exception:
                 self._resolved_symbol = "XAUUSD"
             last_hb = 0; last_data = 0; last_server_msg = time.time(); last_plan_check = time.time()
 
@@ -1009,6 +1032,7 @@ class BridgeWorker(QThread):
                     if cc == 4003:
                         self.log_signal.emit(f"❌ 连接被拒绝: {cr}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
+                        if self.mt5: self.mt5.shutdown()
                         return
                     self.log_signal.emit("WebSocket 连接已断开"); break
                 except Exception as e:
@@ -1774,11 +1798,12 @@ class SettingsPage(QWidget):
             self._set_mt5_manual(self._manual_mt5_path)
 
     def _on_mt5_path_changed(self, idx):
-        """Combo 切换时更新来源标签"""
+        """Combo 切换时更新来源标签并持久化到 config"""
         if idx >= 0 and idx < len(self._mt5_installations):
-            _, source = self._mt5_installations[idx]
+            path, source = self._mt5_installations[idx]
             self.lbl_mt5_source.setText(source)
             self._manual_mt5_path = None
+            update_config({"mt5_path": path})
 
     def _browse_mt5_path(self):
         """手动浏览 MT5 目录"""
