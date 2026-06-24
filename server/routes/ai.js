@@ -1378,23 +1378,26 @@ function timeframeIntervalMs(tf) {
 // Run one cycle for a specific symbol × timeframe
 async function runAutoCycle(userId, symbol, timeframe) {
   const cfg = await getAutoConfig(null, userId)
-  if (!cfg || !cfg.enabled) return
+  if (!cfg || !cfg.enabled) { console.log(`[runAutoCycle] User ${userId}: auto_scheduler not found or disabled`); return }
 
   // Use global auto inference config
   const config = await getAutoInferenceConfig(userId)
   if (!config || !config.api_key_encrypted) {
+    console.log(`[runAutoCycle] User ${userId}: no API key configured for auto inference`)
     return
   }
 
   // Check Pro permission
   const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
   if (!user || user.plan !== 'pro') {
+    console.log(`[runAutoCycle] User ${userId}: not Pro (plan=${user?.plan}), skipping`)
     return
   }
 
   // Check market status
   const tradeMode = await getBridgeTradeMode(userId)
   if (tradeMode !== 4) {
+    // Market closed or unknown — this is normal, skip logging to avoid spam
     return
   }
 
@@ -1649,9 +1652,15 @@ export function stopSmartCloseScheduler(userId) {
 }
 
 async function startAutoScheduler(userId) {
-  if (autoSchedulerState[userId]?.timer) return
+  if (autoSchedulerState[userId]?.timer) {
+    console.log(`[startAutoScheduler] Skipped user ${userId}: timer already exists`)
+    return
+  }
   const cfg = await getAutoConfig(null, userId)
-  if (!cfg || !cfg.enabled) return
+  if (!cfg || !cfg.enabled) {
+    console.log(`[startAutoScheduler] Skipped user ${userId}: auto_scheduler enabled=${cfg?.enabled}`)
+    return
+  }
 
   // Check if user has override config with custom symbol + interval
   const inferenceCfg = await getAutoInferenceConfig(userId)
@@ -1669,6 +1678,7 @@ async function startAutoScheduler(userId) {
   const intervalMs = intervalMinutes * 60_000
   autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null }
 
+  console.log(`[startAutoScheduler] Starting scheduler for user ${userId} (symbol=${symbol}, interval=${intervalMinutes}min)`)
   const tick = async () => {
     if (!autoSchedulerState[userId]?.running) return
     // Wait for bridge connection and market status confirmation
@@ -1698,10 +1708,36 @@ function stopAutoScheduler(userId) {
 export async function initAutoSchedulers() {
   try {
     const rows = await queryAll('SELECT user_id FROM auto_scheduler WHERE enabled = 1')
+    console.log(`[initAutoSchedulers] Found ${rows.length} enabled auto schedulers`)
     for (const row of rows) {
-      await startAutoScheduler(row.user_id)
+      try {
+        await startAutoScheduler(row.user_id)
+        console.log(`[initAutoSchedulers] Started auto scheduler for user ${row.user_id}`)
+      } catch (e) {
+        console.error(`[initAutoSchedulers] Failed to start scheduler for user ${row.user_id}:`, e.message)
+      }
     }
-  } catch {}
+    if (rows.length === 0) {
+      // Fallback: check user_bridge_settings as backup source (sync recovery)
+      const settings = await queryAll("SELECT user_id FROM user_bridge_settings WHERE auto_reasoning_enabled = 1")
+      if (settings.length > 0) {
+        console.log(`[initAutoSchedulers] Fallback: ${settings.length} users with auto_reasoning_enabled=1 in user_bridge_settings, syncing...`)
+        for (const s of settings) {
+          try {
+            const globalCfg = await getGlobalAutoConfig()
+            const symbols = globalCfg?.symbols || 'XAUUSD'
+            await upsertAutoConfig(null, s.user_id, symbols, true)
+            await startAutoScheduler(s.user_id)
+            console.log(`[initAutoSchedulers] Recovered scheduler for user ${s.user_id} from user_bridge_settings`)
+          } catch (e) {
+            console.error(`[initAutoSchedulers] Failed to recover scheduler for user ${s.user_id}:`, e.message)
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[initAutoSchedulers] Top-level error:', e.message)
+  }
 
   // Restore smart close schedulers
   try {

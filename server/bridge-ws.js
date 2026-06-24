@@ -208,8 +208,17 @@ async function _initBridge(ws, userId) {
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled })
 
-  // Restore auto-reasoning if it was enabled before bridge disconnect
-  if (dbAutoReasoningEnabled) {
+  // Restore auto-reasoning — check BOTH user_bridge_settings AND auto_scheduler table
+  // user_bridge_settings.auto_reasoning_enabled is set by toggle_auto/save_auto UI
+  // auto_scheduler.enabled is the actual scheduler state (may survive restart when settings row missing)
+  const shouldRestoreAuto = dbAutoReasoningEnabled
+  let schedulerEnabled = false
+  try {
+    const schedulerRow = await queryOne('SELECT enabled, symbols FROM auto_scheduler WHERE user_id = ?', [userId])
+    schedulerEnabled = !!(schedulerRow?.enabled)
+  } catch {}
+  console.log(`[BridgeWS] _initBridge user ${userId}: dbAutoReason=${dbAutoReasoningEnabled} schedulerEnabled=${schedulerEnabled} hasDbRow=${hasDbRow}`)
+  if (shouldRestoreAuto || schedulerEnabled) {
     try {
       const ai = await import('./routes/ai.js')
       const cfg = await ai.getAutoConfig(null, userId)
@@ -217,6 +226,16 @@ async function _initBridge(ws, userId) {
         const globalCfg = await ai.getGlobalAutoConfig()
         const symbols = globalCfg?.symbols || 'XAUUSD'
         await ai.upsertAutoConfig(null, userId, symbols, true)
+      }
+      // Sync user_bridge_settings if scheduler is enabled but settings row is stale/missing
+      if (schedulerEnabled && !shouldRestoreAuto) {
+        try {
+          await queryRun(
+            'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, 1) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = NOW()',
+            [userId]
+          )
+          bridges.get(userId).autoReasoningEnabled = true
+        } catch {}
       }
       ai.stopAutoScheduler(userId)
       await ai.startAutoScheduler(userId)
@@ -962,6 +981,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         await ai.upsertAutoConfig(null, userId, symbols, enabled)
         ai.stopAutoScheduler(userId)
         if (enabled) await ai.startAutoScheduler(userId)
+        // Sync user_bridge_settings so _initBridge can see it on reconnect
+        try {
+          await queryRun(
+            'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = NOW()',
+            [userId, enabled ? 1 : 0, enabled ? 1 : 0]
+          )
+        } catch (e) { console.error('[BridgeWS] Failed to sync auto_reasoning_enabled from save_auto:', e.message) }
         result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols }
         break
       }

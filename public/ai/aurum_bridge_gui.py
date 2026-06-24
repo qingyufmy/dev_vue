@@ -25,7 +25,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v1.9.8"
+APP_VERSION = "v1.9.9"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
@@ -816,7 +816,10 @@ class BridgeWorker(QThread):
         if not mt5_dirs:
             self.log_signal.emit("[探测] 未找到任何 MT5 安装目录")
 
-        # 加入 DLL 搜索 (Python ≥ 3.8)
+        # Add MT5 directories to DLL search — use both approaches:
+        # 1. os.add_dll_directory() — works for ctypes / LoadLibraryEx (Python 3.8+)
+        # 2. PATH  environment variable — required by .pyd extension modules
+        #    (Python C extensions use Windows default DLL search order, which includes PATH)
         if hasattr(os, "add_dll_directory"):
             for d in mt5_dirs:
                 try:
@@ -824,17 +827,30 @@ class BridgeWorker(QThread):
                     self.log_signal.emit(f"[DLL] 添加搜索路径: {d}")
                 except Exception:
                     pass
+        # Add to PATH for .pyd dependency resolution
+        if mt5_dirs:
+            existing_path = os.environ.get("PATH", "")
+            new_entries = ";".join(mt5_dirs)
+            if new_entries not in existing_path:
+                os.environ["PATH"] = new_entries + ";" + existing_path
+                self.log_signal.emit(f"[PATH] 添加MT5目录到环境变量")
 
         # Import MT5
         try:
             import MetaTrader5 as mt5
             self.mt5 = mt5
         except Exception as e:
-            err = traceback.format_exc().strip().split("\n")[-1] if traceback else str(e)
-            self.log_signal.emit(f"错误: MetaTrader5 导入失败 — {err}")
+            full_tb = traceback.format_exc().strip()
+            self.log_signal.emit(f"错误: MetaTrader5 导入失败")
+            # Show last meaningful line of traceback
+            tb_lines = full_tb.split("\n")
+            for line in tb_lines[-5:]:
+                if line.strip():
+                    self.log_signal.emit(f"  {line.strip()}")
             self.log_signal.emit(f"请确认 MT5 终端已安装。下载: https://www.metatrader5.com/")
             if mt5_dirs:
                 self.log_signal.emit(f"已探测到目录: {', '.join(mt5_dirs)}")
+                self.log_signal.emit(f"提示: 请确保MT5安装目录包含 terminal64.exe 所需的所有DLL文件，或尝试重新安装MT5")
             self.status_signal.emit("MT5 未安装", "#ef4444", "请安装MT5终端后重试")
             return
 
