@@ -1754,11 +1754,11 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: '1.9.9',
     build_date: '2026-06-24',
-    changelog: '修复MT5报价错误Reqoute重试(IOC填单+3次刷新tick)。修复信号trade_ticket绑定。修复交易复盘API Key兜底。修复ai_auto_scan审计虚假成功。',
-    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
+    changelog: '修复MT5导入.pyd DLL依赖(PATH环境变量)。修复\"记住密码\"实际保存密码。修复自动推理重启后不恢复(双表源检查)。修复bridge close handler不重置DB。修复信号trade_ticket绑定。修复审计日志虚假成功。',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v1.9.9.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65335672,
-    md5: 'd20287cc7de17710bc20a051a921316a'
+    file_size: 65343239,
+    md5: 'd4a102842df91e2726dc480e5db3d29d'
   })
 })
 
