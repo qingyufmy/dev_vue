@@ -1903,7 +1903,6 @@ async function loadConfig() {
   // Model sharing toggle (admin only)
   const isAdmin = state.user?.role === "admin";
   const sharingWrap = $("modelSharingWrap");
-  const sharedInfo = $("modelSharedInfo");
   if (sharingWrap) sharingWrap.style.display = isAdmin ? "" : "none";
   if (isAdmin && $("modelSharingEnabled")) {
     $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
@@ -1917,38 +1916,26 @@ async function loadConfig() {
   if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
   // Sync override section visibility
   syncOverrideSection();
-  // 模型共享：仅当确认未处于观摩模式（t桥接已连接）才显示管理员共享
-  // _usingFallback===undefined 时保守处理（不显示），等 loadStatus/heartbeat 确定后再判断
-  const isObserve = state.user?.plan === 'pro' && !isAdmin && state._usingFallback !== false;
-  if (sharedInfo) {
-    if (!isAdmin && cfg._model_shared && !isObserve) {
-      sharedInfo.style.display = "";
-      // API Key 显示隐藏字符，提示使用管理员共享
-      $("apiKey").type = "text";
-      $("apiKey").value = "••••••••••••";
-      $("apiKey").disabled = true;
-      $("apiKey").style.opacity = "0.6";
-      setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 当前使用管理员共享的API Key`);
-    } else {
-      sharedInfo.style.display = "none";
-      // 恢复 API Key 输入
-      $("apiKey").type = "password";
-      $("apiKey").value = "";
-      $("apiKey").disabled = false;
-      $("apiKey").style.opacity = "";
-      // Pro 无桥接 + 无自有 API Key：回退到默认提示
-      if (isObserve && !state.currentConfigHasApiKey && !cfg?._model_shared) {
-        setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
-        $("apiKey").placeholder = "输入 API Key 后保存";
-      }
-    }
+  // 模型共享：只要管理员开启了共享且当前用户非管理员，API Key 为空就共享
+  const isUsingShared = !isAdmin && cfg._model_shared;
+  if (isUsingShared) {
+    $("apiKey").type = "text";
+    $("apiKey").value = "••••••••••••";
+    $("apiKey").disabled = true;
+    $("apiKey").style.opacity = "0.6";
+    setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 当前使用管理员共享的API Key`);
+  } else {
+    $("apiKey").type = "password";
+    $("apiKey").value = "";
+    $("apiKey").disabled = false;
+    $("apiKey").style.opacity = "";
   }
+  state._isUsingSharedModel = isUsingShared;
 }
 
 async function saveConfig() {
   const apiKeyRaw = $("apiKey").value.trim();
-  const sharedInfo = $("modelSharedInfo");
-  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
+  const isUsingShared = state._isUsingSharedModel;
   // 使用共享模型时 apiKey 显示隐藏字符，实际为空
   const apiKey = isUsingShared ? "" : apiKeyRaw;
   if (!apiKey && !state.currentConfigHasApiKey && !isUsingShared) {
@@ -2446,9 +2433,7 @@ async function runAnalysis() {
   }
 
   // Check: non-admin without own config and model sharing is off
-  const sharedInfo = $("modelSharedInfo");
-  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
-  if (!state.currentConfigHasApiKey && !isUsingShared) {
+  if (!state.currentConfigHasApiKey && !state._isUsingSharedModel) {
     toast("请先在模型设置中配置 API Key，或联系管理员开启模型共享", "warning");
     return;
   }
