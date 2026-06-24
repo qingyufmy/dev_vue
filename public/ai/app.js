@@ -1918,16 +1918,19 @@ async function loadConfig() {
   // 模型共享：只要管理员开启了共享且当前用户非管理员，API Key 为空就共享
   const isUsingShared = !isAdmin && cfg._model_shared;
   if (isUsingShared) {
-    $("apiKey").type = "text";
-    $("apiKey").value = "••••••••••••";
-    $("apiKey").disabled = true;
-    $("apiKey").style.opacity = "0.6";
-    setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 当前使用管理员共享的API Key`);
+    // 提示用户当前使用的是管理员共享的 API Key，但允许自行填入覆盖
+    $("apiKey").type = "password";
+    $("apiKey").value = "";
+    $("apiKey").disabled = false;
+    $("apiKey").style.opacity = "";
+    $("apiKey").placeholder = "留空则使用管理员共享的API Key";
+    setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 当前使用管理员共享的API Key（可自行填写覆盖）`);
   } else {
     $("apiKey").type = "password";
     $("apiKey").value = "";
     $("apiKey").disabled = false;
     $("apiKey").style.opacity = "";
+    $("apiKey").placeholder = "";
   }
   state._isUsingSharedModel = isUsingShared;
   // 自动推理配置覆盖开关：有自有API Key / 使用共享模型 / Pro会员 均可使用
@@ -1937,10 +1940,9 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
-  const apiKeyRaw = $("apiKey").value.trim();
+  const apiKey = $("apiKey").value.trim();
   const isUsingShared = state._isUsingSharedModel;
-  // 使用共享模型时 apiKey 显示隐藏字符，实际为空
-  const apiKey = isUsingShared ? "" : apiKeyRaw;
+  // 共享模型下留空可以（后端fallback到管理员Key），但用户填了就用用户的
   if (!apiKey && !state.currentConfigHasApiKey && !isUsingShared) {
     toast("请先填写 API Key", "warning");
     $("apiKey").focus();
