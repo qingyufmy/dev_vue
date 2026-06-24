@@ -1286,53 +1286,78 @@ function timeframeIntervalMs(tf) {
 
 // Run one cycle for a specific symbol × timeframe
 async function runAutoCycle(userId, symbol, timeframe) {
+  const ts = () => new Date().toISOString()
+  const l = (msg) => console.log(`[AutoCycle U${userId}] ${ts()} ${symbol}/${timeframe}: ${msg}`)
+
+  l('>>> cycle start')
   const cfg = await getAutoConfig(null, userId)
-  if (!cfg || !cfg.enabled) { console.log(`[runAutoCycle] User ${userId}: auto_scheduler not found or disabled`); return }
+  if (!cfg || !cfg.enabled) { l(`BLOCKED: auto_scheduler not found or disabled (enabled=${cfg?.enabled})`); return }
+  l(`auto_scheduler enabled=true`)
 
   // Use global auto inference config
   const config = await getAutoInferenceConfig(userId)
   if (!config || !config.api_key_encrypted) {
-    console.log(`[runAutoCycle] User ${userId}: no API key configured for auto inference`)
+    l(`BLOCKED: no API key (config=${!!config}, hasKey=${!!config?.api_key_encrypted}, source=${config?._source})`)
     return
   }
+  l(`inference config ok: source=${config._source}, model=${config.model_name}, provider=${config.api_provider}`)
 
   // Check Pro permission
   const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
   if (!user || user.plan !== 'pro') {
-    console.log(`[runAutoCycle] User ${userId}: not Pro (plan=${user?.plan}), skipping`)
+    l(`BLOCKED: not Pro (plan=${user?.plan})`)
     return
   }
+  l(`plan=pro ✓`)
 
   // Check market status (re-check: could change between tick check and now)
   const tradeMode = await getBridgeTradeMode(userId)
   if (tradeMode !== 4) {
-    console.log(`[runAutoCycle] User ${userId}: market not open (tradeMode=${tradeMode}), skipping cycle`)
+    l(`BLOCKED: market not open (tradeMode=${tradeMode})`)
     return
   }
+  l(`market tradeMode=4 ✓`)
 
   try {
     // Get market data from MT5 bridge
+    l(`fetching bridge data (account+positions+rates)...`)
+    const t0 = Date.now()
     const account = await mt5Bridge(userId, 'account', {})
     const positionsData = await mt5Bridge(userId, 'positions', { symbol })
     const positions = positionsData.positions || []
+    l(`bridge account+positions done (${Date.now()-t0}ms, positions=${positions.length})`)
 
     // Parse tags from auto config's system_prompt to determine which timeframes to fetch
     const prompt = config.system_prompt || ''
     const tags = parseTimeframeTags(prompt, 'auto')
     const primaryTf = tags.length > 0 ? tags[0].tf : (timeframe || 'M5').toUpperCase()
     const primaryCount = tags.length > 0 ? tags[0].count : 100
+    const t1 = Date.now()
     const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
 
-    if (!ratesResp || ratesResp.status === 'error') return
+    if (!ratesResp || ratesResp.status === 'error') {
+      l(`BLOCKED: rates failed (${Date.now()-t1}ms, status=${ratesResp?.status}, error=${ratesResp?.error})`)
+      return
+    }
     const rates = ratesResp.rates || []
-    if (!Array.isArray(rates) || rates.length === 0) return
+    if (!Array.isArray(rates) || rates.length === 0) {
+      l(`BLOCKED: rates empty (${Date.now()-t1}ms, len=${rates?.length})`)
+      return
+    }
+    l(`rates done (${Date.now()-t1}ms, bars=${rates.length}, tf=${primaryTf})`)
 
+    const t2 = Date.now()
     const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
     market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
+    l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
+    const t3 = Date.now()
+    l(`calling AI (model=${config.model_name})...`)
     const signal = await maybeAiSignal(null, config, market)
     market.inference_source = signal._inference_source || 'unknown'
+    const aiSource = signal._inference_source
     delete signal._inference_source
+    l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
 
     const createdAt = utcNow()
     const result = await queryRun(`
@@ -1354,6 +1379,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
     signal.market_data = market
     signal.is_executed = false
     attachSignalTiming(signal)
+    l(`signal #${signal.id} saved to DB ✓`)
 
     // Auto-execute if enabled: check inference_source + signal validity + bridge/trade state
     let execResult = null
@@ -1361,6 +1387,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
       // Check bridge alive and trade enabled
       const bridgeAlive = isBridgeAlive(userId)
       if (!bridgeAlive) {
+        l(`auto-trade skipped: bridge not alive`)
       } else {
         const order = signalOrderPayload(signal, config, market, true)
         execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
@@ -1368,9 +1395,13 @@ async function runAutoCycle(userId, symbol, timeframe) {
           signal.is_executed = true
           const ticket = execResult.order || execResult.ticket || null
           await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ?, trade_ticket = ?, executed_at = NOW() WHERE id = ?', [JSON.stringify(execResult), ticket, signal.id])
+          l(`auto-executed: ticket=${ticket}`)
+        } else {
+          l(`auto-execute failed: ${execResult.message || execResult.status}`)
         }
       }
     } else if (market.inference_source !== 'ai') {
+      l(`auto-trade skipped: inference_source=${market.inference_source}`)
     }
 
     // Audit log — reflect actual execution outcome, NOT just "cycle didn't crash"
@@ -1385,7 +1416,9 @@ async function runAutoCycle(userId, symbol, timeframe) {
       inference_source: market.inference_source,
       is_executed: signal.is_executed || false,
     }, execResult && execResult.status === 'success' ? 'success' : 'info')
+    l(`<<< cycle complete (audit=${scanStatus})`)
   } catch (err) {
+    l(`<<< EXCEPTION: ${err.message}`)
     console.error(`[AutoScheduler] ${symbol}/${timeframe} error:`, err.message)
     await insertAudit(null, userId, 'ai_auto_scan', symbol, { trigger: 'timer', symbol, timeframe }, { status: 'error', message: err.message }, 'error')
   }
@@ -1596,23 +1629,24 @@ async function startAutoScheduler(userId) {
       if (tradeMode !== 4) {
         const st = autoSchedulerState[userId]
         st._waitCount = (st._waitCount || 0) + 1
-        // Log every 30th retry (~2.5 min) to confirm scheduler is alive and show why it's waiting
-        if (st._waitCount === 1 || st._waitCount % 30 === 0) {
-          console.log(`[AutoScheduler] User ${userId}: waiting for market (tradeMode=${tradeMode}, retry#${st._waitCount}, symbol=${symbol})`)
+        // Log every 10th retry (~50s) to confirm scheduler is alive and show why it's waiting
+        if (st._waitCount === 1 || st._waitCount % 10 === 0) {
+          console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} waiting: tradeMode=${tradeMode}, retry#${st._waitCount}, symbol=${symbol}`)
         }
         autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
       }
       // Reset wait counter on successful market check
       if (autoSchedulerState[userId]) autoSchedulerState[userId]._waitCount = 0
+      console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} market OK (tradeMode=4), proceeding to runAutoCycle`)
     } catch (err) {
       const st = autoSchedulerState[userId]
       st._waitCount = (st._waitCount || 0) + 1
-      if (st._waitCount === 1 || st._waitCount % 30 === 0) {
-        console.error(`[AutoScheduler] User ${userId}: getBridgeTradeMode threw (retry#${st._waitCount}):`, err.message)
+      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
+        console.error(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} getBridgeTradeMode error (retry#${st._waitCount}):`, err.message)
       }
       autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
     }
-    try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler] ${symbol}/M5 tick error:`, e.message) }
+    try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} cycle error:`, e.message) }
     if (autoSchedulerState[userId]?.running) {
       autoSchedulerState[userId].timer = setTimeout(tick, intervalMs)
     }
@@ -1625,6 +1659,7 @@ function stopAutoScheduler(userId) {
   if (state?.timer) clearTimeout(state.timer)
   if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
   autoSchedulerState[userId] = null
+  console.log(`[stopAutoScheduler] User ${userId}: scheduler stopped (hadTimer=${!!state?.timer})`)
 }
 
 export async function initAutoSchedulers() {
