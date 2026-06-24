@@ -1917,7 +1917,10 @@ async function loadConfig() {
   // Sync override section visibility
   syncOverrideSection();
   // 模型共享：只要管理员开启了共享且当前用户非管理员，API Key 为空就共享
+  console.log('🔍 [loadConfig] cfg:', cfg);
+  console.log('🔍 [loadConfig] isAdmin:', isAdmin, '_model_shared:', cfg._model_shared, 'has_api_key:', cfg.has_api_key, 'currentConfigHasApiKey:', state.currentConfigHasApiKey);
   const isUsingShared = !isAdmin && cfg._model_shared;
+  console.log('🔍 [loadConfig] isUsingShared:', isUsingShared);
   if (isUsingShared) {
     $("apiKey").type = "text";
     $("apiKey").value = "••••••••••••";
