@@ -868,8 +868,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Targeted risk-param fetch: auto signal → global config (or user override), manual signal → user's config
         // No fallback, no penetration, no API key leak
         const config = await ai.getExecuteRiskConfig(userId, signal)
-        if (!config || !config.enable_auto_trade) {
-          result = { status: 'rejected', message: 'auto_trade_disabled', details: { enable_auto_trade: config?.enable_auto_trade ?? 0 } }
+        // 复核执行是人工触发+二次确认的操作，不应受 enable_auto_trade 限制
+        // 只需确保有风险配置可用（止盈档位、最大手数等参数）
+        if (!config) {
+          result = { status: 'rejected', message: 'no_risk_config', details: {} }
           await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, result.status)
           break
         }
