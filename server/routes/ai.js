@@ -279,12 +279,23 @@ async function mt5Bridge(userId, action, params = {}) {
   const prev = _bridgeLocks[userId] || Promise.resolve()
   const current = prev.then(async () => {
     let result = await executeViaBridge(userId, action, params)
-    // Symbol fallback: XAUUSD -> XAUUSD.s -> XAUUSDm -> XAUUSD.c
+    // Symbol fallback: strip suffix → try base → base.s → base.c
     if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
-      const variants = [params.symbol + '.s', params.symbol + 'm', params.symbol + '.c', params.symbol + '_']
+      // Strip known MT5 suffix if present (e.g. XAUUSD.s → XAUUSD)
+      let base = params.symbol
+      const knownSuffixes = ['.s', '.c', 'm', '.pro', '.std', '.z', '.ecn', '_']
+      for (const sfx of knownSuffixes) {
+        if (base.endsWith(sfx)) { base = base.slice(0, -sfx.length); break }
+      }
+      const variants = [base, base + '.s', base + '.c']
+      let fallback_used = null
       for (const v of variants) {
+        if (v === params.symbol) continue // skip already-tried
         result = await executeViaBridge(userId, action, { ...params, symbol: v })
-        if (result?.status !== 'error') break
+        if (result?.status !== 'error') { fallback_used = v; break }
+      }
+      if (fallback_used) {
+        console.log(`[mt5Bridge] User ${userId}: rates symbol fallback ${params.symbol} → ${fallback_used} ✓`)
       }
     }
     return result
