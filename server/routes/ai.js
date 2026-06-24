@@ -1437,29 +1437,34 @@ async function runAutoCycle(userId, symbol, timeframe) {
     attachSignalTiming(signal)
 
     // Auto-execute if enabled: check inference_source + signal validity + bridge/trade state
+    let execResult = null
     if (config && config.enable_auto_trade && market.inference_source === 'ai' && !signal.is_stale && signal.signal_type !== 'hold') {
       // Check bridge alive and trade enabled
       const bridgeAlive = isBridgeAlive(userId)
       if (!bridgeAlive) {
       } else {
         const order = signalOrderPayload(signal, config, market, true)
-        const execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
+        execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
         if (execResult.status === 'success') {
+          signal.is_executed = true
           await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ? WHERE id = ?', [JSON.stringify(execResult), signal.id])
         }
       }
     } else if (market.inference_source !== 'ai') {
     }
 
-    // Audit log
+    // Audit log — reflect actual execution outcome, NOT just "cycle didn't crash"
+    const scanStatus = execResult
+      ? (execResult.status === 'success' ? 'executed' : `exec_failed:${execResult.message || execResult.status}`)
+      : (signal.signal_type === 'hold' ? 'skipped_hold' : 'skipped')
     await insertAudit(null, userId, 'ai_auto_scan', symbol, { trigger: 'timer', symbol, timeframe, signal_id: signal.id }, {
-      status: 'success',
+      status: scanStatus,
       signal_id: signal.id,
       signal_type: signal.signal_type,
       confidence: signal.confidence,
       inference_source: market.inference_source,
-      is_executed: signal.is_executed,
-    }, 'success')
+      is_executed: signal.is_executed || false,
+    }, execResult && execResult.status === 'success' ? 'success' : 'info')
   } catch (err) {
     console.error(`[AutoScheduler] ${symbol}/${timeframe} error:`, err.message)
     await insertAudit(null, userId, 'ai_auto_scan', symbol, { trigger: 'timer', symbol, timeframe }, { status: 'error', message: err.message }, 'error')
