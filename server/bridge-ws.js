@@ -1087,6 +1087,150 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', tickets: map }
         break
       }
+      case 'export_history': {
+        // Admin-only: export all history + reasoning as structured data
+        const adminUser = user
+        if (adminUser?.role !== 'admin') {
+          result = { status: 'error', message: '仅管理员可操作' }
+          break
+        }
+
+        const flattenSignal = s => ({
+          id: s.id, type: s.signal_type, confidence: s.confidence,
+          volume: s.recommended_volume, analysis: s.analysis, reasoning: s.reasoning,
+          stop_loss: s.stop_loss_price, tp1: s.take_profit_1_price,
+          tp2: s.take_profit_2_price, tp3: s.take_profit_3_price,
+          session: s.session_id || 'default',
+          executed: !!s.is_executed, exec_result: s.execution_result,
+          created_at: s.created_at, symbol: s.symbol,
+        })
+
+        let expUserId = adminUserId || userId
+        let bridgeOk = bridges.get(expUserId)?.ws?.readyState === 1
+        if (!bridgeOk && bridges.get(userId)?.ws?.readyState === 1) {
+          expUserId = userId; bridgeOk = true
+        }
+        if (!bridgeOk) {
+          result = { status: 'error', message: '桥接未连接，无法导出历史数据' }
+          break
+        }
+        // Fetch all orders from MT5 bridge
+        const expRes = await ai.mt5Bridge(expUserId, 'history', { page: 1, page_size: 9999 })
+        if (expRes?.status !== 'success' || !Array.isArray(expRes.orders)) {
+          result = { status: 'error', message: '获取历史订单失败' }
+          break
+        }
+        let orders = [...expRes.orders]
+        // Apply same filters as history page
+        const _od = o => (o.close_time || o.time || '')
+        const _ot = o => (o.type || '')
+        const _op = o => Number(o.profit || 0)
+        if (params.close_from) orders = orders.filter(o => _od(o).slice(0, 10) >= params.close_from)
+        if (params.close_to) orders = orders.filter(o => _od(o).slice(0, 10) <= params.close_to)
+        if (params.entry_from) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) >= params.entry_from)
+        if (params.entry_to) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) <= params.entry_to)
+        if (params.direction) orders = orders.filter(o => _ot(o).toUpperCase() === params.direction)
+        if (params.profit_filter === 'profit') orders = orders.filter(o => _op(o) > 0)
+        if (params.profit_filter === 'loss') orders = orders.filter(o => _op(o) < 0)
+        orders.sort((a, b) => _od(b).localeCompare(_od(a)))
+
+        // Collect all tickets from orders
+        const tickets = orders.map(o => String(o.ticket || o.order || '')).filter(Boolean)
+        let signalMap = {}
+
+        if (tickets.length > 0) {
+          // Use the EXACT same matching logic as signal_tickets handler (line 1009):
+          //   1. trade_ticket direct match
+          //   2. fallback: execution_result JSON → order/ticket/position
+          // Only is_executed=1 signals have a real order ticket binding
+          const signalRows = await queryAll(
+            `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+                    stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+                    session_id, is_executed, execution_result, created_at, symbol
+             FROM ai_signals WHERE is_executed = 1 ORDER BY created_at DESC`
+          )
+
+          // Build ticket→signal map using same extraction as signal_tickets handler
+          for (const s of signalRows) {
+            let ticket = s.trade_ticket
+            if (!ticket) {
+              try {
+                const exec = JSON.parse(s.execution_result || '{}')
+                ticket = exec.order || exec.ticket || exec.position
+              } catch {}
+            }
+            if (ticket) {
+              const tk = String(ticket)
+              if (!signalMap[tk]) signalMap[tk] = []
+              signalMap[tk].push(flattenSignal(s))
+            }
+          }
+
+          // Also match signals WITH trade_ticket but NOT is_executed=1
+          // (auto-reasoning assigns trade_ticket before execution)
+          const unmatchedTickets = tickets.filter(tk => !signalMap[tk])
+          if (unmatchedTickets.length > 0) {
+            const placeholders = unmatchedTickets.map(() => '?').join(',')
+            const taggedRows = await queryAll(
+              `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+                      stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+                      session_id, is_executed, execution_result, created_at, symbol
+               FROM ai_signals WHERE trade_ticket IN (${placeholders}) AND is_executed != 1
+               ORDER BY created_at DESC`,
+              unmatchedTickets
+            )
+            for (const s of taggedRows) {
+              const tk = String(s.trade_ticket)
+              if (!signalMap[tk]) signalMap[tk] = []
+              signalMap[tk].push(flattenSignal(s))
+            }
+          }
+        }
+
+        // Build export rows: one order + reasoning = one row
+        const exportRows = orders.map(o => {
+          const tk = String(o.ticket || o.order || '')
+          const signals = signalMap[tk] || []
+          const mainSignal = signals.find(s => s.session === 'default') || signals[0] || {}
+          return {
+            // Order fields
+            ticket: tk,
+            symbol: o.symbol || '',
+            direction: (o.type || '').toUpperCase(),
+            volume: o.volume || 0,
+            entry_price: o.entry_price ?? o.open_price ?? '',
+            entry_time: o.entry_time || o.time || '',
+            exit_price: o.close_price ?? '',
+            close_time: o.close_time || '',
+            stop_loss: o.stop_loss ?? o.sl ?? '',
+            take_profit: o.take_profit ?? o.tp ?? '',
+            profit: o.profit ?? 0,
+            profit_points: o.profit_points ?? 0,
+            comment: o.comment || '',
+            // Reasoning fields
+            signal_id: mainSignal.id || '',
+            signal_type: mainSignal.type || '',
+            signal_confidence: mainSignal.confidence ?? '',
+            signal_volume: mainSignal.volume ?? '',
+            signal_analysis: mainSignal.analysis || '',
+            signal_reasoning: mainSignal.reasoning || '',
+            signal_stop_loss: mainSignal.stop_loss ?? '',
+            signal_tp1: mainSignal.tp1 ?? '',
+            signal_tp2: mainSignal.tp2 ?? '',
+            signal_tp3: mainSignal.tp3 ?? '',
+            signal_executed: mainSignal.executed ? '是' : '否',
+            signal_created: mainSignal.created_at || '',
+          }
+        })
+
+        result = {
+          status: 'success',
+          rows: exportRows,
+          total: exportRows.length,
+          export_time: new Date().toISOString()
+        }
+        break
+      }
       case 'toggle_close': {
         const enabled = !!params.enabled
         const existing = await ai.getCloseConfig(userId)

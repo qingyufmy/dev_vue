@@ -697,6 +697,7 @@
             <div class="card-header">
               <span class="card-title">交易历史</span>
               <button class="card-action-btn" data-action="refresh-history-page"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
+              <button class="card-action-btn admin-only" id="exportHistoryBtn" data-action="export-history" style="display:none"><i data-lucide="download" size="12"></i>导出</button>
             </div>
             <div class="history-chart-wrap">
               <div class="chart-top-bar">
@@ -922,6 +923,7 @@
     <script src="lucide.js"></script>
     <script src="/ai/js/lightweight-charts.standalone.production.js"></script>
     <script src="/ai/js/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="/ai/app.js?v=20260620-stale"></script>
   </body>
 </html>

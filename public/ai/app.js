@@ -1724,6 +1724,11 @@ function applyRoleUI() {
   // Pro without bridge = has own account but bridge not connected (using admin fallback)
   const isProNoBridge = isPro && !isAdmin && state._usingFallback;
 
+  // Admin-only UI elements
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = isAdmin ? '' : 'none';
+  });
+
   // Free users: locked out entirely (proOverlay shown during init)
 
   // === Plus users: observation-only mode ===
@@ -3159,6 +3164,106 @@ async function refreshHistoryPage() {
   await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
 }
 
+async function exportHistory() {
+  const adminOnly = state.user?.role === 'admin';
+  if (!adminOnly) { toast('仅管理员可操作', 'error'); return; }
+  try {
+    // Gather current filters
+    const filterParams = {};
+    const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
+    const entryTo = document.getElementById('filterEntryTo')?.value || '';
+    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
+    const closeTo = document.getElementById('filterCloseTo')?.value || '';
+    const direction = document.getElementById('filterDirection')?.value || '';
+    const profit = document.getElementById('filterProfit')?.value || '';
+    if (entryFrom) filterParams.entry_from = entryFrom;
+    if (entryTo) filterParams.entry_to = entryTo;
+    if (closeFrom) filterParams.close_from = closeFrom;
+    if (closeTo) filterParams.close_to = closeTo;
+    if (direction) filterParams.direction = direction;
+    if (profit) filterParams.profit_filter = profit;
+
+    toast('正在导出数据...', 'info');
+    const data = await wsApi('export_history', filterParams, 60000);
+    if (data.status !== 'success') { toast(data.message || '导出失败', 'error'); return; }
+    const rows = data.rows || [];
+    if (rows.length === 0) { toast('没有可导出的数据', 'warning'); return; }
+
+    // Build XLSX workbook with 2 sheets
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: 交易记录 (order fields)
+    const headers = [
+      '订单号', '品种', '方向', '手数',
+      '入场价', '开仓时间', '平仓价', '平仓时间',
+      '止损', '止盈', '盈亏', '盈点', '备注',
+      '信号ID', '信号类型', '信号置信度', '信号建议手数',
+      '信号分析', '信号推理',
+      '信号止损', '信号止盈1', '信号止盈2', '信号止盈3',
+      '信号已执行', '信号时间'
+    ];
+    const sheetData = [headers];
+    for (const r of rows) {
+      sheetData.push([
+        r.ticket || '', r.symbol || '', r.direction || '', r.volume || '',
+        r.entry_price ?? '', r.entry_time || '', r.exit_price ?? '', r.close_time || '',
+        r.stop_loss ?? '', r.take_profit ?? '', r.profit ?? '', r.profit_points ?? '', r.comment || '',
+        r.signal_id || '', r.signal_type || '', r.signal_confidence ?? '', r.signal_volume ?? '',
+        r.signal_analysis || '', r.signal_reasoning || '',
+        r.signal_stop_loss ?? '', r.signal_tp1 ?? '', r.signal_tp2 ?? '', r.signal_tp3 ?? '',
+        r.signal_executed || '', r.signal_created || ''
+      ]);
+    }
+    const ws1 = XLSX.utils.aoa_to_sheet(sheetData);
+
+    // Set column widths
+    const colWidths = headers.map(h => ({ wch: Math.max(h.length * 2, 12) }));
+    // Make analysis/reasoning columns wider
+    colWidths[18].wch = 40; // 信号分析
+    colWidths[19].wch = 40; // 信号推理
+    ws1['!cols'] = colWidths;
+
+    XLSX.utils.book_append_sheet(wb, ws1, '交易记录');
+
+    // Sheet 2: 统计汇总
+    const totalCount = rows.length;
+    const winCount = rows.filter(r => (r.profit ?? 0) > 0).length;
+    const lossCount = rows.filter(r => (r.profit ?? 0) < 0).length;
+    const totalProfit = rows.reduce((s, r) => s + (Number(r.profit) || 0), 0);
+    const withSignal = rows.filter(r => r.signal_id).length;
+    const buyCount = rows.filter(r => r.direction === 'BUY').length;
+    const sellCount = rows.filter(r => r.direction === 'SELL').length;
+
+    const summaryData = [
+      ['统计项', '数值'],
+      ['导出时间', new Date().toLocaleString('zh-CN')],
+      ['总交易数', totalCount],
+      ['盈利笔数', winCount],
+      ['亏损笔数', lossCount],
+      ['胜率', totalCount > 0 ? ((winCount / totalCount) * 100).toFixed(1) + '%' : 'N/A'],
+      ['总盈亏', totalProfit.toFixed(2)],
+      ['平均盈亏', totalCount > 0 ? (totalProfit / totalCount).toFixed(2) : 'N/A'],
+      ['买入笔数', buyCount],
+      ['卖出笔数', sellCount],
+      ['有推理信号', withSignal],
+      ['筛选条件', Object.entries(filterParams).map(([k, v]) => `${k}=${v}`).join(', ') || '无（全部）'],
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(summaryData);
+    ws2['!cols'] = [{ wch: 16 }, { wch: 30 }];
+    XLSX.utils.book_append_sheet(wb, ws2, '统计汇总');
+
+    // Generate filename and download
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    const filename = `AURUM_交易历史_${dateStr}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    toast(`导出完成: ${totalCount} 笔交易`, 'success');
+  } catch (e) {
+    console.error('exportHistory:', e);
+    toast('导出失败: ' + (e.message || '未知错误'), 'error');
+  }
+}
+
 function auditActionLabel(action) {
   return {
     manual_open: "手动开仓",
@@ -3374,6 +3479,7 @@ function bindEvents() {
         "refresh-history": loadHistory,
         "refresh-trading-page": refreshTradingPage,
         "refresh-history-page": refreshHistoryPage,
+        "export-history": exportHistory,
         "refresh-audit": loadAudit,
       };
       if (tasks[action]) {
