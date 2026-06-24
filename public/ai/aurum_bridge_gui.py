@@ -827,15 +827,14 @@ class BridgeWorker(QThread):
                     self.log_signal.emit(f"[DLL] 添加搜索路径: {d}")
                 except Exception:
                     pass
-        # Add to PATH for .pyd dependency resolution
-        if mt5_dirs:
-            existing_path = os.environ.get("PATH", "")
-            new_entries = ";".join(mt5_dirs)
-            if new_entries not in existing_path:
-                os.environ["PATH"] = new_entries + ";" + existing_path
-                self.log_signal.emit(f"[PATH] 添加MT5目录到环境变量")
+        # ⚠️  IMPORTANT: do NOT prepend MT5 to PATH before importing MetaTrader5!
+        #    Prepending causes Windows to find MT5's bundled MSVC/openblas DLLs BEFORE
+        #    the PyInstaller-bundled ones that numpy 2.5.0 needs, resulting in:
+        #      ImportError: numpy._core.multiarray failed to import
+        #    Fix: import MetaTrader5 first (numpy loads from PyInstaller bundle),
+        #    then append MT5 to PATH (lower priority) for mt5.initialize() calls.
 
-        # Import MT5
+        # Import MT5 FIRST — before modifying PATH — so numpy DLLs load from PyInstaller bundle
         try:
             import MetaTrader5 as mt5
             self.mt5 = mt5
@@ -853,6 +852,15 @@ class BridgeWorker(QThread):
                 self.log_signal.emit(f"提示: 请确保MT5安装目录包含 terminal64.exe 所需的所有DLL文件，或尝试重新安装MT5")
             self.status_signal.emit("MT5 未安装", "#ef4444", "请安装MT5终端后重试")
             return
+
+        # NOW append MT5 to PATH for mt5.initialize() terminal DLL resolution.
+        # Appending (not prepending) ensures PyInstaller-bundled DLLs take priority.
+        if mt5_dirs:
+            existing_path = os.environ.get("PATH", "")
+            new_entries = ";".join(mt5_dirs)
+            if new_entries not in existing_path:
+                os.environ["PATH"] = existing_path + ";" + new_entries
+                self.log_signal.emit(f"[PATH] 追加MT5目录 (保留PyInstaller DLL优先)")
 
         if not self.mt5.initialize():
             self.log_signal.emit(f"MT5 初始化失败: {self.mt5.last_error()}")
