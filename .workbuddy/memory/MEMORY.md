@@ -12,3 +12,13 @@
 - MySQL: 192.168.1.254:3306, user=huaerjie, database=huaerjie
 - 七牛云: bucket=aurum, domain=qiniu.acadfx.com, AK=nBN5ehGYR4JaPZPp9-hX8zkldzjTADl6IQCvUEeN, SK=AaNVNjKSq5UzTlqmMeoJ3JCVHhKWUYd00ueeIL4T
 - GitHub: qingyufmy/wall-street-skill-local
+
+## 🔴 安全红线（绝对禁止）
+- **自动推理配置中的 system_prompt 是一级敏感数据**，绝不允许任何用户通过任何方式查看或泄露。
+  - `global_auto_config.system_prompt` 只用于自动推理运行时构建 LLM 请求，绝不能出现在：
+    - 手动推理配置界面 (`ai_config` 命令)
+    - 任何 WebSocket 返回给前端的字段中
+    - 任何 HTTP API 响应中
+    - 日志/审计记录中
+  - `getActiveConfig` 在展示层调用时必须带 `skipFallbacks: true`
+  - 信号执行/手动推理等运行时调用走正常回退逻辑（拿 API Key + 风控参数），但 system_prompt 仍需脱敏
