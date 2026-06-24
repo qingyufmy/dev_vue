@@ -222,7 +222,8 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
       row.model_name = row.model_name || globalCfg.model_name || 'deepseek-chat'
       row.temperature = row.temperature ?? globalCfg.temperature
       row.max_tokens = row.max_tokens ?? globalCfg.max_tokens
-      row.system_prompt = row.system_prompt || globalCfg.system_prompt
+      // system_prompt must NOT fall back to global_auto_config — that is admin's auto-reasoning strategy,
+      // and leaking it to all users' manual reasoning config is a data isolation breach.
     }
   }
 
