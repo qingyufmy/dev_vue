@@ -6785,11 +6785,11 @@ function persistAuthSession(result, { syncProgress = false } = {}) {
     return
   }
 
+  // Always re-render immediately after login, regardless of sync progress result
+  renderView()
+
   if (syncProgress) {
     progress.syncFromServer().then(() => { renderView() }).catch(() => {})
-  }
-  if (state.currentView === 'home') {
-    renderHome()
   }
 
 }
