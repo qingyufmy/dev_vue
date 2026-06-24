@@ -362,7 +362,10 @@ class BridgeWorker(QThread):
                 info = self.mt5.symbol_info(symbol); tick = self.mt5.symbol_info_tick(symbol)
                 if not info: return {"status": "error", "message": f"Symbol not available: {symbol}"}
                 if not tick: return {"status": "error", "message": f"Invalid live quote for {symbol}"}
-                ot = self.mt5.ORDER_TYPE_BUY if (params.get("type") or params.get("order_type") or "buy").lower() == "buy" else self.mt5.ORDER_TYPE_SELL
+                dir_str = (params.get("type") or params.get("order_type") or "").strip().lower()
+                if dir_str not in ("buy", "sell"):
+                    return {"status": "error", "message": "order type is required (buy/sell)"}
+                ot = self.mt5.ORDER_TYPE_BUY if dir_str == "buy" else self.mt5.ORDER_TYPE_SELL
                 req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
                        "volume": float(params.get("lot") or params.get("volume") or 0.01),
                        "type": ot, "magic": 234000, "comment": params.get("comment", "AURUM"),
@@ -610,6 +613,26 @@ class BridgeWorker(QThread):
             elif action == "set_quote_symbol":
                 self._resolved_symbol = self._resolve_symbol(params.get("symbol", "XAUUSD"))
                 return {"status": "success", "symbol": self._resolved_symbol}
+            elif action == "modify":
+                ticket = params.get("ticket")
+                if not ticket:
+                    return {"status": "error", "message": "ticket is required for modify"}
+                positions = self.mt5.positions_get(ticket=ticket)
+                if positions is None:
+                    return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
+                if len(positions) == 0:
+                    return {"status": "error", "message": f"Position {ticket} not found"}
+                pos = positions[0]
+                req = {
+                    "action": self.mt5.TRADE_ACTION_SLTP,
+                    "position": ticket,
+                    "sl": float(params["sl"]) if "sl" in params and params["sl"] is not None else pos.sl,
+                    "tp": float(params["tp"]) if "tp" in params and params["tp"] is not None else pos.tp,
+                }
+                result = self.mt5.order_send(req)
+                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                    return {"status": "success", "ticket": ticket}
+                return {"status": "error", "message": result.comment if result else "modify failed"}
             else:
                 return {"status": "error", "message": f"unknown action: {action}"}
         except Exception as e:
