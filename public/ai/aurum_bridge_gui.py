@@ -1547,7 +1547,7 @@ class SettingsPage(QWidget):
         mt5_row.addWidget(self.combo_mt5, 1)
         btn_browse = QPushButton("浏览")
         btn_browse.setProperty("secondary", True)
-        btn_browse.setFixedWidth(60)
+        btn_browse.setFixedWidth(80)
         btn_browse.clicked.connect(self._browse_mt5_path)
         mt5_row.addWidget(btn_browse)
         mt5_path_layout.addLayout(mt5_row)
