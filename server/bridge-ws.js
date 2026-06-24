@@ -1094,6 +1094,19 @@ async function handleBrowserCommand(ws, userId, msg) {
           result = { status: 'error', message: '仅管理员可操作' }
           break
         }
+
+        const flattenSignal = s => ({
+          id: s.id, type: s.signal_type, confidence: s.confidence,
+          volume: s.recommended_volume, analysis: s.analysis, reasoning: s.reasoning,
+          stop_loss: s.stop_loss_price, tp1: s.take_profit_1_price,
+          tp2: s.take_profit_2_price, tp3: s.take_profit_3_price,
+          session: s.session_id || 'default',
+          executed: !!s.is_executed, exec_result: s.execution_result,
+          created_at: s.created_at
+        })
+
+        // Normalize MT5 symbol: strip .s/.m/.c suffix for comparison
+        const normalizeSymbol = (s) => (s || '').toUpperCase().replace(/\\.[SMC]$/i, '')
         let expUserId = adminUserId || userId
         let bridgeOk = bridges.get(expUserId)?.ws?.readyState === 1
         if (!bridgeOk && bridges.get(userId)?.ws?.readyState === 1) {
@@ -1125,29 +1138,59 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // Collect all tickets to batch-query ai_signals
         const tickets = orders.map(o => String(o.ticket || o.order || '')).filter(Boolean)
-        // Batch query signals by trade_ticket
         let signalMap = {}
+
         if (tickets.length > 0) {
-          const placeholders = tickets.map(() => '?').join(',')
+          // Strategy: query all ai_signals in the order date range, then match by:
+          //   1. trade_ticket exact match (auto-executed orders)
+          //   2. symbol + close_time ≈ created_at (manual/non-auto orders)
+          const allTimes = orders.map(o => o.close_time || o.time || '').filter(Boolean).sort()
+          const minDate = allTimes[0]?.slice(0, 10) || '2000-01-01'
+          const maxDate = (allTimes[allTimes.length - 1]?.slice(0, 10) || '2099-12-31') + ' 23:59:59'
+
           const signalRows = await queryAll(
-            `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+            `SELECT id, trade_ticket, symbol, signal_type, confidence, recommended_volume, analysis, reasoning,
                     stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
                     session_id, is_executed, execution_result, created_at
-             FROM ai_signals WHERE trade_ticket IN (${placeholders}) ORDER BY created_at DESC`,
-            tickets
+             FROM ai_signals
+             WHERE created_at >= ? AND created_at <= ?
+             ORDER BY created_at DESC`,
+            [minDate, maxDate]
           )
+
+          const signalsByTicket = {}  // trade_ticket → signal
+          const untaggedSignals = []  // signals without trade_ticket
+
           for (const s of signalRows) {
-            const tk = String(s.trade_ticket)
-            if (!signalMap[tk]) signalMap[tk] = []
-            signalMap[tk].push({
-              id: s.id, type: s.signal_type, confidence: s.confidence,
-              volume: s.recommended_volume, analysis: s.analysis, reasoning: s.reasoning,
-              stop_loss: s.stop_loss_price, tp1: s.take_profit_1_price,
-              tp2: s.take_profit_2_price, tp3: s.take_profit_3_price,
-              session: s.session_id || 'default',
-              executed: !!s.is_executed, exec_result: s.execution_result,
-              created_at: s.created_at
-            })
+            const fs = flattenSignal(s)
+            const tt = s.trade_ticket ? String(s.trade_ticket) : ''
+            if (tt) {
+              if (!signalsByTicket[tt]) signalsByTicket[tt] = []
+              signalsByTicket[tt].push(fs)
+            } else {
+              untaggedSignals.push(fs)
+            }
+          }
+
+          for (const o of orders) {
+            const tk = String(o.ticket || o.order || '')
+            // Match by ticket first
+            if (signalsByTicket[tk]) {
+              signalMap[tk] = signalsByTicket[tk]
+              continue
+            }
+            // Fallback: match by symbol + close_time (minute precision)
+            if (untaggedSignals.length > 0) {
+              const sym = normalizeSymbol(o.symbol)
+              const ct = (o.close_time || o.time || '').slice(0, 16) // YYYY-MM-DD HH:MM
+              if (sym && ct) {
+                const best = untaggedSignals.find(s =>
+                  normalizeSymbol(s.symbol) === sym &&
+                  (s.created_at || '').toString().slice(0, 16) === ct
+                )
+                if (best) signalMap[tk] = [best]
+              }
+            }
           }
         }
 
