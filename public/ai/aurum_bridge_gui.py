@@ -364,14 +364,14 @@ class BridgeWorker(QThread):
         if not cands: cands = [self.mt5.ORDER_FILLING_IOC, self.mt5.ORDER_FILLING_RETURN]
         return cands[0]
 
-    def _order_send_with_retry(self, build_req_fn):
+    def _order_send_with_retry(self, symbol, build_req_fn):
         """带价格刷新重试的 order_send 包装器。
         build_req_fn(tick) → dict: 根据当前 tick 构建 req，返回 (req, price_for_log)
         可重试码 (REQUOTE/PRICE_OFF/PRICE_CHANGED) 时刷新 tick 重试最多 _MAX_RETRY 次
         返回 (result_or_None, comment)
         """
         for attempt in range(self._MAX_RETRY + 1):
-            tick = self.mt5.symbol_info_tick(req.get("symbol"))
+            tick = self.mt5.symbol_info_tick(symbol)
             if not tick:
                 return None, "tick unavailable"
             req, log_price = build_req_fn(tick)
@@ -428,7 +428,7 @@ class BridgeWorker(QThread):
                     req = dict(base_req)
                     req["price"] = tick.ask if ot == self.mt5.ORDER_TYPE_BUY else tick.bid
                     return req, req["price"]
-                result, comment = self._order_send_with_retry(_build)
+                result, comment = self._order_send_with_retry(symbol, _build)
                 if result:
                     resp = {"status": "success", "order": result.order, "price": result.price}
                     if comment: resp["warning"] = comment
@@ -449,7 +449,7 @@ class BridgeWorker(QThread):
                                "symbol": sym, "volume": vol, "type": ct, "magic": 234000,
                                "type_filling": fill, "price": price}
                         return req, price
-                    result, comment = self._order_send_with_retry(_close)
+                    result, comment = self._order_send_with_retry(sym, _close)
                     if result:
                         resp = {"status": "success", "ticket": pos.ticket}
                         if comment: resp["warning"] = comment
