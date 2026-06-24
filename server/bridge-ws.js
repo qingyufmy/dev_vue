@@ -841,7 +841,9 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'execute': {
         const signal = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [params.signal_id, userId])
         if (!signal) return reply({ status: 'error', message: 'Signal not found' })
-        const config = await ai.getActiveConfig(null, userId, params.session_id || 'default')
+        // Targeted risk-param fetch: auto signal → global config (or user override), manual signal → user's config
+        // No fallback, no penetration, no API key leak
+        const config = await ai.getExecuteRiskConfig(userId, signal)
         if (!config || !config.enable_auto_trade) {
           result = { status: 'rejected', message: 'auto_trade_disabled', details: { enable_auto_trade: config?.enable_auto_trade ?? 0 } }
           await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, result.status)

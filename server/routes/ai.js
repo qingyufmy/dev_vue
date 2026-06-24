@@ -60,29 +60,6 @@ async function buildStrategyContextFromTags(userId, symbol, account, positions, 
   }
 }
 
-const TRADE_REVIEW_JSON_CONTRACT = `你现在做订单复盘，不是开仓信号。必须严格依据系统提示词里的策略框架复盘订单是否符合：
-1H/4H 趋势过滤、15min 信号确认、5min 入场触发、缠论/谐波/裸K共振、逆势禁止、模糊放弃。
-
-只允许输出一个 JSON 对象，不要 Markdown，不要代码块，不要额外解释。JSON 字段必须完整：
-{
-  "summary": "中文总结本轮复盘",
-  "strategy_compliance": "符合|部分符合|不符合|无订单",
-  "orders_reviewed": 0,
-  "key_findings": ["中文要点"],
-  "mistakes": ["中文问题；没有则空数组"],
-  "lessons": ["中文经验"],
-  "next_cycle_focus": ["下一轮推理需要重点检查的条件"],
-  "order_reviews": [
-    {
-      "ticket": "订单号",
-      "verdict": "符合|部分符合|不符合",
-      "reason": "中文原因",
-      "improvement": "中文改进"
-    }
-  ]
-}`
-
-
 // ============ Auth Middleware ============
 async function authMiddleware(req, res, next) {
   const auth = req.headers.authorization
@@ -586,179 +563,6 @@ async function buildStrategyContext(userId, symbol, account, positions, primaryT
   }
 }
 
-function parseIsoTime(value) {
-  if (!value) return null
-  try {
-    const d = new Date(String(value).replace('Z', '+00:00').replace(' ', 'T'))
-    return isNaN(d.getTime()) ? null : d
-  } catch { return null }
-}
-
-function closedOrderInWindow(order, windowStartMt5, windowEndMt5) {
-  const closedAt = parseIsoTime(order.close_time || order.time)
-  const start = parseIsoTime(windowStartMt5)
-  const end = parseIsoTime(windowEndMt5)
-  if (!closedAt || !start || !end) return false
-  return start <= closedAt && closedAt <= end
-}
-
-function compactSignalForReview(signal) {
-  const market = JSON.parse(signal.market_data_json || '{}')
-  const execution = signal.execution_result ? JSON.parse(signal.execution_result) : null
-  return {
-    id: signal.id,
-    symbol: signal.symbol,
-    timeframe: signal.timeframe,
-    signal_type: signal.signal_type,
-    confidence: signal.confidence,
-    recommended_volume: signal.recommended_volume,
-    analysis: signal.analysis,
-    reasoning: signal.reasoning,
-    stop_loss_price: signal.stop_loss_price,
-    take_profit_1_price: signal.take_profit_1_price,
-    take_profit_2_price: signal.take_profit_2_price,
-    take_profit_3_price: signal.take_profit_3_price,
-    created_at: signal.created_at,
-    created_at_mt5: utcToMt5Time(signal.created_at),
-    inference_source: market.inference_source,
-    market_data: market,
-    execution_result: execution,
-  }
-}
-
-async function buildTradeReviewContext(userId, symbol, windowStart, windowEnd) {
-  const windowStartMt5 = utcToMt5Time(windowStart)
-  const windowEndMt5 = utcToMt5Time(windowEnd)
-  const history = await mt5Bridge(userId, 'history', { page: 1, page_size: 100 })
-  const recentClosed = (history.orders || []).filter(o => closedOrderInWindow(o, windowStartMt5, windowEndMt5))
-  const positionsData = await mt5Bridge(userId, 'positions', { symbol })
-  const positions = positionsData.positions || []
-  const account = await mt5Bridge(userId, 'account', {})
-  const executedSignals = await queryAll(
-    `SELECT * FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND created_at >= ? AND created_at <= ? ORDER BY id DESC`,
-    [userId, windowStart, windowEnd]
-  )
-  return {
-    symbol,
-    window_start_utc: windowStart,
-    window_end_utc: windowEnd,
-    window_start_mt5: windowStartMt5,
-    window_end_mt5: windowEndMt5,
-    account,
-    open_positions: positions,
-    closed_orders: recentClosed,
-    executed_signals: (executedSignals || []).map(compactSignalForReview),
-    history_statistics: history.statistics,
-    review_rule: 'Review only. Do not open, close, or modify orders. Execution remains controlled by LLM signal plus risk checks.',
-  }
-}
-
-async function reviewTrades(config, reviewContext) {
-  if (!config || !config.api_key_encrypted) return { status: 'skipped', reason: 'no_ai_key_for_trade_review', summary: '未配置 AI Key，跳过订单复盘。' }
-  const apiKey = config.api_key_encrypted
-  if (!apiKey) return { status: 'skipped', reason: 'empty_ai_key_for_trade_review', summary: 'AI Key 为空，跳过订单复盘。' }
-
-  const provider = config.api_provider || 'deepseek'
-  const baseUrl = config.api_base_url
-  let url
-  if (provider === 'deepseek') url = (baseUrl || 'https://api.deepseek.com') + '/chat/completions'
-  else if (provider === 'gpt') url = (baseUrl || 'https://api.openai.com') + '/v1/chat/completions'
-  else return { status: 'skipped', reason: 'unsupported_ai_provider_for_trade_review' }
-
-  const prompt = config.system_prompt || DEFAULT_PROMPT
-  try {
-    const parsed = await requestJsonObject({
-      url, apiKey,
-      model: config.model_name || 'deepseek-chat',
-      temperature: parseFloat(config.temperature || 0.7),
-      maxTokens: parseInt(config.max_tokens || 2000),
-      messages: [
-        { role: 'system', content: prompt },
-        { role: 'user', content: TRADE_REVIEW_JSON_CONTRACT + '\n\n订单复盘上下文 JSON：\n' + JSON.stringify(reviewContext) },
-      ],
-    })
-    parsed.status = 'success'
-    return parsed
-  } catch (exc) {
-    return { status: 'error', reason: 'trade_review_ai_failed', message: exc.message, summary: '订单复盘 AI 调用或 JSON 解析失败。' }
-  }
-}
-
-// ============ Trade Review Scheduler ============
-const tradeReviewState = {} // userId -> { running, timer, lastRunAt }
-
-async function runTradeReviewCycle(userId, trigger) {
-  const state = tradeReviewState[userId]
-  if (state?.running) return { status: 'skipped', reason: 'previous_trade_review_running' }
-
-  if (!tradeReviewState[userId]) tradeReviewState[userId] = {}
-  tradeReviewState[userId].running = true
-  tradeReviewState[userId].lastStartedAt = utcNow()
-
-  try {
-    const config = await getActiveConfig(null, userId)
-    const symbol = 'XAUUSD.s'
-    const reviewInterval = 14400
-    const now = new Date()
-    const windowStart = new Date(now.getTime() - reviewInterval * 1000).toISOString().replace('T', ' ').substring(0, 19)
-    const windowEnd = utcNow()
-
-    const context = await buildTradeReviewContext(userId, symbol, windowStart, windowEnd)
-    const hasSignals = (context.executed_signals || []).length > 0
-    const hasClosed = (context.closed_orders || []).length > 0
-    const hasPositions = (context.open_positions || []).length > 0
-    if (!hasSignals && !hasClosed && !hasPositions) {
-      tradeReviewState[userId].running = false
-      return { status: 'skipped', reason: 'nothing_to_review', summary: '窗口内无信号、无成交、无持仓，跳过复盘。' }
-    }
-    const review = await reviewTrades(config, context)
-
-    const result = {
-      ...review,
-      trigger,
-      window_start_utc: windowStart,
-      window_end_utc: windowEnd,
-      window_start_mt5: context.window_start_mt5,
-      window_end_mt5: context.window_end_mt5,
-      closed_orders_count: (context.closed_orders || []).length,
-      open_positions_count: (context.open_positions || []).length,
-      executed_signals_count: (context.executed_signals || []).length,
-    }
-    const status = result.status || 'success'
-    await insertAudit(null, userId, 'ai_trade_review', symbol, { trigger, window_start: windowStart, window_end: windowEnd }, result, status)
-
-    tradeReviewState[userId].running = false
-    tradeReviewState[userId].lastFinishedAt = utcNow()
-    tradeReviewState[userId].lastResult = result
-    return { status, summary: result.summary, closed_orders_count: result.closed_orders_count, executed_signals_count: result.executed_signals_count }
-  } catch (exc) {
-    tradeReviewState[userId].running = false
-    tradeReviewState[userId].lastError = exc.message
-    return { status: 'error', message: exc.message }
-  }
-}
-
-function startTradeReviewScheduler(userId) {
-  if (tradeReviewState[userId]?.timer) return
-  const intervalMs = 14400 * 1000 // 4 hours
-  tradeReviewState[userId] = { running: false, timer: null, lastRunAt: null }
-
-  const tick = async () => {
-    if (!tradeReviewState[userId]) return
-    try { await runTradeReviewCycle(userId, 'timer') } catch (e) { console.error(`[TradeReview] ${userId} error:`, e.message) }
-    if (tradeReviewState[userId]) {
-      tradeReviewState[userId].timer = setTimeout(tick, intervalMs)
-    }
-  }
-  tradeReviewState[userId].timer = setTimeout(tick, 300000) // first run after 5 min (prevent aggressive re-trigger on scheduler restart)
-}
-
-function stopTradeReviewScheduler(userId) {
-  if (tradeReviewState[userId]?.timer) clearTimeout(tradeReviewState[userId].timer)
-  tradeReviewState[userId] = null
-}
-
-// ============ Rule-Based Signal ============
 // ============ AI Signal (DeepSeek/GPT) ============
 async function maybeAiSignal(db, config, market) {
   if (!config || !config.api_key_encrypted) return aiFailureHold(market, 'missing_ai_configuration_or_key')
@@ -1257,28 +1061,6 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
   res.json({ id: user.id, username: user.email, nickname: user.nickname, role: user.role, plan, plan_expires_at: user.plan_expires_at || '', is_active: 1, source: 'wss' })
 })
 
-// ============ Trade Review API Endpoints ============
-router.get('/review/status', authMiddleware, async (req, res) => {
-  const state = tradeReviewState[req.userId] || {}
-  res.json({ status: 'success', review: {
-    enabled: !!state.timer,
-    running: !!state.running,
-    last_started_at: state.lastStartedAt || null,
-    last_finished_at: state.lastFinishedAt || null,
-    last_error: state.lastError || null,
-    last_result: state.lastResult || null,
-  }})
-})
-
-router.post('/review/run', authMiddleware, async (req, res) => {
-  try {
-    const result = await runTradeReviewCycle(req.userId, 'manual')
-    res.json(result)
-  } catch (exc) {
-    res.status(500).json({ status: 'error', message: exc.message })
-  }
-})
-
 // ============ Auto Scheduler ============
 const autoSchedulerState = {} // userId -> { running, timer, lastRunAt, manualBusy }
 
@@ -1362,6 +1144,49 @@ async function getAutoInferenceConfig(userId) {
   }
 }
 
+// Get only risk-control params for signal execution (no fallback, no API key leak)
+// signal.config_id === 0 → auto-generated signal → use global auto config (or user override)
+// signal.config_id !== 0 → manual signal → use user's own manual config
+async function getExecuteRiskConfig(userId, signal) {
+  const isAuto = (signal.config_id === 0)
+
+  if (isAuto) {
+    // Check if user has auto_config_override enabled
+    const override = await queryOne(
+      "SELECT * FROM ai_configs WHERE user_id = ? AND session_id = 'default' AND is_active = 1 AND auto_config_override = 1 ORDER BY updated_at DESC LIMIT 1",
+      [userId]
+    )
+    if (override) {
+      return {
+        enable_auto_trade: !!override.enable_auto_trade,
+        selected_take_profit: override.selected_take_profit ?? 1,
+        max_position_size: override.max_position_size ?? 0.05,
+      }
+    }
+    // Use global auto config
+    const globalCfg = await getGlobalAutoConfig()
+    if (!globalCfg) return null
+    return {
+      enable_auto_trade: !!globalCfg.enable_auto_trade,
+      selected_take_profit: globalCfg.selected_take_profit ?? 2,
+      max_position_size: globalCfg.max_position_size ?? 0.05,
+    }
+  }
+
+  // Manual signal → use user's own config (no fallback, no penetration)
+  const sessionId = signal.session_id || 'default'
+  const manualCfg = await queryOne(
+    'SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1',
+    [userId, sessionId]
+  )
+  if (!manualCfg) return null
+  return {
+    enable_auto_trade: !!manualCfg.enable_auto_trade,
+    selected_take_profit: manualCfg.selected_take_profit ?? 1,
+    max_position_size: manualCfg.max_position_size ?? 0.05,
+  }
+}
+
 async function upsertAutoConfig(db, userId, symbols, enabled) {
   const now = utcNow()
   await queryRun(`
@@ -1436,7 +1261,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
         take_profit_2_price, take_profit_3_price, market_data_json, ai_model, ttl_seconds, is_executed, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `, [
-      userId, config?.id || null, 'default', symbol, timeframe.toUpperCase(),
+      userId, 0, 'default', symbol, timeframe.toUpperCase(),
       signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price,
       signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
@@ -1696,9 +1521,6 @@ async function startAutoScheduler(userId) {
     }
   }
   autoSchedulerState[userId].timer = setTimeout(tick, 5000)
-
-  // Also start trade review scheduler
-  startTradeReviewScheduler(userId)
 }
 
 function stopAutoScheduler(userId) {
@@ -1706,7 +1528,6 @@ function stopAutoScheduler(userId) {
   if (state?.timer) clearTimeout(state.timer)
   if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
   autoSchedulerState[userId] = null
-  stopTradeReviewScheduler(userId)
 }
 
 export async function initAutoSchedulers() {
@@ -1773,9 +1594,8 @@ export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
   timeframeIntervalMs, startAutoScheduler, stopAutoScheduler,
   buildStrategyContext, buildStrategyContextFromTags, parseTimeframeTags, stripTimeframeTags,
   maybeAiSignal, aiFailureHold,
-  reviewTrades, buildTradeReviewContext, runTradeReviewCycle,
-  startTradeReviewScheduler, stopTradeReviewScheduler,
   getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
-  TRADE_REVIEW_JSON_CONTRACT, STRATEGY_TIMEFRAME_COUNTS,
+  getExecuteRiskConfig,
+  STRATEGY_TIMEFRAME_COUNTS,
   runSmartCloseCycle, closeSchedulerState }
 export default router
