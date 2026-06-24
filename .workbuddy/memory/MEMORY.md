@@ -10,5 +10,5 @@
 
 ## 基础设施
 - MySQL: 192.168.1.254:3306, user=huaerjie, database=huaerjie
-- 七牛云: bucket=aurum, domain=qiniu.acadfx.com
+- 七牛云: bucket=aurum, domain=qiniu.acadfx.com, AK=nBN5ehGYR4JaPZPp9-hX8zkldzjTADl6IQCvUEeN, SK=AaNVNjKSq5UzTlqmMeoJ3JCVHhKWUYd00ueeIL4T
 - GitHub: qingyufmy/wall-street-skill-local
