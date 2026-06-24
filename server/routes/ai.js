@@ -1689,7 +1689,7 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: '1.9.8',
     build_date: '2026-06-24',
-    changelog: '品牌升级: 量见/AI交易实验室。修复开关DB持久化、心跳覆盖、CORS白名单、历史图表筛选',
+    changelog: '品牌升级: 量见/AI交易实验室。修复开关DB持久化、心跳覆盖、CORS白名单、历史图表筛选。MT5路径选择器移至设置页、多层级MT5探测。按钮宽度修复。',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
     file_size: 65335672,
