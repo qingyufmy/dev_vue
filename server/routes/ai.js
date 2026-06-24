@@ -210,6 +210,22 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
       row.model_name = row.model_name || (cfg.deepseek_model || cfg.openai_model || 'deepseek-chat')
     }
   }
+
+  // Fallback: if still no API key, try global_auto_config (used by auto inference / trade review)
+  if (!row || !row.api_key_encrypted) {
+    const globalCfg = await queryOne('SELECT * FROM global_auto_config WHERE id = 1')
+    if (globalCfg && globalCfg.api_key_encrypted) {
+      if (!row) row = {}
+      row.api_key_encrypted = globalCfg.api_key_encrypted
+      row.api_provider = row.api_provider || globalCfg.api_provider || 'deepseek'
+      row.api_base_url = row.api_base_url || globalCfg.api_base_url || null
+      row.model_name = row.model_name || globalCfg.model_name || 'deepseek-chat'
+      row.temperature = row.temperature ?? globalCfg.temperature
+      row.max_tokens = row.max_tokens ?? globalCfg.max_tokens
+      row.system_prompt = row.system_prompt || globalCfg.system_prompt
+    }
+  }
+
   return row
 }
 
