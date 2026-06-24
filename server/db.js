@@ -81,6 +81,24 @@ export async function queryRun(sql, params = []) {
   return { changes: result.affectedRows, insertId: result.insertId }
 }
 
+/** Execute a callback within a MySQL transaction */
+export async function withTransaction(fn) {
+  const p = getDB()
+  const conn = await p.getConnection()
+  try {
+    await conn.beginTransaction()
+    const runner = (sql, params = []) => conn.query(sql, params)
+    const result = await fn(runner)
+    await conn.commit()
+    return result
+  } catch (err) {
+    await conn.rollback()
+    throw err
+  } finally {
+    conn.release()
+  }
+}
+
 export async function logAudit({ userId, action, targetType, targetId, detail, ip, userAgent } = {}) {
   try {
     if (!action) { console.warn('logAudit: action is required, skipping'); return }

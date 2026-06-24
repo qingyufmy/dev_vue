@@ -4,7 +4,7 @@ import multer from 'multer'
 import { join, dirname, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
-import { queryOne, queryAll, queryRun } from '../db.js'
+import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -270,24 +270,26 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
     const user = await queryOne('SELECT id, email, role FROM users WHERE id = ?', [userId])
     if (!user) return res.json({ ok: false, error: '用户不存在' })
     if (user.role === 'admin') return res.json({ ok: false, error: '不能删除管理员账号' })
-    // 级联删除所有关联数据，避免孤立记录
-    await queryRun('DELETE FROM notifications WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
-    await queryRun('DELETE FROM orders WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM verification_codes WHERE email = ?', [user.email])
-    await queryRun('DELETE FROM progress WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM comments WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM comment_likes WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM post_replies WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM posts WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM feedback WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM ai_configs WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM ai_signals WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM auto_scheduler WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM close_config WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM ui_configs WHERE user_id = ?', [userId])
-    await queryRun('DELETE FROM users WHERE id = ?', [userId])
+    // 级联删除所有关联数据，使用事务确保原子性
+    await withTransaction(async (run) => {
+      await run('DELETE FROM notifications WHERE user_id = ?', [userId])
+      await run('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
+      await run('DELETE FROM orders WHERE user_id = ?', [userId])
+      await run('DELETE FROM verification_codes WHERE email = ?', [user.email])
+      await run('DELETE FROM progress WHERE user_id = ?', [userId])
+      await run('DELETE FROM comments WHERE user_id = ?', [userId])
+      await run('DELETE FROM comment_likes WHERE user_id = ?', [userId])
+      await run('DELETE FROM post_replies WHERE user_id = ?', [userId])
+      await run('DELETE FROM posts WHERE user_id = ?', [userId])
+      await run('DELETE FROM feedback WHERE user_id = ?', [userId])
+      await run('DELETE FROM ai_configs WHERE user_id = ?', [userId])
+      await run('DELETE FROM ai_signals WHERE user_id = ?', [userId])
+      await run('DELETE FROM auto_scheduler WHERE user_id = ?', [userId])
+      await run('DELETE FROM close_config WHERE user_id = ?', [userId])
+      await run('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
+      await run('DELETE FROM ui_configs WHERE user_id = ?', [userId])
+      await run('DELETE FROM users WHERE id = ?', [userId])
+    })
     res.json({ ok: true })
   } catch (err) {
     console.error('Delete user error:', err)
