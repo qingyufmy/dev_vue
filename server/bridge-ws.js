@@ -112,12 +112,18 @@ function handleBrowser(ws, url) {
       }
       const connected = !!(bridge && bridge.ws.readyState === 1)
       const alive = connected && (Date.now() - bridge.lastSeen < 20000)
+      // Include switch states from user's own bridge (not meaningful from admin fallback)
+      const ownBridge = bridges.get(userId)
+      const tradeEnabled = ownBridge && ownBridge.ws.readyState === 1 ? !!ownBridge.tradeEnabled : undefined
+      const autoReasoningEnabled = ownBridge && ownBridge.ws.readyState === 1 ? !!ownBridge.autoReasoningEnabled : undefined
       ws.send(JSON.stringify({
         type: 'hb',
         seq: msg.seq,
         mt5_connected: connected,
         mt5_alive: alive,
         using_fallback: usingFallback,
+        trade_enabled: tradeEnabled,
+        auto_reasoning_enabled: autoReasoningEnabled,
       }))
     } else if (msg.type === 'command' && msg.action) {
       handleBrowserCommand(ws, userId, msg)
@@ -182,16 +188,22 @@ async function _initBridge(ws, userId) {
   // Read bridge settings from DB (trade_send / auto_reasoning state)
   let dbTradeEnabled = false
   let dbAutoReasoningEnabled = false
+  let hasDbRow = false
   try {
     const row = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
-    dbTradeEnabled = row ? !!row.trade_send_enabled : false
-    dbAutoReasoningEnabled = row ? !!row.auto_reasoning_enabled : false
+    if (row) {
+      hasDbRow = true
+      dbTradeEnabled = !!row.trade_send_enabled
+      dbAutoReasoningEnabled = !!row.auto_reasoning_enabled
+    }
   } catch (e) {
     console.error(`[BridgeWS] Failed to read user_bridge_settings for user ${userId}:`, e.message)
   }
-  // Admin defaults to tradeEnabled=true (overridden by DB if explicitly disabled), others use DB value
-  const defaultTrade = userId === (adminUserId || -1) ? (dbTradeEnabled || true) : dbTradeEnabled
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, lastPong: Date.now(), lastTradeMode: 4 }); ws._userId = userId
+  // Admin defaults to tradeEnabled=true if no DB record exists, but respects explicit DB value of 0
+  // Non-admin: use DB value as-is (defaults to false when no row)
+  const isAdmin = userId === (adminUserId || -1)
+  const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: 4 }); ws._userId = userId
 
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled })
@@ -280,6 +292,13 @@ async function _initBridge(ws, userId) {
 
   ws.on('close', async () => {
     clearInterval(pingInterval)
+    // Guard: only clean up if this ws is still the current bridge for this user
+    // (prevents old bridge's close handler from wiping out a newly connected bridge)
+    const currentBridge = bridges.get(userId)
+    if (!currentBridge || currentBridge.ws !== ws) {
+      console.log(`[BridgeWS] Stale close for user ${userId}, new bridge already connected — skipping cleanup`)
+      return
+    }
     bridges.delete(userId)
     // Notify browsers
     sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
@@ -868,6 +887,9 @@ async function handleBrowserCommand(ws, userId, msg) {
             [userId, newEnabled ? 1 : 0, newEnabled ? 1 : 0]
           )
         } catch (e) { console.error('[BridgeWS] Failed to persist auto_reasoning_enabled:', e.message) }
+        // Update in-memory bridge state so heartbeat reflects it
+        const bridgeAuto = bridges.get(userId)
+        if (bridgeAuto) bridgeAuto.autoReasoningEnabled = newEnabled
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
         break
       }
