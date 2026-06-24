@@ -310,14 +310,9 @@ async function _initBridge(ws, userId) {
         pending.resolve({ status: 'error', error: 'Bridge disconnected' })
       }
     }
-    // Auto-disable auto-reasoning when bridge disconnects
-    // Also persist disabled state to DB so reconnect doesn't restore it
-    try {
-      await queryRun(
-        'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, trade_send_enabled) VALUES (?, 0, 0) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 0, trade_send_enabled = 0, updated_at = NOW()',
-        [userId]
-      )
-    } catch (e) { console.error('[BridgeWS] Failed to reset bridge settings on disconnect:', e.message) }
+    // Bridge disconnected — stop auto scheduler (no bridge to execute trades)
+    // DO NOT reset switch states in DB: user preferences must persist across disconnects
+    // When bridge reconnects, _initBridge reads DB and restores both switches correctly
     try {
       const ai = await import('./routes/ai.js')
       const cfg = await ai.getAutoConfig(null, userId)
