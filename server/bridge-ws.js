@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { query, queryOne, queryAll, queryRun, logAudit } from './db.js'
+import { query, queryOne, queryAll, queryRun, logAudit, withTransaction } from './db.js'
 
 // Parse symbols from DB: handles legacy JSON array or plain comma-separated text
 function parseSymbols(raw) {
@@ -651,29 +651,32 @@ async function handleBrowserCommand(ws, userId, msg) {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
         const now = localNow()
-        await queryRun('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, params.session_id || 'default'])
-        await queryRun(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
-          temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-          max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override,
-          auto_symbols, auto_interval_minutes, system_prompt, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-          ON DUPLICATE KEY UPDATE
-            api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
-            api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
-            max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
-            enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
-            max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
-            model_sharing_enabled = VALUES(model_sharing_enabled), auto_config_override = VALUES(auto_config_override),
-            auto_symbols = VALUES(auto_symbols), auto_interval_minutes = VALUES(auto_interval_minutes),
-            system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
-            is_active = 1, updated_at = VALUES(updated_at)`,
-          [userId, params.session_id || 'default', cfg.api_provider || 'deepseek', cfg.api_key || null,
-            cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
-            cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-            cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
-            cfg.auto_config_override ? 1 : 0,
-            cfg.auto_symbols || null, cfg.auto_interval_minutes || null,
-            cfg.system_prompt || null, now, now])
+        const sid = params.session_id || 'default'
+        await withTransaction(async (run) => {
+          await run('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, sid])
+          await run(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
+            temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
+            max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override,
+            auto_symbols, auto_interval_minutes, system_prompt, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
+              api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
+              max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
+              enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
+              max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
+              model_sharing_enabled = VALUES(model_sharing_enabled), auto_config_override = VALUES(auto_config_override),
+              auto_symbols = VALUES(auto_symbols), auto_interval_minutes = VALUES(auto_interval_minutes),
+              system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
+              is_active = 1, updated_at = VALUES(updated_at)`,
+            [userId, sid, cfg.api_provider || 'deepseek', cfg.api_key || null,
+              cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
+              cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
+              cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
+              cfg.auto_config_override ? 1 : 0,
+              cfg.auto_symbols || null, cfg.auto_interval_minutes || null,
+              cfg.system_prompt || null, now, now])
+        })
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }
         break
