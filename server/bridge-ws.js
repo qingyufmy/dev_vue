@@ -280,12 +280,20 @@ async function _initBridge(ws, userId) {
         if (prev !== undefined) {
           if (msg.quote.time !== prev) {
             // Time changed → trading
+            if (bridge.lastTradeMode !== 4) {
+              console.log(`[BridgeWS] User ${userId}: market OPENED (tick=${msg.quote.time}, was tradeMode=${bridge.lastTradeMode})`)
+            }
             bridge.lastTradeMode = 4
             bridge._sameTickStart = null
           } else {
             // Same tick time — mark closed after 5s
             if (!bridge._sameTickStart) bridge._sameTickStart = now
-            if (now - bridge._sameTickStart > 5000) bridge.lastTradeMode = 0
+            if (now - bridge._sameTickStart > 5000) {
+              if (bridge.lastTradeMode !== 0) {
+                console.log(`[BridgeWS] User ${userId}: market CLOSED (tick stuck at ${msg.quote.time} for >5s, was tradeMode=${bridge.lastTradeMode})`)
+              }
+              bridge.lastTradeMode = 0
+            }
           }
         }
       }

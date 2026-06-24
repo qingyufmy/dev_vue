@@ -1303,10 +1303,10 @@ async function runAutoCycle(userId, symbol, timeframe) {
     return
   }
 
-  // Check market status
+  // Check market status (re-check: could change between tick check and now)
   const tradeMode = await getBridgeTradeMode(userId)
   if (tradeMode !== 4) {
-    // Market closed or unknown — this is normal, skip logging to avoid spam
+    console.log(`[runAutoCycle] User ${userId}: market not open (tradeMode=${tradeMode}), skipping cycle`)
     return
   }
 
@@ -1585,7 +1585,7 @@ async function startAutoScheduler(userId) {
     intervalMinutes = Number(inferenceCfg.auto_interval_minutes)
   }
   const intervalMs = intervalMinutes * 60_000
-  autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null }
+  autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null, _waitCount: 0 }
 
   console.log(`[startAutoScheduler] Starting scheduler for user ${userId} (symbol=${symbol}, interval=${intervalMinutes}min)`)
   const tick = async () => {
@@ -1593,8 +1593,25 @@ async function startAutoScheduler(userId) {
     // Wait for bridge connection and market status confirmation
     try {
       const tradeMode = await getBridgeTradeMode(userId)
-      if (tradeMode !== 4) { autoSchedulerState[userId].timer = setTimeout(tick, 5000); return }
-    } catch { autoSchedulerState[userId].timer = setTimeout(tick, 5000); return }
+      if (tradeMode !== 4) {
+        const st = autoSchedulerState[userId]
+        st._waitCount = (st._waitCount || 0) + 1
+        // Log every 30th retry (~2.5 min) to confirm scheduler is alive and show why it's waiting
+        if (st._waitCount === 1 || st._waitCount % 30 === 0) {
+          console.log(`[AutoScheduler] User ${userId}: waiting for market (tradeMode=${tradeMode}, retry#${st._waitCount}, symbol=${symbol})`)
+        }
+        autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
+      }
+      // Reset wait counter on successful market check
+      if (autoSchedulerState[userId]) autoSchedulerState[userId]._waitCount = 0
+    } catch (err) {
+      const st = autoSchedulerState[userId]
+      st._waitCount = (st._waitCount || 0) + 1
+      if (st._waitCount === 1 || st._waitCount % 30 === 0) {
+        console.error(`[AutoScheduler] User ${userId}: getBridgeTradeMode threw (retry#${st._waitCount}):`, err.message)
+      }
+      autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
+    }
     try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler] ${symbol}/M5 tick error:`, e.message) }
     if (autoSchedulerState[userId]?.running) {
       autoSchedulerState[userId].timer = setTimeout(tick, intervalMs)
