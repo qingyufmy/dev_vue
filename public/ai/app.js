@@ -1717,6 +1717,20 @@ async function loadPositions() {
   initIcons();
 }
 
+/* ---- Sidebar 观摩提示 ---- */
+function showSidebarObserveHint(html) {
+  const hint = $("sidebarObserveHint");
+  const text = $("sidebarObserveHintText");
+  if (!hint || !text) return;
+  hint.classList.remove("hidden");
+  text.innerHTML = html;
+}
+
+function hideSidebarObserveHint() {
+  const hint = $("sidebarObserveHint");
+  if (hint) hint.classList.add("hidden");
+}
+
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
   const isPlusReadOnly = state.isPlusReadOnly;
@@ -1759,9 +1773,7 @@ function applyRoleUI() {
 
   // Plus read-only: disable all action buttons, hide bridge download
   if (isPlusReadOnly) {
-    // Show observation banner
-    const banner = document.getElementById("observeBanner");
-    if (banner) banner.classList.remove("hidden");
+    showSidebarObserveHint('您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a>');
     document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, [data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
       el.title = 'Plus 会员仅可查看';
@@ -1772,17 +1784,12 @@ function applyRoleUI() {
       el.title = 'Plus 会员仅可查看';
     });
     // Keep clickable-badge on all topbar badges (for pointer cursor) — guards in click handlers block action
-    // [disabled] 智能平仓
-    // const closeConfig = document.getElementById("close-config");
-    // if (closeConfig) closeConfig.style.display = "none";
     return;
   }
 
-  // === Pro without bridge: data visible, trade disabled, bridge download allowed ===
+  // === Pro without bridge: 观摩模式，可打开下载页，模型页只显示自有数据 ===
   if (isProNoBridge) {
-    // Hide observation banner
-    const banner = document.getElementById("observeBanner");
-    if (banner) banner.classList.add("hidden");
+    showSidebarObserveHint('观摩模式 · 请 <a href="#" id="sidebarBridgeLink">下载并启动MT5桥接</a> 后使用完整功能');
     // Disable trade-related buttons
     document.querySelectorAll('[data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
@@ -1797,21 +1804,24 @@ function applyRoleUI() {
     // Allow execute button but show disabled state
     const execBtn = document.getElementById("executeSignalBtn");
     if (execBtn) { execBtn.disabled = true; execBtn.title = "请先连接 MT5 账户"; }
-    // [disabled] 智能平仓
-    // const scMode = document.getElementById("smartCloseMode");
-    // if (scMode) { scMode.classList.add("clickable-badge"); scMode.title = "请先连接 MT5 账户"; }
     // Disable symbol selectors (observe mode)
     document.querySelectorAll('.sym-input').forEach(el => {
       el.disabled = true;
       el.title = '请先连接您的 MT5 账户';
     });
+    // 绑定 sidebar 观摩提示中的下载链接
+    setTimeout(() => {
+      document.getElementById("sidebarBridgeLink")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        handleGatewayModeClick();
+      });
+    }, 100);
     return;
   }
 
   // === Pro with bridge / Admin: full access ===
-  // Hide observation banner
-  const banner = document.getElementById("observeBanner");
-  if (banner) banner.classList.add("hidden");
+  // Hide observation hint
+  hideSidebarObserveHint();
   // Re-enable symbol selectors
   document.querySelectorAll('.sym-input').forEach(el => { el.disabled = false; el.title = ''; });
   const tradeMode = document.getElementById("tradeMode");
@@ -1894,34 +1904,45 @@ async function loadConfig() {
   // Model sharing toggle (admin only)
   const isAdmin = state.user?.role === "admin";
   const sharingWrap = $("modelSharingWrap");
-  const sharedInfo = $("modelSharedInfo");
   if (sharingWrap) sharingWrap.style.display = isAdmin ? "" : "none";
   if (isAdmin && $("modelSharingEnabled")) {
     $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
   }
-  // Auto config override toggle (all users with config)
-  const overrideWrap = $("autoConfigOverrideWrap");
-  if (overrideWrap) overrideWrap.style.display = state.currentConfigHasApiKey ? "" : "none";
+  // Auto config override toggle - restore state first (visibility set after sharing check)
   if ($("autoConfigOverride")) $("autoConfigOverride").checked = Boolean(cfg.auto_config_override);
   // Restore per-user auto symbol + interval (backend fills defaults from global auto config)
   if ($("overrideSymbolSelect")) $("overrideSymbolSelect").value = cfg.auto_symbols;
   if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
   // Sync override section visibility
   syncOverrideSection();
-  if (sharedInfo) {
-    if (!isAdmin && cfg._model_shared) {
-      sharedInfo.style.display = "";
-      setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 使用管理员共享模型`);
-    } else {
-      sharedInfo.style.display = "none";
-    }
+  // 模型共享：只要管理员开启了共享且当前用户非管理员，API Key 为空就共享
+  const isUsingShared = !isAdmin && cfg._model_shared;
+  if (isUsingShared) {
+    // 提示用户当前使用的是管理员共享的 API Key，但允许自行填入覆盖
+    $("apiKey").type = "password";
+    $("apiKey").value = "";
+    $("apiKey").disabled = false;
+    $("apiKey").style.opacity = "";
+    $("apiKey").placeholder = "留空则使用管理员共享的API Key";
+    setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 当前使用管理员共享的API Key（可自行填写覆盖）`);
+  } else {
+    $("apiKey").type = "password";
+    $("apiKey").value = "";
+    $("apiKey").disabled = false;
+    $("apiKey").style.opacity = "";
+    $("apiKey").placeholder = "";
   }
+  state._isUsingSharedModel = isUsingShared;
+  // 自动推理配置覆盖开关：有自有API Key / 使用共享模型 / Pro会员 均可使用
+  const overrideWrap = $("autoConfigOverrideWrap");
+  const isPro = state.user?.plan === 'pro';
+  if (overrideWrap) overrideWrap.style.display = (state.currentConfigHasApiKey || isUsingShared || isPro) ? "" : "none";
 }
 
 async function saveConfig() {
   const apiKey = $("apiKey").value.trim();
-  const sharedInfo = $("modelSharedInfo");
-  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
+  const isUsingShared = state._isUsingSharedModel;
+  // 共享模型下留空可以（后端fallback到管理员Key），但用户填了就用用户的
   if (!apiKey && !state.currentConfigHasApiKey && !isUsingShared) {
     toast("请先填写 API Key", "warning");
     $("apiKey").focus();
@@ -2417,9 +2438,7 @@ async function runAnalysis() {
   }
 
   // Check: non-admin without own config and model sharing is off
-  const sharedInfo = $("modelSharedInfo");
-  const isUsingShared = sharedInfo && sharedInfo.style.display !== "none";
-  if (!state.currentConfigHasApiKey && !isUsingShared) {
+  if (!state.currentConfigHasApiKey && !state._isUsingSharedModel) {
     toast("请先在模型设置中配置 API Key，或联系管理员开启模型共享", "warning");
     return;
   }

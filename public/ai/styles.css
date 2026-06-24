@@ -39,6 +39,8 @@
   --color-warning-border: rgba(245, 158, 11, 0.3);
   --color-warning-glow: rgba(245, 158, 11, 0.12);
   --color-warning-dark: #78350f;
+  --color-shared-bg: rgba(234, 179, 8, 0.12);
+  --color-shared-text: #eab308;
   --color-info: #3b82f6;
   --color-info-bg: rgba(59, 130, 246, 0.1);
   --status-connected: #10b981;
@@ -2058,7 +2060,6 @@ textarea:focus {
 .slider::before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; transition: .2s; border-radius: 50%; }
 input:checked + .slider { background: var(--gold-primary); }
 input:checked + .slider::before { transform: translateX(18px); }
-.model-shared-info { display: flex; align-items: center; gap: var(--space-2); padding: 8px 12px; margin-bottom: var(--space-4); border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 500; }
 
 .unit-field {
   position: relative;
@@ -3789,25 +3790,6 @@ input:checked + .slider::before { transform: translateX(18px); }
 }
 .pro-overlay-btn:hover { opacity: 0.85; }
 
-/* Observation mode banner (Plus users) */
-.observe-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: rgba(234, 179, 8, 0.12);
-  border-bottom: 1px solid rgba(234, 179, 8, 0.25);
-  color: #eab308;
-  font-size: 13px;
-  line-height: 1.4;
-}
-.observe-banner.hidden { display: none; }
-.observe-banner a {
-  color: #fbbf24;
-  font-weight: 600;
-  text-decoration: underline;
-}
-.observe-banner a:hover { color: #facc15; }
 
 /* Signal link in position/history tables */
 a.signal-link {
@@ -3846,6 +3828,27 @@ a.signal-link:hover {
 
 /* ===== 需求反馈 ===== */
 .nav-group-bottom { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.04); }
+
+/* ===== Sidebar 观摩提示 ===== */
+.sidebar-observe-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  margin: 4px 10px 6px;
+  border-radius: 6px;
+  background: rgba(234, 179, 8, 0.1);
+  color: #eab308;
+  font-size: 11px;
+  font-weight: 500;
+  border-left: 2px solid rgba(234, 179, 8, 0.4);
+}
+.sidebar-observe-hint.hidden { display: none; }
+.sidebar-observe-hint a {
+  color: #fbbf24;
+  text-decoration: underline;
+}
+.sidebar-observe-hint a:hover { color: #facc15; }
 
 .feedback-form { display: flex; flex-direction: column; gap: 16px; }
 .feedback-type-group { display: flex; flex-wrap: wrap; gap: 8px; }

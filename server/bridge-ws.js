@@ -714,13 +714,19 @@ async function handleBrowserCommand(ws, userId, msg) {
         // system_config, or global_auto_config.
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', null, { skipFallbacks: true })
         const cfg = ai.configPublic(row)
-        // If user has no own config but admin has model_sharing, show sharing indicator
-        if (!cfg) {
+        // If user has no own API key but admin has model_sharing, attach sharing indicator
+        if (!cfg || !cfg.has_api_key) {
           const sharedRow = await queryOne(
             "SELECT api_provider, model_name FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
           )
           if (sharedRow) {
-            result = { status: 'success', config: { _model_shared: true, api_provider: sharedRow.api_provider, model_name: sharedRow.model_name, enable_auto_trade: false, max_position_size: 0.05, selected_take_profit: 1, risk_level: 'medium' } }
+            if (cfg) {
+              cfg._model_shared = true
+            }
+            result = {
+              status: 'success',
+              config: cfg || { _model_shared: true, api_provider: sharedRow.api_provider, model_name: sharedRow.model_name, enable_auto_trade: false, max_position_size: 0.05, selected_take_profit: 1, risk_level: 'medium' }
+            }
             break
           }
         }

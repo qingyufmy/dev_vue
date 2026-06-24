@@ -25,7 +25,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v1.9.10"
+APP_VERSION = "v1.9.11"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
@@ -2039,16 +2039,18 @@ class MainWindow(QMainWindow):
         self.login_page.load_config()
 
     def _on_login_success(self, email, token):
-        self.bridge_page._log(f"登录成功: {email}")
-        self.bridge_page.lbl_login_user.setText(f"当前登录: {email}")
-        # 确保桥接状态为断开
-        self.bridge_page.btn_start.setText("▶  启动桥接")
-        self.bridge_page.btn_start.setStyleSheet("background-color: #3b82f6;")
-        self.bridge_page._set_status("已断开", "#6b7280")
-        self.bridge_page.lbl_update_hint.setVisible(False)
+        # 🔧 先切换页面，再操作桥接页控件——防止控件操作异常导致页面不跳转
         self.stack.setCurrentIndex(1)
-        # Force UI repaint after page switch
         QApplication.processEvents()
+        try:
+            self.bridge_page._log(f"登录成功: {email}")
+            self.bridge_page.lbl_login_user.setText(f"当前登录: {email}")
+            self.bridge_page.btn_start.setText("▶  启动桥接")
+            self.bridge_page.btn_start.setStyleSheet("background-color: #3b82f6;")
+            self.bridge_page._set_status("已断开", "#6b7280")
+            self.bridge_page.lbl_update_hint.setVisible(False)
+        except Exception:
+            pass
         # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
         QTimer.singleShot(3000, self._auto_check_update)
         self._update_timer.start(30 * 60 * 1000)

@@ -21,7 +21,7 @@
     </script>
     <title>AI交易实验室</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260624" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260624f" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -81,11 +81,7 @@
         </div>
       </header>
 
-      <!-- Observation mode banner (Plus only) -->
-      <div id="observeBanner" class="observe-banner hidden">
-        <i data-lucide="eye" size="16"></i>
-        <span>您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a></span>
-      </div>
+
 
       <aside class="sidebar">
         <div class="nav-group">
@@ -129,6 +125,11 @@
           <button class="nav-item" data-tab="feedback" data-title="需求反馈">
             <i data-lucide="lightbulb" size="16"></i>需求反馈
           </button>
+        </div>
+
+        <div id="sidebarObserveHint" class="sidebar-observe-hint">
+          <i data-lucide="eye" size="14"></i>
+          <span id="sidebarObserveHintText">观摩模式</span>
         </div>
       </aside>
 
@@ -377,10 +378,6 @@
                   </div>
                   <small class="field-help" style="color:var(--color-warning)">开启后，自动推理逻辑将使用您当前设置的配置（包括模型+交易约束+系统提示词）</small>
                 </label>
-                <div id="modelSharedInfo" class="model-shared-info" style="display:none">
-                  <i data-lucide="info" size="14"></i>
-                  <span>当前使用管理员共享的模型设置，请自行配置模型以使用自定义设置</span>
-                </div>
                 <div class="config-grid">
                   <label><span>模型供应商</span><select id="apiProvider">
                     <option value="deepseek">DeepSeek</option>
@@ -924,6 +921,6 @@
     <script src="/ai/js/lightweight-charts.standalone.production.js"></script>
     <script src="/ai/js/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="/ai/app.js?v=20260624"></script>
+    <script src="/ai/app.js?v=20260624g"></script>
   </body>
 </html>
