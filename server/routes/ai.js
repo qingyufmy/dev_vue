@@ -1689,11 +1689,11 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: '1.9.8',
     build_date: '2026-06-24',
-    changelog: '修复开仓/平仓缺price字段、WS断连卡死、会员过期检查、下单方向校验、止损止盈修改',
+    changelog: '品牌升级: 量见/AI交易实验室。修复开关DB持久化、心跳覆盖、CORS白名单、历史图表筛选',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65334040,
-    md5: 'df7eccc3b10a1a539a16e0edce1c4b39'
+    file_size: 65335672,
+    md5: 'd20287cc7de17710bc20a051a921316a'
   })
 })
 
