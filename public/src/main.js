@@ -1241,11 +1241,9 @@ const comments = {
   },
 }
 
-// ===== YouTube Player =====
-let ytPlayer = null
+
 let watchTimer = null
 let accumulatedTime = 0
-
 
 // ===== Bilibili Player =====
 let biliPlayer = null
@@ -1345,7 +1343,6 @@ function initQiniuPlayer(videoUrl) {
 
 function destroyPlayer() {
   if (watchTimer) { clearInterval(watchTimer); watchTimer = null }
-  if (ytPlayer) { ytPlayer.destroy(); ytPlayer = null }
   biliPlayer = null
   const localVideo = document.getElementById('localPlayer')
   if (localVideo) { localVideo.pause(); localVideo.src = '' }
@@ -1377,8 +1374,8 @@ function startWatchTimer() {
     accumulatedTime++
     const ep = state.currentEpisode
     if (!ep || !state.user) return
-    // YouTube or CF Stream has native duration; Bilibili uses episode duration
-    const nativeDuration = ytPlayer?.getDuration?.() || 0
+    // Bilibili uses episode duration
+    const nativeDuration = 0
     const duration = nativeDuration || getEpisodeDuration()
     if (duration > 0) {
       const entry = progress.update(ep.id, accumulatedTime, duration)
@@ -1412,37 +1409,6 @@ function updateProgressUI(entry, duration) {
       quizBtn.textContent = '开始答题'
     }
   }
-}
-
-async function initYouTubePlayer(videoId) {
-  if (!window.YT || !window.YT.Player) return
-
-  const ep = state.currentEpisode
-  if (ep) {
-    const p = progress.get(ep.id)
-    accumulatedTime = p.watchedSeconds || 0
-  }
-
-  ytPlayer = new YT.Player('ytPlayer', {
-    videoId,
-    playerVars: { rel: 0, modestbranding: 1 },
-    events: {
-      onReady: () => {
-        const duration = ytPlayer.getDuration()
-        if (ep && state.user) {
-          const entry = progress.get(ep.id)
-          updateProgressUI({ ...entry, totalDuration: duration }, duration)
-        }
-      },
-      onStateChange: (e) => {
-        if (e.data === YT.PlayerState.PLAYING) {
-          startWatchTimer()
-        } else {
-          stopWatchTimer()
-        }
-      },
-    },
-  })
 }
 
 // ===== DOM References =====
@@ -1914,13 +1880,12 @@ function renderHome() {
 
 function getCardBackground(ep) {
   if (ep.cover) return `background-image: url('${ep.cover}'); background-size: cover; background-position: center;`
-  if (ep.youtubeId) return `background-image: url('https://img.youtube.com/vi/${ep.youtubeId}/hqdefault.jpg'); background-size: cover; background-position: center;`
   return `background: ${ep.gradient};`
 }
 
 function renderEpisodeCard(ep) {
   const hasPaidVideo = ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)
-  const hasCover = ep.cover || ep.youtubeId || hasPaidVideo
+  const hasCover = ep.cover || hasPaidVideo
   const completed = state.user && progress.isCompleted(ep.id)
   const quizPassed = state.user && progress.isQuizPassed(ep.id)
   const locked = state.user && !progress.isUnlocked(ep.id)
@@ -1937,7 +1902,7 @@ function renderEpisodeCard(ep) {
           ` : ''}
           ${locked ? '<div class="card-lock-overlay"><span class="lock-icon">🔒</span></div>' : ''}
         </div>
-        ${(ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)) && ep.duration ? `<span class="card-duration">${ep.duration}</span>` : ''}
+        ${(ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)) && ep.duration ? `<span class="card-duration">${ep.duration}</span>` : ''}
         ${ep.number ? `<span class="card-ep-badge">EP.${String(ep.number).padStart(2, '0')}</span>` : ''}
         ${isArticleEpisode(ep) ? '<span class="card-type-badge">文章</span>' : ''}
         ${accessBadge && !isArticleEpisode(ep) ? `<span class="card-paid-badge">${accessBadge}</span>` : ''}
@@ -2155,7 +2120,7 @@ const CATEGORY_LABELS = { strategy: '交易策略', indicator: '技术指标', p
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
 
 function hasEpisodeVideo(ep) {
-  return Boolean(ep?.youtubeId) || Boolean(ep?.hasStreamVideo) || state.paidVideoEpisodes.includes(ep?.id)
+  return Boolean(ep?.hasStreamVideo) || state.paidVideoEpisodes.includes(ep?.id)
 }
 
 async function resolveArticleThemeUrl() {
@@ -2288,7 +2253,7 @@ function renderEpisodeActions(ep, progressRecord) {
         <p class="paid-hint">升级会员解锁${unlockItems} <a class="paid-hint-link" id="goUpgrade">查看方案 →</a></p>
       ` : `
         ${hasQuiz
-          ? ((!ep.youtubeId && !hasPaidVideo)
+          ? ((!hasPaidVideo)
               ? '<button class="btn btn-primary btn-lg" id="startQuiz">开始答题</button>'
               : !progressRecord?.completed
                 ? '<button class="btn btn-ghost btn-lg" disabled title="观看60%后解锁">观看60%后可答题</button>'
@@ -2336,15 +2301,14 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
 function getFilteredEpisodes() {
   let list
   if (state.currentCategory === 'all') {
-    // 视频课程：显示有YouTube视频或CF Stream付费视频的
     // 视频课程分类：文章课程即使挂了视频讲解也不混入此列表
-    list = episodes.filter(ep => !isArticleEpisode(ep) && (ep.youtubeId || ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)))
+    list = episodes.filter(ep => !isArticleEpisode(ep) && (ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)))
     list = [...list].sort((a, b) => state.sortOrder === 'latest'
       ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
       : new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
   } else {
     // 其他分类：文章课程始终保留；无视频的占位课程也显示
-    list = episodes.filter(ep => ep.category === state.currentCategory && (isArticleEpisode(ep) || (!ep.youtubeId && !ep.hasStreamVideo && !state.paidVideoEpisodes.includes(ep.id))))
+    list = episodes.filter(ep => ep.category === state.currentCategory && (isArticleEpisode(ep) || (!ep.hasStreamVideo && !state.paidVideoEpisodes.includes(ep.id))))
     list = [...list].sort((a, b) => state.sortOrder === 'latest'
       ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
       : new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
@@ -2409,7 +2373,7 @@ function renderArticle() {
       if (state.currentEpisode?.id !== ep.id) return
       if (!r.ok) throw new Error(r.error || '视频加载失败')
 
-      // Priority: Bilibili > Local > Qiniu > YouTube
+      // Priority: Bilibili > Local > Qiniu
       if (r.bilibiliId) {
         initBiliPlayer(r.bilibiliId)
       } else if (r.localPath) {
@@ -2417,8 +2381,6 @@ function renderArticle() {
       } else if (r.qiniuKey) {
         const domain = r.qiniuDomain || ''
         initQiniuPlayer(domain + '/' + r.qiniuKey)
-      } else if (r.youtubeId) {
-        initYouTubePlayer(r.youtubeId)
       } else {
         const container = document.getElementById('videoContainer')
         if (container) {
@@ -2457,7 +2419,6 @@ function renderVideo() {
   const _hasPaid = ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)
   const _hasAcc = canAccessVideo(ep.id)
   if (_hasPaid && _hasAcc && document.getElementById('cfStreamPlayer')) return
-  if (!_hasPaid && ep.youtubeId && ytPlayer) return
 
   // 每次进入视频页弹出学习提醒（无视频的课程跳过）
   const hasVideo = hasEpisodeVideo(ep)
@@ -2487,31 +2448,22 @@ function renderVideo() {
   renderEpisodeDetailShell({
     ep,
     viewClass: 'video-view',
-    showProgress: state.user && (ep.youtubeId || (hasPaidVideo && hasAccess)),
+    showProgress: state.user && (hasPaidVideo && hasAccess),
     mediaHtml: (() => {
-      if (!ep.youtubeId && !hasPaidVideo) return ''
+      if (!hasPaidVideo) return ''
       return `<div class="video-container" id="videoContainer">
         ${hasPaidVideo && hasAccess
           ? `<div class="video-placeholder" style="background: ${ep.gradient}" id="cfVideoLoading">
               <span style="color:rgba(255,255,255,0.7);font-size:14px;">正在加载视频...</span>
             </div>`
-          : ep.youtubeId && !hasPaidVideo
-            ? (hasAccess
-              ? '<div id="ytPlayer"></div>'
-              : `<div class="video-placeholder video-paywall-overlay" style="background: ${ep.gradient}">
-                  <div class="video-lock-icon">🔒</div>
-                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '登录后可观看')}</h3>
-                  <p class="video-lock-text">请先登录后查看</p>
-                  <button class="btn btn-primary" id="goUpgradeVideo">登录</button>
-                </div>`)
-            : hasPaidVideo && !hasAccess
-              ? `<div class="video-placeholder video-paywall-overlay" style="background: ${ep.gradient}">
-                  <div class="video-lock-icon">🔒</div>
-                  <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '会员专属视频')}</h3>
-                  <p class="video-lock-text">${!state.user ? '请先登录后查看' : '升级会员即可观看'}</p>
-                  <button class="btn btn-primary" id="goUpgradeVideo">${!state.user ? '登录' : '升级会员'}</button>
-                </div>`
-              : ''
+          : hasPaidVideo && !hasAccess
+            ? `<div class="video-placeholder video-paywall-overlay" style="background: ${ep.gradient}">
+                <div class="video-lock-icon">🔒</div>
+                <h3 class="video-lock-title">${escapeHtml(getAccessLabel(ep.id) || '会员专属视频')}</h3>
+                <p class="video-lock-text">${!state.user ? '请先登录后查看' : '升级会员即可观看'}</p>
+                <button class="btn btn-primary" id="goUpgradeVideo">${!state.user ? '登录' : '升级会员'}</button>
+              </div>`
+            : ''
         }
       </div>`
     })(),
@@ -2541,8 +2493,6 @@ function renderVideo() {
       } else if (r.qiniuKey) {
         const domain = r.qiniuDomain || ''
         initQiniuPlayer(domain + '/' + r.qiniuKey)
-      } else if (r.youtubeId) {
-        initYouTubePlayer(r.youtubeId)
       }
     }).catch(err => {
       console.error('Video fetch error:', err)
@@ -2562,8 +2512,6 @@ function renderVideo() {
         </div>`
       }
     })
-  } else if (ep.youtubeId && hasAccess) {
-    initYouTubePlayer(ep.youtubeId)
   }
 
 }
@@ -4374,13 +4322,10 @@ async function applyNotebookMetadata(files) {
     const selectedEpisodeId = getSelectedResourceEpisodeId()
     const titleInput = document.getElementById('courseTitle')
     const numberInput = document.getElementById('courseNumber')
-    const youtubeInput = document.getElementById('courseYoutubeId')
     const title = metadata.title || metadata.sourceTitle || metadata.date
     const number = String(metadata.episode || '').match(/\d+/)?.[0]
-    const youtubeId = String(metadata.url || '').match(/[?&]v=([^&]+)/)?.[1] || ''
     if (!selectedEpisodeId && titleInput && title && !titleInput.value.trim()) titleInput.value = title
     if (!selectedEpisodeId && numberInput && number) numberInput.value = number
-    if (youtubeInput && youtubeId && !youtubeInput.value) youtubeInput.value = youtubeId
   } catch (err) {
     console.warn('Notebook metadata parse failed:', err)
   }
@@ -4405,7 +4350,6 @@ function getAdminCoursePayload() {
     status: document.getElementById('courseStatus')?.value || 'published',
     accessLevel: document.getElementById('courseAccessLevel')?.value || 'free',
     duration: document.getElementById('courseDuration')?.value || '',
-    youtubeId: document.getElementById('courseYoutubeId')?.value || '',
     bilibiliId: document.getElementById('courseBilibiliId')?.value || '',
     cover: document.getElementById('courseCover')?.value || '',
     sortOrder: Number(document.getElementById('courseSortOrder')?.value || 0),
@@ -4580,7 +4524,6 @@ function openCourseModal(course = null) {
         <input type="hidden" id="courseDuration" value="${isEdit ? escapeHtml(course.duration || '') : ''}">
         <input type="hidden" id="courseCover" value="${isEdit ? escapeHtml(course.cover || '') : ''}">
         <input type="hidden" id="courseSortOrder" value="${isEdit ? course.sortOrder || course.id : 0}">
-        <input type="hidden" id="courseYoutubeId" value="${isEdit ? escapeHtml(course.youtubeId || '') : ''}">
         <input type="hidden" id="courseArticleObjectKey" value="${isEdit ? escapeHtml(course.articleObjectKey || '') : ''}">
 
         <div class="course-form-grid">
