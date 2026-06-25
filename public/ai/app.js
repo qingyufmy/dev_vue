@@ -3880,7 +3880,7 @@ function renderAdminDashboard(el, d) {
     <!-- 用户状态查询 -->
     <div class="ad-section-title"><i data-lucide="search" size="18"></i>用户状态查询</div>
     <div class="ad-user-lookup">
-      <input type="number" id="adUserLookupId" placeholder="输入用户 ID" class="ad-input" min="1">
+      <input type="text" id="adUserLookupEmail" placeholder="输入用户邮箱" class="ad-input">
       <button id="adUserLookupBtn" class="ad-refresh-btn"><i data-lucide="search" size="14"></i>查询</button>
     </div>
     <div id="adUserStatusResult"></div>
@@ -3932,16 +3932,16 @@ function renderAdminDashboard(el, d) {
 
   // User lookup
   const lookupBtn = $('adUserLookupBtn');
-  const lookupInput = $('adUserLookupId');
+  const lookupInput = $('adUserLookupEmail');
   if (lookupBtn && lookupInput) {
     const doLookup = async () => {
-      const uid = Number(lookupInput.value);
-      if (!uid) return;
+      const email = lookupInput.value.trim();
+      if (!email) return;
       const resultDiv = $('adUserStatusResult');
       resultDiv.innerHTML = '<div class="admin-dash-loading"><i data-lucide="loader-2" size="18" class="spinning-icon"></i>查询中...</div>';
       initIcons();
       try {
-        const resp = await wsApi('admin_user_status', { user_id: uid });
+        const resp = await wsApi('admin_user_status', { email });
         if (resp.status !== 'success') throw new Error(resp.message);
         renderUserStatus(resultDiv, resp.data);
       } catch (e) {

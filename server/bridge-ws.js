@@ -1346,32 +1346,36 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'admin_user_status': {
-        // Admin: lookup a specific user's system status
+        // Admin: lookup a specific user's system status by email or user_id
         const u2 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
+        const email = params.email?.trim()
         const targetId = Number(params.user_id)
-        if (!targetId) { result = { status: 'error', message: '需要 user_id 参数' }; break }
+        if (!email && !targetId) { result = { status: 'error', message: '需要 email 或 user_id 参数' }; break }
 
-        const [targetUser, targetSettings, targetScheduler, targetSignals, bridgeStatus] = await Promise.all([
-          queryOne('SELECT id, nickname, email, plan, role, last_seen_at, created_at FROM users WHERE id = ?', [targetId]),
-          queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [targetId]),
-          queryOne('SELECT enabled, symbols, last_run_at FROM auto_scheduler WHERE user_id = ?', [targetId]),
+        const targetUser = email
+          ? await queryOne('SELECT id, nickname, email, plan, role, last_seen_at, created_at FROM users WHERE email = ?', [email])
+          : await queryOne('SELECT id, nickname, email, plan, role, last_seen_at, created_at FROM users WHERE id = ?', [targetId])
+        if (!targetUser) { result = { status: 'error', message: '用户不存在' }; break }
+
+        const tid = targetUser.id
+        const [targetSettings, targetScheduler, targetSignals, bridgeStatus] = await Promise.all([
+          queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [tid]),
+          queryOne('SELECT enabled, symbols, last_run_at FROM auto_scheduler WHERE user_id = ?', [tid]),
           queryOne(`SELECT
             (SELECT COUNT(*) FROM ai_signals WHERE user_id = ?) AS total_signals,
             (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND DATE(created_at) = CURDATE()) AS today_signals,
             (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND is_executed = 1) AS executed_signals,
             (SELECT signal_type FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1) AS last_signal_type,
-            (SELECT created_at FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1) AS last_signal_at`, [targetId, targetId, targetId, targetId, targetId]),
+            (SELECT created_at FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1) AS last_signal_at`, [tid, tid, tid, tid, tid]),
           (async () => {
-            const bridge = bridges.get(targetId)
+            const bridge = bridges.get(tid)
             const connected = !!(bridge && bridge.ws?.readyState === 1)
             const alive = connected && (Date.now() - bridge.lastSeen < 20000)
             return { connected, alive, lastSeen: bridge?.lastSeen || null }
           })()
         ])
-
-        if (!targetUser) { result = { status: 'error', message: '用户不存在' }; break }
 
         result = {
           status: 'success',
