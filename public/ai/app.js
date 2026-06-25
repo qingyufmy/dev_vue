@@ -3212,6 +3212,16 @@ async function refreshHistoryPage() {
 async function exportHistory() {
   const adminOnly = state.user?.role === 'admin';
   if (!adminOnly) { toast('仅管理员可操作', 'error'); return; }
+  // Lazy-load xlsx library (only admins need it)
+  if (typeof XLSX === 'undefined') {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '/ai/js/xlsx.full.min.js';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('xlsx 库加载失败'));
+      document.head.appendChild(script);
+    });
+  }
   try {
     // Gather current filters
     const filterParams = {};
