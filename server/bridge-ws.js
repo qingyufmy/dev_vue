@@ -898,9 +898,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         const globalCfg = await ai.getGlobalAutoConfig()
         let symbols = parseSymbols(globalCfg?.symbols)
         let intervalMin = globalCfg?.interval_minutes || 5
-        // Check for user override (silent, no banner)
-        // Override removed: auto config panel shows global config only
-        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, interval_minutes: intervalMin, running: !!cfg?.enabled } }
+        // Use actual in-memory scheduler state for running field
+        const running = ai.isAutoSchedulerRunning(statusUserId)
+        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, interval_minutes: intervalMin, running } }
         break
       }
       case 'toggle_auto': {

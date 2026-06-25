@@ -664,15 +664,12 @@ function connectBridgeStatusWs(onReady) {
       } else if (msg.type === 'auto_state') {
         // Server pushed auto-reasoning state change (e.g. bridge disconnected/reconnected)
         state.autoEnabled = !!msg.enabled;
-        const autoSwitch = $("autoAnalyzeMode");
-        if (autoSwitch) autoSwitch.checked = state.autoEnabled;
         if (msg.reason === 'bridge_disconnected' && !msg.enabled) {
           toast('MT5桥接断开，自动推理已自动关闭', 'warning');
+          setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
         }
-        // Refresh full auto status to get symbols/interval info (bridge reconnected etc.)
-        if (msg.enabled || msg.reason === 'bridge_connected') {
-          loadStatus().catch(() => {});
-        }
+        // Always refresh auto status so badge reflects market + enabled state
+        loadStatus().catch(() => {});
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -743,7 +740,12 @@ function updateMarketStatus(tradeMode) {
 // Handle data push from bridge (account + quote + positions)
 function handleBridgeData(msg) {
   // Server-detected market status — update in real-time
+  const prevMode = state.marketTradeMode;
   if (typeof msg.trade_mode === 'number') updateMarketStatus(msg.trade_mode);
+  // Market status changed → refresh auto badge (e.g. market opened/closed)
+  if (prevMode !== state.marketTradeMode && state.autoEnabled) {
+    loadStatus().catch(() => {});
+  }
   const selectedSymbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   // Detect position close → invalidate history cache
   const currPosCount = (msg.positions || []).length;
@@ -953,8 +955,11 @@ function handleHeartbeat(msg) {
     if (msg.auto_reasoning_enabled && state.autoConfig) {
       const sym = (state.autoConfig.symbols && state.autoConfig.symbols[0]) || 'XAUUSD';
       const intervalMin = state.autoConfig.interval_minutes || 5;
-      const label = `自动推理运行中 · ${sym} · ${intervalMin}分钟`;
-      setBadge("autoAnalyzeMode", label, "active");
+      const marketClosed = state.marketTradeMode !== 4;
+      const label = marketClosed
+        ? '市场休市 · 自动推理暂停'
+        : `自动推理运行中 · ${sym} · ${intervalMin}分钟`;
+      setBadge("autoAnalyzeMode", label, marketClosed ? "warning" : "active");
     } else if (!msg.auto_reasoning_enabled) {
       setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
     }
@@ -986,6 +991,7 @@ function handleHeartbeat(msg) {
 function handleDisconnect(msg) {
   setBadge("gatewayMode", "未连接-请启动桥接脚本", "neutral");
   setBadge("tradeMode", "请先启动桥接", "neutral");
+  setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
   state._lastGatewayLive = false;
 }
 
@@ -1292,23 +1298,41 @@ async function handleTradeModeClick() {
 }
 
 // ============ Auto Toggle (Simple) ============
+let _autoToggleLock = false;
 async function handleAutoToggle() {
+  if (_autoToggleLock) return;
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
+  _autoToggleLock = true;
   try {
+    // Check bridge connection before toggling (better UX than backend error)
+    const health = await wsApi("health").catch(() => null);
+    if (health?.gateway?.mode !== "live") {
+      toast("请先启动桥接脚本", "warning");
+      return;
+    }
     const result = await wsApi('toggle_auto');
-    toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
-    // Immediately update badge (don't wait for loadStatus)
+    // Wait for loadStatus to refresh state.autoConfig before building badge label
+    await loadStatus();
+    const isMarketClosed = state.marketTradeMode !== 4;
     const symbols = state.autoConfig?.symbols || ['XAUUSD'];
     const intervalMin = state.autoConfig?.interval_minutes || 5;
-    const label = result.enabled
-      ? `自动推理运行中 · ${symbols[0]} · ${intervalMin}分钟`
-      : '自动推理关闭';
-    const type = result.enabled ? 'active' : 'neutral';
+    let label, type;
+    if (result.enabled && isMarketClosed) {
+      label = `市场休市 · 自动推理暂停`;
+      type = 'warning';
+    } else if (result.enabled) {
+      label = `自动推理运行中 · ${symbols[0]} · ${intervalMin}分钟`;
+      type = 'active';
+    } else {
+      label = '自动推理关闭';
+      type = 'neutral';
+    }
     setBadge('autoAnalyzeMode', label, type);
-    // Also reload full status in background
-    loadStatus().catch(() => {});
+    toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
   } catch (e) {
     toast('切换失败: ' + e.message, 'error');
+  } finally {
+    _autoToggleLock = false;
   }
 }
 
@@ -1784,6 +1808,8 @@ function applyRoleUI() {
       el.title = 'Plus 会员仅可查看';
     });
     // Keep clickable-badge on all topbar badges (for pointer cursor) — guards in click handlers block action
+    const autoMode = document.getElementById("autoAnalyzeMode");
+    if (autoMode) { autoMode.classList.add("clickable-badge"); autoMode.title = "Plus 会员仅可查看"; }
     return;
   }
 

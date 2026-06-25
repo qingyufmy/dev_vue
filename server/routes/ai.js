@@ -1605,12 +1605,16 @@ export function stopSmartCloseScheduler(userId) {
 }
 
 async function startAutoScheduler(userId) {
-  if (autoSchedulerState[userId]?.timer) {
-    console.log(`[startAutoScheduler] Skipped user ${userId}: timer already exists`)
+  // Set placeholder entry BEFORE awaits to prevent race condition
+  if (autoSchedulerState[userId]) {
+    console.log(`[startAutoScheduler] Skipped user ${userId}: scheduler already in progress`)
     return
   }
+  autoSchedulerState[userId] = { running: false, timer: null } // placeholder, prevents concurrent starts
+
   const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) {
+    autoSchedulerState[userId] = null
     console.log(`[startAutoScheduler] Skipped user ${userId}: auto_scheduler enabled=${cfg?.enabled}`)
     return
   }
@@ -1629,7 +1633,10 @@ async function startAutoScheduler(userId) {
     intervalMinutes = Number(inferenceCfg.auto_interval_minutes)
   }
   const intervalMs = intervalMinutes * 60_000
-  autoSchedulerState[userId] = { running: true, lastRunAt: cfg.last_run_at || null, timer: null, _waitCount: 0 }
+  // Update placeholder with real state
+  autoSchedulerState[userId].running = true
+  autoSchedulerState[userId].lastRunAt = cfg.last_run_at || null
+  autoSchedulerState[userId]._waitCount = 0
 
   console.log(`[startAutoScheduler] Starting scheduler for user ${userId} (symbol=${symbol}, interval=${intervalMinutes}min)`)
   const tick = async () => {
@@ -1671,6 +1678,10 @@ function stopAutoScheduler(userId) {
   if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
   autoSchedulerState[userId] = null
   console.log(`[stopAutoScheduler] User ${userId}: scheduler stopped (hadTimer=${!!state?.timer})`)
+}
+
+export function isAutoSchedulerRunning(userId) {
+  return !!autoSchedulerState[userId]?.running
 }
 
 export async function initAutoSchedulers() {
