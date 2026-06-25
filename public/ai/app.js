@@ -1114,14 +1114,14 @@ async function bootstrap() {
     state.isPlusReadOnly = plan === 'plus' && role !== 'admin';
     applyRoleUI();
     showApp(true);
-    // Admin users default to dashboard tab
-    if (role === 'admin') {
-      setTab('admin-dashboard');
-    }
     // Connect WebSocket FIRST — all data flows through it
     await new Promise((resolve) => {
       connectBridgeStatusWs(resolve);
     });
+    // Admin users default to dashboard tab (after WS connected)
+    if (role === 'admin') {
+      setTab('admin-dashboard');
+    }
     await refreshAll();
     // Data loads on-demand: tab switch + manual refresh + bridge data push
     refreshTabData(activeTabId());
