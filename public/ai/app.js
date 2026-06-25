@@ -1118,10 +1118,8 @@ async function bootstrap() {
     await new Promise((resolve) => {
       connectBridgeStatusWs(resolve);
     });
-    // Admin users default to dashboard tab (after WS connected)
-    if (role === 'admin') {
-      setTab('admin-dashboard');
-    }
+    // Set default tab after WS connected
+    setTab(role === 'admin' ? 'admin-dashboard' : 'dashboard');
     await refreshAll();
     // Data loads on-demand: tab switch + manual refresh + bridge data push
     refreshTabData(activeTabId());
