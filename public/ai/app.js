@@ -3762,7 +3762,7 @@ async function loadAdminDashboard(force) {
     renderAdminDashboard(container, resp.data);
     _adminDashState.loaded = true;
   } catch (e) {
-    container.innerHTML = `<div class="admin-dash-loading" style="color:#ef4444">加载失败: ${esc(e.message)}</div>`;
+    container.innerHTML = `<div class="admin-dash-loading" style="color:#ef4444">加载失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -3829,7 +3829,7 @@ function renderAdminDashboard(el, d) {
           <thead><tr><th>#</th><th>用户</th><th>计划</th><th>信号数</th></tr></thead>
           <tbody>${(d.topSignalUsers||[]).map((u,i) => `<tr>
             <td>${i+1}</td>
-            <td>${esc(u.nickname||u.email||'UID:'+u.user_id)}</td>
+            <td>${escapeHtml(u.nickname||u.email||'UID:'+u.user_id)}</td>
             <td><span class="ad-chip ad-chip-${u.plan||'free'}">${u.plan||'free'}</span></td>
             <td style="font-weight:600">${u.signal_count}</td>
           </tr>`).join('')}</tbody>
@@ -3840,7 +3840,7 @@ function renderAdminDashboard(el, d) {
         <table class="ad-table">
           <thead><tr><th>用户</th><th>计划</th><th>角色</th><th>最后在线</th></tr></thead>
           <tbody>${(d.recentActiveUsers||[]).map(u => `<tr>
-            <td>${esc(u.nickname||u.email||'')}</td>
+            <td>${escapeHtml(u.nickname||u.email||'')}</td>
             <td><span class="ad-chip ad-chip-${u.plan||'free'}">${u.plan||'free'}</span></td>
             <td>${u.role === 'admin' ? '<span class="ad-chip ad-chip-admin">admin</span>' : u.role}</td>
             <td style="font-size:.78rem;color:var(--text-muted)">${formatTimeAgo(u.last_seen_at)}</td>
@@ -3856,8 +3856,8 @@ function renderAdminDashboard(el, d) {
         <thead><tr><th>用户</th><th>邮箱</th><th>计划</th><th>状态</th></tr></thead>
         <tbody>${d.bridges.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">暂无在线桥接</td></tr>' :
           d.bridges.map(b => `<tr>
-            <td>${esc(b.nickname||'UID:'+b.userId)}</td>
-            <td style="font-size:.78rem">${esc(b.email)}</td>
+            <td>${escapeHtml(b.nickname||'UID:'+b.userId)}</td>
+            <td style="font-size:.78rem">${escapeHtml(b.email)}</td>
             <td><span class="ad-chip ad-chip-${b.plan||'free'}">${b.plan||'free'}</span></td>
             <td><span class="ad-chip ad-chip-online">● 在线</span></td>
           </tr>`).join('')}
