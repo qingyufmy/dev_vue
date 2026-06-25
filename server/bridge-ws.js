@@ -1331,6 +1331,18 @@ export function isTradeEnabled(userId) {
 
 // Market status: bridge connected + tick time unchanged for 5 min → closed
 // Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
+// Check market status for user's OWN bridge only — NO admin fallback.
+// Used by auto-scheduler, auto-cycle, smart-close, etc.
+// Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
+export function getOwnBridgeTradeMode(userId) {
+  const bridge = bridges.get(userId)
+  if (!bridge || bridge.ws.readyState !== 1) return -1
+  if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
+  return -1
+}
+
+// Market status: bridge connected + tick time unchanged for 5 min → closed
+// Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
 export async function getBridgeTradeMode(userId) {
   let bridge = bridges.get(userId)
   if (!bridge || bridge.ws.readyState !== 1) {

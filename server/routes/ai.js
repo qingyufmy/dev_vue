@@ -3,7 +3,7 @@ import { query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import jwt from 'jsonwebtoken'
 import { JWT_SECRET } from '../config.js'
 
-import { sendBridgeCommand, isBridgeAlive, isTradeEnabled, getBridgeStatus, getAllBridges, getBridgeTradeMode } from '../bridge-ws.js'
+import { sendBridgeCommand, isBridgeAlive, isTradeEnabled, getBridgeStatus, getAllBridges, getBridgeTradeMode, getOwnBridgeTradeMode } from '../bridge-ws.js'
 
 const router = Router()
 
@@ -1322,7 +1322,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
   l(`plan=pro ✓`)
 
   // Check market status (re-check: could change between tick check and now)
-  const tradeMode = await getBridgeTradeMode(userId)
+  const tradeMode = getOwnBridgeTradeMode(userId)
   if (tradeMode !== 4) {
     l(`BLOCKED: market not open (tradeMode=${tradeMode})`)
     return
@@ -1490,7 +1490,7 @@ async function runSmartCloseCycle(userId) {
   if (!user || user.plan !== 'pro') return
 
   // Check market status — pause unless actively trading
-  const tradeMode = await getBridgeTradeMode(userId)
+  const tradeMode = getOwnBridgeTradeMode(userId)
   if (tradeMode !== 4) {
     return
   }
@@ -1587,7 +1587,7 @@ export async function startSmartCloseScheduler(userId) {
     if (!closeSchedulerState[userId]?.running) return
     // Wait for bridge connection and market status confirmation
     try {
-      const tradeMode = await getBridgeTradeMode(userId)
+      const tradeMode = getOwnBridgeTradeMode(userId)
       if (tradeMode !== 4) { closeSchedulerState[userId].timer = setTimeout(tick, 5000); return }
     } catch { closeSchedulerState[userId].timer = setTimeout(tick, 5000); return }
     try { await runSmartCloseCycle(userId) } catch (e) { console.error(`[SmartClose] User ${userId} tick error:`, e.message) }
@@ -1636,7 +1636,7 @@ async function startAutoScheduler(userId) {
     if (!autoSchedulerState[userId]?.running) return
     // Wait for bridge connection and market status confirmation
     try {
-      const tradeMode = await getBridgeTradeMode(userId)
+      const tradeMode = getOwnBridgeTradeMode(userId)
       if (tradeMode !== 4) {
         const st = autoSchedulerState[userId]
         st._waitCount = (st._waitCount || 0) + 1
@@ -1653,7 +1653,7 @@ async function startAutoScheduler(userId) {
       const st = autoSchedulerState[userId]
       st._waitCount = (st._waitCount || 0) + 1
       if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        console.error(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} getBridgeTradeMode error (retry#${st._waitCount}):`, err.message)
+        console.error(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} getOwnBridgeTradeMode error (retry#${st._waitCount}):`, err.message)
       }
       autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
     }
