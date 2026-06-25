@@ -1114,6 +1114,10 @@ async function bootstrap() {
     state.isPlusReadOnly = plan === 'plus' && role !== 'admin';
     applyRoleUI();
     showApp(true);
+    // Admin users default to dashboard tab
+    if (role === 'admin') {
+      setTab('admin-dashboard');
+    }
     // Connect WebSocket FIRST — all data flows through it
     await new Promise((resolve) => {
       connectBridgeStatusWs(resolve);
@@ -3767,119 +3771,141 @@ async function loadAdminDashboard(force) {
 }
 
 function renderAdminDashboard(el, d) {
-  // Destroy old chart instances
   Object.values(_adminDashState.charts).forEach(c => { try { c.destroy() } catch {} });
   _adminDashState.charts = {};
 
-  const us = d.userStats, ss = d.signalStats, as_ = d.auditStats, rv = d.revenue;
-  const planTotal = (+us.pro_users||0) + (+us.plus_users||0) + (+us.free_users||0);
+  const us = d.userStats, ss = d.signalStats, ar = d.autoReasonStats;
+  const wssCount = d.bridges.length;
+  const buyCnt = (d.signalTypeDist||[]).filter(r => ['buy','strong_buy'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
+  const sellCnt = (d.signalTypeDist||[]).filter(r => ['sell','strong_sell'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
+  const holdCnt = (d.signalTypeDist||[]).filter(r => r.signal_type==='hold').reduce((s,r)=>s+r.cnt,0);
 
   el.innerHTML = `
     <div class="ad-section-header">
-      <div class="ad-section-title"><i data-lucide="layout-dashboard" size="18"></i>系统概览</div>
+      <div class="ad-section-title"><i data-lucide="bar-chart-3" size="18"></i>数据看板</div>
       <button class="ad-refresh-btn" id="adRefreshBtn"><i data-lucide="refresh-cw" size="14"></i>刷新</button>
     </div>
 
+    <!-- 核心指标 -->
     <div class="ad-stats-grid">
-      <div class="ad-stat-card"><div class="ad-stat-label">总用户</div><div class="ad-stat-value">${us.total_users||0}</div><div class="ad-stat-sub">Pro ${us.pro_users||0} · Plus ${us.plus_users||0} · Free ${us.free_users||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">今日新增</div><div class="ad-stat-value">${us.today_new||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">实时在线</div><div class="ad-stat-value">${us.online_now||0}</div><div class="ad-stat-sub">5分钟内活跃</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">今日活跃</div><div class="ad-stat-value">${us.today_active||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">本周活跃</div><div class="ad-stat-value">${us.week_active||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">桥接连接</div><div class="ad-stat-value">${d.bridges.length}</div><div class="ad-stat-sub">当前在线桥接</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">总收入</div><div class="ad-stat-value">¥${((rv.total_revenue||0)/100).toFixed(2)}</div><div class="ad-stat-sub">今日 ¥${((rv.today_revenue||0)/100).toFixed(2)}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">付费订单</div><div class="ad-stat-value">${rv.paid_orders||0}</div></div>
+      <div class="ad-stat-card ad-stat-accent">
+        <div class="ad-stat-label">WSS 连接</div>
+        <div class="ad-stat-value">${wssCount}</div>
+        <div class="ad-stat-sub">当前在线桥接用户</div>
+      </div>
+      <div class="ad-stat-card ad-stat-accent">
+        <div class="ad-stat-label">自动推理</div>
+        <div class="ad-stat-value">${ar.auto_reasoning_users||0}</div>
+        <div class="ad-stat-sub">已开启用户数</div>
+      </div>
+      <div class="ad-stat-card ad-stat-accent">
+        <div class="ad-stat-label">自动交易</div>
+        <div class="ad-stat-value">${ar.trade_enabled_users||0}</div>
+        <div class="ad-stat-sub">已开启用户数</div>
+      </div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">总用户</div>
+        <div class="ad-stat-value">${us.total_users||0}</div>
+        <div class="ad-stat-sub">Pro ${us.pro_users||0} · Plus ${us.plus_users||0} · Free ${us.free_users||0}</div>
+      </div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">今日新增</div>
+        <div class="ad-stat-value">${us.today_new||0}</div>
+      </div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">实时在线</div>
+        <div class="ad-stat-value">${us.online_now||0}</div>
+        <div class="ad-stat-sub">5分钟内活跃</div>
+      </div>
     </div>
 
-    <!-- Signal Stats -->
-    <div class="ad-section-title"><i data-lucide="zap" size="18"></i>信号分析</div>
+    <!-- 信号统计 -->
+    <div class="ad-section-title"><i data-lucide="zap" size="18"></i>信号统计</div>
     <div class="ad-stats-grid">
-      <div class="ad-stat-card"><div class="ad-stat-label">总信号</div><div class="ad-stat-value">${ss.total||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">今日信号</div><div class="ad-stat-value">${ss.today||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">本周信号</div><div class="ad-stat-value">${ss.week||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">已执行</div><div class="ad-stat-value">${ss.executed||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">平均置信度</div><div class="ad-stat-value">${ss.avg_confidence||0}%</div></div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">总信号</div>
+        <div class="ad-stat-value">${ss.total||0}</div>
+      </div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">今日信号</div>
+        <div class="ad-stat-value">${ss.today||0}</div>
+      </div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">本周信号</div>
+        <div class="ad-stat-value">${ss.week||0}</div>
+      </div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">已执行</div>
+        <div class="ad-stat-value">${ss.executed||0}</div>
+      </div>
+      <div class="ad-stat-card">
+        <div class="ad-stat-label">平均置信度</div>
+        <div class="ad-stat-value">${ss.avg_confidence||0}%</div>
+      </div>
     </div>
+
     <div class="ad-two-col">
-      <div class="ad-chart-card"><h4>信号类型分布</h4><div class="ad-chart-wrap"><canvas id="adChartSignalType"></canvas></div></div>
-      <div class="ad-chart-card"><h4>信号品种分布</h4><div class="ad-chart-wrap"><canvas id="adChartSignalSymbol"></canvas></div></div>
+      <div class="ad-chart-card">
+        <h4>信号方向分布</h4>
+        <div class="ad-chart-wrap"><canvas id="adChartSignalType"></canvas></div>
+      </div>
+      <div class="ad-chart-card">
+        <h4>方向统计</h4>
+        <div class="ad-direction-stats">
+          <div class="ad-dir-item ad-dir-buy"><span class="ad-dir-icon">↑</span><span class="ad-dir-label">买入</span><span class="ad-dir-cnt">${buyCnt}</span></div>
+          <div class="ad-dir-item ad-dir-sell"><span class="ad-dir-icon">↓</span><span class="ad-dir-label">卖出</span><span class="ad-dir-cnt">${sellCnt}</span></div>
+          <div class="ad-dir-item ad-dir-hold"><span class="ad-dir-icon">→</span><span class="ad-dir-label">观望</span><span class="ad-dir-cnt">${holdCnt}</span></div>
+        </div>
+      </div>
     </div>
     <div class="ad-chart-card"><h4>近30天信号趋势</h4><div class="ad-chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>
 
-    <!-- Audit Stats -->
-    <div class="ad-section-title"><i data-lucide="shield-check" size="18"></i>交易审计</div>
-    <div class="ad-stats-grid">
-      <div class="ad-stat-card"><div class="ad-stat-label">总操作</div><div class="ad-stat-value">${as_.total||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">今日操作</div><div class="ad-stat-value">${as_.today||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">成功</div><div class="ad-stat-value" style="color:#22c55e">${as_.success||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">失败</div><div class="ad-stat-value" style="color:#ef4444">${as_.errors||0}</div></div>
-      <div class="ad-stat-card"><div class="ad-stat-label">成功率</div><div class="ad-stat-value">${((as_.total||0) > 0 ? ((as_.success||0)/(as_.total)*100).toFixed(1) : 0)}%</div></div>
-    </div>
-    <div class="ad-two-col">
-      <div class="ad-chart-card"><h4>操作类型分布</h4><div class="ad-chart-wrap"><canvas id="adChartAuditAction"></canvas></div></div>
-      <div class="ad-chart-card"><h4>近14天操作趋势</h4><div class="ad-chart-wrap"><canvas id="adChartAuditTrend"></canvas></div></div>
-    </div>
-
-    <!-- User Ranking -->
-    <div class="ad-section-title"><i data-lucide="users" size="18"></i>用户排行</div>
-    <div class="ad-two-col">
-      <div class="ad-table-card">
-        <h4>信号数排行 TOP 10</h4>
-        <table class="ad-table">
-          <thead><tr><th>#</th><th>用户</th><th>计划</th><th>信号数</th></tr></thead>
-          <tbody>${(d.topSignalUsers||[]).map((u,i) => `<tr>
-            <td>${i+1}</td>
-            <td>${escapeHtml(u.nickname||u.email||'UID:'+u.user_id)}</td>
-            <td><span class="ad-chip ad-chip-${u.plan||'free'}">${u.plan||'free'}</span></td>
-            <td style="font-weight:600">${u.signal_count}</td>
-          </tr>`).join('')}</tbody>
-        </table>
-      </div>
-      <div class="ad-table-card">
-        <h4>最近在线用户 TOP 10</h4>
-        <table class="ad-table">
-          <thead><tr><th>用户</th><th>计划</th><th>角色</th><th>最后在线</th></tr></thead>
-          <tbody>${(d.recentActiveUsers||[]).map(u => `<tr>
-            <td>${escapeHtml(u.nickname||u.email||'')}</td>
-            <td><span class="ad-chip ad-chip-${u.plan||'free'}">${u.plan||'free'}</span></td>
-            <td>${u.role === 'admin' ? '<span class="ad-chip ad-chip-admin">admin</span>' : u.role}</td>
-            <td style="font-size:.78rem;color:var(--text-muted)">${formatTimeAgo(u.last_seen_at)}</td>
-          </tr>`).join('')}</tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Bridge Status -->
-    <div class="ad-section-title"><i data-lucide="radio" size="18"></i>在线桥接</div>
+    <!-- 在线桥接 -->
+    <div class="ad-section-title"><i data-lucide="radio" size="18"></i>在线桥接 (${wssCount})</div>
     <div class="ad-table-card">
       <table class="ad-table">
-        <thead><tr><th>用户</th><th>邮箱</th><th>计划</th><th>状态</th></tr></thead>
-        <tbody>${d.bridges.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">暂无在线桥接</td></tr>' :
+        <thead><tr><th>用户</th><th>计划</th><th>交易</th><th>自动推理</th><th>最后心跳</th></tr></thead>
+        <tbody>${d.bridges.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">暂无在线桥接</td></tr>' :
           d.bridges.map(b => `<tr>
-            <td>${escapeHtml(b.nickname||'UID:'+b.userId)}</td>
-            <td style="font-size:.78rem">${escapeHtml(b.email)}</td>
+            <td>${escapeHtml(b.nickname||'UID:'+b.userId)}<br><span style="font-size:.72rem;color:var(--text-muted)">${escapeHtml(b.email)}</span></td>
             <td><span class="ad-chip ad-chip-${b.plan||'free'}">${b.plan||'free'}</span></td>
-            <td><span class="ad-chip ad-chip-online">● 在线</span></td>
+            <td>${b.tradeEnabled ? '<span style="color:#22c55e">● 开启</span>' : '<span style="color:var(--text-muted)">○ 关闭</span>'}</td>
+            <td>${b.autoReasoning ? '<span style="color:#22c55e">● 开启</span>' : '<span style="color:var(--text-muted)">○ 关闭</span>'}</td>
+            <td style="font-size:.78rem;color:var(--text-muted)">${formatTimeAgo(b.lastSeen)}</td>
           </tr>`).join('')}
         </tbody>
       </table>
     </div>
+
+    <!-- 用户状态查询 -->
+    <div class="ad-section-title"><i data-lucide="search" size="18"></i>用户状态查询</div>
+    <div class="ad-user-lookup">
+      <input type="number" id="adUserLookupId" placeholder="输入用户 ID" class="ad-input" min="1">
+      <button id="adUserLookupBtn" class="ad-refresh-btn"><i data-lucide="search" size="14"></i>查询</button>
+    </div>
+    <div id="adUserStatusResult"></div>
   `;
   initIcons();
 
-  // Render charts with Chart.js
-  const chartColors = ['#22c55e','#ef4444','#3b82f6','#a855f7','#f59e0b','#06b6d4','#ec4899','#84cc16','#f97316','#6366f1'];
+  // Charts
+  const chartColors = ['#22c55e','#ef4444','#3b82f6','#a855f7','#f59e0b'];
   const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } } };
 
-  // Signal type pie chart
   if (d.signalTypeDist.length > 0) {
-    const typeLabels = d.signalTypeDist.map(r => r.signal_type?.toUpperCase() || '未知');
+    const typeLabels = d.signalTypeDist.map(r => {
+      const t = (r.signal_type||'').toLowerCase();
+      if (t === 'buy') return '买入';
+      if (t === 'sell') return '卖出';
+      if (t === 'strong_buy') return '强买';
+      if (t === 'strong_sell') return '强卖';
+      if (t === 'hold') return '观望';
+      return r.signal_type?.toUpperCase() || '未知';
+    });
     const typeColors = d.signalTypeDist.map(r => {
       const t = (r.signal_type||'').toLowerCase();
-      if (t === 'buy') return '#22c55e';
-      if (t === 'sell') return '#ef4444';
+      if (t === 'buy' || t === 'strong_buy') return '#22c55e';
+      if (t === 'sell' || t === 'strong_sell') return '#ef4444';
       if (t === 'hold') return '#3b82f6';
-      if (t === 'close') return '#a855f7';
       return '#6b7280';
     });
     _adminDashState.charts.signalType = new Chart($('adChartSignalType'), {
@@ -3889,19 +3915,6 @@ function renderAdminDashboard(el, d) {
     });
   }
 
-  // Signal symbol bar chart
-  if (d.signalSymbolDist.length > 0) {
-    _adminDashState.charts.signalSymbol = new Chart($('adChartSignalSymbol'), {
-      type: 'bar',
-      data: {
-        labels: d.signalSymbolDist.map(r => r.symbol),
-        datasets: [{ label: '信号数', data: d.signalSymbolDist.map(r => r.cnt), backgroundColor: 'rgba(212,175,55,.6)', borderRadius: 4, borderWidth: 0 }]
-      },
-      options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,.04)' } } }, plugins: { legend: { display: false } } }
-    });
-  }
-
-  // Signal trend line chart
   if (d.signalTrend.length > 0) {
     _adminDashState.charts.signalTrend = new Chart($('adChartSignalTrend'), {
       type: 'line',
@@ -3913,43 +3926,94 @@ function renderAdminDashboard(el, d) {
     });
   }
 
-  // Audit action pie
-  if (d.auditActionDist.length > 0) {
-    _adminDashState.charts.auditAction = new Chart($('adChartAuditAction'), {
-      type: 'doughnut',
-      data: {
-        labels: d.auditActionDist.map(r => {
-          const a = r.action||'';
-          if (a === 'ai_auto_execute') return '自动执行';
-          if (a === 'ai_execute') return '手动执行';
-          if (a === 'manual_open') return '手动开仓';
-          if (a === 'manual_close') return '手动平仓';
-          if (a === 'smart_close') return '智能平仓';
-          if (a === 'smart_close_rule') return '规则平仓';
-          if (a === 'ai_auto_scan') return '自动扫描';
-          return a;
-        }),
-        datasets: [{ data: d.auditActionDist.map(r => r.cnt), backgroundColor: ['#22c55e','#3b82f6','#f59e0b','#ef4444','#a855f7','#06b6d4','#ec4899','#84cc16','#f97316','#6366f1'], borderWidth: 0 }]
-      },
-      options: { ...chartDefaults, cutout: '55%', plugins: { ...chartDefaults.plugins, legend: { position: 'right', labels: { color: '#9ca3af', font: { size: 11 }, padding: 12 } } } }
-    });
-  }
-
-  // Audit trend bar chart
-  if (d.auditTrend.length > 0) {
-    _adminDashState.charts.auditTrend = new Chart($('adChartAuditTrend'), {
-      type: 'bar',
-      data: {
-        labels: d.auditTrend.map(r => r.day?.slice(5) || ''),
-        datasets: [{ label: '操作数', data: d.auditTrend.map(r => r.cnt), backgroundColor: 'rgba(59,130,246,.6)', borderRadius: 4, borderWidth: 0 }]
-      },
-      options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true } }, plugins: { legend: { display: false } } }
-    });
-  }
-
   // Refresh button
   const btn = $('adRefreshBtn');
   if (btn) btn.addEventListener('click', () => { btn.classList.add('spinning'); loadAdminDashboard(true).finally(() => btn.classList.remove('spinning')); });
+
+  // User lookup
+  const lookupBtn = $('adUserLookupBtn');
+  const lookupInput = $('adUserLookupId');
+  if (lookupBtn && lookupInput) {
+    const doLookup = async () => {
+      const uid = Number(lookupInput.value);
+      if (!uid) return;
+      const resultDiv = $('adUserStatusResult');
+      resultDiv.innerHTML = '<div class="admin-dash-loading"><i data-lucide="loader-2" size="18" class="spinning-icon"></i>查询中...</div>';
+      initIcons();
+      try {
+        const resp = await wsApi('admin_user_status', { user_id: uid });
+        if (resp.status !== 'success') throw new Error(resp.message);
+        renderUserStatus(resultDiv, resp.data);
+      } catch (e) {
+        resultDiv.innerHTML = `<div class="admin-dash-loading" style="color:#ef4444">${escapeHtml(e.message)}</div>`;
+      }
+    };
+    lookupBtn.addEventListener('click', doLookup);
+    lookupInput.addEventListener('keydown', e => { if (e.key === 'Enter') doLookup(); });
+  }
+}
+
+function renderUserStatus(el, d) {
+  const u = d.user, s = d.settings, sc = d.scheduler, sig = d.signals, br = d.bridge;
+  el.innerHTML = `
+    <div class="ad-user-status-card">
+      <div class="ad-user-header">
+        <span class="ad-user-name">${escapeHtml(u.nickname || u.email || 'UID:'+u.id)}</span>
+        <span class="ad-chip ad-chip-${u.plan||'free'}">${u.plan||'free'}</span>
+        ${u.role === 'admin' ? '<span class="ad-chip ad-chip-admin">admin</span>' : ''}
+      </div>
+      <div class="ad-user-grid">
+        <div class="ad-user-item">
+          <span class="ad-user-label">桥接状态</span>
+          <span class="ad-user-value">${br.connected ? (br.alive ? '<span style="color:#22c55e">● 在线</span>' : '<span style="color:#f59e0b">● 连接但无心跳</span>') : '<span style="color:var(--text-muted)">○ 未连接</span>'}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">交易发送</span>
+          <span class="ad-user-value">${s.trade_send_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭'}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">自动推理</span>
+          <span class="ad-user-value">${s.auto_reasoning_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭'}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">调度器</span>
+          <span class="ad-user-value">${sc.enabled ? '<span style="color:#22c55e">启用</span>' : '未启用'}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">监控品种</span>
+          <span class="ad-user-value">${sc.symbols || '--'}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">上次运行</span>
+          <span class="ad-user-value">${sc.last_run_at ? formatTimeAgo(sc.last_run_at) : '--'}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">总信号</span>
+          <span class="ad-user-value">${sig.total_signals||0}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">今日信号</span>
+          <span class="ad-user-value">${sig.today_signals||0}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">已执行</span>
+          <span class="ad-user-value">${sig.executed_signals||0}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">最新信号</span>
+          <span class="ad-user-value">${sig.last_signal_type ? sig.last_signal_type.toUpperCase() : '--'} ${sig.last_signal_at ? formatTimeAgo(sig.last_signal_at) : ''}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">最后在线</span>
+          <span class="ad-user-value">${u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--'}</span>
+        </div>
+        <div class="ad-user-item">
+          <span class="ad-user-label">注册时间</span>
+          <span class="ad-user-value">${u.created_at ? u.created_at.slice(0,10) : '--'}</span>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function formatTimeAgo(dtStr) {

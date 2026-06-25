@@ -1277,14 +1277,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
-        const [userStats, signalStats, signalTypeDist, signalSymbolDist, signalTrend, auditStats, auditActionDist, auditTrend, topSignalUsers, recentActiveUsers, revenue, bridgeList] = await Promise.all([
+        const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, bridgeList] = await Promise.all([
           // 1. User stats
           queryOne(`SELECT
             (SELECT COUNT(*) FROM users) AS total_users,
             (SELECT COUNT(*) FROM users WHERE DATE(created_at) = CURDATE()) AS today_new,
             (SELECT COUNT(*) FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)) AS online_now,
             (SELECT COUNT(*) FROM users WHERE last_seen_at >= CURDATE()) AS today_active,
-            (SELECT COUNT(*) FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)) AS week_active,
             (SELECT COUNT(*) FROM users WHERE plan = 'pro') AS pro_users,
             (SELECT COUNT(*) FROM users WHERE plan = 'plus') AS plus_users,
             (SELECT COUNT(*) FROM users WHERE plan = 'free' OR plan IS NULL) AS free_users`),
@@ -1295,57 +1294,38 @@ async function handleBrowserCommand(ws, userId, msg) {
             (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today,
             (SELECT COUNT(*) FROM ai_signals WHERE YEARWEEK(created_at, 1) = YEARWEEK(NOW(), 1)) AS week,
             (SELECT COUNT(*) FROM ai_signals WHERE is_executed = 1) AS executed,
-            (SELECT ROUND(AVG(confidence)*100, 1) FROM ai_signals) AS avg_confidence`),
+            (SELECT ROUND(AVG(confidence)*100, 1) FROM ai_signals WHERE signal_type IN ('buy','sell','strong_buy','strong_sell')) AS avg_confidence`),
 
           // 3. Signal type distribution
           queryAll('SELECT signal_type, COUNT(*) AS cnt FROM ai_signals GROUP BY signal_type ORDER BY cnt DESC'),
 
-          // 4. Signal symbol distribution
-          queryAll('SELECT symbol, COUNT(*) AS cnt FROM ai_signals GROUP BY symbol ORDER BY cnt DESC LIMIT 10'),
-
-          // 5. Daily signal trend (30 days)
+          // 4. Daily signal trend (30 days)
           queryAll(`SELECT DATE(created_at) AS day, COUNT(*) AS cnt
             FROM ai_signals WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
             GROUP BY DATE(created_at) ORDER BY day`),
 
-          // 6. Trade audit summary
+          // 5. Auto-reasoning & trade stats
           queryOne(`SELECT
-            (SELECT COUNT(*) FROM trade_audit_logs) AS total,
-            (SELECT COUNT(*) FROM trade_audit_logs WHERE DATE(created_at) = CURDATE()) AS today,
-            (SELECT COUNT(*) FROM trade_audit_logs WHERE status = 'success') AS success,
-            (SELECT COUNT(*) FROM trade_audit_logs WHERE status = 'error') AS errors`),
+            (SELECT COUNT(*) FROM user_bridge_settings WHERE auto_reasoning_enabled = 1) AS auto_reasoning_users,
+            (SELECT COUNT(*) FROM user_bridge_settings WHERE trade_send_enabled = 1) AS trade_enabled_users,
+            (SELECT COUNT(*) FROM auto_scheduler WHERE enabled = 1) AS auto_scheduler_users`),
 
-          // 7. Audit action distribution
-          queryAll('SELECT action, COUNT(*) AS cnt FROM trade_audit_logs GROUP BY action ORDER BY cnt DESC'),
-
-          // 8. Daily audit trend (14 days)
-          queryAll(`SELECT DATE(created_at) AS day, COUNT(*) AS cnt
-            FROM trade_audit_logs WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
-            GROUP BY DATE(created_at) ORDER BY day`),
-
-          // 9. Top signal users
-          queryAll(`SELECT s.user_id, u.nickname, u.email, u.plan, COUNT(*) AS signal_count
-            FROM ai_signals s LEFT JOIN users u ON s.user_id = u.id
-            GROUP BY s.user_id ORDER BY signal_count DESC LIMIT 10`),
-
-          // 10. Recent active users
-          queryAll(`SELECT id, nickname, email, plan, role, last_seen_at
-            FROM users WHERE last_seen_at IS NOT NULL
-            ORDER BY last_seen_at DESC LIMIT 10`),
-
-          // 11. Revenue
-          queryOne(`SELECT
-            (SELECT COALESCE(SUM(amount_confirmed), 0) FROM orders WHERE status = 'paid') AS total_revenue,
-            (SELECT COUNT(*) FROM orders WHERE status = 'paid') AS paid_orders,
-            (SELECT COALESCE(SUM(amount_confirmed), 0) FROM orders WHERE status = 'paid' AND DATE(paid_at) = CURDATE()) AS today_revenue`),
-
-          // 12. Connected bridges
+          // 6. Connected bridges (WSS + trade mode info)
           (async () => {
             const list = []
             for (const [uid, bridge] of bridges) {
               if (bridge.ws?.readyState === 1) {
                 const info = await queryOne('SELECT nickname, email, plan FROM users WHERE id = ?', [uid])
-                list.push({ userId: uid, nickname: info?.nickname || '', email: info?.email || '', plan: info?.plan || 'free', lastSeen: bridge.lastSeen })
+                const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [uid])
+                list.push({
+                  userId: uid,
+                  nickname: info?.nickname || '',
+                  email: info?.email || '',
+                  plan: info?.plan || 'free',
+                  tradeEnabled: !!settings?.trade_send_enabled,
+                  autoReasoning: !!settings?.auto_reasoning_enabled,
+                  lastSeen: bridge.lastSeen
+                })
               }
             }
             return list
@@ -1358,15 +1338,49 @@ async function handleBrowserCommand(ws, userId, msg) {
             userStats: userStats || {},
             signalStats: signalStats || {},
             signalTypeDist: signalTypeDist || [],
-            signalSymbolDist: signalSymbolDist || [],
             signalTrend: signalTrend || [],
-            auditStats: auditStats || {},
-            auditActionDist: auditActionDist || [],
-            auditTrend: auditTrend || [],
-            topSignalUsers: topSignalUsers || [],
-            recentActiveUsers: recentActiveUsers || [],
-            revenue: revenue || {},
+            autoReasonStats: autoReasonStats || {},
             bridges: bridgeList || []
+          }
+        }
+        break
+      }
+      case 'admin_user_status': {
+        // Admin: lookup a specific user's system status
+        const u2 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (u2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+
+        const targetId = Number(params.user_id)
+        if (!targetId) { result = { status: 'error', message: '需要 user_id 参数' }; break }
+
+        const [targetUser, targetSettings, targetScheduler, targetSignals, bridgeStatus] = await Promise.all([
+          queryOne('SELECT id, nickname, email, plan, role, last_seen_at, created_at FROM users WHERE id = ?', [targetId]),
+          queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [targetId]),
+          queryOne('SELECT enabled, symbols, last_run_at FROM auto_scheduler WHERE user_id = ?', [targetId]),
+          queryOne(`SELECT
+            (SELECT COUNT(*) FROM ai_signals WHERE user_id = ?) AS total_signals,
+            (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND DATE(created_at) = CURDATE()) AS today_signals,
+            (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND is_executed = 1) AS executed_signals,
+            (SELECT signal_type FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1) AS last_signal_type,
+            (SELECT created_at FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1) AS last_signal_at`, [targetId, targetId, targetId, targetId, targetId]),
+          (async () => {
+            const bridge = bridges.get(targetId)
+            const connected = !!(bridge && bridge.ws?.readyState === 1)
+            const alive = connected && (Date.now() - bridge.lastSeen < 20000)
+            return { connected, alive, lastSeen: bridge?.lastSeen || null }
+          })()
+        ])
+
+        if (!targetUser) { result = { status: 'error', message: '用户不存在' }; break }
+
+        result = {
+          status: 'success',
+          data: {
+            user: targetUser,
+            settings: targetSettings || { trade_send_enabled: 0, auto_reasoning_enabled: 0 },
+            scheduler: targetScheduler || { enabled: 0, symbols: null, last_run_at: null },
+            signals: targetSignals || {},
+            bridge: bridgeStatus
           }
         }
         break

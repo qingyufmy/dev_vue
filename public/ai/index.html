@@ -21,7 +21,7 @@
     </script>
     <title>AI交易实验室</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260626c" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260626d" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -86,7 +86,10 @@
       <aside class="sidebar">
         <div class="nav-group">
           <span class="nav-group-label">监控</span>
-          <button class="nav-item active" data-tab="dashboard" data-title="概览">
+          <button class="nav-item admin-only" data-tab="admin-dashboard" data-title="看板" style="display:none">
+            <i data-lucide="bar-chart-3" size="16"></i>看板
+          </button>
+          <button class="nav-item" data-tab="dashboard" data-title="概览">
             <i data-lucide="layout-dashboard" size="16"></i>概览
           </button>
           <button class="nav-item" data-tab="signals" data-title="信号">
@@ -116,9 +119,6 @@
 
         <div class="nav-group">
           <span class="nav-group-label">管理</span>
-          <button class="nav-item admin-only" data-tab="admin-dashboard" data-title="看板" style="display:none">
-            <i data-lucide="bar-chart-3" size="16"></i>看板
-          </button>
           <button class="nav-item" data-tab="audit" data-title="审计">
             <i data-lucide="shield-check" size="16"></i>审计
           </button>
@@ -932,6 +932,6 @@
     <script src="lucide.js"></script>
     <script src="/ai/js/lightweight-charts.standalone.production.js"></script>
     <script src="/ai/js/chart.umd.min.js"></script>
-    <script src="/ai/app.js?v=20260626g"></script>
+    <script src="/ai/app.js?v=20260626h"></script>
   </body>
 </html>

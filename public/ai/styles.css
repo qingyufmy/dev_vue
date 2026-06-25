@@ -3993,3 +3993,39 @@ a.signal-link:hover {
   display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
 }
 .ad-section-header .ad-section-title { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+
+/* Accent stat cards (WSS, auto-reasoning, trade) */
+.ad-stat-accent { border: 1px solid rgba(212,175,55,.2); background: rgba(212,175,55,.04); }
+.ad-stat-accent .ad-stat-value { color: var(--gold-primary); }
+
+/* Direction stats */
+.ad-direction-stats { display: flex; flex-direction: column; gap: 12px; padding: 16px 8px; }
+.ad-dir-item { display: flex; align-items: center; gap: 10px; font-size: .9rem; }
+.ad-dir-icon { font-size: 1.2rem; font-weight: 700; width: 28px; text-align: center; }
+.ad-dir-label { flex: 1; color: var(--text-secondary); }
+.ad-dir-cnt { font-weight: 700; font-size: 1.1rem; }
+.ad-dir-buy .ad-dir-icon, .ad-dir-buy .ad-dir-cnt { color: #22c55e; }
+.ad-dir-sell .ad-dir-icon, .ad-dir-sell .ad-dir-cnt { color: #ef4444; }
+.ad-dir-hold .ad-dir-icon, .ad-dir-hold .ad-dir-cnt { color: #3b82f6; }
+
+/* User lookup */
+.ad-user-lookup { display: flex; gap: 8px; margin-bottom: 12px; }
+.ad-input {
+  flex: 1; max-width: 240px; padding: 6px 12px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.04);
+  color: var(--text-primary); font-size: .85rem; outline: none;
+}
+.ad-input:focus { border-color: var(--gold-dim); }
+.ad-input::placeholder { color: var(--text-muted); }
+
+/* User status card */
+.ad-user-status-card {
+  background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 8px; padding: 16px;
+}
+.ad-user-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.ad-user-name { font-weight: 700; font-size: 1rem; }
+.ad-user-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.ad-user-item { display: flex; flex-direction: column; gap: 2px; }
+.ad-user-label { font-size: .72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
+.ad-user-value { font-size: .88rem; color: var(--text-primary); }
