@@ -2362,7 +2362,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     const raw = String(signal.analysis || "").trim();
     if (raw.startsWith("[")) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length > 0 && arr[0].ticket) closePositions = arr; }
   } catch {}
-  let escapedAnalysis = closePositions ? "" : escapeHtml(String(signal.analysis || "").trim() || "暂无行情判断");
+  let escapedAnalysis = closePositions ? "" : escapeHtml(String(signal.analysis || "").trim() || "暂无行情分析");
   // Build analysis block: table for structured data, plain text otherwise
   let analysisBlock = "";
   if (closePositions) {
@@ -2385,9 +2385,9 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   <tbody>${rows}</tbody>
 </table>`;
   } else {
-    analysisBlock = `<strong>行情判断</strong>\n${escapedAnalysis}`;
+    analysisBlock = `<strong>行情分析</strong>\n${escapedAnalysis}`;
   }
-  const reasoningBlock = reasoningText ? `\n\n<strong>推理依据</strong>\n${escapeHtml(reasoningText)}` : "";
+  const reasoningBlock = reasoningText ? `\n\n<strong>分析依据</strong>\n${escapeHtml(reasoningText)}` : "";
   result.className = "analysis-result";
   result.innerHTML = `
     <div class="analysis-summary-head">
@@ -2438,11 +2438,11 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       </div>
     </div>
     <div class="analysis-section">
-      <div class="analysis-section-title"><i data-lucide="file-text" size="14"></i>推理正文</div>
+      <div class="analysis-section-title"><i data-lucide="file-text" size="14"></i>分析正文</div>
     </div>
     <div id="analysisTextContent" class="analysis-text collapsed">${analysisBlock}${reasoningBlock}</div>
     <div class="analysis-expand-row">
-      <button class="btn-expand-analysis" type="button" data-action="toggle-analysis-text">展开完整推理</button>
+      <button class="btn-expand-analysis" type="button" data-action="toggle-analysis-text">展开完整分析</button>
     </div>
   `;
   highlightActiveAnalysis(signal.id);
@@ -3522,7 +3522,7 @@ function bindEvents() {
       if (action === "toggle-analysis-text") {
         const text = $("analysisTextContent");
         const expanded = text?.classList.toggle("collapsed") === false;
-        actionButton.textContent = expanded ? "收起推理正文" : "展开完整推理";
+        actionButton.textContent = expanded ? "收起分析正文" : "展开完整分析";
         return;
       }
       const tasks = {
