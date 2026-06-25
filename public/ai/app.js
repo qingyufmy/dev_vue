@@ -1582,6 +1582,7 @@ function _createKlineChart(container) {
 }
 
 async function loadKlineData() {
+  if (!_klineSeries) return; // Chart not initialized yet (e.g. admin on dashboard tab)
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   try {
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
