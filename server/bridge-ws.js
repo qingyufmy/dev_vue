@@ -1272,6 +1272,105 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         break
       }
+      case 'admin_dashboard': {
+        // Admin-only data dashboard
+        const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+
+        const [userStats, signalStats, signalTypeDist, signalSymbolDist, signalTrend, auditStats, auditActionDist, auditTrend, topSignalUsers, recentActiveUsers, revenue, bridgeList] = await Promise.all([
+          // 1. User stats
+          queryOne(`SELECT
+            (SELECT COUNT(*) FROM users) AS total_users,
+            (SELECT COUNT(*) FROM users WHERE DATE(created_at) = CURDATE()) AS today_new,
+            (SELECT COUNT(*) FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)) AS online_now,
+            (SELECT COUNT(*) FROM users WHERE last_seen_at >= CURDATE()) AS today_active,
+            (SELECT COUNT(*) FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)) AS week_active,
+            (SELECT COUNT(*) FROM users WHERE plan = 'pro') AS pro_users,
+            (SELECT COUNT(*) FROM users WHERE plan = 'plus') AS plus_users,
+            (SELECT COUNT(*) FROM users WHERE plan = 'free' OR plan IS NULL) AS free_users`),
+
+          // 2. Signal summary
+          queryOne(`SELECT
+            (SELECT COUNT(*) FROM ai_signals) AS total,
+            (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today,
+            (SELECT COUNT(*) FROM ai_signals WHERE YEARWEEK(created_at, 1) = YEARWEEK(NOW(), 1)) AS week,
+            (SELECT COUNT(*) FROM ai_signals WHERE is_executed = 1) AS executed,
+            (SELECT ROUND(AVG(confidence)*100, 1) FROM ai_signals) AS avg_confidence`),
+
+          // 3. Signal type distribution
+          queryAll('SELECT signal_type, COUNT(*) AS cnt FROM ai_signals GROUP BY signal_type ORDER BY cnt DESC'),
+
+          // 4. Signal symbol distribution
+          queryAll('SELECT symbol, COUNT(*) AS cnt FROM ai_signals GROUP BY symbol ORDER BY cnt DESC LIMIT 10'),
+
+          // 5. Daily signal trend (30 days)
+          queryAll(`SELECT DATE(created_at) AS day, COUNT(*) AS cnt
+            FROM ai_signals WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            GROUP BY DATE(created_at) ORDER BY day`),
+
+          // 6. Trade audit summary
+          queryOne(`SELECT
+            (SELECT COUNT(*) FROM trade_audit_logs) AS total,
+            (SELECT COUNT(*) FROM trade_audit_logs WHERE DATE(created_at) = CURDATE()) AS today,
+            (SELECT COUNT(*) FROM trade_audit_logs WHERE status = 'success') AS success,
+            (SELECT COUNT(*) FROM trade_audit_logs WHERE status = 'error') AS errors`),
+
+          // 7. Audit action distribution
+          queryAll('SELECT action, COUNT(*) AS cnt FROM trade_audit_logs GROUP BY action ORDER BY cnt DESC'),
+
+          // 8. Daily audit trend (14 days)
+          queryAll(`SELECT DATE(created_at) AS day, COUNT(*) AS cnt
+            FROM trade_audit_logs WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+            GROUP BY DATE(created_at) ORDER BY day`),
+
+          // 9. Top signal users
+          queryAll(`SELECT s.user_id, u.nickname, u.email, u.plan, COUNT(*) AS signal_count
+            FROM ai_signals s LEFT JOIN users u ON s.user_id = u.id
+            GROUP BY s.user_id ORDER BY signal_count DESC LIMIT 10`),
+
+          // 10. Recent active users
+          queryAll(`SELECT id, nickname, email, plan, role, last_seen_at
+            FROM users WHERE last_seen_at IS NOT NULL
+            ORDER BY last_seen_at DESC LIMIT 10`),
+
+          // 11. Revenue
+          queryOne(`SELECT
+            (SELECT COALESCE(SUM(amount_confirmed), 0) FROM orders WHERE status = 'paid') AS total_revenue,
+            (SELECT COUNT(*) FROM orders WHERE status = 'paid') AS paid_orders,
+            (SELECT COALESCE(SUM(amount_confirmed), 0) FROM orders WHERE status = 'paid' AND DATE(paid_at) = CURDATE()) AS today_revenue`),
+
+          // 12. Connected bridges
+          (async () => {
+            const list = []
+            for (const [uid, bridge] of bridges) {
+              if (bridge.ws?.readyState === 1) {
+                const info = await queryOne('SELECT nickname, email, plan FROM users WHERE id = ?', [uid])
+                list.push({ userId: uid, nickname: info?.nickname || '', email: info?.email || '', plan: info?.plan || 'free', lastSeen: bridge.lastSeen })
+              }
+            }
+            return list
+          })()
+        ])
+
+        result = {
+          status: 'success',
+          data: {
+            userStats: userStats || {},
+            signalStats: signalStats || {},
+            signalTypeDist: signalTypeDist || [],
+            signalSymbolDist: signalSymbolDist || [],
+            signalTrend: signalTrend || [],
+            auditStats: auditStats || {},
+            auditActionDist: auditActionDist || [],
+            auditTrend: auditTrend || [],
+            topSignalUsers: topSignalUsers || [],
+            recentActiveUsers: recentActiveUsers || [],
+            revenue: revenue || {},
+            bridges: bridgeList || []
+          }
+        }
+        break
+      }
       default:
         result = { status: 'error', message: `Unknown action: ${action}` }
     }
