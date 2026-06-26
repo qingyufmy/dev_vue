@@ -71,6 +71,38 @@ def update_config(patch):
     save_config(cfg)
 
 # ══════════════════════════════════════════════════════════
+#  Password encryption (XOR + base64)
+# ══════════════════════════════════════════════════════════
+
+import base64
+
+_ENC_KEY = "AURUM_BRIDGE_v2"  # 简单混淆密钥
+
+def encrypt_password(password):
+    """简单 XOR + base64 加密"""
+    if not password:
+        return ""
+    try:
+        key_bytes = _ENC_KEY.encode('utf-8')
+        pwd_bytes = password.encode('utf-8')
+        encrypted = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(pwd_bytes)])
+        return base64.b64encode(encrypted).decode('utf-8')
+    except Exception:
+        return password
+
+def decrypt_password(encrypted):
+    """解密密码"""
+    if not encrypted:
+        return ""
+    try:
+        key_bytes = _ENC_KEY.encode('utf-8')
+        pwd_bytes = base64.b64decode(encrypted)
+        decrypted = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(pwd_bytes)])
+        return decrypted.decode('utf-8')
+    except Exception:
+        return encrypted
+
+# ══════════════════════════════════════════════════════════
 #  File logging
 # ══════════════════════════════════════════════════════════
 
@@ -1527,7 +1559,7 @@ class LoginPage(QWidget):
         self.chk_remember.setChecked(cfg.get("remember", False))
         self.chk_auto_login.setChecked(cfg.get("auto_login", False))
         if cfg.get("remember") and cfg.get("saved_password"):
-            self.input_password.setText(cfg["saved_password"])
+            self.input_password.setText(decrypt_password(cfg["saved_password"]))
 
     def _do_login(self):
         server = self.input_server.text().strip()
@@ -1567,7 +1599,7 @@ class LoginPage(QWidget):
             cfg["remember"] = self.chk_remember.isChecked()
             cfg["auto_login"] = self.chk_auto_login.isChecked()
             if self.chk_remember.isChecked():
-                cfg["saved_password"] = password  # token 过期后自动填充
+                cfg["saved_password"] = encrypt_password(password)
             else:
                 cfg.pop("saved_password", None)
             cfg["plan"] = data.get("user", {}).get("plan", "free")
