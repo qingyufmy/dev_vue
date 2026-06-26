@@ -3774,16 +3774,29 @@ async function loadAdminDashboard(force) {
 
 // 20s auto-refresh timer for admin dashboard
 function startDashAutoRefresh() {
-  if (_adminDashState.refreshTimer) return;
-  _adminDashState.refreshTimer = setInterval(() => {
-    loadAdminDashboard(true);
-  }, 20000);
+  if (_adminDashState.refreshInterval) return;
+  _adminDashState.countdown = 20;
+  const updateCountdown = () => {
+    const el = $('dashCountdown');
+    if (el) el.textContent = _adminDashState.countdown + 's';
+  };
+  updateCountdown();
+  _adminDashState.refreshInterval = setInterval(() => {
+    _adminDashState.countdown--;
+    if (_adminDashState.countdown <= 0) {
+      _adminDashState.countdown = 20;
+      loadAdminDashboard(true);
+    }
+    updateCountdown();
+  }, 1000);
 }
 function stopDashAutoRefresh() {
-  if (_adminDashState.refreshTimer) {
-    clearInterval(_adminDashState.refreshTimer);
-    _adminDashState.refreshTimer = null;
+  if (_adminDashState.refreshInterval) {
+    clearInterval(_adminDashState.refreshInterval);
+    _adminDashState.refreshInterval = null;
   }
+  const el = $('dashCountdown');
+  if (el) el.textContent = '';
 }
 
 function renderAdminDashboard(el, d, userListResp) {
@@ -3800,7 +3813,7 @@ function renderAdminDashboard(el, d, userListResp) {
   el.innerHTML = [
     '<div class="dash-header">',
     '  <div class="dash-title"><i data-lucide="bar-chart-3" size="15"></i>数据看板</div>',
-    '  <div class="dash-actions"><button class="dash-btn" id="dashRefreshBtn"><i data-lucide="refresh-cw" size="12"></i>刷新</button></div>',
+    '  <div class="dash-actions"><button class="dash-btn" id="dashRefreshBtn"><i data-lucide="refresh-cw" size="12"></i>刷新</button><span class="dash-countdown" id="dashCountdown"></span></div>',
     '</div>',
     '',
     '<div class="stats-grid">',
@@ -3904,7 +3917,11 @@ function renderAdminDashboard(el, d, userListResp) {
 
   // ====== Refresh ======
   const refreshBtn = $('dashRefreshBtn');
-  if (refreshBtn) refreshBtn.addEventListener('click', () => { refreshBtn.classList.add('spinning'); loadAdminDashboard(true).finally(() => refreshBtn.classList.remove('spinning')); });
+  if (refreshBtn) refreshBtn.addEventListener('click', () => {
+    refreshBtn.classList.add('spinning');
+    _adminDashState.countdown = 20;
+    loadAdminDashboard(true).finally(() => refreshBtn.classList.remove('spinning'));
+  });
 
   // ====== User Search ======
   let searchTimer = null;

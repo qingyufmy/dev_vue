@@ -3934,6 +3934,14 @@ a.signal-link:hover {
 }
 .dash-btn.spinning i { animation: spin 1s linear infinite; }
 
+/* Countdown next to refresh button */
+.dash-countdown {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; font-weight: 600; color: var(--text-muted);
+  font-family: 'Consolas', 'Menlo', monospace;
+  min-width: 32px; letter-spacing: 0.02em;
+}
+
 /* ====== Tech Stats Grid (compact) ====== */
 .stats-grid {
   display: grid; gap: 8px;
