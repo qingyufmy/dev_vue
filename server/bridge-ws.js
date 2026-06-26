@@ -1403,6 +1403,67 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         break
       }
+      case 'admin_user_search': {
+        // Admin: search users by email or nickname for dropdown
+        const u4 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (u4?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+
+        const searchTerm = (params.q || '').trim()
+        const limit = Math.min(Number(params.limit) || 5, 20)
+        let users
+        if (searchTerm) {
+          users = await queryAll(
+            'SELECT id, email, nickname, plan, role FROM users WHERE email LIKE ? OR nickname LIKE ? ORDER BY last_seen_at DESC LIMIT ?',
+            [`%${searchTerm}%`, `%${searchTerm}%`, limit]
+          )
+        } else {
+          users = await queryAll(
+            'SELECT id, email, nickname, plan, role FROM users ORDER BY last_seen_at DESC LIMIT ?',
+            [limit]
+          )
+        }
+        result = { status: 'success', users }
+        break
+      }
+      case 'admin_user_list': {
+        // Admin: paginated user list with status
+        const u5 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (u5?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+
+        const page = Math.max(1, Number(params.page) || 1)
+        const pageSize = Math.min(Number(params.pageSize) || 10, 50)
+        const offset = (page - 1) * pageSize
+
+        const countRow = await queryOne('SELECT COUNT(*) AS total FROM users')
+        const rows = await queryAll(
+          `SELECT id, email, nickname, plan, role, last_seen_at, created_at FROM users ORDER BY id DESC LIMIT ? OFFSET ?`,
+          [pageSize, offset]
+        )
+
+        // Enrich with bridge/settings status
+        const enriched = await Promise.all(rows.map(async r => {
+          const bridge = bridges.get(r.id)
+          const connected = !!(bridge && bridge.ws?.readyState === 1)
+          const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [r.id])
+          const scheduler = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [r.id])
+          return {
+            ...r,
+            bridgeConnected: connected,
+            autoReasoning: !!(settings?.auto_reasoning_enabled),
+            tradeEnabled: !!(settings?.trade_send_enabled),
+            schedulerEnabled: !!(scheduler?.enabled)
+          }
+        }))
+
+        result = {
+          status: 'success',
+          users: enriched,
+          total: countRow?.total || 0,
+          page,
+          pageSize
+        }
+        break
+      }
       default:
         result = { status: 'error', message: `Unknown action: ${action}` }
     }

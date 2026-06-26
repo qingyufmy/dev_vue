@@ -3751,7 +3751,7 @@ function initAnalysisHistoryScroll() {
 }
 
 // ============ Admin Data Dashboard ============
-const _adminDashState = { charts: {}, loaded: false };
+const _adminDashState = { charts: {}, loaded: false, userList: { page: 1, total: 0, users: [] }, selectedUserId: null };
 
 async function loadAdminDashboard(force) {
   if (_adminDashState.loaded && !force) return;
@@ -3760,16 +3760,19 @@ async function loadAdminDashboard(force) {
   container.innerHTML = '<div class="admin-dash-loading"><i data-lucide="loader-2" size="24" class="spinning-icon"></i><span>加载中...</span></div>';
   initIcons();
   try {
-    const resp = await wsApi('admin_dashboard');
-    if (resp.status !== 'success') throw new Error(resp.message || '加载失败');
-    renderAdminDashboard(container, resp.data);
+    const [dashResp, userListResp] = await Promise.all([
+      wsApi('admin_dashboard'),
+      wsApi('admin_user_list', { page: 1, pageSize: 10 })
+    ]);
+    if (dashResp.status !== 'success') throw new Error(dashResp.message || '加载失败');
+    renderAdminDashboard(container, dashResp.data, userListResp);
     _adminDashState.loaded = true;
   } catch (e) {
-    container.innerHTML = `<div class="admin-dash-loading" style="color:#ef4444">加载失败: ${escapeHtml(e.message)}</div>`;
+    container.innerHTML = '<div class="admin-dash-loading" style="color:#ef4444">加载失败: ' + escapeHtml(e.message) + '</div>';
   }
 }
 
-function renderAdminDashboard(el, d) {
+function renderAdminDashboard(el, d, userListResp) {
   Object.values(_adminDashState.charts).forEach(c => { try { c.destroy() } catch {} });
   _adminDashState.charts = {};
 
@@ -3778,185 +3781,109 @@ function renderAdminDashboard(el, d) {
   const buyCnt = (d.signalTypeDist||[]).filter(r => ['buy','strong_buy'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
   const sellCnt = (d.signalTypeDist||[]).filter(r => ['sell','strong_sell'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
   const holdCnt = (d.signalTypeDist||[]).filter(r => r.signal_type==='hold').reduce((s,r)=>s+r.cnt,0);
+  const fmt = n => { if (!n || n < 1000) return (n||0).toLocaleString(); if (n < 1000000) return (n/1000).toFixed(1)+'K'; return (n/1000000).toFixed(2)+'M'; };
 
-  const fmtTokens = n => {
-    if (!n || n < 1000) return (n||0).toLocaleString();
-    if (n < 1000000) return (n/1000).toFixed(1) + 'K';
-    return (n/1000000).toFixed(2) + 'M';
-  };
-
-  el.innerHTML = `
-    <div class="ad-section-header">
-      <div class="ad-section-title"><i data-lucide="bar-chart-3" size="18"></i>数据看板</div>
-      <button class="ad-refresh-btn" id="adRefreshBtn"><i data-lucide="refresh-cw" size="14"></i>刷新</button>
-    </div>
-
-    <!-- 核心指标 — Bento Grid -->
-    <div class="ad-bento">
-      <div class="ad-metric-card ad-metric-highlight">
-        <div class="ad-metric-label">WSS 连接</div>
-        <div class="ad-metric-value">${wssCount}</div>
-        <div class="ad-metric-sub">当前在线桥接用户</div>
-      </div>
-      <div class="ad-metric-card ad-metric-highlight">
-        <div class="ad-metric-label">自动推理</div>
-        <div class="ad-metric-value">${ar.auto_reasoning_users||0}</div>
-        <div class="ad-metric-sub">已开启用户数</div>
-      </div>
-      <div class="ad-metric-card ad-metric-highlight">
-        <div class="ad-metric-label">自动交易</div>
-        <div class="ad-metric-value">${ar.trade_enabled_users||0}</div>
-        <div class="ad-metric-sub">已开启用户数</div>
-      </div>
-      <div class="ad-metric-card">
-        <div class="ad-metric-label">总用户</div>
-        <div class="ad-metric-value">${us.total_users||0}</div>
-        <div class="ad-metric-sub">Pro ${us.pro_users||0} · Plus ${us.plus_users||0} · Free ${us.free_users||0}</div>
-      </div>
-      <div class="ad-metric-card">
-        <div class="ad-metric-label">今日新增</div>
-        <div class="ad-metric-value">${us.today_new||0}</div>
-      </div>
-      <div class="ad-metric-card">
-        <div class="ad-metric-label">实时在线</div>
-        <div class="ad-metric-value">${us.online_now||0}</div>
-        <div class="ad-metric-sub">5分钟内活跃</div>
-      </div>
-      <div class="ad-metric-card ad-metric-highlight">
-        <div class="ad-metric-label">今日 Token</div>
-        <div class="ad-metric-value">${fmtTokens(tk.today_tokens)}</div>
-        <div class="ad-metric-sub">累计 ${fmtTokens(tk.total_tokens)}</div>
-      </div>
-    </div>
-
-    <!-- 信号统计 -->
-    <div class="ad-section-title"><i data-lucide="zap" size="16"></i>信号统计</div>
-    <div class="ad-signal-grid">
-      <div class="ad-signal-card">
-        <div class="ad-signal-icon" style="background:rgba(212,175,55,0.1)"><i data-lucide="activity" size="16" style="color:var(--gold-primary)"></i></div>
-        <div class="ad-signal-info">
-          <span class="ad-signal-label">总信号</span>
-          <span class="ad-signal-number">${ss.total||0}</span>
-        </div>
-      </div>
-      <div class="ad-signal-card">
-        <div class="ad-signal-icon" style="background:rgba(34,197,94,0.1)"><i data-lucide="trending-up" size="16" style="color:#22c55e"></i></div>
-        <div class="ad-signal-info">
-          <span class="ad-signal-label">今日信号</span>
-          <span class="ad-signal-number">${ss.today||0}</span>
-        </div>
-      </div>
-      <div class="ad-signal-card">
-        <div class="ad-signal-icon" style="background:rgba(59,130,246,0.1)"><i data-lucide="calendar" size="16" style="color:#60a5fa"></i></div>
-        <div class="ad-signal-info">
-          <span class="ad-signal-label">本周信号</span>
-          <span class="ad-signal-number">${ss.week||0}</span>
-        </div>
-      </div>
-      <div class="ad-signal-card">
-        <div class="ad-signal-icon" style="background:rgba(168,85,247,0.1)"><i data-lucide="check-circle" size="16" style="color:#a78bfa"></i></div>
-        <div class="ad-signal-info">
-          <span class="ad-signal-label">已执行</span>
-          <span class="ad-signal-number">${ss.executed||0}</span>
-        </div>
-      </div>
-      <div class="ad-signal-card">
-        <div class="ad-signal-icon" style="background:rgba(251,191,36,0.1)"><i data-lucide="percent" size="16" style="color:#fbbf24"></i></div>
-        <div class="ad-signal-info">
-          <span class="ad-signal-label">平均置信度</span>
-          <span class="ad-signal-number">${ss.avg_confidence||0}%</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="section-break"></div>
-
-    <!-- 方向分布 + 趋势 -->
-    <div class="ad-two-col">
-      <div class="ad-chart-card">
-        <h4>信号方向分布</h4>
-        <div class="ad-chart-wrap"><canvas id="adChartSignalType"></canvas></div>
-      </div>
-      <div class="ad-chart-card">
-        <h4>方向统计</h4>
-        <div class="ad-direction-stats">
-          <div class="ad-dir-item ad-dir-buy"><span class="ad-dir-icon">↑</span><span class="ad-dir-label">买入信号</span><span class="ad-dir-cnt">${buyCnt}</span></div>
-          <div class="ad-dir-item ad-dir-sell"><span class="ad-dir-icon">↓</span><span class="ad-dir-label">卖空信号</span><span class="ad-dir-cnt">${sellCnt}</span></div>
-          <div class="ad-dir-item ad-dir-hold"><span class="ad-dir-icon">—</span><span class="ad-dir-label">观望信号</span><span class="ad-dir-cnt">${holdCnt}</span></div>
-        </div>
-      </div>
-    </div>
-    <div class="ad-chart-card"><h4>近30天信号趋势</h4><div class="ad-chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>
-    <div class="ad-chart-card"><h4>近30天 Token 消耗趋势</h4><div class="ad-chart-wrap"><canvas id="adChartTokenTrend"></canvas></div></div>
-
-    <div class="section-break"></div>
-
-    <!-- 在线桥接 -->
-    <div class="ad-bridge-section">
-      <div class="ad-bridge-header">
-        <h3><i data-lucide="radio" size="16" style="color:var(--gold-primary)"></i>在线桥接</h3>
-        <span class="ad-bridge-count">${wssCount} 连接</span>
-      </div>
-      <div class="ad-bridge-card">
-        ${d.bridges.length === 0
-          ? `<div class="ad-bridge-empty">暂无在线桥接</div>`
-          : `<table class="ad-bridge-table">
-            <thead><tr><th>用户</th><th>计划</th><th>交易</th><th>自动推理</th><th>最后心跳</th></tr></thead>
-            <tbody>${d.bridges.map(b => `<tr>
-              <td>
-                <div class="ad-bridge-user">
-                  <span class="ad-bridge-user-name">${escapeHtml(b.nickname||'UID:'+b.userId)}</span>
-                  <span class="ad-bridge-user-email">${escapeHtml(b.email)}</span>
-                </div>
-              </td>
-              <td><span class="ad-chip ad-chip-${b.plan||'free'}">${b.plan||'free'}</span></td>
-              <td><span class="ad-bridge-status"><span class="ad-bridge-dot ${b.tradeEnabled ? 'on' : 'off'}"></span>${b.tradeEnabled ? '开启' : '关闭'}</span></td>
-              <td><span class="ad-bridge-status"><span class="ad-bridge-dot ${b.autoReasoning ? 'on' : 'off'}"></span>${b.autoReasoning ? '开启' : '关闭'}</span></td>
-              <td style="font-size:0.78rem;color:var(--text-muted)">${formatTimeAgo(b.lastSeen)}</td>
-            </tr>`).join('')}</tbody>
-          </table>`}
-      </div>
-    </div>
-
-    <div class="section-break"></div>
-
-    <!-- 用户状态查询 -->
-    <div class="ad-lookup-section">
-      <div class="ad-section-title"><i data-lucide="search" size="16"></i>用户状态查询</div>
-      <div class="ad-lookup-bar">
-        <input type="text" id="adUserLookupEmail" placeholder="输入用户邮箱查询系统状态" class="ad-lookup-input">
-        <button id="adUserLookupBtn" class="ad-refresh-btn"><i data-lucide="arrow-right" size="14"></i>查询</button>
-      </div>
-      <div id="adUserStatusResult"></div>
-    </div>
-  `;
+  el.innerHTML = [
+    '<div class="dash-header">',
+    '  <div class="dash-title"><i data-lucide="bar-chart-3" size="15"></i>数据看板</div>',
+    '  <div class="dash-actions"><button class="dash-btn" id="dashRefreshBtn"><i data-lucide="refresh-cw" size="12"></i>刷新</button></div>',
+    '</div>',
+    '',
+    '<div class="stats-grid">',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="radio"></i>WSS</div><div class="stat-val">' + wssCount + '</div><div class="stat-sub">在线桥接</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="cpu"></i>推理</div><div class="stat-val">' + (ar.auto_reasoning_users||0) + '</div><div class="stat-sub">自动推理用户</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="zap"></i>交易</div><div class="stat-val">' + (ar.trade_enabled_users||0) + '</div><div class="stat-sub">自动交易用户</div></div>',
+    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="users"></i>用户</div><div class="stat-val">' + (us.total_users||0) + '</div><div class="stat-sub">Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0) + '</div></div>',
+    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="user-plus"></i>新增</div><div class="stat-val">' + (us.today_new||0) + '</div><div class="stat-sub">今日注册</div></div>',
+    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="activity"></i>在线</div><div class="stat-val">' + (us.online_now||0) + '</div><div class="stat-sub">5分钟活跃</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="database"></i>Token</div><div class="stat-val">' + fmt(tk.today_tokens) + '</div><div class="stat-sub">累计 ' + fmt(tk.total_tokens) + '</div></div>',
+    '</div>',
+    '',
+    '<div class="signal-row">',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(212,175,55,0.1)"><i data-lucide="activity" style="color:var(--gold-primary)"></i></div><div class="sig-info"><span class="sig-lbl">总信号</span><span class="sig-num">' + (ss.total||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(34,197,94,0.1)"><i data-lucide="trending-up" style="color:#22c55e"></i></div><div class="sig-info"><span class="sig-lbl">今日</span><span class="sig-num">' + (ss.today||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(59,130,246,0.1)"><i data-lucide="calendar" style="color:#60a5fa"></i></div><div class="sig-info"><span class="sig-lbl">本周</span><span class="sig-num">' + (ss.week||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(168,85,247,0.1)"><i data-lucide="check-circle" style="color:#a78bfa"></i></div><div class="sig-info"><span class="sig-lbl">已执行</span><span class="sig-num">' + (ss.executed||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(251,191,36,0.1)"><i data-lucide="percent" style="color:#fbbf24"></i></div><div class="sig-info"><span class="sig-lbl">置信度</span><span class="sig-num">' + (ss.avg_confidence||0) + '%</span></div></div>',
+    '</div>',
+    '',
+    '<div class="charts-row">',
+    '  <div class="chart-cell"><h4>信号方向分布</h4><div class="chart-wrap"><canvas id="adChartSignalType"></canvas></div></div>',
+    '  <div class="chart-cell">',
+    '    <h4>方向统计</h4>',
+    '    <div class="dir-group">',
+    '      <div class="dir-mini dir-buy"><span class="dir-arrow">&uarr;</span><span class="dir-lbl">买入</span><span class="dir-num">' + buyCnt + '</span></div>',
+    '      <div class="dir-mini dir-sell"><span class="dir-arrow">&darr;</span><span class="dir-lbl">卖空</span><span class="dir-num">' + sellCnt + '</span></div>',
+    '      <div class="dir-mini dir-hold"><span class="dir-arrow">&mdash;</span><span class="dir-lbl">观望</span><span class="dir-num">' + holdCnt + '</span></div>',
+    '    </div>',
+    '  </div>',
+    '</div>',
+    '',
+    '<div class="charts-row">',
+    '  <div class="chart-cell"><h4>近30天信号趋势</h4><div class="chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>',
+    '  <div class="chart-cell"><h4>近30天 Token 消耗</h4><div class="chart-wrap"><canvas id="adChartTokenTrend"></canvas></div></div>',
+    '</div>',
+    '',
+    '<hr class="dash-divider">',
+    '',
+    '<div class="section-inline">',
+    '  <h3><i data-lucide="radio"></i>在线桥接</h3>',
+    '  <span class="badge">' + wssCount + ' 连接</span>',
+    '</div>',
+    '<div class="bridge-box">',
+    (d.bridges.length === 0
+      ? '<div class="bridge-empty">暂无在线桥接</div>'
+      : '<table class="bridge-table"><thead><tr><th>用户</th><th>计划</th><th>交易</th><th>推理</th><th>心跳</th></tr></thead><tbody>' +
+        d.bridges.map(function(b) {
+          return '<tr>' +
+            '<td><div class="bridge-user"><span class="name">' + escapeHtml(b.nickname||'UID:'+b.userId) + '</span><span class="email">' + escapeHtml(b.email) + '</span></div></td>' +
+            '<td><span class="chip chip-' + (b.plan||'free') + '">' + (b.plan||'free') + '</span></td>' +
+            '<td><span class="bridge-status"><span class="bridge-dot ' + (b.tradeEnabled ? 'on' : 'off') + '"></span>' + (b.tradeEnabled ? '开' : '关') + '</span></td>' +
+            '<td><span class="bridge-status"><span class="bridge-dot ' + (b.autoReasoning ? 'on' : 'off') + '"></span>' + (b.autoReasoning ? '开' : '关') + '</span></td>' +
+            '<td style="font-size:0.68rem;color:var(--text-muted)">' + formatTimeAgo(b.lastSeen) + '</td></tr>';
+        }).join('') +
+        '</tbody></table>'),
+    '</div>',
+    '',
+    '<hr class="dash-divider">',
+    '',
+    '<div class="section-inline">',
+    '  <h3><i data-lucide="search"></i>用户状态</h3>',
+    '</div>',
+    '',
+    '<div class="user-search-wrap">',
+    '  <input type="text" id="userSearchInput" class="user-search-input" placeholder="搜索用户邮箱或昵称..." autocomplete="off">',
+    '  <div class="search-dropdown" id="userSearchDropdown"></div>',
+    '</div>',
+    '',
+    '<div class="user-list-box" id="userListContainer">',
+    '  <div class="bridge-empty">加载中...</div>',
+    '</div>',
+    '',
+    '<div id="userDetailContainer"></div>',
+  ].join('\n');
   initIcons();
 
-  // Charts
-  const chartColors = ['#22c55e','#ef4444','#3b82f6','#a855f7','#f59e0b'];
-  const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } } };
+  // ====== Charts ======
+  const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#9ca3af', font: { size: 10 } } } } };
 
   if (d.signalTypeDist.length > 0) {
     const typeLabels = d.signalTypeDist.map(r => {
       const t = (r.signal_type||'').toLowerCase();
-      if (t === 'buy') return '买入';
-      if (t === 'sell') return '卖出';
-      if (t === 'strong_buy') return '强买';
-      if (t === 'strong_sell') return '强卖';
-      if (t === 'hold') return '观望';
-      return r.signal_type?.toUpperCase() || '未知';
+      if (t === 'buy') return '买入'; if (t === 'sell') return '卖出';
+      if (t === 'strong_buy') return '强买'; if (t === 'strong_sell') return '强卖';
+      if (t === 'hold') return '观望'; return r.signal_type?.toUpperCase() || '未知';
     });
     const typeColors = d.signalTypeDist.map(r => {
       const t = (r.signal_type||'').toLowerCase();
       if (t === 'buy' || t === 'strong_buy') return '#22c55e';
       if (t === 'sell' || t === 'strong_sell') return '#ef4444';
-      if (t === 'hold') return '#3b82f6';
-      return '#6b7280';
+      if (t === 'hold') return '#3b82f6'; return '#6b7280';
     });
     _adminDashState.charts.signalType = new Chart($('adChartSignalType'), {
       type: 'doughnut',
       data: { labels: typeLabels, datasets: [{ data: d.signalTypeDist.map(r => r.cnt), backgroundColor: typeColors, borderWidth: 0 }] },
-      options: { ...chartDefaults, cutout: '55%', plugins: { ...chartDefaults.plugins, legend: { position: 'right', labels: { color: '#9ca3af', font: { size: 11 }, padding: 12 } } } }
+      options: { ...chartDefaults, cutout: '55%', plugins: { ...chartDefaults.plugins, legend: { position: 'right', labels: { color: '#9ca3af', font: { size: 10 }, padding: 8 } } } }
     });
   }
 
@@ -3965,112 +3892,145 @@ function renderAdminDashboard(el, d) {
       type: 'line',
       data: {
         labels: d.signalTrend.map(r => r.day?.slice(5) || ''),
-        datasets: [{ label: '信号数', data: d.signalTrend.map(r => r.cnt), borderColor: '#d4af37', backgroundColor: 'rgba(212,175,55,.1)', fill: true, tension: .3, pointRadius: 2, pointHoverRadius: 5, borderWidth: 2 }]
+        datasets: [{ label: '信号数', data: d.signalTrend.map(r => r.cnt), borderColor: '#d4af37', backgroundColor: 'rgba(212,175,55,.1)', fill: true, tension: .3, pointRadius: 1.5, pointHoverRadius: 4, borderWidth: 2 }]
       },
-      options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 10 }, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true } }, plugins: { legend: { display: false } } }
+      options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true } }, plugins: { legend: { display: false } } }
     });
   }
 
-  // Token trend chart
   if (d.tokenTrend && d.tokenTrend.length > 0) {
     _adminDashState.charts.tokenTrend = new Chart($('adChartTokenTrend'), {
       type: 'bar',
       data: {
         labels: d.tokenTrend.map(r => r.day?.slice(5) || ''),
-        datasets: [{ label: 'Token 消耗', data: d.tokenTrend.map(r => r.tokens), backgroundColor: 'rgba(59,130,246,0.5)', borderRadius: 4, borderWidth: 0 }]
+        datasets: [{ label: 'Token', data: d.tokenTrend.map(r => r.tokens), backgroundColor: 'rgba(59,130,246,0.4)', borderRadius: 3, borderWidth: 0 }]
       },
-      options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 10 }, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af', callback: v => v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v >= 1000 ? (v/1000).toFixed(1)+'K' : v }, grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true } }, plugins: { legend: { display: false } } }
+      options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af', font: { size: 9 }, callback: v => v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v >= 1000 ? (v/1000).toFixed(1)+'K' : v }, grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true } }, plugins: { legend: { display: false } } }
     });
   }
 
-  // Refresh button
-  const btn = $('adRefreshBtn');
-  if (btn) btn.addEventListener('click', () => { btn.classList.add('spinning'); loadAdminDashboard(true).finally(() => btn.classList.remove('spinning')); });
+  // ====== Refresh ======
+  const refreshBtn = $('dashRefreshBtn');
+  if (refreshBtn) refreshBtn.addEventListener('click', () => { refreshBtn.classList.add('spinning'); loadAdminDashboard(true).finally(() => refreshBtn.classList.remove('spinning')); });
 
-  // User lookup
-  const lookupBtn = $('adUserLookupBtn');
-  const lookupInput = $('adUserLookupEmail');
-  if (lookupBtn && lookupInput) {
-    const doLookup = async () => {
-      const email = lookupInput.value.trim();
-      if (!email) return;
-      const resultDiv = $('adUserStatusResult');
-      resultDiv.innerHTML = '<div class="admin-dash-loading"><i data-lucide="loader-2" size="18" class="spinning-icon"></i>查询中...</div>';
-      initIcons();
-      try {
-        const resp = await wsApi('admin_user_status', { email });
-        if (resp.status !== 'success') throw new Error(resp.message);
-        renderUserStatus(resultDiv, resp.data);
-      } catch (e) {
-        resultDiv.innerHTML = `<div class="admin-dash-loading" style="color:#ef4444">${escapeHtml(e.message)}</div>`;
-      }
-    };
-    lookupBtn.addEventListener('click', doLookup);
-    lookupInput.addEventListener('keydown', e => { if (e.key === 'Enter') doLookup(); });
+  // ====== User Search ======
+  let searchTimer = null;
+  const searchInput = $('userSearchInput');
+  const dropdown = $('userSearchDropdown');
+
+  if (searchInput && dropdown) {
+    const closeDropdown = () => dropdown.classList.remove('open');
+    const openDropdown = () => dropdown.classList.add('open');
+
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const q = searchInput.value.trim();
+        try {
+          const resp = await wsApi('admin_user_search', { q, limit: 5 });
+          if (resp.status !== 'success') return;
+          dropdown.innerHTML = resp.users.length
+            ? resp.users.map(u => '<div class="drop-item" data-uid="' + u.id + '">' +
+                '<div class="drop-info"><span class="drop-name">' + escapeHtml(u.nickname || '--') + '</span><span class="drop-email">' + escapeHtml(u.email) + '</span></div>' +
+                '<span class="chip chip-' + (u.plan||'free') + '">' + (u.plan||'free') + (u.role==='admin'?' · admin':'') + '</span></div>').join('')
+            : '<div class="drop-empty">无匹配用户</div>';
+          dropdown.querySelectorAll('.drop-item').forEach(el => {
+            el.addEventListener('click', async () => {
+              const uid = el.dataset.uid;
+              closeDropdown();
+              searchInput.value = el.querySelector('.drop-email')?.textContent || '';
+              await showUserDetail(uid);
+            });
+          });
+          openDropdown();
+        } catch {}
+      }, 250);
+    });
+
+    document.addEventListener('click', e => {
+      if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) closeDropdown();
+    });
   }
-}
 
-function renderUserStatus(el, d) {
-  const u = d.user, s = d.settings, sc = d.scheduler, sig = d.signals, br = d.bridge;
-  el.innerHTML = `
-    <div class="ad-user-status-card">
-      <div class="ad-user-header">
-        <span class="ad-user-name">${escapeHtml(u.nickname || u.email || 'UID:'+u.id)}</span>
-        <span class="ad-chip ad-chip-${u.plan||'free'}">${u.plan||'free'}</span>
-        ${u.role === 'admin' ? '<span class="ad-chip ad-chip-admin">admin</span>' : ''}
-      </div>
-      <div class="ad-user-grid">
-        <div class="ad-user-item">
-          <span class="ad-user-label">桥接状态</span>
-          <span class="ad-user-value">${br.connected ? (br.alive ? '<span style="color:#22c55e">● 在线</span>' : '<span style="color:#f59e0b">● 连接但无心跳</span>') : '<span style="color:var(--text-muted)">○ 未连接</span>'}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">交易发送</span>
-          <span class="ad-user-value">${s.trade_send_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭'}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">自动推理</span>
-          <span class="ad-user-value">${s.auto_reasoning_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭'}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">调度器</span>
-          <span class="ad-user-value">${sc.enabled ? '<span style="color:#22c55e">启用</span>' : '未启用'}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">监控品种</span>
-          <span class="ad-user-value">${sc.symbols || '--'}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">上次运行</span>
-          <span class="ad-user-value">${sc.last_run_at ? formatTimeAgo(sc.last_run_at) : '--'}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">总信号</span>
-          <span class="ad-user-value">${sig.total_signals||0}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">今日信号</span>
-          <span class="ad-user-value">${sig.today_signals||0}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">已执行</span>
-          <span class="ad-user-value">${sig.executed_signals||0}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">最新信号</span>
-          <span class="ad-user-value">${sig.last_signal_type ? sig.last_signal_type.toUpperCase() : '--'} ${sig.last_signal_at ? formatTimeAgo(sig.last_signal_at) : ''}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">最后在线</span>
-          <span class="ad-user-value">${u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--'}</span>
-        </div>
-        <div class="ad-user-item">
-          <span class="ad-user-label">注册时间</span>
-          <span class="ad-user-value">${u.created_at ? u.created_at.slice(0,10) : '--'}</span>
-        </div>
-      </div>
-    </div>
-  `;
+  // ====== User List ======
+  function renderUserList(data) {
+    const container = $('userListContainer');
+    const totalPages = Math.ceil((data.total || 0) / (data.pageSize || 10));
+    const users = data.users || [];
+    container.innerHTML = users.length
+      ? '<table class="user-table"><thead><tr><th>ID</th><th>用户</th><th>计划</th><th>桥接</th><th>推理</th><th>交易</th><th>调度</th><th>最后在线</th></tr></thead><tbody>' +
+        users.map(u => '<tr data-uid="' + u.id + '">' +
+          '<td style="color:var(--text-muted);font-family:monospace;font-size:0.65rem">' + u.id + '</td>' +
+          '<td><div class="bridge-user"><span class="name">' + escapeHtml(u.nickname||'--') + '</span><span class="email">' + escapeHtml(u.email) + '</span></div></td>' +
+          '<td><span class="chip chip-' + (u.plan||'free') + '">' + (u.plan||'free') + (u.role==='admin'?' ★':'') + '</span></td>' +
+          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.bridgeConnected?'on':'off') + '"></span>' + (u.bridgeConnected?'在线':'离线') + '</span></td>' +
+          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.autoReasoning?'on':'off') + '"></span>' + (u.autoReasoning?'开':'关') + '</span></td>' +
+          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.tradeEnabled?'on':'off') + '"></span>' + (u.tradeEnabled?'开':'关') + '</span></td>' +
+          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.schedulerEnabled?'on':'off') + '"></span>' + (u.schedulerEnabled?'开':'关') + '</span></td>' +
+          '<td style="font-size:0.65rem;color:var(--text-muted)">' + (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--') + '</td></tr>').join('') +
+        '</tbody></table>' +
+        (totalPages > 1
+          ? '<div class="user-pager"><button class="page-btn" data-page="prev"' + (data.page <= 1 ? ' disabled': '') + '>‹</button>' +
+            Array.from({length: totalPages}, (_, i) => i+1).map(p => '<button class="page-btn' + (p === data.page ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>').join('') +
+            '<button class="page-btn" data-page="next"' + (data.page >= totalPages ? ' disabled': '') + '>›</button>' +
+            '<span class="page-info">第 ' + data.page + '/' + totalPages + ' 页 · 共 ' + data.total + ' 人</span></div>'
+          : '')
+      : '<div class="bridge-empty">暂无用户数据</div>';
+
+    container.querySelectorAll('tr[data-uid]').forEach(el => {
+      el.addEventListener('click', () => showUserDetail(el.dataset.uid));
+    });
+    container.querySelectorAll('.page-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        let targetPage = data.page;
+        if (btn.dataset.page === 'prev') targetPage = Math.max(1, data.page - 1);
+        else if (btn.dataset.page === 'next') targetPage = Math.min(totalPages, data.page + 1);
+        else targetPage = Number(btn.dataset.page);
+        if (targetPage === data.page) return;
+        const resp = await wsApi('admin_user_list', { page: targetPage, pageSize: data.pageSize || 10 });
+        if (resp.status === 'success') renderUserList(resp);
+      });
+    });
+  }
+
+  async function showUserDetail(uid) {
+    const detailContainer = $('userDetailContainer');
+    detailContainer.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-muted)"><i class="spinning-icon" data-lucide="loader-2" size="18"></i></div>';
+    initIcons();
+    try {
+      const resp = await wsApi('admin_user_status', { user_id: uid });
+      if (resp.status !== 'success') throw new Error(resp.message);
+      const d2 = resp.data, u = d2.user, s = d2.settings, sc = d2.scheduler, sig = d2.signals, br = d2.bridge;
+      detailContainer.innerHTML =
+        '<div class="user-detail-card">' +
+        '<div class="user-detail-header">' +
+        '<div class="user-detail-avatar">' + (u.nickname||u.email||'?')[0].toUpperCase() + '</div>' +
+        '<div class="user-detail-info"><span class="name">' + escapeHtml(u.nickname||'未设置昵称') + '</span><span class="email">' + escapeHtml(u.email) + '</span></div>' +
+        '<button class="user-detail-close" onclick="document.getElementById(\'userDetailContainer\').innerHTML=\'\'">✕</button></div>' +
+        '<div class="user-detail-grid">' +
+        '<div class="user-detail-field"><span class="f-label">桥接状态</span><span class="f-value">' + (br.connected ? (br.alive ? '<span style="color:#22c55e">● 在线</span>' : '<span style="color:#f59e0b">● 无心跳</span>') : '<span style="color:var(--text-muted)">○ 离线</span>') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">交易发送</span><span class="f-value">' + (s.trade_send_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">自动推理</span><span class="f-value">' + (s.auto_reasoning_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">调度器</span><span class="f-value">' + (sc.enabled ? '<span style="color:#22c55e">启用</span>' : '未启用') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">监控品种</span><span class="f-value">' + (sc.symbols || '--') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">上次运行</span><span class="f-value">' + (sc.last_run_at ? formatTimeAgo(sc.last_run_at) : '--') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">总信号</span><span class="f-value">' + (sig.total_signals||0) + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">今日信号</span><span class="f-value">' + (sig.today_signals||0) + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">已执行</span><span class="f-value">' + (sig.executed_signals||0) + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">最新信号</span><span class="f-value">' + (sig.last_signal_type ? sig.last_signal_type.toUpperCase() : '--') + ' ' + (sig.last_signal_at ? formatTimeAgo(sig.last_signal_at) : '') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">最后在线</span><span class="f-value">' + (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">注册时间</span><span class="f-value">' + (u.created_at ? u.created_at.slice(0,10) : '--') + '</span></div>' +
+        '</div></div>';
+      initIcons();
+    } catch (e) {
+      detailContainer.innerHTML = '<div style="color:#ef4444;text-align:center;padding:12px">' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  // Initial render
+  if (userListResp && userListResp.status === 'success') {
+    renderUserList(userListResp);
+  }
 }
 
 function formatTimeAgo(dtStr) {
@@ -4081,7 +4041,6 @@ function formatTimeAgo(dtStr) {
   if (diff < 86400000) return Math.floor(diff/3600000) + '小时前';
   return Math.floor(diff/86400000) + '天前';
 }
-
 // Hook admin dashboard tab into setTab
 const _origSetTab2 = setTab;
 setTab = function(tab) {
