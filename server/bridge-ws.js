@@ -509,10 +509,14 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'open':
         result = await ai.mt5Bridge(userId, 'open', params)
         await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
+        // 交易操作后清除历史缓存
+        if (result?.status === 'success') cacheDel(`cache:history:${userId}`).catch(() => {})
         break
       case 'close':
         result = await ai.mt5Bridge(userId, 'close', params)
         await ai.insertAudit(null, userId, 'manual_close', null, params, result, result?.status || 'unknown')
+        // 交易操作后清除历史缓存
+        if (result?.status === 'success') cacheDel(`cache:history:${userId}`).catch(() => {})
         break
       case 'toggle_trade': {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
@@ -551,8 +555,17 @@ async function handleBrowserCommand(ws, userId, msg) {
           historyUserId = adminUserId
         }
         if (bridgeOk) {
-          // Fetch all orders from bridge (no date filter on bridge — server handles filtering)
-          const hRes = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: 9999 })
+          // 先查 Redis 长期缓存（交易操作时主动失效）
+          const histCacheKey = `cache:history:${historyUserId}`
+          let hRes = await cacheGetJSON(histCacheKey)
+          if (!hRes) {
+            // 缓存未命中，从 MT5 桥接获取
+            hRes = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: 9999 })
+            if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
+              // 缓存原始数据，5分钟 TTL（交易操作时主动清除）
+              cacheSetJSON(histCacheKey, hRes, 300).catch(() => {})
+            }
+          }
           if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
             const allOrders = hRes.orders          // preserve ALL orders for cumulative calc
             let orders = [...allOrders]
@@ -928,6 +941,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(userId, 'open', orderPayload)
         if (result.status === 'success') {
           await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [localNow(), result.ticket || null, signal.id])
+          cacheDel(`cache:history:${userId}`).catch(() => {})
         }
         await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm }, result, result.status)
         break
@@ -1309,6 +1323,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         try {
           await ai.runSmartCloseCycle(userId)
           result = { status: 'success' }
+          cacheDel(`cache:history:${userId}`).catch(() => {})
         } catch (e) {
           result = { status: 'error', message: e.message }
         }
