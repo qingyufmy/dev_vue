@@ -1882,7 +1882,7 @@ function applyRoleUI() {
   // Plus read-only: disable all action buttons, hide bridge download
   if (isPlusReadOnly) {
     showSidebarObserveHint('您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a>');
-    document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, [data-action="execute"], [data-action="close-position"]').forEach(el => {
+    document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, .btn-success, #executeSignalBtn, [data-action="execute"], [data-action="close-position"]').forEach(el => {
       el.disabled = true;
       el.title = 'Plus 会员仅可查看';
     });

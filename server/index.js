@@ -190,7 +190,11 @@ app.get('/ai/bridge/config', (req, res) => {
 })
 
 // Bridge script download with embedded auth token
-app.get('/ai/bridge/:platform', async (req, res) => {
+app.get('/ai/bridge/:platform', authMiddleware, async (req, res) => {
+  // Only Pro and admin users can download bridge software
+  if (req.user.plan !== 'pro' && req.user.role !== 'admin') {
+    return res.status(403).json({ ok: false, error: '仅 Pro 会员可下载桥接软件' })
+  }
   const platform = req.params.platform
   const token = req.query.token || ''
   const serverUrl = `${req.protocol}://${req.get('host')}`
