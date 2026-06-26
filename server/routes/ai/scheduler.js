@@ -122,11 +122,20 @@ export async function initAutoSchedulers() {
   } catch (e) { console.error('[initAutoSchedulers] Failed to restore smart close schedulers:', e.message) }
 }
 
+function sendAutoProgress(userId, progress) {
+  try {
+    const { sendToBrowsers } = require('../../bridge-ws.js')
+    sendToBrowsers(userId, { type: 'auto_progress', ...progress })
+  } catch {}
+}
+
 export async function runAutoCycle(userId, symbol, timeframe) {
   const ts = () => new Date().toISOString()
   const l = (msg) => console.log(`[AutoCycle U${userId}] ${ts()} ${symbol}/${timeframe}: ${msg}`)
 
   l('>>> cycle start')
+  sendAutoProgress(userId, { stage: 'config', label: '检查配置...' })
+
   const cfg = await getAutoConfig(null, userId)
   if (!cfg || !cfg.enabled) { l(`BLOCKED: auto_scheduler not found or disabled (enabled=${cfg?.enabled})`); return }
   l(`auto_scheduler enabled=true`)
@@ -153,6 +162,7 @@ export async function runAutoCycle(userId, symbol, timeframe) {
   l(`market tradeMode=4 ✓`)
 
   try {
+    sendAutoProgress(userId, { stage: 'bridge', label: '获取行情数据...' })
     l(`fetching bridge data (account+positions+rates)...`)
     const t0 = Date.now()
     const account = await mt5Bridge(userId, 'account', {})
@@ -179,11 +189,13 @@ export async function runAutoCycle(userId, symbol, timeframe) {
     }
     l(`rates done (${Date.now()-t1}ms, bars=${rates.length}, tf=${primaryTf})`)
 
+    sendAutoProgress(userId, { stage: 'market', label: '计算技术指标...' })
     const t2 = Date.now()
     const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
     market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
+    sendAutoProgress(userId, { stage: 'ai', label: 'AI 模型推理中...' })
     const t3 = Date.now()
     l(`calling AI (model=${config.model_name})...`)
     const signal = await maybeAiSignal(null, config, market)

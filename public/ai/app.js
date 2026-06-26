@@ -662,14 +662,18 @@ function connectBridgeStatusWs(onReady) {
       } else if (msg.type === 'disconnect') {
         handleDisconnect(msg);
       } else if (msg.type === 'auto_state') {
-        // Server pushed auto-reasoning state change (e.g. bridge disconnected/reconnected)
         state.autoEnabled = !!msg.enabled;
         if (msg.reason === 'bridge_disconnected' && !msg.enabled) {
           toast('MT5桥接断开，自动推理已自动关闭', 'warning');
           setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
         }
-        // Always refresh auto status so badge reflects market + enabled state
         loadStatus().catch(() => {});
+      } else if (msg.type === 'auto_progress') {
+        const badge = document.getElementById("autoAnalyzeMode");
+        if (badge && state.autoEnabled) {
+          badge.textContent = msg.label || "推理中...";
+          badge.title = msg.label || "";
+        }
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
