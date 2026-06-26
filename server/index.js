@@ -52,7 +52,7 @@ const app = express()
 app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避免 IP 欺骗
 
 // CORS: restrict to known origins
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8080,https://www.cnfxtrade.com,https://cnfxtrade.com,http://www.cnfxtrade.com,http://cnfxtrade.com').split(',').map(s => s.trim())
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8080,http://192.168.1.254,https://www.cnfxtrade.com,https://cnfxtrade.com,http://www.cnfxtrade.com,http://cnfxtrade.com').split(',').map(s => s.trim())
 app.use(cors({
   origin(origin, cb) {
     if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
