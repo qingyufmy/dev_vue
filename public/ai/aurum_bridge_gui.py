@@ -1510,17 +1510,21 @@ class BridgePage(QWidget):
 
     def _log(self, msg):
         ts = time.strftime("%H:%M:%S")
+        # 检查滚动条是否在底部（在添加新内容之前）
+        sb = self.log_area.verticalScrollBar()
+        was_at_bottom = sb.value() >= sb.maximum() - 5
+        # 添加日志
         self.log_area.append(f"[{ts}] {msg}")
-        # Limit lines
+        # 限制日志行数
         doc = self.log_area.document()
         if doc.blockCount() > MAX_LOG_LINES:
             cursor = self.log_area.textCursor()
             cursor.movePosition(cursor.Start)
             cursor.movePosition(cursor.Down, cursor.KeepAnchor, doc.blockCount() - MAX_LOG_LINES)
             cursor.removeSelectedText()
-        # Auto-scroll
-        sb = self.log_area.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        # 仅当之前在底部时才自动滚动
+        if was_at_bottom:
+            sb.setValue(sb.maximum())
 
     def _set_status(self, text, color, account=""):
         self.lbl_status.setText(text)
