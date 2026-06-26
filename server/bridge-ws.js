@@ -308,6 +308,19 @@ async function _initBridge(ws, userId) {
       const tradeMode = bridge ? bridge.lastTradeMode : -1
       sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
 
+      // Detect position ticket changes → invalidate history cache
+      if (bridge && msg.positions) {
+        const curTickets = msg.positions.map(p => p.ticket).sort().join(',')
+        const prevTickets = bridge._lastPositionTickets || ''
+        if (curTickets !== prevTickets) {
+          bridge._lastPositionTickets = curTickets
+          if (prevTickets !== '') {
+            // Not the first snapshot — a real change happened
+            cacheDel(`cache:history:${userId}`).catch(() => {})
+          }
+        }
+      }
+
       // Cache bridge data in Redis (TTL 3s — auto-expires when bridge goes offline)
       cacheSetJSON(`bridge:data:${userId}`, {
         account: msg.account,

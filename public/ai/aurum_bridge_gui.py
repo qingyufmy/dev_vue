@@ -9,6 +9,7 @@ import os
 import ssl
 import json
 import time
+import asyncio
 import threading
 import ctypes
 import ctypes.wintypes
@@ -911,7 +912,13 @@ class BridgeWorker(QThread):
         # Run async event loop in this thread
         try:
             import asyncio
-            asyncio.run(self._run_async())
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            try:
+                self._loop.run_until_complete(self._run_async())
+            finally:
+                self._loop.close()
+                self._loop = None
         except Exception as e:
             self.log_signal.emit(f"桥接异常退出: {e}")
         finally:
@@ -922,7 +929,6 @@ class BridgeWorker(QThread):
 
     async def _run_async(self):
         """Main async loop: connect → session → reconnect with circuit breaker."""
-        import asyncio
         import websockets
 
         server = self.server_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
@@ -1010,7 +1016,7 @@ class BridgeWorker(QThread):
 
     async def _async_send_loop(self, ws):
         """Send MT5 data every 1s with deduplication."""
-        import asyncio
+        import websockets
         last_data_hash = None
         last_plan_check = time.time()
 
@@ -1020,7 +1026,7 @@ class BridgeWorker(QThread):
                 now = time.time()
                 if now - last_plan_check > 3600:
                     last_plan_check = now
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     plan, expired, reason = await loop.run_in_executor(None, self.check_plan)
                     if expired:
                         self.log_signal.emit(f"❌ {reason}")
@@ -1028,7 +1034,7 @@ class BridgeWorker(QThread):
                         break
 
                 # Collect MT5 data (in executor to avoid blocking)
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 dm = await loop.run_in_executor(None, self._collect_mt5_data)
                 if dm is None:
                     # No data (MT5 unavailable), just wait
@@ -1053,6 +1059,8 @@ class BridgeWorker(QThread):
                                            f"{acc_login} @ {acc_server}  ${acc_balance:,.2f}")
 
                 await asyncio.sleep(1)
+            except websockets.ConnectionClosed:
+                break  # Normal disconnect — handled by _run_async
             except (ssl.SSLError, OSError, ConnectionResetError, BrokenPipeError) as e:
                 self.log_signal.emit(f"数据推送错误: {e}")
                 break
@@ -1097,7 +1105,6 @@ class BridgeWorker(QThread):
 
     async def _async_recv_loop(self, ws):
         """Receive commands from server and process them."""
-        import asyncio
         async for raw_msg in ws:
             if not self.running:
                 break
@@ -1117,7 +1124,7 @@ class BridgeWorker(QThread):
                     self.log_signal.emit(f"⚠️ 收到格式错误的命令消息，已跳过")
                     continue
                 self.log_signal.emit(f"执行: {action}")
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 try:
                     resp = await loop.run_in_executor(None, self._process_command, msg)
                 except Exception as ce:
@@ -1133,14 +1140,8 @@ class BridgeWorker(QThread):
         if ws:
             try:
                 loop = getattr(self, '_loop', None)
-                if loop and loop.is_running():
+                if loop and not loop.is_closed():
                     asyncio.run_coroutine_threadsafe(ws.close(), loop)
-                else:
-                    # Best effort synchronous close
-                    import asyncio
-                    try:
-                        asyncio.get_event_loop().run_until_complete(ws.close())
-                    except: pass
             except: pass
 
 # ══════════════════════════════════════════════════════════
