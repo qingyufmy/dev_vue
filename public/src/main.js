@@ -4259,9 +4259,10 @@ async function refreshAdminUserTable(search = '', page = 1) {
 
 function renderAdminUserPager(data) {
   const pager = document.getElementById('adminUserPager')
+  console.log('[Pager] element:', pager, 'data:', { page: data.page, totalPages: data.totalPages, total: data.total })
   if (!pager) return
   const { page = 1, totalPages = 1, total = 0 } = data
-  if (totalPages <= 1) { pager.innerHTML = ''; return }
+  if (totalPages <= 1) { pager.innerHTML = ''; console.log('[Pager] totalPages<=1, cleared'); return }
   let html = '<div class="admin-pager-inner">'
   html += `<button class="admin-pager-btn" data-page="prev" ${page <= 1 ? 'disabled' : ''}>‹</button>`
   for (let i = 1; i <= totalPages; i++) {
