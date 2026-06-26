@@ -3026,8 +3026,8 @@ function renderAdmin() {
   `
   document.getElementById('backHome')?.addEventListener('click', () => navigate('home'))
 
-  // Fetch real data from backend
-  api.get('/api/admin-users').then(data => {
+  // Fetch real data from backend (page 1, 10 per page)
+  api.get('/api/admin-users?page=1&limit=10').then(data => {
     if (!data.ok || !data.stats) {
       mainContent.querySelector('.loading-spinner').textContent = '加载失败: ' + (data.error || '未知错误')
       return
@@ -3120,9 +3120,8 @@ function renderAdminContent(data) {
   const todayOnlineUsers = Number(stats.todayOnlineUsers || 0)
   const weekOnlineUsers = Number(stats.weekOnlineUsers || 0)
   const realtimeWindowMinutes = Number(stats.realtimeWindowMinutes || 5)
-  const plusUsers = userList.filter(u => u.plan === 'plus')
-  const proUsers = userList.filter(u => u.plan === 'pro')
-  const memberUsers = userList.filter(u => u.plan === 'plus' || u.plan === 'pro')
+  const plusCount = Number(stats.plusUsers || 0)
+  const proCount = Number(stats.proUsers || 0)
   const learningRanked = userList
     .filter(u => u.progress?.completed > 0)
     .sort((a, b) => (b.progress.completed - a.progress.completed) || (b.progress.quizPassed - a.progress.quizPassed))
@@ -3196,15 +3195,15 @@ function renderAdminContent(data) {
         </div>
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="members">
           <div class="admin-stat-icon">⭐</div>
-          <div class="admin-stat-value">${plusUsers.length}</div>
+          <div class="admin-stat-value">${plusCount}</div>
           <div class="admin-stat-label">Plus 会员</div>
-          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(plusUsers.length / stats.totalUsers * 100) : 0}%</div>
+          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(plusCount / stats.totalUsers * 100) : 0}%</div>
         </div>
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="members">
           <div class="admin-stat-icon">💎</div>
-          <div class="admin-stat-value">${proUsers.length}</div>
+          <div class="admin-stat-value">${proCount}</div>
           <div class="admin-stat-label">Pro 会员</div>
-          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(proUsers.length / stats.totalUsers * 100) : 0}%</div>
+          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(proCount / stats.totalUsers * 100) : 0}%</div>
         </div>
         <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="orders">
           <div class="admin-stat-icon">💵</div>
@@ -3334,7 +3333,8 @@ function renderAdminContent(data) {
                     </tr>`).join('')}
                 </tbody>
               </table>
-            </div>`
+            </div>
+            <div id="adminUserPager" class="admin-pager"></div>`
           : '<div class="comments-empty">暂无会员</div>'
         }
       </div>
@@ -4203,17 +4203,23 @@ function setupAdminUserTabs() {
 
 // Re-fetch and re-render the user table body (used after edit and for search)
 let _adminSearchTimer = null
-async function refreshAdminUserTable(search = '') {
+let _adminCurrentPage = 1
+let _adminCurrentSearch = ''
+async function refreshAdminUserTable(search = '', page = 1) {
   try {
-    const qs = search ? `?search=${encodeURIComponent(search)}` : ''
-    const data = await api.get(`/api/admin-users${qs}`)
+    _adminCurrentSearch = search
+    _adminCurrentPage = page
+    const params = new URLSearchParams({ page: String(page), limit: '10' })
+    if (search) params.set('search', search)
+    const data = await api.get(`/api/admin-users?${params}`)
     if (!data.ok || !data.users) return
     const tbody = document.querySelector('#adminUserList .admin-table tbody')
     const countEl = document.getElementById('adminUserCount')
     if (!tbody) return
-    if (countEl) countEl.textContent = `${data.users.length} 人`
+    if (countEl) countEl.textContent = `${data.total || data.users.length} 人`
     if (data.users.length === 0) {
       tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">未找到匹配用户</td></tr>'
+      renderAdminUserPager(data)
       return
     }
     tbody.innerHTML = data.users.map(u => `
@@ -4246,6 +4252,33 @@ async function refreshAdminUserTable(search = '') {
   } catch (e) {
     console.error('refreshAdminUserTable error:', e)
   }
+  renderAdminUserPager(data)
+}
+
+function renderAdminUserPager(data) {
+  const pager = document.getElementById('adminUserPager')
+  if (!pager) return
+  const { page = 1, totalPages = 1, total = 0 } = data
+  if (totalPages <= 1) { pager.innerHTML = ''; return }
+  let html = '<div class="admin-pager-inner">'
+  html += `<button class="admin-pager-btn" data-page="prev" ${page <= 1 ? 'disabled' : ''}>‹</button>`
+  for (let i = 1; i <= totalPages; i++) {
+    html += `<button class="admin-pager-btn${i === page ? ' active' : ''}" data-page="${i}">${i}</button>`
+  }
+  html += `<button class="admin-pager-btn" data-page="next" ${page >= totalPages ? 'disabled' : ''}>›</button>`
+  html += `<span class="admin-pager-info">第 ${page}/${totalPages} 页 · 共 ${total} 人</span>`
+  html += '</div>'
+  pager.innerHTML = html
+  pager.querySelectorAll('.admin-pager-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      let target = btn.dataset.page
+      if (target === 'prev') target = Math.max(1, page - 1)
+      else if (target === 'next') target = Math.min(totalPages, page + 1)
+      else target = Number(target)
+      if (target === page) return
+      refreshAdminUserTable(_adminCurrentSearch, target)
+    })
+  })
 }
 
 function setupAdminUserSearch() {
@@ -4253,7 +4286,7 @@ function setupAdminUserSearch() {
   if (!input) return
   input.addEventListener('input', () => {
     clearTimeout(_adminSearchTimer)
-    _adminSearchTimer = setTimeout(() => refreshAdminUserTable(input.value.trim()), 300)
+    _adminSearchTimer = setTimeout(() => refreshAdminUserTable(input.value.trim(), 1), 300)
   })
 }
 

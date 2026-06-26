@@ -450,3 +450,44 @@
   background: var(--accent-hover, #1d4ed8);
   transform: translateY(-1px);
 }
+
+/* Admin User Pager */
+.admin-pager {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+}
+.admin-pager-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.admin-pager-btn {
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-1, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg-1, #fff);
+  color: var(--text-2, #374151);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.admin-pager-btn:hover:not(:disabled) {
+  border-color: var(--accent, #3b82f6);
+  color: var(--accent, #3b82f6);
+}
+.admin-pager-btn.active {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+  color: #fff;
+}
+.admin-pager-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.admin-pager-info {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--text-3, #9ca3af);
+}

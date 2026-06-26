@@ -49,6 +49,10 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
       weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)')).c
     } catch {}
 
+    // Get plan counts
+    const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus'")).c
+    const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro'")).c
+
     // Get total revenue
     let totalRevenue = 0
     let paidOrderCount = 0
@@ -189,6 +193,8 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
       stats: {
         totalUsers,
         todayNewUsers,
+        plusUsers,
+        proUsers,
         totalRevenue,
         paidOrderCount,
         totalPosts,
