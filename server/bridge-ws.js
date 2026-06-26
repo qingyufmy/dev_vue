@@ -215,7 +215,7 @@ async function _initBridge(ws, userId) {
   console.log(`[BridgeWS] _initBridge user ${userId}: dbAutoReason=${dbAutoReasoningEnabled} schedulerEnabled=${schedulerEnabled} hasDbRow=${hasDbRow}`)
   if (shouldRestoreAuto || schedulerEnabled) {
     try {
-      const ai = await import('./routes/ai.js')
+      const ai = await import('./routes/ai/index.js')
       const cfg = await ai.getAutoConfig(null, userId)
       if (!cfg?.enabled) {
         const globalCfg = await ai.getGlobalAutoConfig()
@@ -362,7 +362,7 @@ async function _initBridge(ws, userId) {
     //    → _initBridge restores it, but potential race with async close handler
     // Just stop the in-memory scheduler; enabled state stays intact in DB.
     try {
-      const ai = await import('./routes/ai.js')
+      const ai = await import('./routes/ai/index.js')
       ai.stopAutoScheduler(userId)
       sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
     } catch (e) {
@@ -421,7 +421,7 @@ async function handleBrowserCommand(ws, userId, msg) {
   }
 
   try {
-    const ai = await import('./routes/ai.js')
+    const ai = await import('./routes/ai/index.js')
     const user = await queryOne('SELECT plan, role FROM users WHERE id = ?', [userId])
     const isPro = user?.role === 'admin' || user?.plan === 'pro'
     const hasAccess = isPro || user?.plan === 'plus'
