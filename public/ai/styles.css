@@ -3973,19 +3973,18 @@ a.signal-link:hover {
 .stat-cell.gold .stat-val { color: var(--gold-primary); }
 
 .stat-label {
-  font-size: 0.62rem; color: var(--text-muted);
+  font-size: 0.68rem; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500;
   display: flex; align-items: center; gap: 4px;
 }
 .stat-label i { width: 11px; height: 11px; opacity: 0.6; }
 .stat-val {
-  font-size: 1.3rem; font-weight: 700; color: var(--text-primary);
+  font-size: 1.4rem; font-weight: 700; color: var(--text-primary);
   line-height: 1.1; letter-spacing: -0.01em; font-family: 'Consolas', 'Menlo', monospace;
 }
 .stat-sub {
-  font-size: 0.65rem; color: var(--text-muted);
+  font-size: 0.68rem; color: var(--text-muted);
 }
-
 /* ====== Charts Row (compact) ====== */
 .charts-row {
   display: grid; gap: 8px;
@@ -4044,8 +4043,8 @@ a.signal-link:hover {
 }
 .signal-mini .sig-icon i { width: 13px; height: 13px; }
 .signal-mini .sig-info { display: flex; flex-direction: column; gap: 0; }
-.signal-mini .sig-lbl { font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
-.signal-mini .sig-num { font-size: 1rem; font-weight: 700; color: var(--text-primary); font-family: 'Consolas', monospace; line-height: 1.2; }
+.signal-mini .sig-lbl { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.signal-mini .sig-num { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); font-family: 'Consolas', monospace; line-height: 1.2; }
 
 /* ====== Section divider ====== */
 .dash-divider {
@@ -4092,8 +4091,8 @@ a.signal-link:hover {
 .bridge-table tr:hover td { background: rgba(255,255,255,0.015); }
 
 .bridge-user { display: flex; flex-direction: column; gap: 1px; }
-.bridge-user .name { font-weight: 600; color: var(--text-primary); font-size: 0.78rem; }
-.bridge-user .email { font-size: 0.62rem; color: var(--text-muted); }
+.bridge-user .name { font-weight: 600; color: var(--text-primary); font-size: 0.85rem; }
+.bridge-user .email { font-size: 0.7rem; color: var(--text-muted); }
 
 .bridge-status { display: inline-flex; align-items: center; gap: 4px; font-size: 0.7rem; font-weight: 500; }
 .bridge-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
@@ -4104,8 +4103,8 @@ a.signal-link:hover {
 
 /* Chips */
 .chip {
-  display: inline-block; padding: 1px 8px; border-radius: 4px;
-  font-size: 0.6rem; font-weight: 600; letter-spacing: 0.02em;
+  display: inline-block; padding: 2px 10px; border-radius: 5px;
+  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.02em;
 }
 .chip-pro { background: rgba(212,175,55,0.1); color: var(--gold-primary); }
 .chip-plus { background: rgba(59,130,246,0.1); color: #60a5fa; }
@@ -4157,11 +4156,11 @@ a.signal-link:hover {
   border-radius: 10px; overflow: hidden;
 }
 .user-table {
-  width: 100%; border-collapse: collapse; font-size: 0.75rem;
+  width: 100%; border-collapse: collapse; font-size: 0.85rem;
 }
 .user-table th {
   text-align: left; padding: 7px 10px;
-  color: var(--text-muted); font-weight: 500; font-size: 0.6rem;
+  color: var(--text-muted); font-weight: 500; font-size: 0.7rem;
   border-bottom: 1px solid rgba(255,255,255,0.05);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
@@ -4228,9 +4227,9 @@ a.signal-link:hover {
   background: rgba(255,255,255,0.015);
 }
 .user-detail-field .f-label {
-  font-size: 0.58rem; color: var(--text-muted);
+  font-size: 0.65rem; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.05em;
 }
 .user-detail-field .f-value {
-  font-size: 0.78rem; color: var(--text-primary); font-weight: 500;
+  font-size: 0.85rem; color: var(--text-primary); font-weight: 500;
 }
