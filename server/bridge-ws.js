@@ -567,88 +567,22 @@ async function handleBrowserCommand(ws, userId, msg) {
           historyUserId = adminUserId
         }
         if (bridgeOk) {
-          // 先查 Redis 长期缓存（交易操作时主动失效）
-          const histCacheKey = `cache:history:${historyUserId}`
-          let hRes = await cacheGetJSON(histCacheKey)
-          if (!hRes) {
-            // 缓存未命中，从 MT5 桥接获取
-            hRes = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: 9999 })
-            if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
-              // 缓存原始数据，3小时 TTL（交易操作时主动清除）
-              cacheSetJSON(histCacheKey, hRes, 10800).catch(() => {})
-            }
+          // 直接透传前端参数给桥接软件（含分页、过滤）
+          const bridgeParams = {
+            page: params.page || 1,
+            page_size: params.page_size || 20,
+            direction: params.direction || '',
+            profit_filter: params.profit_filter || ''
           }
-          if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
-            const allOrders = hRes.orders          // preserve ALL orders for cumulative calc
-            let orders = [...allOrders]
-            const origStats = hRes.statistics || {}
-            const _ordDate = o => (o.close_time || o.time || '')
-            const _ordType = o => (o.type || '')
-            const _ordProfit = o => Number(o.profit || 0)
+          if (params.close_from) bridgeParams.date_from = params.close_from
+          if (params.close_to) bridgeParams.date_to = params.close_to
 
-            // Apply close-time filters
-            if (params.close_from) orders = orders.filter(o => _ordDate(o).slice(0, 10) >= params.close_from)
-            if (params.close_to) orders = orders.filter(o => _ordDate(o).slice(0, 10) <= params.close_to)
-
-            // Apply entry-time filters
-            if (params.entry_from) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) >= params.entry_from)
-            if (params.entry_to) orders = orders.filter(o => (o.entry_time || '').slice(0, 10) <= params.entry_to)
-
-            // Apply direction / profit filters
-            if (params.direction) orders = orders.filter(o => _ordType(o).toUpperCase() === params.direction)
-            if (params.profit_filter === 'profit') orders = orders.filter(o => _ordProfit(o) > 0)
-            if (params.profit_filter === 'loss') orders = orders.filter(o => _ordProfit(o) < 0)
-
-            // Sort by close_time DESC — newest first (page 1 = latest 20)
-            orders.sort((a, b) => _ordDate(b).localeCompare(_ordDate(a)))
-
-            // ---- Recalculate stats from filtered orders ----
-            // total_profit: only filtered orders (date range + direction + profit_filter)
-            const filteredProfit = Math.round(orders.reduce((s, o) => s + _ordProfit(o), 0) * 100) / 100
-
-            // net_result: 本金 + 从开始到筛选结束日期的累计收益
-            // (cumulative from ALL orders, not affected by direction/profit_filter)
-            const closeTo = params.close_to
-              || (allOrders.length > 0 ? allOrders.reduce((max, o) => { const d = _ordDate(o).slice(0,10); return d > max ? d : max; }, '') : '')
-            const cumToDate = Math.round(allOrders
-              .filter(o => _ordDate(o).slice(0, 10) <= closeTo)
-              .reduce((s, o) => s + _ordProfit(o), 0) * 100) / 100
-
-            // initCapital: 本金 = 当前余额 - 全网累计净结果
-            const allTimeNet = (Number(origStats.total_profit) || 0) + (Number(origStats.credit) || 0) + (Number(origStats.deposit) || 0) - (Number(origStats.withdrawal) || 0)
-            const balance = Number(origStats.account_balance) || 0
-            const initCapital = Math.max(0, balance - allTimeNet)
-            // 结余 = 本金 + 入金 + 累计收益(到 close_to 日期)
-            const deposit = Number(origStats.deposit) || 0
-            const netToDate = Math.round((initCapital + deposit + cumToDate) * 100) / 100
-
-            // Paginate
-            const page = params.page || 1
-            const pageSize = params.page_size || 20
-            const si = (page - 1) * pageSize
-
-            result = {
-              status: 'success',
-              orders: orders.slice(si, si + pageSize),
-              statistics: {
-                total_profit: filteredProfit,
-                credit: origStats.credit || 0,
-                deposit: origStats.deposit || 0,
-                withdrawal: origStats.withdrawal || 0,
-                net_result: netToDate,
-              },
-              pagination: {
-                current_page: page,
-                page_size: pageSize,
-                total_count: orders.length,
-                total_pages: Math.max(Math.ceil(orders.length / pageSize), 1)
-              }
-            }
-          } else {
-            result = hRes || { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
+          result = await ai.mt5Bridge(historyUserId, 'history', bridgeParams)
+          if (result?.status !== 'success') {
+            result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 }, pagination: { current_page: 1, page_size: 20, total_count: 0, total_pages: 1 } }
           }
         } else {
-          result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 } }
+          result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 }, pagination: { current_page: 1, page_size: 20, total_count: 0, total_pages: 1 } }
         }
         break
       }

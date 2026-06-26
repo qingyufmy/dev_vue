@@ -676,6 +676,15 @@ class BridgeWorker(QThread):
                         "comment": d.get("comment"),
                         "take_profit": ord_info.get("tp"), "stop_loss": ord_info.get("sl")})
                 rows.sort(key=lambda r: r.get("close_time") or r.get("entry_time") or "", reverse=True)
+                # Apply direction/profit filters before pagination
+                direction_filter = params.get("direction", "")
+                profit_filter = params.get("profit_filter", "")
+                if direction_filter:
+                    rows = [r for r in rows if r.get("type") == direction_filter]
+                if profit_filter == "profit":
+                    rows = [r for r in rows if float(r.get("profit") or 0) > 0]
+                elif profit_filter == "loss":
+                    rows = [r for r in rows if float(r.get("profit") or 0) < 0]
                 total = len(rows); si = max(page-1,0)*page_size
                 pr = rows[si:si+page_size]
                 tp = sum(float(r.get("profit") or 0) for r in rows)
