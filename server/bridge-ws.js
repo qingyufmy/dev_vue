@@ -1435,13 +1435,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         const offset = (page - 1) * pageSize
 
         const countRow = await queryOne('SELECT COUNT(*) AS total FROM users')
-        const rows = await queryAll(
-          `SELECT id, email, nickname, plan, role, last_seen_at, created_at FROM users ORDER BY id DESC LIMIT ? OFFSET ?`,
-          [pageSize, offset]
+        const allRows = await queryAll(
+          `SELECT id, email, nickname, plan, role, last_seen_at, created_at FROM users ORDER BY id DESC`
         )
 
         // Enrich with bridge/settings status + heartbeat
-        const enriched = await Promise.all(rows.map(async r => {
+        const enriched = await Promise.all(allRows.map(async r => {
           const bridge = bridges.get(r.id)
           const connected = !!(bridge && bridge.ws?.readyState === 1)
           const bridgeLastSeen = bridge?.lastSeen || null
@@ -1465,9 +1464,12 @@ async function handleBrowserCommand(ws, userId, msg) {
           return new Date(b.last_seen_at || 0) - new Date(a.last_seen_at || 0)
         })
 
+        // Manual pagination after sort
+        const paginated = enriched.slice(offset, offset + pageSize)
+
         result = {
           status: 'success',
-          users: enriched,
+          users: paginated,
           total: countRow?.total || 0,
           page,
           pageSize
