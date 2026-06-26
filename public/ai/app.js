@@ -1779,9 +1779,35 @@ function ticketCell(ticket, signalTickets) {
   return `<td class="num">${escapeHtml(ticket)}</td>`;
 }
 
+function updatePositionRow(tbody, position, withAction) {
+  const ticket = String(position.ticket);
+  let row = tbody.querySelector(`tr[data-ticket="${CSS.escape(ticket)}"]`);
+  if (!row) {
+    tbody.innerHTML = renderPositionRows([position], withAction);
+    initIcons();
+    return;
+  }
+  const type = String(position.type || "").toLowerCase();
+  const directionLabel = type === "buy" ? "买入 多" : "卖出 空";
+  const directionClass = type === "buy" ? "dir-buy" : type === "close" ? "dir-close" : "dir-sell";
+  const digits = Number(position.digits);
+  const priceDigits = Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
+  const cells = row.querySelectorAll("td");
+  if (cells[1]) cells[1].textContent = position.symbol;
+  if (cells[2]) cells[2].innerHTML = `<span class="${directionClass}">${directionLabel}</span>`;
+  if (cells[3]) cells[3].textContent = volumeText(position.volume);
+  if (cells[4]) cells[4].textContent = fmt(position.price_open, priceDigits);
+  if (cells[5]) cells[5].textContent = fmt(position.price_current, priceDigits);
+  const profitCell = cells[withAction ? 8 : 7];
+  if (profitCell) {
+    profitCell.textContent = fmt(position.profit);
+    profitCell.className = profitClass(position.profit);
+  }
+}
+
 async function loadPositions() {
   const [data] = await Promise.all([
-    wsApi("positions"),
+    wsApi("positions", {}),
     loadSignalTickets(),
   ]);
   const positions = data.positions || [];
