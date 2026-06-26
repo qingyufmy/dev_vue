@@ -144,6 +144,17 @@ Added to `migrations.js`:
 
 ### Architecture
 - `ai.js` uses shared `authMiddleware` from `middleware/auth.js` (removed private duplicate)
+- `ai.js` split into 7 modules: utils/market-data/llm/config/strategy/scheduler/index
+
+### Testing
+- Added Vitest framework with 69 unit tests
+- Coverage: ai/utils.js (28), ai/llm.js (14), ai/config.js (14), ai/market-data.js (13)
+- Run: `npm test`
+
+### Frontend Performance
+- Timer pause on page visibility change (reduces CPU/network when tab hidden)
+- K-line volume refresh reduced from 1s to 5s (80% less overhead)
+- MutationObserver/ResizeObserver lifecycle management (prevents memory leaks)
 
 ## Deployment
 
