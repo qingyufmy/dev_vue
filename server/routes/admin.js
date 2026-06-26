@@ -26,12 +26,14 @@ const router = Router()
 // Admin: get users with full stats and enriched data
 router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { page = 1, limit = 50, search } = req.query
+    const { page = 1, limit = 50, search, plan } = req.query
     const offset = (Number(page) - 1) * Number(limit)
 
     let where = '1=1'
     const params = []
     if (search) { where += ' AND (u.email LIKE ? OR u.nickname LIKE ?)'; params.push(`%${search}%`, `%${search}%`) }
+    if (plan === 'member') { where += " AND u.plan IN ('plus','pro')"; }
+    else if (plan === 'plus' || plan === 'pro' || plan === 'free') { where += ' AND u.plan = ?'; params.push(plan); }
 
     // Get total user count
     const totalUsers = (await queryOne('SELECT COUNT(*) as c FROM users')).c

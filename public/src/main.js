@@ -3033,7 +3033,7 @@ function renderAdmin() {
       return
     }
     renderAdminContent(data)
-    renderAdminUserPager(data)
+    refreshAdminUserTable()
     startAdminAutoRefresh()
   })
 }
@@ -3270,75 +3270,27 @@ function renderAdminContent(data) {
                 <th>操作</th>
               </tr>
             </thead>
-            <tbody>
-              ${userList.length > 0
-                ? userList.map(u => `
-                  <tr>
-                    <td>
-                      <div class="admin-user-cell">
-                        <span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span>
-                        <div>
-                          <div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div>
-                          <div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
-                    <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
-                    <td>${planLabel(u.plan, u.planExpiresAt)}</td>
-                    <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
-                    <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
-                    <td style="font-size:11px;white-space:nowrap;">
-                      ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
-                    </td>
-                    <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
-                    <td>
-                      <div class="admin-actions">
-                        <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
-                        <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
-                      </div>
-                    </td>
-                  </tr>`
-                ).join('')
-                : '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">暂无注册用户</td></tr>'
-              }
+            <tbody id="adminUserBody">
+              <tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:32px;">加载中...</td></tr>
             </tbody>
           </table>
         </div>
+        <div id="adminUserPager" class="admin-pager"></div>
       </div>
 
       <!-- 会员列表 -->
       <div class="admin-section admin-user-panel" id="adminMemberList" data-admin-user-panel="members" hidden>
         <div class="admin-section-header">
           <h2>会员列表</h2>
-          <span class="admin-section-badge">${memberUsers.length} 人</span>
+          <span class="admin-section-badge" id="adminMemberCount">${plusCount + proCount} 人</span>
         </div>
-        ${memberUsers.length > 0
-          ? `<div class="admin-table-wrapper">
-              <table class="admin-table">
-                <thead><tr><th>用户</th><th>邮箱</th><th>UID</th><th>会员等级</th><th>到期日</th><th>已付</th><th>操作</th></tr></thead>
-                <tbody>
-                  ${memberUsers.map(u => `
-                    <tr>
-                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}</div></div></div></td>
-                      <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
-                      <td class="admin-uid">${escapeHtml(u.uid || '-')}</td>
-                      <td>${planLabel(u.plan, u.planExpiresAt)}</td>
-                      <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
-                      <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
-                      <td>
-                        <div class="admin-actions">
-                          <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
-                          <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
-                        </div>
-                      </td>
-                    </tr>`).join('')}
-                </tbody>
-              </table>
-            </div>`
-          : '<div class="comments-empty">暂无会员</div>'
-        }
-        <div id="adminUserPager" class="admin-pager"></div>
+        <div class="admin-table-wrapper">
+          <table class="admin-table">
+            <thead><tr><th>用户</th><th>邮箱</th><th>UID</th><th>会员等级</th><th>到期日</th><th>已付</th><th>操作</th></tr></thead>
+            <tbody id="adminMemberBody"></tbody>
+          </table>
+        </div>
+        <div id="adminMemberPager" class="admin-pager"></div>
       </div>
 
       <!-- 订单充值 -->
@@ -4191,6 +4143,9 @@ function activateAdminUserTab(target, { scroll = false } = {}) {
   })
   localStorage.setItem('adminActiveUserTab', target)
 
+  // 切换到会员tab时加载数据
+  if (target === 'members') refreshAdminMemberTable()
+
   if (scroll) {
     document.getElementById('adminUserSubTabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -4207,6 +4162,44 @@ function setupAdminUserTabs() {
 let _adminSearchTimer = null
 let _adminCurrentPage = 1
 let _adminCurrentSearch = ''
+let _adminMemberPage = 1
+
+function renderAdminRow(u) {
+  return `<tr>
+    <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div><div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div></div></div></td>
+    <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
+    <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
+    <td>${planLabel(u.plan, u.planExpiresAt)}</td>
+    <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
+    <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
+    <td style="font-size:11px;white-space:nowrap;">${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}</td>
+    <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
+    <td><div class="admin-actions"><button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button><button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button></div></td>
+  </tr>`
+}
+
+function renderPager(pagerId, data, onPageChange) {
+  const pager = document.getElementById(pagerId)
+  if (!pager) return
+  const { page = 1, totalPages = 1, total = 0 } = data
+  if (totalPages <= 1) { pager.innerHTML = ''; return }
+  let html = '<div class="admin-pager-inner">'
+  html += `<button class="admin-pager-btn" data-page="prev" ${page <= 1 ? 'disabled' : ''}>‹</button>`
+  for (let i = 1; i <= totalPages; i++) html += `<button class="admin-pager-btn${i === page ? ' active' : ''}" data-page="${i}">${i}</button>`
+  html += `<button class="admin-pager-btn" data-page="next" ${page >= totalPages ? 'disabled' : ''}>›</button>`
+  html += `<span class="admin-pager-info">第 ${page}/${totalPages} 页 · 共 ${total} 人</span></div>`
+  pager.innerHTML = html
+  pager.querySelectorAll('.admin-pager-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      let t = btn.dataset.page
+      if (t === 'prev') t = Math.max(1, page - 1)
+      else if (t === 'next') t = Math.min(totalPages, page + 1)
+      else t = Number(t)
+      if (t !== page) onPageChange(t)
+    })
+  })
+}
+
 async function refreshAdminUserTable(search = '', page = 1) {
   try {
     _adminCurrentSearch = search
@@ -4215,73 +4208,32 @@ async function refreshAdminUserTable(search = '', page = 1) {
     if (search) params.set('search', search)
     const data = await api.get(`/api/admin-users?${params}`)
     if (!data.ok || !data.users) return
-    const tbody = document.querySelector('#adminUserList .admin-table tbody')
-    const countEl = document.getElementById('adminUserCount')
+    const tbody = document.getElementById('adminUserBody')
     if (!tbody) return
-    if (countEl) countEl.textContent = `${data.total || data.users.length} 人`
-    if (data.users.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-3); padding:32px;">未找到匹配用户</td></tr>'
-      renderAdminUserPager(data)
-      return
-    }
-    tbody.innerHTML = data.users.map(u => `
-      <tr>
-        <td>
-          <div class="admin-user-cell">
-            <span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span>
-            <div>
-              <div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div>
-              <div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div>
-            </div>
-          </div>
-        </td>
-        <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
-        <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
-        <td>${planLabel(u.plan, u.planExpiresAt)}</td>
-        <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
-        <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
-        <td style="font-size:11px;white-space:nowrap;">
-          ${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}
-        </td>
-        <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
-        <td>
-          <div class="admin-actions">
-            <button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button>
-            <button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button>
-          </div>
-        </td>
-      </tr>`).join('')
-    renderAdminUserPager(data)
+    tbody.innerHTML = data.users.length > 0
+      ? data.users.map(u => renderAdminRow(u)).join('')
+      : '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:32px;">未找到匹配用户</td></tr>'
+    renderPager('adminUserPager', data, t => refreshAdminUserTable(_adminCurrentSearch, t))
   } catch (e) {
     console.error('refreshAdminUserTable error:', e)
   }
 }
 
-function renderAdminUserPager(data) {
-  const pager = document.getElementById('adminUserPager')
-  console.log('[Pager] element:', pager, 'data:', { page: data.page, totalPages: data.totalPages, total: data.total })
-  if (!pager) return
-  const { page = 1, totalPages = 1, total = 0 } = data
-  if (totalPages <= 1) { pager.innerHTML = ''; console.log('[Pager] totalPages<=1, cleared'); return }
-  let html = '<div class="admin-pager-inner">'
-  html += `<button class="admin-pager-btn" data-page="prev" ${page <= 1 ? 'disabled' : ''}>‹</button>`
-  for (let i = 1; i <= totalPages; i++) {
-    html += `<button class="admin-pager-btn${i === page ? ' active' : ''}" data-page="${i}">${i}</button>`
+async function refreshAdminMemberTable(page = 1) {
+  try {
+    _adminMemberPage = page
+    const params = new URLSearchParams({ page: String(page), limit: '10', plan: 'member' })
+    const data = await api.get(`/api/admin-users?${params}`)
+    if (!data.ok || !data.users) return
+    const tbody = document.getElementById('adminMemberBody')
+    if (!tbody) return
+    tbody.innerHTML = data.users.length > 0
+      ? data.users.map(u => renderAdminRow(u)).join('')
+      : '<tr><td colspan="7" style="text-align:center;color:var(--text-3);padding:32px;">暂无会员</td></tr>'
+    renderPager('adminMemberPager', data, t => refreshAdminMemberTable(t))
+  } catch (e) {
+    console.error('refreshAdminMemberTable error:', e)
   }
-  html += `<button class="admin-pager-btn" data-page="next" ${page >= totalPages ? 'disabled' : ''}>›</button>`
-  html += `<span class="admin-pager-info">第 ${page}/${totalPages} 页 · 共 ${total} 人</span>`
-  html += '</div>'
-  pager.innerHTML = html
-  pager.querySelectorAll('.admin-pager-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      let target = btn.dataset.page
-      if (target === 'prev') target = Math.max(1, page - 1)
-      else if (target === 'next') target = Math.min(totalPages, page + 1)
-      else target = Number(target)
-      if (target === page) return
-      refreshAdminUserTable(_adminCurrentSearch, target)
-    })
-  })
 }
 
 function setupAdminUserSearch() {
