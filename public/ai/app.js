@@ -823,7 +823,7 @@ function handleBridgeData(msg) {
         if (row) {
           row.setAttribute('data-ticket', pos.ticket);
           const cells = row.querySelectorAll('td');
-          if (cells[5]) cells[5].textContent = fmt(pos.current_price);
+          if (cells[5]) cells[5].textContent = fmt(pos.price_current);
           if (cells[9]) {
             cells[9].textContent = fmt(pos.profit);
             cells[9].className = `num ${profitClass(pos.profit)}`;
@@ -835,7 +835,7 @@ function handleBridgeData(msg) {
         const ticketCell = row.querySelector('td:first-child');
         if (ticketCell && ticketCell.textContent.trim() === String(pos.ticket)) {
           const cells = row.querySelectorAll('td');
-          if (cells[5]) cells[5].textContent = fmt(pos.current_price);
+          if (cells[5]) cells[5].textContent = fmt(pos.price_current);
           if (cells[7]) {
             cells[7].textContent = fmt(pos.profit);
             cells[7].className = `num ${profitClass(pos.profit)}`;
