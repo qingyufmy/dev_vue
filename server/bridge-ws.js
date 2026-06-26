@@ -1087,8 +1087,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'audit_logs': {
-        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
-        if (ownRows.length === 0 && adminUserId) ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [adminUserId])
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const auditUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [auditUserId])
         const logs = ownRows.map(row => {
           const item = { ...row }
           item.created_at_mt5 = toMt5Time(item.created_at)
@@ -1102,7 +1103,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'signal_tickets': {
-        const rows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 ORDER BY id DESC LIMIT 200', [userId])
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const ticketUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const rows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 ORDER BY id DESC LIMIT 200', [ticketUserId])
         const ticketMap = {}
         for (const row of rows) {
           try {
@@ -1178,7 +1181,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'close_signal_tickets': {
-        const map = await ai.getCloseSignalTickets(userId)
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const closeTicketUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const map = await ai.getCloseSignalTickets(closeTicketUserId)
         result = { status: 'success', tickets: map }
         break
       }
