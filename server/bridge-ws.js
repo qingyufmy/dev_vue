@@ -494,7 +494,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (cached && cached.account) {
           result = { status: 'success', ...cached.account }
         } else {
-          result = await ai.mt5Bridge(userId, 'account', {})
+          const adminCached = adminUserId ? await cacheGetJSON(`bridge:data:${adminUserId}`) : null
+          if (adminCached && adminCached.account) {
+            result = { status: 'success', ...adminCached.account }
+          } else {
+            result = await ai.mt5Bridge(userId, 'account', {})
+          }
         }
         break
       }
@@ -506,7 +511,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (cached && cached.quote) {
           result = { status: 'success', ...cached.quote }
         } else {
-          result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
+          const adminCached = adminUserId ? await cacheGetJSON(`bridge:data:${adminUserId}`) : null
+          if (adminCached && adminCached.quote) {
+            result = { status: 'success', ...adminCached.quote }
+          } else {
+            result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
+          }
         }
         break
       }
@@ -515,7 +525,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (cached && cached.positions) {
           result = { status: 'success', positions: cached.positions }
         } else {
-          result = await ai.mt5Bridge(userId, 'positions', {})
+          // Fallback: try admin's bridge data if user has no own bridge
+          const adminCached = adminUserId ? await cacheGetJSON(`bridge:data:${adminUserId}`) : null
+          if (adminCached && adminCached.positions) {
+            result = { status: 'success', positions: adminCached.positions }
+          } else {
+            result = await ai.mt5Bridge(userId, 'positions', {})
+          }
         }
         break
       }
