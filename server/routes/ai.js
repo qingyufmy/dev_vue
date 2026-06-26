@@ -1731,12 +1731,12 @@ export async function initAutoSchedulers() {
 // ── Bridge 版本检查端点 ──
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '2.0.0',
+    version: '2.0.1',
     build_date: '2026-06-26',
-    changelog: 'v2.0.0: websockets异步库迁移(解决SSL BAD_LENGTH) + 数据去重优化 + 断路器防崩溃 + Redis缓存加速',
-    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.0.0.exe',
+    changelog: 'v2.0.1: 杠杆数据实时显示 + 缓存策略优化 + 历史订单桥接端分页 + 图表数据桥接端聚合 + 带宽优化',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.0.1.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 65567041,
+    file_size: 65568517,
     md5: ''
   })
 })
