@@ -929,7 +929,7 @@ class BridgeWorker(QThread):
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
-        ssl_ctx = _get_ssl_context()
+        ssl_ctx = _get_ssl_context() if ws_url.startswith('wss://') else None
         MAX_RETRY = 300; RETRY_INT = 5
         MAX_RAPID_FAILS = 5
         rapid_fails = 0
