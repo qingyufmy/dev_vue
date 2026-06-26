@@ -26,7 +26,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v1.9.11"
+APP_VERSION = "v2.0.0"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
@@ -74,24 +74,28 @@ def update_config(patch):
 import urllib.request, urllib.error
 
 def _get_ssl_context():
-    """PySide6 frozen EXE 中 SSL 证书可能不全，提供兼容 context"""
+    """Create optimized SSL context for websockets (TLS 1.2+, modern ciphers)."""
     import ssl
     try:
-        import certifi
-        ctx = ssl.create_default_context(cafile=certifi.where())
-        return ctx
-    except ImportError:
-        pass
-    # Fallback to system default — works on normal Python installs
-    try:
-        ctx = ssl.create_default_context()
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:ECDHE+AES')
+        ctx.check_hostname = True
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        try:
+            import certifi
+            ctx.load_verify_locations(cafile=certifi.where())
+        except ImportError:
+            ctx.load_default_certs()
         return ctx
     except Exception:
-        pass
-    # Last resort: warn instead of silently disabling verification
-    raise RuntimeError(
-        "SSL 证书验证不可用。请检查 Python 安装或安装 certifi 包 (pip install certifi)"
-    )
+        # Fallback to system default
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            raise RuntimeError(
+                "SSL 证书验证不可用。请检查 Python 安装或安装 certifi 包 (pip install certifi)"
+            )
 
 def http_get_json(url, timeout=10):
     try:
@@ -883,10 +887,10 @@ class BridgeWorker(QThread):
             self.log_signal.emit("⚠️ 算法交易未开启：MT5 → 工具 → 选项 → EA交易 → 允许算法交易")
 
         try:
-            import websocket
+            import websockets
         except ImportError:
-            self.log_signal.emit("错误: websocket-client 未安装")
-            self.mt5.shutdown()  # 释放 MT5 连接，防止资源泄漏
+            self.log_signal.emit("错误: websockets 未安装")
+            self.mt5.shutdown()
             return
 
         # Check plan status before connecting
@@ -899,199 +903,245 @@ class BridgeWorker(QThread):
             return
         self.log_signal.emit(f"会员等级: {plan.upper()}，开始连接...")
 
-        server = self.server_url.replace("http://","ws://").replace("https://","wss://").rstrip("/")
+        try:
+            self._resolved_symbol = self._resolve_symbol("XAUUSD")
+        except Exception:
+            self._resolved_symbol = "XAUUSD"
+
+        # Run async event loop in this thread
+        try:
+            import asyncio
+            asyncio.run(self._run_async())
+        except Exception as e:
+            self.log_signal.emit(f"桥接异常退出: {e}")
+        finally:
+            if self.mt5: self.mt5.shutdown()
+            self.log_signal.emit("MT5 已断开")
+
+    # ── Async core (websockets) ──────────────────────────────
+
+    async def _run_async(self):
+        """Main async loop: connect → session → reconnect with circuit breaker."""
+        import asyncio
+        import websockets
+
+        server = self.server_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
+        ssl_ctx = _get_ssl_context()
         MAX_RETRY = 300; RETRY_INT = 5
-        MAX_RAPID_FAILS = 5  # 连续快速断开(10秒内)超过5次则停止
+        MAX_RAPID_FAILS = 5
         rapid_fails = 0
 
         while self.running:
-            retry_start = time.time(); connected = False
+            retry_start = time.time()
+            ws = None
+
+            # ── Connection retry loop ──
             while self.running:
                 elapsed = time.time() - retry_start
                 if elapsed >= MAX_RETRY:
                     self.log_signal.emit("连接失败：已重试5分钟，停止")
                     self.status_signal.emit("连接失败", "#ef4444", "")
-                    if self.mt5: self.mt5.shutdown()
                     return
                 try:
-                    ws = websocket.create_connection(ws_url, timeout=10, header=["Origin: http://localhost"])
-                    self._ws = ws; connected = True
+                    ws = await asyncio.wait_for(
+                        websockets.connect(ws_url, ssl=ssl_ctx, additional_headers={"Origin": "http://localhost"},
+                                           ping_interval=None, max_size=2**20, close_timeout=3),
+                        timeout=10
+                    )
+                    self._ws = ws
                     self.log_signal.emit("WebSocket 已连接")
                     break
                 except Exception as e:
                     err_str = str(e)
-                    # Plan rejection — stop retrying
                     if '4003' in err_str or '会员' in err_str or 'Pro' in err_str:
                         self.log_signal.emit(f"❌ {err_str}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
-                        if self.mt5: self.mt5.shutdown()
                         return
                     rc = int(elapsed // RETRY_INT) + 1
                     self.log_signal.emit(f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
                     self.status_signal.emit(f"重连中... ({rc})", "#f59e0b", "")
-                    time.sleep(RETRY_INT)
+                    await asyncio.sleep(RETRY_INT)
 
-            if not connected or not self.running: break
+            if not ws or not self.running:
+                break
 
+            # ── Session: run send + recv concurrently ──
             session_start = time.time()
-
             try:
-                self._resolved_symbol = self._resolve_symbol("XAUUSD")
-            except Exception:
-                self._resolved_symbol = "XAUUSD"
-            last_hb = 0; last_data = 0; last_server_msg = time.time(); last_plan_check = time.time()
+                async with ws:
+                    await asyncio.gather(
+                        self._async_send_loop(ws),
+                        self._async_recv_loop(ws),
+                    )
+            except websockets.ConnectionClosed as e:
+                if e.code == 4003:
+                    self.log_signal.emit(f"❌ 连接被拒绝: {e.reason}")
+                    self.status_signal.emit("会员等级不足", "#ef4444", "")
+                    return
+                self.log_signal.emit(f"WebSocket 连接已断开 (code={e.code})")
+            except (ssl.SSLError, OSError, ConnectionResetError) as e:
+                self.log_signal.emit(f"连接错误: {e}")
+            except Exception as e:
+                self.log_signal.emit(f"会话异常: {e}")
 
-            while self.running:
-                now = time.time()
-
-                # Detect server silence — no data/ping for 20s = dead connection
-                if now - last_server_msg > 20:
-                    self.log_signal.emit("服务端心跳超时(20s无响应)，强制重连")
-                    break
-
-                if now - last_data >= 1.0:
-                    push_err = False
-                    try:
-                        acc = self.mt5.account_info()
-                        sym = self._resolved_symbol
-                        if not acc and not self._acc_lost_warned:
-                            self._acc_lost_warned = True
-                            self.log_signal.emit("⚠️ MT5账户已断开，请重新登录后重启桥接")
-                        if acc and self._acc_lost_warned:
-                            self._acc_lost_warned = False
-                            self.log_signal.emit("MT5账户已恢复")
-                        tick = self.mt5.symbol_info_tick(sym)
-                        info = self.mt5.symbol_info(sym)
-                        positions = self.mt5.positions_get() or []
-                        bar_vol = 0
-                        try:
-                            rates = self.mt5.copy_rates_from_pos(sym, self.mt5.TIMEFRAME_M1, 0, 1)
-                            if rates is not None and len(rates) > 0:
-                                bar_vol = int(rates[0][5])
-                        except: pass
-                        dm = {"type": "data", "account": {
-                            "login": acc.login if acc else None, "balance": round(acc.balance,2) if acc else None,
-                            "equity": round(acc.equity,2) if acc else None, "margin": round(acc.margin,2) if acc else None,
-                            "free_margin": round(acc.margin_free,2) if acc else None, "profit": round(acc.profit,2) if acc else None,
-                            "server": acc.server if acc else None}, "quote": {"symbol": sym,
-                            "bid": round(tick.bid,5) if tick else None, "ask": round(tick.ask,5) if tick else None,
-                            "spread": round((tick.ask-tick.bid)/(0.01 if "JPY" not in sym else 0.001),1) if tick else None,
-                            "time": self._mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "volume": bar_vol},
-                            "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
-                                "volume": p.volume, "open_price": p.price_open, "current_price": p.price_current,
-                                "profit": round(p.profit,2), "sl": p.sl, "tp": p.tp,
-                                "swap": p.swap, "commission": getattr(p,'commission',0)} for p in positions],
-                            "live_trading_enabled": self._trade_enabled}
-                        ws.send(json.dumps(dm))
-                        if not ws.connected:
-                            self.log_signal.emit("发送后检测到连接断开")
-                            break
-                        if acc:
-                            self.status_signal.emit("MT5桥接-已连接", "#22c55e",
-                                                   f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
-                        last_data = now
-                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError, TimeoutError) as e:
-                        self.log_signal.emit(f"数据推送错误: {e}")
-                        push_err = True
-                    except Exception as e:
-                        self.log_signal.emit(f"数据推送错误: {e}")
-                        push_err = True
-                    if push_err:
-                        break  # SSL/网络错误后立即断开重连，不等recv检测
-
-                if now - last_hb > 10:
-                    try:
-                        ws.send(json.dumps({"type": "hb"})); last_hb = now
-                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError, TimeoutError):
-                        break  # 心跳发送失败也立即重连
-                    except Exception as e:
-                        self.log_signal.emit(f"心跳错误: {e}")
-                        break
-
-                # Hourly plan check
-                if now - last_plan_check > 3600:
-                    last_plan_check = now
-                    plan, expired, reason = self.check_plan()
-                    if expired:
-                        self.log_signal.emit(f"❌ {reason}")
-                        self.plan_expired_signal.emit(reason)
-                        break
-
-                ws.settimeout(0.3)
-                try:
-                    data = ws.recv()
-                    if data:
-                        last_server_msg = time.time()
-                        msg = json.loads(data)
-                        if msg.get("type") == "ping":
-                            try: ws.send(json.dumps({"type": "pong", "ts": msg.get("ts", 0)}))
-                            except: pass
-                        elif msg.get("type") == "command":
-                            action = msg.get("action")
-                            cmd_id = msg.get("command_id")
-                            if not action or cmd_id is None:
-                                self.log_signal.emit(f"⚠️ 收到格式错误的命令消息，已跳过: {data[:100]}")
-                            else:
-                                self.log_signal.emit(f"执行: {action}")
-                                try: resp = self._process_command(msg)
-                                except Exception as ce: resp = {"status": "error", "message": str(ce)}
-                                ws.send(json.dumps({"type": "result", "command_id": cmd_id, "result": resp}))
-                                self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
-                except websocket.WebSocketTimeoutException: pass
-                except ssl.SSLError as e:
-                    self.log_signal.emit(f"SSL错误: {e}，重新连接...")
-                    break
-                except websocket.WebSocketConnectionClosedException:
-                    # Check close code for plan rejection
-                    cc = getattr(ws, 'close_code', None)
-                    cr = getattr(ws, 'close_reason', '')
-                    if cc == 4003:
-                        self.log_signal.emit(f"❌ 连接被拒绝: {cr}")
-                        self.status_signal.emit("会员等级不足", "#ef4444", "")
-                        if self.mt5: self.mt5.shutdown()
-                        return
-                    self.log_signal.emit("WebSocket 连接已断开"); break
-                except Exception as e:
-                    self.log_signal.emit(f"接收错误: {e}"); break
-
-            try:
-                if ws and ws.connected:
-                    ws.send(json.dumps({"type": "disconnect", "reason": "client_reconnect"})); ws.close()
-            except: pass
             self._ws = None
-            if not self.running: break
+            if not self.running:
+                break
 
-            # 断路器：连接后10秒内断开视为快速失败
+            # ── Circuit breaker ──
             session_duration = time.time() - session_start
             if session_duration < 10:
                 rapid_fails += 1
                 self.log_signal.emit(f"快速断开 (第{rapid_fails}/{MAX_RAPID_FAILS}次，持续{session_duration:.0f}秒)")
             else:
-                rapid_fails = 0  # 正常运行后重置计数
+                rapid_fails = 0
 
             if rapid_fails >= MAX_RAPID_FAILS:
                 self.log_signal.emit(f"❌ 连续{MAX_RAPID_FAILS}次快速断开，停止重连。请检查网络或重启软件")
                 self.status_signal.emit("重连已停止", "#ef4444", "")
-                if self.mt5: self.mt5.shutdown()
                 return
 
             self.log_signal.emit(f"连接断开，{RETRY_INT}秒后自动重连...")
             self.status_signal.emit("重连中...", "#f59e0b", "")
-            time.sleep(RETRY_INT)
+            await asyncio.sleep(RETRY_INT)
 
-        if self.mt5: self.mt5.shutdown()
-        self.log_signal.emit("MT5 已断开")
+    async def _async_send_loop(self, ws):
+        """Send MT5 data every 1s with deduplication."""
+        import asyncio
+        last_data_hash = None
+        last_plan_check = time.time()
+
+        while self.running:
+            try:
+                # Hourly plan check
+                now = time.time()
+                if now - last_plan_check > 3600:
+                    last_plan_check = now
+                    loop = asyncio.get_event_loop()
+                    plan, expired, reason = await loop.run_in_executor(None, self.check_plan)
+                    if expired:
+                        self.log_signal.emit(f"❌ {reason}")
+                        self.plan_expired_signal.emit(reason)
+                        break
+
+                # Collect MT5 data (in executor to avoid blocking)
+                loop = asyncio.get_event_loop()
+                dm = await loop.run_in_executor(None, self._collect_mt5_data)
+                if dm is None:
+                    # No data (MT5 unavailable), just wait
+                    await asyncio.sleep(1)
+                    continue
+
+                # Dedup: hash the data, skip if unchanged
+                data_hash = hash(json.dumps(dm, sort_keys=True, default=str))
+                if data_hash == last_data_hash:
+                    await asyncio.sleep(1)
+                    continue
+                last_data_hash = data_hash
+
+                await ws.send(json.dumps(dm))
+
+                # Update status
+                acc_login = dm.get("account", {}).get("login")
+                acc_server = dm.get("account", {}).get("server")
+                acc_balance = dm.get("account", {}).get("balance")
+                if acc_login:
+                    self.status_signal.emit("MT5桥接-已连接", "#22c55e",
+                                           f"{acc_login} @ {acc_server}  ${acc_balance:,.2f}")
+
+                await asyncio.sleep(1)
+            except (ssl.SSLError, OSError, ConnectionResetError, BrokenPipeError) as e:
+                self.log_signal.emit(f"数据推送错误: {e}")
+                break
+            except Exception as e:
+                self.log_signal.emit(f"数据推送错误: {e}")
+                break
+
+    def _collect_mt5_data(self):
+        """Collect MT5 data (synchronous, called from executor)."""
+        acc = self.mt5.account_info()
+        sym = self._resolved_symbol
+        if not acc and not self._acc_lost_warned:
+            self._acc_lost_warned = True
+            self.log_signal.emit("⚠️ MT5账户已断开，请重新登录后重启桥接")
+        if acc and self._acc_lost_warned:
+            self._acc_lost_warned = False
+            self.log_signal.emit("MT5账户已恢复")
+        if not acc:
+            return None
+        tick = self.mt5.symbol_info_tick(sym)
+        positions = self.mt5.positions_get() or []
+        bar_vol = 0
+        try:
+            rates = self.mt5.copy_rates_from_pos(sym, self.mt5.TIMEFRAME_M1, 0, 1)
+            if rates is not None and len(rates) > 0:
+                bar_vol = int(rates[0][5])
+        except: pass
+        return {"type": "data", "account": {
+            "login": acc.login, "balance": round(acc.balance, 2),
+            "equity": round(acc.equity, 2), "margin": round(acc.margin, 2),
+            "free_margin": round(acc.margin_free, 2), "profit": round(acc.profit, 2),
+            "server": acc.server}, "quote": {"symbol": sym,
+            "bid": round(tick.bid, 5) if tick else None, "ask": round(tick.ask, 5) if tick else None,
+            "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in sym else 0.001), 1) if tick else None,
+            "time": self._mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
+            "volume": bar_vol},
+            "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type == 0 else "sell",
+                "volume": p.volume, "open_price": p.price_open, "current_price": p.price_current,
+                "profit": round(p.profit, 2), "sl": p.sl, "tp": p.tp,
+                "swap": p.swap, "commission": getattr(p, 'commission', 0)} for p in positions],
+            "live_trading_enabled": self._trade_enabled}
+
+    async def _async_recv_loop(self, ws):
+        """Receive commands from server and process them."""
+        import asyncio
+        async for raw_msg in ws:
+            if not self.running:
+                break
+            try:
+                msg = json.loads(raw_msg)
+            except Exception:
+                continue
+
+            if msg.get("type") == "ping":
+                try:
+                    await ws.send(json.dumps({"type": "pong", "ts": msg.get("ts", 0)}))
+                except: pass
+            elif msg.get("type") == "command":
+                action = msg.get("action")
+                cmd_id = msg.get("command_id")
+                if not action or cmd_id is None:
+                    self.log_signal.emit(f"⚠️ 收到格式错误的命令消息，已跳过")
+                    continue
+                self.log_signal.emit(f"执行: {action}")
+                loop = asyncio.get_event_loop()
+                try:
+                    resp = await loop.run_in_executor(None, self._process_command, msg)
+                except Exception as ce:
+                    resp = {"status": "error", "message": str(ce)}
+                try:
+                    await ws.send(json.dumps({"type": "result", "command_id": cmd_id, "result": resp}))
+                except: pass
+                self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
 
     def stop(self):
         self.running = False
-        try:
-            if self._ws and self._ws.connected:
-                self._ws.close()
-        except: pass
+        ws = self._ws
+        if ws:
+            try:
+                loop = getattr(self, '_loop', None)
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(ws.close(), loop)
+                else:
+                    # Best effort synchronous close
+                    import asyncio
+                    try:
+                        asyncio.get_event_loop().run_until_complete(ws.close())
+                    except: pass
+            except: pass
 
 # ══════════════════════════════════════════════════════════
 #  Update Downloader

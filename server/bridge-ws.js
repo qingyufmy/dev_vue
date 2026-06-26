@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { query, queryOne, queryAll, queryRun, logAudit, withTransaction } from './db.js'
+import { getRedis, cacheGetJSON, cacheSetJSON, cacheDel } from './redis.js'
 
 // Parse symbols from DB: handles legacy JSON array or plain comma-separated text
 function parseSymbols(raw) {
@@ -306,6 +307,16 @@ async function _initBridge(ws, userId) {
       // Data relay — push to browsers, include server-detected trade_mode
       const tradeMode = bridge ? bridge.lastTradeMode : -1
       sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
+
+      // Cache bridge data in Redis (TTL 3s — auto-expires when bridge goes offline)
+      cacheSetJSON(`bridge:data:${userId}`, {
+        account: msg.account,
+        quote: msg.quote,
+        positions: msg.positions,
+        live_trading_enabled: msg.live_trading_enabled,
+        trade_mode: tradeMode,
+        ts: Date.now()
+      }, 3).catch(() => {})
     } else if (msg.type === 'hb' || msg.type === 'pong') {
       // Bridge heartbeat/pong — lastSeen already updated
       if (bridge) bridge.lastPong = Date.now()
@@ -465,18 +476,36 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         break
       }
-      case 'account':
-        result = await ai.mt5Bridge(userId, 'account', {})
+      case 'account': {
+        const cached = await cacheGetJSON(`bridge:data:${userId}`)
+        if (cached && cached.account) {
+          result = { status: 'success', ...cached.account }
+        } else {
+          result = await ai.mt5Bridge(userId, 'account', {})
+        }
         break
+      }
       case 'symbols':
         result = await ai.mt5Bridge(userId, 'symbols', {})
         break
-      case 'quote':
-        result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
+      case 'quote': {
+        const cached = await cacheGetJSON(`bridge:data:${userId}`)
+        if (cached && cached.quote) {
+          result = { status: 'success', ...cached.quote }
+        } else {
+          result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
+        }
         break
-      case 'positions':
-        result = await ai.mt5Bridge(userId, 'positions', {})
+      }
+      case 'positions': {
+        const cached = await cacheGetJSON(`bridge:data:${userId}`)
+        if (cached && cached.positions) {
+          result = { status: 'success', positions: cached.positions }
+        } else {
+          result = await ai.mt5Bridge(userId, 'positions', {})
+        }
         break
+      }
       case 'open':
         result = await ai.mt5Bridge(userId, 'open', params)
         await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
@@ -821,6 +850,11 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signals': {
         const offset = Number(params.offset) || 0
         const limit = Math.min(Number(params.limit) || 6, 100)
+        // Build cache key from query params
+        const sigCacheKey = `cache:signals:${userId}:${offset}:${limit}:${params.direction||''}:${params.timeframe||''}:${params.session_id||''}`
+        const sigCached = await cacheGetJSON(sigCacheKey)
+        if (sigCached) { result = sigCached; break }
+
         let queryUserId = userId
         // Build filter conditions
         const filterClauses = ['user_id = ?']
@@ -866,6 +900,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           return item
         })
         result = { status: 'success', signals, has_more: hasMore, total_count: totalCount }
+        cacheSetJSON(sigCacheKey, result, 10).catch(() => {})
+
         break
       }
       case 'execute': {
@@ -1283,6 +1319,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
+        // Check Redis cache first (10s TTL)
+        const dashCached = await cacheGetJSON('cache:admin:dashboard')
+        if (dashCached) { result = dashCached; break }
+
         const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList] = await Promise.all([
           // 1. User stats
           queryOne(`SELECT
@@ -1363,6 +1403,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             bridges: bridgeList || []
           }
         }
+        cacheSetJSON('cache:admin:dashboard', result, 10).catch(() => {})
         break
       }
       case 'admin_user_status': {
@@ -1438,6 +1479,9 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         const page = Math.max(1, Number(params.page) || 1)
         const pageSize = Math.min(Number(params.pageSize) || 10, 50)
+        const ulCacheKey = `cache:admin:userlist:${page}:${pageSize}`
+        const ulCached = await cacheGetJSON(ulCacheKey)
+        if (ulCached) { result = ulCached; break }
         const offset = (page - 1) * pageSize
 
         const countRow = await queryOne('SELECT COUNT(*) AS total FROM users')
@@ -1470,6 +1514,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           page,
           pageSize
         }
+        cacheSetJSON(ulCacheKey, result, 10).catch(() => {})
         break
       }
       default:

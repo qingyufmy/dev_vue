@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('D:\\web\\public\\ai\\aurum_icon.ico', '.')]
 binaries = []
-hiddenimports = ['MetaTrader5']
+hiddenimports = ['MetaTrader5', 'websockets']
 
 # numpy 单独收集（它有大量 C 扩展）
 tmp_ret = collect_all('numpy')
