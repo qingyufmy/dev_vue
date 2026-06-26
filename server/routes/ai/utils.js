@@ -1,0 +1,114 @@
+// ai/utils.js — 纯函数工具层，无外部依赖
+
+export const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
+
+export const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
+
+const MTF_TAG_RE = /\{\{MTF:([A-Z]\d+):(\d+)\}\}/g
+const ATF_TAG_RE = /\{\{ATF:([A-Z]\d+):(\d+)\}\}/g
+const CTF_TAG_RE = /\{\{CTF:([A-Z]\d+):(\d+)\}\}/g
+const ALL_TF_TAG_RE = /\{\{[MAC]TF:([A-Z]\d+):(\d+)\}\}/g
+
+export function parseTimeframeTags(prompt, mode = 'manual') {
+  if (!prompt) return []
+  const re = mode === 'auto' ? ATF_TAG_RE : mode === 'close' ? CTF_TAG_RE : MTF_TAG_RE
+  const tags = []
+  let m
+  while ((m = re.exec(prompt)) !== null) {
+    tags.push({ tf: m[1].toUpperCase(), count: Math.min(Math.max(parseInt(m[2]) || 100, 10), 500) })
+  }
+  return tags
+}
+
+export function stripTimeframeTags(prompt) {
+  return prompt ? prompt.replace(ALL_TF_TAG_RE, '').replace(/\n{3,}/g, '\n\n').trim() : prompt
+}
+
+export function round2(v) { return Math.round(v * 100) / 100 }
+export function round3(v) { return Math.round(v * 1000) / 1000 }
+export function round5(v) { return Math.round(v * 100000) / 100000 }
+export function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
+
+export function compactRates(rates) {
+  return rates.map(r => ({
+    time: r.time,
+    open: round5(parseFloat(r.open || 0)),
+    high: round5(parseFloat(r.high || 0)),
+    low: round5(parseFloat(r.low || 0)),
+    close: round5(parseFloat(r.close || 0)),
+    tick_volume: parseInt(r.tick_volume || 0),
+  }))
+}
+
+export function utcToMt5Time(str) {
+  if (!str) return null
+  try {
+    const d = new Date(str.replace(' ', 'T'))
+    d.setHours(d.getHours() - 5)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  } catch { return str }
+}
+
+export function signalTtlSeconds(timeframe) {
+  const map = { M1: 20, M5: 45, M15: 90, M30: 180, H1: 300, H4: 900, D1: 1800 }
+  return map[String(timeframe).toUpperCase()] || 120
+}
+
+export function signalAgeSeconds(createdAt) {
+  try {
+    const created = new Date(createdAt.replace(' ', 'T'))
+    return Math.max((Date.now() - created.getTime()) / 1000, 0)
+  } catch { return 999999 }
+}
+
+export function attachSignalTiming(signal) {
+  const ttl = signalTtlSeconds(signal.timeframe || '')
+  const age = signalAgeSeconds(signal.created_at)
+  signal.ttl_seconds = ttl
+  signal.age_seconds = Math.round(age * 10) / 10
+  signal.expires_at = signal.created_at
+    ? (() => { const d = new Date(signal.created_at.replace(' ', 'T')); d.setSeconds(d.getSeconds() + ttl); const pad = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
+    : null
+  signal.is_stale = age > ttl
+  signal.created_at_mt5 = utcToMt5Time(signal.created_at)
+  signal.expires_at_mt5 = utcToMt5Time(signal.expires_at)
+  return signal
+}
+
+export function configPublic(row) {
+  if (!row) return null
+  const data = { ...row }
+  const hasApiKey = !!data.api_key_encrypted
+  data.has_api_key = hasApiKey
+  data.masked_api_key = hasApiKey ? '****' : null
+  delete data.api_key_encrypted
+  return data
+}
+
+export function timeframeIntervalMs(tf) {
+  const map = { 'M1': 60_000, 'M5': 300_000, 'M15': 900_000, 'M30': 1_800_000, 'H1': 3_600_000, 'H4': 14_400_000, 'D1': 86_400_000 }
+  return map[String(tf).toUpperCase()] || 900_000
+}
+
+export function aiFailureHold(market, reason) {
+  return {
+    signal_type: 'hold',
+    confidence: 0.5,
+    recommended_volume: 0.0,
+    analysis: `${market.symbol} ${market.timeframe}: AI 推理返回未能形成可执行 JSON，系统按保护规则观望。`,
+    reasoning: `DeepSeek 推理失败或输出格式不符合执行合约：${reason}。为确保交易严格按策略提示词执行，本轮不使用本地规则替代开仓。`,
+    stop_loss_price: null,
+    take_profit_1_price: null,
+    take_profit_2_price: null,
+    take_profit_3_price: null,
+    _inference_source: 'ai_error_hold',
+  }
+}
+
+export function parseJsonObject(content) {
+  const start = content.indexOf('{')
+  const end = content.lastIndexOf('}')
+  if (start === -1 || end === -1 || end <= start) throw new Error('ai_response_missing_json_object')
+  return JSON.parse(content.substring(start, end + 1))
+}
