@@ -1736,7 +1736,7 @@ router.get('/bridge/version', (req, res) => {
     changelog: 'v2.0.0: websockets异步库迁移(解决SSL BAD_LENGTH) + 数据去重优化 + 断路器防崩溃 + Redis缓存加速',
     download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.0.0.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 0,
+    file_size: 65567041,
     md5: ''
   })
 })

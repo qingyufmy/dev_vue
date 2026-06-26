@@ -5,7 +5,8 @@
 - 每次修改完成后，自动 commit + push 到 dev 分支，方便随时回档
 - 需要重启服务时直接重启，不用询问
 - 项目启动命令: `node server/index.js`
-- 源文件: 桥接 `public/ai/aurum_bridge_gui.py`，更新器 `public/ai/aurum_updater.py`
+- 源文件: 桥接 `public/ai/aurum_bridge_gui.py`(v2.0.0, websockets异步)，更新器 `public/ai/aurum_updater.py`
+- 桥接软件通信层: websockets(asyncio)，非 websocket-client
 - 打包规则: `AURUM_Bridge.spec` / `aurum_updater.spec`
 
 - 资源文件引用规则: JS/CSS 文件在 HTML 中引用时带 `?v=YYYYMMDD` 版本号。修改任何 JS/CSS 后必须同步更新版本号为当天日期，防止浏览器缓存旧文件
@@ -13,6 +14,7 @@
 
 ## 基础设施
 - MySQL: 192.168.1.254:3306, user=huaerjie, database=huaerjie
+- Redis: 192.168.1.254:6379, password=admin123（配置在 server/.env）
 - 七牛云: bucket=aurum, domain=qiniu.acadfx.com, AK=nBN5ehGYR4JaPZPp9-hX8zkldzjTADl6IQCvUEeN, SK=AaNVNjKSq5UzTlqmMeoJ3JCVHhKWUYd00ueeIL4T
 - GitHub: qingyufmy/wall-street-skill-local
 
