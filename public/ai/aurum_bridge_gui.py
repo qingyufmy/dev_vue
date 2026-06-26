@@ -71,6 +71,56 @@ def update_config(patch):
     save_config(cfg)
 
 # ══════════════════════════════════════════════════════════
+#  File logging
+# ══════════════════════════════════════════════════════════
+
+LOG_DIR = os.path.join(CONFIG_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+def _get_log_file():
+    today = datetime.now().strftime("%Y-%m-%d")
+    return os.path.join(LOG_DIR, f"bridge_{today}.log")
+
+def _cleanup_old_logs():
+    """删除7天前的日志文件"""
+    try:
+        cutoff = datetime.now() - timedelta(days=7)
+        for f in os.listdir(LOG_DIR):
+            if f.startswith("bridge_") and f.endswith(".log"):
+                date_str = f[7:-4]  # bridge_YYYY-MM-DD.log
+                try:
+                    file_date = datetime.strptime(date_str, "%Y-%m-%d")
+                    if file_date < cutoff:
+                        os.remove(os.path.join(LOG_DIR, f))
+                except (ValueError, OSError):
+                    pass
+    except Exception:
+        pass
+
+def log_to_file(level, message):
+    """写入日志文件"""
+    try:
+        _cleanup_old_logs()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{timestamp}] [{level}] {message}\n"
+        with open(_get_log_file(), "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+def log_info(message):
+    print(f"[Bridge] {message}")
+    log_to_file("INFO", message)
+
+def log_error(message):
+    print(f"[Bridge] ERROR: {message}")
+    log_to_file("ERROR", message)
+
+def log_warn(message):
+    print(f"[Bridge] WARN: {message}")
+    log_to_file("WARN", message)
+
+# ══════════════════════════════════════════════════════════
 #  HTTP helpers
 # ══════════════════════════════════════════════════════════
 
