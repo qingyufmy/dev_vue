@@ -58,6 +58,7 @@ export function signalTtlSeconds(timeframe) {
 export function signalAgeSeconds(createdAt) {
   try {
     const created = new Date(createdAt.replace(' ', 'T'))
+    if (isNaN(created.getTime())) return 999999
     return Math.max((Date.now() - created.getTime()) / 1000, 0)
   } catch { return 999999 }
 }
