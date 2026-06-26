@@ -3767,8 +3767,72 @@ async function loadAdminDashboard(force) {
     if (dashResp.status !== 'success') throw new Error(dashResp.message || '加载失败');
     renderAdminDashboard(container, dashResp.data, userListResp);
     _adminDashState.loaded = true;
+    if (userListResp && userListResp.status === 'success') {
+      _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
+    }
   } catch (e) {
     container.innerHTML = '<div class="admin-dash-loading" style="color:#ef4444">加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+// Lightweight in-place update (no DOM rebuild, no chart destroy/recreate)
+async function updateAdminDashboard() {
+  const container = $('adminDashContent');
+  if (!container || !_adminDashState.loaded) return;
+  const fmt = n => { if (!n || n < 1000) return (n||0).toLocaleString(); if (n < 1000000) return (n/1000).toFixed(1)+'K'; return (n/1000000).toFixed(2)+'M'; };
+  try {
+    const curPage = _adminDashState.userList?.page || 1;
+    const [dashResp, userListResp] = await Promise.all([
+      wsApi('admin_dashboard'),
+      wsApi('admin_user_list', { page: curPage, pageSize: 10 })
+    ]);
+    if (dashResp.status !== 'success') return;
+    const d = dashResp.data, us = d.userStats, ss = d.signalStats, ar = d.autoReasonStats, tk = d.tokenStats || {};
+    const wssCount = d.bridges.length;
+
+    // Update stats grid in-place
+    const set = (field, val) => { const el = container.querySelector('[data-field="' + field + '"]'); if (el) el.textContent = val; };
+    set('wss', wssCount);
+    set('autoReason', ar.auto_reasoning_users || 0);
+    set('tradeEnabled', ar.trade_enabled_users || 0);
+    set('totalUsers', us.total_users || 0);
+    set('userBreakdown', 'Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0));
+    set('todayNew', us.today_new || 0);
+    set('onlineNow', us.online_now || 0);
+    set('todayTokens', fmt(tk.today_tokens));
+    set('totalTokens', '累计 ' + fmt(tk.total_tokens));
+
+    // Update signal mini stats
+    set('sigTotal', ss.total || 0);
+    set('sigToday', ss.today || 0);
+    set('sigWeek', ss.week || 0);
+    set('sigExecuted', ss.executed || 0);
+    set('sigConfidence', (ss.avg_confidence||0) + '%');
+
+    // Update charts in-place (no destroy/recreate)
+    const charts = _adminDashState.charts;
+    if (charts.signalType && d.signalTypeDist.length > 0) {
+      charts.signalType.data.datasets[0].data = d.signalTypeDist.map(r => r.cnt);
+      charts.signalType.update('none');
+    }
+    if (charts.signalTrend && d.signalTrend.length > 0) {
+      charts.signalTrend.data.labels = d.signalTrend.map(r => r.day?.slice(5) || '');
+      charts.signalTrend.data.datasets[0].data = d.signalTrend.map(r => r.cnt);
+      charts.signalTrend.update('none');
+    }
+    if (charts.tokenTrend && d.tokenTrend && d.tokenTrend.length > 0) {
+      charts.tokenTrend.data.labels = d.tokenTrend.map(r => r.day?.slice(5) || '');
+      charts.tokenTrend.data.datasets[0].data = d.tokenTrend.map(r => r.tokens);
+      charts.tokenTrend.update('none');
+    }
+
+    // Update user list in-place
+    if (userListResp && userListResp.status === 'success') {
+      _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
+      renderUserList(userListResp);
+    }
+  } catch (e) {
+    console.warn('[admin-dash] update failed:', e.message);
   }
 }
 
@@ -3785,7 +3849,7 @@ function startDashAutoRefresh() {
     _adminDashState.countdown--;
     if (_adminDashState.countdown <= 0) {
       _adminDashState.countdown = 20;
-      loadAdminDashboard(true);
+      updateAdminDashboard();
     }
     updateCountdown();
   }, 1000);
@@ -3813,25 +3877,25 @@ function renderAdminDashboard(el, d, userListResp) {
   el.innerHTML = [
     '<div class="dash-header">',
     '  <div class="dash-title"><i data-lucide="bar-chart-3" size="15"></i>数据看板</div>',
-    '  <div class="dash-actions"><button class="dash-btn" id="dashRefreshBtn"><i data-lucide="refresh-cw" size="12"></i>刷新</button><span class="dash-countdown" id="dashCountdown"></span></div>',
+    '  <div class="dash-actions"><button class="dash-btn" id="dashRefreshBtn"><i data-lucide="refresh-cw" size="12"></i><span class="dash-btn-label">刷新</span><span class="dash-btn-countdown" id="dashCountdown"></span></button></div>',
     '</div>',
     '',
     '<div class="stats-grid">',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="radio"></i>WSS</div><div class="stat-val">' + wssCount + '</div><div class="stat-sub">在线桥接</div></div>',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="cpu"></i>推理</div><div class="stat-val">' + (ar.auto_reasoning_users||0) + '</div><div class="stat-sub">自动推理用户</div></div>',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="zap"></i>交易</div><div class="stat-val">' + (ar.trade_enabled_users||0) + '</div><div class="stat-sub">自动交易用户</div></div>',
-    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="users"></i>用户</div><div class="stat-val">' + (us.total_users||0) + '</div><div class="stat-sub">Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0) + '</div></div>',
-    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="user-plus"></i>新增</div><div class="stat-val">' + (us.today_new||0) + '</div><div class="stat-sub">今日注册</div></div>',
-    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="activity"></i>在线</div><div class="stat-val">' + (us.online_now||0) + '</div><div class="stat-sub">5分钟活跃</div></div>',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="database"></i>Token</div><div class="stat-val">' + fmt(tk.today_tokens) + '</div><div class="stat-sub">累计 ' + fmt(tk.total_tokens) + '</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="radio"></i>WSS</div><div class="stat-val" data-field="wss">' + wssCount + '</div><div class="stat-sub">在线桥接</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="cpu"></i>推理</div><div class="stat-val" data-field="autoReason">' + (ar.auto_reasoning_users||0) + '</div><div class="stat-sub">自动推理用户</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="zap"></i>交易</div><div class="stat-val" data-field="tradeEnabled">' + (ar.trade_enabled_users||0) + '</div><div class="stat-sub">自动交易用户</div></div>',
+    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="users"></i>用户</div><div class="stat-val" data-field="totalUsers">' + (us.total_users||0) + '</div><div class="stat-sub" data-field="userBreakdown">Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0) + '</div></div>',
+    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="user-plus"></i>新增</div><div class="stat-val" data-field="todayNew">' + (us.today_new||0) + '</div><div class="stat-sub">今日注册</div></div>',
+    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="activity"></i>在线</div><div class="stat-val" data-field="onlineNow">' + (us.online_now||0) + '</div><div class="stat-sub">5分钟活跃</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="database"></i>Token</div><div class="stat-val" data-field="todayTokens">' + fmt(tk.today_tokens) + '</div><div class="stat-sub" data-field="totalTokens">累计 ' + fmt(tk.total_tokens) + '</div></div>',
     '</div>',
     '',
     '<div class="signal-row">',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(212,175,55,0.1)"><i data-lucide="activity" style="color:var(--gold-primary)"></i></div><div class="sig-info"><span class="sig-lbl">总信号</span><span class="sig-num">' + (ss.total||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(34,197,94,0.1)"><i data-lucide="trending-up" style="color:#22c55e"></i></div><div class="sig-info"><span class="sig-lbl">今日</span><span class="sig-num">' + (ss.today||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(59,130,246,0.1)"><i data-lucide="calendar" style="color:#60a5fa"></i></div><div class="sig-info"><span class="sig-lbl">本周</span><span class="sig-num">' + (ss.week||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(168,85,247,0.1)"><i data-lucide="check-circle" style="color:#a78bfa"></i></div><div class="sig-info"><span class="sig-lbl">已执行</span><span class="sig-num">' + (ss.executed||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(251,191,36,0.1)"><i data-lucide="percent" style="color:#fbbf24"></i></div><div class="sig-info"><span class="sig-lbl">置信度</span><span class="sig-num">' + (ss.avg_confidence||0) + '%</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(212,175,55,0.1)"><i data-lucide="activity" style="color:var(--gold-primary)"></i></div><div class="sig-info"><span class="sig-lbl">总信号</span><span class="sig-num" data-field="sigTotal">' + (ss.total||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(34,197,94,0.1)"><i data-lucide="trending-up" style="color:#22c55e"></i></div><div class="sig-info"><span class="sig-lbl">今日</span><span class="sig-num" data-field="sigToday">' + (ss.today||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(59,130,246,0.1)"><i data-lucide="calendar" style="color:#60a5fa"></i></div><div class="sig-info"><span class="sig-lbl">本周</span><span class="sig-num" data-field="sigWeek">' + (ss.week||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(168,85,247,0.1)"><i data-lucide="check-circle" style="color:#a78bfa"></i></div><div class="sig-info"><span class="sig-lbl">已执行</span><span class="sig-num" data-field="sigExecuted">' + (ss.executed||0) + '</span></div></div>',
+    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(251,191,36,0.1)"><i data-lucide="percent" style="color:#fbbf24"></i></div><div class="sig-info"><span class="sig-lbl">置信度</span><span class="sig-num" data-field="sigConfidence">' + (ss.avg_confidence||0) + '%</span></div></div>',
     '</div>',
     '',
     '<div class="charts-row">',
@@ -3920,7 +3984,7 @@ function renderAdminDashboard(el, d, userListResp) {
   if (refreshBtn) refreshBtn.addEventListener('click', () => {
     refreshBtn.classList.add('spinning');
     _adminDashState.countdown = 20;
-    loadAdminDashboard(true).finally(() => refreshBtn.classList.remove('spinning'));
+    updateAdminDashboard().finally(() => refreshBtn.classList.remove('spinning'));
   });
 
   // ====== User Search ======
@@ -3998,7 +4062,10 @@ function renderAdminDashboard(el, d, userListResp) {
         else targetPage = Number(btn.dataset.page);
         if (targetPage === data.page) return;
         const resp = await wsApi('admin_user_list', { page: targetPage, pageSize: data.pageSize || 10 });
-        if (resp.status === 'success') renderUserList(resp);
+        if (resp.status === 'success') {
+          _adminDashState.userList = { page: resp.page, total: resp.total, users: resp.users };
+          renderUserList(resp);
+        }
       });
     });
   }

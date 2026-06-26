@@ -3934,13 +3934,15 @@ a.signal-link:hover {
 }
 .dash-btn.spinning i { animation: spin 1s linear infinite; }
 
-/* Countdown next to refresh button */
-.dash-countdown {
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0.8rem; font-weight: 600; color: var(--text-muted);
+/* Countdown integrated inside refresh button */
+.dash-btn-label { white-space: nowrap; }
+.dash-btn-countdown {
+  font-size: 0.75rem; font-weight: 600; color: var(--gold-primary);
   font-family: 'Consolas', 'Menlo', monospace;
-  min-width: 32px; letter-spacing: 0.02em;
+  min-width: 28px; text-align: center; opacity: 0.8;
+  transition: color 0.3s;
 }
+.dash-btn-countdown:empty { display: none; }
 
 /* ====== Tech Stats Grid (compact) ====== */
 .stats-grid {
