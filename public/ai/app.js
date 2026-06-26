@@ -3785,64 +3785,82 @@ function renderAdminDashboard(el, d) {
       <button class="ad-refresh-btn" id="adRefreshBtn"><i data-lucide="refresh-cw" size="14"></i>刷新</button>
     </div>
 
-    <!-- 核心指标 -->
-    <div class="ad-stats-grid">
-      <div class="ad-stat-card ad-stat-accent">
-        <div class="ad-stat-label">WSS 连接</div>
-        <div class="ad-stat-value">${wssCount}</div>
-        <div class="ad-stat-sub">当前在线桥接用户</div>
+    <!-- 核心指标 — Bento Grid -->
+    <div class="ad-bento">
+      <div class="ad-metric-card ad-metric-highlight">
+        <div class="ad-metric-label">WSS 连接</div>
+        <div class="ad-metric-value">${wssCount}</div>
+        <div class="ad-metric-sub">当前在线桥接用户</div>
       </div>
-      <div class="ad-stat-card ad-stat-accent">
-        <div class="ad-stat-label">自动推理</div>
-        <div class="ad-stat-value">${ar.auto_reasoning_users||0}</div>
-        <div class="ad-stat-sub">已开启用户数</div>
+      <div class="ad-metric-card ad-metric-highlight">
+        <div class="ad-metric-label">自动推理</div>
+        <div class="ad-metric-value">${ar.auto_reasoning_users||0}</div>
+        <div class="ad-metric-sub">已开启用户数</div>
       </div>
-      <div class="ad-stat-card ad-stat-accent">
-        <div class="ad-stat-label">自动交易</div>
-        <div class="ad-stat-value">${ar.trade_enabled_users||0}</div>
-        <div class="ad-stat-sub">已开启用户数</div>
+      <div class="ad-metric-card ad-metric-highlight">
+        <div class="ad-metric-label">自动交易</div>
+        <div class="ad-metric-value">${ar.trade_enabled_users||0}</div>
+        <div class="ad-metric-sub">已开启用户数</div>
       </div>
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">总用户</div>
-        <div class="ad-stat-value">${us.total_users||0}</div>
-        <div class="ad-stat-sub">Pro ${us.pro_users||0} · Plus ${us.plus_users||0} · Free ${us.free_users||0}</div>
+      <div class="ad-metric-card">
+        <div class="ad-metric-label">总用户</div>
+        <div class="ad-metric-value">${us.total_users||0}</div>
+        <div class="ad-metric-sub">Pro ${us.pro_users||0} · Plus ${us.plus_users||0} · Free ${us.free_users||0}</div>
       </div>
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">今日新增</div>
-        <div class="ad-stat-value">${us.today_new||0}</div>
+      <div class="ad-metric-card">
+        <div class="ad-metric-label">今日新增</div>
+        <div class="ad-metric-value">${us.today_new||0}</div>
       </div>
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">实时在线</div>
-        <div class="ad-stat-value">${us.online_now||0}</div>
-        <div class="ad-stat-sub">5分钟内活跃</div>
+      <div class="ad-metric-card">
+        <div class="ad-metric-label">实时在线</div>
+        <div class="ad-metric-value">${us.online_now||0}</div>
+        <div class="ad-metric-sub">5分钟内活跃</div>
       </div>
     </div>
 
     <!-- 信号统计 -->
-    <div class="ad-section-title"><i data-lucide="zap" size="18"></i>信号统计</div>
-    <div class="ad-stats-grid">
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">总信号</div>
-        <div class="ad-stat-value">${ss.total||0}</div>
+    <div class="ad-section-title"><i data-lucide="zap" size="16"></i>信号统计</div>
+    <div class="ad-signal-grid">
+      <div class="ad-signal-card">
+        <div class="ad-signal-icon" style="background:rgba(212,175,55,0.1)"><i data-lucide="activity" size="16" style="color:var(--gold-primary)"></i></div>
+        <div class="ad-signal-info">
+          <span class="ad-signal-label">总信号</span>
+          <span class="ad-signal-number">${ss.total||0}</span>
+        </div>
       </div>
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">今日信号</div>
-        <div class="ad-stat-value">${ss.today||0}</div>
+      <div class="ad-signal-card">
+        <div class="ad-signal-icon" style="background:rgba(34,197,94,0.1)"><i data-lucide="trending-up" size="16" style="color:#22c55e"></i></div>
+        <div class="ad-signal-info">
+          <span class="ad-signal-label">今日信号</span>
+          <span class="ad-signal-number">${ss.today||0}</span>
+        </div>
       </div>
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">本周信号</div>
-        <div class="ad-stat-value">${ss.week||0}</div>
+      <div class="ad-signal-card">
+        <div class="ad-signal-icon" style="background:rgba(59,130,246,0.1)"><i data-lucide="calendar" size="16" style="color:#60a5fa"></i></div>
+        <div class="ad-signal-info">
+          <span class="ad-signal-label">本周信号</span>
+          <span class="ad-signal-number">${ss.week||0}</span>
+        </div>
       </div>
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">已执行</div>
-        <div class="ad-stat-value">${ss.executed||0}</div>
+      <div class="ad-signal-card">
+        <div class="ad-signal-icon" style="background:rgba(168,85,247,0.1)"><i data-lucide="check-circle" size="16" style="color:#a78bfa"></i></div>
+        <div class="ad-signal-info">
+          <span class="ad-signal-label">已执行</span>
+          <span class="ad-signal-number">${ss.executed||0}</span>
+        </div>
       </div>
-      <div class="ad-stat-card">
-        <div class="ad-stat-label">平均置信度</div>
-        <div class="ad-stat-value">${ss.avg_confidence||0}%</div>
+      <div class="ad-signal-card">
+        <div class="ad-signal-icon" style="background:rgba(251,191,36,0.1)"><i data-lucide="percent" size="16" style="color:#fbbf24"></i></div>
+        <div class="ad-signal-info">
+          <span class="ad-signal-label">平均置信度</span>
+          <span class="ad-signal-number">${ss.avg_confidence||0}%</span>
+        </div>
       </div>
     </div>
 
+    <div class="section-break"></div>
+
+    <!-- 方向分布 + 趋势 -->
     <div class="ad-two-col">
       <div class="ad-chart-card">
         <h4>信号方向分布</h4>
@@ -3851,38 +3869,54 @@ function renderAdminDashboard(el, d) {
       <div class="ad-chart-card">
         <h4>方向统计</h4>
         <div class="ad-direction-stats">
-          <div class="ad-dir-item ad-dir-buy"><span class="ad-dir-icon">↑</span><span class="ad-dir-label">买入</span><span class="ad-dir-cnt">${buyCnt}</span></div>
-          <div class="ad-dir-item ad-dir-sell"><span class="ad-dir-icon">↓</span><span class="ad-dir-label">卖出</span><span class="ad-dir-cnt">${sellCnt}</span></div>
-          <div class="ad-dir-item ad-dir-hold"><span class="ad-dir-icon">→</span><span class="ad-dir-label">观望</span><span class="ad-dir-cnt">${holdCnt}</span></div>
+          <div class="ad-dir-item ad-dir-buy"><span class="ad-dir-icon">↑</span><span class="ad-dir-label">买入信号</span><span class="ad-dir-cnt">${buyCnt}</span></div>
+          <div class="ad-dir-item ad-dir-sell"><span class="ad-dir-icon">↓</span><span class="ad-dir-label">卖空信号</span><span class="ad-dir-cnt">${sellCnt}</span></div>
+          <div class="ad-dir-item ad-dir-hold"><span class="ad-dir-icon">—</span><span class="ad-dir-label">观望信号</span><span class="ad-dir-cnt">${holdCnt}</span></div>
         </div>
       </div>
     </div>
     <div class="ad-chart-card"><h4>近30天信号趋势</h4><div class="ad-chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>
 
+    <div class="section-break"></div>
+
     <!-- 在线桥接 -->
-    <div class="ad-section-title"><i data-lucide="radio" size="18"></i>在线桥接 (${wssCount})</div>
-    <div class="ad-table-card">
-      <table class="ad-table">
-        <thead><tr><th>用户</th><th>计划</th><th>交易</th><th>自动推理</th><th>最后心跳</th></tr></thead>
-        <tbody>${d.bridges.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">暂无在线桥接</td></tr>' :
-          d.bridges.map(b => `<tr>
-            <td>${escapeHtml(b.nickname||'UID:'+b.userId)}<br><span style="font-size:.72rem;color:var(--text-muted)">${escapeHtml(b.email)}</span></td>
-            <td><span class="ad-chip ad-chip-${b.plan||'free'}">${b.plan||'free'}</span></td>
-            <td>${b.tradeEnabled ? '<span style="color:#22c55e">● 开启</span>' : '<span style="color:var(--text-muted)">○ 关闭</span>'}</td>
-            <td>${b.autoReasoning ? '<span style="color:#22c55e">● 开启</span>' : '<span style="color:var(--text-muted)">○ 关闭</span>'}</td>
-            <td style="font-size:.78rem;color:var(--text-muted)">${formatTimeAgo(b.lastSeen)}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
+    <div class="ad-bridge-section">
+      <div class="ad-bridge-header">
+        <h3><i data-lucide="radio" size="16" style="color:var(--gold-primary)"></i>在线桥接</h3>
+        <span class="ad-bridge-count">${wssCount} 连接</span>
+      </div>
+      <div class="ad-bridge-card">
+        ${d.bridges.length === 0
+          ? `<div class="ad-bridge-empty">暂无在线桥接</div>`
+          : `<table class="ad-bridge-table">
+            <thead><tr><th>用户</th><th>计划</th><th>交易</th><th>自动推理</th><th>最后心跳</th></tr></thead>
+            <tbody>${d.bridges.map(b => `<tr>
+              <td>
+                <div class="ad-bridge-user">
+                  <span class="ad-bridge-user-name">${escapeHtml(b.nickname||'UID:'+b.userId)}</span>
+                  <span class="ad-bridge-user-email">${escapeHtml(b.email)}</span>
+                </div>
+              </td>
+              <td><span class="ad-chip ad-chip-${b.plan||'free'}">${b.plan||'free'}</span></td>
+              <td><span class="ad-bridge-status"><span class="ad-bridge-dot ${b.tradeEnabled ? 'on' : 'off'}"></span>${b.tradeEnabled ? '开启' : '关闭'}</span></td>
+              <td><span class="ad-bridge-status"><span class="ad-bridge-dot ${b.autoReasoning ? 'on' : 'off'}"></span>${b.autoReasoning ? '开启' : '关闭'}</span></td>
+              <td style="font-size:0.78rem;color:var(--text-muted)">${formatTimeAgo(b.lastSeen)}</td>
+            </tr>`).join('')}</tbody>
+          </table>`}
+      </div>
     </div>
 
+    <div class="section-break"></div>
+
     <!-- 用户状态查询 -->
-    <div class="ad-section-title"><i data-lucide="search" size="18"></i>用户状态查询</div>
-    <div class="ad-user-lookup">
-      <input type="text" id="adUserLookupEmail" placeholder="输入用户邮箱" class="ad-input">
-      <button id="adUserLookupBtn" class="ad-refresh-btn"><i data-lucide="search" size="14"></i>查询</button>
+    <div class="ad-lookup-section">
+      <div class="ad-section-title"><i data-lucide="search" size="16"></i>用户状态查询</div>
+      <div class="ad-lookup-bar">
+        <input type="text" id="adUserLookupEmail" placeholder="输入用户邮箱查询系统状态" class="ad-lookup-input">
+        <button id="adUserLookupBtn" class="ad-refresh-btn"><i data-lucide="arrow-right" size="14"></i>查询</button>
+      </div>
+      <div id="adUserStatusResult"></div>
     </div>
-    <div id="adUserStatusResult"></div>
   `;
   initIcons();
 
