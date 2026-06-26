@@ -1087,9 +1087,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'audit_logs': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const auditUserId = hasOwnBridge ? userId : (adminUserId || userId)
-        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [auditUserId])
+        // 审计日志只显示自己的数据
+        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
         const logs = ownRows.map(row => {
           const item = { ...row }
           item.created_at_mt5 = toMt5Time(item.created_at)

@@ -1802,9 +1802,12 @@ function applyRoleUI() {
     el.style.display = isAdmin ? '' : 'none';
   });
 
-  // 观摩模式隐藏审计导航
-  const auditTab = document.querySelector('.nav-item[data-tab="audit"]');
-  if (auditTab) auditTab.style.display = (isPlusReadOnly || isProNoBridge) ? 'none' : '';
+  // 管理分组：仅桥接已连接时显示
+  const navGroupManage = document.getElementById('navGroupManage');
+  if (navGroupManage) {
+    const hasBridge = isPro && !isAdmin && !isProNoBridge && !isPlusReadOnly;
+    navGroupManage.style.display = hasBridge ? '' : 'none';
+  }
 
   // Free users: locked out entirely (proOverlay shown during init)
 
