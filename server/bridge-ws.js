@@ -490,16 +490,15 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'account': {
-        const cached = await cacheGetJSON(`bridge:data:${userId}`)
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const dataKey = hasOwnBridge ? `bridge:data:${userId}` : `bridge:data:${adminUserId}`
+        const cached = dataKey ? await cacheGetJSON(dataKey) : null
         if (cached && cached.account) {
           result = { status: 'success', ...cached.account }
+        } else if (hasOwnBridge) {
+          result = await ai.mt5Bridge(userId, 'account', {})
         } else {
-          const adminCached = adminUserId ? await cacheGetJSON(`bridge:data:${adminUserId}`) : null
-          if (adminCached && adminCached.account) {
-            result = { status: 'success', ...adminCached.account }
-          } else {
-            result = await ai.mt5Bridge(userId, 'account', {})
-          }
+          result = await ai.mt5Bridge(adminUserId, 'account', {})
         }
         break
       }
@@ -507,31 +506,28 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(userId, 'symbols', {})
         break
       case 'quote': {
-        const cached = await cacheGetJSON(`bridge:data:${userId}`)
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const dataKey = hasOwnBridge ? `bridge:data:${userId}` : `bridge:data:${adminUserId}`
+        const cached = dataKey ? await cacheGetJSON(dataKey) : null
         if (cached && cached.quote) {
           result = { status: 'success', ...cached.quote }
+        } else if (hasOwnBridge) {
+          result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
         } else {
-          const adminCached = adminUserId ? await cacheGetJSON(`bridge:data:${adminUserId}`) : null
-          if (adminCached && adminCached.quote) {
-            result = { status: 'success', ...adminCached.quote }
-          } else {
-            result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
-          }
+          result = await ai.mt5Bridge(adminUserId, 'quote', { symbol: params.symbol })
         }
         break
       }
       case 'positions': {
-        const cached = await cacheGetJSON(`bridge:data:${userId}`)
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const dataKey = hasOwnBridge ? `bridge:data:${userId}` : `bridge:data:${adminUserId}`
+        const cached = dataKey ? await cacheGetJSON(dataKey) : null
         if (cached && cached.positions) {
           result = { status: 'success', positions: cached.positions }
+        } else if (hasOwnBridge) {
+          result = await ai.mt5Bridge(userId, 'positions', {})
         } else {
-          // Fallback: try admin's bridge data if user has no own bridge
-          const adminCached = adminUserId ? await cacheGetJSON(`bridge:data:${adminUserId}`) : null
-          if (adminCached && adminCached.positions) {
-            result = { status: 'success', positions: adminCached.positions }
-          } else {
-            result = await ai.mt5Bridge(userId, 'positions', {})
-          }
+          result = await ai.mt5Bridge(adminUserId, 'positions', {})
         }
         break
       }
