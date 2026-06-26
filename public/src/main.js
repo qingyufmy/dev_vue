@@ -3335,10 +3335,10 @@ function renderAdminContent(data) {
                     </tr>`).join('')}
                 </tbody>
               </table>
-            </div>
-            <div id="adminUserPager" class="admin-pager"></div>`
+            </div>`
           : '<div class="comments-empty">暂无会员</div>'
         }
+        <div id="adminUserPager" class="admin-pager"></div>
       </div>
 
       <!-- 订单充值 -->
