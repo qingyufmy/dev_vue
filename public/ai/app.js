@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || "",
   user: null,
   symbols: [],
@@ -855,28 +855,40 @@ let _lastSignalId = null;
 // Also polls for new signals every 5s when bridge is not pushing data
 let _uiTimerPollCounter = 0;
 let _statusRefreshCounter = 0;
-setInterval(() => {
-  const s = state.selectedSignal;
-  if (s) {
-    setText("sigValidWindow", signalFreshness(s));
-    setText("signalFreshness", signalFreshness(s));
-    setText("analysisValidity", signalFreshness(s));
-    setSignalBadge(s);
-    // Update execute button state when signal expires
-    const btn = $("executeSignalBtn");
-    if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
-  }
-  // Poll for new signals every 5s (bridge data push handles this when connected)
-  if (++_uiTimerPollCounter >= 5) {
-    _uiTimerPollCounter = 0;
-    if (state.token) _maybeRefreshSignal();
-  }
-  // Refresh topbar badges (auto/close/trade) every 15s
-  if (++_statusRefreshCounter >= 15) {
-    _statusRefreshCounter = 0;
-    if (state.token) loadStatus().catch(() => {});
-  }
-}, 1000);
+let _uiTimerInterval = null;
+
+function startUiTimer() {
+  if (_uiTimerInterval) return;
+  _uiTimerInterval = setInterval(() => {
+    const s = state.selectedSignal;
+    if (s) {
+      setText("sigValidWindow", signalFreshness(s));
+      setText("signalFreshness", signalFreshness(s));
+      setText("analysisValidity", signalFreshness(s));
+      setSignalBadge(s);
+      const btn = $("executeSignalBtn");
+      if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
+    }
+    if (++_uiTimerPollCounter >= 5) {
+      _uiTimerPollCounter = 0;
+      if (state.token) _maybeRefreshSignal();
+    }
+    if (++_statusRefreshCounter >= 15) {
+      _statusRefreshCounter = 0;
+      if (state.token) loadStatus().catch(() => {});
+    }
+  }, 1000);
+}
+
+function stopUiTimer() {
+  if (_uiTimerInterval) { clearInterval(_uiTimerInterval); _uiTimerInterval = null; }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { stopUiTimer(); } else { startUiTimer(); }
+});
+
+startUiTimer();
 
 async function _maybeRefreshSignal() {
   const now = Date.now();
@@ -1495,10 +1507,21 @@ let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
 let _klineVolRefreshTimer = null;
+let _klineMutationObserver = null;
+let _klineResizeObserver = null;
+
+function disconnectKlineObservers() {
+  if (_klineMutationObserver) { _klineMutationObserver.disconnect(); _klineMutationObserver = null; }
+  if (_klineResizeObserver) { _klineResizeObserver.disconnect(); _klineResizeObserver = null; }
+}
 
 function initKlineChart() {
   const container = document.getElementById('klineChart');
-  if (!container || _klineChart) return;
+  if (!container) return;
+  if (_klineChart) {
+    disconnectKlineObservers();
+    return;
+  }
 
   // Defer chart creation if container is hidden (0 size)
   if (container.offsetWidth === 0 || container.offsetHeight === 0) {
@@ -1566,30 +1589,31 @@ function _createKlineChart(container) {
   const tvLogo = container.querySelector('#tv-attr-logo') || container.querySelector('a[href*="tradingview"]');
   if (tvLogo) tvLogo.remove();
   // Also watch for late-inserted logo
-  new MutationObserver(function(mutations) {
+  _klineMutationObserver = new MutationObserver(function(mutations) {
     mutations.forEach(function(m) {
       m.addedNodes.forEach(function(n) {
         if (n.tagName === 'A' && n.href && n.href.indexOf('tradingview') > -1) n.remove();
       });
     });
-  }).observe(container, { childList: true });
+  });
+  _klineMutationObserver.observe(container, { childList: true });
 
   // Responsive
-  const ro = new ResizeObserver(() => {
+  _klineResizeObserver = new ResizeObserver(() => {
     if (_klineChart && container.clientWidth > 0) {
       _klineChart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
     }
   });
-  ro.observe(container);
+  _klineResizeObserver.observe(container);
 
   // Period buttons
   document.querySelectorAll('.kline-period-btn').forEach(btn => {
     btn.addEventListener('click', () => switchKlineTimeframe(btn.dataset.tf));
   });
 
-  // Volume refresh every 1 second
+  // Volume refresh every 5 seconds (was 1s, reduced for performance)
   clearInterval(_klineVolRefreshTimer);
-  _klineVolRefreshTimer = setInterval(refreshKlineVolume, 1000);
+  _klineVolRefreshTimer = setInterval(refreshKlineVolume, 5000);
 
   // Zoom limit: don't allow zooming out beyond all loaded data
   _klineChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
