@@ -14,7 +14,7 @@ const router = Router()
 
 router.get('/auth/me', authMiddleware, async (req, res) => {
   const user = await queryOne('SELECT id, email, nickname, role, plan, plan_expires_at FROM users WHERE id = ?', [req.user.id])
-  if (!user) return res.status(404).json({ status: 'error', message: 'User not found' })
+  if (!user) return res.status(404).json({ ok: false, error: 'User not found' })
   const now = new Date()
   const expiresAt = user.plan_expires_at ? new Date(user.plan_expires_at) : null
   let plan = user.plan
