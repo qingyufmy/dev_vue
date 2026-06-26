@@ -4251,10 +4251,10 @@ async function refreshAdminUserTable(search = '', page = 1) {
           </div>
         </td>
       </tr>`).join('')
+    renderAdminUserPager(data)
   } catch (e) {
     console.error('refreshAdminUserTable error:', e)
   }
-  renderAdminUserPager(data)
 }
 
 function renderAdminUserPager(data) {
