@@ -1098,8 +1098,11 @@ class BridgeWorker(QThread):
             "time": self._mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
             "volume": bar_vol},
             "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type == 0 else "sell",
-                "volume": p.volume, "open_price": p.price_open, "current_price": p.price_current,
+                "volume": p.volume, "price_open": p.price_open, "price_current": p.price_current,
+                "open_price": p.price_open, "current_price": p.price_current,
+                "time": self._mt5_time(p.time) if p.time else '', "time_update": self._mt5_time(p.time_update) if getattr(p, 'time_update', None) else '',
                 "profit": round(p.profit, 2), "sl": p.sl, "tp": p.tp,
+                "digits": getattr(p, 'digits', 2),
                 "swap": p.swap, "commission": getattr(p, 'commission', 0)} for p in positions],
             "live_trading_enabled": self._trade_enabled}
 
