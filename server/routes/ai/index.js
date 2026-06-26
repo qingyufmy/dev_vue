@@ -39,21 +39,22 @@ router.get('/bridge/version', (req, res) => {
 
 export { initAutoSchedulers }
 
-export { executeViaBridge, isBridgeAlive, getBridgeStatus, getAllBridges,
-  mt5Bridge } from './market-data.js'
+export { executeViaBridge, mt5Bridge } from './market-data.js'
+export { isBridgeAlive, getBridgeStatus, getAllBridges, getBridgeTradeMode, getOwnBridgeTradeMode } from '../../bridge-ws.js'
 
 export { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
 
 export { maybeAiSignal } from './llm.js'
 
-export { insertAudit, getActiveConfig, getAnalyzeApiKey, configPublic,
-  getAutoConfig, upsertAutoConfig, signalOrderPayload, attachSignalTiming,
-  timeframeIntervalMs, getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
+export { insertAudit, getActiveConfig, getAnalyzeApiKey,
+  getAutoConfig, upsertAutoConfig, signalOrderPayload,
+  getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
   getExecuteRiskConfig } from './config.js'
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   runAutoCycle, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler } from './scheduler.js'
 
-export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags } from './utils.js'
+export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
+  attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'
 
 export default router
