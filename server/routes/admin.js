@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
+import { cacheGetJSON, cacheSetJSON } from '../redis.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const resourceDir = join(__dirname, '..', 'uploads', 'resources')
@@ -35,42 +36,41 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     if (plan === 'member') { where += " AND u.plan IN ('plus','pro')"; }
     else if (plan === 'plus' || plan === 'pro' || plan === 'free') { where += ' AND u.plan = ?'; params.push(plan); }
 
-    // Get total user count
-    const totalUsers = (await queryOne('SELECT COUNT(*) as c FROM users')).c
+    // Cached dashboard stats (60s TTL)
+    const cacheKey = 'cache:admin:dashboard'
+    let dashboardStats = await cacheGetJSON(cacheKey)
+    if (!dashboardStats) {
+      const totalUsers = (await queryOne('SELECT COUNT(*) as c FROM users')).c
+      const todayNewUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE DATE(created_at) = CURDATE()')).c
 
-    // Get today's new users
-    const todayNewUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE DATE(created_at) = CURDATE()')).c
+      let realtimeOnlineUsers = 0, todayOnlineUsers = 0, weekOnlineUsers = 0
+      try {
+        realtimeOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)')).c
+        todayOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= CURDATE()')).c
+        weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)')).c
+      } catch (e) { console.error('[Admin] Online users query failed:', e.message) }
 
-    // Get online stats (based on last_seen_at)
-    let realtimeOnlineUsers = 0
-    let todayOnlineUsers = 0
-    let weekOnlineUsers = 0
-    try {
-      realtimeOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)')).c
-      todayOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= CURDATE()')).c
-      weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)')).c
-    } catch {}
+      const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus'")).c
+      const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro'")).c
 
-    // Get plan counts
-    const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus'")).c
-    const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro'")).c
+      let totalRevenue = 0, paidOrderCount = 0
+      try {
+        const revenueRes = await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as total, COUNT(*) as cnt FROM orders WHERE status = 'paid'")
+        totalRevenue = Math.round(revenueRes.total / 100)
+        paidOrderCount = revenueRes.cnt
+      } catch (e) { console.error('[Admin] Revenue query failed:', e.message) }
 
-    // Get total revenue
-    let totalRevenue = 0
-    let paidOrderCount = 0
-    try {
-      const revenueRes = await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as total, COUNT(*) as cnt FROM orders WHERE status = 'paid'")
-      totalRevenue = Math.round(revenueRes.total / 100)
-      paidOrderCount = revenueRes.cnt
-    } catch {}
+      let totalPosts = 0, totalComments = 0, totalReplies = 0
+      try {
+        totalPosts = (await queryOne('SELECT COUNT(*) as c FROM posts')).c
+        totalComments = (await queryOne('SELECT COUNT(*) as c FROM comments')).c
+        totalReplies = (await queryOne('SELECT COUNT(*) as c FROM post_replies')).c
+      } catch (e) { console.error('[Admin] Content stats query failed:', e.message) }
 
-    // Get content stats
-    let totalPosts = 0, totalComments = 0, totalReplies = 0
-    try {
-      totalPosts = (await queryOne('SELECT COUNT(*) as c FROM posts')).c
-      totalComments = (await queryOne('SELECT COUNT(*) as c FROM comments')).c
-      totalReplies = (await queryOne('SELECT COUNT(*) as c FROM post_replies')).c
-    } catch {}
+      dashboardStats = { totalUsers, todayNewUsers, realtimeOnlineUsers, todayOnlineUsers, weekOnlineUsers, plusUsers, proUsers, totalRevenue, paidOrderCount, totalPosts, totalComments, totalReplies }
+      await cacheSetJSON(cacheKey, dashboardStats, 60)
+    }
+    const { totalUsers, todayNewUsers, realtimeOnlineUsers, todayOnlineUsers, weekOnlineUsers, plusUsers, proUsers, totalRevenue, paidOrderCount, totalPosts, totalComments, totalReplies } = dashboardStats
 
     // Get users with pagination
     const userCount = (await queryOne(`SELECT COUNT(*) as c FROM users u WHERE ${where}`, params)).c
@@ -293,6 +293,7 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
       await run('DELETE FROM ai_configs WHERE user_id = ?', [userId])
       await run('DELETE FROM ai_signals WHERE user_id = ?', [userId])
       await run('DELETE FROM auto_scheduler WHERE user_id = ?', [userId])
+      await run('DELETE FROM user_bridge_settings WHERE user_id = ?', [userId])
       await run('DELETE FROM close_config WHERE user_id = ?', [userId])
       await run('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
       await run('DELETE FROM ui_configs WHERE user_id = ?', [userId])
@@ -461,7 +462,7 @@ router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) =
           if (bd.data.pic) finalCover = bd.data.pic.replace('http://', 'https://')
           if ((!duration || duration === '') && bd.data.duration) finalDuration = bd.data.duration
         }
-      } catch {}
+      } catch (e) { console.error('[Admin] Bilibili API fetch failed:', e.message) }
     }
 
     if (episodeId) {

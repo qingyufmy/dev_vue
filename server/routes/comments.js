@@ -18,15 +18,26 @@ router.get('/comments', optionalAuth, async (req, res) => {
       ORDER BY c.created_at DESC
     `, [episode])
 
+    // Batch load all user likes for this episode (avoid N+1)
+    let likedSet = new Set()
+    if (req.user && comments.length > 0) {
+      const commentIds = comments.map(c => c.id)
+      const placeholders = commentIds.map(() => '?').join(',')
+      const likedRows = await queryAll(
+        `SELECT comment_id FROM comment_likes WHERE user_id = ? AND comment_id IN (${placeholders})`,
+        [req.user.id, ...commentIds]
+      )
+      likedSet = new Set(likedRows.map(r => r.comment_id))
+    }
+
     // Get replies for each comment
-    const result = await Promise.all(comments.filter(c => !c.parent_id).map(async c => {
+    const result = comments.filter(c => !c.parent_id).map(c => {
       const replies = comments.filter(r => r.parent_id === c.id)
-      const liked = req.user ? await queryOne('SELECT id FROM comment_likes WHERE user_id = ? AND comment_id = ?', [req.user.id, c.id]) : null
       return {
         id: c.id,
         text: c.text,
         likes: c.likes,
-        liked: Boolean(liked),
+        liked: likedSet.has(c.id),
         createdAt: c.created_at,
         user: { nickname: c.nickname || '匿名', avatar: c.avatar, email: c.email },
         replies: replies.map(r => ({
@@ -37,7 +48,7 @@ router.get('/comments', optionalAuth, async (req, res) => {
           user: { nickname: r.nickname || '匿名', avatar: r.avatar, email: r.email }
         }))
       }
-    }))
+    })
 
     res.json({ ok: true, comments: result })
   } catch (err) {

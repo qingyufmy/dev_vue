@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { query, queryOne, queryAll, queryRun, logAudit, withTransaction } from './db.js'
+import { query, queryOne, queryAll, queryRun, logAudit, withTransaction, beijingNow } from './db.js'
 import { getRedis, cacheGetJSON, cacheSetJSON, cacheDel } from './redis.js'
 
 // Parse symbols from DB: handles legacy JSON array or plain comma-separated text
@@ -9,12 +9,6 @@ function parseSymbols(raw) {
   const s = raw.trim()
   if (s.startsWith('[')) { try { return JSON.parse(s) } catch { return [s] } }
   return s.split(',').map(x => x.trim()).filter(Boolean)
-}
-
-function localNow() {
-  const d = new Date()
-  const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function toMt5Time(str) {
@@ -646,7 +640,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'save_config': {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
-        const now = localNow()
+        const now = beijingNow()
         const sid = params.session_id || 'default'
         await withTransaction(async (run) => {
           await run('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, sid])
@@ -788,7 +782,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
         result = await ai.mt5Bridge(userId, 'open', orderPayload)
         if (result.status === 'success') {
-          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [localNow(), result.ticket || null, signal.id])
+          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), result.ticket || null, signal.id])
           cacheDel(`cache:history:${userId}`).catch(() => {})
         }
         await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm }, result, result.status)

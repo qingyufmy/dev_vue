@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
+import { cacheGetJSON, cacheSetJSON } from '../redis.js'
 
 const router = Router()
 
@@ -14,8 +15,13 @@ router.get('/system-config-public/:category', async (req, res) => {
     return res.status(403).json({ ok: false, error: 'Forbidden' })
   }
   try {
-    const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [category])
-    res.json({ ok: true, items: rows })
+    const cacheKey = `cache:config:${category}`
+    let items = await cacheGetJSON(cacheKey)
+    if (!items) {
+      items = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [category])
+      await cacheSetJSON(cacheKey, items, 300)
+    }
+    res.json({ ok: true, items })
   } catch (err) {
     res.json({ ok: false, error: err.message })
   }
@@ -56,12 +62,14 @@ router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
     if (existing) {
       await queryRun('UPDATE system_config SET `value` = ?, label = ?, sort_order = ?, updated_at = NOW() WHERE id = ?',
         [value || '', label || '', sort_order || 0, existing.id])
-      res.json({ ok: true, id: existing.id, action: 'updated' })
     } else {
-      const result = await queryRun('INSERT INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
+      await queryRun('INSERT INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
         [category, key, value || '', label || '', sort_order || 0])
-      res.json({ ok: true, id: result.insertId, action: 'created' })
     }
+    // Invalidate cache for this category
+    const { cacheDel } = await import('../redis.js')
+    await cacheDel(`cache:config:${category}`)
+    res.json({ ok: true, id: existing?.id, action: existing ? 'updated' : 'created' })
   } catch (err) {
     res.json({ ok: false, error: err.message })
   }
@@ -82,7 +90,9 @@ router.put('/system-config/:category', authMiddleware, adminOnly, async (req, re
         ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), label = VALUES(label), sort_order = VALUES(sort_order), updated_at = NOW()
       `, [category, item.key, item.value || '', item.label || '', item.sort_order ?? i])
     }
-
+    // Invalidate cache for this category
+    const { cacheDel } = await import('../redis.js')
+    await cacheDel(`cache:config:${category}`)
     res.json({ ok: true, count: items.length })
   } catch (err) {
     res.json({ ok: false, error: err.message })
@@ -92,7 +102,13 @@ router.put('/system-config/:category', authMiddleware, adminOnly, async (req, re
 // Delete config item
 router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
+    // Get category before delete to invalidate cache
+    const item = await queryOne('SELECT category FROM system_config WHERE id = ?', [req.params.id])
     await queryRun('DELETE FROM system_config WHERE id = ?', [req.params.id])
+    if (item) {
+      const { cacheDel } = await import('../redis.js')
+      await cacheDel(`cache:config:${item.category}`)
+    }
     res.json({ ok: true })
   } catch (err) {
     res.json({ ok: false, error: err.message })
@@ -103,6 +119,8 @@ router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) 
 router.delete('/system-config/category/:category', authMiddleware, adminOnly, async (req, res) => {
   try {
     await queryRun('DELETE FROM system_config WHERE category = ?', [req.params.category])
+    const { cacheDel } = await import('../redis.js')
+    await cacheDel(`cache:config:${req.params.category}`)
     res.json({ ok: true })
   } catch (err) {
     res.json({ ok: false, error: err.message })

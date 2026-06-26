@@ -1,7 +1,6 @@
 import { Router } from 'express'
-import { query, queryOne, queryAll, queryRun, logAudit } from '../db.js'
-import jwt from 'jsonwebtoken'
-import { JWT_SECRET } from '../config.js'
+import { query, queryOne, queryAll, queryRun, logAudit, beijingNow } from '../db.js'
+import { authMiddleware } from '../middleware/auth.js'
 
 import { sendBridgeCommand, isBridgeAlive, isTradeEnabled, getBridgeStatus, getAllBridges, getBridgeTradeMode, getOwnBridgeTradeMode } from '../bridge-ws.js'
 
@@ -60,41 +59,7 @@ async function buildStrategyContextFromTags(userId, symbol, account, positions, 
   }
 }
 
-// ============ Auth Middleware ============
-async function authMiddleware(req, res, next) {
-  const auth = req.headers.authorization
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return res.status(401).json({ status: 'error', message: 'Missing bearer token' })
-  }
-  try {
-    const payload = jwt.verify(auth.slice(7), JWT_SECRET)
-    req.userId = payload.userId
-    req.userEmail = payload.email
-    // Load user plan for Pro guard
-    const u = await queryOne('SELECT plan, role FROM users WHERE id = ?', [payload.userId])
-    req.userPlan = u?.plan || 'free'
-    req.userRole = u?.role || 'user'
-    next()
-  } catch {
-    res.status(401).json({ status: 'error', message: 'Invalid or expired token' })
-  }
-}
-
-function proOnly(req, res, next) {
-  if (req.userRole === 'admin' || req.userPlan === 'pro') return next()
-  return res.status(403).json({ status: 'error', message: '此功能仅限 Pro 会员使用' })
-}
-
 // ============ Helper Functions ============
-function utcNow() {
-  // Return local Beijing time for MySQL DATETIME (server is UTC+8)
-  const d = new Date()
-  const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
-
-const mt5Now = utcNow
-
 function utcToMt5Time(str) {
   // Convert Beijing time (UTC+8) to MT5 broker time (UTC+3): subtract 5 hours
   if (!str) return null
@@ -182,7 +147,7 @@ async function getActiveConfig(db, userId, sessionId = 'default', provider = nul
     try {
       const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''")
       for (const r of rows) cfg[r.key] = r.value
-    } catch {}
+    } catch (e) { console.error('[AI] Failed to load system_config:', e.message) }
     const sysKey = cfg.deepseek_api_key || cfg.openai_api_key
     if (sysKey) {
       if (!row) row = {}
@@ -269,7 +234,7 @@ async function insertAudit(db, userId, action, symbol, request, result, status) 
   await queryRun(`
     INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [userId, action, symbol || null, JSON.stringify(request), JSON.stringify(result), status, utcNow()])
+  `, [userId, action, symbol || null, JSON.stringify(request), JSON.stringify(result), status, beijingNow()])
 }
 
 // ============ MT5 Bridge (WebSocket via bridge-ws.js) ============
@@ -884,7 +849,7 @@ async function runSmartClose(userId, closeConfig, account, positions) {
     const analysisJson = JSON.stringify(parsed.positions)
 
     // Save CLOSE signal to ai_signals
-    const createdAt = utcNow()
+    const createdAt = beijingNow()
     const closeSignalResult = await queryRun(
       `INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
         analysis, reasoning, market_data_json, ai_model, ttl_seconds, created_at)
@@ -1138,7 +1103,7 @@ async function handleAnalyze(userId, params) {
 
 // Auth/me endpoint for frontend compatibility
 router.get('/auth/me', authMiddleware, async (req, res) => {
-  const user = await queryOne('SELECT id, email, nickname, role, plan, plan_expires_at FROM users WHERE id = ?', [req.userId])
+  const user = await queryOne('SELECT id, email, nickname, role, plan, plan_expires_at FROM users WHERE id = ?', [req.user.id])
   if (!user) return res.status(404).json({ status: 'error', message: 'User not found' })
   // Check if plan has expired
   const now = new Date()
@@ -1165,7 +1130,7 @@ async function getGlobalAutoConfig() {
 }
 
 async function saveGlobalAutoConfig(cfg) {
-  const now = utcNow()
+  const now = beijingNow()
   await queryRun(`
     UPDATE global_auto_config SET
       symbols = ?, interval_minutes = ?,
@@ -1279,7 +1244,7 @@ async function getExecuteRiskConfig(userId, signal) {
 }
 
 async function upsertAutoConfig(db, userId, symbols, enabled) {
-  const now = utcNow()
+  const now = beijingNow()
   await queryRun(`
     INSERT INTO auto_scheduler (user_id, symbols, enabled, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?)
@@ -1287,6 +1252,11 @@ async function upsertAutoConfig(db, userId, symbols, enabled) {
       symbols = VALUES(symbols), enabled = VALUES(enabled),
       updated_at = VALUES(updated_at)
   `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, now, now])
+  // Sync to user_bridge_settings for dual-table consistency
+  await queryRun(
+    'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = ?',
+    [userId, enabled ? 1 : 0, now, enabled ? 1 : 0, now]
+  ).catch(e => console.error('[AutoConfig] Failed to sync user_bridge_settings:', e.message))
 }
 
 // Map timeframe to its candle period in ms
@@ -1370,7 +1340,7 @@ async function runAutoCycle(userId, symbol, timeframe) {
     delete signal._inference_source
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
 
-    const createdAt = utcNow()
+    const createdAt = beijingNow()
     const result = await queryRun(`
       INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
         recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
@@ -1435,8 +1405,8 @@ async function runAutoCycle(userId, symbol, timeframe) {
   }
 
   // Update last_run_at
-  await queryRun('UPDATE auto_scheduler SET last_run_at = ? WHERE user_id = ?', [utcNow(), userId])
-  if (autoSchedulerState[userId]) autoSchedulerState[userId].lastRunAt = utcNow()
+  await queryRun('UPDATE auto_scheduler SET last_run_at = ? WHERE user_id = ?', [beijingNow(), userId])
+  if (autoSchedulerState[userId]) autoSchedulerState[userId].lastRunAt = beijingNow()
 }
 
 // ============ Smart Close Scheduler ============
@@ -1448,7 +1418,7 @@ export async function getCloseConfig(userId) {
 }
 
 export async function saveCloseConfig(userId, cfg) {
-  const now = utcNow()
+  const now = beijingNow()
   let keyEnc = cfg.api_key_encrypted || null
   if (cfg.api_key && !keyEnc) {
     keyEnc = cfg.api_key
@@ -1724,7 +1694,7 @@ export async function initAutoSchedulers() {
     for (const row of closeRows) {
       await startSmartCloseScheduler(row.user_id)
     }
-  } catch {}
+  } catch (e) { console.error('[initAutoSchedulers] Failed to restore smart close schedulers:', e.message) }
 }
 
 

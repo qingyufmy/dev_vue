@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
-import { queryOne, queryRun } from '../db.js'
+import { queryOne, queryRun, withTransaction } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 
 const router = Router()
@@ -96,20 +96,23 @@ router.post('/payment', authMiddleware, async (req, res) => {
     const orderNo = `WSS${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`
     const orderId = uuidv4()
 
-    // Create order
-    await queryRun(`
-      INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, paid_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', NOW())
-    `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
+    // Use transaction for order creation + user update (atomicity)
+    await withTransaction(async (run) => {
+      // Create order
+      await run(`
+        INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, paid_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', NOW())
+      `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
 
-    // Update user plan
-    const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
-    await queryRun("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
+      // Update user plan
+      const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
+      await run("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
 
-    // Deduct referral credit if used
-    if (referralCredit > 0) {
-      await queryRun("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
-    }
+      // Deduct referral credit if used
+      if (referralCredit > 0) {
+        await run("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
+      }
+    })
 
     // Calculate referral commission: find pending referral for this user, update with actual order amount
     try {
