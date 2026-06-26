@@ -649,7 +649,7 @@ function connectBridgeStatusWs(onReady) {
       if (ws.readyState === 1) {
         try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq })); } catch {}
       }
-    }, 1000);
+    }, 30000);
     _fireReady();
   };
   ws.onmessage = (e) => {

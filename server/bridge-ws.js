@@ -321,15 +321,8 @@ async function _initBridge(ws, userId) {
         }
       }
 
-      // Cache bridge data in Redis (TTL 3s — auto-expires when bridge goes offline)
-      cacheSetJSON(`bridge:data:${userId}`, {
-        account: msg.account,
-        quote: msg.quote,
-        positions: msg.positions,
-        live_trading_enabled: msg.live_trading_enabled,
-        trade_mode: tradeMode,
-        ts: Date.now()
-      }, 3).catch(() => {})
+      // Real-time data: no cache, direct broadcast to browsers only
+      // (account/positions/quote commands will fetch directly from bridge)
     } else if (msg.type === 'hb' || msg.type === 'pong') {
       // Bridge heartbeat/pong — lastSeen already updated
       if (bridge) bridge.lastPong = Date.now()
@@ -491,14 +484,12 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'account': {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const dataKey = hasOwnBridge ? `bridge:data:${userId}` : `bridge:data:${adminUserId}`
-        const cached = dataKey ? await cacheGetJSON(dataKey) : null
-        if (cached && cached.account) {
-          result = { status: 'success', ...cached.account }
-        } else if (hasOwnBridge) {
+        if (hasOwnBridge) {
           result = await ai.mt5Bridge(userId, 'account', {})
-        } else {
+        } else if (adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
           result = await ai.mt5Bridge(adminUserId, 'account', {})
+        } else {
+          result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
@@ -507,27 +498,23 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'quote': {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const dataKey = hasOwnBridge ? `bridge:data:${userId}` : `bridge:data:${adminUserId}`
-        const cached = dataKey ? await cacheGetJSON(dataKey) : null
-        if (cached && cached.quote) {
-          result = { status: 'success', ...cached.quote }
-        } else if (hasOwnBridge) {
+        if (hasOwnBridge) {
           result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
-        } else {
+        } else if (adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
           result = await ai.mt5Bridge(adminUserId, 'quote', { symbol: params.symbol })
+        } else {
+          result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
       case 'positions': {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const dataKey = hasOwnBridge ? `bridge:data:${userId}` : `bridge:data:${adminUserId}`
-        const cached = dataKey ? await cacheGetJSON(dataKey) : null
-        if (cached && cached.positions) {
-          result = { status: 'success', positions: cached.positions }
-        } else if (hasOwnBridge) {
+        if (hasOwnBridge) {
           result = await ai.mt5Bridge(userId, 'positions', {})
-        } else {
+        } else if (adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
           result = await ai.mt5Bridge(adminUserId, 'positions', {})
+        } else {
+          result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
@@ -587,8 +574,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             // 缓存未命中，从 MT5 桥接获取
             hRes = await ai.mt5Bridge(historyUserId, 'history', { page: 1, page_size: 9999 })
             if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
-              // 缓存原始数据，5分钟 TTL（交易操作时主动清除）
-              cacheSetJSON(histCacheKey, hRes, 300).catch(() => {})
+              // 缓存原始数据，3小时 TTL（交易操作时主动清除）
+              cacheSetJSON(histCacheKey, hRes, 10800).catch(() => {})
             }
           }
           if (hRes?.status === 'success' && Array.isArray(hRes.orders)) {
@@ -673,7 +660,15 @@ async function handleBrowserCommand(ws, userId, msg) {
           hcUserId = adminUserId
         }
         if (bridgeOk) {
-          const hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999 })
+          // Use cached history data (3h TTL, shared with history command)
+          const histCacheKey = `cache:history:${hcUserId}`
+          let hcResult = await cacheGetJSON(histCacheKey)
+          if (!hcResult) {
+            hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999 })
+            if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
+              cacheSetJSON(histCacheKey, hcResult, 10800).catch(() => {})
+            }
+          }
           if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
             // Compute initCapital from ALL orders (before filtering), using account balance
             const allOrders = hcResult.orders;
@@ -932,7 +927,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           return item
         })
         result = { status: 'success', signals, has_more: hasMore, total_count: totalCount }
-        cacheSetJSON(sigCacheKey, result, 10).catch(() => {})
+        cacheSetJSON(sigCacheKey, result, 300).catch(() => {})
 
         break
       }
