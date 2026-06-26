@@ -701,6 +701,108 @@ class BridgeWorker(QThread):
                     "trade_count": total, "total_volume": round(sum(float(r.get("volume") or 0) for r in rows),2)},
                     "pagination": {"current_page": page, "page_size": page_size,
                         "total_count": total, "total_pages": max(math.ceil(total/page_size),1)}, "source": "mt5"}
+            elif action == "chart_data":
+                # Chart aggregation: returns daily stats, cumulative, drawdown
+                import math
+                # Date range
+                if "date_to" in params:
+                    try: date_to = datetime.strptime(params["date_to"][:10], "%Y-%m-%d") + timedelta(days=1)
+                    except: date_to = datetime.utcnow() + timedelta(days=1)
+                else:
+                    date_to = datetime.utcnow() + timedelta(days=1)
+                if "date_from" in params:
+                    try: date_from = datetime.strptime(params["date_from"][:10], "%Y-%m-%d")
+                    except: date_from = date_to - timedelta(days=31)
+                else:
+                    date_from = date_to - timedelta(days=31)
+                # Optional filters
+                direction_filter = params.get("direction", "")
+                profit_filter = params.get("profit_filter", "")
+                # Fetch deals
+                deals = self.mt5.history_deals_get(date_from, date_to)
+                if deals is None:
+                    return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
+                deal_rows = [d._asdict() for d in deals]
+                # Group by position
+                entry_out = getattr(self.mt5, "DEAL_ENTRY_OUT", 1)
+                entry_inout = getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)
+                entry_in = getattr(self.mt5, "DEAL_ENTRY_IN", 0)
+                deal_type_buy = getattr(self.mt5, "DEAL_TYPE_BUY", 0)
+                deals_by_pos = {}
+                for d in deal_rows:
+                    key = d.get("position_id") or d.get("order") or d.get("ticket")
+                    deals_by_pos.setdefault(key, []).append(d)
+                # Build orders list
+                orders = []
+                for d in deal_rows:
+                    if d.get("entry") not in (entry_out, entry_inout): continue
+                    pid = d.get("position_id") or d.get("order") or d.get("ticket")
+                    grp = deals_by_pos.get(pid, [])
+                    ed = next((i for i in grp if i.get("entry") == entry_in), None)
+                    direction = "BUY" if (ed or d).get("type") == deal_type_buy else "SELL"
+                    profit = float(d.get("profit") or 0)
+                    close_time = self._mt5_time(d.get("time"))
+                    orders.append({"type": direction, "profit": profit, "close_time": close_time})
+                # Apply direction/profit filters
+                if direction_filter:
+                    orders = [o for o in orders if o["type"] == direction_filter]
+                if profit_filter == "profit":
+                    orders = [o for o in orders if o["profit"] > 0]
+                elif profit_filter == "loss":
+                    orders = [o for o in orders if o["profit"] < 0]
+                # Sort by close_time
+                orders.sort(key=lambda o: o.get("close_time") or "")
+                # Daily aggregation
+                daily_map = {}
+                for o in orders:
+                    d = (o.get("close_time") or "")[:10]
+                    if not d: continue
+                    if d not in daily_map:
+                        daily_map[d] = {"date": d, "profit": 0, "trade_count": 0, "wins": 0, "losses": 0}
+                    p = o["profit"]
+                    daily_map[d]["profit"] += p
+                    daily_map[d]["trade_count"] += 1
+                    if p > 0: daily_map[d]["wins"] += 1
+                    elif p < 0: daily_map[d]["losses"] += 1
+                # Round profits
+                for v in daily_map.values():
+                    v["profit"] = round(v["profit"] * 100) / 100
+                daily = sorted(daily_map.values(), key=lambda x: x["date"])
+                # Cumulative + drawdown
+                acc = self.mt5.account_info()
+                balance = float(acc.balance) if acc else 10000.0
+                total_profit = sum(o["profit"] for o in orders)
+                init_capital = max(0, balance - total_profit)
+                cumulative = []
+                drawdown = []
+                cum = 0
+                peak = init_capital
+                max_dd = 0
+                for day in daily:
+                    cum += day["profit"]
+                    cum = round(cum * 100) / 100
+                    cumulative.append(cum)
+                    equity = init_capital + cum
+                    if equity > peak: peak = equity
+                    dd = round((1 - equity / peak) * 10000) / 100 if peak > 0 else 0
+                    drawdown.append(dd)
+                    if dd > max_dd: max_dd = dd
+                # Win/loss stats
+                wins = [o for o in orders if o["profit"] > 0]
+                losses = [o for o in orders if o["profit"] < 0]
+                gross_profit = sum(o["profit"] for o in wins)
+                gross_loss = abs(sum(o["profit"] for o in losses))
+                avg_win = gross_profit / len(wins) if wins else 0
+                avg_loss = gross_loss / len(losses) if losses else 0
+                return {"status": "success", "daily": daily, "cumulative": cumulative,
+                    "drawdown": drawdown, "stats": {
+                    "total_trades": len(orders),
+                    "win_rate": round(len(wins) / len(orders) * 10000) / 100 if orders else 0,
+                    "profit_factor": round(avg_win / avg_loss * 100) / 100 if avg_loss > 0 else (999 if avg_win > 0 else 0),
+                    "max_drawdown": max_dd,
+                    "gross_profit": round(gross_profit * 100) / 100,
+                    "gross_loss": round(gross_loss * 100) / 100
+                }}
             elif action == "diagnostics":
                 acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
                 return {"status": "success", "mt5_connected": True,

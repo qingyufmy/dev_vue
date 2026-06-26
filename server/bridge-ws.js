@@ -594,114 +594,14 @@ async function handleBrowserCommand(ws, userId, msg) {
           hcUserId = adminUserId
         }
         if (bridgeOk) {
-          // Use cached history data (3h TTL, shared with history command)
-          const histCacheKey = `cache:history:${hcUserId}`
-          let hcResult = await cacheGetJSON(histCacheKey)
-          if (!hcResult) {
-            hcResult = await ai.mt5Bridge(hcUserId, 'history', { page: 1, page_size: 9999 })
-            if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
-              cacheSetJSON(histCacheKey, hcResult, 10800).catch(() => {})
-            }
-          }
-          if (hcResult?.status === 'success' && Array.isArray(hcResult.orders)) {
-            // Compute initCapital from ALL orders (before filtering), using account balance
-            const allOrders = hcResult.orders;
-            const totalProfit = allOrders.reduce((s, o) => s + Number(o.profit || 0), 0);
-            let initCapital = 0;
-            let acct = null;
-            try {
-              acct = await ai.mt5Bridge(hcUserId, 'account', {});
-              if (acct?.status === 'success' && acct.balance != null) {
-                initCapital = Math.max(0, acct.balance - totalProfit);
-              }
-            } catch (e) { /* fall through, initCapital=0 */ }
-
-            // Default chart date range: last 30 days
-            const now = new Date()
-            const defaultFrom = new Date(now); defaultFrom.setDate(defaultFrom.getDate() - 30)
-            const dateFrom = params.close_from || defaultFrom.toISOString().slice(0, 10)
-            const dateTo = params.close_to || now.toISOString().slice(0, 10)
-
-            // Daily aggregation on ALL orders (for daily bars display, up to 30 days)
-            const allDailyMap = {};
-            hcResult.orders.forEach(o => {
-              const d = (o.close_time || '').slice(0, 10);
-              if (!d) return;
-              if (!allDailyMap[d]) allDailyMap[d] = { profit: 0, trade_count: 0, wins: 0, losses: 0 }
-              const p = Number(o.profit || 0)
-              allDailyMap[d].profit += p
-              allDailyMap[d].trade_count++
-              if (p > 0) allDailyMap[d].wins++
-              else if (p < 0) allDailyMap[d].losses++
-            })
-            const allDates = Object.keys(allDailyMap).sort()
-            // Only show dates within the selected range
-            const shownDates = allDates.filter(d => d >= dateFrom && d <= dateTo)
-            const daily = shownDates.map(d => ({
-              date: d,
-              profit: Math.round(allDailyMap[d].profit * 100) / 100,
-              trade_count: allDailyMap[d].trade_count,
-              wins: allDailyMap[d].wins,
-              losses: allDailyMap[d].losses
-            }))
-
-            // Filter orders for cumulative/drawdown/stats (within selected range)
-            let orders = hcResult.orders.filter(o => {
-              const d = (o.close_time || '').slice(0, 10)
-              return d >= dateFrom && d <= dateTo
-            })
-
-            // Apply additional chart filters (direction, profit)
-            if (params.direction) orders = orders.filter(o => String(o.type || '').toUpperCase() === params.direction)
-            if (params.profit_filter === 'profit') orders = orders.filter(o => Number(o.profit || 0) > 0)
-            if (params.profit_filter === 'loss') orders = orders.filter(o => Number(o.profit || 0) < 0)
-
-            // Sort orders by close time (mandatory for correct drawdown)
-            orders.sort((a, b) => (a.close_time || '').localeCompare(b.close_time || ''));
-
-            // Cumulative + drawdown per day (aligned with shownDates daily chart labels)
-            // Drawdown based on equity = initCapital + cum, not raw profit
-            const cumulative = [];
-            const drawdown = [];
-            let cum = 0, peak = initCapital, maxDD = 0;
-            let orderIdx = 0;
-            shownDates.forEach(d => {
-              while (orderIdx < orders.length && (orders[orderIdx].close_time || '').slice(0, 10) === d) {
-                cum += Number(orders[orderIdx].profit || 0);
-                orderIdx++;
-              }
-              cum = Math.round(cum * 100) / 100;
-              cumulative.push(cum);
-              const equity = initCapital + cum;
-              if (equity > peak) peak = equity;
-              const dd = peak > 0 ? Math.round((1 - equity / peak) * 10000) / 100 : 0;
-              drawdown.push(dd);
-              if (dd > maxDD) maxDD = dd;
-            });
-
-            // Win/loss stats (per-trade, avg_win/avg_loss)
-            const wins = orders.filter(o => Number(o.profit || 0) > 0)
-            const losses = orders.filter(o => Number(o.profit || 0) < 0)
-            const grossProfit = wins.reduce((s, o) => s + Number(o.profit || 0), 0)
-            const grossLoss = Math.abs(losses.reduce((s, o) => s + Number(o.profit || 0), 0))
-            const avgWin = wins.length > 0 ? grossProfit / wins.length : 0
-            const avgLoss = losses.length > 0 ? grossLoss / losses.length : 0
-
-            result = {
-              status: 'success',
-              daily,
-              cumulative,
-              drawdown,
-              stats: {
-                total_trades: orders.length,
-                win_rate: orders.length > 0 ? Math.round(wins.length / orders.length * 10000) / 100 : 0,
-                profit_factor: avgLoss > 0 ? Math.round(avgWin / avgLoss * 100) / 100 : avgWin > 0 ? 999 : 0,
-                max_drawdown: maxDD,
-                gross_profit: Math.round(grossProfit * 100) / 100,
-                gross_loss: Math.round(grossLoss * 100) / 100,
-              }
-            }
-          } else {
+          // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
+          const chartParams = {}
+          if (params.close_from) chartParams.date_from = params.close_from
+          if (params.close_to) chartParams.date_to = params.close_to
+          if (params.direction) chartParams.direction = params.direction
+          if (params.profit_filter) chartParams.profit_filter = params.profit_filter
+          result = await ai.mt5Bridge(hcUserId, 'chart_data', chartParams)
+          if (result?.status !== 'success') {
             result = { status: 'success', daily: [], cumulative: [], drawdown: [], stats: { total_trades: 0, win_rate: 0, profit_factor: 0, max_drawdown: 0, gross_profit: 0, gross_loss: 0 } }
           }
         } else {
