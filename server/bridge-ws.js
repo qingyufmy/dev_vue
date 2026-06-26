@@ -1277,7 +1277,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
-        const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, bridgeList] = await Promise.all([
+        const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList] = await Promise.all([
           // 1. User stats
           queryOne(`SELECT
             (SELECT COUNT(*) FROM users) AS total_users,
@@ -1310,7 +1310,19 @@ async function handleBrowserCommand(ws, userId, msg) {
             (SELECT COUNT(*) FROM user_bridge_settings WHERE trade_send_enabled = 1) AS trade_enabled_users,
             (SELECT COUNT(*) FROM auto_scheduler WHERE enabled = 1) AS auto_scheduler_users`),
 
-          // 6. Connected bridges (WSS + trade mode info)
+          // 6. Token usage stats (estimated: ~4 chars per token for Chinese/English mixed)
+          queryOne(`SELECT
+            (SELECT ROUND(SUM(LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today_tokens,
+            (SELECT ROUND(SUM(LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) FROM ai_signals) AS total_tokens,
+            (SELECT DATE(created_at) FROM ai_signals ORDER BY id DESC LIMIT 1) AS last_api_call`),
+
+          // 7. Daily token trend (30 days)
+          queryAll(`SELECT DATE(created_at) AS day,
+            ROUND(SUM(LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) AS tokens
+            FROM ai_signals WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            GROUP BY DATE(created_at) ORDER BY day`),
+
+          // 8. Connected bridges (WSS + trade mode info)
           (async () => {
             const list = []
             for (const [uid, bridge] of bridges) {
@@ -1340,6 +1352,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             signalTypeDist: signalTypeDist || [],
             signalTrend: signalTrend || [],
             autoReasonStats: autoReasonStats || {},
+            tokenStats: tokenStats || {},
+            tokenTrend: tokenTrend || [],
             bridges: bridgeList || []
           }
         }

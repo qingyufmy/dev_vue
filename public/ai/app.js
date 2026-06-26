@@ -3773,11 +3773,17 @@ function renderAdminDashboard(el, d) {
   Object.values(_adminDashState.charts).forEach(c => { try { c.destroy() } catch {} });
   _adminDashState.charts = {};
 
-  const us = d.userStats, ss = d.signalStats, ar = d.autoReasonStats;
+  const us = d.userStats, ss = d.signalStats, ar = d.autoReasonStats, tk = d.tokenStats || {};
   const wssCount = d.bridges.length;
   const buyCnt = (d.signalTypeDist||[]).filter(r => ['buy','strong_buy'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
   const sellCnt = (d.signalTypeDist||[]).filter(r => ['sell','strong_sell'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
   const holdCnt = (d.signalTypeDist||[]).filter(r => r.signal_type==='hold').reduce((s,r)=>s+r.cnt,0);
+
+  const fmtTokens = n => {
+    if (!n || n < 1000) return (n||0).toLocaleString();
+    if (n < 1000000) return (n/1000).toFixed(1) + 'K';
+    return (n/1000000).toFixed(2) + 'M';
+  };
 
   el.innerHTML = `
     <div class="ad-section-header">
@@ -3815,6 +3821,11 @@ function renderAdminDashboard(el, d) {
         <div class="ad-metric-label">实时在线</div>
         <div class="ad-metric-value">${us.online_now||0}</div>
         <div class="ad-metric-sub">5分钟内活跃</div>
+      </div>
+      <div class="ad-metric-card ad-metric-highlight">
+        <div class="ad-metric-label">今日 Token</div>
+        <div class="ad-metric-value">${fmtTokens(tk.today_tokens)}</div>
+        <div class="ad-metric-sub">累计 ${fmtTokens(tk.total_tokens)}</div>
       </div>
     </div>
 
@@ -3876,6 +3887,7 @@ function renderAdminDashboard(el, d) {
       </div>
     </div>
     <div class="ad-chart-card"><h4>近30天信号趋势</h4><div class="ad-chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>
+    <div class="ad-chart-card"><h4>近30天 Token 消耗趋势</h4><div class="ad-chart-wrap"><canvas id="adChartTokenTrend"></canvas></div></div>
 
     <div class="section-break"></div>
 
@@ -3956,6 +3968,18 @@ function renderAdminDashboard(el, d) {
         datasets: [{ label: '信号数', data: d.signalTrend.map(r => r.cnt), borderColor: '#d4af37', backgroundColor: 'rgba(212,175,55,.1)', fill: true, tension: .3, pointRadius: 2, pointHoverRadius: 5, borderWidth: 2 }]
       },
       options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 10 }, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true } }, plugins: { legend: { display: false } } }
+    });
+  }
+
+  // Token trend chart
+  if (d.tokenTrend && d.tokenTrend.length > 0) {
+    _adminDashState.charts.tokenTrend = new Chart($('adChartTokenTrend'), {
+      type: 'bar',
+      data: {
+        labels: d.tokenTrend.map(r => r.day?.slice(5) || ''),
+        datasets: [{ label: 'Token 消耗', data: d.tokenTrend.map(r => r.tokens), backgroundColor: 'rgba(59,130,246,0.5)', borderRadius: 4, borderWidth: 0 }]
+      },
+      options: { ...chartDefaults, scales: { x: { ticks: { color: '#9ca3af', font: { size: 10 }, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,.04)' } }, y: { ticks: { color: '#9ca3af', callback: v => v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v >= 1000 ? (v/1000).toFixed(1)+'K' : v }, grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true } }, plugins: { legend: { display: false } } }
     });
   }
 
