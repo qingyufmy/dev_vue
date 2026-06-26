@@ -1181,7 +1181,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
         // Check Redis cache first (10s TTL)
-        const dashCached = await cacheGetJSON('cache:admin:dashboard')
+        const dashCached = await cacheGetJSON('cache:admin:ws_dashboard')
         if (dashCached) { result = dashCached; break }
 
         const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList] = await Promise.all([
@@ -1264,7 +1264,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             bridges: bridgeList || []
           }
         }
-        cacheSetJSON('cache:admin:dashboard', result, 10).catch(() => {})
+        cacheSetJSON('cache:admin:ws_dashboard', result, 10).catch(() => {})
         break
       }
       case 'admin_user_status': {
