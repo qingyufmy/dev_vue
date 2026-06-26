@@ -526,6 +526,16 @@ function toast(message, type = "info") {
   setTimeout(() => node.remove(), 3600);
 }
 
+function showLoading(container, text = "加载中...", size = "lg") {
+  if (!container) return;
+  container.innerHTML = `<div class="loading-state ${size === 'lg' ? 'loading-state-lg' : ''}"><div class="loading-spinner ${size === 'sm' ? 'loading-spinner-sm' : ''}"></div><div class="loading-text">${escapeHtml(text)}</div></div>`;
+}
+
+function showError(container, message) {
+  if (!container) return;
+  container.innerHTML = `<div class="loading-state" style="color:var(--accent-danger)"><div class="loading-text">${escapeHtml(message)}</div></div>`;
+}
+
 function showSignalNotification(signal) {
   if (!signal) return;
   const host = $("toastHost");
@@ -3869,8 +3879,7 @@ async function loadAdminDashboard(force) {
   if (_adminDashState.loaded && !force) return;
   const container = $('adminDashContent');
   if (!container) return;
-  container.innerHTML = '<div class="admin-dash-loading"><i data-lucide="loader-2" size="24" class="spinning-icon"></i><span>加载中...</span></div>';
-  initIcons();
+  showLoading(container, "加载看板数据...");
   try {
     const [dashResp, userListResp] = await Promise.all([
       wsApi('admin_dashboard'),
@@ -3883,7 +3892,7 @@ async function loadAdminDashboard(force) {
       _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
     }
   } catch (e) {
-    container.innerHTML = '<div class="admin-dash-loading" style="color:#ef4444">加载失败: ' + escapeHtml(e.message) + '</div>';
+    showError(container, '加载失败: ' + e.message);
   }
 }
 
@@ -4039,7 +4048,7 @@ function renderAdminDashboard(el, d, userListResp) {
     '</div>',
     '',
     '<div class="user-list-box" id="userListContainer">',
-    '  <div class="bridge-empty">加载中...</div>',
+    '  <div class="loading-state"><div class="loading-spinner loading-spinner-sm"></div><div class="loading-text">加载中...</div></div>',
     '</div>',
     '',
     '<div id="userDetailContainer"></div>',
@@ -4184,8 +4193,7 @@ function renderAdminDashboard(el, d, userListResp) {
 
   async function showUserDetail(uid) {
     const detailContainer = $('userDetailContainer');
-    detailContainer.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-muted)"><i class="spinning-icon" data-lucide="loader-2" size="18"></i></div>';
-    initIcons();
+    showLoading(detailContainer, "加载用户详情...", "sm");
     try {
       const resp = await wsApi('admin_user_status', { user_id: uid });
       if (resp.status !== 'success') throw new Error(resp.message);
