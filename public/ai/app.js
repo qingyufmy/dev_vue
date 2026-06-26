@@ -1060,11 +1060,42 @@ async function login(event) {
 function logout() {
   if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopRealtimeSync();
+  stopPresenceHeartbeat();
   state.user = null;
   state.selectedSignal = null;
   setAuth("");
   showApp(false);
   window.location.href = "/";
+}
+
+// Presence heartbeat — updates last_seen_at for online count
+const _presenceInterval = 60000;
+let _presenceTimer = null;
+let _presenceLastSend = 0;
+
+function startPresenceHeartbeat() {
+  if (_presenceTimer) return;
+  if (!state.token) return;
+  sendPresenceHeartbeat();
+  _presenceTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return;
+    if (!state.token) { stopPresenceHeartbeat(); return; }
+    sendPresenceHeartbeat();
+  }, _presenceInterval);
+}
+
+function stopPresenceHeartbeat() {
+  if (_presenceTimer) { clearInterval(_presenceTimer); _presenceTimer = null; }
+  _presenceLastSend = 0;
+}
+
+async function sendPresenceHeartbeat() {
+  const now = Date.now();
+  if (now - _presenceLastSend < 30000) return;
+  _presenceLastSend = now;
+  try {
+    await api('/api/presence', { method: 'POST', body: JSON.stringify({ view: activeTabId() }), timeout: 5000 });
+  } catch {}
 }
 
 async function bootstrap() {
@@ -1120,6 +1151,7 @@ async function bootstrap() {
     });
     // Set default tab after WS connected
     setTab(role === 'admin' ? 'admin-dashboard' : 'dashboard');
+    startPresenceHeartbeat();
     await refreshAll();
     // Data loads on-demand: tab switch + manual refresh + bridge data push
     refreshTabData(activeTabId());
