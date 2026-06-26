@@ -850,14 +850,11 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'signals_latest_id': {
         // Lightweight check: return only latest signal's ID and minimal fields
-        let queryUserId = userId
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const queryUserId = hasOwnBridge ? userId : (adminUserId || userId)
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
         const sessionParam = params.session_id ? [params.session_id] : []
-        let row = await queryOne(`SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`, [userId, ...sessionParam])
-        if (!row && adminUserId) {
-          queryUserId = adminUserId
-          row = await queryOne(`SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`, [queryUserId, ...sessionParam])
-        }
+        const row = await queryOne(`SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`, [queryUserId, ...sessionParam])
         if (row) {
           const now = Date.now()
           const createdAt = new Date(row.created_at).getTime()
@@ -871,8 +868,9 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signal_detail': {
         const signalId = Number(params.signal_id)
         if (!signalId) return reply({ status: 'error', message: 'signal_id required' })
-        let row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, userId])
-        if (!row && adminUserId) row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, adminUserId])
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const detailUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, detailUserId])
         if (row) {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
@@ -888,15 +886,17 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signals': {
         const offset = Number(params.offset) || 0
         const limit = Math.min(Number(params.limit) || 6, 100)
+        // 观摩模式：始终用 admin 的信号
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const queryUserId = hasOwnBridge ? userId : (adminUserId || userId)
         // Build cache key from query params
-        const sigCacheKey = `cache:signals:${userId}:${offset}:${limit}:${params.direction||''}:${params.timeframe||''}:${params.session_id||''}`
+        const sigCacheKey = `cache:signals:${queryUserId}:${offset}:${limit}:${params.direction||''}:${params.timeframe||''}:${params.session_id||''}`
         const sigCached = await cacheGetJSON(sigCacheKey)
         if (sigCached) { result = sigCached; break }
 
-        let queryUserId = userId
         // Build filter conditions
         const filterClauses = ['user_id = ?']
-        const filterParams = [userId]
+        const filterParams = [queryUserId]
         if (params.direction) {
           const types = { buy: 'buy,strong_buy', sell: 'sell,strong_sell', hold: 'hold' }
           const dirTypes = types[params.direction] || params.direction
@@ -916,13 +916,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           filterParams.push(params.session_id)
         }
         const where = filterClauses.join(' AND ')
-        // Check if user has any rows matching filters
-        const ownRows = await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
-        if (ownRows.length === 0 && adminUserId) {
-          queryUserId = adminUserId
-          filterParams[0] = adminUserId
-        }
-        const rows = ownRows.length > 0 ? ownRows : await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
+        const rows = await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
         const hasMore = rows.length > limit
         const sliced = rows.slice(0, limit)
         // Get filtered total count for pagination
