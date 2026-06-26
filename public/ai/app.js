@@ -790,6 +790,7 @@ function handleBridgeData(msg) {
     setText("accountMargin", fmt(msg.account.margin));
     setText("accountMarginFree", fmt(msg.account.free_margin));
     setText("accountFloatPnl", fmt(msg.account.profit));
+    if (msg.account.leverage) setText("accountLeverage", msg.account.leverage);
     setText("tradeAccountBalance", fmt(msg.account.balance));
     setText("tradeAccountEquity", fmt(msg.account.equity));
     setText("tradeAccountProfit", fmt(msg.account.profit));

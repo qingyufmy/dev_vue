@@ -1092,7 +1092,7 @@ class BridgeWorker(QThread):
             "login": acc.login, "balance": round(acc.balance, 2),
             "equity": round(acc.equity, 2), "margin": round(acc.margin, 2),
             "free_margin": round(acc.margin_free, 2), "profit": round(acc.profit, 2),
-            "server": acc.server}, "quote": {"symbol": sym,
+            "leverage": acc.leverage, "server": acc.server}, "quote": {"symbol": sym,
             "bid": round(tick.bid, 5) if tick else None, "ask": round(tick.ask, 5) if tick else None,
             "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in sym else 0.001), 1) if tick else None,
             "time": self._mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
