@@ -2314,6 +2314,38 @@ input:checked + .slider::before { transform: translateX(18px); }
   min-height: 360px;
 }
 
+.analysis-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.analysis-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-input-soft);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.analysis-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-success));
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.analysis-progress-text {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
 .muted-block {
   display: flex;
   align-items: center;

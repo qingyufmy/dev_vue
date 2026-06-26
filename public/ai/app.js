@@ -2541,13 +2541,11 @@ async function runAnalysis() {
     return;
   }
 
-  // Block manual reasoning when market is closed
   if (state.marketTradeMode === 0) {
     toast("当前市场休市，暂无法推理", "warning");
     return;
   }
 
-  // Check: non-admin without own config and model sharing is off
   if (!state.currentConfigHasApiKey && !state._isUsingSharedModel) {
     toast("请先在模型设置中配置 API Key，或联系管理员开启模型共享", "warning");
     return;
@@ -2555,47 +2553,76 @@ async function runAnalysis() {
 
   $("runAnalysisBtn").disabled = true;
   $("executeSignalBtn").disabled = true;
-  $("analysisResult").className = "analysis-result muted-block";
-  $("analysisResult").textContent = "正在合成行情与信号";
+  const resultEl = $("analysisResult");
+  resultEl.className = "analysis-result";
+  resultEl.innerHTML = `
+    <div class="analysis-progress">
+      <div class="analysis-progress-bar"><div class="analysis-progress-fill" id="analysisProgressFill"></div></div>
+      <div class="analysis-progress-text">
+        <span id="analysisProgressLabel">正在获取行情数据...</span>
+        <span id="analysisProgressTime"></span>
+      </div>
+      <button class="btn btn-sm btn-danger" id="analysisCancelBtn" onclick="window._analysisCancelled=true">取消</button>
+    </div>`;
   setText("analysisLatency", "推理中");
   setText("signalFreshness", "等待结果");
   const started = performance.now();
+  window._analysisCancelled = false;
+
+  const stages = [
+    { pct: 10, label: "获取行情数据..." },
+    { pct: 30, label: "计算技术指标..." },
+    { pct: 50, label: "AI 模型推理中..." },
+    { pct: 80, label: "生成交易信号..." },
+    { pct: 95, label: "保存结果..." },
+  ];
+  let stageIdx = 0;
+  const progressTimer = setInterval(() => {
+    if (window._analysisCancelled || stageIdx >= stages.length) { clearInterval(progressTimer); return; }
+    const s = stages[stageIdx++];
+    const fill = document.getElementById("analysisProgressFill");
+    const label = document.getElementById("analysisProgressLabel");
+    const time = document.getElementById("analysisProgressTime");
+    if (fill) fill.style.width = s.pct + "%";
+    if (label) label.textContent = s.label;
+    if (time) {
+      const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+      const remaining = Math.max(0, ((100 - s.pct) / s.pct) * (performance.now() - started) / 1000).toFixed(0);
+      time.textContent = `${elapsed}s / 预计 ${remaining}s`;
+    }
+  }, 3000);
 
   try {
     const klineCount = Number($("klineCount").value) || 100;
     const results = await Promise.all(frames.map((timeframe) => {
-      // Inject timeframe tag into system_prompt so backend parses it for multi-TF data
       const tag = `{{MTF:${timeframe.toUpperCase()}:${klineCount}}}`;
       const basePrompt = $("systemPrompt")?.value?.trim() || "";
       const promptWithTag = tag + (basePrompt ? "\n" + basePrompt : "");
       return wsApi("analyze", {
-        session_id: "default",
-        symbol,
-        timeframe,
-        kline_count: klineCount,
-        include_positions: true,
-        prompt_override: promptWithTag,
+        session_id: "default", symbol, timeframe,
+        kline_count: klineCount, include_positions: true,
+        prompt_override: promptWithTag, _timeout: 120000,
       });
     }));
-    const best = results
-      .map((item) => item.signal)
-      .filter(Boolean)
+    if (window._analysisCancelled) { toast("已取消推理", "info"); return; }
+    const best = results.map((item) => item.signal).filter(Boolean)
       .sort((a, b) => Number(b.confidence) - Number(a.confidence))[0];
     if (!best) throw new Error("未返回有效信号");
-    renderSignal(best, Math.round(performance.now() - started));
+    const elapsed = Math.round(performance.now() - started);
+    renderSignal(best, elapsed);
     showSignalNotification(best);
     await loadSignals({ skipResultRender: true });
-    // Scroll history list to top (latest signal)
     const firstItem = document.querySelector(".analysis-history-item");
     if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    toast(`已生成 ${results.length} 个周期信号，已选最高置信度结果`, "success");
+    toast(`已生成 ${results.length} 个周期信号，耗时 ${(elapsed/1000).toFixed(1)}s`, "success");
   } catch (error) {
-    $("analysisResult").className = "analysis-result muted-block";
-    $("analysisResult").textContent = error.message;
+    resultEl.className = "analysis-result muted-block";
+    resultEl.textContent = error.message;
     setText("analysisLatency", "--");
     setText("signalFreshness", "--");
     toast(error.message, "error");
   } finally {
+    clearInterval(progressTimer);
     $("runAnalysisBtn").disabled = false;
     initIcons();
   }
