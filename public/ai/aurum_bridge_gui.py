@@ -6,6 +6,7 @@ AURUM Bridge - MT5 桥接桌面客户端 (PySide6)
 """
 import sys
 import os
+import ssl
 import json
 import time
 import threading
@@ -948,6 +949,7 @@ class BridgeWorker(QThread):
                     break
 
                 if now - last_data >= 1.0:
+                    push_err = False
                     try:
                         acc = self.mt5.account_info()
                         sym = self._resolved_symbol
@@ -988,12 +990,23 @@ class BridgeWorker(QThread):
                             self.status_signal.emit("MT5桥接-已连接", "#22c55e",
                                                    f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
                         last_data = now
+                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError) as e:
+                        self.log_signal.emit(f"数据推送错误: {e}")
+                        push_err = True
                     except Exception as e:
                         self.log_signal.emit(f"数据推送错误: {e}")
+                        push_err = True
+                    if push_err:
+                        break  # SSL/网络错误后立即断开重连，不等recv检测
 
                 if now - last_hb > 10:
-                    try: ws.send(json.dumps({"type": "hb"})); last_hb = now
-                    except Exception as e: self.log_signal.emit(f"心跳错误: {e}")
+                    try:
+                        ws.send(json.dumps({"type": "hb"})); last_hb = now
+                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError):
+                        break  # 心跳发送失败也立即重连
+                    except Exception as e:
+                        self.log_signal.emit(f"心跳错误: {e}")
+                        break
 
                 # Hourly plan check
                 if now - last_plan_check > 3600:
@@ -1025,6 +1038,9 @@ class BridgeWorker(QThread):
                                 ws.send(json.dumps({"type": "result", "command_id": cmd_id, "result": resp}))
                                 self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
                 except websocket.WebSocketTimeoutException: pass
+                except ssl.SSLError as e:
+                    self.log_signal.emit(f"SSL错误: {e}，重新连接...")
+                    break
                 except websocket.WebSocketConnectionClosedException:
                     # Check close code for plan rejection
                     cc = getattr(ws, 'close_code', None)
