@@ -3751,7 +3751,7 @@ function initAnalysisHistoryScroll() {
 }
 
 // ============ Admin Data Dashboard ============
-const _adminDashState = { charts: {}, loaded: false, userList: { page: 1, total: 0, users: [] }, selectedUserId: null };
+const _adminDashState = { charts: {}, loaded: false, userList: { page: 1, total: 0, users: [] }, selectedUserId: null, refreshTimer: null };
 
 async function loadAdminDashboard(force) {
   if (_adminDashState.loaded && !force) return;
@@ -3769,6 +3769,20 @@ async function loadAdminDashboard(force) {
     _adminDashState.loaded = true;
   } catch (e) {
     container.innerHTML = '<div class="admin-dash-loading" style="color:#ef4444">加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+// 20s auto-refresh timer for admin dashboard
+function startDashAutoRefresh() {
+  if (_adminDashState.refreshTimer) return;
+  _adminDashState.refreshTimer = setInterval(() => {
+    loadAdminDashboard(true);
+  }, 20000);
+}
+function stopDashAutoRefresh() {
+  if (_adminDashState.refreshTimer) {
+    clearInterval(_adminDashState.refreshTimer);
+    _adminDashState.refreshTimer = null;
   }
 }
 
@@ -4024,6 +4038,11 @@ function formatTimeAgo(dtStr) {
 const _origSetTab2 = setTab;
 setTab = function(tab) {
   _origSetTab2(tab);
-  if (tab === 'admin-dashboard') loadAdminDashboard();
+  if (tab === 'admin-dashboard') {
+    loadAdminDashboard();
+    startDashAutoRefresh();
+  } else {
+    stopDashAutoRefresh();
+  }
 };
 

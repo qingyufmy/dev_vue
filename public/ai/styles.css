@@ -3900,7 +3900,7 @@ a.signal-link:hover {
 
 /* ============ Admin Data Dashboard ============ */
 .admin-dash {
-  padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  padding: 20px; display: flex; flex-direction: column; gap: 16px;
 }
 .admin-dash-loading {
   display: flex; align-items: center; justify-content: center; gap: 12px;
@@ -3915,7 +3915,7 @@ a.signal-link:hover {
   padding: 4px 0 8px;
 }
 .dash-title {
-  font-size: 0.95rem; font-weight: 700; color: var(--text-primary);
+  font-size: 1.15rem; font-weight: 700; color: var(--text-primary);
   display: flex; align-items: center; gap: 8px;
 }
 .dash-title i { color: var(--gold-primary); }
@@ -3923,10 +3923,10 @@ a.signal-link:hover {
 
 /* Refresh button */
 .dash-btn {
-  display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px;
-  border: 1px solid rgba(255,255,255,0.07); border-radius: 6px;
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px;
+  border: 1px solid rgba(255,255,255,0.07); border-radius: 7px;
   background: rgba(255,255,255,0.03); color: var(--text-secondary);
-  font-size: 0.75rem; cursor: pointer; transition: all 0.2s ease;
+  font-size: 0.82rem; cursor: pointer; transition: all 0.2s ease;
 }
 .dash-btn:hover {
   border-color: var(--gold-dim); color: var(--gold-primary);
@@ -3973,17 +3973,17 @@ a.signal-link:hover {
 .stat-cell.gold .stat-val { color: var(--gold-primary); }
 
 .stat-label {
-  font-size: 0.68rem; color: var(--text-muted);
+  font-size: 0.75rem; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500;
   display: flex; align-items: center; gap: 4px;
 }
 .stat-label i { width: 11px; height: 11px; opacity: 0.6; }
 .stat-val {
-  font-size: 1.4rem; font-weight: 700; color: var(--text-primary);
+  font-size: 1.6rem; font-weight: 700; color: var(--text-primary);
   line-height: 1.1; letter-spacing: -0.01em; font-family: 'Consolas', 'Menlo', monospace;
 }
 .stat-sub {
-  font-size: 0.68rem; color: var(--text-muted);
+  font-size: 0.72rem; color: var(--text-muted);
 }
 /* ====== Charts Row (compact) ====== */
 .charts-row {
@@ -3997,7 +3997,7 @@ a.signal-link:hover {
   border-radius: 10px; padding: 12px; min-height: 200px;
 }
 .chart-cell h4 {
-  font-size: 0.75rem; font-weight: 600; color: var(--text-primary);
+  font-size: 0.85rem; font-weight: 600; color: var(--text-primary);
   margin: 0 0 8px 0; letter-spacing: 0.02em;
 }
 .chart-wrap { position: relative; width: 100%; height: 180px; }
@@ -4013,9 +4013,9 @@ a.signal-link:hover {
   min-width: 80px;
 }
 .dir-mini .dir-arrow { font-size: 0.9rem; font-weight: 700; width: 20px; text-align: center; }
-.dir-mini .dir-lbl { flex: 1; font-size: 0.72rem; color: var(--text-secondary); }
+.dir-mini .dir-lbl { flex: 1; font-size: 0.78rem; color: var(--text-secondary); }
 .dir-mini .dir-num {
-  font-size: 1rem; font-weight: 700; font-family: 'Consolas', monospace;
+  font-size: 1.1rem; font-weight: 700; font-family: 'Consolas', monospace;
   padding: 0 6px; border-radius: 4px; background: rgba(255,255,255,0.04);
 }
 .dir-buy .dir-arrow, .dir-buy .dir-num { color: #22c55e; }
@@ -4043,8 +4043,8 @@ a.signal-link:hover {
 }
 .signal-mini .sig-icon i { width: 13px; height: 13px; }
 .signal-mini .sig-info { display: flex; flex-direction: column; gap: 0; }
-.signal-mini .sig-lbl { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
-.signal-mini .sig-num { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); font-family: 'Consolas', monospace; line-height: 1.2; }
+.signal-mini .sig-lbl { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.signal-mini .sig-num { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); font-family: 'Consolas', monospace; line-height: 1.2; }
 
 /* ====== Section divider ====== */
 .dash-divider {
@@ -4057,7 +4057,7 @@ a.signal-link:hover {
   padding: 8px 0 4px;
 }
 .section-inline h3 {
-  font-size: 0.78rem; font-weight: 600; color: var(--text-primary);
+  font-size: 0.88rem; font-weight: 600; color: var(--text-primary);
   margin: 0; display: flex; align-items: center; gap: 6px;
 }
 .section-inline h3 i { color: var(--gold-primary); width: 14px; height: 14px; }
@@ -4091,10 +4091,10 @@ a.signal-link:hover {
 .bridge-table tr:hover td { background: rgba(255,255,255,0.015); }
 
 .bridge-user { display: flex; flex-direction: column; gap: 1px; }
-.bridge-user .name { font-weight: 600; color: var(--text-primary); font-size: 0.85rem; }
-.bridge-user .email { font-size: 0.7rem; color: var(--text-muted); }
+.bridge-user .name { font-weight: 600; color: var(--text-primary); font-size: 0.9rem; }
+.bridge-user .email { font-size: 0.75rem; color: var(--text-muted); }
 
-.bridge-status { display: inline-flex; align-items: center; gap: 4px; font-size: 0.7rem; font-weight: 500; }
+.bridge-status { display: inline-flex; align-items: center; gap: 4px; font-size: 0.78rem; font-weight: 500; }
 .bridge-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .bridge-dot.on { background: #22c55e; box-shadow: 0 0 4px rgba(34,197,94,0.3); }
 .bridge-dot.off { background: var(--text-muted); }
@@ -4104,7 +4104,7 @@ a.signal-link:hover {
 /* Chips */
 .chip {
   display: inline-block; padding: 2px 10px; border-radius: 5px;
-  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.02em;
+  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
 }
 .chip-pro { background: rgba(212,175,55,0.1); color: var(--gold-primary); }
 .chip-plus { background: rgba(59,130,246,0.1); color: #60a5fa; }
@@ -4116,10 +4116,10 @@ a.signal-link:hover {
   position: relative; display: flex; gap: 8px;
 }
 .user-search-input {
-  flex: 1; max-width: 300px; padding: 7px 12px; border-radius: 7px;
+  flex: 1; max-width: 360px; padding: 9px 14px; border-radius: 8px;
   border: 1px solid rgba(255,255,255,0.08);
   background: rgba(255,255,255,0.03);
-  color: var(--text-primary); font-size: 0.8rem; outline: none;
+  color: var(--text-primary); font-size: 0.85rem; outline: none;
   transition: border-color 0.2s;
 }
 .user-search-input:focus { border-color: var(--gold-dim); }
@@ -4143,10 +4143,10 @@ a.signal-link:hover {
 .search-dropdown .drop-item:hover { background: rgba(255,255,255,0.04); }
 .search-dropdown .drop-item.selected { background: rgba(212,175,55,0.06); }
 .search-dropdown .drop-item .drop-info { display: flex; flex-direction: column; gap: 1px; }
-.search-dropdown .drop-item .drop-name { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); }
-.search-dropdown .drop-item .drop-email { font-size: 0.65rem; color: var(--text-muted); }
+.search-dropdown .drop-item .drop-name { font-size: 0.85rem; font-weight: 600; color: var(--text-primary); }
+.search-dropdown .drop-item .drop-email { font-size: 0.72rem; color: var(--text-muted); }
 .search-dropdown .drop-empty {
-  padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.75rem;
+  padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.82rem;
 }
 
 /* User list table (compact) */
@@ -4156,16 +4156,16 @@ a.signal-link:hover {
   border-radius: 10px; overflow: hidden;
 }
 .user-table {
-  width: 100%; border-collapse: collapse; font-size: 0.85rem;
+  width: 100%; border-collapse: collapse; font-size: 0.9rem;
 }
 .user-table th {
-  text-align: left; padding: 7px 10px;
-  color: var(--text-muted); font-weight: 500; font-size: 0.7rem;
+  text-align: left; padding: 8px 12px;
+  color: var(--text-muted); font-weight: 500; font-size: 0.75rem;
   border-bottom: 1px solid rgba(255,255,255,0.05);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .user-table td {
-  padding: 7px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid rgba(255,255,255,0.025);
   color: var(--text-secondary);
   white-space: nowrap;
@@ -4182,14 +4182,14 @@ a.signal-link:hover {
   padding: 8px 10px; border-top: 1px solid rgba(255,255,255,0.04);
 }
 .user-pager .page-btn {
-  padding: 3px 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.06);
-  background: transparent; color: var(--text-muted); font-size: 0.7rem;
+  padding: 5px 12px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.06);
+  background: transparent; color: var(--text-muted); font-size: 0.78rem;
   cursor: pointer; transition: all 0.15s;
 }
 .user-pager .page-btn:hover { border-color: var(--gold-dim); color: var(--gold-primary); }
 .user-pager .page-btn.active { background: var(--gold-wash); border-color: var(--gold-dim); color: var(--gold-primary); }
 .user-pager .page-btn:disabled { opacity: 0.3; cursor: default; }
-.user-pager .page-info { font-size: 0.68rem; color: var(--text-muted); padding: 0 8px; }
+.user-pager .page-info { font-size: 0.75rem; color: var(--text-muted); padding: 0 8px; }
 
 /* ====== User Status Detail ====== */
 .user-detail-card {
@@ -4208,8 +4208,8 @@ a.signal-link:hover {
   font-weight: 700; font-size: 0.85rem; color: #fff;
 }
 .user-detail-info { display: flex; flex-direction: column; gap: 1px; }
-.user-detail-info .name { font-weight: 700; font-size: 0.88rem; color: var(--text-primary); }
-.user-detail-info .email { font-size: 0.68rem; color: var(--text-muted); }
+.user-detail-info .name { font-weight: 700; font-size: 0.95rem; color: var(--text-primary); }
+.user-detail-info .email { font-size: 0.75rem; color: var(--text-muted); }
 .user-detail-close {
   margin-left: auto; background: none; border: 1px solid rgba(255,255,255,0.06);
   color: var(--text-muted); border-radius: 4px; padding: 2px 6px; cursor: pointer;
@@ -4227,9 +4227,9 @@ a.signal-link:hover {
   background: rgba(255,255,255,0.015);
 }
 .user-detail-field .f-label {
-  font-size: 0.65rem; color: var(--text-muted);
+  font-size: 0.7rem; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.05em;
 }
 .user-detail-field .f-value {
-  font-size: 0.85rem; color: var(--text-primary); font-weight: 500;
+  font-size: 0.9rem; color: var(--text-primary); font-weight: 500;
 }
