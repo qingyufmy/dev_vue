@@ -3122,6 +3122,7 @@ function renderAdminContent(data) {
   const realtimeWindowMinutes = Number(stats.realtimeWindowMinutes || 5)
   const plusCount = Number(stats.plusUsers || 0)
   const proCount = Number(stats.proUsers || 0)
+  const memberUsers = userList.filter(u => u.plan === 'plus' || u.plan === 'pro')
   const learningRanked = userList
     .filter(u => u.progress?.completed > 0)
     .sort((a, b) => (b.progress.completed - a.progress.completed) || (b.progress.quizPassed - a.progress.quizPassed))
