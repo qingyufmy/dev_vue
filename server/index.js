@@ -294,6 +294,30 @@ app.post('/api/presence', async (req, res) => {
   res.json({ ok: true })
 })
 
+// Health check endpoint
+app.get('/health', async (req, res) => {
+  const health = { status: 'ok', timestamp: new Date().toISOString() }
+  try {
+    const { getDB } = await import('./db.js')
+    const db = getDB()
+    const conn = await db.getConnection()
+    await conn.ping()
+    conn.release()
+    health.database = 'connected'
+  } catch (e) {
+    health.status = 'degraded'
+    health.database = 'disconnected'
+  }
+  try {
+    const { isRedisAvailable } = await import('./redis.js')
+    health.redis = isRedisAvailable() ? 'connected' : 'unavailable'
+  } catch {
+    health.redis = 'unavailable'
+  }
+  const statusCode = health.status === 'ok' ? 200 : 503
+  res.status(statusCode).json(health)
+})
+
 // Fallback: serve index.html for SPA routing
 app.get('*', (req, res) => {
   res.sendFile(join(publicDir, 'index.html'))

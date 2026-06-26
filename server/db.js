@@ -598,14 +598,6 @@ export async function initDB() {
     await p.query(sql)
   }
 
-  // Migration: add verify_token to verification_codes (for existing DBs)
-  try {
-    const [cols] = await p.query("SHOW COLUMNS FROM verification_codes LIKE 'verify_token'")
-    if (!cols.length) {
-      await p.query('ALTER TABLE verification_codes ADD COLUMN verify_token VARCHAR(36) DEFAULT NULL AFTER used')
-    }
-  } catch (e) { /* column already exists or table not yet created */ }
-
   // Seed referral_rules if empty
   const [ruleRows] = await p.query('SELECT COUNT(*) as c FROM referral_rules')
   if (ruleRows[0].c === 0) {
@@ -637,82 +629,6 @@ export async function initDB() {
   for (const col of badCols) {
     await p.query(`ALTER TABLE \`${col.TABLE_NAME}\` ALTER COLUMN \`${col.COLUMN_NAME}\` SET DEFAULT (NOW())`)
   }
-  if (badCols.length) {}
-
-  // v1.7: global_auto_config + cleanup
-  const [gacExists] = await p.query('SELECT COUNT(*) as c FROM global_auto_config')
-  if (gacExists[0].c === 0) {
-    let oldGlobal = []
-    try { [oldGlobal] = await p.query('SELECT * FROM auto_scheduler WHERE user_id = 0') } catch {}
-    if (oldGlobal.length) {
-      const g = oldGlobal[0]
-      await p.query('INSERT INTO global_auto_config (id, symbols, interval_minutes, api_provider, model_name, api_key_encrypted, api_base_url, temperature, max_tokens, risk_level, max_position_size, selected_take_profit, system_prompt) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
-        g.symbols || 'XAUUSD', g.interval_minutes || 5, g.api_provider || 'deepseek',
-        g.model_name || 'deepseek-chat', g.api_key_encrypted || null, g.api_base_url || 'https://api.deepseek.com',
-        g.temperature || 0.3, g.max_tokens || 2000, g.risk_level || 'medium',
-        g.max_position_size || 0.05, g.selected_take_profit || 2, g.system_prompt || null
-      ])
-    } else {
-      await p.query('INSERT INTO global_auto_config (id) VALUES (1)')
-    }
-  }
-  try { await p.query('DELETE FROM auto_scheduler WHERE user_id = 0') } catch {}
-
-  // Clean up auto_scheduler: drop model config columns
-  for (const col of ['api_provider','model_name','api_key_encrypted','api_base_url','temperature','max_tokens','system_prompt','risk_level','max_position_size','selected_take_profit','interval_minutes']) {
-    try { await p.query('ALTER TABLE auto_scheduler DROP COLUMN ' + col) } catch {}
-  }
-
-  // Drop system_prompts (prompt in ai_configs + global_auto_config now)
-  try { await p.query('DROP TABLE IF EXISTS system_prompts') } catch {}
-
-  // Clean notifications: drop unused 'read' column (reserved word)
-  try { await p.query('ALTER TABLE notifications DROP COLUMN `read`') } catch {}
-
-  // v1.7.3: add enable_auto_trade to global_auto_config
-  try {
-    const [eacCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_auto_config' AND COLUMN_NAME = 'enable_auto_trade'`)
-    if (eacCols.length === 0) {
-      await p.query('ALTER TABLE global_auto_config ADD COLUMN enable_auto_trade TINYINT NOT NULL DEFAULT 0 AFTER selected_take_profit')
-    }
-  } catch {}
-
-  // v1.7.7: add auto_config_override to ai_configs
-  try {
-    const [acCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_config_override'`)
-    if (acCols.length === 0) {
-      await p.query('ALTER TABLE ai_configs ADD COLUMN auto_config_override TINYINT NOT NULL DEFAULT 0 AFTER model_sharing_enabled')
-    }
-  } catch {}
-
-  // v1.8.2: add auto_symbols / auto_interval_minutes to ai_configs (per-user auto reasoning override)
-  try {
-    const [symCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_symbols'`)
-    if (symCols.length === 0) {
-      await p.query('ALTER TABLE ai_configs ADD COLUMN auto_symbols VARCHAR(100) DEFAULT NULL AFTER auto_config_override')
-    }
-    const [ivCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_interval_minutes'`)
-    if (ivCols.length === 0) {
-      await p.query('ALTER TABLE ai_configs ADD COLUMN auto_interval_minutes INT DEFAULT NULL AFTER auto_symbols')
-    }
-  } catch {}
-
-  // v1.8.3: fix Bilibili http:// covers to https:// (mixed content)
-  try {
-    await p.query("UPDATE courses SET cover = REPLACE(cover, 'http://', 'https://') WHERE cover LIKE 'http://i%.hdslb.com/%'")
-  } catch {}
-
-  // v1.8.5: add engine fields to close_config
-  try {
-    const [ccCols] = await p.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'close_config' AND COLUMN_NAME = 'api_provider'`)
-    if (ccCols.length === 0) {
-      await p.query('ALTER TABLE close_config ADD COLUMN api_provider VARCHAR(50) DEFAULT \'deepseek\' AFTER model_name')
-      await p.query('ALTER TABLE close_config ADD COLUMN api_base_url VARCHAR(255) DEFAULT \'https://api.deepseek.com\' AFTER api_provider')
-      await p.query('ALTER TABLE close_config ADD COLUMN api_key_encrypted VARCHAR(500) DEFAULT NULL AFTER api_base_url')
-      await p.query('ALTER TABLE close_config ADD COLUMN temperature DOUBLE DEFAULT 0.3 AFTER api_key_encrypted')
-      await p.query('ALTER TABLE close_config ADD COLUMN max_tokens INT DEFAULT 1500 AFTER temperature')
-    }
-  } catch {}
 }
 
 async function seedData(p) {
