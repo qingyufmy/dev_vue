@@ -218,12 +218,12 @@ function handleReplyImageSelection(fileList) {
 
   for (const file of files) {
     if (!allowedTypes.has((file.type || '').toLowerCase())) {
-      alert('回复仅支持 JPEG、PNG、WebP、GIF 图片')
+      showToast('回复仅支持 JPEG、PNG、WebP、GIF 图片', 'error')
       continue
     }
 
     if (file.size > MAX_POST_IMAGE_BYTES) {
-      alert('单张图片不能超过 5MB')
+      showToast('单张图片不能超过 5MB', 'error')
       continue
     }
 
@@ -419,7 +419,7 @@ async function handleCommunityEditorImageInsert() {
   if (!editor) return
 
   if (getPostImageCount(editor.root) >= MAX_POST_IMAGES) {
-    alert(`最多上传 ${MAX_POST_IMAGES} 张图片`)
+    showToast(`最多上传 ${MAX_POST_IMAGES} 张图片`, 'error')
     return
   }
 
@@ -430,11 +430,11 @@ async function handleCommunityEditorImageInsert() {
     const file = input.files?.[0]
     if (!file) return
     if (file.size > MAX_POST_IMAGE_BYTES) {
-      alert('单张图片不能超过 5MB')
+      showToast('单张图片不能超过 5MB', 'error')
       return
     }
     if (getPostImageCount(editor.root) >= MAX_POST_IMAGES) {
-      alert(`最多上传 ${MAX_POST_IMAGES} 张图片`)
+      showToast(`最多上传 ${MAX_POST_IMAGES} 张图片`, 'error')
       return
     }
 
@@ -1148,7 +1148,7 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Add comment error:', err)
-      alert('发布评论失败，请检查网络后重试')
+      showToast('发布评论失败，请检查网络后重试', 'error')
     }
   },
 
@@ -1163,7 +1163,7 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Delete comment error:', err)
-      alert('删除评论失败，请检查网络后重试')
+      showToast('删除评论失败，请检查网络后重试', 'error')
     }
   },
 
@@ -1209,7 +1209,7 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Add reply error:', err)
-      alert('回复失败，请检查网络后重试')
+      showToast('回复失败，请检查网络后重试', 'error')
     }
   },
 
@@ -1225,7 +1225,7 @@ const comments = {
       if (state.currentView === 'video' && state.currentEpisode?.id === episodeId) renderVideo()
     } catch (err) {
       console.error('Delete reply error:', err)
-      alert('删除回复失败，请检查网络后重试')
+      showToast('删除回复失败，请检查网络后重试', 'error')
     }
   },
 
@@ -1484,11 +1484,11 @@ async function init() {
     state.currentView = 'home'
     if (paymentStatus === 'success') {
       setTimeout(() => {
-        alert('🎉 支付成功！你的会员已升级，请重新登录以刷新状态。')
+        showToast('🎉 支付成功！你的会员已升级，请重新登录以刷新状态。', 'success')
       }, 500)
     } else if (paymentStatus === 'failed') {
       setTimeout(() => {
-        alert('支付未完成，如有问题请联系客服。')
+        showToast('支付未完成，如有问题请联系客服。', 'error')
       }, 500)
     }
   } else {
@@ -3608,7 +3608,7 @@ async function loadAdminReferrals() {
       btn.addEventListener('click', async () => {
         btn.disabled = true
         const res = await api.patch(`/api/admin/referrals/commissions/${encodeURIComponent(btn.dataset.referralApprove)}`, { action: 'approve' })
-        if (!res.ok) alert(res.error || '审核失败')
+        if (!res.ok) showToast(res.error || '审核失败', 'error')
         loadAdminReferrals()
       })
     })
@@ -3618,7 +3618,7 @@ async function loadAdminReferrals() {
         if (!reason) return
         btn.disabled = true
         const res = await api.patch(`/api/admin/referrals/commissions/${encodeURIComponent(btn.dataset.referralVoid)}`, { action: 'void', reason })
-        if (!res.ok) alert(res.error || '作废失败')
+        if (!res.ok) showToast(res.error || '作废失败', 'error')
         loadAdminReferrals()
       })
     })
@@ -3631,7 +3631,7 @@ async function loadAdminReferrals() {
         const enabled = Number(container.querySelector(`[data-rule-enabled="${key}"]`)?.value || 0)
         btn.disabled = true
         const res = await api.put('/api/admin/referrals/rules', { rules: [{ plan, period, rate_bps: rate, enabled }] })
-        if (!res.ok) alert(res.error || '保存失败')
+        if (!res.ok) showToast(res.error || '保存失败', 'error')
         loadAdminReferrals()
       })
     })
@@ -3769,10 +3769,10 @@ function renderSmtpConfig(container) {
     ]
     const res = await api.put('/api/system-config/smtp', { items })
     if (res.ok) {
-      alert('SMTP 配置已保存')
+      showToast('SMTP 配置已保存', 'success')
       loadAdminConfig()
     } else {
-      alert(res.error || '保存失败')
+      showToast(res.error || '保存失败', 'error')
     }
   })
 
@@ -3839,10 +3839,10 @@ function renderQiniuConfig(container) {
     ]
     const res = await api.put('/api/system-config/qiniu', { items })
     if (res.ok) {
-      alert('七牛云配置已保存')
+      showToast('七牛云配置已保存', 'success')
       loadAdminConfig()
     } else {
-      alert(res.error || '保存失败')
+      showToast(res.error || '保存失败', 'error')
     }
   })
 }
@@ -3988,10 +3988,10 @@ function setupToolboxEvents(categories) {
     const items = [{ key: 'items', value: JSON.stringify(categories), label: '金融工具箱', sort_order: 0 }]
     const res = await api.put('/api/system-config/toolbox', { items })
     if (res.ok) {
-      alert('金融工具箱配置已保存')
+      showToast('金融工具箱配置已保存', 'success')
       loadAdminConfig()
     } else {
-      alert(res.error || '保存失败')
+      showToast(res.error || '保存失败', 'error')
     }
   })
 }
@@ -4078,10 +4078,10 @@ function setupMarketMenuEvents(menuItems) {
     const items = [{ key: 'items', value: JSON.stringify(menuItems), label: '股票市场研究菜单', sort_order: 0 }]
     const res = await api.put('/api/system-config/market_menu', { items })
     if (res.ok) {
-      alert('菜单配置已保存')
+      showToast('菜单配置已保存', 'success')
       loadAdminConfig()
     } else {
-      alert(res.error || '保存失败')
+      showToast(res.error || '保存失败', 'error')
     }
   })
 }
@@ -4483,7 +4483,7 @@ function renderAdminCourseList(courses) {
       if (r.ok) {
         await loadAdminCourses()
         await reloadCourseCatalog()
-      } else alert(r.error || '删除失败')
+      } else showToast(r.error || '删除失败', 'error')
     })
   })
   el.querySelectorAll('[data-page]').forEach(btn => {
@@ -4847,7 +4847,7 @@ function renderAdminQuizList(questions) {
         await loadAdminQuiz()
         await reloadCourseCatalog()
       }
-      else alert(r.error || '删除失败')
+      else showToast(r.error || '删除失败', 'error')
     })
   })
 }
@@ -5015,7 +5015,7 @@ async function startStreamUpload() {
 
     document.getElementById('streamLinkBtn')?.addEventListener('click', async () => {
       const epId = document.getElementById('streamLinkEpisode')?.value
-      if (!epId) { alert('请选择集数'); return }
+      if (!epId) { showToast('请选择集数', 'error'); return }
       const linkBtn = document.getElementById('streamLinkBtn')
       linkBtn.disabled = true; linkBtn.textContent = '关联中...'
       const r = await api.post('/api/video-stream', {
@@ -5034,7 +5034,7 @@ async function startStreamUpload() {
           state.videoAccessMap = {}
           listRes.episodes.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
         }
-      } else { alert(r.error || '关联失败'); linkBtn.disabled = false; linkBtn.textContent = '关联' }
+      } else { showToast(r.error || '关联失败', 'error'); linkBtn.disabled = false; linkBtn.textContent = '关联' }
     })
 
     // Refresh video list after a short delay
@@ -5128,10 +5128,10 @@ async function loadStreamVideos() {
         const uid = btn.dataset.linkUid
         const select = listEl.querySelector(`.stream-link-select[data-link-uid="${uid}"]`)
         const epId = select?.value
-        if (!epId) { alert('请选择集数'); return }
+        if (!epId) { showToast('请选择集数', 'error'); return }
         btn.disabled = true; btn.textContent = '关联中...'
         const r = await api.post('/api/video-stream', { episodeId: Number(epId), cfStreamId: uid })
-        if (r.ok) { loadStreamVideos() } else { alert(r.error || '关联失败'); btn.disabled = false; btn.textContent = '关联' }
+        if (r.ok) { loadStreamVideos() } else { showToast(r.error || '关联失败', 'error'); btn.disabled = false; btn.textContent = '关联' }
       })
     })
 
@@ -5146,7 +5146,7 @@ async function loadStreamVideos() {
           state.videoAccessMap[Number(epId)] = newLevel
           sel.style.borderColor = 'var(--primary)'
           setTimeout(() => { sel.style.borderColor = '#ddd' }, 1500)
-        } else { alert(r.error || '修改失败') }
+        } else { showToast(r.error || '修改失败', 'error') }
       })
     })
 
@@ -5156,7 +5156,7 @@ async function loadStreamVideos() {
         if (!confirm('确定取消关联？')) return
         btn.disabled = true; btn.textContent = '取消中...'
         const r = await api.del(`/api/video-stream?episode=${btn.dataset.unlinkEp}`)
-        if (r.ok) { loadStreamVideos() } else { alert(r.error || '取消失败'); btn.disabled = false; btn.textContent = '取消关联' }
+        if (r.ok) { loadStreamVideos() } else { showToast(r.error || '取消失败', 'error'); btn.disabled = false; btn.textContent = '取消关联' }
       })
     })
 
@@ -5182,12 +5182,12 @@ async function loadStreamVideos() {
           if (res.ok || res.success) {
             btn.closest('.stream-video-card')?.remove()
           } else {
-            alert(res.error || '删除失败')
+            showToast(res.error || '删除失败', 'error')
             btn.textContent = '删除'
             btn.disabled = false
           }
         } catch (err) {
-          alert('删除失败')
+          showToast('删除失败', 'error')
           btn.textContent = '删除'
           btn.disabled = false
         }
@@ -6093,10 +6093,10 @@ function renderProfile() {
           updateAuthUI()
           renderProfile()
         } else {
-          alert(res.error || '操作失败')
+          showToast(res.error || '操作失败', 'error')
         }
       } catch {
-        alert('操作失败，请稍后重试')
+        showToast('操作失败，请稍后重试', 'error')
       }
       forumReadAllBtn.disabled = false
       forumReadAllBtn.textContent = '全部已读'
@@ -6400,14 +6400,17 @@ function getPasswordRuleError(password) {
   return null
 }
 
-function showFormMsgProfile(msg, type) {
-  // Simple toast for profile page
+function showToast(msg, type = 'info') {
   const toast = document.createElement('div')
-  toast.className = `profile-toast profile-toast-${type}`
+  toast.className = `profile-toast profile-toast-${type === 'error' ? 'err' : type === 'success' ? 'ok' : 'ok'}`
   toast.textContent = msg
   document.body.appendChild(toast)
   setTimeout(() => toast.classList.add('active'), 10)
-  setTimeout(() => { toast.classList.remove('active'); setTimeout(() => toast.remove(), 300) }, 2500)
+  setTimeout(() => { toast.classList.remove('active'); setTimeout(() => toast.remove(), 300) }, 3000)
+}
+
+function showFormMsgProfile(msg, type) {
+  showToast(msg, type === 'err' ? 'error' : 'success')
 }
 
 // Avatar upload with auto-compression
@@ -6923,13 +6926,13 @@ function renderTrades() {
         notes: document.getElementById('tradeNotes').value.trim(),
         screenshot_url: document.getElementById('tradeScreenshot').value.trim(),
       }
-      if (!data.trade_date || !data.symbol) { alert('请填写日期和标的'); btn.disabled = false; btn.textContent = '添加'; return }
+      if (!data.trade_date || !data.symbol) { showToast('请填写日期和标的', 'error'); btn.disabled = false; btn.textContent = '添加'; return }
       const res = await api.post('/api/trades', data)
       if (res.ok) {
         document.getElementById('tradesAdminForm').style.display = 'none'
         document.getElementById('showAddTrade').style.display = 'block'
         loadTradeRecords()
-      } else { alert(res.error || '添加失败') }
+      } else { showToast(res.error || '添加失败', 'error') }
       btn.disabled = false; btn.textContent = '添加'
     })
   }
@@ -7001,7 +7004,7 @@ async function loadTradeRecords() {
         btn.disabled = true
         const r = await api.del(`/api/trades?id=${btn.dataset.tradeId}`)
         if (r.ok) loadTradeRecords()
-        else { alert('删除失败'); btn.disabled = false }
+        else { showToast('删除失败', 'error'); btn.disabled = false }
       })
     })
   } catch (err) {
@@ -8193,9 +8196,9 @@ function setupGlobalEvents() {
               modal.style.display = 'none'
               refreshAdminUserTable()
             } else {
-              alert(r.error || '删除失败')
+              showToast(r.error || '删除失败', 'error')
             }
-          } catch { alert('删除失败') }
+          } catch { showToast('删除失败', 'error') }
         })
       }
       return
@@ -8280,7 +8283,7 @@ function setupGlobalEvents() {
           document.getElementById('adminOrderModal').style.display = 'none'
           renderAdmin()
         } else {
-          alert('操作失败: ' + (r.error || '未知错误'))
+          showToast('操作失败: ' + (r.error || '未知错误'), 'error')
           target.disabled = false
           target.textContent = '保存'
         }
@@ -8345,7 +8348,7 @@ function setupGlobalEvents() {
 
     // Membership: subscribe button — currently disabled
     if (target.closest('.mem-btn-plus, .mem-btn-pro')) {
-      alert('支付功能暂关闭，请联系管理员开通。')
+      showToast('支付功能暂关闭，请联系管理员开通。', 'info')
       return
     }// Membership price toggle (月付/年付)
     const priceTab = target.closest('.price-tab')
@@ -8411,11 +8414,11 @@ function setupGlobalEvents() {
             renderCommunity()
           }
         } else {
-          alert(res.error || '删除失败')
+          showToast(res.error || '删除失败', 'error')
         }
       } catch (err) {
         console.error('Delete post error:', err)
-        alert('删除失败，请检查网络')
+        showToast('删除失败，请检查网络', 'error')
       }
       return
     }
@@ -8451,14 +8454,14 @@ function setupGlobalEvents() {
           renderPost()
         } else {
           await cleanupTemporaryPostImages(uploadedAssetIds)
-          alert(res.error || '发布失败')
+          showToast(res.error || '发布失败', 'error')
           btn.disabled = false
           btn.textContent = '发布回复'
         }
       } catch (err) {
         await cleanupTemporaryPostImages(uploadedAssetIds)
         console.error('Submit reply error:', err)
-        alert(err?.message || '发布失败，请检查网络')
+        showToast(err?.message || '发布失败，请检查网络', 'error')
         btn.disabled = false
         btn.textContent = '发布回复'
       }
@@ -8491,11 +8494,11 @@ function setupGlobalEvents() {
         if (res.success) {
           renderPost()
         } else {
-          alert(res.error || '删除失败')
+          showToast(res.error || '删除失败', 'error')
         }
       } catch (err) {
         console.error('Delete reply error:', err)
-        alert('删除失败，请检查网络')
+        showToast('删除失败，请检查网络', 'error')
       }
       return
     }
@@ -8525,7 +8528,7 @@ function setupGlobalEvents() {
       if (!reason) return
       const detail = prompt('补充说明（选填）') || ''
       const res = await api.post('/api/post-reports', { replyId: reportReplyBtn.dataset.reportReply, reason, detail })
-      alert(res.ok ? (res.message || '举报已提交') : (res.error || '举报失败'))
+      showToast(res.ok ? (res.message || '举报已提交') : (res.error || '举报失败'), res.ok ? 'success' : 'error')
       return
     }
 
@@ -8581,9 +8584,9 @@ function setupGlobalEvents() {
       const tags = document.getElementById('postTagsInput')?.value || ''
       const editor = initCommunityEditor()
       const plainText = normalizePlainText(editor?.getText() || '')
-      if (!title || !plainText) { alert('标题和内容不能为空'); return }
+      if (!title || !plainText) { showToast('标题和内容不能为空', 'error'); return }
       if ((editor?.root && getPostImageCount(editor.root) > MAX_POST_IMAGES)) {
-        alert(`最多上传 ${MAX_POST_IMAGES} 张图片`)
+        showToast(`最多上传 ${MAX_POST_IMAGES} 张图片`, 'error')
         return
       }
       const btn = target
@@ -8614,13 +8617,13 @@ function setupGlobalEvents() {
           renderCommunity()
         } else {
           await cleanupTemporaryPostImages(uploadedAssetIds)
-          alert(res.error || '发帖失败')
+          showToast(res.error || '发帖失败', 'error')
           btn.disabled = false
           btn.textContent = '发布'
         }
       } catch (error) {
         await cleanupTemporaryPostImages(uploadedAssetIds)
-        alert(error?.message || '发帖失败，请检查网络')
+        showToast(error?.message || '发帖失败，请检查网络', 'error')
         btn.disabled = false
         btn.textContent = '发布'
       }
@@ -8634,7 +8637,7 @@ function setupGlobalEvents() {
       if (!reason) return
       const detail = prompt('补充说明（选填）') || ''
       const res = await api.post('/api/post-reports', { postId: postReportBtn.dataset.postReport, reason, detail })
-      alert(res.ok ? (res.message || '举报已提交') : (res.error || '举报失败'))
+      showToast(res.ok ? (res.message || '举报已提交') : (res.error || '举报失败'), res.ok ? 'success' : 'error')
       return
     }
 
@@ -8645,7 +8648,7 @@ function setupGlobalEvents() {
         sticky: postPinBtn.dataset.nextPin === '1',
       })
       if (!res.ok) {
-        alert(res.error || '操作失败')
+        showToast(res.error || '操作失败', 'error')
         return
       }
       renderPost()
@@ -8659,7 +8662,7 @@ function setupGlobalEvents() {
         featured: postFeatureBtn.dataset.nextFeature === '1',
       })
       if (!res.ok) {
-        alert(res.error || '操作失败')
+        showToast(res.error || '操作失败', 'error')
         return
       }
       renderPost()
@@ -8673,7 +8676,7 @@ function setupGlobalEvents() {
         locked: postLockBtn.dataset.nextLock === '1',
       })
       if (!res.ok) {
-        alert(res.error || '操作失败')
+        showToast(res.error || '操作失败', 'error')
         return
       }
       renderPost()
