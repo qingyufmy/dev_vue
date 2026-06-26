@@ -54,14 +54,16 @@ def load_config():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception: pass
+        except Exception as e:
+            print(f"[Bridge] 加载配置失败: {e}")
     return {}
 
 def save_config(cfg):
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception: pass
+    except Exception as e:
+        print(f"[Bridge] 保存配置失败: {e}")
 
 def update_config(patch):
     cfg = load_config()
@@ -693,7 +695,8 @@ class BridgeWorker(QThread):
                 try:
                     acc = self.mt5.account_info()
                     if acc: ab = float(acc.balance)
-                except: pass
+                except Exception as e:
+                    self.log_signal.emit(f"获取账户余额失败: {e}")
                 return {"status": "success", "orders": pr, "statistics": {
                     "account_principal": round(ab-nr,2), "account_balance": round(ab,2),
                     "total_profit": round(tp,2), "credit": round(credit,2), "deposit": round(deposit,2),
@@ -881,8 +884,8 @@ class BridgeWorker(QThread):
                     d = os.path.normpath(os.path.dirname(line))
                     if os.path.isdir(d) and d not in found:
                         found[d] = "运行中进程"
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Bridge] 进程检测失败: {e}")
 
         # ── 3. 注册表 HKLM (64-bit view) ──
         try:
@@ -906,11 +909,11 @@ class BridgeWorker(QThread):
                             break
                         finally:
                             i += 1
-                except OSError:
-                    pass
+                except OSError as e:
+                    print(f"[Bridge] 注册表读取失败: {e}")
                 break  # HKLM done once
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Bridge] 注册表检测失败: {e}")
 
         # ── 4. 文件系统 glob（增强: 覆盖券商定制目录名） ──
         glob_patterns = [
