@@ -904,6 +904,8 @@ class BridgeWorker(QThread):
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
         MAX_RETRY = 300; RETRY_INT = 5
+        MAX_RAPID_FAILS = 5  # 连续快速断开(10秒内)超过5次则停止
+        rapid_fails = 0
 
         while self.running:
             retry_start = time.time(); connected = False
@@ -933,6 +935,8 @@ class BridgeWorker(QThread):
                     time.sleep(RETRY_INT)
 
             if not connected or not self.running: break
+
+            session_start = time.time()
 
             try:
                 self._resolved_symbol = self._resolve_symbol("XAUUSD")
@@ -990,7 +994,7 @@ class BridgeWorker(QThread):
                             self.status_signal.emit("MT5桥接-已连接", "#22c55e",
                                                    f"{acc.login} @ {acc.server}  ${acc.balance:,.2f}")
                         last_data = now
-                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError) as e:
+                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError, TimeoutError) as e:
                         self.log_signal.emit(f"数据推送错误: {e}")
                         push_err = True
                     except Exception as e:
@@ -1002,7 +1006,7 @@ class BridgeWorker(QThread):
                 if now - last_hb > 10:
                     try:
                         ws.send(json.dumps({"type": "hb"})); last_hb = now
-                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError):
+                    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, OSError, TimeoutError):
                         break  # 心跳发送失败也立即重连
                     except Exception as e:
                         self.log_signal.emit(f"心跳错误: {e}")
@@ -1060,6 +1064,21 @@ class BridgeWorker(QThread):
             except: pass
             self._ws = None
             if not self.running: break
+
+            # 断路器：连接后10秒内断开视为快速失败
+            session_duration = time.time() - session_start
+            if session_duration < 10:
+                rapid_fails += 1
+                self.log_signal.emit(f"快速断开 (第{rapid_fails}/{MAX_RAPID_FAILS}次，持续{session_duration:.0f}秒)")
+            else:
+                rapid_fails = 0  # 正常运行后重置计数
+
+            if rapid_fails >= MAX_RAPID_FAILS:
+                self.log_signal.emit(f"❌ 连续{MAX_RAPID_FAILS}次快速断开，停止重连。请检查网络或重启软件")
+                self.status_signal.emit("重连已停止", "#ef4444", "")
+                if self.mt5: self.mt5.shutdown()
+                return
+
             self.log_signal.emit(f"连接断开，{RETRY_INT}秒后自动重连...")
             self.status_signal.emit("重连中...", "#f59e0b", "")
             time.sleep(RETRY_INT)
