@@ -3033,6 +3033,7 @@ function renderAdmin() {
       return
     }
     renderAdminContent(data)
+    renderAdminUserPager(data)
     startAdminAutoRefresh()
   })
 }
