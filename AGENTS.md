@@ -70,6 +70,8 @@ Both `/api` and `/aurum-api` serve the same routes. `/aurum-api` is used by the 
 |---------|-------------|
 | `npm run dev` | Dev server with file watch (`node --watch server/index.js`) |
 | `npm start` | Production server (`node server/index.js`) |
+| `npm test` | Run all unit tests (`vitest run`) |
+| `npm run test:watch` | Run tests in watch mode |
 
 ## Key Files
 
@@ -82,7 +84,13 @@ Both `/api` and `/aurum-api` serve the same routes. `/aurum-api` is used by the 
 | `server/bridge-ws.js` | WebSocket server for MT5 bridge |
 | `server/config.js` | Env loading, JWT_SECRET validation |
 | `server/middleware/auth.js` | JWT authentication |
-| `server/routes/ai.js` | AI trading, auto-scheduler, smart close, signals |
+| `server/routes/ai/index.js` | AI trading entry point + Router |
+| `server/routes/ai/utils.js` | Pure function utilities |
+| `server/routes/ai/market-data.js` | Market calculation + bridge |
+| `server/routes/ai/llm.js` | AI inference + signal normalization |
+| `server/routes/ai/config.js` | Config management + risk + audit |
+| `server/routes/ai/strategy.js` | Strategy context + execution |
+| `server/routes/ai/scheduler.js` | Auto scheduler + smart close |
 | `server/routes/admin.js` | Admin panel APIs |
 | `server/routes/auth.js` | Login/register |
 | `public/ai/app.js` | Frontend trading UI logic (4100+ lines) |
