@@ -9,6 +9,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { initDB, queryRun } from './db.js'
+import { runMigrations } from './migrations.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
 import commentRoutes from './routes/comments.js'
@@ -306,6 +307,7 @@ initBridgeWS(server)
 
 ;(async () => {
   await initDB()
+  await runMigrations()
   server.listen(PORT, () => {
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })
