@@ -1440,20 +1440,30 @@ async function handleBrowserCommand(ws, userId, msg) {
           [pageSize, offset]
         )
 
-        // Enrich with bridge/settings status
+        // Enrich with bridge/settings status + heartbeat
         const enriched = await Promise.all(rows.map(async r => {
           const bridge = bridges.get(r.id)
           const connected = !!(bridge && bridge.ws?.readyState === 1)
+          const bridgeLastSeen = bridge?.lastSeen || null
           const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [r.id])
           const scheduler = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [r.id])
           return {
             ...r,
             bridgeConnected: connected,
+            bridgeLastSeen,
             autoReasoning: !!(settings?.auto_reasoning_enabled),
             tradeEnabled: !!(settings?.trade_send_enabled),
             schedulerEnabled: !!(scheduler?.enabled)
           }
         }))
+
+        // Sort by bridge heartbeat descending, then by last_seen_at descending
+        enriched.sort((a, b) => {
+          const aTime = a.bridgeLastSeen || 0
+          const bTime = b.bridgeLastSeen || 0
+          if (aTime !== bTime) return bTime - aTime
+          return new Date(b.last_seen_at || 0) - new Date(a.last_seen_at || 0)
+        })
 
         result = {
           status: 'success',

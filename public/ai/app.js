@@ -3827,27 +3827,6 @@ function renderAdminDashboard(el, d, userListResp) {
     '<hr class="dash-divider">',
     '',
     '<div class="section-inline">',
-    '  <h3><i data-lucide="radio"></i>在线桥接</h3>',
-    '  <span class="badge">' + wssCount + ' 连接</span>',
-    '</div>',
-    '<div class="bridge-box">',
-    (d.bridges.length === 0
-      ? '<div class="bridge-empty">暂无在线桥接</div>'
-      : '<table class="bridge-table"><thead><tr><th>用户</th><th>计划</th><th>交易</th><th>推理</th><th>心跳</th></tr></thead><tbody>' +
-        d.bridges.map(function(b) {
-          return '<tr>' +
-            '<td><div class="bridge-user"><span class="name">' + escapeHtml(b.nickname||'UID:'+b.userId) + '</span><span class="email">' + escapeHtml(b.email) + '</span></div></td>' +
-            '<td><span class="chip chip-' + (b.plan||'free') + '">' + (b.plan||'free') + '</span></td>' +
-            '<td><span class="bridge-status"><span class="bridge-dot ' + (b.tradeEnabled ? 'on' : 'off') + '"></span>' + (b.tradeEnabled ? '开' : '关') + '</span></td>' +
-            '<td><span class="bridge-status"><span class="bridge-dot ' + (b.autoReasoning ? 'on' : 'off') + '"></span>' + (b.autoReasoning ? '开' : '关') + '</span></td>' +
-            '<td style="font-size:0.68rem;color:var(--text-muted)">' + formatTimeAgo(b.lastSeen) + '</td></tr>';
-        }).join('') +
-        '</tbody></table>'),
-    '</div>',
-    '',
-    '<hr class="dash-divider">',
-    '',
-    '<div class="section-inline">',
     '  <h3><i data-lucide="search"></i>用户状态</h3>',
     '</div>',
     '',
@@ -3958,7 +3937,7 @@ function renderAdminDashboard(el, d, userListResp) {
     const totalPages = Math.ceil((data.total || 0) / (data.pageSize || 10));
     const users = data.users || [];
     container.innerHTML = users.length
-      ? '<table class="user-table"><thead><tr><th>ID</th><th>用户</th><th>计划</th><th>桥接</th><th>推理</th><th>交易</th><th>调度</th><th>最后在线</th></tr></thead><tbody>' +
+      ? '<table class="user-table"><thead><tr><th>ID</th><th>用户</th><th>计划</th><th>桥接</th><th>推理</th><th>交易</th><th>调度</th><th>心跳</th></tr></thead><tbody>' +
         users.map(u => '<tr data-uid="' + u.id + '">' +
           '<td style="color:var(--text-muted);font-family:monospace;font-size:0.65rem">' + u.id + '</td>' +
           '<td><div class="bridge-user"><span class="name">' + escapeHtml(u.nickname||'--') + '</span><span class="email">' + escapeHtml(u.email) + '</span></div></td>' +
@@ -3967,7 +3946,7 @@ function renderAdminDashboard(el, d, userListResp) {
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.autoReasoning?'on':'off') + '"></span>' + (u.autoReasoning?'开':'关') + '</span></td>' +
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.tradeEnabled?'on':'off') + '"></span>' + (u.tradeEnabled?'开':'关') + '</span></td>' +
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.schedulerEnabled?'on':'off') + '"></span>' + (u.schedulerEnabled?'开':'关') + '</span></td>' +
-          '<td style="font-size:0.65rem;color:var(--text-muted)">' + (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--') + '</td></tr>').join('') +
+          '<td style="font-size:0.65rem;color:var(--text-muted)">' + (u.bridgeLastSeen ? formatTimeAgo(Number(u.bridgeLastSeen)) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--')) + '</td></tr>').join('') +
         '</tbody></table>' +
         (totalPages > 1
           ? '<div class="user-pager"><button class="page-btn" data-page="prev"' + (data.page <= 1 ? ' disabled': '') + '>‹</button>' +
