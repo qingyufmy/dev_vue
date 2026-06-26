@@ -3946,7 +3946,7 @@ function renderAdminDashboard(el, d, userListResp) {
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.autoReasoning?'on':'off') + '"></span>' + (u.autoReasoning?'开':'关') + '</span></td>' +
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.tradeEnabled?'on':'off') + '"></span>' + (u.tradeEnabled?'开':'关') + '</span></td>' +
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.schedulerEnabled?'on':'off') + '"></span>' + (u.schedulerEnabled?'开':'关') + '</span></td>' +
-          '<td style="font-size:0.65rem;color:var(--text-muted)">' + (u.bridgeLastSeen ? formatTimeAgo(Number(u.bridgeLastSeen)) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--')) + '</td></tr>').join('') +
+          '<td style="font-size:0.65rem;color:var(--text-muted)">' + (u.bridge_heartbeat ? formatTimeAgo(u.bridge_heartbeat) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--')) + '</td></tr>').join('') +
         '</tbody></table>' +
         (totalPages > 1
           ? '<div class="user-pager"><button class="page-btn" data-page="prev"' + (data.page <= 1 ? ' disabled': '') + '>‹</button>' +

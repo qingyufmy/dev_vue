@@ -270,6 +270,12 @@ async function _initBridge(ws, userId) {
     const bridge = bridges.get(userId)
     if (bridge) bridge.lastSeen = Date.now()
 
+    // Persist heartbeat to DB (throttled: max once per 60s per user)
+    if (bridge && (!bridge._lastDbWrite || Date.now() - bridge._lastDbWrite > 60000)) {
+      bridge._lastDbWrite = Date.now()
+      queryRun('UPDATE users SET bridge_heartbeat = NOW() WHERE id = ?', [userId]).catch(() => {})
+    }
+
     if (msg.type === 'data') {
       // Real-time market status detection: compare consecutive tick times
       if (bridge && msg.quote && typeof msg.quote.time === 'string') {
@@ -1435,45 +1441,22 @@ async function handleBrowserCommand(ws, userId, msg) {
         const offset = (page - 1) * pageSize
 
         const countRow = await queryOne('SELECT COUNT(*) AS total FROM users')
-
-        // Get connected bridge users sorted by heartbeat (in-memory, fast)
-        const bridgeUsers = Array.from(bridges.entries())
-          .filter(([_, b]) => b.ws?.readyState === 1)
-          .sort((a, b) => b[1].lastSeen - a[1].lastSeen)
-          .map(([uid]) => uid)
-
-        // Use SQL FIELD() to order: bridge users first (by heartbeat via FIELD order),
-        // then non-bridge users sorted by last_seen_at DESC
-        // Only fetch the current page from DB
-        let rows
-        if (bridgeUsers.length > 0) {
-          const placeholders = bridgeUsers.map(() => '?').join(',')
-          rows = await queryAll(
-            `SELECT id, email, nickname, plan, role, last_seen_at, created_at FROM users
-             ORDER BY FIELD(id, ${placeholders}) DESC, last_seen_at DESC
-             LIMIT ? OFFSET ?`,
-            [...bridgeUsers, pageSize, offset]
-          )
-        } else {
-          rows = await queryAll(
-            `SELECT id, email, nickname, plan, role, last_seen_at, created_at FROM users
-             ORDER BY last_seen_at DESC
-             LIMIT ? OFFSET ?`,
-            [pageSize, offset]
-          )
-        }
+        const rows = await queryAll(
+          `SELECT id, email, nickname, plan, role, last_seen_at, bridge_heartbeat, created_at FROM users
+           ORDER BY bridge_heartbeat DESC, last_seen_at DESC
+           LIMIT ? OFFSET ?`,
+          [pageSize, offset]
+        )
 
         // Enrich page results with bridge/settings status (only current page)
         const enriched = await Promise.all(rows.map(async r => {
           const bridge = bridges.get(r.id)
           const connected = !!(bridge && bridge.ws?.readyState === 1)
-          const bridgeLastSeen = bridge?.lastSeen || null
           const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [r.id])
           const scheduler = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [r.id])
           return {
             ...r,
             bridgeConnected: connected,
-            bridgeLastSeen,
             autoReasoning: !!(settings?.auto_reasoning_enabled),
             tradeEnabled: !!(settings?.trade_send_enabled),
             schedulerEnabled: !!(scheduler?.enabled)
