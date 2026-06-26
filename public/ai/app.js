@@ -1805,8 +1805,8 @@ function applyRoleUI() {
   // 管理分组：仅桥接已连接时显示
   const navGroupManage = document.getElementById('navGroupManage');
   if (navGroupManage) {
-    const hasBridge = isPro && !isAdmin && !isProNoBridge && !isPlusReadOnly;
-    navGroupManage.style.display = hasBridge ? '' : 'none';
+    const bridgeConnected = !state._usingFallback && state._lastGatewayLive;
+    navGroupManage.style.display = bridgeConnected ? '' : 'none';
   }
 
   // Free users: locked out entirely (proOverlay shown during init)
