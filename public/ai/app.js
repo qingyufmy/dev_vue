@@ -967,6 +967,9 @@ function handleHeartbeat(msg) {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
   }
 
+  // Update market status from heartbeat
+  if (typeof msg.trade_mode === 'number') updateMarketStatus(msg.trade_mode);
+
   // Update trade badge from heartbeat data (bridge just connected/state changed)
   if (typeof msg.trade_enabled === 'boolean') {
     const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";

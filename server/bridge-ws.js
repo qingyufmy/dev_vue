@@ -201,7 +201,7 @@ async function _initBridge(ws, userId) {
   bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1 }); ws._userId = userId
 
   // Notify browsers with current trade/auto state
-  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled })
+  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled, trade_mode: -1 })
 
   // Restore auto-reasoning — check BOTH user_bridge_settings AND auto_scheduler table
   // user_bridge_settings.auto_reasoning_enabled is set by toggle_auto/save_auto UI
