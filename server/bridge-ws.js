@@ -1217,15 +1217,15 @@ async function handleBrowserCommand(ws, userId, msg) {
             (SELECT COUNT(*) FROM user_bridge_settings WHERE trade_send_enabled = 1) AS trade_enabled_users,
             (SELECT COUNT(*) FROM auto_scheduler WHERE enabled = 1) AS auto_scheduler_users`),
 
-          // 6. Token usage stats (estimated: ~4 chars per token for Chinese/English mixed)
+          // 6. Token usage stats (using pre-calculated token_count)
           queryOne(`SELECT
-            (SELECT ROUND(SUM(LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today_tokens,
-            (SELECT ROUND(SUM(LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) FROM ai_signals) AS total_tokens,
+            (SELECT SUM(token_count) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today_tokens,
+            (SELECT SUM(token_count) FROM ai_signals) AS total_tokens,
             (SELECT DATE(created_at) FROM ai_signals ORDER BY id DESC LIMIT 1) AS last_api_call`),
 
           // 7. Daily token trend (30 days)
           queryAll(`SELECT DATE(created_at) AS day,
-            ROUND(SUM(LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) AS tokens
+            SUM(token_count) AS tokens
             FROM ai_signals WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
             GROUP BY DATE(created_at) ORDER BY day`),
 

@@ -114,6 +114,19 @@ const migrations = [
         await queryRun("UPDATE courses SET cover = REPLACE(cover, 'http://', 'https://') WHERE cover LIKE 'http://i%.hdslb.com/%'")
       } catch {}
     }
+  },
+  {
+    id: '010_add_token_count_to_signals',
+    up: async () => {
+      try {
+        const [cols] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = 'token_count'")
+        if (!cols.length) {
+          await queryRun('ALTER TABLE ai_signals ADD COLUMN token_count INT DEFAULT 0 AFTER market_data_json')
+          // 回填历史数据
+          await queryRun('UPDATE ai_signals SET token_count = ROUND((LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) WHERE token_count = 0')
+        }
+      } catch {}
+    }
   }
 ]
 

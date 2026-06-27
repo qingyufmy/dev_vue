@@ -136,14 +136,16 @@ export async function handleAnalyze(userId, params) {
   delete signal._inference_source
 
   const createdAt = beijingNow()
+  const marketJson = JSON.stringify(market)
+  const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
   const result = await queryRun(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
     analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
-    market_data_json, ai_model, ttl_seconds, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    market_data_json, token_count, ai_model, ttl_seconds, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price || null,
       signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
-      JSON.stringify(market), (config || {}).model_name || 'deepseek-chat', (await import('./utils.js')).signalTtlSeconds(timeframe), createdAt])
+      marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', (await import('./utils.js')).signalTtlSeconds(timeframe), createdAt])
 
   signal.id = result.insertId
   signal.symbol = symbol

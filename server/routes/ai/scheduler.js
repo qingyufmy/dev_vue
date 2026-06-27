@@ -205,17 +205,19 @@ export async function runAutoCycle(userId, symbol, timeframe) {
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
 
     const createdAt = beijingNow()
+    const marketJson = JSON.stringify(market)
+    const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
     const result = await queryRun(`
       INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
         recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
-        take_profit_2_price, take_profit_3_price, market_data_json, ai_model, ttl_seconds, is_executed, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        take_profit_2_price, take_profit_3_price, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `, [
       userId, 0, 'default', symbol, timeframe.toUpperCase(),
       signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price,
       signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
-      JSON.stringify(market), config.model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt
+      marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt
     ])
     signal.id = result.insertId
     signal.symbol = symbol
@@ -476,15 +478,17 @@ async function runSmartClose(userId, closeConfig, account, positions) {
 
     const avgConfidence = parsed.positions.reduce((s, p) => s + (p.confidence || 0.5), 0) / parsed.positions.length
     const analysisJson = JSON.stringify(parsed.positions)
+    const reasoningText = `智能平仓分析：${positions.length}笔持仓`
+    const contextJson = JSON.stringify(contextPayload)
 
     const createdAt = beijingNow()
+    const tokenCount = Math.round((analysisJson.length + reasoningText.length + contextJson.length) / 4)
     const closeSignalResult = await queryRun(
       `INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
-        analysis, reasoning, market_data_json, ai_model, ttl_seconds, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        analysis, reasoning, market_data_json, token_count, ai_model, ttl_seconds, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, 'smart_close', symbol, 'CLOSE', 'close', avgConfidence, 0,
-        analysisJson, `智能平仓分析：${positions.length}笔持仓`,
-        JSON.stringify(contextPayload), model, 3600, createdAt]
+        analysisJson, reasoningText, contextJson, tokenCount, model, 3600, createdAt]
     )
     const closeSignalId = closeSignalResult?.insertId
 
