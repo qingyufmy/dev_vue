@@ -1,4 +1,4 @@
-# AURUM AI Trading System v1.9.4
+# AURUM AI Trading System v2.1.0
 
 全自动 MT5 量化交易系统 · AI 驱动决策 · WebSocket 纯转发架构 · 实时信号执行
 
@@ -11,6 +11,8 @@
 - **历史数据回测** — MT5 实时数据拉取与统计分析
 - **Web 管理界面** — 实时监控交易状态、账户权益、持仓管理
 - **模型共享** — 管理员开启共享后，普通用户无需配置 API Key 即可使用 AI 推理
+- **自动推理** — 定时自动分析市场，可配置自动执行
+- **市场状态检测** — 自动检测开市/休市状态
 
 ## 项目结构
 
@@ -19,29 +21,36 @@
 │   ├── index.js              # Express 主服务（端口 3000）
 │   ├── bridge-ws.js          # WebSocket MT5 桥接
 │   ├── db.js                 # MySQL 数据库（mysql2）
+│   ├── migrations.js         # 数据库迁移
+│   ├── redis.js              # Redis 缓存（可选）
+│   ├── logger.js             # 结构化日志
 │   ├── .env.example          # 环境变量模板
 │   ├── routes/
-│   │   ├── ai.js             # AI/MT5 交易接口
+│   │   ├── ai/               # AI 交易模块（拆分）
+│   │   │   ├── index.js      # 入口 + Router
+│   │   │   ├── utils.js      # 纯函数工具
+│   │   │   ├── market-data.js # 行情计算 + 桥接
+│   │   │   ├── llm.js        # AI 推理
+│   │   │   ├── config.js     # 配置管理 + 风控
+│   │   │   ├── strategy.js   # 策略上下文 + 执行
+│   │   │   └── scheduler.js  # 自动调度 + 智能平仓
 │   │   ├── auth.js           # 认证/登录
 │   │   ├── admin.js          # 管理后台
-│   │   ├── config.js         # 系统配置
-│   │   ├── courses.js        # 课程管理
-│   │   ├── posts.js          # 帖子系统
-│   │   ├── video.js          # 视频管理
 │   │   └── ...
 │   └── middleware/auth.js    # JWT 认证中间件
 ├── public/
 │   ├── ai/
-│   │   ├── index.html        # 量化系统主页面
+│   │   ├── index.html        # AI 交易实验室主页面
+│   │   ├── guide.html        # 使用手册（独立页面）
 │   │   ├── app.js            # 前端交易逻辑
 │   │   ├── styles.css        # 样式表
-│   │   ├── AURUM_Bridge.exe          # Windows MT5 桥接
-│   │   ├── AURUM_Bridge_Mac.command  # macOS MT5 桥接
-│   │   └── aurum_bridge_gui.py       # 桥接源码
+│   │   ├── AURUM_Bridge.exe  # Windows MT5 桥接
+│   │   └── aurum_bridge_gui.py # 桥接源码
 │   ├── index.html            # 主站首页
 │   └── src/
 │       ├── main.js           # 主站前端逻辑
 │       └── style.css         # 主站样式
+├── tests/                    # 单元测试（75个）
 └── README.md
 ```
 

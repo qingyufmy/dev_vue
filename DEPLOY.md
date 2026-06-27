@@ -1,6 +1,6 @@
 # AURUM AI Trading System — 宝塔面板部署教程
 
-> 当前版本：v1.9.4 | 最后更新：2026-06-20
+> 当前版本：v2.1.0 | 最后更新：2026-06-27
 
 ## 一、服务器准备
 
@@ -14,7 +14,7 @@
 ```bash
 # SSH 连接服务器
 cd /www1/wwwroot
-git clone https://github.com/qingyufmy/wall-street-skill-local.git aurum-ai
+git clone https://gitee.com/fmyseo/wall-street-skill-local.git aurum-ai
 cd aurum-ai
 git checkout main
 ```
