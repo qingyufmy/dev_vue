@@ -1544,7 +1544,7 @@ class LoginPage(QWidget):
         layout.addStretch()
 
         # Footer
-        footer = QLabel(f"AI交易实验室 · wall-street-skill.com · {APP_VERSION}")
+        footer = QLabel(f"AI交易实验室 · www.cnfxtrade.com · {APP_VERSION}")
         footer.setProperty("muted", True)
         footer.setAlignment(Qt.AlignCenter)
         layout.addWidget(footer)
@@ -1706,7 +1706,7 @@ class BridgePage(QWidget):
         layout.addWidget(self.log_area, 1)
 
         # Footer
-        footer = QLabel(f"AI交易实验室 · wall-street-skill.com · {APP_VERSION}")
+        footer = QLabel(f"AI交易实验室 · www.cnfxtrade.com · {APP_VERSION}")
         footer.setProperty("muted", True)
         footer.setStyleSheet("color: #475569; font-size: 11px; background: transparent;")
         footer.setAlignment(Qt.AlignCenter)
