@@ -1,11 +1,11 @@
 // ai/strategy.js — 策略上下文 + 执行 + 分析
 
 import { queryOne, queryRun, beijingNow } from '../../db.js'
-import { isBridgeAlive } from '../../bridge-ws.js'
+import { isBridgeAlive, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject } from './config.js'
+import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload } from './config.js'
 import { round2 } from './utils.js'
 
 export async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
@@ -150,6 +150,17 @@ export async function handleAnalyze(userId, params) {
   signal.market_data = market
   signal.is_executed = false
   attachSignalTiming(signal)
+
+  // Push new signal notification to browser
+  sendToBrowsers(userId, {
+    type: 'new_signal',
+    signal_id: signal.id,
+    signal_type: signal.signal_type,
+    symbol: signal.symbol,
+    timeframe: signal.timeframe,
+    confidence: signal.confidence,
+    created_at: createdAt
+  })
 
   if (signal.signal_type !== 'hold' && config && config.enable_auto_trade) {
     try {

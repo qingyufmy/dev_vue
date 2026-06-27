@@ -239,6 +239,17 @@ export async function runAutoCycle(userId, symbol, timeframe) {
     attachSignalTiming(signal)
     l(`signal #${signal.id} saved to DB ✓`)
 
+    // Push new signal notification to browser
+    sendToBrowsers(userId, {
+      type: 'new_signal',
+      signal_id: signal.id,
+      signal_type: signal.signal_type,
+      symbol: signal.symbol,
+      timeframe: signal.timeframe,
+      confidence: signal.confidence,
+      created_at: createdAt
+    })
+
     let execResult = null
     if (config && config.enable_auto_trade && market.inference_source === 'ai' && !signal.is_stale && signal.signal_type !== 'hold') {
       const bridgeAlive = isBridgeAlive(userId)

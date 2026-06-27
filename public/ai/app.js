@@ -684,6 +684,9 @@ function connectBridgeStatusWs(onReady) {
           badge.textContent = msg.label || "推理中...";
           badge.title = msg.label || "";
         }
+      } else if (msg.type === 'new_signal') {
+        // New signal pushed from server — refresh signal list
+        handleNewSignal(msg);
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -863,8 +866,6 @@ let _lastSignalRefreshTs = 0;
 let _lastSignalId = null;
 
 // UI-only timer: refresh signal timing displays every second (no network calls)
-// Also polls for new signals every 5s when bridge is not pushing data
-let _uiTimerPollCounter = 0;
 let _statusRefreshCounter = 0;
 let _uiTimerInterval = null;
 
@@ -879,10 +880,6 @@ function startUiTimer() {
       setSignalBadge(s);
       const btn = $("executeSignalBtn");
       if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
-    }
-    if (++_uiTimerPollCounter >= 5) {
-      _uiTimerPollCounter = 0;
-      if (state.token) _maybeRefreshSignal();
     }
     if (++_statusRefreshCounter >= 15) {
       _statusRefreshCounter = 0;
@@ -935,6 +932,31 @@ async function _maybeRefreshSignal() {
     state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= 6;
     renderAnalysisHistory(signals);
     loadSignalTable();
+    if (state.selectedSignal) {
+      showSignalNotification(state.selectedSignal);
+      if (activeTabId() === "ai-analyze") {
+        openAnalysisFromHistory(state.selectedSignal.id);
+        const firstItem = document.querySelector(".analysis-history-item");
+        if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  } catch (e) { /* silent */ }
+}
+
+// Handle new signal pushed from server (replaces polling)
+async function handleNewSignal(msg) {
+  try {
+    // Refresh signal list
+    const fullData = await wsApi("signals", {});
+    const signals = fullData.signals || [];
+    state.signals = signals;
+    state.selectedSignal = signals[0] || null;
+    state.analysisHistoryOffset = signals.length;
+    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= 6;
+    renderAnalysisHistory(signals);
+    loadSignalTable();
+
+    // Show notification for new signal
     if (state.selectedSignal) {
       showSignalNotification(state.selectedSignal);
       if (activeTabId() === "ai-analyze") {
