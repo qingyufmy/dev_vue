@@ -6,7 +6,6 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
-import { cacheGetJSON, cacheSetJSON } from '../redis.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const resourceDir = join(__dirname, '..', 'uploads', 'resources')
@@ -36,41 +35,33 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     if (plan === 'member') { where += " AND u.plan IN ('plus','pro')"; }
     else if (plan === 'plus' || plan === 'pro' || plan === 'free') { where += ' AND u.plan = ?'; params.push(plan); }
 
-    // Cached dashboard stats (60s TTL)
-    const cacheKey = 'cache:admin:dashboard'
-    let dashboardStats = await cacheGetJSON(cacheKey)
-    if (!dashboardStats) {
-      const totalUsers = (await queryOne('SELECT COUNT(*) as c FROM users')).c
-      const todayNewUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE DATE(created_at) = CURDATE()')).c
+    // Dashboard stats
+    const totalUsers = (await queryOne('SELECT COUNT(*) as c FROM users')).c
+    const todayNewUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE DATE(created_at) = CURDATE()')).c
 
-      let realtimeOnlineUsers = 0, todayOnlineUsers = 0, weekOnlineUsers = 0
-      try {
-        realtimeOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)')).c
-        todayOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= CURDATE()')).c
-        weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)')).c
-      } catch (e) { console.error('[Admin] Online users query failed:', e.message) }
+    let realtimeOnlineUsers = 0, todayOnlineUsers = 0, weekOnlineUsers = 0
+    try {
+      realtimeOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)')).c
+      todayOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE last_seen_at >= CURDATE()')).c
+      weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)')).c
+    } catch (e) { console.error('[Admin] Online users query failed:', e.message) }
 
-      const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus'")).c
-      const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro'")).c
+    const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus'")).c
+    const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro'")).c
 
-      let totalRevenue = 0, paidOrderCount = 0
-      try {
-        const revenueRes = await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as total, COUNT(*) as cnt FROM orders WHERE status = 'paid'")
-        totalRevenue = Math.round(revenueRes.total / 100)
-        paidOrderCount = revenueRes.cnt
-      } catch (e) { console.error('[Admin] Revenue query failed:', e.message) }
+    let totalRevenue = 0, paidOrderCount = 0
+    try {
+      const revenueRes = await queryOne("SELECT COALESCE(SUM(amount_confirmed), 0) as total, COUNT(*) as cnt FROM orders WHERE status = 'paid'")
+      totalRevenue = Math.round(revenueRes.total / 100)
+      paidOrderCount = revenueRes.cnt
+    } catch (e) { console.error('[Admin] Revenue query failed:', e.message) }
 
-      let totalPosts = 0, totalComments = 0, totalReplies = 0
-      try {
-        totalPosts = (await queryOne('SELECT COUNT(*) as c FROM posts')).c
-        totalComments = (await queryOne('SELECT COUNT(*) as c FROM comments')).c
-        totalReplies = (await queryOne('SELECT COUNT(*) as c FROM post_replies')).c
-      } catch (e) { console.error('[Admin] Content stats query failed:', e.message) }
-
-      dashboardStats = { totalUsers, todayNewUsers, realtimeOnlineUsers, todayOnlineUsers, weekOnlineUsers, plusUsers, proUsers, totalRevenue, paidOrderCount, totalPosts, totalComments, totalReplies }
-      await cacheSetJSON(cacheKey, dashboardStats, 60)
-    }
-    const { totalUsers, todayNewUsers, realtimeOnlineUsers, todayOnlineUsers, weekOnlineUsers, plusUsers, proUsers, totalRevenue, paidOrderCount, totalPosts, totalComments, totalReplies } = dashboardStats
+    let totalPosts = 0, totalComments = 0, totalReplies = 0
+    try {
+      totalPosts = (await queryOne('SELECT COUNT(*) as c FROM posts')).c
+      totalComments = (await queryOne('SELECT COUNT(*) as c FROM comments')).c
+      totalReplies = (await queryOne('SELECT COUNT(*) as c FROM post_replies')).c
+    } catch (e) { console.error('[Admin] Content stats query failed:', e.message) }
 
     // Get users with pagination
     const userCount = (await queryOne(`SELECT COUNT(*) as c FROM users u WHERE ${where}`, params)).c
