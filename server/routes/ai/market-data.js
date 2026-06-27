@@ -5,11 +5,9 @@ import { sendBridgeCommand } from '../../bridge-ws.js'
 import { round2, round3, round5, clamp, compactRates } from './utils.js'
 
 const _bridgeLocks = {}
-const _bridgeLocksLastUsed = {}
 
 export async function mt5Bridge(userId, action, params = {}) {
   const prev = _bridgeLocks[userId] || Promise.resolve()
-  _bridgeLocksLastUsed[userId] = Date.now()
   const current = prev.then(async () => {
     let result = await executeViaBridge(userId, action, params)
     if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
@@ -38,19 +36,6 @@ export async function mt5Bridge(userId, action, params = {}) {
 export async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
   return sendBridgeCommand(userId, action, params, timeoutMs)
 }
-
-// 清理长时间未使用的桥接锁（防止内存泄漏）
-const LOCK_CLEANUP_INTERVAL = 300000 // 5 minutes
-const LOCK_MAX_AGE = 600000 // 10 minutes
-setInterval(() => {
-  const now = Date.now()
-  for (const [userId, lastUsed] of Object.entries(_bridgeLocksLastUsed)) {
-    if (now - lastUsed > LOCK_MAX_AGE) {
-      delete _bridgeLocks[userId]
-      delete _bridgeLocksLastUsed[userId]
-    }
-  }
-}, LOCK_CLEANUP_INTERVAL)
 
 export function calculateMarketData(symbol, timeframe, rates, account, positions) {
   const closes = rates.map(r => parseFloat(r.close))
