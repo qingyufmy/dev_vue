@@ -116,12 +116,13 @@ export async function initAutoSchedulers() {
     console.error('[initAutoSchedulers] Top-level error:', e.message)
   }
 
-  try {
-    const closeRows = await queryAll('SELECT user_id FROM close_config WHERE enabled = 1')
-    for (const row of closeRows) {
-      await startSmartCloseScheduler(row.user_id)
-    }
-  } catch (e) { console.error('[initAutoSchedulers] Failed to restore smart close schedulers:', e.message) }
+  // 智能平仓功能已禁用，前端无入口，暂不恢复调度器
+  // try {
+  //   const closeRows = await queryAll('SELECT user_id FROM close_config WHERE enabled = 1')
+  //   for (const row of closeRows) {
+  //     await startSmartCloseScheduler(row.user_id)
+  //   }
+  // } catch (e) { console.error('[initAutoSchedulers] Failed to restore smart close schedulers:', e.message) }
 }
 
 function sendAutoProgress(userId, progress) {
