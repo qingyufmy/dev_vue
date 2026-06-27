@@ -1023,6 +1023,7 @@ function handleDisconnect(msg) {
   setBadge("tradeMode", "请先启动桥接", "neutral");
   setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
   state._lastGatewayLive = false;
+  updateMarketStatus(-1);
 }
 
 
