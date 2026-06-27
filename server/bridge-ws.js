@@ -1495,3 +1495,5 @@ export function getAllBridges() {
   }
   return result
 }
+
+export { sendToBrowsers }

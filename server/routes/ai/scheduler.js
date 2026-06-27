@@ -1,7 +1,7 @@
 // ai/scheduler.js — 自动调度 + 智能平仓
 
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
-import { getOwnBridgeTradeMode, isBridgeAlive } from '../../bridge-ws.js'
+import { getOwnBridgeTradeMode, isBridgeAlive, sendToBrowsers } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig } from './config.js'
@@ -47,16 +47,18 @@ export async function startAutoScheduler(userId) {
     if (!autoSchedulerState[userId]?.running) return
     try {
       const tradeMode = getOwnBridgeTradeMode(userId)
-      if (tradeMode !== 4) {
+      // tradeMode: 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
+      if (tradeMode === 0 || tradeMode === -1) {
         const st = autoSchedulerState[userId]
         st._waitCount = (st._waitCount || 0) + 1
         if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-          console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} waiting: tradeMode=${tradeMode}, retry#${st._waitCount}, symbol=${symbol}`)
+          const reason = tradeMode === 0 ? 'market_closed' : 'unknown'
+          console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} waiting: tradeMode=${tradeMode} (${reason}), retry#${st._waitCount}, symbol=${symbol}`)
         }
         autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
       }
       if (autoSchedulerState[userId]) autoSchedulerState[userId]._waitCount = 0
-      console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} market OK (tradeMode=4), proceeding to runAutoCycle`)
+      console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} market OK (tradeMode=${tradeMode}), proceeding to runAutoCycle`)
     } catch (err) {
       const st = autoSchedulerState[userId]
       st._waitCount = (st._waitCount || 0) + 1
@@ -124,7 +126,6 @@ export async function initAutoSchedulers() {
 
 function sendAutoProgress(userId, progress) {
   try {
-    const { sendToBrowsers } = require('../../bridge-ws.js')
     sendToBrowsers(userId, { type: 'auto_progress', ...progress })
   } catch {}
 }

@@ -737,9 +737,9 @@ function updateMarketStatus(tradeMode) {
   }
   const map = {
     0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动推理已暂停'],
-    1: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
-    2: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
-    3: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
+    1: ['open', '只做多', 'active', '只做多模式 - 仅允许买入操作'],
+    2: ['open', '只做空', 'active', '只做空模式 - 仅允许卖出操作'],
+    3: ['open', '只平仓', 'active', '只平仓模式 - 仅允许平仓操作'],
     4: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
   };
   const [cls, label, badgeType, tip] = map[tradeMode] || ['unknown', '未知', 'neutral', '未知状态'];
@@ -971,6 +971,7 @@ function handleHeartbeat(msg) {
   if (typeof msg.trade_mode === 'number') updateMarketStatus(msg.trade_mode);
 
   // Update trade badge from heartbeat data (bridge just connected/state changed)
+  // Note: tradeMode 1-3 are partial trading modes, not "closed"
   if (typeof msg.trade_enabled === 'boolean') {
     const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
     setBadge("tradeMode", tradeText, msg.trade_enabled ? "danger" : "neutral");
@@ -1176,9 +1177,16 @@ async function bootstrap() {
     state.isPlusReadOnly = plan === 'plus' && role !== 'admin';
     applyRoleUI();
     showApp(true);
-    // Connect WebSocket FIRST — all data flows through it
+    // Connect WebSocket FIRST — all data flows through it (with 10s timeout)
     await new Promise((resolve) => {
-      connectBridgeStatusWs(resolve);
+      const timer = setTimeout(() => {
+        console.warn('WebSocket connection timeout, continuing anyway');
+        resolve();
+      }, 10000);
+      connectBridgeStatusWs(() => {
+        clearTimeout(timer);
+        resolve();
+      });
     });
     // Set default tab after WS connected
     setTab(role === 'admin' ? 'admin-dashboard' : 'dashboard');
