@@ -46,6 +46,16 @@ export async function startAutoScheduler(userId) {
   const tick = async () => {
     if (!autoSchedulerState[userId]?.running) return
     try {
+      // Check bridge alive first
+      if (!isBridgeAlive(userId)) {
+        const st = autoSchedulerState[userId]
+        st._waitCount = (st._waitCount || 0) + 1
+        if (st._waitCount === 1 || st._waitCount % 10 === 0) {
+          console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} waiting: bridge not alive, retry#${st._waitCount}, symbol=${symbol}`)
+        }
+        autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
+      }
+
       const tradeMode = getOwnBridgeTradeMode(userId)
       // tradeMode: 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
       if (tradeMode === 0 || tradeMode === -1) {

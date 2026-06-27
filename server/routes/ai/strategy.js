@@ -153,13 +153,28 @@ export async function handleAnalyze(userId, params) {
 
   if (signal.signal_type !== 'hold' && config && config.enable_auto_trade) {
     try {
-      const { signalOrderPayload } = await import('./config.js')
       const riskCfg = {
         enable_auto_trade: true,
         selected_take_profit: config.selected_take_profit ?? 1,
         max_position_size: config.max_position_size ?? 0.05,
       }
       const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
+
+      // Get account and positions for risk validation
+      const accountResult = await mt5Bridge(userId, 'account', {})
+      const positionsResult = await mt5Bridge(userId, 'positions', {})
+      const account = accountResult
+      const positions = positionsResult.positions || []
+
+      // Run risk validation before executing
+      try {
+        validateTradeRequest(riskCfg, account, positions, orderPayload)
+      } catch (e) {
+        console.log(`[Analyze] Auto-execute blocked by risk: ${e.message}`)
+        await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', risk_block: e.message }, { status: 'rejected', message: e.message }, 'rejected')
+        return { status: 'success', signal, market }
+      }
+
       const execResult = await mt5Bridge(userId, 'open', orderPayload)
       if (execResult && execResult.status === 'success') {
         await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
