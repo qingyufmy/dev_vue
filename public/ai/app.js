@@ -737,9 +737,6 @@ function updateMarketStatus(tradeMode) {
   }
   const map = {
     0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动推理已暂停'],
-    1: ['open', '只做多', 'active', '只做多模式 - 仅允许买入操作'],
-    2: ['open', '只做空', 'active', '只做空模式 - 仅允许卖出操作'],
-    3: ['open', '只平仓', 'active', '只平仓模式 - 仅允许平仓操作'],
     4: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
   };
   const [cls, label, badgeType, tip] = map[tradeMode] || ['unknown', '未知', 'neutral', '未知状态'];
