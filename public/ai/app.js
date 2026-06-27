@@ -726,13 +726,23 @@ function updateMarketStatus(tradeMode) {
   const text = document.getElementById('marketStatusText');
   if (!dot || !text) return;
   state.marketTradeMode = tradeMode;
-  if (tradeMode < 0) { // bridge disconnected
-    dot.className = 'market-dot market-dot-unknown';
-    text.className = 'market-status-text market-status-text-unknown';
-    text.textContent = '未连接';
-    setBadge('marketStatus', '未连接', 'neutral');
-    const b = document.getElementById('marketStatus');
-    if (b) b.title = '市场状态：MT5 桥接未连接';
+  if (tradeMode === -1) { // bridge connected but no tick data yet
+    const isLive = state._lastGatewayLive;
+    if (isLive) {
+      dot.className = 'market-dot market-dot-unknown';
+      text.className = 'market-status-text market-status-text-unknown';
+      text.textContent = '已连接·等待数据';
+      setBadge('marketStatus', '已连接·等待数据', 'neutral');
+      const b = document.getElementById('marketStatus');
+      if (b) b.title = '市场状态：MT5 已连接，等待行情数据';
+    } else {
+      dot.className = 'market-dot market-dot-unknown';
+      text.className = 'market-status-text market-status-text-unknown';
+      text.textContent = '未连接';
+      setBadge('marketStatus', '未连接', 'neutral');
+      const b = document.getElementById('marketStatus');
+      if (b) b.title = '市场状态：MT5 桥接未连接';
+    }
     return;
   }
   const map = {
