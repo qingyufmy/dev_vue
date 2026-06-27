@@ -4290,3 +4290,64 @@ a.signal-link:hover {
 .user-detail-field .f-value {
   font-size: 0.9rem; color: var(--text-primary); font-weight: 500;
 }
+
+/* Guide / User Manual */
+.guide-content h1, .guide-content h2, .guide-content h3 {
+  color: var(--gold-primary);
+  margin: 24px 0 12px 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--gold-primary);
+  font-size: 1.1rem;
+}
+.guide-content h3:first-child {
+  margin-top: 0;
+}
+.guide-content p {
+  margin: 8px 0;
+  line-height: 1.8;
+}
+.guide-content ul, .guide-content ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+.guide-content li {
+  margin: 4px 0;
+  line-height: 1.7;
+}
+.guide-content strong {
+  color: var(--text-primary);
+}
+.guide-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 0.9rem;
+}
+.guide-content table th {
+  background: var(--bg-input-soft);
+  border-bottom: 1px solid var(--border-default);
+  padding: 10px;
+  font-weight: bold;
+  text-align: left;
+}
+.guide-content table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border-default);
+}
+.guide-content table tr:hover {
+  background: rgba(255,255,255,0.02);
+}
+.guide-content blockquote {
+  border-left: 3px solid var(--gold-primary);
+  padding: 10px 16px;
+  margin: 12px 0;
+  background: rgba(212,175,55,0.05);
+  border-radius: 0 6px 6px 0;
+  color: var(--text-secondary);
+}
+.guide-content code {
+  background: rgba(255,255,255,0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
