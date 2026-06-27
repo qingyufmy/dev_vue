@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <title>使用指南 - AI交易实验室</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e5e7eb; display: flex; height: 100vh; }
+
+    /* Left Nav */
+    .nav { width: 240px; background: #1a1d28; border-right: 1px solid rgba(255,255,255,0.06); padding: 24px 0; overflow-y: auto; flex-shrink: 0; }
+    .nav-header { padding: 0 20px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .nav-header h1 { font-size: 16px; color: #d4af37; margin-bottom: 4px; }
+    .nav-header p { font-size: 11px; color: #6b7280; }
+    .nav-group { padding: 12px 0; }
+    .nav-group-title { padding: 0 20px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+    .nav-item { display: block; padding: 8px 20px; color: #9ca3af; text-decoration: none; font-size: 13px; cursor: pointer; transition: all 0.15s; border-left: 3px solid transparent; }
+    .nav-item:hover { color: #e5e7eb; background: rgba(255,255,255,0.03); }
+    .nav-item.active { color: #d4af37; border-left-color: #d4af37; background: rgba(212,175,55,0.05); }
+    .nav-back { display: block; padding: 12px 20px; color: #6b7280; text-decoration: none; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.06); margin-top: auto; }
+    .nav-back:hover { color: #d4af37; }
+
+    /* Main Content */
+    .main { flex: 1; overflow-y: auto; padding: 32px 48px; scroll-behavior: smooth; }
+    .main h1 { font-size: 28px; color: #d4af37; margin-bottom: 8px; }
+    .main h2 { font-size: 20px; color: #d4af37; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 2px solid rgba(212,175,55,0.3); }
+    .main h3 { font-size: 16px; color: #f3f4f6; margin: 20px 0 10px; }
+    .main p { margin: 8px 0; line-height: 1.8; color: #d1d5db; }
+    .main ul, .main ol { margin: 8px 0; padding-left: 24px; }
+    .main li { margin: 4px 0; line-height: 1.7; color: #d1d5db; }
+    .main strong { color: #f3f4f6; }
+    .main blockquote { border-left: 3px solid #d4af37; padding: 10px 16px; margin: 12px 0; background: rgba(212,175,55,0.05); border-radius: 0 6px 6px 0; color: #9ca3af; }
+    .main code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; font-family: monospace; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+    th { text-align: left; padding: 10px 12px; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.08); color: #9ca3af; font-weight: 600; }
+    td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #d1d5db; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    /* Badges */
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+    .badge-green { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .badge-red { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .badge-yellow { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .badge-gray { background: rgba(107,114,128,0.15); color: #9ca3af; }
+
+    /* Steps */
+    .step { display: flex; gap: 16px; margin: 16px 0; }
+    .step-num { width: 32px; height: 32px; background: #d4af37; color: #0f1117; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; flex-shrink: 0; }
+    .step-content { flex: 1; }
+    .step-content h4 { font-size: 15px; color: #f3f4f6; margin-bottom: 6px; }
+    .step-content p { margin: 4px 0; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <!-- Left Navigation -->
+  <nav class="nav">
+    <div class="nav-header">
+      <h1>📖 使用指南</h1>
+      <p>AI交易实验室 v2.0.2</p>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">快速开始</div>
+      <a class="nav-item active" href="#intro">这是什么</a>
+      <a class="nav-item" href="#quickstart">3分钟上手</a>
+      <a class="nav-item" href="#interface">界面说明</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">新手操作</div>
+      <a class="nav-item" href="#auto-reasoning">开启自动推理</a>
+      <a class="nav-item" href="#view-signals">查看信号</a>
+      <a class="nav-item" href="#execute-signal">执行信号</a>
+      <a class="nav-item" href="#manual-trade">手动交易</a>
+      <a class="nav-item" href="#close-position">平仓操作</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">进阶操作</div>
+      <a class="nav-item" href="#model-config">模型配置</a>
+      <a class="nav-item" href="#system-prompt">系统提示词</a>
+      <a class="nav-item" href="#auto-config">自动推理参数</a>
+      <a class="nav-item" href="#risk-config">风控参数</a>
+      <a class="nav-item" href="#manual-reasoning">手动推理</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">参考</div>
+      <a class="nav-item" href="#market-status">市场状态</a>
+      <a class="nav-item" href="#permissions">会员权限</a>
+      <a class="nav-item" href="#history">历史记录</a>
+      <a class="nav-item" href="#notes">注意事项</a>
+      <a class="nav-item" href="#faq">常见问题</a>
+    </div>
+
+    <a class="nav-back" href="/ai/">← 返回AI交易实验室</a>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main">
+
+    <h1 id="intro">AI 交易实验室 · 使用指南</h1>
+    <blockquote>v2.0.2 | 2026年6月</blockquote>
+    <p>本系统通过 AI 自动分析黄金市场行情，生成交易信号并可一键执行到 MT5 账户。</p>
+
+    <h2 id="quickstart">3分钟上手</h2>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <h4>登录系统</h4>
+        <p>打开浏览器访问系统地址，输入账号密码登录。</p>
+        <blockquote>⚠️ AI交易实验室为 <strong>Pro 会员</strong> 专属功能。免费用户会看到升级提示。</blockquote>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <h4>连接 MT5 Bridge</h4>
+        <p>Bridge 是连接 MT5 交易终端和服务器的桥梁程序。</p>
+        <ul>
+          <li>点击右上角「桥接状态」徽章</li>
+          <li>点击「下载桥接软件」</li>
+          <li>运行 AURUM_Bridge.exe</li>
+          <li>输入 MT5 账号信息，点击「登录并连接」</li>
+        </ul>
+        <p>连接成功后状态栏显示 <span class="badge badge-green">✅ MT5桥接-已连接</span></p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <h4>开启自动推理</h4>
+        <p>点击顶部「自动推理」徽章，开启自动推理功能。</p>
+        <p>开启后系统会每隔 5 分钟自动分析市场，生成交易信号。</p>
+      </div>
+    </div>
+
+    <h2 id="interface">界面说明</h2>
+
+    <h3>顶部状态栏</h3>
+    <table>
+      <tr><th>状态</th><th>含义</th></tr>
+      <tr><td>桥接状态</td><td>Bridge 是否在线</td></tr>
+      <tr><td>交易发送</td><td>是否允许下单（关闭时 AI 只分析不下单）</td></tr>
+      <tr><td>自动推理</td><td>是否自动循环分析</td></tr>
+      <tr><td>市场状态</td><td>交易中 / 休市 / 检测中</td></tr>
+    </table>
+
+    <h3>左侧导航</h3>
+    <table>
+      <tr><th>页面</th><th>用途</th></tr>
+      <tr><td>概览</td><td>实时行情、持仓列表、快捷交易</td></tr>
+      <tr><td>AI推理</td><td>手动触发 AI 分析</td></tr>
+      <tr><td>交易</td><td>查看和管理持仓</td></tr>
+      <tr><td>历史</td><td>交易历史和盈亏曲线</td></tr>
+      <tr><td>配置</td><td>模型和自动推理参数</td></tr>
+      <tr><td>审计</td><td>所有操作记录</td></tr>
+    </table>
+
+    <!-- ==================== 新手操作 ==================== -->
+
+    <h2 id="auto-reasoning">开启自动推理</h2>
+    <blockquote>💡 新手只需 3 步即可开始使用系统</blockquote>
+    <p><strong>你只需要做一件事：点击顶部「自动推理」状态栏，开启自动推理。</strong></p>
+    <p>开启后，系统会：</p>
+    <ul>
+      <li>每隔 5 分钟自动分析市场</li>
+      <li>生成交易信号（做多/做空/观望）</li>
+      <li>信号显示在概览页的「AI 信号」卡片中</li>
+    </ul>
+
+    <h2 id="view-signals">查看信号</h2>
+    <p>信号卡片包含以下信息：</p>
+    <table>
+      <tr><th>项目</th><th>说明</th></tr>
+      <tr><td>方向</td><td><span class="badge badge-green">BUY</span> 做多 / <span class="badge badge-red">SELL</span> 做空 / <span class="badge badge-yellow">HOLD</span> 观望</td></tr>
+      <tr><td>置信度</td><td>AI 的把握程度（越高越可靠）</td></tr>
+      <tr><td>止损/止盈</td><td>建议的价格位置</td></tr>
+      <tr><td>有效期</td><td>过期后不可执行</td></tr>
+    </table>
+
+    <h2 id="execute-signal">执行信号</h2>
+    <ol>
+      <li>点击信号卡片查看详情</li>
+      <li>确认止损止盈价格</li>
+      <li>点击「执行信号」</li>
+      <li>确认弹窗中检查参数</li>
+      <li>点击「确认执行」</li>
+    </ol>
+    <blockquote>⚠️ HOLD（观望）信号不可执行，系统会自动跳过。</blockquote>
+
+    <h2 id="manual-trade">手动交易</h2>
+    <ol>
+      <li>选择品种</li>
+      <li>选择方向：买入（做多）/ 卖出（做空）</li>
+      <li>输入手数</li>
+      <li>点击「发送订单」→ 确认</li>
+    </ol>
+
+    <h2 id="close-position">平仓操作</h2>
+    <p>在持仓列表中，点击对应持仓的「平仓」按钮即可关闭。</p>
+
+    <!-- ==================== 进阶操作 ==================== -->
+
+    <h2 id="model-config">模型配置</h2>
+    <p>进入「配置」→「模型设置」，可以配置 AI 分析所使用的模型。</p>
+    <table>
+      <tr><th>参数</th><th>说明</th><th>推荐值</th></tr>
+      <tr><td>API 服务商</td><td>DeepSeek / GPT / Kimi / Qwen 等</td><td>DeepSeek</td></tr>
+      <tr><td>API Key</td><td>对应服务商的密钥</td><td>-</td></tr>
+      <tr><td>模型名称</td><td>如 deepseek-chat</td><td>deepseek-chat</td></tr>
+      <tr><td>Temperature</td><td>输出随机性 0-1</td><td>0.3-0.7</td></tr>
+      <tr><td>Max Tokens</td><td>最大输出长度</td><td>2000</td></tr>
+    </table>
+    <blockquote>💡 管理员开启模型共享后，无需配置 API Key 也能使用。</blockquote>
+
+    <h2 id="system-prompt">系统提示词</h2>
+    <p>在「配置」→「模型设置」中，可以修改系统提示词来定制 AI 的分析行为。</p>
+    <p>提示词中可使用时间框架标签：</p>
+    <table>
+      <tr><th>标签</th><th>用途</th><th>示例</th></tr>
+      <tr><td><code>{{MTF:M5:100}}</code></td><td>手动推理时获取 M5 周期 100 根K线</td><td>放提示词开头</td></tr>
+      <tr><td><code>{{ATF:H1:80}}</code></td><td>自动推理时获取 H1 周期 80 根K线</td><td>放提示词开头</td></tr>
+      <tr><td><code>{{CTF:M5:50}}</code></td><td>智能平仓时获取数据</td><td>放提示词开头</td></tr>
+    </table>
+
+    <h2 id="auto-config">自动推理参数</h2>
+    <p>进入「配置」→「自动推理」：</p>
+    <table>
+      <tr><th>参数</th><th>说明</th><th>默认值</th></tr>
+      <tr><td>分析品种</td><td>交易品种</td><td>XAUUSD</td></tr>
+      <tr><td>分析间隔</td><td>多久分析一次</td><td>5 分钟</td></tr>
+      <tr><td>自动执行</td><td>信号是否自动下单</td><td>关闭</td></tr>
+    </table>
+
+    <h2 id="risk-config">风控参数</h2>
+    <p>在「配置」→「模型设置」中调整：</p>
+    <table>
+      <tr><th>参数</th><th>说明</th><th>推荐值</th></tr>
+      <tr><td>风险级别</td><td>low/medium/high</td><td>medium</td></tr>
+      <tr><td>最大手数</td><td>单笔最大交易量</td><td>0.05</td></tr>
+      <tr><td>止盈档位</td><td>选择 TP1/TP2/TP3</td><td>TP1</td></tr>
+    </table>
+
+    <h2 id="manual-reasoning">手动推理</h2>
+    <ol>
+      <li>进入「AI推理」页面</li>
+      <li>选择品种和分析周期（M5/M15/H1/H4）</li>
+      <li>点击「生成信号」</li>
+      <li>等待 10-30 秒</li>
+    </ol>
+
+    <!-- ==================== 参考 ==================== -->
+
+    <h2 id="market-status">市场状态</h2>
+    <table>
+      <tr><th>状态</th><th>颜色</th><th>含义</th></tr>
+      <tr><td>交易中</td><td><span class="badge badge-green">🟢</span></td><td>市场开放，可交易</td></tr>
+      <tr><td>休市</td><td><span class="badge badge-gray">⚪</span></td><td>市场收盘，自动推理暂停</td></tr>
+      <tr><td>检测中</td><td><span class="badge badge-yellow">🟡</span></td><td>正在检测市场状态</td></tr>
+    </table>
+
+    <h2 id="permissions">会员权限</h2>
+    <table>
+      <tr><th>会员</th><th>功能</th></tr>
+      <tr><td>免费用户</td><td>无法使用 AI 交易</td></tr>
+      <tr><td>Plus</td><td>观摩模式（只看不操作）</td></tr>
+      <tr><td>Pro</td><td>完整功能</td></tr>
+      <tr><td>管理员</td><td>全部功能 + 管理后台</td></tr>
+    </table>
+
+    <h2 id="history">历史记录</h2>
+    <p><strong>交易历史</strong>：显示所有已完成的交易，支持按时间、方向、盈亏筛选。</p>
+    <p><strong>盈亏曲线</strong>：每日盈亏柱状图、累计盈亏折线、回撤曲线、胜率/盈亏比/最大回撤。</p>
+    <p><strong>信号历史</strong>：显示所有 AI 生成的信号，支持按方向、时间框架筛选。</p>
+
+    <h2 id="notes">注意事项</h2>
+    <ul>
+      <li><strong>Bridge 必须在运行 MT5 的电脑上运行</strong></li>
+      <li><strong>市场休市时</strong>（周末），自动推理自动暂停</li>
+      <li><strong>所有交易操作</strong>都会记录审计日志</li>
+      <li><strong>AI 分析仅供参考</strong>，交易风险自行承担</li>
+      <li><strong>一个账号只能连接一个 Bridge</strong></li>
+    </ul>
+
+    <h2 id="faq">常见问题</h2>
+    <p><strong>Q: Bridge 连接失败？</strong><br>A: 确认 MT5 已登录 → 检查网络 → 确认 Pro 权限 → 检查防火墙</p>
+    <p><strong>Q: 自动推理没运行？</strong><br>A: 检查 Bridge 状态 → 检查市场是否休市 → 检查 API Key → 检查开关</p>
+    <p><strong>Q: 信号没执行？</strong><br>A: 检查自动执行开关 → 检查交易发送 → 检查保证金 → 检查是否过期</p>
+    <p><strong>Q: Plus 用户能做什么？</strong><br>A: 只能观摩，不能交易。升级 Pro 解锁全部功能。</p>
+    <blockquote>📞 有问题请使用「需求反馈」提交</blockquote>
+
+  </div>
+
+  <script>
+    // Active nav highlight
+    const navItems = document.querySelectorAll('.nav-item');
+    const sections = document.querySelectorAll('[id]');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          navItems.forEach(item => item.classList.remove('active'));
+          const activeNav = document.querySelector(`.nav-item[href="#${entry.target.id}"]`);
+          if (activeNav) activeNav.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    sections.forEach(section => observer.observe(section));
+  </script>
+</body>
+</html>
