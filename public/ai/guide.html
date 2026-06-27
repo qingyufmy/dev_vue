@@ -17,7 +17,7 @@
     .nav-header p { font-size: 11px; color: #6b7280; }
     .nav-group { padding: 12px 0; }
     .nav-group-title { padding: 0 20px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-    .nav-item { display: block; padding: 8px 20px; color: #9ca3af; text-decoration: none; font-size: 13px; cursor: pointer; transition: all 0.15s; border-left: 3px solid transparent; }
+    .nav-item { display: block; padding: 8px 20px; color: #9ca3af; text-decoration: none !important; font-size: 13px; cursor: pointer; transition: all 0.15s; border-left: 3px solid transparent; }
     .nav-item:hover { color: #e5e7eb; background: rgba(255,255,255,0.03); }
     .nav-item.active { color: #d4af37; border-left-color: #d4af37; background: rgba(212,175,55,0.05); }
     .nav-back { display: block; padding: 12px 20px; color: #6b7280; text-decoration: none; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.06); margin-top: auto; }
@@ -130,7 +130,7 @@
         <h4>连接 MT5 Bridge</h4>
         <p>Bridge 是连接 MT5 交易终端和服务器的桥梁程序。</p>
         <ul>
-          <li>点击右上角「桥接状态」徽章</li>
+          <li>点击左上角「桥接状态」徽章</li>
           <li>点击「下载桥接软件」</li>
           <li>运行 AURUM_Bridge.exe</li>
           <li>输入 MT5 账号信息，点击「登录并连接」</li>
@@ -193,6 +193,8 @@
     </table>
 
     <h2 id="execute-signal">执行信号</h2>
+    <p>自动推理产生的信号会自动执行，无需手动操作。</p>
+    <p>手动推理的信号需要手动执行：</p>
     <ol>
       <li>点击信号卡片查看详情</li>
       <li>确认止损止盈价格</li>
@@ -234,11 +236,10 @@
       <tr><th>标签</th><th>用途</th><th>示例</th></tr>
       <tr><td><code>{{MTF:M5:100}}</code></td><td>手动推理时获取 M5 周期 100 根K线</td><td>放提示词开头</td></tr>
       <tr><td><code>{{ATF:H1:80}}</code></td><td>自动推理时获取 H1 周期 80 根K线</td><td>放提示词开头</td></tr>
-      <tr><td><code>{{CTF:M5:50}}</code></td><td>智能平仓时获取数据</td><td>放提示词开头</td></tr>
     </table>
 
     <h2 id="auto-config">自动推理参数</h2>
-    <p>进入「配置」→「自动推理」：</p>
+    <p>进入「配置」→「手动推理」，打开「应用当前配置给自动推理」开关：</p>
     <table>
       <tr><th>参数</th><th>说明</th><th>默认值</th></tr>
       <tr><td>分析品种</td><td>交易品种</td><td>XAUUSD</td></tr>
@@ -279,7 +280,6 @@
       <tr><td>免费用户</td><td>无法使用 AI 交易</td></tr>
       <tr><td>Plus</td><td>观摩模式（只看不操作）</td></tr>
       <tr><td>Pro</td><td>完整功能</td></tr>
-      <tr><td>管理员</td><td>全部功能 + 管理后台</td></tr>
     </table>
 
     <h2 id="history">历史记录</h2>
