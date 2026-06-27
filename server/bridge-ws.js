@@ -378,9 +378,17 @@ async function _initBridge(ws, userId) {
 // ============ Helpers ============
 
 function sendToBrowsers(userId, data) {
+  // Admin market status override: if admin is closed, force all users to closed
+  const adminBridge = adminUserId ? bridges.get(adminUserId) : null
+  const adminTradeMode = adminBridge ? adminBridge.lastTradeMode : -1
+  const adminIsClosed = adminTradeMode === 0
+
   const set = browsers.get(userId)
   if (set) {
-    const json = JSON.stringify(data)
+    // Override trade_mode for non-admin users when admin is closed
+    const shouldOverride = adminIsClosed && userId !== adminUserId && data.type === 'data' && data.trade_mode !== 0
+    const finalData = shouldOverride ? { ...data, trade_mode: 0, _admin_override: true } : data
+    const json = JSON.stringify(finalData)
     for (const ws of set) {
       if (ws.readyState === 1) {
         try { ws.send(json) } catch {}
