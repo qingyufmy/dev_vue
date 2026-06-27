@@ -198,7 +198,7 @@ async function _initBridge(ws, userId) {
   // Non-admin: use DB value as-is (defaults to false when no row)
   const isAdmin = userId === (adminUserId || -1)
   const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: 4 }); ws._userId = userId
+  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1 }); ws._userId = userId
 
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled })
