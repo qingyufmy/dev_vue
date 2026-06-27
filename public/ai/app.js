@@ -1186,7 +1186,7 @@ async function bootstrap() {
       });
     });
     // Set default tab after WS connected
-    setTab(role === 'admin' ? 'admin-dashboard' : 'dashboard');
+    setTab('dashboard');
     startPresenceHeartbeat();
     await refreshAll();
     // Data loads on-demand: tab switch + manual refresh + bridge data push
