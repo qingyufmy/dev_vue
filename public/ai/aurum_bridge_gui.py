@@ -1211,10 +1211,12 @@ class BridgeWorker(QThread):
             await asyncio.sleep(RETRY_INT)
 
     async def _async_send_loop(self, ws):
-        """Send MT5 data every 1s with deduplication."""
+        """Send MT5 data every 1s with deduplication, force send every 5s for market status detection."""
         import websockets
         last_data_hash = None
+        last_quote_time = None
         last_plan_check = time.time()
+        last_send_time = time.time()
 
         while self.running:
             try:
@@ -1237,12 +1239,18 @@ class BridgeWorker(QThread):
                     await asyncio.sleep(1)
                     continue
 
-                # Dedup: hash the data, skip if unchanged
+                # Dedup: hash the data, skip if unchanged (but force send every 5s for market status detection)
+                # Always send if quote.time changed (for market status detection)
                 data_hash = hash(json.dumps(dm, sort_keys=True, default=str))
-                if data_hash == last_data_hash:
+                quote_time = dm.get("quote", {}).get("time", "")
+                force_send = (time.time() - last_send_time) >= 5
+                time_changed = quote_time != last_quote_time
+                if data_hash == last_data_hash and not force_send and not time_changed:
                     await asyncio.sleep(1)
                     continue
                 last_data_hash = data_hash
+                last_quote_time = quote_time
+                last_send_time = time.time()
 
                 await ws.send(json.dumps(dm))
 
