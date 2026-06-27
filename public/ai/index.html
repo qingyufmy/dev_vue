@@ -813,394 +813,294 @@
             </div>
             <div class="guide-content" style="padding: 20px; line-height: 1.8; color: var(--text-primary); max-height: 70vh; overflow-y: auto;">
 
-              <!-- ==================== 快速开始 ==================== -->
-              <h3 style="color: var(--gold-primary); margin-bottom: 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">🚀 快速开始</h3>
-              <p><strong>第一步：下载并安装桥接软件</strong></p>
-              <ol>
-                <li>登录后进入 AI 交易实验室</li>
-                <li>点击右上角「桥接状态」徽章，或进入「配置」页面</li>
-                <li>点击「下载桥接软件」按钮</li>
-                <li>运行下载的 AURUM_Bridge.exe</li>
-                <li>输入服务器地址（默认已填好）和您的账号密码</li>
-                <li>勾选「记住密码」可自动填充</li>
-                <li>点击「登录并连接」</li>
-              </ol>
-              <p><strong>预期结果</strong>：桥接软件显示「MT5桥接-已连接」，网页右上角徽章变为绿色「MT5桥接-已连接」</p>
+# AURUM AI 交易实验室 · 使用指南
 
-              <p style="margin-top: 16px;"><strong>第二步：确认 MT5 连接</strong></p>
-              <ol>
-                <li>确保 MT5 终端已登录并运行</li>
-                <li>桥接软件会自动检测并连接 MT5</li>
-                <li>连接成功后，页面行情区域会显示实时报价</li>
-              </ol>
-              <p><strong>预期结果</strong>：行情区域显示 bid/ask 价格，数字会实时跳动</p>
+> 适用版本：v2.0.2 | 更新时间：2026年6月
 
-              <p style="margin-top: 16px;"><strong>第三步：选择品种</strong></p>
-              <ol>
-                <li>在行情区域左侧的品种选择器中输入或选择品种</li>
-                <li>支持搜索：输入 "XAU" 会过滤显示所有黄金相关品种</li>
-                <li>切换品种后，报价、K线图、持仓列表会同步更新</li>
-              </ol>
-              <p><strong>预期结果</strong>：品种名称显示在选择器中，报价和K线图更新为该品种数据</p>
+---
 
-              <p style="margin-top: 16px;"><strong>第四步：生成 AI 信号</strong></p>
-              <ol>
-                <li>进入「AI推理」页面</li>
-                <li>确认品种选择器中显示正确的品种</li>
-                <li>选择分析周期（M5/M15/H1/H4）</li>
-                <li>点击「生成信号」按钮</li>
-                <li>等待 AI 分析完成（通常 10-30 秒）</li>
-              </ol>
-              <p><strong>预期结果</strong>：显示分析进度条，完成后展示信号卡片（买入/卖出/持有），包含置信度、止损止盈价格</p>
+## 一、这是什么？
 
-              <!-- ==================== 页面导航 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">📑 页面导航</h3>
-              <p>左侧导航栏包含以下页面：</p>
-              <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px;">
-                <tr style="background: var(--bg-input-soft); border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px; font-weight: bold;">页面</td>
-                  <td style="padding: 10px; font-weight: bold;">功能</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">📊 概览</td>
-                  <td style="padding: 10px;">实时行情、持仓列表、快捷交易、市场状态</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">🤖 AI推理</td>
-                  <td style="padding: 10px;">手动/自动推理、信号列表、信号执行</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">💹 交易</td>
-                  <td style="padding: 10px;">手动下单、持仓管理、平仓操作</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">📜 历史</td>
-                  <td style="padding: 10px;">交易历史、盈亏曲线、统计分析</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">⚙️ 配置</td>
-                  <td style="padding: 10px;">AI模型设置、自动推理配置、API Key管理</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">🔍 审计</td>
-                  <td style="padding: 10px;">所有操作记录、信号执行日志</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">📋 管理</td>
-                  <td style="padding: 10px;">（仅管理员）用户管理、系统统计</td>
-                </tr>
-              </table>
+AURUM AI 交易实验室是一个 **AI 辅助黄金交易系统**。它能：
 
-              <!-- ==================== 概览页面 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">📊 概览页面</h3>
-              <p><strong>功能说明</strong>：显示实时行情、当前持仓、市场状态，支持快捷交易操作。</p>
+- 🤖 自动分析市场行情，生成交易信号（做多/做空/观望）
+- ⚡ 一键执行信号，自动下单到你的 MT5 账户
+- 📊 实时监控账户余额、持仓、盈亏
 
-              <p><strong>行情区域</strong>：</p>
-              <ul>
-                <li>左侧：品种选择器（支持搜索）</li>
-                <li>中间：实时 bid/ask 报价，数字跳动表示数据更新</li>
-                <li>右侧：市场状态（交易中/休市/检测中）、MT5 服务器时间</li>
-              </ul>
+**简单说：打开自动推理 → AI 帮你看盘 → 有信号你确认下单**
 
-              <p><strong>持仓列表</strong>：</p>
-              <ul>
-                <li>显示当前所有持仓：订单号、品种、方向、手数、开仓价、当前价、盈亏</li>
-                <li>盈亏数字：绿色=盈利，红色=亏损</li>
-                <li>平仓按钮：点击可快速平仓</li>
-              </ul>
+---
 
-              <p><strong>快捷交易</strong>：</p>
-              <ul>
-                <li>输入手数（默认 0.01）</li>
-                <li>点击「买入」或「卖出」按钮</li>
-                <li>确认弹窗中检查参数后点击「确认发送」</li>
-              </ul>
-              <p><strong>预期结果</strong>：交易成功后持仓列表更新，审计日志记录操作</p>
+## 二、开始使用
 
-              <!-- ==================== AI 推理 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">🤖 AI 推理</h3>
-              <p><strong>功能说明</strong>：使用 AI 模型分析市场数据，生成交易信号。</p>
+### 第 1 步：登录系统
 
-              <p><strong>手动推理</strong>：</p>
-              <ol>
-                <li>进入「AI推理」页面</li>
-                <li>选择品种（默认使用概览页面选择的品种）</li>
-                <li>选择分析周期：M5（5分钟）、M15（15分钟）、H1（1小时）、H4（4小时）</li>
-                <li>可选：修改系统提示词（高级用户）</li>
-                <li>点击「生成信号」按钮</li>
-                <li>等待进度条完成（显示当前阶段和预计时间）</li>
-              </ol>
-              <p><strong>预期结果</strong>：显示信号卡片，包含：</p>
-              <ul>
-                <li>方向：买入(🟢) / 卖出(🔴) / 持有(🟡)</li>
-                <li>置信度：0-100%（越高越可靠）</li>
-                <li>止损价格：建议的止损位</li>
-                <li>止盈价格：TP1/TP2/TP3 三级止盈</li>
-                <li>分析理由：AI 的分析逻辑</li>
-              </ul>
+打开浏览器访问系统地址，输入账号密码登录。
 
-              <p style="margin-top: 16px;"><strong>自动推理</strong>：</p>
-              <ol>
-                <li>进入「配置」页面 → 自动推理标签</li>
-                <li>开启「自动推理」开关</li>
-                <li>设置分析间隔（默认 5 分钟）</li>
-                <li>确认「自动执行」开关状态：</li>
-                  <ul>
-                    <li>开启：AI 信号符合条件时自动下单</li>
-                    <li>关闭：仅生成信号，需手动确认执行</li>
-                  </ul>
-                <li>点击「保存配置」</li>
-              </ol>
-              <p><strong>预期结果</strong>：左上角徽章显示「自动推理运行中 · XAUUSD · 5分钟」</p>
-              <p><strong>自动推理流程</strong>：</p>
-              <ul>
-                <li>系统每 5 分钟自动获取行情数据</li>
-                <li>调用 AI 模型分析市场</li>
-                <li>生成信号并保存到历史记录</li>
-                <li>若开启自动执行且信号非 HOLD，自动下单</li>
-                <li>市场休市时自动暂停，恢复交易后继续</li>
-              </ul>
+> ⚠️ AI交易实验室为 **Pro 会员** 专属功能。免费用户会看到升级提示。
 
-              <p style="margin-top: 16px;"><strong>信号执行</strong>：</p>
-              <ol>
-                <li>在信号列表中点击要执行的信号</li>
-                <li>查看信号详情：方向、置信度、止损止盈</li>
-                <li>点击「执行信号」按钮</li>
-                <li>确认弹窗中检查参数</li>
-                <li>点击「确认执行」</li>
-              </ol>
-              <p><strong>预期结果</strong>：MT5 终端执行订单，信号标记为「已执行」</p>
-              <p><strong>风控规则</strong>：HOLD 信号不可执行；信号过期不可执行；手数超过配置上限被拒绝</p>
+### 第 2 步：连接 MT5 Bridge
 
-              <!-- ==================== 交易页面 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">💹 交易页面</h3>
-              <p><strong>功能说明</strong>：手动交易、持仓管理、平仓操作。</p>
+你需要在电脑上运行 **MT5 Bridge** 程序，它负责连接你的 MT5 交易账户和服务器。
 
-              <p><strong>手动下单</strong>：</p>
-              <ol>
-                <li>选择品种</li>
-                <li>选择方向：买入(多) / 卖出(空)</li>
-                <li>输入手数（0.01-手数上限，由风控配置决定）</li>
-                <li>可选：设置止损价格、止盈价格</li>
-                <li>点击「发送订单」</li>
-                <li>确认弹窗中检查参数（预估入场价、保证金、滑点）</li>
-                <li>点击「确认发送」</li>
-              </ol>
-              <p><strong>预期结果</strong>：MT5 终端执行订单，持仓列表更新</p>
-              <p><strong>风控检查</strong>：系统会自动检查手数上限、保证金充足性、价格滑点</p>
+1. 点击右上角「桥接状态」徽章
+2. 点击「下载桥接软件」
+3. 运行 AURUM_Bridge.exe
+4. 输入你的 MT5 账号信息
+5. 点击「登录并连接」
 
-              <p style="margin-top: 16px;"><strong>持仓管理</strong>：</p>
-              <ul>
-                <li>持仓列表实时更新（通过 WebSocket 推送）</li>
-                <li>每行显示：订单号、品种、方向、手数、开仓价、当前价、盈亏</li>
-                <li>盈亏颜色：绿色=盈利，红色=亏损</li>
-                <li>点击「平仓」按钮可快速平仓</li>
-              </ul>
-              <p><strong>预期结果</strong>：平仓后持仓列表更新，审计日志记录操作</p>
+连接成功后，顶部状态栏会显示：
+- ✅ **MT5桥接-已连接** — Bridge 正常工作
+- ❌ **未连接** — 检查 Bridge 是否运行、网络是否正常
 
-              <!-- ==================== 历史记录 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">📜 历史记录</h3>
-              <p><strong>功能说明</strong>：查看交易历史、盈亏曲线、统计分析。</p>
+### 第 3 步：了解界面
 
-              <p><strong>交易历史</strong>：</p>
-              <ul>
-                <li>显示所有已完成的交易订单</li>
-                <li>支持按时间范围、方向、盈亏筛选</li>
-                <li>分页加载（每页 20 条）</li>
-                <li>点击订单号可跳转到关联的 AI 信号</li>
-              </ul>
+**顶部状态栏**：
 
-              <p><strong>盈亏曲线</strong>：</p>
-              <ul>
-                <li>每日盈亏柱状图</li>
-                <li>累计盈亏折线图</li>
-                <li>回撤曲线</li>
-                <li>统计指标：胜率、盈亏比、最大回撤</li>
-              </ul>
+| 状态 | 含义 |
+|------|------|
+| 桥接状态 | Bridge 是否在线 |
+| 交易发送 | 是否允许下单（关闭时 AI 只分析不下单） |
+| 自动推理 | 是否自动循环分析 |
+| 市场状态 | 交易中 / 休市 / 检测中 |
 
-              <p><strong>信号历史</strong>：</p>
-              <ul>
-                <li>显示所有 AI 生成的信号</li>
-                <li>支持按方向、时间框架筛选</li>
-                <li>点击信号可查看详情和执行状态</li>
-              </ul>
+**左侧导航**：
 
-              <!-- ==================== 配置页面 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">⚙️ 配置页面</h3>
-              <p><strong>功能说明</strong>：管理 AI 模型、API Key、自动推理参数。</p>
+| 页面 | 用途 |
+|------|------|
+| 概览 | 账户状态、实时报价、最新信号、当前持仓 |
+| AI推理 | 手动触发 AI 分析 |
+| 交易 | 查看和管理持仓 |
+| 历史 | 交易历史记录 |
+| 配置 | 模型设置、自动推理参数 |
+| 审计 | 所有操作记录 |
+| 使用手册 | 本文档 |
 
-              <p><strong>模型设置</strong>（仅 Pro 用户可见）：</p>
-              <ul>
-                <li>API 服务商：DeepSeek / GPT / Kimi / Qwen / 智谱 / 豆包 / Claude / Gemini</li>
-                <li>API Key：输入对应的 API 密钥</li>
-                <li>模型名称：选择具体模型（如 deepseek-chat）</li>
-                <li>Temperature：控制输出随机性（0-1，推荐 0.3-0.7）</li>
-                <li>Max Tokens：最大输出 token 数（推荐 2000）</li>
-                <li>风险级别：low / medium / high（影响仓位和止损计算）</li>
-                <li>最大手数：单笔交易最大手数限制</li>
-                <li>止盈档位：选择 TP1/TP2/TP3</li>
-                <li>系统提示词：自定义 AI 分析的指令</li>
-              </ul>
-              <p><strong>预期结果</strong>：保存后立即生效，下次推理使用新配置</p>
+---
 
-              <p style="margin-top: 16px;"><strong>自动推理配置</strong>（仅管理员可编辑全局配置）：</p>
-              <ul>
-                <li>分析品种：默认 XAUUSD</li>
-                <li>分析间隔：5 分钟（可调整）</li>
-                <li>自动执行开关：开启后 AI 信号自动下单</li>
-                <li>使用独立的 API Key 和模型设置</li>
-              </ul>
-              <p><strong>预期结果</strong>：保存后自动推理调度器使用新配置</p>
+## 三、日常使用（推荐流程）
 
-              <!-- ==================== 市场状态 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">📈 市场状态</h3>
-              <p>右上角显示当前市场状态：</p>
-              <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px;">
-                <tr style="background: var(--bg-input-soft); border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px; font-weight: bold;">状态</td>
-                  <td style="padding: 10px; font-weight: bold;">颜色</td>
-                  <td style="padding: 10px; font-weight: bold;">含义</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">交易中</td>
-                  <td style="padding: 10px; color: #22c55e;">🟢 绿色</td>
-                  <td style="padding: 10px;">市场正常开放，可交易</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">休市</td>
-                  <td style="padding: 10px; color: #9ca3af;">⚪ 灰色</td>
-                  <td style="padding: 10px;">市场已收盘，自动推理暂停</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">检测中</td>
-                  <td style="padding: 10px; color: #f59e0b;">🟡 黄色</td>
-                  <td style="padding: 10px;">正在检测市场状态</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">未连接</td>
-                  <td style="padding: 10px; color: #9ca3af;">⚪ 灰色</td>
-                  <td style="padding: 10px;">桥接未连接</td>
-                </tr>
-              </table>
+### 🟢 最简单的用法：开启自动推理
 
-              <!-- ==================== 权限说明 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">🔐 权限说明</h3>
-              <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px;">
-                <tr style="background: var(--bg-input-soft); border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px; font-weight: bold;">会员类型</td>
-                  <td style="padding: 10px; font-weight: bold;">可用功能</td>
-                  <td style="padding: 10px; font-weight: bold;">限制</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">免费用户</td>
-                  <td style="padding: 10px;">无</td>
-                  <td style="padding: 10px;">显示升级遮罩，无法进入系统</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">Plus 会员</td>
-                  <td style="padding: 10px;">观摩模式</td>
-                  <td style="padding: 10px;">只能查看管理员的实时数据，不能交易、不能配置、不能下载桥接</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">Pro 会员</td>
-                  <td style="padding: 10px;">完整功能</td>
-                  <td style="padding: 10px;">可桥接 MT5、可交易、可配置、可下载桥接</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">管理员</td>
-                  <td style="padding: 10px;">全部功能 + 管理后台</td>
-                  <td style="padding: 10px;">可管理用户、配置全局设置、查看所有数据</td>
-                </tr>
-              </table>
+**你只需要做一件事：点击顶部「自动推理」状态栏，开启自动推理。**
 
-              <!-- ==================== 状态徽章说明 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">🏷️ 状态徽章说明</h3>
-              <p>右上角显示以下状态徽章：</p>
-              <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px;">
-                <tr style="background: var(--bg-input-soft); border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px; font-weight: bold;">徽章</td>
-                  <td style="padding: 10px; font-weight: bold;">显示内容</td>
-                  <td style="padding: 10px; font-weight: bold;">含义</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">桥接状态</td>
-                  <td style="padding: 10px;">MT5桥接-已连接 / 未连接-请启动桥接脚本</td>
-                  <td style="padding: 10px;">桥接软件是否连接成功</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">交易发送</td>
-                  <td style="padding: 10px;">交易发送开启 / 交易发送关闭</td>
-                  <td style="padding: 10px;">是否允许执行交易操作</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">自动推理</td>
-                  <td style="padding: 10px;">自动推理运行中 · XAUUSD · 5分钟 / 自动推理暂停 / 自动推理关闭</td>
-                  <td style="padding: 10px;">自动推理调度器状态</td>
-                </tr>
-                <tr style="border-bottom: 1px solid var(--border-default);">
-                  <td style="padding: 10px;">市场状态</td>
-                  <td style="padding: 10px;">交易中 / 休市 / 检测中</td>
-                  <td style="padding: 10px;">当前市场是否可交易</td>
-                </tr>
-              </table>
+开启后，系统会：
+1. 每隔一段时间自动调用 AI 分析市场
+2. 生成交易信号（做多/做空/观望）
+3. 信号显示在概览页的「AI 信号」卡片中
+4. 如果信号是做多或做空，你可以选择执行
 
-              <!-- ==================== 注意事项 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">⚠️ 重要注意事项</h3>
-              <ul>
-                <li><strong>桥接软件必须在运行 MT5 的电脑上运行</strong>，不能在服务器上运行</li>
-                <li><strong>自动推理开启后</strong>，系统会按设定间隔自动分析和执行，请确保风控参数设置合理</li>
-                <li><strong>市场休市时</strong>（周末、每日特定时段），自动推理会自动暂停</li>
-                <li><strong>所有交易操作</strong>都会记录审计日志，可在「审计」页面查看</li>
-                <li><strong>AI 分析结果仅供参考</strong>，交易风险由您自行承担</li>
-                <li><strong>不要同时运行多个桥接实例</strong>，一个账号只能连接一个桥接</li>
-                <li><strong>定期检查 API Key 余额</strong>，避免因余额不足导致推理失败</li>
-              </ul>
+### 查看信号
 
-              <!-- ==================== 常见问题 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">🔧 常见问题</h3>
+信号卡片会显示：
 
-              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-input-soft); border-radius: 8px;">
-                <strong>Q: 桥接连接失败怎么办？</strong><br>
-                A: ① 确认 MT5 已登录并运行 ② 检查网络连接 ③ 确认账号权限为 Pro ④ 检查防火墙是否阻止连接
-              </div>
+| 项目 | 说明 |
+|------|------|
+| 方向 | **BUY**（做多）/ **SELL**（做空）/ **HOLD**（观望） |
+| 置信度 | AI 对这次判断的把握程度（越高越可靠） |
+| 止损价 | 建议的止损价格 |
+| 止盈价 | 建议的止盈价格（TP1/TP2/TP3） |
+| 有效期 | 信号的有效时间（过期后不可执行） |
 
-              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-input-soft); border-radius: 8px;">
-                <strong>Q: 自动推理没有运行？</strong><br>
-                A: ① 检查桥接状态是否为「已连接」 ② 检查市场是否休市 ③ 检查 API Key 是否配置正确 ④ 检查自动推理开关是否开启
-              </div>
+### 执行信号
 
-              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-input-soft); border-radius: 8px;">
-                <strong>Q: 信号没有自动执行？</strong><br>
-                A: ① 检查「自动执行」开关是否开启 ② 检查交易发送是否开启 ③ 检查保证金是否充足 ④ 检查信号是否过期（M5信号45秒过期）
-              </div>
+如果信号方向是 BUY 或 SELL：
+1. 点击信号卡片查看详情
+2. 确认止损止盈价格合理
+3. 点击「执行信号」
+4. 在确认弹窗中检查参数
+5. 点击「确认执行」
 
-              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-input-soft); border-radius: 8px;">
-                <strong>Q: AI 分析失败？</strong><br>
-                A: ① 检查 API Key 是否有效 ② 检查 API 余额是否充足 ③ 检查网络连接 ④ 查看审计日志中的错误信息
-              </div>
+> ⚠️ HOLD（观望）信号不可执行，系统会自动跳过。
 
-              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-input-soft); border-radius: 8px;">
-                <strong>Q: 持仓数据不更新？</strong><br>
-                A: ① 检查桥接状态 ② 检查交易发送是否开启 ③ 点击「刷新」按钮手动刷新 ④ 重启桥接软件
-              </div>
+---
 
-              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-input-soft); border-radius: 8px;">
-                <strong>Q: Plus 用户能做什么？</strong><br>
-                A: Plus 用户处于观摩模式，只能查看管理员连接的 MT5 账户数据，不能交易、不能配置、不能下载桥接软件。如需完整功能，请升级 Pro。
-              </div>
+## 四、AI 推理
 
-              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-input-soft); border-radius: 8px;">
-                <strong>Q: 如何切换深色/浅色模式？</strong><br>
-                A: 点击右上角的主题切换按钮（月亮/太阳图标）
-              </div>
+### 手动推理
 
-              <!-- ==================== 联系支持 ==================== -->
-              <h3 style="color: var(--gold-primary); margin: 24px 0 12px; border-bottom: 2px solid var(--gold-primary); padding-bottom: 8px;">📞 联系支持</h3>
-              <p>如遇到无法解决的问题，请通过以下方式联系支持：</p>
-              <ul>
-                <li>使用「需求反馈」功能提交问题</li>
-                <li>联系管理员获取帮助</li>
-              </ul>
+当你想主动让 AI 分析市场时：
+
+1. 进入「AI推理」页面
+2. 选择品种（默认使用概览页选择的品种）
+3. 选择分析周期：M5（5分钟）、M15（15分钟）、H1（1小时）、H4（4小时）
+4. 点击「生成信号」
+5. 等待 AI 分析（通常 10-30 秒）
+
+完成后会显示：
+- 信号方向和置信度
+- 止损止盈价格
+- AI 的分析理由
+
+### 自动推理
+
+自动推理是系统的核心功能，开启后：
+
+1. 系统每隔固定时间自动分析市场
+2. 自动判断做多/做空/观望
+3. 可选择自动执行信号
+
+**开启方法**：
+1. 进入「配置」页面
+2. 找到「自动推理」开关
+3. 开启开关
+4. 设置分析间隔（推荐 5 分钟）
+5. 保存配置
+
+**自动推理状态**：
+- 🟢 **运行中** — 正在自动分析
+- ⏸️ **暂停** — 市场休市，等待恢复
+- ⚪ **关闭** — 未开启
+
+### 风控参数
+
+在「配置」页面可以设置：
+
+| 参数 | 说明 | 推荐值 |
+|------|------|--------|
+| 风险级别 | low/medium/high | medium |
+| 最大手数 | 单笔最大交易量 | 0.05 |
+| 止盈档位 | TP1/TP2/TP3 | TP1 |
+
+---
+
+## 五、交易操作
+
+### 手动交易
+
+1. 在概览页或交易页
+2. 选择品种
+3. 选择方向：买入（做多）/ 卖出（做空）
+4. 输入手数
+5. 可选：设置止损、止盈价格
+6. 点击「发送订单」
+7. 在确认弹窗中检查参数
+8. 点击「确认发送」
+
+### 持仓管理
+
+持仓列表显示：
+- 订单号、品种、方向、手数
+- 开仓价、当前价
+- 盈亏金额（绿色=盈利，红色=亏损）
+- 平仓按钮
+
+点击「平仓」可以快速关闭持仓。
+
+---
+
+## 六、历史记录
+
+### 交易历史
+
+显示所有已完成的交易：
+- 支持按时间、方向、盈亏筛选
+- 分页浏览
+- 点击订单号可跳转到关联的 AI 信号
+
+### 盈亏曲线
+
+可视化展示交易表现：
+- 每日盈亏柱状图
+- 累计盈亏折线
+- 回撤曲线
+- 统计指标：胜率、盈亏比、最大回撤
+
+### 信号历史
+
+显示所有 AI 生成的信号：
+- 支持按方向、时间框架筛选
+- 查看信号详情和执行状态
+
+---
+
+## 七、配置说明
+
+### 模型设置
+
+进入「配置」→「模型设置」：
+
+| 参数 | 说明 |
+|------|------|
+| API 服务商 | DeepSeek / GPT / Kimi / Qwen 等 |
+| API Key | 对应服务商的 API 密钥 |
+| 模型名称 | 如 deepseek-chat |
+| Temperature | 输出随机性（0-1，推荐 0.3-0.7） |
+| Max Tokens | 最大输出长度（推荐 2000） |
+
+> 💡 管理员开启了模型共享后，你无需配置 API Key 也能使用。
+
+### 自动推理配置
+
+进入「配置」→「自动推理」：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| 分析品种 | 交易品种 | XAUUSD |
+| 分析间隔 | 多久分析一次 | 5 分钟 |
+| 自动执行 | 信号是否自动下单 | 关闭 |
+
+---
+
+## 八、市场状态
+
+顶部显示当前市场状态：
+
+| 状态 | 颜色 | 含义 |
+|------|------|------|
+| 交易中 | 🟢 绿色 | 市场开放，可交易 |
+| 休市 | ⚪ 灰色 | 市场收盘，自动推理暂停 |
+| 检测中 | 🟡 黄色 | 正在检测市场状态 |
+
+---
+
+## 九、权限说明
+
+| 会员 | 功能 |
+|------|------|
+| 免费用户 | 无法使用 AI 交易 |
+| Plus 会员 | 观摩模式（只看不操作） |
+| Pro 会员 | 完整功能 |
+| 管理员 | 全部功能 + 管理后台 |
+
+---
+
+## 十、注意事项
+
+1. **桥接软件必须在运行 MT5 的电脑上运行**
+2. **自动推理开启后**，系统会按设定间隔自动分析
+3. **市场休市时**（周末、每日特定时段），自动推理自动暂停
+4. **所有交易操作**都会记录审计日志
+5. **AI 分析结果仅供参考**，交易风险由您自行承担
+6. **不要同时运行多个桥接实例**，一个账号只能连接一个桥接
+7. **定期检查 API Key 余额**，避免因余额不足导致推理失败
+
+---
+
+## 十一、常见问题
+
+**Q: 桥接连接失败？**
+A: ① 确认 MT5 已登录 ② 检查网络 ③ 确认账号为 Pro ④ 检查防火墙
+
+**Q: 自动推理没有运行？**
+A: ① 检查桥接状态 ② 检查市场是否休市 ③ 检查 API Key ④ 检查开关
+
+**Q: 信号没有自动执行？**
+A: ① 检查「自动执行」开关 ② 检查交易发送开关 ③ 检查保证金 ④ 检查信号是否过期
+
+**Q: AI 分析失败？**
+A: ① 检查 API Key ② 检查 API 余额 ③ 检查网络 ④ 查看审计日志
+
+**Q: 持仓数据不更新？**
+A: ① 检查桥接状态 ② 点击刷新 ③ 重启桥接软件
+
+**Q: Plus 用户能做什么？**
+A: 只能查看管理员数据（观摩），不能交易。升级 Pro 可解锁全部功能。
+
+---
+
+> 📞 如有问题，请使用「需求反馈」功能提交。
+
             </div>
           </div>
         </section>
