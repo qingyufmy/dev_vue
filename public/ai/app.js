@@ -3624,7 +3624,9 @@ function bindEvents() {
   // (removed old modal handlers)
 
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.addEventListener("click", () => setTab(button.dataset.tab));
+    if (button.dataset.tab) {
+      button.addEventListener("click", () => setTab(button.dataset.tab));
+    }
   });
 
   document.body.addEventListener("click", (event) => {
