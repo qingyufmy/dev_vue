@@ -127,7 +127,7 @@ export async function initAutoSchedulers() {
 function sendAutoProgress(userId, progress) {
   try {
     sendToBrowsers(userId, { type: 'auto_progress', ...progress })
-  } catch {}
+  } catch (e) { console.error('[AutoScheduler] Failed to send progress:', e.message) }
 }
 
 export async function runAutoCycle(userId, symbol, timeframe) {
@@ -318,7 +318,7 @@ async function runSmartCloseCycle(userId) {
   try {
     const accountData = await mt5Bridge(userId, 'account', {})
     account = accountData?.account || null
-  } catch {}
+  } catch (e) { console.error('[SmartClose] Failed to get account:', e.message) }
 
   const ruleResults = runCloseRules(closeCfg, positions, account)
   if (ruleResults.length > 0) {
@@ -555,7 +555,7 @@ async function executeOrder(userId, config, request, action) {
           ? round2(request.quote_price + request.take_profit_points * pointSize)
           : round2(request.quote_price - request.take_profit_points * pointSize)
       }
-    } catch {}
+    } catch (e) { console.error('[ExecuteOrder] Failed to get quote:', e.message) }
   }
 
   let result

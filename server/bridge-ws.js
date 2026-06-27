@@ -29,6 +29,8 @@ const bridges = new Map()       // userId -> { ws, lastSeen }
 const browsers = new Map()      // userId -> Set<ws>
 const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
 let adminUserId = null          // cached admin userId for fallback
+let adminUserIdLastCheck = 0
+const ADMIN_CACHE_TTL = 300000 // 5 minutes
 
 let cmdCounter = 0
 let wss = null
@@ -43,7 +45,8 @@ setInterval(() => {
 }, 10 * 60 * 1000)
 
 async function getAdminUserId() {
-  if (adminUserId) return adminUserId
+  const now = Date.now()
+  if (adminUserId && (now - adminUserIdLastCheck) < ADMIN_CACHE_TTL) return adminUserId
   const row = await queryOne('SELECT id FROM users WHERE role = ? LIMIT 1', ['admin'])
   adminUserId = row?.id || null
   return adminUserId
