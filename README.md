@@ -1,4 +1,4 @@
-# AURUM AI Trading System v2.1.0
+# AURUM AI Trading System v2.1.1
 
 全自动 MT5 量化交易系统 · AI 驱动决策 · WebSocket 纯转发架构 · 实时信号执行
 
