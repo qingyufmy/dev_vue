@@ -1532,8 +1532,10 @@ let _klineLastBar = null;
 let _klineVolRefreshTimer = null;
 let _klineMutationObserver = null;
 let _klineResizeObserver = null;
+let _klineDeferredObserver = null;
 
 function disconnectKlineObservers() {
+  if (_klineDeferredObserver) { _klineDeferredObserver.disconnect(); _klineDeferredObserver = null; }
   if (_klineMutationObserver) { _klineMutationObserver.disconnect(); _klineMutationObserver = null; }
   if (_klineResizeObserver) { _klineResizeObserver.disconnect(); _klineResizeObserver = null; }
 }
@@ -1548,13 +1550,14 @@ function initKlineChart() {
 
   // Defer chart creation if container is hidden (0 size)
   if (container.offsetWidth === 0 || container.offsetHeight === 0) {
-    const deferred = new ResizeObserver(() => {
+    _klineDeferredObserver = new ResizeObserver(() => {
       if (container.offsetWidth > 0 && container.offsetHeight > 0) {
-        deferred.disconnect();
+        _klineDeferredObserver.disconnect();
+        _klineDeferredObserver = null;
         _createKlineChart(container);
       }
     });
-    deferred.observe(container);
+    _klineDeferredObserver.observe(container);
     return;
   }
   _createKlineChart(container);

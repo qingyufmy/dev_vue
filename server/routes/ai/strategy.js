@@ -2,7 +2,7 @@
 
 import { queryOne, queryRun, beijingNow } from '../../db.js'
 import { isBridgeAlive } from '../../bridge-ws.js'
-import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming } from './utils.js'
+import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject } from './config.js'
@@ -30,10 +30,6 @@ export async function buildStrategyContext(userId, symbol, account, positions, p
 }
 
 export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual') {
-  const { parseTimeframeTags, compactRates } = await import('./utils.js')
-  const { calculateMarketData } = await import('./market-data.js')
-  const { STRATEGY_TIMEFRAME_COUNTS } = await import('./utils.js')
-
   let tags = parseTimeframeTags(prompt, mode)
   if (tags.length === 0) {
     const tf = (fallbackTimeframe || 'M30').toUpperCase()

@@ -86,7 +86,7 @@ export function initBridgeWS(server) {
 function handleBrowser(ws, url) {
   const token = url.searchParams.get('token')
   let userId = null
-  try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
+  try { userId = jwt.verify(token, JWT_SECRET).userId } catch (e) { console.error('[BridgeWS] Browser JWT verify failed:', e.message) }
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
   // Register
@@ -214,7 +214,7 @@ async function _initBridge(ws, userId) {
   try {
     const schedulerRow = await queryOne('SELECT enabled, symbols FROM auto_scheduler WHERE user_id = ?', [userId])
     schedulerEnabled = !!(schedulerRow?.enabled)
-  } catch {}
+  } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
   console.log(`[BridgeWS] _initBridge user ${userId}: dbAutoReason=${dbAutoReasoningEnabled} schedulerEnabled=${schedulerEnabled} hasDbRow=${hasDbRow}`)
   if (shouldRestoreAuto || schedulerEnabled) {
     try {
@@ -233,7 +233,7 @@ async function _initBridge(ws, userId) {
             [userId]
           )
           bridges.get(userId).autoReasoningEnabled = true
-        } catch {}
+        } catch (e) { console.error('[BridgeWS] Failed to sync user_bridge_settings:', e.message) }
       }
       ai.stopAutoScheduler(userId)
       await ai.startAutoScheduler(userId)

@@ -4,11 +4,11 @@ import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
 import { getOwnBridgeTradeMode, isBridgeAlive, sendToBrowsers } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig } from './config.js'
+import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
-import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2 } from './utils.js'
+import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
 
-const autoSchedulerState = {}
+export const autoSchedulerState = {}
 export const closeSchedulerState = {}
 
 export function isAutoSchedulerRunning(userId) {
@@ -172,7 +172,6 @@ export async function runAutoCycle(userId, symbol, timeframe) {
     l(`bridge account+positions done (${Date.now()-t0}ms, positions=${positions.length})`)
 
     const prompt = config.system_prompt || ''
-    const { parseTimeframeTags } = await import('./utils.js')
     const tags = parseTimeframeTags(prompt, 'auto')
     const primaryTf = tags.length > 0 ? tags[0].tf : (timeframe || 'M5').toUpperCase()
     const primaryCount = tags.length > 0 ? tags[0].count : 100
@@ -560,14 +559,13 @@ async function executeOrder(userId, config, request, action) {
 
   let result
   try {
-    const { validateTradeRequest, RiskReject } = await import('./config.js')
     const risk = validateTradeRequest(config, account, positions, request)
     let openResult
     openResult = await mt5Bridge(userId, 'open', request)
     result = { ...openResult, risk }
     if (quote) result.quote = quote
   } catch (err) {
-    if (err instanceof (await import('./config.js')).RiskReject) {
+    if (err instanceof RiskReject) {
       result = {
         status: err.reason === 'confirmation_required' ? 'needs_confirmation' : 'rejected',
         message: err.reason,
@@ -582,7 +580,4 @@ async function executeOrder(userId, config, request, action) {
   return result
 }
 
-async function getActiveConfig(db, userId) {
-  const { getActiveConfig: getConfig } = await import('./config.js')
-  return getConfig(db, userId)
-}
+// getActiveConfig is now imported from config.js directly
