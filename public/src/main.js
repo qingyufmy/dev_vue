@@ -1283,7 +1283,7 @@ function initBiliPlayer(bvid) {
     container.innerHTML = '<div class="video-error">无效的视频 ID</div>'
     return
   }
-  container.innerHTML = '<iframe id="biliPlayer" src="//player.bilibili.com/player.html?bvid=' + safeBvid + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
+  container.innerHTML = '<iframe id="biliPlayer" src="https://player.bilibili.com/player.html?bvid=' + safeBvid + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
 
   biliPlayer = document.getElementById('biliPlayer')
   // Bilibili doesn't have a JS API for progress tracking,
@@ -1819,7 +1819,6 @@ window.addEventListener('popstate', (e) => {
 // ===== Home View =====
 function renderHome() {
   const filtered = getFilteredEpisodes()
-  const isMobileHome = window.matchMedia('(max-width: 1024px)').matches
   const statsHtml = renderSidebarStats()
   const quotesHtml = renderSidebarQuotes()
   const updatesHtml = renderSidebarUpdates()
@@ -1829,18 +1828,42 @@ function renderHome() {
   const sidebarHtml = `${statsHtml}${quotesHtml}${updatesHtml}${historyHtml}`
 
   mainContent.innerHTML = `
+    <section class="hero-wrap">
+      <span class="hero-eyebrow">交易与 AI 技术教育平台</span>
+      <h1 class="hero-title">量化市场之道，诚待天下之人</h1>
+      <p class="hero-lead">在这里，系统学习交易的底层逻辑、技术分析方法，以及 AI 在交易分析中的技术应用。我们教方法、讲原理，帮你建立属于自己的判断力。</p>
+      <p class="hero-fineprint">市场永远有风险。我们能交付的是能力与方法，而不是对收益的承诺——这一点，从第一天起就不会变。</p>
+      <div class="hero-cta">
+        <button class="btn btn-primary" onclick="document.querySelector('.tabs')?.scrollIntoView({behavior:'smooth'})">免费领取入门课程</button>
+        <button class="btn btn-outline" onclick="document.querySelector('.tabs')?.scrollIntoView({behavior:'smooth'})">浏览课程大纲</button>
+      </div>
+      <div class="hero-tags">
+        <span class="hero-tag"><b>讲方法</b>，不讲内幕</span>
+        <span class="hero-tag"><b>讲风险</b>，不讲稳赚</span>
+        <span class="hero-tag"><b>讲技术</b>，不带单不荐股</span>
+      </div>
+    </section>
+
+    <section class="values-wrap">
+      <div class="value-card">
+        <div class="value-icon">⚖︎</div>
+        <h3>技术平权</h3>
+        <p>把曾经只属于专业圈子的分析方法，清楚地讲给每一个普通人。</p>
+      </div>
+      <div class="value-card">
+        <div class="value-icon">⚡︎</div>
+        <h3>执行效率</h3>
+        <p>理解 AI 如何把繁琐、易受情绪干扰的环节自动化——这是一种值得学习的能力。</p>
+      </div>
+      <div class="value-card">
+        <div class="value-icon">◈</div>
+        <h3>复杂决策辅助</h3>
+        <p>学会用数据与模型辅助思考，把判断权牢牢握在自己手里。</p>
+      </div>
+    </section>
+
     <div class="home-layout fade-in">
       <div class="home-main">
-        ${!isMobileHome ? `
-        <div class="home-quotes">
-          <p class="quote-hero">做空的人能赚钱，做多的人也能赚钱，<br>唯独<span class="quote-gold">贪婪</span>的人永远赚不到钱。</p>
-          <div class="quote-divider"></div>
-          <p class="quote-detail"><span class="quote-label">正常走势</span>会技术的和主力一起推动盘面，收割不懂技术的韭菜</p>
-          <p class="quote-detail"><span class="quote-label quote-label-warn">非正常走势</span>不懂技术的韭菜爆完了，再收割"到位了"的那些懂技术的人</p>
-          <a href="https://x.com/WallStreet0Name" target="_blank" rel="noopener noreferrer" class="quote-author">— 华尔街没有名字 ↗</a>
-        </div>
-        ` : ''}
-
         <div class="tabs">
           ${categories.map(cat => `
             <button class="tab ${state.currentCategory === cat.id ? 'active' : ''}" data-category="${cat.id}">
@@ -2479,7 +2502,7 @@ function renderVideo() {
       if (r.bilibiliId) {
         const container = document.getElementById('videoContainer')
         if (container) {
-          container.innerHTML = '<iframe id="biliPlayer" src="//player.bilibili.com/player.html?bvid=' + r.bilibiliId + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
+          container.innerHTML = '<iframe id="biliPlayer" src="https://player.bilibili.com/player.html?bvid=' + r.bilibiliId + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
           biliPlayer = document.getElementById('biliPlayer')
           if (ep && state.user) {
             const p = progress.get(ep.id)
@@ -7648,7 +7671,6 @@ function setupGlobalEvents() {
   }
 
   $('#logoHome').addEventListener('click', () => navigate('home'))
-  $('#navTrades').addEventListener('click', () => navigate('trades'))
   marketToggle?.addEventListener('click', (e) => {
     e.stopPropagation()
     toggleMarketMenu()

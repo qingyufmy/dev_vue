@@ -202,7 +202,11 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
       LEFT JOIN users u ON r.referred_id = u.id WHERE r.referrer_id = ? ORDER BY r.created_at DESC
     `, [req.user.id])
 
-    const baseUrl = req.protocol + '://' + req.get('host')
+    const proto = req.get('x-forwarded-proto') || req.protocol
+    const hostname = req.hostname
+    const port = req.get('host')?.split(':')?.[1] || ''
+    const needsPort = port && !['80', '443'].includes(port)
+    const baseUrl = needsPort ? `${proto}://${hostname}:${port}` : `${proto}://${hostname}`
     const referralLink = `${baseUrl}/?ref=${user.referral_code}`
 
     const invitedCount = referrals.length

@@ -52,7 +52,7 @@ const app = express()
 app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避免 IP 欺骗
 
 // CORS: restrict to known origins
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8080,http://192.168.1.254,https://www.cnfxtrade.com,https://cnfxtrade.com,http://www.cnfxtrade.com,http://cnfxtrade.com').split(',').map(s => s.trim())
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3005,http://localhost:8080,http://192.168.1.254,https://www.cnfxtrade.com,https://cnfxtrade.com,http://www.cnfxtrade.com,http://cnfxtrade.com').split(',').map(s => s.trim())
 app.use(cors({
   origin(origin, cb) {
     if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
@@ -185,7 +185,10 @@ app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai'), {
 
 // Bridge config download (for EXE update-token feature)
 app.get('/ai/bridge/config', (req, res) => {
-  const serverUrl = `${req.protocol}://${req.get('host')}`
+  const _proto = req.get('x-forwarded-proto') || req.protocol
+  const _port = req.get('host')?.split(':')?.[1] || ''
+  const _needsPort = _port && !['80', '443'].includes(_port)
+  const serverUrl = _needsPort ? `${_proto}://${req.hostname}:${_port}` : `${_proto}://${req.hostname}`
   res.json({ server_url: serverUrl, token: '' })
 })
 
@@ -197,7 +200,10 @@ app.get('/ai/bridge/:platform', authMiddleware, async (req, res) => {
   }
   const platform = req.params.platform
   const token = req.query.token || ''
-  const serverUrl = `${req.protocol}://${req.get('host')}`
+  const _proto = req.get('x-forwarded-proto') || req.protocol
+  const _port = req.get('host')?.split(':')?.[1] || ''
+  const _needsPort = _port && !['80', '443'].includes(_port)
+  const serverUrl = _needsPort ? `${_proto}://${req.hostname}:${_port}` : `${_proto}://${req.hostname}`
 
   if (platform === 'setup') {
     // One-click setup: downloads exe + writes config + launches
