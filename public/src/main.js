@@ -5670,6 +5670,24 @@ async function renderTools() {
         <p class="tools-subtitle">这些是我平时看盘、交易、分析用到的工具和平台，分享给大家</p>
       </div>
 
+      <div class="tools-category">
+        <h2 class="tools-cat-title">情绪分析</h2>
+        <div class="tools-grid">
+          <div class="tool-card sentiment-card" id="sentimentCard">
+            <div class="tool-card-top">
+              <span class="tool-icon">🌡️</span>
+              <span class="tool-tag" style="background:var(--accent)">实时</span>
+            </div>
+            <h3 class="tool-name">量见晴雨表</h3>
+            <p class="tool-desc">各品种交易者持仓多空比例，可作为反向指标参考</p>
+            <div class="sentiment-card-preview" id="sentimentPreview">
+              <div class="sentiment-gauge-loading" id="sentimentLoading">加载中...</div>
+            </div>
+            <span class="tool-link">查看详情 ↗</span>
+          </div>
+        </div>
+      </div>
+
       ${tools.map(cat => `
         <div class="tools-category">
           <h2 class="tools-cat-title">${cat.category}</h2>
@@ -5696,6 +5714,139 @@ async function renderTools() {
       </div>
     </div>
   `
+
+  loadSentimentGauge()
+
+  document.getElementById('sentimentCard')?.addEventListener('click', () => {
+    if (window._sentimentData) openSentimentModal(window._sentimentData)
+  })
+}
+
+let _sentimentData = null
+
+async function loadSentimentGauge() {
+  const previewEl = document.getElementById('sentimentPreview')
+  if (!previewEl) return
+
+  try {
+    const res = await api.get('/api/sentiment')
+    if (!res.ok || !res.data) {
+      if (previewEl) previewEl.innerHTML = '<div class="sentiment-preview-hint">数据更新中，请稍后查看</div>'
+      return
+    }
+
+    const validItems = res.data.filter(d => d.longPct !== null)
+    if (validItems.length === 0) {
+      if (previewEl) previewEl.innerHTML = '<div class="sentiment-preview-hint">数据更新中，请稍后查看</div>'
+      return
+    }
+
+    window._sentimentData = res
+    _sentimentData = res
+
+    const top4 = validItems.slice(0, 4)
+
+    previewEl.innerHTML = top4.map(item => `
+        <div class="sentiment-preview-item">
+          <span class="sentiment-preview-name">${item.name}</span>
+          <div class="sentiment-preview-bar">
+            <div class="sentiment-preview-bull" style="width:${item.longPct}%"></div>
+            <div class="sentiment-preview-bear" style="width:${item.shortPct}%"></div>
+          </div>
+          <span class="sentiment-preview-pct">${item.longPct}%</span>
+        </div>
+      `).join('') + '<div class="sentiment-preview-hint">点击查看更多</div>'
+  } catch (e) {
+    if (previewEl) previewEl.innerHTML = '<div class="sentiment-preview-hint">暂时无法加载</div>'
+  }
+}
+
+function openSentimentModal(data) {
+  const modal = document.createElement('div')
+  modal.className = 'sentiment-modal-overlay'
+
+  const updatedAt = data.updatedAt
+    ? new Date(data.updatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : ''
+  const source = data.source || 'IG'
+
+  const validItems = data.data.filter(d => d.longPct !== null)
+  const avgLong = validItems.length ? Math.round(validItems.reduce((s, d) => s + d.longPct, 0) / validItems.length) : 50
+  const avgShort = 100 - avgLong
+
+  const categoryOrder = ['商品', '股指', '外汇']
+  const grouped = categoryOrder.map(cat => ({
+    name: cat,
+    items: data.data.filter(d => d.category === cat && d.longPct !== null),
+  })).filter(g => g.items.length > 0)
+
+  modal.innerHTML = `
+    <div class="sentiment-modal">
+      <div class="sentiment-modal-header">
+        <div>
+          <h3 class="sentiment-modal-title">🌡️ 买卖强弱对比</h3>
+          <p class="sentiment-modal-desc">反映各品种交易者持仓多空比例，数值越高代表看多情绪越强。可作为反向指标参考。</p>
+        </div>
+        <button class="sentiment-modal-close" id="closeSentimentModal">✕</button>
+      </div>
+      ${updatedAt ? `<div class="sentiment-modal-time">更新于 ${updatedAt} · 数据来源 ${source}</div>` : ''}
+      <div class="sentiment-legend">
+        <div class="sentiment-legend-bar">
+          <div class="sentiment-legend-bull" style="width:${avgLong}%">
+            <span class="sentiment-legend-label">多头</span>
+          </div>
+          <div class="sentiment-legend-bear" style="width:${avgShort}%">
+            <span class="sentiment-legend-label">空头</span>
+          </div>
+        </div>
+        <div class="sentiment-legend-scale">
+          <span>${avgLong}%</span><span>0</span><span>${avgShort}%</span>
+        </div>
+        <p class="sentiment-legend-desc">空头占比&gt;80%一般视为买进信号；多头占比&gt;80%一般视为卖出信号</p>
+      </div>
+      <div class="sentiment-modal-body">
+        ${grouped.map(cat => `
+          <div class="sentiment-modal-cat">
+            <h4 class="sentiment-modal-cat-name">${cat.name}</h4>
+            <div class="sentiment-modal-items">
+              ${cat.items.map(item => `
+                  <div class="sentiment-modal-item">
+                    <div class="sentiment-modal-item-info">
+                      <span class="sentiment-modal-item-name">${item.name}</span>
+                      <div class="sentiment-modal-item-tags">
+                        <span class="sentiment-bull-tag">多 ${item.longPct}%</span>
+                        <span class="sentiment-bear-tag">空 ${item.shortPct}%</span>
+                      </div>
+                    </div>
+                    <div class="sentiment-modal-bar">
+                      <div class="sentiment-bar-bull" style="width:${item.longPct}%">
+                        <span class="sentiment-bar-label">${item.longPct}%</span>
+                      </div>
+                      <div class="sentiment-bar-bear" style="width:${item.shortPct}%">
+                        <span class="sentiment-bar-label">${item.shortPct}%</span>
+                      </div>
+                    </div>
+                  </div>
+                `).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `
+
+  document.body.appendChild(modal)
+  requestAnimationFrame(() => modal.classList.add('sentiment-modal-visible'))
+
+  const close = () => {
+    modal.classList.remove('sentiment-modal-visible')
+    setTimeout(() => modal.remove(), 300)
+  }
+  modal.querySelector('#closeSentimentModal').addEventListener('click', close)
+  modal.addEventListener('click', e => { if (e.target === modal) close() })
+  document.addEventListener('keydown', function handler(e) {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', handler) }
+  })
 }
 
 // Settings tab state
@@ -7319,6 +7470,17 @@ function renderCommunity() {
   loadCommunityPosts().then((applied) => {
     if (!applied || state.currentView !== 'community') return
     renderCommunityPosts()
+    const filterRow = document.querySelector('.forum-filter-row')
+    if (filterRow) {
+      filterRow.innerHTML = `
+        <button class="forum-tag-filter ${!state.communityTag ? 'active' : ''}" data-tag-filter="">全部话题</button>
+        ${state.communityTags.map(tag => `
+          <button class="forum-tag-filter ${state.communityTag === tag.slug ? 'active' : ''}" data-tag-filter="${escapeHtml(tag.slug)}">
+            #${escapeHtml(tag.label)} <span>${tag.count || 0}</span>
+          </button>
+        `).join('')}
+      `
+    }
   })
 }
 

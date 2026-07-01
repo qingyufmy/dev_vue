@@ -22,6 +22,9 @@ import videoRoutes from './routes/video.js'
 import configRoutes from './routes/config.js'
 import aiRoutes from './routes/ai/index.js'
 import feedbackRoutes from './routes/feedback.js'
+import sentimentRoutes from './routes/sentiment.js'
+import { fetchSentiment } from './services/sentiment.js'
+import { cacheSetJSON } from './redis.js'
 import { initAutoSchedulers } from './routes/ai/index.js'
 import { authMiddleware } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
@@ -52,7 +55,7 @@ const app = express()
 app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避免 IP 欺骗
 
 // CORS: restrict to known origins
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3005,http://localhost:8080,http://192.168.1.254,https://www.cnfxtrade.com,https://cnfxtrade.com,http://www.cnfxtrade.com,http://cnfxtrade.com').split(',').map(s => s.trim())
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001,http://localhost:3005,http://localhost:8080,http://192.168.1.254,https://www.cnfxtrade.com,https://cnfxtrade.com,http://www.cnfxtrade.com,http://cnfxtrade.com').split(',').map(s => s.trim())
 app.use(cors({
   origin(origin, cb) {
     if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
@@ -166,6 +169,7 @@ app.use('/api', videoRoutes)
 app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
 app.use('/api', feedbackRoutes)
+app.use('/api', sentimentRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
 
 
@@ -345,6 +349,19 @@ initBridgeWS(server)
   server.listen(PORT, () => {
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })
+  // Sentiment data: initial fetch + 30-min refresh
+  try {
+    const data = await fetchSentiment()
+    await cacheSetJSON('sentiment:data', { data, updatedAt: new Date().toISOString() }, 2100)
+    console.log('[Sentiment] Initial data loaded')
+  } catch (e) { console.error('[Sentiment] Initial fetch failed:', e.message) }
+  setInterval(async () => {
+    try {
+      const data = await fetchSentiment()
+      await cacheSetJSON('sentiment:data', { data, updatedAt: new Date().toISOString() }, 2100)
+      console.log('[Sentiment] 30min refresh done')
+    } catch (e) { console.error('[Sentiment] Refresh failed:', e.message) }
+  }, 30 * 60 * 1000)
 })()
 
 // Crash protection — log and restart gracefully
