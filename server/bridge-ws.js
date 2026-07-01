@@ -59,7 +59,13 @@ export function initBridgeWS(server) {
   wss = new WebSocketServer({ noServer: true })
 
   server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, 'http://localhost')
+    const type = url.searchParams.get('type')
+    const tokenPresent = !!url.searchParams.get('token')
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress
+
     if (req.url.startsWith('/aurum-api/bridge/ws')) {
+      console.log(`[BridgeWS] upgrade path=/aurum-api/bridge/ws type=${type} tokenPresent=${tokenPresent} ip=${ip}`)
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit('connection', ws, req)
       })
@@ -143,8 +149,8 @@ function handleBrowser(ws, url) {
 function handleBridge(ws, url) {
   const token = url.searchParams.get('token')
   let userId = null
-  try { userId = jwt.verify(token, JWT_SECRET).userId } catch (e) { console.error('[BridgeWS] Bridge JWT verify failed:', e.message) }
-  if (!userId) { ws.close(4002, 'Invalid token'); return }
+  try { userId = jwt.verify(token, JWT_SECRET).userId } catch (e) { console.error('[BridgeWS] bridge auth failed:', e.message) }
+  if (!userId) { console.log('[BridgeWS] bridge auth failed: no valid userId'); ws.close(4002, 'Invalid token'); return }
 
   // 在计划检查完成之前先缓存消息，防止竞态条件（消息先于 _initBridge 到达）
   const msgQueue = []
@@ -192,9 +198,10 @@ async function _initBridge(ws, userId) {
   let initComplete = false
 
   // Register close + error handlers BEFORE any await (so close during init is caught)
-  ws.on('close', async () => {
+  ws.on('close', async (code, reason) => {
+    const reasonStr = reason?.toString() || ''
     if (!initComplete) {
-      console.log(`[BridgeWS] Close during init for user ${userId}, basic cleanup`)
+      console.log(`[BridgeWS] close during init user=${userId} code=${code} reason=${reasonStr}`)
       const current = bridges.get(userId)
       if (current && current.ws === ws) {
         if (current._pingInterval) clearInterval(current._pingInterval)
@@ -208,9 +215,19 @@ async function _initBridge(ws, userId) {
       if (bridge._pingInterval) clearInterval(bridge._pingInterval)
     }
     if (!bridge || bridge.ws !== ws) {
-      console.log(`[BridgeWS] Stale close for user ${userId}, new bridge already connected — skipping cleanup`)
+      console.log(`[BridgeWS] stale close user=${userId}, new bridge already connected — skipping cleanup`)
       return
     }
+    // Detailed close logging
+    const now = Date.now()
+    const duration = bridge._connectTime ? Math.round((now - bridge._connectTime) / 1000) : '?'
+    const lastSeenAge = bridge.lastSeen ? Math.round((now - bridge.lastSeen) / 1000) : '?'
+    const lastPongAge = bridge.lastPong ? Math.round((now - bridge.lastPong) / 1000) : '?'
+    const lastType = bridge._lastMessageType || '?'
+    let pendingCount = 0
+    for (const [, p] of pendingCommands) { if (p.userId === userId) pendingCount++ }
+    console.log(`[BridgeWS] bridge closed user=${userId} code=${code} reason=${reasonStr} duration=${duration}s lastSeenAge=${lastSeenAge}s lastPongAge=${lastPongAge}s lastType=${lastType} pending=${pendingCount}`)
+
     bridges.delete(userId)
     sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
     for (const [cmdId, pending] of pendingCommands) {
@@ -253,9 +270,11 @@ async function _initBridge(ws, userId) {
   // Non-admin: use DB value as-is (defaults to false when no row)
   const isAdmin = userId === (adminUserId || -1)
   const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
-  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1, _pingInterval: null }
+  const replacedOld = !!existing
+  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1, _pingInterval: null, _connectTime: Date.now() }
   bridges.set(userId, bridgeEntry)
   ws._userId = userId
+  console.log(`[BridgeWS] bridge connected user=${userId} plan=${user?.role || 'unknown'} replacedOld=${replacedOld}`)
 
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled, trade_mode: -1 })
@@ -306,15 +325,24 @@ async function _initBridge(ws, userId) {
     }
   }
 
-  // Server-side ping every 15s — if bridge doesn't reply within 30s, close
+  // Server-side ping every 15s — if bridge doesn't reply within 45s, close
   bridgeEntry._pingInterval = setInterval(() => {
     const bridge = bridges.get(userId)
     if (!bridge || bridge.ws !== ws) { clearInterval(bridgeEntry._pingInterval); return }
-    if (Date.now() - bridge.lastPong > 30000) {
-      try { ws.close(4003, 'Ping timeout') } catch {}
+    // Check last activity (any message or pong)
+    const lastActivity = Math.max(bridge.lastPong || 0, bridge.lastSeen || 0, bridge.lastMessageAt || 0)
+    if (Date.now() - lastActivity > 45000) {
+      const lastPongAge = bridge.lastPong ? Math.round((Date.now() - bridge.lastPong) / 1000) : '?'
+      const lastSeenAge = bridge.lastSeen ? Math.round((Date.now() - bridge.lastSeen) / 1000) : '?'
+      console.log(`[BridgeWS] ping timeout user=${userId} lastPongAge=${lastPongAge}s lastSeenAge=${lastSeenAge}s readyState=${ws.readyState}`)
+      try { ws.close(4003, 'Ping timeout') } catch (e) {
+        console.error(`[BridgeWS] ping timeout close failed user=${userId} error=${e.message}`)
+      }
       clearInterval(bridgeEntry._pingInterval)
       return
     }
+    // Send both protocol-level ping and application-level ping
+    try { ws.ping() } catch {}
     try { ws.send(JSON.stringify({ type: 'ping', ts: Date.now() })) } catch {}
   }, 15000)
 
@@ -328,7 +356,11 @@ async function _initBridge(ws, userId) {
     try { msg = JSON.parse(data) } catch(e) { return }
 
     const bridge = bridges.get(userId)
-    if (bridge) bridge.lastSeen = Date.now()
+    if (bridge) {
+      bridge.lastSeen = Date.now()
+      bridge.lastMessageAt = Date.now()
+      bridge._lastMessageType = msg.type || '?'
+    }
 
     if (bridge && (!bridge._lastDbWrite || Date.now() - bridge._lastDbWrite > 60000)) {
       bridge._lastDbWrite = Date.now()

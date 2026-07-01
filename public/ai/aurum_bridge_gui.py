@@ -27,7 +27,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.1.1"
+APP_VERSION = "v2.1.2"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
@@ -1130,8 +1130,25 @@ class BridgeWorker(QThread):
 
     # ── Async core (websockets) ──────────────────────────────
 
+    @staticmethod
+    def _format_ws_error(e):
+        """Format WebSocket exception for logging — Chinese-friendly, no token."""
+        parts = []
+        parts.append(type(e).__name__)
+        msg = str(e) or '无详细信息'
+        parts.append(msg)
+        # Extract websockets-specific fields
+        for attr in ('status_code', 'status', 'headers', 'response', 'code', 'reason'):
+            val = getattr(e, attr, None)
+            if val is not None:
+                parts.append(f'{attr}={val}')
+        args = getattr(e, 'args', None)
+        if args and len(args) > 1:
+            parts.append(f'args={args}')
+        return '; '.join(parts)
+
     async def _run_async(self):
-        """Main async loop: connect → session → reconnect with circuit breaker."""
+        """Main async loop: connect → session → reconnect with progressive backoff."""
         import websockets
 
         server = self.server_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
@@ -1139,21 +1156,33 @@ class BridgeWorker(QThread):
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
         ssl_ctx = _get_ssl_context() if ws_url.startswith('wss://') else None
-        MAX_RETRY = 300; RETRY_INT = 5
         MAX_RAPID_FAILS = 5
         rapid_fails = 0
+        retry_count = 0
+
+        def get_backoff_delay():
+            """Progressive backoff: 5s → 10s → 30s, max 60s."""
+            if retry_count <= 12:  # first ~1 minute
+                return 5
+            elif retry_count <= 60:  # 1-5 minutes
+                return 10
+            else:  # 5+ minutes
+                return 30
 
         while self.running:
             retry_start = time.time()
             ws = None
+            retry_count = 0
 
             # ── Connection retry loop ──
             while self.running:
                 elapsed = time.time() - retry_start
-                if elapsed >= MAX_RETRY:
-                    self.log_signal.emit("连接失败：已重试5分钟，停止")
-                    self.status_signal.emit("连接失败", "#ef4444", "")
-                    return
+                retry_count += 1
+                delay = get_backoff_delay()
+
+                if elapsed >= 300 and retry_count % 6 == 0:
+                    self.log_signal.emit(f"已连续重连 {int(elapsed/60)} 分钟，仍在继续尝试。请检查服务器或反向代理状态。")
+
                 try:
                     ws = await asyncio.wait_for(
                         websockets.connect(ws_url, ssl=ssl_ctx, additional_headers={"Origin": "http://localhost"},
@@ -1167,64 +1196,62 @@ class BridgeWorker(QThread):
                     err_str = str(e)
                     if '4003' in err_str:
                         if '会员' in err_str or '过期' in err_str or 'Pro' in err_str:
-                            self.log_signal.emit(f"❌ {err_str}")
+                            self.log_signal.emit(f"连接失败: {err_str}")
                             self.status_signal.emit("会员等级不足", "#ef4444", "")
                             return
                     elif '会员' in err_str or 'Pro' in err_str:
-                        self.log_signal.emit(f"❌ {err_str}")
+                        self.log_signal.emit(f"连接失败: {err_str}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
                         return
-                    rc = int(elapsed // RETRY_INT) + 1
-                    self.log_signal.emit(f"连接失败 (第{rc}次): {e}，{RETRY_INT}秒后重试...")
-                    self.status_signal.emit(f"重连中... ({rc})", "#f59e0b", "")
-                    await asyncio.sleep(RETRY_INT)
+                    self.log_signal.emit(f"连接失败（第{retry_count}次）：{self._format_ws_error(e)}，{delay}秒后重试...")
+                    self.status_signal.emit(f"重连中...（第{retry_count}次）", "#f59e0b", "")
+                    await asyncio.sleep(delay)
 
             if not ws or not self.running:
                 break
 
-            # ── Session: run send + recv concurrently ──
+            # ── Session: run send + recv + heartbeat concurrently ──
             session_start = time.time()
             try:
                 async with ws:
                     await asyncio.gather(
                         self._async_send_loop(ws),
                         self._async_recv_loop(ws),
+                        self._async_heartbeat_loop(ws),
                     )
             except websockets.ConnectionClosed as e:
                 if e.code == 4003:
                     reason = e.reason or ''
                     if '会员' in reason or '过期' in reason or 'Pro' in reason:
-                        self.log_signal.emit(f"❌ 连接被拒绝: {reason}")
+                        self.log_signal.emit(f"连接被服务器拒绝: {reason}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
                         return
                     self.log_signal.emit(f"连接被服务器关闭: {reason}")
                 else:
                     self.log_signal.emit(f"WebSocket 连接已断开 (code={e.code})")
             except (ssl.SSLError, OSError, ConnectionResetError) as e:
-                self.log_signal.emit(f"连接错误: {e}")
+                self.log_signal.emit(f"连接错误: {self._format_ws_error(e)}")
             except Exception as e:
-                self.log_signal.emit(f"会话异常: {e}")
+                self.log_signal.emit(f"会话异常: {self._format_ws_error(e)}")
 
             self._ws = None
             if not self.running:
                 break
 
-            # ── Circuit breaker ──
+            # ── Circuit breaker: extend backoff, never stop ──
             session_duration = time.time() - session_start
             if session_duration < 10:
                 rapid_fails += 1
                 self.log_signal.emit(f"快速断开 (第{rapid_fails}/{MAX_RAPID_FAILS}次，持续{session_duration:.0f}秒)")
+                if rapid_fails >= MAX_RAPID_FAILS:
+                    self.log_signal.emit(f"连续多次快速断开，已延长重连间隔，仍会继续自动重连。")
             else:
                 rapid_fails = 0
 
-            if rapid_fails >= MAX_RAPID_FAILS:
-                self.log_signal.emit(f"❌ 连续{MAX_RAPID_FAILS}次快速断开，停止重连。请检查网络或重启软件")
-                self.status_signal.emit("重连已停止", "#ef4444", "")
-                return
-
-            self.log_signal.emit(f"连接断开，{RETRY_INT}秒后自动重连...")
+            retry_delay = get_backoff_delay()
+            self.log_signal.emit(f"连接断开，{retry_delay}秒后自动重连...")
             self.status_signal.emit("重连中...", "#f59e0b", "")
-            await asyncio.sleep(RETRY_INT)
+            await asyncio.sleep(retry_delay)
 
     async def _async_send_loop(self, ws):
         """Send MT5 data every 1s with deduplication, force send every 5s for market status detection."""
@@ -1358,6 +1385,19 @@ class BridgeWorker(QThread):
                 except Exception:
                     break
                 self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
+
+    async def _async_heartbeat_loop(self, ws):
+        """Send client heartbeat every 15s to keep connection alive."""
+        import websockets
+        while self.running:
+            await asyncio.sleep(15)
+            try:
+                hb = {"type": "hb", "ts": int(time.time() * 1000), "client_version": APP_VERSION}
+                await ws.send(json.dumps(hb))
+            except (websockets.ConnectionClosed, OSError):
+                break
+            except Exception:
+                break
 
     def stop(self):
         self.running = False

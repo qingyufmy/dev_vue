@@ -27,14 +27,35 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
 
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '2.1.1',
+    version: '2.1.2',
     build_date: '2026-07-01',
-    changelog: 'v2.1.1: 修复Ping超时断连不重连 + 批量平仓空指针崩溃 + 连接初始化竞态保护',
-    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.1.1.exe',
+    changelog: 'v2.1.2: 桥接重连优化(永不停止)+日志增强+客户端心跳+全中文诊断',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.1.2.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
     file_size: 0,
     md5: ''
   })
+})
+
+router.get('/bridge/ws-health', authMiddleware, (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' })
+  const bridges = getAllBridges()
+  const now = Date.now()
+  const result = {
+    ok: true,
+    serverTime: new Date().toISOString(),
+    bridges: bridges.map(b => ({
+      userId: b.userId,
+      readyState: b.ws?.readyState ?? -1,
+      connectedSeconds: b._connectTime ? Math.round((now - b._connectTime) / 1000) : 0,
+      lastSeenAgeSeconds: b.lastSeen ? Math.round((now - b.lastSeen) / 1000) : -1,
+      lastPongAgeSeconds: b.lastPong ? Math.round((now - b.lastPong) / 1000) : -1,
+      lastMessageType: b._lastMessageType || '?',
+      tradeEnabled: !!b.tradeEnabled,
+      autoReasoningEnabled: !!b.autoReasoningEnabled,
+    }))
+  }
+  res.json(result)
 })
 
 export { initAutoSchedulers }

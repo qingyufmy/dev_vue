@@ -97,8 +97,27 @@ location /aurum-api/bridge/ws {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_read_timeout 86400s;
     proxy_send_timeout 86400s;
+    proxy_buffering off;
 }
 ```
+
+**WebSocket 排查命令**：
+
+```bash
+# 查看 Node 应用日志
+pm2 logs --lines 300
+
+# 查看 Nginx 错误日志（路径根据站点配置调整）
+tail -n 300 /www/wwwlogs/站点.error.log
+
+# 查看 Nginx 访问日志
+tail -n 300 /www/wwwlogs/站点.log
+
+# 检查 WebSocket 健康状态（需管理员权限）
+curl -H "Authorization: Bearer <admin_token>" http://localhost:3000/api/bridge/ws-health
+```
+
+> 注意：普通 HTTPS/API 正常不代表 WebSocket upgrade 正常。如果桥接客户端持续重连失败，优先检查 Nginx 的 `proxy_read_timeout` 和 `proxy_buffering off` 是否正确配置。
 
 ## 七、防火墙放行
 

@@ -340,6 +340,10 @@ app.get('*', (req, res) => {
 // Start MT5 Bridge (use venv Python with MetaTrader5 package)
 // Init DB and start
 const server = http.createServer(app)
+// HTTP timeout settings — prevent reverse proxy / long-poll issues with WebSocket upgrade
+server.keepAliveTimeout = 65000
+server.headersTimeout = 66000
+server.requestTimeout = 0 // No timeout for HTTP requests (WebSocket upgrade needs time)
 initBridgeWS(server)
 
 ;(async () => {
