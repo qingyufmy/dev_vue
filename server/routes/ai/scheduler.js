@@ -7,7 +7,7 @@ import { maybeAiSignal } from './llm.js'
 import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
-import { getRedis } from '../../redis.js'
+import { getRedis, isRedisAvailable } from '../../redis.js'
 import crypto from 'crypto'
 
 // === Unified Scheduler State ===
@@ -221,27 +221,36 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st._waitCount = 0
     st.lastError = null
 
-    // Redis lock + cooldown
+    // Redis lock + cooldown — fail closed when Redis unavailable
     const redis = getRedis()
-    if (redis) {
-      if (st.inFlight) {
-        autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
-        return
+    if (!redis || !isRedisAvailable()) {
+      st._waitCount = (st._waitCount || 0) + 1
+      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
+        console.log(`[UnifiedScheduler] ${key}: Redis unavailable, pausing (retry#${st._waitCount})`)
       }
-      const lockToken = await acquireLock(key)
-      if (!lockToken) {
-        autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
-        return
-      }
-      const cooldownSet = await setCooldown(key, st.intervalMinutes * 60)
-      if (!cooldownSet) {
-        await releaseLock(key, lockToken)
-        autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
-        return
-      }
-      st.inFlight = true
-      st._lockToken = lockToken
+      st.lastError = 'redis_unavailable'
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
     }
+    if (st.inFlight) {
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
+    }
+    const lockToken = await acquireLock(key)
+    if (!lockToken) {
+      st.lastError = 'redis_lock_failed'
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
+    }
+    const cooldownSet = await setCooldown(key, st.intervalMinutes * 60)
+    if (!cooldownSet) {
+      st.lastError = 'redis_cooldown_active'
+      await releaseLock(key, lockToken)
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
+    }
+    st.inFlight = true
+    st._lockToken = lockToken
 
     try {
       await runUnifiedAutoCycle(promptTypeId, symbol, 'M5')
@@ -351,6 +360,18 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
       marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt
     ])
     const signalId = result.insertId
+    signal.id = signalId
+    signal.symbol = symbol
+    signal.timeframe = timeframe.toUpperCase()
+    signal.created_at = createdAt
+    signal.market_data = market
+    signal.is_executed = false
+    signal.config_id = 0
+    signal.session_id = 'auto_shared'
+    signal.source = 'auto_shared'
+    signal.prompt_type_id = promptTypeId
+    signal.ai_model = config.model_name || 'deepseek-chat'
+    attachSignalTiming(signal)
     l(`shared signal #${signalId} saved`)
 
     // 5. Batch write deliveries + notify subscribers

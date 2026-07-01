@@ -682,18 +682,42 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'signals_latest_id': {
-        // Lightweight check: return only latest signal's ID and minimal fields
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         const queryUserId = hasOwnBridge ? userId : (adminUserId || userId)
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
         const sessionParam = params.session_id ? [params.session_id] : []
-        const row = await queryOne(`SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`, [queryUserId, ...sessionParam])
+
+        // Old user signals
+        const oldRow = await queryOne(
+          `SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`,
+          [queryUserId, ...sessionParam]
+        )
+
+        // Shared delivery signals
+        const delivRow = await queryOne(
+          `SELECT s.id, s.signal_type, d.is_executed, s.created_at, s.ttl_seconds, s.timeframe, 'auto_shared' as signal_source, d.execution_status
+           FROM auto_signal_deliveries d
+           JOIN ai_signals s ON s.id = d.signal_id
+           WHERE d.user_id = ? ORDER BY s.id DESC LIMIT 1`,
+          [queryUserId]
+        )
+
+        // Pick the newest of both
+        let row = null
+        if (oldRow && delivRow) {
+          row = (oldRow.id >= delivRow.id) ? oldRow : delivRow
+        } else {
+          row = oldRow || delivRow
+        }
+
         if (row) {
           const now = Date.now()
           const createdAt = new Date(row.created_at).getTime()
           const ttl = (row.ttl_seconds || 3600) * 1000
           row.is_stale = (now - createdAt) > ttl
           row.age_seconds = Math.floor((now - createdAt) / 1000)
+          delete row.signal_source
+          if (row.execution_status !== undefined) delete row.execution_status
         }
         result = { status: 'success', signal: row || null }
         break
@@ -749,84 +773,64 @@ async function handleBrowserCommand(ws, userId, msg) {
         const offset = Number(params.offset) || 0
         const limit = Math.min(Number(params.limit) || 6, 100)
 
-        // Build filter conditions for old signals
-        const filterClauses = ['user_id = ?']
-        const filterParams = [userId]
+        // Build shared WHERE conditions for both queries
+        const sharedConditions = []
+        const sharedParams = []
         if (params.direction) {
           const types = { buy: 'buy,strong_buy', sell: 'sell,strong_sell', hold: 'hold' }
           const dirTypes = types[params.direction] || params.direction
-          filterClauses.push(`signal_type IN (${dirTypes.split(',').map(() => '?').join(',')})`)
-          filterParams.push(...dirTypes.split(','))
+          sharedConditions.push(`signal_type IN (${dirTypes.split(',').map(() => '?').join(',')})`)
+          sharedParams.push(...dirTypes.split(','))
         }
         if (params.timeframe) {
-          filterClauses.push('timeframe = ?')
-          filterParams.push(params.timeframe)
+          sharedConditions.push('timeframe = ?')
+          sharedParams.push(params.timeframe)
         }
         if (params.direction === 'close') {
-          filterClauses.push('session_id = ?')
-          filterParams.push('smart_close')
-        } else if (params.session_id) {
-          filterClauses.push('session_id = ?')
-          filterParams.push(params.session_id)
+          sharedConditions.push('session_id = ?')
+          sharedParams.push('smart_close')
         }
-        filterClauses.push("(source = 'manual' OR source IS NULL)")
-        const where = filterClauses.join(' AND ')
-        const oldRows = await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
+        const sharedWhere = sharedConditions.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''
 
-        // New shared signals via deliveries
-        const delivClauses = ['d.user_id = ?']
-        const delivParams = [userId]
-        if (params.direction) {
-          const types = { buy: 'buy,strong_buy', sell: 'sell,strong_sell', hold: 'hold' }
-          const dirTypes = types[params.direction] || params.direction
-          delivClauses.push(`s.signal_type IN (${dirTypes.split(',').map(() => '?').join(',')})`)
-          delivParams.push(...dirTypes.split(','))
-        }
-        if (params.timeframe) {
-          delivClauses.push('s.timeframe = ?')
-          delivParams.push(params.timeframe)
-        }
-        if (params.direction === 'close') {
-          delivClauses.push('s.session_id = ?')
-          delivParams.push('smart_close')
-        }
-        const delivWhere = delivClauses.join(' AND ')
-        const newRows = await queryAll(
-          `SELECT s.*, d.id as delivery_id, d.execution_status, d.trade_ticket as delivery_trade_ticket,
-                  d.execution_result as delivery_execution_result, d.is_executed as delivery_is_executed,
-                  d.executed_at as delivery_executed_at, d.prompt_type_id as delivery_prompt_type_id
-           FROM auto_signal_deliveries d
-           JOIN ai_signals s ON s.id = d.signal_id
-           WHERE ${delivWhere}
-           ORDER BY s.id DESC LIMIT ? OFFSET ?`,
-          [...delivParams, limit + 1, offset]
-        )
+        // Old signals subquery
+        const oldSessionFilter = (params.direction !== 'close' && params.session_id) ? ' AND session_id = ?' : ''
+        const oldSessionParam = (params.direction !== 'close' && params.session_id) ? [params.session_id] : []
+        const oldSubquery = `(SELECT s.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.market_data_json, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, s.created_at, NULL as delivery_id, NULL as execution_status FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
+        const oldParams = [userId, ...oldSessionParam, ...sharedParams]
 
-        // Merge and sort
-        const allRows = [...oldRows.map(r => ({ ...r, _source: 'old' })), ...newRows.map(r => {
-          const item = { ...r, _source: 'auto_shared' }
-          item.is_executed = !!r.delivery_is_executed
-          item.executed_at = r.delivery_executed_at
-          item.trade_ticket = r.delivery_trade_ticket
-          item.execution_result = r.delivery_execution_result
-          item.execution_status = r.execution_status
-          item.delivery_id = r.delivery_id
-          item.prompt_type_id = r.delivery_prompt_type_id
-          item.source = 'auto_shared'
-          return item
-        })]
-        allRows.sort((a, b) => (b.id || 0) - (a.id || 0))
+        // Shared signals subquery
+        const delivSubquery = `(SELECT s.id, s.user_id, s.config_id, s.prompt_type_id, d.prompt_type_id as delivery_prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.market_data_json, s.ai_model, s.ttl_seconds, d.is_executed as delivery_is_executed, d.executed_at as delivery_executed_at, d.trade_ticket as delivery_trade_ticket, d.execution_result as delivery_execution_result, d.id as delivery_id, d.execution_status FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
+        const delivParams = [userId, ...sharedParams]
+
+        // Count total
+        const countSql = `SELECT COUNT(*) as total FROM (${oldSubquery} UNION ALL ${delivSubquery}) t`
+        const countRow = await queryOne(countSql, [...oldParams, ...delivParams])
+        const totalCount = countRow?.total || 0
+
+        // Fetch page
+        const dataSql = `SELECT * FROM (${oldSubquery} UNION ALL ${delivSubquery}) t ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
+        const allRows = await queryAll(dataSql, [...oldParams, ...delivParams, limit + 1, offset])
         const hasMore = allRows.length > limit
         const sliced = allRows.slice(0, limit)
-        const totalCount = sliced.length // approximate for combined
+
         const signals = sliced.map(row => {
           const item = { ...row }
+          // Shared signal overrides
+          if (item.delivery_id) {
+            item.is_executed = !!item.delivery_is_executed
+            item.executed_at = item.delivery_executed_at
+            item.trade_ticket = item.delivery_trade_ticket
+            item.execution_result = item.delivery_execution_result
+            item.prompt_type_id = item.delivery_prompt_type_id
+            item.source = 'auto_shared'
+          }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
           delete item.market_data_json
-          delete item.delivery_trade_ticket
-          delete item.delivery_execution_result
+          delete item.delivery_id
           delete item.delivery_is_executed
           delete item.delivery_executed_at
+          delete item.delivery_trade_ticket
+          delete item.delivery_execution_result
           delete item.delivery_prompt_type_id
           item.is_executed = !!item.is_executed
           ai.attachSignalTiming(item)
@@ -931,7 +935,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const bridgeAuto = bridges.get(userId)
         if (bridgeAuto) bridgeAuto.autoReasoningEnabled = newEnabled
         // Reconcile schedulers
-        ai.reconcileAutoSchedulers()
+        await ai.reconcileAutoSchedulers()
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
         break
       }
@@ -1004,7 +1008,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'save_user_auto_config': {
         try {
           await ai.saveUserAutoConfig(userId, params)
-          ai.reconcileAutoSchedulers()
+          await ai.reconcileAutoSchedulers()
           result = { status: 'success', message: '配置已保存' }
         } catch (e) {
           result = { status: 'error', message: e.message }
@@ -1031,7 +1035,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           enable_auto_trade: params.enable_auto_trade ?? existing?.enable_auto_trade ?? 0,
         }
         await ai.saveGlobalAutoConfig(newCfg)
-        ai.reconcileAutoSchedulers()
+        await ai.reconcileAutoSchedulers()
         result = { status: 'success', message: '全局配置已保存' }
         break
       }
@@ -1040,7 +1044,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (user3?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         try {
           const saved = await ai.saveAutoPromptType(userId, params)
-          ai.reconcileAutoSchedulers()
+          await ai.reconcileAutoSchedulers()
           result = { status: 'success', prompt_type: saved }
         } catch (e) {
           result = { status: 'error', message: e.message }
@@ -1052,7 +1056,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (user4?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         if (!params.id) { result = { status: 'error', message: 'id required' }; break }
         await ai.disableAutoPromptType(userId, params.id)
-        ai.reconcileAutoSchedulers()
+        await ai.reconcileAutoSchedulers()
         result = { status: 'success', message: '策略已禁用' }
         break
       }
@@ -1461,12 +1465,40 @@ async function handleBrowserCommand(ws, userId, msg) {
         const [targetSettings, targetScheduler, targetSignals, bridgeStatus] = await Promise.all([
           queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [tid]),
           queryOne('SELECT enabled, symbols, last_run_at FROM auto_scheduler WHERE user_id = ?', [tid]),
-          queryOne(`SELECT
-            (SELECT COUNT(*) FROM ai_signals WHERE user_id = ?) AS total_signals,
-            (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND DATE(created_at) = CURDATE()) AS today_signals,
-            (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND is_executed = 1) AS executed_signals,
-            (SELECT signal_type FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1) AS last_signal_type,
-            (SELECT created_at FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1) AS last_signal_at`, [tid, tid, tid, tid, tid]),
+          (async () => {
+            const oldStats = await queryOne(`SELECT
+              (SELECT COUNT(*) FROM ai_signals WHERE user_id = ?) AS old_total,
+              (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND DATE(created_at) = CURDATE()) AS old_today,
+              (SELECT COUNT(*) FROM ai_signals WHERE user_id = ? AND is_executed = 1) AS old_executed`, [tid, tid, tid])
+            const delivStats = await queryOne(`SELECT
+              COUNT(*) AS deliv_total,
+              SUM(CASE WHEN DATE(d.created_at) = CURDATE() THEN 1 ELSE 0 END) AS deliv_today,
+              SUM(CASE WHEN d.is_executed = 1 THEN 1 ELSE 0 END) AS deliv_executed
+              FROM auto_signal_deliveries d WHERE d.user_id = ?`, [tid])
+            const lastSignal = await queryOne(
+              `SELECT id, signal_type, created_at FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1`, [tid])
+            const lastDelivery = await queryOne(
+              `SELECT s.id, s.signal_type, s.created_at FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ? ORDER BY s.id DESC LIMIT 1`, [tid])
+            let lastSignalType = null, lastSignalAt = null
+            if (lastSignal && lastDelivery) {
+              if (lastSignal.id >= lastDelivery.id) {
+                lastSignalType = lastSignal.signal_type; lastSignalAt = lastSignal.created_at
+              } else {
+                lastSignalType = lastDelivery.signal_type; lastSignalAt = lastDelivery.created_at
+              }
+            } else if (lastSignal) {
+              lastSignalType = lastSignal.signal_type; lastSignalAt = lastSignal.created_at
+            } else if (lastDelivery) {
+              lastSignalType = lastDelivery.signal_type; lastSignalAt = lastDelivery.created_at
+            }
+            return {
+              total_signals: (oldStats?.old_total || 0) + (delivStats?.deliv_total || 0),
+              today_signals: (oldStats?.old_today || 0) + (delivStats?.deliv_today || 0),
+              executed_signals: (oldStats?.old_executed || 0) + (delivStats?.deliv_executed || 0),
+              last_signal_type: lastSignalType,
+              last_signal_at: lastSignalAt,
+            }
+          })(),
           (async () => {
             const bridge = bridges.get(tid)
             const connected = !!(bridge && bridge.ws?.readyState === 1)

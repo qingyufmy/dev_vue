@@ -39,56 +39,56 @@ const migrations = [
     id: '003_add_verify_token',
     up: async () => {
       try {
-        const [cols] = await queryAll("SHOW COLUMNS FROM verification_codes LIKE 'verify_token'")
-        if (!cols.length) {
+        const cols = await queryAll("SHOW COLUMNS FROM verification_codes LIKE 'verify_token'")
+        if (!cols || !cols.length) {
           await queryRun('ALTER TABLE verification_codes ADD COLUMN verify_token VARCHAR(36) DEFAULT NULL AFTER used')
         }
-      } catch {}
+      } catch (e) { if (!e.message?.includes('Duplicate')) console.error('[Migrations] 003 error:', e.message) }
     }
   },
   {
     id: '004_add_global_auto_config_enable_trade',
     up: async () => {
       try {
-        const [cols] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_auto_config' AND COLUMN_NAME = 'enable_auto_trade'")
-        if (!cols.length) {
+        const cols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_auto_config' AND COLUMN_NAME = 'enable_auto_trade'")
+        if (!cols || !cols.length) {
           await queryRun('ALTER TABLE global_auto_config ADD COLUMN enable_auto_trade TINYINT NOT NULL DEFAULT 0 AFTER selected_take_profit')
         }
-      } catch {}
+      } catch (e) { if (!e.message?.includes('Duplicate')) console.error('[Migrations] 004 error:', e.message) }
     }
   },
   {
     id: '005_add_ai_configs_override_fields',
     up: async () => {
       try {
-        const [oc] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_config_override'")
-        if (!oc.length) {
+        const oc = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_config_override'")
+        if (!oc || !oc.length) {
           await queryRun('ALTER TABLE ai_configs ADD COLUMN auto_config_override TINYINT NOT NULL DEFAULT 0 AFTER model_sharing_enabled')
         }
-        const [sym] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_symbols'")
-        if (!sym.length) {
+        const sym = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_symbols'")
+        if (!sym || !sym.length) {
           await queryRun('ALTER TABLE ai_configs ADD COLUMN auto_symbols VARCHAR(100) DEFAULT NULL AFTER auto_config_override')
         }
-        const [iv] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_interval_minutes'")
-        if (!iv.length) {
+        const iv = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_configs' AND COLUMN_NAME = 'auto_interval_minutes'")
+        if (!iv || !iv.length) {
           await queryRun('ALTER TABLE ai_configs ADD COLUMN auto_interval_minutes INT DEFAULT NULL AFTER auto_symbols')
         }
-      } catch {}
+      } catch (e) { if (!e.message?.includes('Duplicate')) console.error('[Migrations] 005 error:', e.message) }
     }
   },
   {
     id: '006_add_close_config_engine_fields',
     up: async () => {
       try {
-        const [cols] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'close_config' AND COLUMN_NAME = 'api_provider'")
-        if (!cols.length) {
+        const cols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'close_config' AND COLUMN_NAME = 'api_provider'")
+        if (!cols || !cols.length) {
           await queryRun("ALTER TABLE close_config ADD COLUMN api_provider VARCHAR(50) DEFAULT 'deepseek' AFTER model_name")
           await queryRun("ALTER TABLE close_config ADD COLUMN api_base_url VARCHAR(255) DEFAULT 'https://api.deepseek.com' AFTER api_provider")
           await queryRun('ALTER TABLE close_config ADD COLUMN api_key_encrypted VARCHAR(500) DEFAULT NULL AFTER api_base_url')
           await queryRun('ALTER TABLE close_config ADD COLUMN temperature DOUBLE DEFAULT 0.3 AFTER api_key_encrypted')
           await queryRun('ALTER TABLE close_config ADD COLUMN max_tokens INT DEFAULT 1500 AFTER temperature')
         }
-      } catch {}
+      } catch (e) { if (!e.message?.includes('Duplicate')) console.error('[Migrations] 006 error:', e.message) }
     }
   },
   {
@@ -112,20 +112,20 @@ const migrations = [
     up: async () => {
       try {
         await queryRun("UPDATE courses SET cover = REPLACE(cover, 'http://', 'https://') WHERE cover LIKE 'http://i%.hdslb.com/%'")
-      } catch {}
+      } catch (e) { if (!e.message?.includes('Duplicate')) console.error('[Migrations] 009 error:', e.message) }
     }
   },
   {
     id: '010_add_token_count_to_signals',
     up: async () => {
       try {
-        const [cols] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = 'token_count'")
-        if (!cols.length) {
+        const cols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = 'token_count'")
+        if (!cols || !cols.length) {
           await queryRun('ALTER TABLE ai_signals ADD COLUMN token_count INT DEFAULT 0 AFTER market_data_json')
           // 回填历史数据
           await queryRun('UPDATE ai_signals SET token_count = ROUND((LENGTH(analysis) + LENGTH(reasoning) + LENGTH(market_data_json)) / 4) WHERE token_count = 0')
         }
-      } catch {}
+      } catch (e) { if (!e.message?.includes('Duplicate')) console.error('[Migrations] 010 error:', e.message) }
     }
   },
   {
@@ -140,9 +140,13 @@ const migrations = [
       ]
       for (const col of cols) {
         try {
-          const [existing] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_scheduler' AND COLUMN_NAME = ?", [col.name])
-          if (!existing.length) await queryRun(`ALTER TABLE auto_scheduler ${col.def}`)
-        } catch {}
+          const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_scheduler' AND COLUMN_NAME = ?", [col.name])
+          if (!existing || existing.length === 0) await queryRun(`ALTER TABLE auto_scheduler ${col.def}`)
+        } catch (e) {
+          if (!e.message?.includes('Duplicate column')) {
+            console.error(`[Migrations] 011 column ${col.name} failed:`, e.message)
+          }
+        }
       }
     }
   },
@@ -155,9 +159,13 @@ const migrations = [
       ]
       for (const col of cols) {
         try {
-          const [existing] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = ?", [col.name])
-          if (!existing.length) await queryRun(`ALTER TABLE ai_signals ${col.def}`)
-        } catch {}
+          const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = ?", [col.name])
+          if (!existing || existing.length === 0) await queryRun(`ALTER TABLE ai_signals ${col.def}`)
+        } catch (e) {
+          if (!e.message?.includes('Duplicate column')) {
+            console.error(`[Migrations] 012 column ${col.name} failed:`, e.message)
+          }
+        }
       }
     }
   },
@@ -186,8 +194,8 @@ const migrations = [
     up: async () => {
       try {
         // 1. 如果 auto_prompt_types 为空，从 global_auto_config 迁移默认策略
-        const [cnt] = await queryAll('SELECT COUNT(*) as c FROM auto_prompt_types')
-        if (cnt[0].c === 0) {
+        const cnt = await queryAll('SELECT COUNT(*) as c FROM auto_prompt_types')
+        if ((cnt[0]?.c || 0) === 0) {
           const globalCfg = await queryOne('SELECT * FROM global_auto_config WHERE id = 1')
           if (globalCfg) {
             let symbolsArr = ['XAUUSD']
@@ -206,8 +214,8 @@ const migrations = [
         }
 
         // 2. 旧 auto_scheduler.enabled=1 但 prompt_type_id 为空的用户，指向默认策略
-        const [defaultPt] = await queryAll('SELECT id FROM auto_prompt_types LIMIT 1')
-        if (defaultPt.length) {
+        const defaultPt = await queryAll('SELECT id FROM auto_prompt_types LIMIT 1')
+        if (defaultPt && defaultPt.length) {
           const ptId = defaultPt[0].id
           await queryRun(
             'UPDATE auto_scheduler SET prompt_type_id = ? WHERE enabled = 1 AND prompt_type_id IS NULL',
@@ -222,7 +230,7 @@ const migrations = [
         }
 
         // 3. 迁移 ai_configs.auto_config_override 的风控字段到 auto_scheduler
-        const [overrides] = await queryAll(
+        const overrides = await queryAll(
           "SELECT user_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade FROM ai_configs WHERE auto_config_override = 1 AND is_active = 1"
         )
         for (const cfg of overrides) {
@@ -233,7 +241,7 @@ const migrations = [
           )
         }
       } catch (e) {
-        console.error('[Migrations] 014_migrate_old_auto_config warning:', e.message)
+        console.error('[Migrations] 014_migrate_old_auto_config error:', e.message)
       }
     }
   }

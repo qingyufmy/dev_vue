@@ -293,53 +293,56 @@ export async function disableAutoPromptType(adminUserId, promptTypeId) {
 
 export async function getUserAutoConfig(userId) {
   const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
-  const running = isAutoSchedulerKeyRunningForUser(userId)
   let pausedReason = ''
-  if (scheduler?.enabled && !running) {
+  if (scheduler?.enabled) {
     if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
     else {
       const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
       if (!pt || !pt.is_active) pausedReason = 'prompt_disabled'
     }
   }
-  return { scheduler, running, pausedReason }
-}
-
-function isAutoSchedulerKeyRunningForUser(userId) {
-  // This will be called from scheduler.js via a callback pattern; for now check via import
-  try {
-    const { autoSchedulerState } = require ? {} : {}
-  } catch {}
-  return false
+  return { scheduler, running: false, pausedReason }
 }
 
 export async function saveUserAutoConfig(userId, payload) {
   const now = beijingNow()
-  const { prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade } = payload
 
-  if (prompt_type_id !== undefined) {
-    const pt = await getAutoPromptTypeById(prompt_type_id)
+  if (payload.prompt_type_id !== undefined) {
+    const pt = await getAutoPromptTypeById(payload.prompt_type_id)
     if (!pt || !pt.is_active) throw new Error('策略不存在或已禁用')
   }
 
-  const tp = Number(selected_take_profit)
-  if (tp && ![1, 2, 3].includes(tp)) throw new Error('止盈档位只能是 1、2 或 3')
+  if (payload.selected_take_profit !== undefined) {
+    const tp = Number(payload.selected_take_profit)
+    if (![1, 2, 3].includes(tp)) throw new Error('止盈档位只能是 1、2 或 3')
+  }
 
-  const mps = parseFloat(max_position_size)
-  if (mps !== undefined && (isNaN(mps) || mps <= 0)) throw new Error('最大手数必须大于 0')
+  if (payload.max_position_size !== undefined) {
+    const mps = parseFloat(payload.max_position_size)
+    if (isNaN(mps) || mps <= 0) throw new Error('最大手数必须大于 0')
+  }
+
+  const existing = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  const next = {
+    prompt_type_id: payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null),
+    risk_level: payload.risk_level !== undefined ? payload.risk_level : (existing?.risk_level ?? 'medium'),
+    max_position_size: payload.max_position_size !== undefined ? Number(payload.max_position_size) : (existing?.max_position_size ?? 0.05),
+    selected_take_profit: payload.selected_take_profit !== undefined ? Number(payload.selected_take_profit) : (existing?.selected_take_profit ?? 2),
+    enable_auto_trade: payload.enable_auto_trade !== undefined ? (payload.enable_auto_trade ? 1 : 0) : (existing?.enable_auto_trade ?? 0),
+  }
 
   await queryRun(
     `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, created_at, updated_at)
      VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
-       prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
-       risk_level = COALESCE(VALUES(risk_level), risk_level),
-       max_position_size = COALESCE(VALUES(max_position_size), max_position_size),
-       selected_take_profit = COALESCE(VALUES(selected_take_profit), selected_take_profit),
-       enable_auto_trade = COALESCE(VALUES(enable_auto_trade), enable_auto_trade),
+       prompt_type_id = VALUES(prompt_type_id),
+       risk_level = VALUES(risk_level),
+       max_position_size = VALUES(max_position_size),
+       selected_take_profit = VALUES(selected_take_profit),
+       enable_auto_trade = VALUES(enable_auto_trade),
        updated_at = VALUES(updated_at)`,
-    [userId, prompt_type_id || null, risk_level || 'medium', mps || 0.05, tp || 2,
-     enable_auto_trade ? 1 : 0, now, now]
+    [userId, next.prompt_type_id, next.risk_level, next.max_position_size, next.selected_take_profit,
+     next.enable_auto_trade, now, now]
   )
 }
 
