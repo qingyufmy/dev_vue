@@ -27,7 +27,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.1.0"
+APP_VERSION = "v2.1.1"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
@@ -132,7 +132,6 @@ def _cleanup_old_logs():
 def log_to_file(level, message):
     """写入日志文件"""
     try:
-        _cleanup_old_logs()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{level}] {message}\n"
         with open(_get_log_file(), "a", encoding="utf-8") as f:
@@ -151,6 +150,8 @@ def log_error(message):
 def log_warn(message):
     print(f"[Bridge] WARN: {message}")
     log_to_file("WARN", message)
+
+_cleanup_old_logs()
 
 # ══════════════════════════════════════════════════════════
 #  HTTP helpers
@@ -576,7 +577,10 @@ class BridgeWorker(QThread):
                     for pos in positions:
                         ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
                         tick_c = self.mt5.symbol_info_tick(pos.symbol)
-                        price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
+                        if not tick_c:
+                            failed.append({"ticket": pos.ticket, "error": f"symbol_info_tick({pos.symbol}) returned None"})
+                            continue
+                        price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask
                         result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                             "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
                             "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
@@ -596,7 +600,10 @@ class BridgeWorker(QThread):
                 for pos in positions:
                     ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
                     tick_c = self.mt5.symbol_info_tick(pos.symbol)
-                    price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask if tick_c else None
+                    if not tick_c:
+                        failed.append({"ticket": pos.ticket, "error": f"symbol_info_tick({pos.symbol}) returned None"})
+                        continue
+                    price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask
                     result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
                         "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
                         "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
@@ -1158,7 +1165,12 @@ class BridgeWorker(QThread):
                     break
                 except Exception as e:
                     err_str = str(e)
-                    if '4003' in err_str or '会员' in err_str or 'Pro' in err_str:
+                    if '4003' in err_str:
+                        if '会员' in err_str or '过期' in err_str or 'Pro' in err_str:
+                            self.log_signal.emit(f"❌ {err_str}")
+                            self.status_signal.emit("会员等级不足", "#ef4444", "")
+                            return
+                    elif '会员' in err_str or 'Pro' in err_str:
                         self.log_signal.emit(f"❌ {err_str}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
                         return
@@ -1180,10 +1192,14 @@ class BridgeWorker(QThread):
                     )
             except websockets.ConnectionClosed as e:
                 if e.code == 4003:
-                    self.log_signal.emit(f"❌ 连接被拒绝: {e.reason}")
-                    self.status_signal.emit("会员等级不足", "#ef4444", "")
-                    return
-                self.log_signal.emit(f"WebSocket 连接已断开 (code={e.code})")
+                    reason = e.reason or ''
+                    if '会员' in reason or '过期' in reason or 'Pro' in reason:
+                        self.log_signal.emit(f"❌ 连接被拒绝: {reason}")
+                        self.status_signal.emit("会员等级不足", "#ef4444", "")
+                        return
+                    self.log_signal.emit(f"连接被服务器关闭: {reason}")
+                else:
+                    self.log_signal.emit(f"WebSocket 连接已断开 (code={e.code})")
             except (ssl.SSLError, OSError, ConnectionResetError) as e:
                 self.log_signal.emit(f"连接错误: {e}")
             except Exception as e:
@@ -1291,7 +1307,8 @@ class BridgeWorker(QThread):
             rates = self.mt5.copy_rates_from_pos(sym, self.mt5.TIMEFRAME_M1, 0, 1)
             if rates is not None and len(rates) > 0:
                 bar_vol = int(rates[0][5])
-        except: pass
+        except Exception:
+            pass
         return {"type": "data", "account": {
             "login": acc.login, "balance": round(acc.balance, 2),
             "equity": round(acc.equity, 2), "margin": round(acc.margin, 2),
@@ -1322,7 +1339,8 @@ class BridgeWorker(QThread):
             if msg.get("type") == "ping":
                 try:
                     await ws.send(json.dumps({"type": "pong", "ts": msg.get("ts", 0)}))
-                except: pass
+                except Exception:
+                    break
             elif msg.get("type") == "command":
                 action = msg.get("action")
                 cmd_id = msg.get("command_id")
@@ -1337,7 +1355,8 @@ class BridgeWorker(QThread):
                     resp = {"status": "error", "message": str(ce)}
                 try:
                     await ws.send(json.dumps({"type": "result", "command_id": cmd_id, "result": resp}))
-                except: pass
+                except Exception:
+                    break
                 self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
 
     def stop(self):
@@ -2446,7 +2465,8 @@ if __name__ == "__main__":
     # DPI awareness
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except: pass
+    except Exception:
+        pass
 
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_STYLE)

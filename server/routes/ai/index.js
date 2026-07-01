@@ -27,10 +27,10 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
 
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '2.1.0',
-    build_date: '2026-06-27',
-    changelog: 'v2.1.0: 自动执行风控检查 + bridge存活检查 + 休市检测优化',
-    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.1.0.exe',
+    version: '2.1.1',
+    build_date: '2026-07-01',
+    changelog: 'v2.1.1: 修复Ping超时断连不重连 + 批量平仓空指针崩溃 + 连接初始化竞态保护',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.1.1.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
     file_size: 0,
     md5: ''

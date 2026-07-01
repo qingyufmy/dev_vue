@@ -31,6 +31,7 @@ const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
 let adminUserId = null          // cached admin userId for fallback
 let adminUserIdLastCheck = 0
 const ADMIN_CACHE_TTL = 300000 // 5 minutes
+const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 污染状态)
 
 let cmdCounter = 0
 let wss = null
@@ -143,7 +144,7 @@ function handleBrowser(ws, url) {
 function handleBridge(ws, url) {
   const token = url.searchParams.get('token')
   let userId = null
-  try { userId = jwt.verify(token, JWT_SECRET).userId } catch {}
+  try { userId = jwt.verify(token, JWT_SECRET).userId } catch (e) { console.error('[BridgeWS] Bridge JWT verify failed:', e.message) }
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
   // 在计划检查完成之前先缓存消息，防止竞态条件（消息先于 _initBridge 到达）
@@ -176,12 +177,62 @@ function handleBridge(ws, url) {
 }
 
 async function _initBridge(ws, userId) {
+  // Generation counter — prevents stale async init from corrupting a newer bridge's state
+  const gen = (_bridgeInitGen.get(userId) || 0) + 1
+  _bridgeInitGen.set(userId, gen)
 
-  const existing = bridges.get(userId)
   // Close old bridge connection if still open (one bridge per account)
-  if (existing && existing.ws && existing.ws.readyState === 1) {
-    try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
+  const existing = bridges.get(userId)
+  if (existing) {
+    if (existing._pingInterval) clearInterval(existing._pingInterval)
+    if (existing.ws && existing.ws.readyState === 1) {
+      try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
+    }
   }
+
+  let initComplete = false
+
+  // Register close + error handlers BEFORE any await (so close during init is caught)
+  ws.on('close', async () => {
+    if (!initComplete) {
+      console.log(`[BridgeWS] Close during init for user ${userId}, basic cleanup`)
+      const current = bridges.get(userId)
+      if (current && current.ws === ws) {
+        if (current._pingInterval) clearInterval(current._pingInterval)
+        bridges.delete(userId)
+      }
+      sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
+      return
+    }
+    const bridge = bridges.get(userId)
+    if (bridge) {
+      if (bridge._pingInterval) clearInterval(bridge._pingInterval)
+    }
+    if (!bridge || bridge.ws !== ws) {
+      console.log(`[BridgeWS] Stale close for user ${userId}, new bridge already connected — skipping cleanup`)
+      return
+    }
+    bridges.delete(userId)
+    sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
+    for (const [cmdId, pending] of pendingCommands) {
+      if (pending.userId === userId) {
+        clearTimeout(pending.timer)
+        pendingCommands.delete(cmdId)
+        pending.resolve({ status: 'error', error: 'Bridge disconnected' })
+      }
+    }
+    try {
+      const ai = await import('./routes/ai/index.js')
+      ai.stopAutoScheduler(userId)
+      sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
+    } catch (e) {
+      console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
+    }
+  })
+
+  ws.on('error', (err) => {
+    console.error(`[BridgeWS] Bridge error for user ${userId}:`, err.message)
+  })
 
   // Read bridge settings from DB (trade_send / auto_reasoning state)
   let dbTradeEnabled = false
@@ -189,6 +240,7 @@ async function _initBridge(ws, userId) {
   let hasDbRow = false
   try {
     const row = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
+    if (_bridgeInitGen.get(userId) !== gen) { console.log(`[BridgeWS] Stale init for user ${userId}, aborting`); return }
     if (row) {
       hasDbRow = true
       dbTradeEnabled = !!row.trade_send_enabled
@@ -201,40 +253,44 @@ async function _initBridge(ws, userId) {
   // Non-admin: use DB value as-is (defaults to false when no row)
   const isAdmin = userId === (adminUserId || -1)
   const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
-  bridges.set(userId, { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1 }); ws._userId = userId
+  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1, _pingInterval: null }
+  bridges.set(userId, bridgeEntry)
+  ws._userId = userId
 
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled, trade_mode: -1 })
 
   // Restore auto-reasoning — check BOTH user_bridge_settings AND auto_scheduler table
-  // user_bridge_settings.auto_reasoning_enabled is set by toggle_auto/save_auto UI
-  // auto_scheduler.enabled is the actual scheduler state (may survive restart when settings row missing)
   const shouldRestoreAuto = dbAutoReasoningEnabled
   let schedulerEnabled = false
   try {
     const schedulerRow = await queryOne('SELECT enabled, symbols FROM auto_scheduler WHERE user_id = ?', [userId])
+    if (_bridgeInitGen.get(userId) !== gen) return
     schedulerEnabled = !!(schedulerRow?.enabled)
   } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
   console.log(`[BridgeWS] _initBridge user ${userId}: dbAutoReason=${dbAutoReasoningEnabled} schedulerEnabled=${schedulerEnabled} hasDbRow=${hasDbRow}`)
   if (shouldRestoreAuto || schedulerEnabled) {
     try {
       const ai = await import('./routes/ai/index.js')
+      if (_bridgeInitGen.get(userId) !== gen) return
       const cfg = await ai.getAutoConfig(null, userId)
+      if (_bridgeInitGen.get(userId) !== gen) return
       if (!cfg?.enabled) {
         const globalCfg = await ai.getGlobalAutoConfig()
         const symbols = globalCfg?.symbols || 'XAUUSD'
         await ai.upsertAutoConfig(null, userId, symbols, true)
       }
-      // Sync user_bridge_settings if scheduler is enabled but settings row is stale/missing
       if (schedulerEnabled && !shouldRestoreAuto) {
         try {
           await queryRun(
             'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, 1) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = NOW()',
             [userId]
           )
-          bridges.get(userId).autoReasoningEnabled = true
+          const current = bridges.get(userId)
+          if (current && current.ws === ws) current.autoReasoningEnabled = true
         } catch (e) { console.error('[BridgeWS] Failed to sync user_bridge_settings:', e.message) }
       }
+      if (_bridgeInitGen.get(userId) !== gen) return
       ai.stopAutoScheduler(userId)
       await ai.startAutoScheduler(userId)
       console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
@@ -245,12 +301,12 @@ async function _initBridge(ws, userId) {
   }
 
   // Server-side ping every 15s — if bridge doesn't reply within 30s, close
-  const pingInterval = setInterval(() => {
+  bridgeEntry._pingInterval = setInterval(() => {
     const bridge = bridges.get(userId)
-    if (!bridge || bridge.ws !== ws) { clearInterval(pingInterval); return }
+    if (!bridge || bridge.ws !== ws) { clearInterval(bridgeEntry._pingInterval); return }
     if (Date.now() - bridge.lastPong > 30000) {
       try { ws.close(4003, 'Ping timeout') } catch {}
-      clearInterval(pingInterval)
+      clearInterval(bridgeEntry._pingInterval)
       return
     }
     try { ws.send(JSON.stringify({ type: 'ping', ts: Date.now() })) } catch {}
@@ -268,14 +324,12 @@ async function _initBridge(ws, userId) {
     const bridge = bridges.get(userId)
     if (bridge) bridge.lastSeen = Date.now()
 
-    // Persist heartbeat to DB (throttled: max once per 60s per user)
     if (bridge && (!bridge._lastDbWrite || Date.now() - bridge._lastDbWrite > 60000)) {
       bridge._lastDbWrite = Date.now()
       queryRun('UPDATE users SET bridge_heartbeat = NOW() WHERE id = ?', [userId]).catch(() => {})
     }
 
     if (msg.type === 'data') {
-      // Real-time market status detection: compare consecutive tick times
       if (bridge && msg.quote && typeof msg.quote.time === 'string') {
         const now = Date.now()
         bridge.lastTickMs = now
@@ -283,14 +337,12 @@ async function _initBridge(ws, userId) {
         bridge.mt5TimeStr = msg.quote.time
         if (prev !== undefined) {
           if (msg.quote.time !== prev) {
-            // Time changed → trading
             if (bridge.lastTradeMode !== 4) {
               console.log(`[BridgeWS] User ${userId}: market OPENED (tick=${msg.quote.time}, was tradeMode=${bridge.lastTradeMode})`)
             }
             bridge.lastTradeMode = 4
             bridge._sameTickStart = null
           } else {
-            // Same tick time — mark closed after 5s
             if (!bridge._sameTickStart) bridge._sameTickStart = now
             if (now - bridge._sameTickStart > 5000) {
               if (bridge.lastTradeMode !== 0) {
@@ -301,30 +353,22 @@ async function _initBridge(ws, userId) {
           }
         }
       }
-      // Data relay — push to browsers, include server-detected trade_mode
       const tradeMode = bridge ? bridge.lastTradeMode : -1
       sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
 
-      // Detect position ticket changes → invalidate history cache
       if (bridge && msg.positions) {
         const curTickets = msg.positions.map(p => p.ticket).sort().join(',')
         const prevTickets = bridge._lastPositionTickets || ''
         if (curTickets !== prevTickets) {
           bridge._lastPositionTickets = curTickets
           if (prevTickets !== '') {
-            // Not the first snapshot — a real change happened
             cacheDel(`cache:history:${userId}`).catch(() => {})
           }
         }
       }
-
-      // Real-time data: no cache, direct broadcast to browsers only
-      // (account/positions/quote commands will fetch directly from bridge)
     } else if (msg.type === 'hb' || msg.type === 'pong') {
-      // Bridge heartbeat/pong — lastSeen already updated
       if (bridge) bridge.lastPong = Date.now()
     } else if (msg.type === 'result') {
-      // Command result from bridge
       if (msg.command_id) {
         const pending = pendingCommands.get(msg.command_id)
         if (pending) {
@@ -337,45 +381,7 @@ async function _initBridge(ws, userId) {
     }
   })
 
-  ws.on('close', async () => {
-    clearInterval(pingInterval)
-    // Guard: only clean up if this ws is still the current bridge for this user
-    // (prevents old bridge's close handler from wiping out a newly connected bridge)
-    const currentBridge = bridges.get(userId)
-    if (!currentBridge || currentBridge.ws !== ws) {
-      console.log(`[BridgeWS] Stale close for user ${userId}, new bridge already connected — skipping cleanup`)
-      return
-    }
-    bridges.delete(userId)
-    // Notify browsers
-    sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
-    // Reject pending commands
-    for (const [cmdId, pending] of pendingCommands) {
-      if (pending.userId === userId) {
-        clearTimeout(pending.timer)
-        pendingCommands.delete(cmdId)
-        pending.resolve({ status: 'error', error: 'Bridge disconnected' })
-      }
-    }
-    // Bridge disconnected — stop auto scheduler (no bridge to execute trades)
-    // CRITICAL: Do NOT touch auto_scheduler.enabled! The enabled flag reflects user's
-    // intent, not bridge connectivity. Resetting it on disconnect causes:
-    // 1. Server restart → all enabled flags get zeroed → initAutoSchedulers starts nothing
-    // 2. Bridge reconnect → UI shows ON (from user_bridge_settings) but DB says OFF
-    //    → _initBridge restores it, but potential race with async close handler
-    // Just stop the in-memory scheduler; enabled state stays intact in DB.
-    try {
-      const ai = await import('./routes/ai/index.js')
-      ai.stopAutoScheduler(userId)
-      sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
-    } catch (e) {
-      console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
-    }
-  })
-
-  ws.on('error', (err) => {
-    console.error(`[BridgeWS] Bridge error for user ${userId}:`, err.message)
-  })
+  initComplete = true
 }
 
 // ============ Helpers ============
