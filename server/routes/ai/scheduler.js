@@ -1,7 +1,7 @@
 // ai/scheduler.js — 统一自动调度 + 智能平仓
 
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
-import { getOwnBridgeTradeMode, isBridgeAlive, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
+import { getOwnBridgeTradeMode, getOwnBridgeMarketState, isBridgeAlive, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
@@ -137,13 +137,20 @@ export async function updateSchedulerRedisState(key, state) {
   if (!redis) return
 
   try {
-    await redis.hset(`${REDIS_SUBS_PREFIX}${key}:state`, {
+    const fields = {
       running: state.running ? '1' : '0',
       interval_minutes: String(state.intervalMinutes || 5),
       subscriber_count: String(state.subscriberCount || 0),
       last_error: state.lastError || '',
       last_run_at: state.lastRunAt || ''
-    })
+    }
+    if (state.marketState) {
+      fields.market_reason = state.marketState.reason || ''
+      fields.market_trade_mode = String(state.marketState.tradeMode ?? -1)
+      fields.market_tick_age_ms = String(state.marketState.tickAgeMs ?? '')
+      fields.market_mt5_time = state.marketState.mt5TimeStr || ''
+    }
+    await redis.hset(`${REDIS_SUBS_PREFIX}${key}:state`, fields)
   } catch {}
 }
 
@@ -380,14 +387,15 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
 
     // Check admin market status
-    const adminTradeMode = getOwnBridgeTradeMode(adminUserId)
-    if (adminTradeMode === 0 || adminTradeMode === -1) {
+    const marketState = getOwnBridgeMarketState(adminUserId)
+    if (!marketState.isOpen) {
       st._waitCount = (st._waitCount || 0) + 1
       if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        const reason = adminTradeMode === 0 ? 'market_closed' : 'market_unknown'
-        console.log(`[UnifiedScheduler] ${key}: ${reason}, pausing (retry#${st._waitCount})`)
+        console.log(`[UnifiedScheduler] ${key}: ${marketState.reason}, pausing (retry#${st._waitCount})`)
       }
-      st.lastError = adminTradeMode === 0 ? 'market_closed' : 'market_unknown'
+      st.lastError = marketState.reason
+      st.marketState = marketState
+      await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
       return
     }
@@ -481,8 +489,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
   const adminUserId = await getActiveAdminBridgeUserId()
   if (!adminUserId) { l('BLOCKED: admin bridge offline'); return }
 
-  const tradeMode = getOwnBridgeTradeMode(adminUserId)
-  if (tradeMode !== 4) { l(`BLOCKED: market not open (tradeMode=${tradeMode})`); return }
+  const marketState = getOwnBridgeMarketState(adminUserId)
+  if (!marketState.isOpen) {
+    l(`BLOCKED: market not open (${marketState.reason}, tradeMode=${marketState.tradeMode}, tickAgeMs=${marketState.tickAgeMs})`)
+    return
+  }
 
   try {
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: '获取管理员行情数据...' })
@@ -718,8 +729,8 @@ export async function startSmartCloseScheduler(userId) {
   const tick = async () => {
     if (!closeSchedulerState[userId]?.running) return
     try {
-      const tradeMode = getOwnBridgeTradeMode(userId)
-      if (tradeMode !== 4) { closeSchedulerState[userId].timer = setTimeout(tick, 5000); return }
+      const marketState = getOwnBridgeMarketState(userId)
+      if (!marketState.isOpen) { closeSchedulerState[userId].timer = setTimeout(tick, 5000); return }
     } catch { closeSchedulerState[userId].timer = setTimeout(tick, 5000); return }
     try { await runSmartCloseCycle(userId) } catch (e) { console.error(`[SmartClose] User ${userId} tick error:`, e.message) }
     if (closeSchedulerState[userId]?.running) {
@@ -742,8 +753,8 @@ async function runSmartCloseCycle(userId) {
   const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
   if (!user || user.plan !== 'pro') return
 
-  const tradeMode = getOwnBridgeTradeMode(userId)
-  if (tradeMode !== 4) { return }
+  const marketState = getOwnBridgeMarketState(userId)
+  if (!marketState.isOpen) { return }
 
   const positionsData = await mt5Bridge(userId, 'positions', {})
   const positions = positionsData?.positions || []

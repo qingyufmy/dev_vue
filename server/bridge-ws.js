@@ -350,7 +350,7 @@ async function _initBridge(ws, userId) {
             bridge._sameTickStart = null
           } else {
             if (!bridge._sameTickStart) bridge._sameTickStart = now
-            if (now - bridge._sameTickStart > 5000) {
+            if (now - bridge._sameTickStart > MARKET_SAME_TICK_CLOSED_MS) {
               if (bridge.lastTradeMode !== 0) {
                 console.log(`[BridgeWS] User ${userId}: market CLOSED (tick stuck at ${msg.quote.time} for >5s, was tradeMode=${bridge.lastTradeMode})`)
               }
@@ -1686,6 +1686,37 @@ export function getOwnBridgeTradeMode(userId) {
   if (!bridge || bridge.ws.readyState !== 1) return -1
   if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
   return -1
+}
+
+// Market tick thresholds
+const MARKET_SAME_TICK_CLOSED_MS = 60_000
+const MARKET_TICK_STALE_MS = 120_000
+
+// Unified market state function
+export function getOwnBridgeMarketState(userId) {
+  const bridge = bridges.get(userId)
+  if (!bridge || bridge.ws.readyState !== 1) {
+    return {
+      alive: false, isOpen: false, tradeMode: -1,
+      reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null,
+    }
+  }
+
+  const now = Date.now()
+  const lastTickMs = bridge.lastTickMs || null
+  const tickAgeMs = lastTickMs ? now - lastTickMs : null
+  const tradeMode = typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1
+
+  if (!lastTickMs) {
+    return { alive: true, isOpen: false, tradeMode, reason: 'market_unknown_no_tick', lastTickMs, tickAgeMs, mt5TimeStr: bridge.mt5TimeStr || null }
+  }
+  if (tickAgeMs > MARKET_TICK_STALE_MS) {
+    return { alive: true, isOpen: false, tradeMode, reason: 'market_stale_tick', lastTickMs, tickAgeMs, mt5TimeStr: bridge.mt5TimeStr || null }
+  }
+  if (tradeMode !== 4) {
+    return { alive: true, isOpen: false, tradeMode, reason: tradeMode === 0 ? 'market_closed' : 'market_unknown', lastTickMs, tickAgeMs, mt5TimeStr: bridge.mt5TimeStr || null }
+  }
+  return { alive: true, isOpen: true, tradeMode: 4, reason: 'market_open', lastTickMs, tickAgeMs, mt5TimeStr: bridge.mt5TimeStr || null }
 }
 
 // Market status: bridge connected + tick time unchanged for 5 min → closed
