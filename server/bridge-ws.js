@@ -528,7 +528,6 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'open':
         result = await ai.mt5Bridge(userId, 'open', params)
         await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
-        // 交易操作后清除历史缓存
         break
       case 'close':
         result = await ai.mt5Bridge(userId, 'close', params)
@@ -772,6 +771,9 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signals': {
         const offset = Number(params.offset) || 0
         const limit = Math.min(Number(params.limit) || 6, 100)
+        // 观摩模式：始终用 admin 的信号
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const queryUserId = hasOwnBridge ? userId : (adminUserId || userId)
 
         // Build shared WHERE conditions for both queries
         const sharedConditions = []
@@ -1354,7 +1356,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         try {
           await ai.runSmartCloseCycle(userId)
           result = { status: 'success' }
-          cacheDel(`cache:history:${userId}`).catch(() => {})
         } catch (e) {
           result = { status: 'error', message: e.message }
         }
