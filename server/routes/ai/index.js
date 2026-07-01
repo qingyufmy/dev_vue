@@ -9,6 +9,7 @@ import { maybeAiSignal } from './llm.js'
 import { getActiveConfig, getAnalyzeApiKey, getAutoConfig, getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, insertAudit, getAutoPromptTypes, getAutoPromptTypeById, saveAutoPromptType, disableAutoPromptType, getUserAutoConfig, saveUserAutoConfig, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler } from './scheduler.js'
+import { getBridgeDiagnostics } from '../../bridge-ws.js'
 
 const router = Router()
 
@@ -39,23 +40,11 @@ router.get('/bridge/version', (req, res) => {
 
 router.get('/bridge/ws-health', authMiddleware, (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' })
-  const bridges = getAllBridges()
-  const now = Date.now()
-  const result = {
+  res.json({
     ok: true,
     serverTime: new Date().toISOString(),
-    bridges: bridges.map(b => ({
-      userId: b.userId,
-      readyState: b.ws?.readyState ?? -1,
-      connectedSeconds: b._connectTime ? Math.round((now - b._connectTime) / 1000) : 0,
-      lastSeenAgeSeconds: b.lastSeen ? Math.round((now - b.lastSeen) / 1000) : -1,
-      lastPongAgeSeconds: b.lastPong ? Math.round((now - b.lastPong) / 1000) : -1,
-      lastMessageType: b._lastMessageType || '?',
-      tradeEnabled: !!b.tradeEnabled,
-      autoReasoningEnabled: !!b.autoReasoningEnabled,
-    }))
-  }
-  res.json(result)
+    bridges: getBridgeDiagnostics(),
+  })
 })
 
 export { initAutoSchedulers }

@@ -171,7 +171,7 @@ function handleBridge(ws, url) {
         return
       }
     }
-    await _initBridge(ws, userId)
+    await _initBridge(ws, userId, user)
     // 重放缓存消息
     for (const msg of msgQueue) ws.emit('message', msg)
   }).catch(err => {
@@ -181,7 +181,7 @@ function handleBridge(ws, url) {
   })
 }
 
-async function _initBridge(ws, userId) {
+async function _initBridge(ws, userId, user) {
   // Generation counter — prevents stale async init from corrupting a newer bridge's state
   const gen = (_bridgeInitGen.get(userId) || 0) + 1
   _bridgeInitGen.set(userId, gen)
@@ -274,7 +274,7 @@ async function _initBridge(ws, userId) {
   const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1, _pingInterval: null, _connectTime: Date.now() }
   bridges.set(userId, bridgeEntry)
   ws._userId = userId
-  console.log(`[BridgeWS] bridge connected user=${userId} plan=${user?.role || 'unknown'} replacedOld=${replacedOld}`)
+  console.log(`[BridgeWS] bridge connected user=${userId} role=${user?.role || 'unknown'} plan=${user?.plan || 'unknown'} replacedOld=${replacedOld}`)
 
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled, trade_mode: -1 })
@@ -1781,6 +1781,25 @@ export function getAllBridges() {
     })
   }
   return result
+}
+
+export function getBridgeDiagnostics() {
+  const now = Date.now()
+  return Array.from(bridges.entries()).map(([userId, bridge]) => ({
+    userId,
+    readyState: bridge.ws?.readyState ?? -1,
+    connected: bridge.ws?.readyState === 1,
+    alive: !!(bridge.ws?.readyState === 1 && now - bridge.lastSeen < 20000),
+    connectedSeconds: bridge._connectTime ? Math.round((now - bridge._connectTime) / 1000) : 0,
+    lastSeenAgeSeconds: bridge.lastSeen ? Math.round((now - bridge.lastSeen) / 1000) : -1,
+    lastPongAgeSeconds: bridge.lastPong ? Math.round((now - bridge.lastPong) / 1000) : -1,
+    lastMessageType: bridge._lastMessageType || '?',
+    tradeEnabled: !!bridge.tradeEnabled,
+    autoReasoningEnabled: !!bridge.autoReasoningEnabled,
+    lastTradeMode: typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
+    mt5TimeStr: bridge.mt5TimeStr || null,
+    lastTickAgeSeconds: bridge.lastTickMs ? Math.round((now - bridge.lastTickMs) / 1000) : -1,
+  }))
 }
 
 export { sendToBrowsers }

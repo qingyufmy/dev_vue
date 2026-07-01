@@ -1131,21 +1131,33 @@ class BridgeWorker(QThread):
     # ── Async core (websockets) ──────────────────────────────
 
     @staticmethod
+    def _short_text(value, limit=200):
+        """Truncate value to limit chars, masking sensitive headers."""
+        s = str(value)
+        if 'Authorization' in s or 'Cookie' in s or 'token' in s.lower():
+            s = s[:80] + '...[敏感信息已脱敏]'
+        if len(s) > limit:
+            s = s[:limit] + '...'
+        return s
+
+    @staticmethod
     def _format_ws_error(e):
-        """Format WebSocket exception for logging — Chinese-friendly, no token."""
+        """Format WebSocket exception for logging — Chinese-friendly, no token, max ~800 chars."""
         parts = []
         parts.append(type(e).__name__)
         msg = str(e) or '无详细信息'
-        parts.append(msg)
-        # Extract websockets-specific fields
-        for attr in ('status_code', 'status', 'headers', 'response', 'code', 'reason'):
+        parts.append(msg[:200])
+        # Extract websockets-specific fields (safe truncation)
+        for attr in ('status_code', 'status', 'code', 'reason'):
             val = getattr(e, attr, None)
             if val is not None:
                 parts.append(f'{attr}={val}')
-        args = getattr(e, 'args', None)
-        if args and len(args) > 1:
-            parts.append(f'args={args}')
-        return '; '.join(parts)
+        for attr in ('headers', 'response'):
+            val = getattr(e, attr, None)
+            if val is not None:
+                parts.append(f'{attr}={WsBridgeThread._short_text(val, 150)}')
+        result = '; '.join(parts)
+        return result[:800] if len(result) > 800 else result
 
     async def _run_async(self):
         """Main async loop: connect → session → reconnect with progressive backoff."""
@@ -1212,13 +1224,21 @@ class BridgeWorker(QThread):
 
             # ── Session: run send + recv + heartbeat concurrently ──
             session_start = time.time()
+            tasks = [
+                asyncio.create_task(self._async_send_loop(ws)),
+                asyncio.create_task(self._async_recv_loop(ws)),
+                asyncio.create_task(self._async_heartbeat_loop(ws)),
+            ]
             try:
                 async with ws:
-                    await asyncio.gather(
-                        self._async_send_loop(ws),
-                        self._async_recv_loop(ws),
-                        self._async_heartbeat_loop(ws),
-                    )
+                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for t in pending:
+                        t.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    # Check if any task raised an unexpected exception
+                    for t in done:
+                        if t.exception() and not isinstance(t.exception(), (websockets.ConnectionClosed, ssl.SSLError, OSError, ConnectionResetError)):
+                            raise t.exception()
             except websockets.ConnectionClosed as e:
                 if e.code == 4003:
                     reason = e.reason or ''
@@ -1249,6 +1269,8 @@ class BridgeWorker(QThread):
                 rapid_fails = 0
 
             retry_delay = get_backoff_delay()
+            if rapid_fails >= MAX_RAPID_FAILS:
+                retry_delay = min(60, max(retry_delay, 30 + (rapid_fails - MAX_RAPID_FAILS) * 5))
             self.log_signal.emit(f"连接断开，{retry_delay}秒后自动重连...")
             self.status_signal.emit("重连中...", "#f59e0b", "")
             await asyncio.sleep(retry_delay)
@@ -1284,7 +1306,8 @@ class BridgeWorker(QThread):
 
                 # Dedup: hash the data, skip if unchanged (but force send every 5s for market status detection)
                 # Always send if quote.time changed (for market status detection)
-                data_hash = hash(json.dumps(dm, sort_keys=True, default=str))
+                payload = json.dumps(dm, sort_keys=True, default=str, ensure_ascii=False, separators=(',', ':'))
+                data_hash = hash(payload)
                 quote_time = dm.get("quote", {}).get("time", "")
                 force_send = (time.time() - last_send_time) >= 5
                 time_changed = quote_time != last_quote_time
@@ -1295,7 +1318,7 @@ class BridgeWorker(QThread):
                 last_quote_time = quote_time
                 last_send_time = time.time()
 
-                await ws.send(json.dumps(dm))
+                await ws.send(payload)
 
                 # Update status
                 acc_login = dm.get("account", {}).get("login")
