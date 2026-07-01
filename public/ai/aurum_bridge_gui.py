@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 APP_VERSION = "v2.1.2"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
+MAX_LOG_MESSAGE_CHARS = 1000
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 
 # PyInstaller bundle resource path
@@ -1131,11 +1132,25 @@ class BridgeWorker(QThread):
     # ── Async core (websockets) ──────────────────────────────
 
     @staticmethod
-    def _short_text(value, limit=200):
-        """Truncate value to limit chars, masking sensitive headers."""
+    def _mask_sensitive_text(value):
+        """Mask sensitive fields (token/Authorization/Cookie) before logging."""
+        import re
         s = str(value)
-        if 'Authorization' in s or 'Cookie' in s or 'token' in s.lower():
-            s = s[:80] + '...[敏感信息已脱敏]'
+        patterns = [
+            (r'(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+', r'\1[已脱敏]'),
+            (r'(?i)(authorization\s*[:=]\s*)[^\s,;]+', r'\1[已脱敏]'),
+            (r'(?i)(cookie\s*[:=]\s*)[^,\n\r]+', r'\1[已脱敏]'),
+            (r'(?i)((?:access_token|refresh_token|token)\s*[:=]\s*)[^&\s,;]+', r'\1[已脱敏]'),
+            (r'(?i)(bearer\s+)[^\s,;]+', r'\1[已脱敏]'),
+        ]
+        for pattern, repl in patterns:
+            s = re.sub(pattern, repl, s)
+        return s
+
+    @staticmethod
+    def _short_text(value, limit=200):
+        """Mask sensitive content first, then truncate to limit chars."""
+        s = BridgeWorker._mask_sensitive_text(value)
         if len(s) > limit:
             s = s[:limit] + '...'
         return s
@@ -1155,9 +1170,14 @@ class BridgeWorker(QThread):
         for attr in ('headers', 'response'):
             val = getattr(e, attr, None)
             if val is not None:
-                parts.append(f'{attr}={WsBridgeThread._short_text(val, 150)}')
+                parts.append(f'{attr}={BridgeWorker._short_text(val, 150)}')
         result = '; '.join(parts)
         return result[:800] if len(result) > 800 else result
+
+    @staticmethod
+    def _brief_ws_error(e):
+        """Return brief error type name for noise-reduced logging."""
+        return type(e).__name__ or 'UnknownError'
 
     async def _run_async(self):
         """Main async loop: connect → session → reconnect with progressive backoff."""
@@ -1215,7 +1235,11 @@ class BridgeWorker(QThread):
                         self.log_signal.emit(f"连接失败: {err_str}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
                         return
-                    self.log_signal.emit(f"连接失败（第{retry_count}次）：{self._format_ws_error(e)}，{delay}秒后重试...")
+                    # Noise reduction: full error for first 3 attempts, then every 10th
+                    if retry_count <= 3 or retry_count % 10 == 0:
+                        self.log_signal.emit(f"连接失败（第{retry_count}次）：{self._format_ws_error(e)}，{delay}秒后重试...")
+                    else:
+                        self.log_signal.emit(f"连接失败（第{retry_count}次）：{self._brief_ws_error(e)}，{delay}秒后重试...")
                     self.status_signal.emit(f"重连中...（第{retry_count}次）", "#f59e0b", "")
                     await asyncio.sleep(delay)
 
@@ -1796,6 +1820,10 @@ class BridgePage(QWidget):
 
     def _log(self, msg):
         ts = time.strftime("%H:%M:%S")
+        # Mask sensitive content and limit message length
+        msg = BridgeWorker._mask_sensitive_text(str(msg))
+        if len(msg) > MAX_LOG_MESSAGE_CHARS:
+            msg = msg[:MAX_LOG_MESSAGE_CHARS] + "...[日志过长，已截断]"
         # 检查滚动条是否在底部（在添加新内容之前）
         sb = self.log_area.verticalScrollBar()
         was_at_bottom = sb.value() >= sb.maximum() - 5
