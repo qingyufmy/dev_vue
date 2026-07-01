@@ -425,6 +425,84 @@ function setBadge(id, text, type, withDot = true) {
   el.innerHTML = `${withDot ? '<span class="badge-dot"></span>' : ""}${escapeHtml(text)}`;
 }
 
+const AUTO_REASON_LABELS = {
+  admin_bridge_offline: '管理员桥接离线',
+  user_bridge_offline: '用户桥接离线',
+  market_closed: '休市',
+  market_unknown: '市场状态未知',
+  market_unknown_no_tick: '等待行情 tick',
+  market_stale_tick: '行情停滞',
+  redis_unavailable: 'Redis 未连接',
+  redis_lock_failed: 'Redis 锁获取失败',
+  no_api_key: '未配置 API Key',
+  strategy_disabled: '策略已停用',
+  symbol_not_supported: '品种不支持',
+  no_runtime_scheduler: '调度器未运行',
+  no_online_subscribers: '无在线订阅者',
+  rates_failed: '行情获取失败',
+  rates_empty: '行情为空',
+  no_strategy: '未选择策略',
+  no_symbols: '未选择品种',
+  disabled: '已关闭',
+};
+
+function isMarketClosedReason(reason) {
+  return ['market_closed', 'market_stale_tick', 'market_unknown_no_tick', 'market_unknown'].includes(reason);
+}
+
+function renderAutoAnalyzeBadge(s) {
+  if (!s) return;
+  const ptName = s.prompt_type_name || '';
+  const symbols = s.selected_symbols || [];
+  const symbolsStr = symbols.join(', ') || '未选择品种';
+
+  // Calculate remaining time
+  let remaining = null;
+  if (s.receivedAtMs && s.next_run_in_seconds) {
+    remaining = Math.max(0, s.next_run_in_seconds - Math.floor((Date.now() - s.receivedAtMs) / 1000));
+  }
+
+  let label, type, title;
+
+  if (!s.enabled) {
+    label = '自动推理关闭';
+    type = 'neutral';
+    title = '自动推理关闭';
+  } else if (s.in_flight) {
+    label = '自动推理中';
+    type = 'running';
+    const stageLabel = s.stage_label || (s.stage === 'running' ? '正在推理' : '调度中');
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：正在推理\n阶段：${stageLabel}`;
+  } else if (s.paused_reason && isMarketClosedReason(s.paused_reason)) {
+    label = '自动推理暂停 · 休市';
+    type = 'warning';
+    const reasonLabel = AUTO_REASON_LABELS[s.paused_reason] || s.paused_reason;
+    const msState = s.market_state || {};
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：休市暂停\n市场：${msState.reason || s.paused_reason}`;
+    if (msState.tickAgeMs) title += `\nTick 延迟：${msState.tickAgeMs}ms`;
+    if (msState.mt5TimeStr) title += `\nMT5 时间：${msState.mt5TimeStr}`;
+  } else if (remaining !== null && remaining > 0) {
+    const min = Math.floor(remaining / 60);
+    const sec = remaining % 60;
+    const countdown = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    label = `自动推理开启 · 下次 ${countdown}`;
+    type = 'active';
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启\n下次运行：${countdown}`;
+    if (s.paused_reason) title += `\n内部状态：${AUTO_REASON_LABELS[s.paused_reason] || s.paused_reason}`;
+    if (s.market_state) title += `\n市场：${s.market_state.reason || ''}`;
+  } else {
+    label = '自动推理开启';
+    type = 'active';
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启`;
+    if (s.paused_reason) title += `\n内部状态：${AUTO_REASON_LABELS[s.paused_reason] || s.paused_reason}`;
+    if (s.market_state) title += `\n市场：${s.market_state.reason || ''}`;
+  }
+
+  setBadge('autoAnalyzeMode', label, type);
+  const el = $('autoAnalyzeMode');
+  if (el) el.title = title;
+}
+
 function updatePnlStyle(elementId, value) {
   const el = $(elementId);
   if (!el) return;
@@ -679,14 +757,17 @@ function connectBridgeStatusWs(onReady) {
         }
         loadStatus().catch(() => {});
       } else if (msg.type === 'auto_progress') {
-        const badge = document.getElementById("autoAnalyzeMode");
-        if (badge && state.autoEnabled) {
-          badge.textContent = msg.label || "推理中...";
-          badge.title = msg.label || "";
+        // Update runtime state and render badge
+        if (state.autoRuntime) {
+          state.autoRuntime.in_flight = true;
+          state.autoRuntime.stage = msg.stage || 'running';
+          state.autoRuntime.stage_label = msg.label || '推理中';
         }
+        renderAutoAnalyzeBadge(state.autoRuntime || { enabled: true, in_flight: true, stage: 'running', stage_label: msg.label || '推理中' });
       } else if (msg.type === 'new_signal') {
-        // New signal pushed from server — refresh signal list
+        // New signal pushed — refresh status and signal list
         handleNewSignal(msg);
+        loadStatus().catch(() => {});
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -881,6 +962,10 @@ function startUiTimer() {
       const btn = $("executeSignalBtn");
       if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
     }
+    // Render auto badge with local countdown
+    if (state.autoRuntime && state.autoRuntime.enabled) {
+      renderAutoAnalyzeBadge(state.autoRuntime);
+    }
     if (++_statusRefreshCounter >= 15) {
       _statusRefreshCounter = 0;
       if (state.token) loadStatus().catch(() => {});
@@ -998,25 +1083,16 @@ function handleHeartbeat(msg) {
     setBadge("tradeMode", "请先启动桥接", "neutral");
   }
 
-  // Update auto badge from heartbeat data — preserve symbols/interval from autoConfig
+  // Update auto badge from heartbeat data
   if (typeof msg.auto_reasoning_enabled === 'boolean') {
     state.autoEnabled = msg.auto_reasoning_enabled;
-    // Only overwrite badge if state actually changed (avoid heartbeat flash)
-    if (msg.auto_reasoning_enabled && state.autoConfig) {
-      const ptName = state.autoConfig.prompt_type_name || '';
-      const pausedReason = state.autoConfig.paused_reason || '';
-      const inFlight = state.autoConfig.in_flight || false;
-      if (inFlight) {
-        setBadge("autoAnalyzeMode", `自动推理中 · ${ptName || '策略'}`, "running");
-      } else if (pausedReason) {
-        setBadge("autoAnalyzeMode", `自动推理暂停 · ${pausedReason}`, "warning");
-      } else {
-        setBadge("autoAnalyzeMode", `自动推理 · ${ptName || '策略'}`, "active");
-      }
+    // Use renderAutoAnalyzeBadge for consistent display
+    if (state.autoRuntime) {
+      state.autoRuntime.enabled = msg.auto_reasoning_enabled;
+      renderAutoAnalyzeBadge(state.autoRuntime);
     } else if (!msg.auto_reasoning_enabled) {
       setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
     }
-    // If enabled but no autoConfig loaded yet, keep current badge — don't flash to bare text
   }
 
   state._lastGatewayLive = isLive;
@@ -1281,63 +1357,25 @@ async function loadStatus() {
   try {
     const auto = await wsApi('auto_status');
     const scheduler = auto.scheduler || {};
-    const enabled = scheduler.enabled;
-    const running = scheduler.running;
-    const ptName = scheduler.prompt_type_name || '';
-    const pausedReason = scheduler.paused_reason || '';
-    const inFlight = scheduler.in_flight || false;
-    const nextRunSec = scheduler.next_run_in_seconds || 0;
 
-    const REASON_LABELS = {
-      'admin_bridge_offline': '管理员桥接离线',
-      'market_closed': '休市',
-      'market_unknown': '市场状态未知',
-      'market_unknown_no_tick': '等待行情 tick',
-      'market_stale_tick': '行情停滞',
-      'redis_unavailable': 'Redis 未连接',
-      'no_api_key': '未配置 API Key',
-      'strategy_disabled': '策略已停用',
-      'symbol_not_supported': '品种不支持',
-      'no_subscribers': '无在线订阅者',
-      'rates_failed': '行情获取失败',
-      'rates_empty': '行情为空',
-      'no_strategy': '未选择策略',
-      'no_symbols': '未选择品种',
-      'disabled': '已关闭',
+    // Store runtime state for local countdown
+    state.autoRuntime = {
+      ...scheduler,
+      receivedAtMs: Date.now(),
     };
 
-    let label, type;
-    if (!enabled) {
-      label = '自动推理关闭';
-      type = 'neutral';
-    } else if (inFlight) {
-      label = `自动推理中 · ${ptName || '策略'}`;
-      type = 'running';
-    } else if (pausedReason) {
-      const reasonLabel = REASON_LABELS[pausedReason] || pausedReason;
-      label = `自动推理暂停 · ${reasonLabel}`;
-      type = 'warning';
-    } else if (nextRunSec > 0) {
-      const min = Math.floor(nextRunSec / 60);
-      const sec = nextRunSec % 60;
-      const countdown = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-      label = `自动推理 · ${ptName || '策略'} · 下次 ${countdown}`;
-      type = 'active';
-    } else {
-      label = `自动推理 · ${ptName || '策略'}`;
-      type = 'active';
-    }
-    setBadge('autoAnalyzeMode', label, type);
+    // Render badge using unified function
+    renderAutoAnalyzeBadge(state.autoRuntime);
 
     state.autoConfig = {
-      enabled,
+      enabled: scheduler.enabled,
       prompt_type_id: scheduler.prompt_type_id || null,
-      prompt_type_name: ptName,
-      next_run_in_seconds: nextRunSec,
-      paused_reason: pausedReason,
-      in_flight: inFlight,
+      prompt_type_name: scheduler.prompt_type_name || '',
+      next_run_in_seconds: scheduler.next_run_in_seconds || 0,
+      paused_reason: scheduler.paused_reason || '',
+      in_flight: scheduler.in_flight || false,
     };
-    state.autoEnabled = enabled;
+    state.autoEnabled = scheduler.enabled;
   } catch {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
   }

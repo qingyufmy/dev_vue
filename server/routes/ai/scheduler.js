@@ -257,6 +257,12 @@ export async function getUserAutoRuntimeStatus(userId) {
   let pausedReason = ''
   if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
   else if (selectedSymbols.length === 0) pausedReason = 'no_symbols'
+  else if (activeKeys.length === 0) {
+    // No scheduler running — diagnose why
+    const userBridgeAlive = isBridgeAlive(userId)
+    if (!userBridgeAlive) pausedReason = 'user_bridge_offline'
+    else pausedReason = 'no_runtime_scheduler'
+  }
   else if (!adminBridgeOnline) pausedReason = 'admin_bridge_offline'
   else if (!marketState.isOpen) pausedReason = marketState.reason
   else if (!redisAvailable) pausedReason = 'redis_unavailable'
@@ -487,6 +493,23 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st._waitCount = 0
     st.lastError = null
 
+    // Preflight: check API key and strategy before setting cooldown
+    const ptRow = await getAutoPromptTypeById(promptTypeId)
+    if (!ptRow || !ptRow.is_active) {
+      st.lastError = 'strategy_disabled'
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
+    }
+    // Check API key
+    const globalCfg = await getGlobalAutoConfig()
+    if (!globalCfg?.api_key_encrypted) {
+      st.lastError = 'no_api_key'
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
+    }
+
     // Redis lock + cooldown — fail closed when Redis unavailable
     const redis = getRedis()
     if (!redis || !isRedisAvailable()) {
@@ -517,17 +540,29 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
     st.inFlight = true
     st._lockToken = lockToken
+    st.stage = 'running'
 
     try {
-      await runUnifiedAutoCycle(promptTypeId, symbol, 'M5')
+      const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol, 'M5')
+      if (cycleResult?.status === 'success') {
+        st.lastError = ''
+        st.lastRunAt = cycleResult.createdAt
+        st.lastSignalId = cycleResult.signalId
+        st.subscriberCount = cycleResult.subscriberCount
+      } else if (cycleResult?.status === 'blocked') {
+        st.lastError = cycleResult.reason
+      }
     } catch (e) {
       console.error(`[UnifiedScheduler] ${key} cycle error:`, e.message)
+      st.lastError = 'exception'
     } finally {
       st.inFlight = false
+      st.stage = 'idle'
       if (st._lockToken) {
         await releaseLock(key, st._lockToken)
         st._lockToken = null
       }
+      await updateSchedulerRedisState(key, st)
     }
 
     if (autoSchedulerState[key]?.running) {
@@ -559,24 +594,24 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
 
   // 1. Read prompt type
   const pt = await getAutoPromptTypeById(promptTypeId)
-  if (!pt || !pt.is_active) { l('BLOCKED: prompt type not found or disabled'); return }
-  if (!pt.symbols_json.includes(symbol)) { l(`BLOCKED: symbol ${symbol} not in strategy symbols`); return }
+  if (!pt || !pt.is_active) { l('BLOCKED: prompt type not found or disabled'); return { status: 'blocked', reason: 'strategy_disabled' } }
+  if (!pt.symbols_json.includes(symbol)) { l(`BLOCKED: symbol ${symbol} not in strategy symbols`); return { status: 'blocked', reason: 'symbol_not_supported' } }
 
   // 2. Get unified config (model/API from global, prompt from strategy)
   const config = await getUnifiedAutoInferenceConfig(promptTypeId)
   if (!config || !config.api_key_encrypted) {
     l(`BLOCKED: no API key (hasKey=${!!config?.api_key_encrypted})`)
-    return
+    return { status: 'blocked', reason: 'no_api_key' }
   }
 
   // 3. Check admin bridge
   const adminUserId = await getActiveAdminBridgeUserId()
-  if (!adminUserId) { l('BLOCKED: admin bridge offline'); return }
+  if (!adminUserId) { l('BLOCKED: admin bridge offline'); return { status: 'blocked', reason: 'admin_bridge_offline' } }
 
   const marketState = getOwnBridgeMarketState(adminUserId)
   if (!marketState.isOpen) {
     l(`BLOCKED: market not open (${marketState.reason}, tradeMode=${marketState.tradeMode}, tickAgeMs=${marketState.tickAgeMs})`)
-    return
+    return { status: 'blocked', reason: marketState.reason }
   }
 
   try {
@@ -593,9 +628,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
     const primaryCount = tags.length > 0 ? tags[0].count : 100
     const t1 = Date.now()
     const ratesResp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
-    if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return }
+    if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return { status: 'blocked', reason: 'rates_failed' } }
     const rates = ratesResp.rates || []
-    if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return }
+    if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return { status: 'blocked', reason: 'rates_empty' } }
     l(`rates done (${Date.now()-t1}ms, bars=${rates.length}, tf=${primaryTf})`)
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算技术指标...' })
@@ -716,10 +751,12 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
       subscriber_count: onlineSubscribers.size, inference_source: aiSource,
     }, 'success')
     l(`<<< cycle complete (signal=#${signalId}, subscribers=${onlineSubscribers.size})`)
+    return { status: 'success', signalId, subscriberCount: onlineSubscribers.size, createdAt }
   } catch (err) {
     l(`<<< EXCEPTION: ${err.message}`)
     console.error(`[UnifiedCycle] ${key} error:`, err.message)
     await insertAudit(null, adminUserId || 0, 'ai_auto_scan', symbol, { prompt_type_id: promptTypeId, symbol, timeframe }, { status: 'error', message: err.message }, 'error')
+    return { status: 'error', reason: 'exception', message: err.message }
   }
 }
 
