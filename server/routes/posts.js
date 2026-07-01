@@ -1,6 +1,31 @@
 import { Router } from 'express'
+import multer from 'multer'
+import { join, dirname, extname } from 'path'
+import { fileURLToPath } from 'url'
+import { existsSync, mkdirSync, unlinkSync } from 'fs'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth } from '../middleware/auth.js'
+
+const __postsDirname = dirname(fileURLToPath(import.meta.url))
+const __uploadDir = join(__postsDirname, '..', process.env.UPLOAD_DIR || 'uploads')
+if (!existsSync(__uploadDir)) mkdirSync(__uploadDir, { recursive: true })
+
+const postImageStorage = multer.diskStorage({
+  destination: __uploadDir,
+  filename(req, file, cb) {
+    const ext = extname(file.originalname) || '.jpg'
+    const assetId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    cb(null, assetId + ext)
+  },
+})
+const postImageUpload = multer({
+  storage: postImageStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    if (/^image\/(jpeg|png|webp|gif)$/.test(file.mimetype)) cb(null, true)
+    else cb(new Error('仅支持 JPEG/PNG/WebP/GIF 格式'))
+  },
+})
 
 const router = Router()
 
@@ -371,23 +396,37 @@ router.get('/post-reports', authMiddleware, async (req, res) => {
 })
 
 // Post images upload
-router.post('/post-images', authMiddleware, async (req, res) => {
+router.post('/post-images', authMiddleware, postImageUpload.single('file'), async (req, res) => {
   try {
-    // For local dev, return a placeholder
-    const assetId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    const url = `/uploads/${assetId}.jpg`
+    if (!req.file) return res.json({ ok: false, error: '未收到图片文件' })
 
-    await queryRun('INSERT INTO post_assets (asset_id, user_id, url) VALUES (?, ?, ?)', [assetId, req.user.id, url])
+    const savedName = req.file.filename
+    const assetId = savedName.replace(/\.[^.]+$/, '')
+    const url = `/uploads/${savedName}`
+
+    await queryRun('INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url) VALUES (?, ?, ?, ?, ?, ?)',
+      [assetId, req.user.id, req.file.originalname, req.file.mimetype, req.file.size, url])
 
     res.json({ ok: true, assetId, url })
-  } catch (err) { res.json({ ok: false, error: '上传失败' }) }
+  } catch (err) {
+    console.error('[Posts] Image upload error:', err)
+    if (req.file) {
+      try { unlinkSync(req.file.path) } catch {}
+    }
+    res.json({ ok: false, error: '上传失败' })
+  }
 })
 
 // Delete post image
 router.delete('/post-images', authMiddleware, async (req, res) => {
   try {
     const { id } = req.query
-    await queryRun('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+    const asset = await queryOne('SELECT * FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+    if (asset) {
+      const filePath = join(__uploadDir, asset.url?.replace(/^\/uploads\//, '') || '')
+      try { unlinkSync(filePath) } catch {}
+      await queryRun('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+    }
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '删除失败' }) }
 })
