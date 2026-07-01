@@ -446,7 +446,9 @@ export async function initDB() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
       config_id INT,
+      prompt_type_id INT DEFAULT NULL,
       session_id VARCHAR(100) NOT NULL DEFAULT 'default',
+      source VARCHAR(30) NOT NULL DEFAULT 'manual',
       symbol VARCHAR(50) NOT NULL,
       timeframe VARCHAR(10) NOT NULL,
       signal_type VARCHAR(20) NOT NULL,
@@ -459,6 +461,7 @@ export async function initDB() {
       take_profit_2_price DOUBLE,
       take_profit_3_price DOUBLE,
       market_data_json TEXT NOT NULL,
+      token_count INT DEFAULT 0,
       ai_model VARCHAR(100) NOT NULL DEFAULT 'deepseek-chat',
       ttl_seconds INT,
       is_executed TINYINT NOT NULL DEFAULT 0,
@@ -492,14 +495,51 @@ export async function initDB() {
       updated_at DATETIME NOT NULL DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    `CREATE TABLE IF NOT EXISTS auto_prompt_types (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(100) NOT NULL,
+      description TEXT,
+      system_prompt MEDIUMTEXT NOT NULL,
+      symbols_json TEXT NOT NULL,
+      interval_minutes INT NOT NULL DEFAULT 5,
+      is_active TINYINT NOT NULL DEFAULT 1,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_by INT,
+      created_at DATETIME NOT NULL DEFAULT (NOW()),
+      updated_at DATETIME NOT NULL DEFAULT (NOW()),
+      deleted_at DATETIME DEFAULT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
     `CREATE TABLE IF NOT EXISTS auto_scheduler (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL UNIQUE,
       symbols VARCHAR(1000) NOT NULL DEFAULT 'XAUUSD',
       enabled TINYINT NOT NULL DEFAULT 0,
+      prompt_type_id INT DEFAULT NULL,
+      risk_level VARCHAR(20) NOT NULL DEFAULT 'medium',
+      max_position_size DOUBLE NOT NULL DEFAULT 0.05,
+      selected_take_profit INT NOT NULL DEFAULT 2,
+      enable_auto_trade TINYINT NOT NULL DEFAULT 0,
       last_run_at DATETIME,
       created_at DATETIME NOT NULL DEFAULT (NOW()),
       updated_at DATETIME NOT NULL DEFAULT (NOW())
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS auto_signal_deliveries (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      signal_id INT NOT NULL,
+      user_id INT NOT NULL,
+      prompt_type_id INT NOT NULL,
+      symbol VARCHAR(50) NOT NULL,
+      delivery_status VARCHAR(30) NOT NULL DEFAULT 'delivered',
+      execution_status VARCHAR(30) NOT NULL DEFAULT 'not_attempted',
+      is_executed TINYINT NOT NULL DEFAULT 0,
+      executed_at DATETIME DEFAULT NULL,
+      trade_ticket VARCHAR(100) DEFAULT NULL,
+      execution_result TEXT,
+      created_at DATETIME NOT NULL DEFAULT (NOW()),
+      updated_at DATETIME NOT NULL DEFAULT (NOW()),
+      UNIQUE KEY uq_auto_signal_delivery (signal_id, user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS global_auto_config (

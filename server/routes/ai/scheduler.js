@@ -1,212 +1,331 @@
-// ai/scheduler.js — 自动调度 + 智能平仓
+// ai/scheduler.js — 统一自动调度 + 智能平仓
 
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
-import { getOwnBridgeTradeMode, isBridgeAlive, sendToBrowsers } from '../../bridge-ws.js'
+import { getOwnBridgeTradeMode, isBridgeAlive, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig } from './config.js'
+import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
+import { getRedis } from '../../redis.js'
+import crypto from 'crypto'
 
+// === Unified Scheduler State ===
+// Key: "promptTypeId:symbol"
 export const autoSchedulerState = {}
 export const closeSchedulerState = {}
 
+function buildSchedulerKey(promptTypeId, symbol) {
+  return `${promptTypeId}:${symbol}`
+}
+
+// === Compatibility: isAutoSchedulerRunning(userId) ===
 export function isAutoSchedulerRunning(userId) {
-  return !!autoSchedulerState[userId]?.running
+  for (const key in autoSchedulerState) {
+    const st = autoSchedulerState[key]
+    if (st?.subscribers?.has(userId) && st.running) return true
+  }
+  return false
 }
 
-export async function startAutoScheduler(userId) {
-  if (autoSchedulerState[userId]) {
-    console.log(`[startAutoScheduler] Skipped user ${userId}: scheduler already in progress`)
-    return
-  }
-  autoSchedulerState[userId] = { running: false, timer: null }
+// === Redis Lock Helpers ===
+const REDIS_LOCK_PREFIX = 'auto:scheduler:lock:'
+const REDIS_COOLDOWN_PREFIX = 'auto:scheduler:cooldown:'
 
-  const cfg = await getAutoConfig(null, userId)
-  if (!cfg || !cfg.enabled) {
-    autoSchedulerState[userId] = null
-    console.log(`[startAutoScheduler] Skipped user ${userId}: auto_scheduler enabled=${cfg?.enabled}`)
-    return
-  }
-
-  const inferenceCfg = await getAutoInferenceConfig(userId)
-  const isOverride = inferenceCfg?._source === 'user_override'
-  const raw = (cfg.symbols || 'XAUUSD').trim()
-  let symbol = raw.startsWith('[') ? (JSON.parse(raw)[0] || 'XAUUSD') : raw.split(',')[0].trim() || 'XAUUSD'
-  let intervalMinutes = (await getGlobalAutoConfig())?.interval_minutes || 5
-
-  if (isOverride && inferenceCfg.auto_symbols) { symbol = inferenceCfg.auto_symbols.trim() }
-  if (isOverride && inferenceCfg.auto_interval_minutes != null) { intervalMinutes = Number(inferenceCfg.auto_interval_minutes) }
-  const intervalMs = intervalMinutes * 60_000
-  autoSchedulerState[userId].running = true
-  autoSchedulerState[userId].lastRunAt = cfg.last_run_at || null
-  autoSchedulerState[userId]._waitCount = 0
-
-  console.log(`[startAutoScheduler] Starting scheduler for user ${userId} (symbol=${symbol}, interval=${intervalMinutes}min)`)
-  const tick = async () => {
-    if (!autoSchedulerState[userId]?.running) return
-    try {
-      // Check bridge alive first
-      if (!isBridgeAlive(userId)) {
-        const st = autoSchedulerState[userId]
-        st._waitCount = (st._waitCount || 0) + 1
-        if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-          console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} waiting: bridge not alive, retry#${st._waitCount}, symbol=${symbol}`)
-        }
-        autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
-      }
-
-      const tradeMode = getOwnBridgeTradeMode(userId)
-      // tradeMode: 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
-      if (tradeMode === 0 || tradeMode === -1) {
-        const st = autoSchedulerState[userId]
-        st._waitCount = (st._waitCount || 0) + 1
-        if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-          const reason = tradeMode === 0 ? 'market_closed' : 'unknown'
-          console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} waiting: tradeMode=${tradeMode} (${reason}), retry#${st._waitCount}, symbol=${symbol}`)
-        }
-        autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
-      }
-      if (autoSchedulerState[userId]) autoSchedulerState[userId]._waitCount = 0
-      console.log(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} market OK (tradeMode=${tradeMode}), proceeding to runAutoCycle`)
-    } catch (err) {
-      const st = autoSchedulerState[userId]
-      st._waitCount = (st._waitCount || 0) + 1
-      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        console.error(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} getOwnBridgeTradeMode error (retry#${st._waitCount}):`, err.message)
-      }
-      autoSchedulerState[userId].timer = setTimeout(tick, 5000); return
-    }
-    try { await runAutoCycle(userId, symbol, 'M5') } catch (e) { console.error(`[AutoScheduler-tick U${userId}] ${new Date().toISOString()} cycle error:`, e.message) }
-    if (autoSchedulerState[userId]?.running) {
-      autoSchedulerState[userId].timer = setTimeout(tick, intervalMs)
-    }
-  }
-  autoSchedulerState[userId].timer = setTimeout(tick, 5000)
-}
-
-export function stopAutoScheduler(userId) {
-  const state = autoSchedulerState[userId]
-  if (state?.timer) clearTimeout(state.timer)
-  if (autoSchedulerState[userId]) autoSchedulerState[userId].running = false
-  autoSchedulerState[userId] = null
-  console.log(`[stopAutoScheduler] User ${userId}: scheduler stopped (hadTimer=${!!state?.timer})`)
-}
-
-export async function initAutoSchedulers() {
+async function acquireLock(key) {
+  const redis = getRedis()
+  if (!redis) return null
+  const token = crypto.randomUUID()
   try {
-    const rows = await queryAll('SELECT user_id FROM auto_scheduler WHERE enabled = 1')
-    console.log(`[initAutoSchedulers] Found ${rows.length} enabled auto schedulers`)
+    const ok = await redis.set(`${REDIS_LOCK_PREFIX}${key}`, token, 'NX', 'PX', 600000)
+    return ok ? token : null
+  } catch { return null }
+}
+
+async function releaseLock(key, token) {
+  const redis = getRedis()
+  if (!redis || !token) return
+  try {
+    const current = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
+    if (current === token) await redis.del(`${REDIS_LOCK_PREFIX}${key}`)
+  } catch {}
+}
+
+async function setCooldown(key, intervalSeconds) {
+  const redis = getRedis()
+  if (!redis) return false
+  try {
+    const ok = await redis.set(`${REDIS_COOLDOWN_PREFIX}${key}`, '1', 'NX', 'EX', intervalSeconds)
+    return !!ok
+  } catch { return false }
+}
+
+// === Admin Bridge ===
+async function getActiveAdminBridgeUserId() {
+  const bridges = getAllBridges()
+  const adminBridges = bridges.filter(b => b.connected && b.alive)
+    .sort((a, b) => a.userId - b.userId)
+  if (adminBridges.length === 0) return null
+  // Check if any is actually admin role
+  for (const b of adminBridges) {
+    const user = await queryOne('SELECT role FROM users WHERE id = ?', [b.userId])
+    if (user?.role === 'admin') return b.userId
+  }
+  return null
+}
+
+// === Broadcast progress to all subscribers ===
+function broadcastAutoProgress(promptTypeId, symbol, progress) {
+  for (const key in autoSchedulerState) {
+    const st = autoSchedulerState[key]
+    if (st.promptTypeId === promptTypeId && st.symbol === symbol && st.subscribers) {
+      for (const uid of st.subscribers) {
+        try { sendToBrowsers(uid, { type: 'auto_progress', ...progress }) } catch {}
+      }
+      break
+    }
+  }
+}
+
+// === Reconcile: start/stop schedulers based on DB state ===
+export async function reconcileAutoSchedulers() {
+  try {
+    const rows = await queryAll(`
+      SELECT DISTINCT
+        apt.id AS prompt_type_id,
+        apt.symbols_json,
+        apt.interval_minutes
+      FROM auto_prompt_types apt
+      JOIN auto_scheduler s ON s.prompt_type_id = apt.id
+      JOIN users u ON u.id = s.user_id
+      WHERE s.enabled = 1
+        AND apt.is_active = 1
+        AND apt.deleted_at IS NULL
+        AND u.plan = 'pro'
+    `)
+
+    const neededKeys = new Set()
+    const neededKeyMeta = {}
+
     for (const row of rows) {
-      try {
-        await startAutoScheduler(row.user_id)
-        console.log(`[initAutoSchedulers] Started auto scheduler for user ${row.user_id}`)
-      } catch (e) {
-        console.error(`[initAutoSchedulers] Failed to start scheduler for user ${row.user_id}:`, e.message)
+      let symbols = ['XAUUSD']
+      try { symbols = JSON.parse(row.symbols_json || '["XAUUSD"]') } catch {}
+      for (const sym of symbols) {
+        const k = buildSchedulerKey(row.prompt_type_id, sym)
+        neededKeys.add(k)
+        neededKeyMeta[k] = { promptTypeId: row.prompt_type_id, symbol: sym, intervalMinutes: row.interval_minutes || 5 }
       }
     }
-    if (rows.length === 0) {
-      const settings = await queryAll("SELECT user_id FROM user_bridge_settings WHERE auto_reasoning_enabled = 1")
-      if (settings.length > 0) {
-        console.log(`[initAutoSchedulers] Fallback: ${settings.length} users with auto_reasoning_enabled=1 in user_bridge_settings, syncing...`)
-        for (const s of settings) {
-          try {
-            const globalCfg = await getGlobalAutoConfig()
-            const symbols = globalCfg?.symbols || 'XAUUSD'
-            await upsertAutoConfig(null, s.user_id, symbols, true)
-            await startAutoScheduler(s.user_id)
-            console.log(`[initAutoSchedulers] Recovered scheduler for user ${s.user_id} from user_bridge_settings`)
-          } catch (e) {
-            console.error(`[initAutoSchedulers] Failed to recover scheduler for user ${s.user_id}:`, e.message)
-          }
-        }
+
+    // Stop schedulers no longer needed
+    for (const key of Object.keys(autoSchedulerState)) {
+      if (!neededKeys.has(key)) {
+        stopUnifiedScheduler(autoSchedulerState[key].promptTypeId, autoSchedulerState[key].symbol)
+      }
+    }
+
+    // Start or update schedulers
+    for (const k of neededKeys) {
+      const meta = neededKeyMeta[k]
+      if (autoSchedulerState[k]) {
+        autoSchedulerState[k].intervalMinutes = meta.intervalMinutes
+        autoSchedulerState[k].subscriberCount = countSubscribers(meta.promptTypeId)
+      } else {
+        await startUnifiedScheduler(meta.promptTypeId, meta.symbol, meta.intervalMinutes)
       }
     }
   } catch (e) {
-    console.error('[initAutoSchedulers] Top-level error:', e.message)
+    console.error('[reconcileAutoSchedulers] Error:', e.message)
+  }
+}
+
+function countSubscribers(promptTypeId) {
+  let count = 0
+  for (const key in autoSchedulerState) {
+    const st = autoSchedulerState[key]
+    if (st.promptTypeId === promptTypeId) count += st.subscribers?.size || 0
+  }
+  return count
+}
+
+// === Unified Scheduler Start/Stop ===
+async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) {
+  const key = buildSchedulerKey(promptTypeId, symbol)
+  if (autoSchedulerState[key]?.running) return
+
+  const subscribers = await getAutoSubscribers(promptTypeId, symbol)
+  if (subscribers.length === 0) return
+
+  const subSet = new Set(subscribers.map(s => s.user_id))
+  const intervalMs = intervalMinutes * 60_000
+  const tickIntervalMs = 5000 // tick every 5s for Redis lock check
+
+  autoSchedulerState[key] = {
+    key,
+    promptTypeId,
+    symbol,
+    intervalMinutes,
+    running: true,
+    timer: null,
+    inFlight: false,
+    lastRunAt: null,
+    lastError: null,
+    subscriberCount: subSet.size,
+    subscribers: subSet,
+    _waitCount: 0,
   }
 
-  // 智能平仓功能已禁用，前端无入口，暂不恢复调度器
-  // try {
-  //   const closeRows = await queryAll('SELECT user_id FROM close_config WHERE enabled = 1')
-  //   for (const row of closeRows) {
-  //     await startSmartCloseScheduler(row.user_id)
-  //   }
-  // } catch (e) { console.error('[initAutoSchedulers] Failed to restore smart close schedulers:', e.message) }
+  console.log(`[UnifiedScheduler] Started ${key} (subscribers=${subSet.size}, interval=${intervalMinutes}min)`)
+
+  const tick = async () => {
+    const st = autoSchedulerState[key]
+    if (!st?.running) return
+
+    // Refresh subscribers
+    try {
+      const freshSubs = await getAutoSubscribers(promptTypeId, symbol)
+      st.subscribers = new Set(freshSubs.map(s => s.user_id))
+      st.subscriberCount = st.subscribers.size
+      if (st.subscribers.size === 0) {
+        console.log(`[UnifiedScheduler] No subscribers for ${key}, stopping`)
+        stopUnifiedScheduler(promptTypeId, symbol)
+        return
+      }
+    } catch {}
+
+    // Check admin bridge
+    const adminUserId = await getActiveAdminBridgeUserId()
+    if (!adminUserId) {
+      st._waitCount = (st._waitCount || 0) + 1
+      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
+        console.log(`[UnifiedScheduler] ${key}: admin bridge offline, pausing (retry#${st._waitCount})`)
+      }
+      st.lastError = 'admin_bridge_offline'
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
+    }
+
+    // Check admin market status
+    const adminTradeMode = getOwnBridgeTradeMode(adminUserId)
+    if (adminTradeMode === 0 || adminTradeMode === -1) {
+      st._waitCount = (st._waitCount || 0) + 1
+      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
+        const reason = adminTradeMode === 0 ? 'market_closed' : 'market_unknown'
+        console.log(`[UnifiedScheduler] ${key}: ${reason}, pausing (retry#${st._waitCount})`)
+      }
+      st.lastError = adminTradeMode === 0 ? 'market_closed' : 'market_unknown'
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      return
+    }
+
+    st._waitCount = 0
+    st.lastError = null
+
+    // Redis lock + cooldown
+    const redis = getRedis()
+    if (redis) {
+      if (st.inFlight) {
+        autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+        return
+      }
+      const lockToken = await acquireLock(key)
+      if (!lockToken) {
+        autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+        return
+      }
+      const cooldownSet = await setCooldown(key, st.intervalMinutes * 60)
+      if (!cooldownSet) {
+        await releaseLock(key, lockToken)
+        autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+        return
+      }
+      st.inFlight = true
+      st._lockToken = lockToken
+    }
+
+    try {
+      await runUnifiedAutoCycle(promptTypeId, symbol, 'M5')
+    } catch (e) {
+      console.error(`[UnifiedScheduler] ${key} cycle error:`, e.message)
+    } finally {
+      st.inFlight = false
+      if (st._lockToken) {
+        await releaseLock(key, st._lockToken)
+        st._lockToken = null
+      }
+    }
+
+    if (autoSchedulerState[key]?.running) {
+      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+    }
+  }
+
+  autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
 }
 
-function sendAutoProgress(userId, progress) {
-  try {
-    sendToBrowsers(userId, { type: 'auto_progress', ...progress })
-  } catch (e) { console.error('[AutoScheduler] Failed to send progress:', e.message) }
+function stopUnifiedScheduler(promptTypeId, symbol) {
+  const key = buildSchedulerKey(promptTypeId, symbol)
+  const state = autoSchedulerState[key]
+  if (state?.timer) clearTimeout(state.timer)
+  if (autoSchedulerState[key]) autoSchedulerState[key].running = false
+  delete autoSchedulerState[key]
+  console.log(`[UnifiedScheduler] Stopped ${key}`)
 }
 
-export async function runAutoCycle(userId, symbol, timeframe) {
+// === Unified Auto Cycle: shared signal generation ===
+async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
+  const key = buildSchedulerKey(promptTypeId, symbol)
   const ts = () => new Date().toISOString()
-  const l = (msg) => console.log(`[AutoCycle U${userId}] ${ts()} ${symbol}/${timeframe}: ${msg}`)
+  const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}/${timeframe}: ${msg}`)
 
   l('>>> cycle start')
-  sendAutoProgress(userId, { stage: 'config', label: '检查配置...' })
+  broadcastAutoProgress(promptTypeId, symbol, { stage: 'config', label: '检查配置...' })
 
-  const cfg = await getAutoConfig(null, userId)
-  if (!cfg || !cfg.enabled) { l(`BLOCKED: auto_scheduler not found or disabled (enabled=${cfg?.enabled})`); return }
-  l(`auto_scheduler enabled=true`)
+  // 1. Read prompt type
+  const pt = await getAutoPromptTypeById(promptTypeId)
+  if (!pt || !pt.is_active) { l('BLOCKED: prompt type not found or disabled'); return }
+  if (!pt.symbols_json.includes(symbol)) { l(`BLOCKED: symbol ${symbol} not in strategy symbols`); return }
 
-  const config = await getAutoInferenceConfig(userId)
+  // 2. Get unified config (model/API from global, prompt from strategy)
+  const config = await getUnifiedAutoInferenceConfig(promptTypeId)
   if (!config || !config.api_key_encrypted) {
-    l(`BLOCKED: no API key (config=${!!config}, hasKey=${!!config?.api_key_encrypted}, source=${config?._source})`)
+    l(`BLOCKED: no API key (hasKey=${!!config?.api_key_encrypted})`)
     return
   }
-  l(`inference config ok: source=${config._source}, model=${config.model_name}, provider=${config.api_provider}`)
 
-  const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
-  if (!user || user.plan !== 'pro') {
-    l(`BLOCKED: not Pro (plan=${user?.plan})`)
-    return
-  }
-  l(`plan=pro ✓`)
+  // 3. Check admin bridge
+  const adminUserId = await getActiveAdminBridgeUserId()
+  if (!adminUserId) { l('BLOCKED: admin bridge offline'); return }
 
-  const tradeMode = getOwnBridgeTradeMode(userId)
-  if (tradeMode !== 4) {
-    l(`BLOCKED: market not open (tradeMode=${tradeMode})`)
-    return
-  }
-  l(`market tradeMode=4 ✓`)
+  const tradeMode = getOwnBridgeTradeMode(adminUserId)
+  if (tradeMode !== 4) { l(`BLOCKED: market not open (tradeMode=${tradeMode})`); return }
 
   try {
-    sendAutoProgress(userId, { stage: 'bridge', label: '获取行情数据...' })
-    l(`fetching bridge data (account+positions+rates)...`)
+    broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: '获取管理员行情数据...' })
     const t0 = Date.now()
-    const account = await mt5Bridge(userId, 'account', {})
-    const positionsData = await mt5Bridge(userId, 'positions', { symbol })
+    const account = await mt5Bridge(adminUserId, 'account', {})
+    const positionsData = await mt5Bridge(adminUserId, 'positions', { symbol })
     const positions = positionsData.positions || []
-    l(`bridge account+positions done (${Date.now()-t0}ms, positions=${positions.length})`)
+    l(`bridge done (${Date.now()-t0}ms, positions=${positions.length})`)
 
     const prompt = config.system_prompt || ''
     const tags = parseTimeframeTags(prompt, 'auto')
-    const primaryTf = tags.length > 0 ? tags[0].tf : (timeframe || 'M5').toUpperCase()
+    const primaryTf = tags.length > 0 ? tags[0].tf : timeframe.toUpperCase()
     const primaryCount = tags.length > 0 ? tags[0].count : 100
     const t1 = Date.now()
-    const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
-
-    if (!ratesResp || ratesResp.status === 'error') {
-      l(`BLOCKED: rates failed (${Date.now()-t1}ms, status=${ratesResp?.status}, error=${ratesResp?.error})`)
-      return
-    }
+    const ratesResp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
+    if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return }
     const rates = ratesResp.rates || []
-    if (!Array.isArray(rates) || rates.length === 0) {
-      l(`BLOCKED: rates empty (${Date.now()-t1}ms, len=${rates?.length})`)
-      return
-    }
+    if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return }
     l(`rates done (${Date.now()-t1}ms, bars=${rates.length}, tf=${primaryTf})`)
 
-    sendAutoProgress(userId, { stage: 'market', label: '计算技术指标...' })
+    broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算技术指标...' })
     const t2 = Date.now()
     const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
-    market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
+    market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
-    sendAutoProgress(userId, { stage: 'ai', label: 'AI 模型推理中...' })
+    broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型推理中...' })
     const t3 = Date.now()
     l(`calling AI (model=${config.model_name})...`)
     const signal = await maybeAiSignal(null, config, market)
@@ -215,82 +334,174 @@ export async function runAutoCycle(userId, symbol, timeframe) {
     delete signal._inference_source
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
 
+    // 4. Write shared signal to ai_signals
     const createdAt = beijingNow()
     const marketJson = JSON.stringify(market)
     const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
     const result = await queryRun(`
-      INSERT INTO ai_signals(user_id, config_id, session_id, symbol, timeframe, signal_type, confidence,
+      INSERT INTO ai_signals(user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
         recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
         take_profit_2_price, take_profit_3_price, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `, [
-      userId, 0, 'default', symbol, timeframe.toUpperCase(),
+      0, 0, promptTypeId, 'auto_shared', 'auto_shared', symbol, timeframe.toUpperCase(),
       signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price,
       signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
       marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt
     ])
-    signal.id = result.insertId
-    signal.symbol = symbol
-    signal.timeframe = timeframe.toUpperCase()
-    signal.created_at = createdAt
-    signal.market_data = market
-    signal.is_executed = false
-    attachSignalTiming(signal)
-    l(`signal #${signal.id} saved to DB ✓`)
+    const signalId = result.insertId
+    l(`shared signal #${signalId} saved`)
 
-    // Push new signal notification to browser
-    sendToBrowsers(userId, {
-      type: 'new_signal',
-      signal_id: signal.id,
-      signal_type: signal.signal_type,
-      symbol: signal.symbol,
-      timeframe: signal.timeframe,
-      confidence: signal.confidence,
-      created_at: createdAt
-    })
-
-    let execResult = null
-    if (config && config.enable_auto_trade && market.inference_source === 'ai' && !signal.is_stale && signal.signal_type !== 'hold') {
-      const bridgeAlive = isBridgeAlive(userId)
-      if (!bridgeAlive) {
-        l(`auto-trade skipped: bridge not alive`)
-      } else {
-        const order = signalOrderPayload(signal, config, market, true)
-        execResult = await executeOrder(userId, config, order, 'ai_auto_execute')
-        if (execResult.status === 'success') {
-          signal.is_executed = true
-          const ticket = execResult.order || execResult.ticket || null
-          await queryRun('UPDATE ai_signals SET is_executed = 1, execution_result = ?, trade_ticket = ?, executed_at = NOW() WHERE id = ?', [JSON.stringify(execResult), ticket, signal.id])
-          l(`auto-executed: ticket=${ticket}`)
-        } else {
-          l(`auto-execute failed: ${execResult.message || execResult.status}`)
-        }
-      }
-    } else if (market.inference_source !== 'ai') {
-      l(`auto-trade skipped: inference_source=${market.inference_source}`)
+    // 5. Batch write deliveries + notify subscribers
+    const st = autoSchedulerState[key]
+    const subscribers = st?.subscribers || new Set()
+    const deliveryValues = []
+    const deliveryParams = []
+    for (const uid of subscribers) {
+      deliveryValues.push('(?, ?, ?, ?, ?, ?, ?, ?)')
+      deliveryParams.push(signalId, uid, promptTypeId, symbol, 'delivered', 'not_attempted', 0, createdAt)
+    }
+    if (deliveryValues.length > 0) {
+      await queryRun(
+        `INSERT IGNORE INTO auto_signal_deliveries (signal_id, user_id, prompt_type_id, symbol, delivery_status, execution_status, is_executed, created_at)
+         VALUES ${deliveryValues.join(',')}`,
+        deliveryParams
+      )
     }
 
-    const scanStatus = execResult
-      ? (execResult.status === 'success' ? 'executed' : `exec_failed:${execResult.message || execResult.status}`)
-      : (signal.signal_type === 'hold' ? 'skipped_hold' : 'skipped')
-    await insertAudit(null, userId, 'ai_auto_scan', symbol, { trigger: 'timer', symbol, timeframe, signal_id: signal.id }, {
-      status: scanStatus,
-      signal_id: signal.id,
-      signal_type: signal.signal_type,
-      confidence: signal.confidence,
-      inference_source: market.inference_source,
-      is_executed: signal.is_executed || false,
-    }, execResult && execResult.status === 'success' ? 'success' : 'info')
-    l(`<<< cycle complete (audit=${scanStatus})`)
+    // 6. Notify all subscribers
+    for (const uid of subscribers) {
+      sendToBrowsers(uid, {
+        type: 'new_signal',
+        signal_id: signalId,
+        signal_type: signal.signal_type,
+        symbol,
+        timeframe: timeframe.toUpperCase(),
+        confidence: signal.confidence,
+        created_at: createdAt,
+        source: 'auto_shared',
+        prompt_type_id: promptTypeId,
+      })
+    }
+
+    // 7. Auto-trade for eligible subscribers (limited concurrency)
+    if (signal.signal_type !== 'hold' && aiSource === 'ai' && !signal.is_stale) {
+      const eligibleSubs = []
+      for (const uid of subscribers) {
+        const subCfg = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ? AND enabled = 1', [uid])
+        if (!subCfg || !subCfg.enable_auto_trade) continue
+        if (subCfg.prompt_type_id !== promptTypeId) continue
+        const subUser = await queryOne('SELECT plan FROM users WHERE id = ?', [uid])
+        if (!subUser || subUser.plan !== 'pro') continue
+        const subSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [uid])
+        if (!subSettings?.trade_send_enabled) continue
+        if (!isBridgeAlive(uid)) continue
+        eligibleSubs.push({ userId: uid, subCfg })
+      }
+
+      // Run with concurrency limit of 5
+      const CONCURRENCY = 5
+      for (let i = 0; i < eligibleSubs.length; i += CONCURRENCY) {
+        const batch = eligibleSubs.slice(i, i + CONCURRENCY)
+        await Promise.allSettled(batch.map(({ userId: uid, subCfg }) =>
+          executeDelivery(uid, signalId, signal, config, market, promptTypeId, symbol, createdAt)
+        ))
+      }
+    }
+
+    // 8. Audit
+    await insertAudit(null, adminUserId, 'ai_auto_scan', symbol, {
+      trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe, signal_id: signalId
+    }, {
+      status: signal.signal_type === 'hold' ? 'skipped_hold' : 'success',
+      signal_id: signalId, signal_type: signal.signal_type, confidence: signal.confidence,
+      subscriber_count: subscribers.size, inference_source: aiSource,
+    }, 'success')
+    l(`<<< cycle complete (signal=#${signalId}, subscribers=${subscribers.size})`)
   } catch (err) {
     l(`<<< EXCEPTION: ${err.message}`)
-    console.error(`[AutoScheduler] ${symbol}/${timeframe} error:`, err.message)
-    await insertAudit(null, userId, 'ai_auto_scan', symbol, { trigger: 'timer', symbol, timeframe }, { status: 'error', message: err.message }, 'error')
+    console.error(`[UnifiedCycle] ${key} error:`, err.message)
+    await insertAudit(null, adminUserId || 0, 'ai_auto_scan', symbol, { prompt_type_id: promptTypeId, symbol, timeframe }, { status: 'error', message: err.message }, 'error')
   }
+}
 
-  await queryRun('UPDATE auto_scheduler SET last_run_at = ? WHERE user_id = ?', [beijingNow(), userId])
-  if (autoSchedulerState[userId]) autoSchedulerState[userId].lastRunAt = beijingNow()
+// === Delivery execution for a single subscriber ===
+async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt) {
+  const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
+  try {
+    const riskConfig = await getDeliveryExecuteRiskConfig(userId)
+    if (!riskConfig?.enable_auto_trade) {
+      l('skipped: enable_auto_trade=false')
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['skipped', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'auto_trade_disabled' },
+        { status: 'skipped' }, 'info')
+      return
+    }
+
+    // Use user's own bridge for execution
+    if (!isBridgeAlive(userId)) {
+      l('skipped: bridge not alive')
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['skipped', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'bridge_offline' },
+        { status: 'skipped' }, 'info')
+      return
+    }
+
+    const order = signalOrderPayload(signal, riskConfig, market, true)
+    const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute')
+
+    if (execResult.status === 'success') {
+      const ticket = execResult.order || execResult.ticket || null
+      await queryRun(
+        `UPDATE auto_signal_deliveries SET execution_status = 'success', is_executed = 1, executed_at = NOW(),
+         trade_ticket = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
+        [ticket, JSON.stringify(execResult), signalId, userId])
+      l(`auto-executed: ticket=${ticket}`)
+      await insertAudit(null, userId, 'ai_auto_execute', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, ticket },
+        { status: 'success', ticket }, 'success')
+    } else {
+      const status = execResult.status === 'rejected' ? 'rejected' : 'failed'
+      await queryRun(
+        `UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
+        [status, JSON.stringify(execResult), signalId, userId])
+      l(`auto-execute ${status}: ${execResult.message || execResult.status}`)
+      await insertAudit(null, userId, status === 'rejected' ? 'ai_auto_execute_rejected' : 'ai_auto_execute', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, error: execResult.message },
+        execResult, status === 'rejected' ? 'warning' : 'error')
+    }
+  } catch (err) {
+    l(`exception: ${err.message}`)
+    await queryRun(
+      `UPDATE auto_signal_deliveries SET execution_status = 'failed', execution_result = ? WHERE signal_id = ? AND user_id = ?`,
+      [JSON.stringify({ error: err.message }), signalId, userId]).catch(() => {})
+    await insertAudit(null, userId, 'ai_auto_execute', symbol,
+      { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, error: err.message },
+      { status: 'error', message: err.message }, 'error')
+  }
+}
+
+// === Compatibility wrappers ===
+export async function startAutoScheduler(userId) {
+  await reconcileAutoSchedulers()
+}
+
+export function stopAutoScheduler(userId) {
+  reconcileAutoSchedulers()
+}
+
+export async function initAutoSchedulers() {
+  console.log('[initAutoSchedulers] Starting unified scheduler reconciliation')
+  await reconcileAutoSchedulers()
+}
+
+function sendAutoProgress(userId, progress) {
+  try { sendToBrowsers(userId, { type: 'auto_progress', ...progress }) } catch {}
 }
 
 export async function startSmartCloseScheduler(userId) {

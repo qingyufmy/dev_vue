@@ -454,23 +454,9 @@
             <!-- 自动推理配置 -->
             <div id="auto-config" class="config-sub-panel">
               <div class="config-section">
-                <div class="config-section-title">自动推理引擎 <span class="admin-badge">仅管理员</span></div>
+                <div class="config-section-title">自动推理策略</div>
                 <div class="config-grid">
-                  <label><span>模型供应商</span><select id="autoApiProvider">
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="gpt">GPT</option>
-                    <option value="kimi">Kimi</option>
-                    <option value="qwen">Qwen</option>
-                    <option value="zhipu">Zhipu</option>
-                    <option value="doubao">DouBao</option>
-                    <option value="claude">Claude</option>
-                    <option value="gemini">Gemini</option>
-                  </select></label>
-                  <label><span>模型名称</span><input id="autoModelName" value="deepseek-chat" /></label>
-                  <label><span>API Key</span><input id="autoApiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
-                  <label><span>API 地址</span><input id="autoApiBaseUrl" value="https://api.deepseek.com" placeholder="OpenAI-compatible endpoint" /></label>
-                  <label><span>推理温度 Temperature</span><input id="autoTemperature" class="num" type="number" min="0" max="2" step="0.1" value="0.3" /><small class="field-help">自动推理建议低温稳定，0.2-0.4</small></label>
-                  <label><span>最大输出 Max Tokens</span><input id="autoMaxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /></label>
+                  <label><span>选择策略</span><select id="autoPromptTypeSelect"><option value="">加载中...</option></select></label>
                 </div>
               </div>
               <div class="config-section">
@@ -490,27 +476,54 @@
                   <label class="check-row auto-execute-label"><input id="autoEnableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
                 </div>
               </div>
-              <div class="config-section">
-                <div class="config-section-title">推理品种与循环间隔</div>
-                <div class="config-grid">
-                  <label><span>品种</span><input id="autoSymbolSelect" class="instrument-select" placeholder="搜索品种..." /></label>
-                  <label><span>循环间隔</span><span class="unit-field"><input id="autoIntervalMin" class="num" type="number" min="1" max="1440" step="1" value="5" /><span class="input-unit">分钟</span></span><small class="field-help">自动推理固定使用 M5 周期，每隔多久执行一次</small></label>
-                </div>
-              </div>
-              <div class="config-section">
-                <div class="config-section-title">系统提示词</div>
-                <div class="tf-tag-hint" style="background:var(--color-warning-bg);border:1px solid var(--color-warning-border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.6">
-                  <div style="color:var(--color-warning);font-weight:600;margin-bottom:4px">📐 自动推理数据周期标签</div>
-                  <div>在提示词中使用 <code style="background:var(--color-surface-alt);padding:2px 6px;border-radius:4px;font-size:12px">{{ATF:H4:50}}</code> 声明自动推理需要的 K 线周期和数量。</div>
-                  <div>格式：<code style="background:var(--color-surface-alt);padding:2px 6px;border-radius:4px;font-size:12px">{{ATF:周期:数量}}</code>，支持 M1/M5/M15/M30/H1/H4/D1，数量 10-500。</div>
-                  <div style="color:var(--color-text-muted);margin-top:4px">示例：<code style="background:var(--color-surface-alt);padding:2px 6px;border-radius:4px;font-size:12px">{{ATF:H4:50}} {{ATF:H1:80}} {{ATF:M15:100}} {{ATF:M5:60}}</code></div>
-                  <div style="color:var(--color-text-muted);">未添加标签时，系统将使用默认 4 周期数据。</div>
-                </div>
-                <label class="prompt-box"><span>自动推理专用提示词</span><textarea id="autoSystemPrompt" rows="11" spellcheck="false"></textarea></label>
-              </div>
               <div id="autoConfigStatus" class="inline-status">正在读取配置</div>
               <div class="config-actions">
-                <button id="saveAutoConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存自动推理配置</button>
+                <button id="saveAutoConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
+              </div>
+
+              <!-- Admin-only: Global model/API config -->
+              <div class="admin-only-auto-config" style="display:none">
+                <div class="config-section" style="margin-top:20px;border-top:2px solid var(--color-border);padding-top:20px">
+                  <div class="config-section-title">全局模型/API 配置 <span class="admin-badge">仅管理员</span></div>
+                  <div class="config-grid">
+                    <label><span>模型供应商</span><select id="autoApiProvider">
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="gpt">GPT</option>
+                      <option value="kimi">Kimi</option>
+                      <option value="qwen">Qwen</option>
+                      <option value="zhipu">Zhipu</option>
+                      <option value="doubao">DouBao</option>
+                      <option value="claude">Claude</option>
+                      <option value="gemini">Gemini</option>
+                    </select></label>
+                    <label><span>模型名称</span><input id="autoModelName" value="deepseek-chat" /></label>
+                    <label><span>API Key</span><input id="autoApiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
+                    <label><span>API 地址</span><input id="autoApiBaseUrl" value="https://api.deepseek.com" placeholder="OpenAI-compatible endpoint" /></label>
+                    <label><span>推理温度</span><input id="autoTemperature" class="num" type="number" min="0" max="2" step="0.1" value="0.3" /></label>
+                    <label><span>最大输出</span><input id="autoMaxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /></label>
+                  </div>
+                </div>
+
+                <div class="config-section">
+                  <div class="config-section-title">提示词策略管理</div>
+                  <div id="adminPromptTypeList" style="max-height:200px;overflow-y:auto;margin-bottom:12px"></div>
+                  <div style="margin-top:12px;padding:12px;background:var(--color-surface-alt);border-radius:8px">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                      <input id="adminPtId" type="hidden" value="" />
+                      <label><span>策略标题</span><input id="adminPtTitle" placeholder="如: 黄金5分钟趋势" /></label>
+                      <label><span>排序</span><input id="adminPtSortOrder" type="number" value="0" /></label>
+                    </div>
+                    <label><span>描述</span><input id="adminPtDescription" placeholder="策略说明" /></label>
+                    <label><span>绑定品种 (逗号分隔)</span><input id="adminPtSymbols" placeholder="XAUUSD, EURUSD" /></label>
+                    <label><span>循环间隔 (分钟)</span><input id="adminPtInterval" type="number" min="1" value="5" /></label>
+                    <label><span>系统提示词</span><textarea id="adminPtPrompt" rows="6" spellcheck="false" placeholder="输入提示词..."></textarea></label>
+                    <label class="check-row"><input id="adminPtActive" type="checkbox" checked /><span>启用</span></label>
+                    <div style="display:flex;gap:8px;margin-top:8px">
+                      <button class="btn btn-primary" onclick="saveAdminPromptType()">保存策略</button>
+                      <button class="btn btn-secondary" onclick="document.getElementById('adminPtId').value='';document.getElementById('adminPtTitle').value='';document.getElementById('adminPtDescription').value='';document.getElementById('adminPtSymbols').value='';document.getElementById('adminPtInterval').value='5';document.getElementById('adminPtPrompt').value='';document.getElementById('adminPtActive').checked=true;document.getElementById('adminPtSortOrder').value='0'">新建策略</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 

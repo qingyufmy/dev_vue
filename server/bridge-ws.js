@@ -1,7 +1,6 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { query, queryOne, queryAll, queryRun, logAudit, withTransaction, beijingNow } from './db.js'
-import { getRedis, cacheGetJSON, cacheSetJSON, cacheDel } from './redis.js'
 
 // Parse symbols from DB: handles legacy JSON array or plain comma-separated text
 function parseSymbols(raw) {
@@ -361,9 +360,6 @@ async function _initBridge(ws, userId) {
         const prevTickets = bridge._lastPositionTickets || ''
         if (curTickets !== prevTickets) {
           bridge._lastPositionTickets = curTickets
-          if (prevTickets !== '') {
-            cacheDel(`cache:history:${userId}`).catch(() => {})
-          }
         }
       }
     } else if (msg.type === 'hb' || msg.type === 'pong') {
@@ -445,7 +441,7 @@ async function handleBrowserCommand(ws, userId, msg) {
     if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
 
     // Plus users: read-only, block write operations + analyze (API cost)
-    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_auto_config', 'toggle_auto', 'set_quote_symbol', 'save_close_config', 'run_close_now']
+    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_user_auto_config', 'toggle_auto', 'admin_save_auto_global_config', 'admin_save_auto_prompt_type', 'admin_disable_auto_prompt_type', 'set_quote_symbol', 'save_close_config', 'run_close_now']
     if (!isPro && writeActions.includes(action)) {
       return reply({ status: 'error', message: '升级会员即可解锁交易功能' })
     }
@@ -454,14 +450,14 @@ async function handleBrowserCommand(ws, userId, msg) {
       return reply({ status: 'error', message: '升级会员即可使用 AI 推理' })
     }
 
-    // Pro/Plus users without own bridge: block write operations
+    // Pro/Plus users without own bridge: block trade operations (config/toggle allowed)
     const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws.readyState === 1
-    if (!hasOwnBridge && writeActions.includes(action)) {
+    const tradeActions = ['open', 'close', 'execute']
+    if (!hasOwnBridge && tradeActions.includes(action)) {
       return reply({ status: 'error', message: '请先连接您的 MT5 账户' })
     }
 
     // Block trade operations when trading is disabled
-    const tradeActions = ['open', 'close', 'execute']
     if (tradeActions.includes(action) && hasOwnBridge) {
       const bridge = bridges.get(userId)
       if (bridge.tradeEnabled === false) {
@@ -533,13 +529,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(userId, 'open', params)
         await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
         // 交易操作后清除历史缓存
-        if (result?.status === 'success') cacheDel(`cache:history:${userId}`).catch(() => {})
         break
       case 'close':
         result = await ai.mt5Bridge(userId, 'close', params)
         await ai.insertAudit(null, userId, 'manual_close', null, params, result, result?.status || 'unknown')
-        // 交易操作后清除历史缓存
-        if (result?.status === 'success') cacheDel(`cache:history:${userId}`).catch(() => {})
         break
       case 'toggle_trade': {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
@@ -708,6 +701,35 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signal_detail': {
         const signalId = Number(params.signal_id)
         if (!signalId) return reply({ status: 'error', message: 'signal_id required' })
+
+        // Check if user has a delivery for this signal
+        const delivery = await queryOne(
+          'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?',
+          [signalId, userId]
+        )
+        if (delivery) {
+          const row = await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId])
+          if (row) {
+            const item = { ...row }
+            try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
+            delete item.market_data_json
+            item.is_executed = !!delivery.is_executed
+            item.executed_at = delivery.executed_at
+            item.trade_ticket = delivery.trade_ticket
+            item.execution_result = delivery.execution_result
+            item.execution_status = delivery.execution_status
+            item.delivery_id = delivery.id
+            item.prompt_type_id = delivery.prompt_type_id
+            item.source = 'auto_shared'
+            ai.attachSignalTiming(item)
+            result = { status: 'success', signal: item }
+          } else {
+            result = { status: 'error', message: 'signal not found' }
+          }
+          break
+        }
+
+        // Fallback: old signal check
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         const detailUserId = hasOwnBridge ? userId : (adminUserId || userId)
         const row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, detailUserId])
@@ -726,17 +748,10 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signals': {
         const offset = Number(params.offset) || 0
         const limit = Math.min(Number(params.limit) || 6, 100)
-        // 观摩模式：始终用 admin 的信号
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const queryUserId = hasOwnBridge ? userId : (adminUserId || userId)
-        // Build cache key from query params
-        const sigCacheKey = `cache:signals:${queryUserId}:${offset}:${limit}:${params.direction||''}:${params.timeframe||''}:${params.session_id||''}`
-        const sigCached = await cacheGetJSON(sigCacheKey)
-        if (sigCached) { result = sigCached; break }
 
-        // Build filter conditions
+        // Build filter conditions for old signals
         const filterClauses = ['user_id = ?']
-        const filterParams = [queryUserId]
+        const filterParams = [userId]
         if (params.direction) {
           const types = { buy: 'buy,strong_buy', sell: 'sell,strong_sell', hold: 'hold' }
           const dirTypes = types[params.direction] || params.direction
@@ -748,42 +763,96 @@ async function handleBrowserCommand(ws, userId, msg) {
           filterParams.push(params.timeframe)
         }
         if (params.direction === 'close') {
-          // CLOSE signals use session_id='smart_close'
           filterClauses.push('session_id = ?')
           filterParams.push('smart_close')
         } else if (params.session_id) {
           filterClauses.push('session_id = ?')
           filterParams.push(params.session_id)
         }
+        filterClauses.push("(source = 'manual' OR source IS NULL)")
         const where = filterClauses.join(' AND ')
-        const rows = await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
-        const hasMore = rows.length > limit
-        const sliced = rows.slice(0, limit)
-        // Get filtered total count for pagination
-        const countParams = [...filterParams]
-        const countRow = await queryOne(`SELECT COUNT(*) as total FROM ai_signals WHERE ${where}`, countParams)
-        const totalCount = countRow ? countRow.total : sliced.length
+        const oldRows = await queryAll(`SELECT * FROM ai_signals WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...filterParams, limit + 1, offset])
+
+        // New shared signals via deliveries
+        const delivClauses = ['d.user_id = ?']
+        const delivParams = [userId]
+        if (params.direction) {
+          const types = { buy: 'buy,strong_buy', sell: 'sell,strong_sell', hold: 'hold' }
+          const dirTypes = types[params.direction] || params.direction
+          delivClauses.push(`s.signal_type IN (${dirTypes.split(',').map(() => '?').join(',')})`)
+          delivParams.push(...dirTypes.split(','))
+        }
+        if (params.timeframe) {
+          delivClauses.push('s.timeframe = ?')
+          delivParams.push(params.timeframe)
+        }
+        if (params.direction === 'close') {
+          delivClauses.push('s.session_id = ?')
+          delivParams.push('smart_close')
+        }
+        const delivWhere = delivClauses.join(' AND ')
+        const newRows = await queryAll(
+          `SELECT s.*, d.id as delivery_id, d.execution_status, d.trade_ticket as delivery_trade_ticket,
+                  d.execution_result as delivery_execution_result, d.is_executed as delivery_is_executed,
+                  d.executed_at as delivery_executed_at, d.prompt_type_id as delivery_prompt_type_id
+           FROM auto_signal_deliveries d
+           JOIN ai_signals s ON s.id = d.signal_id
+           WHERE ${delivWhere}
+           ORDER BY s.id DESC LIMIT ? OFFSET ?`,
+          [...delivParams, limit + 1, offset]
+        )
+
+        // Merge and sort
+        const allRows = [...oldRows.map(r => ({ ...r, _source: 'old' })), ...newRows.map(r => {
+          const item = { ...r, _source: 'auto_shared' }
+          item.is_executed = !!r.delivery_is_executed
+          item.executed_at = r.delivery_executed_at
+          item.trade_ticket = r.delivery_trade_ticket
+          item.execution_result = r.delivery_execution_result
+          item.execution_status = r.execution_status
+          item.delivery_id = r.delivery_id
+          item.prompt_type_id = r.delivery_prompt_type_id
+          item.source = 'auto_shared'
+          return item
+        })]
+        allRows.sort((a, b) => (b.id || 0) - (a.id || 0))
+        const hasMore = allRows.length > limit
+        const sliced = allRows.slice(0, limit)
+        const totalCount = sliced.length // approximate for combined
         const signals = sliced.map(row => {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
           delete item.market_data_json
+          delete item.delivery_trade_ticket
+          delete item.delivery_execution_result
+          delete item.delivery_is_executed
+          delete item.delivery_executed_at
+          delete item.delivery_prompt_type_id
           item.is_executed = !!item.is_executed
           ai.attachSignalTiming(item)
           return item
         })
         result = { status: 'success', signals, has_more: hasMore, total_count: totalCount }
-        cacheSetJSON(sigCacheKey, result, 300).catch(() => {})
 
         break
       }
       case 'execute': {
-        const signal = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [params.signal_id, userId])
+        // Check shared delivery first
+        const delivery = await queryOne(
+          'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?',
+          [params.signal_id, userId]
+        )
+        let signal, signalSource
+        if (delivery) {
+          signal = await queryOne('SELECT * FROM ai_signals WHERE id = ?', [params.signal_id])
+          signalSource = 'auto_shared'
+        } else {
+          signal = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [params.signal_id, userId])
+          signalSource = 'manual'
+        }
         if (!signal) return reply({ status: 'error', message: 'Signal not found' })
-        // Targeted risk-param fetch: auto signal → global config (or user override), manual signal → user's config
-        // No fallback, no penetration, no API key leak
+
         const config = await ai.getExecuteRiskConfig(userId, signal)
-        // 复核执行是人工触发+二次确认的操作，不应受 enable_auto_trade 限制
-        // 只需确保有风险配置可用（止盈档位、最大手数等参数）
         if (!config) {
           result = { status: 'rejected', message: 'no_risk_config', details: {} }
           await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, result.status)
@@ -799,10 +868,16 @@ async function handleBrowserCommand(ws, userId, msg) {
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
         result = await ai.mt5Bridge(userId, 'open', orderPayload)
         if (result.status === 'success') {
-          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), result.ticket || null, signal.id])
-          cacheDel(`cache:history:${userId}`).catch(() => {})
+          if (signalSource === 'auto_shared' && delivery) {
+            const ticket = result.order || result.ticket || null
+            await queryRun(
+              'UPDATE auto_signal_deliveries SET execution_status = ?, is_executed = 1, executed_at = NOW(), trade_ticket = ?, execution_result = ? WHERE id = ?',
+              ['success', ticket, JSON.stringify(result), delivery.id])
+          } else {
+            await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), result.ticket || null, signal.id])
+          }
         }
-        await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm }, result, result.status)
+        await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm, source: signalSource }, result, result.status)
         break
       }
       case 'auto_status': {
@@ -819,26 +894,44 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'toggle_auto': {
-        // Simple toggle: immediately return new state, auto uses global config only
         const cfg = await ai.getAutoConfig(null, userId)
         const newEnabled = !cfg?.enabled
-        const globalCfg = await ai.getGlobalAutoConfig()
-        const symbols = parseSymbols(globalCfg?.symbols)
-        await ai.upsertAutoConfig(null, userId, symbols, newEnabled)
-        ai.stopAutoScheduler(userId)
         if (newEnabled) {
-          await ai.startAutoScheduler(userId)
+          // Ensure user has a prompt_type_id
+          const pt = await ai.getAutoPromptTypes()
+          if (!pt || pt.length === 0) {
+            result = { status: 'error', message: '暂无可用策略，请联系管理员' }
+            break
+          }
+          const userCfg = cfg || {}
+          if (!userCfg.prompt_type_id) {
+            // Assign first active strategy as default
+            await ai.saveUserAutoConfig(userId, { prompt_type_id: pt[0].id })
+          }
         }
-        // Persist auto-reasoning state to DB
+        // Update enabled in auto_scheduler
+        if (cfg) {
+          await queryRun('UPDATE auto_scheduler SET enabled = ?, updated_at = NOW() WHERE user_id = ?', [newEnabled ? 1 : 0, userId])
+        } else {
+          const pt = await ai.getAutoPromptTypes()
+          const defaultPtId = pt?.[0]?.id || null
+          await queryRun(
+            `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())`,
+            [userId, newEnabled ? 1 : 0, defaultPtId]
+          )
+        }
+        // Sync user_bridge_settings
         try {
           await queryRun(
             'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = NOW()',
             [userId, newEnabled ? 1 : 0, newEnabled ? 1 : 0]
           )
         } catch (e) { console.error('[BridgeWS] Failed to persist auto_reasoning_enabled:', e.message) }
-        // Update in-memory bridge state so heartbeat reflects it
+        // Update in-memory bridge state
         const bridgeAuto = bridges.get(userId)
         if (bridgeAuto) bridgeAuto.autoReasoningEnabled = newEnabled
+        // Reconcile schedulers
+        ai.reconcileAutoSchedulers()
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
         break
       }
@@ -850,62 +943,117 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'get_auto_config': {
         const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
-        if (user?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
-        const globalCfg = await ai.getGlobalAutoConfig()
-        const autoPrompt = globalCfg?.system_prompt || ''
-        let symbols = parseSymbols(globalCfg?.symbols)
-        let intervalMinutes = globalCfg?.interval_minutes || 5
-        // If user has override enabled, silently use their symbol + interval (no banner / no disabled)
-        // Override removed: auto config panel shows global config only
-        result = {
-          status: 'success',
-          config: {
-            api_provider: globalCfg?.api_provider || 'deepseek',
-            model_name: globalCfg?.model_name || 'deepseek-chat',
-            has_api_key: !!globalCfg?.api_key_encrypted,
-            api_base_url: globalCfg?.api_base_url || 'https://api.deepseek.com',
-            temperature: globalCfg?.temperature ?? 0.3,
-            max_tokens: globalCfg?.max_tokens ?? 2000,
-            risk_level: globalCfg?.risk_level || 'medium',
-            max_position_size: globalCfg?.max_position_size ?? 0.05,
-            selected_take_profit: globalCfg?.selected_take_profit ?? 2,
-            system_prompt: autoPrompt,
-            symbols,
-            interval_minutes: intervalMinutes,
-            enable_auto_trade: !!globalCfg?.enable_auto_trade
+        const isAdmin = user?.role === 'admin'
+        const userAuto = await ai.getUserAutoConfig(userId)
+        const running = ai.isAutoSchedulerRunning(userId)
+
+        const config = {
+          enabled: !!userAuto.scheduler?.enabled,
+          prompt_type_id: userAuto.scheduler?.prompt_type_id || null,
+          risk_level: userAuto.scheduler?.risk_level || 'medium',
+          max_position_size: userAuto.scheduler?.max_position_size ?? 0.05,
+          selected_take_profit: userAuto.scheduler?.selected_take_profit ?? 2,
+          enable_auto_trade: !!userAuto.scheduler?.enable_auto_trade,
+          running,
+          paused_reason: userAuto.pausedReason || '',
+        }
+
+        const promptTypes = await ai.getAutoPromptTypes()
+
+        if (isAdmin) {
+          const globalCfg = await ai.getGlobalAutoConfig()
+          const { autoSchedulerState } = await import('./scheduler.js')
+          const schedulerStates = Object.values(autoSchedulerState).map(s => ({
+            key: s.key, promptTypeId: s.promptTypeId, symbol: s.symbol,
+            running: s.running, subscriberCount: s.subscriberCount, lastError: s.lastError,
+          }))
+          result = {
+            status: 'success',
+            config,
+            prompt_types: promptTypes.map(pt => ({
+              id: pt.id, title: pt.title, description: pt.description,
+              system_prompt: pt.system_prompt, symbols: JSON.parse(pt.symbols_json || '[]'),
+              interval_minutes: pt.interval_minutes, is_active: !!pt.is_active, sort_order: pt.sort_order,
+            })),
+            admin: {
+              global_config: {
+                api_provider: globalCfg?.api_provider || 'deepseek',
+                model_name: globalCfg?.model_name || 'deepseek-chat',
+                has_api_key: !!globalCfg?.api_key_encrypted,
+                api_base_url: globalCfg?.api_base_url || 'https://api.deepseek.com',
+                temperature: globalCfg?.temperature ?? 0.3,
+                max_tokens: globalCfg?.max_tokens ?? 2000,
+                risk_level: globalCfg?.risk_level || 'medium',
+                max_position_size: globalCfg?.max_position_size ?? 0.05,
+                selected_take_profit: globalCfg?.selected_take_profit ?? 2,
+              },
+              scheduler_states: schedulerStates,
+            },
+          }
+        } else {
+          result = {
+            status: 'success',
+            config,
+            prompt_types: promptTypes.map(pt => ({
+              id: pt.id, title: pt.title, description: pt.description, is_active: !!pt.is_active,
+            })),
           }
         }
         break
       }
-      case 'save_auto_config': {
-        // Save global auto config (admin only)
+      case 'save_user_auto_config': {
+        try {
+          await ai.saveUserAutoConfig(userId, params)
+          ai.reconcileAutoSchedulers()
+          result = { status: 'success', message: '配置已保存' }
+        } catch (e) {
+          result = { status: 'error', message: e.message }
+        }
+        break
+      }
+      case 'admin_save_auto_global_config': {
         const user2 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (user2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         const existing = await ai.getGlobalAutoConfig()
-        const existingSymbols = (existing?.symbols || 'XAUUSD').split(',').map(s => s.trim()).filter(Boolean)
         const newCfg = {
-          symbols: Array.isArray(params.symbols) ? params.symbols[0] || 'XAUUSD' : (params.symbols || existing?.symbols || 'XAUUSD'),
-          interval_minutes: params.interval_minutes ?? existing?.interval_minutes ?? 5,
+          symbols: existing?.symbols || 'XAUUSD',
+          interval_minutes: existing?.interval_minutes || 5,
           api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
           api_key_encrypted: params.api_key || existing?.api_key_encrypted || null,
           api_base_url: params.api_base_url ?? existing?.api_base_url ?? 'https://api.deepseek.com',
           temperature: params.temperature ?? existing?.temperature ?? 0.3,
           max_tokens: params.max_tokens ?? existing?.max_tokens ?? 2000,
-          system_prompt: params.system_prompt ?? existing?.system_prompt ?? null,
+          system_prompt: existing?.system_prompt || null,
           risk_level: params.risk_level ?? existing?.risk_level ?? 'medium',
           max_position_size: params.max_position_size ?? existing?.max_position_size ?? 0.05,
           selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
           enable_auto_trade: params.enable_auto_trade ?? existing?.enable_auto_trade ?? 0,
         }
         await ai.saveGlobalAutoConfig(newCfg)
-        // Restart schedulers for all enabled users
-        const enabledUsers = await queryAll('SELECT user_id FROM auto_scheduler WHERE enabled = 1 AND user_id != 0')
-        for (const u of enabledUsers) {
-          ai.stopAutoScheduler(u.user_id)
-          await ai.startAutoScheduler(u.user_id)
+        ai.reconcileAutoSchedulers()
+        result = { status: 'success', message: '全局配置已保存' }
+        break
+      }
+      case 'admin_save_auto_prompt_type': {
+        const user3 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (user3?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+        try {
+          const saved = await ai.saveAutoPromptType(userId, params)
+          ai.reconcileAutoSchedulers()
+          result = { status: 'success', prompt_type: saved }
+        } catch (e) {
+          result = { status: 'error', message: e.message }
         }
-        result = { status: 'success', message: '自动推理配置已保存' }
+        break
+      }
+      case 'admin_disable_auto_prompt_type': {
+        const user4 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        if (user4?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
+        if (!params.id) { result = { status: 'error', message: 'id required' }; break }
+        await ai.disableAutoPromptType(userId, params.id)
+        ai.reconcileAutoSchedulers()
+        result = { status: 'success', message: '策略已禁用' }
         break
       }
       case 'save_auto': {
@@ -942,11 +1090,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'signal_tickets': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const ticketUserId = hasOwnBridge ? userId : (adminUserId || userId)
-        const rows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 ORDER BY id DESC LIMIT 200', [ticketUserId])
         const ticketMap = {}
-        for (const row of rows) {
+        // Old signals
+        const oldRows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND (source = \'manual\' OR source IS NULL) ORDER BY id DESC LIMIT 200', [userId])
+        for (const row of oldRows) {
           try {
             let ticket = row.trade_ticket
             if (!ticket) {
@@ -954,6 +1101,23 @@ async function handleBrowserCommand(ws, userId, msg) {
               ticket = exec.order || exec.ticket || exec.position
             }
             if (ticket) ticketMap[String(ticket)] = row.id
+          } catch {}
+        }
+        // New shared signals via deliveries
+        const delivRows = await queryAll(
+          `SELECT d.signal_id, d.trade_ticket, d.execution_result
+           FROM auto_signal_deliveries d
+           WHERE d.user_id = ? AND d.is_executed = 1
+           ORDER BY d.id DESC LIMIT 200`,
+          [userId])
+        for (const row of delivRows) {
+          try {
+            let ticket = row.trade_ticket
+            if (!ticket) {
+              const exec = JSON.parse(row.execution_result || '{}')
+              ticket = exec.order || exec.ticket || exec.position
+            }
+            if (ticket) ticketMap[String(ticket)] = row.signal_id
           } catch {}
         }
         result = { status: 'success', tickets: ticketMap }
@@ -1197,10 +1361,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
-        // Check Redis cache first (10s TTL)
-        const dashCached = await cacheGetJSON('cache:admin:ws_dashboard')
-        if (dashCached) { result = dashCached; break }
-
         const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList] = await Promise.all([
           // 1. User stats
           queryOne(`SELECT
@@ -1281,7 +1441,6 @@ async function handleBrowserCommand(ws, userId, msg) {
             bridges: bridgeList || []
           }
         }
-        cacheSetJSON('cache:admin:ws_dashboard', result, 10).catch(() => {})
         break
       }
       case 'admin_user_status': {
@@ -1357,9 +1516,6 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         const page = Math.max(1, Number(params.page) || 1)
         const pageSize = Math.min(Number(params.pageSize) || 10, 50)
-        const ulCacheKey = `cache:admin:userlist:${page}:${pageSize}`
-        const ulCached = await cacheGetJSON(ulCacheKey)
-        if (ulCached) { result = ulCached; break }
         const offset = (page - 1) * pageSize
 
         const countRow = await queryOne('SELECT COUNT(*) AS total FROM users')
@@ -1392,7 +1548,6 @@ async function handleBrowserCommand(ws, userId, msg) {
           page,
           pageSize
         }
-        cacheSetJSON(ulCacheKey, result, 10).catch(() => {})
         break
       }
       default:

@@ -6,9 +6,9 @@ import { authMiddleware } from '../../middleware/auth.js'
 import { attachSignalTiming, configPublic, timeframeIntervalMs, STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getActiveConfig, getAnalyzeApiKey, getAutoConfig, getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, insertAudit } from './config.js'
+import { getActiveConfig, getAnalyzeApiKey, getAutoConfig, getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, insertAudit, getAutoPromptTypes, getAutoPromptTypeById, saveAutoPromptType, disableAutoPromptType, getUserAutoConfig, saveUserAutoConfig, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
-import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler } from './scheduler.js'
+import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler } from './scheduler.js'
 
 const router = Router()
 
@@ -49,10 +49,13 @@ export { maybeAiSignal } from './llm.js'
 export { insertAudit, getActiveConfig, getAnalyzeApiKey,
   getAutoConfig, upsertAutoConfig, signalOrderPayload,
   getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig,
-  getExecuteRiskConfig } from './config.js'
+  getExecuteRiskConfig, getAutoPromptTypes, getAutoPromptTypeById,
+  saveAutoPromptType, disableAutoPromptType, getUserAutoConfig,
+  saveUserAutoConfig, getUnifiedAutoInferenceConfig, getAutoSubscribers,
+  getDeliveryExecuteRiskConfig } from './config.js'
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
-  runAutoCycle, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler } from './scheduler.js'
+  reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler } from './scheduler.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'

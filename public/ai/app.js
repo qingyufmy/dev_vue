@@ -1387,24 +1387,15 @@ async function handleAutoToggle() {
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   _autoToggleLock = true;
   try {
-    // Check bridge connection before toggling (better UX than backend error)
-    const health = await wsApi("health").catch(() => null);
-    if (health?.gateway?.mode !== "live") {
-      toast("请先启动桥接脚本", "warning");
-      return;
-    }
     const result = await wsApi('toggle_auto');
-    // Wait for loadStatus to refresh state.autoConfig before building badge label
-    await loadStatus();
+    await loadAutoConfig();
     const isMarketClosed = state.marketTradeMode !== 4;
-    const symbols = state.autoConfig?.symbols || ['XAUUSD'];
-    const intervalMin = state.autoConfig?.interval_minutes || 5;
     let label, type;
     if (result.enabled && isMarketClosed) {
       label = `市场休市 · 自动推理暂停`;
       type = 'warning';
     } else if (result.enabled) {
-      label = `自动推理运行中 · ${symbols[0]} · ${intervalMin}分钟`;
+      label = `自动推理运行中`;
       type = 'active';
     } else {
       label = '自动推理关闭';
@@ -2209,35 +2200,90 @@ function applyAutoProviderPreset(provider) {
 }
 
 async function loadAutoConfig() {
-  const isAdmin = state.user?.role === 'admin';
   const autoPanel = document.getElementById('auto-config');
-  if (autoPanel) autoPanel.style.display = isAdmin ? '' : 'none';
-  if (!isAdmin) return;
+  if (autoPanel) autoPanel.style.display = '';
+  const isAdmin = state.user?.role === 'admin';
 
   try {
     const data = await wsApi('get_auto_config');
     if (data.status !== 'success') { setText('autoConfigStatus', data.message || '加载失败'); return; }
     const cfg = data.config;
+    const promptTypes = data.prompt_types || [];
 
-    document.getElementById('autoApiProvider').value = cfg.api_provider || 'deepseek';
-    document.getElementById('autoModelName').value = cfg.model_name || 'deepseek-chat';
-    document.getElementById('autoApiBaseUrl').value = cfg.api_base_url || '';
-    document.getElementById('autoTemperature').value = cfg.temperature ?? 0.3;
-    document.getElementById('autoMaxTokens').value = cfg.max_tokens ?? 2000;
+    // Show/hide admin sections
+    const adminSections = document.querySelectorAll('.admin-only-auto-config');
+    adminSections.forEach(el => { el.style.display = isAdmin ? '' : 'none'; });
+
+    // User config section
+    const ptSelect = document.getElementById('autoPromptTypeSelect');
+    if (ptSelect) {
+      ptSelect.innerHTML = '<option value="">选择策略...</option>';
+      for (const pt of promptTypes) {
+        const opt = document.createElement('option');
+        opt.value = pt.id;
+        opt.textContent = pt.title + (pt.description ? ` - ${pt.description}` : '');
+        if (pt.id === cfg.prompt_type_id) opt.selected = true;
+        ptSelect.appendChild(opt);
+      }
+    }
+
     document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
     document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
     document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enable_auto_trade);
-    document.getElementById('autoSymbolSelect').value = (cfg.symbols || ['XAUUSD'])[0] || 'XAUUSD';
-    document.getElementById('autoApiKey').placeholder = cfg.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
-    document.getElementById('autoSystemPrompt').value = cfg.system_prompt || '';
-    document.getElementById('autoIntervalMin').value = cfg.interval_minutes || 5;
 
-    applyAutoProviderPreset(cfg.api_provider || 'deepseek');
-    setText('autoConfigStatus', `${cfg.api_provider || 'Provider'} · ${cfg.model_name || 'model'} · ${cfg.has_api_key ? '密钥已配置' : '未配置密钥'} · 品种: ${(cfg.symbols||['XAUUSD'])[0]} · 间隔: ${cfg.interval_minutes || 5}分钟`);
+    // Running status
+    const statusEl = document.getElementById('autoConfigStatus');
+    let statusText = '';
+    if (cfg.running) {
+      statusText = cfg.paused_reason ? `暂停: ${cfg.paused_reason}` : '运行中';
+    } else if (cfg.enabled) {
+      statusText = cfg.paused_reason ? `暂停: ${cfg.paused_reason}` : '已启用';
+    } else {
+      statusText = '已关闭';
+    }
+    setText('autoConfigStatus', statusText);
+
+    // Admin: global config
+    if (isAdmin && data.admin) {
+      const gc = data.admin.global_config;
+      document.getElementById('autoApiProvider').value = gc.api_provider || 'deepseek';
+      document.getElementById('autoModelName').value = gc.model_name || 'deepseek-chat';
+      document.getElementById('autoApiBaseUrl').value = gc.api_base_url || '';
+      document.getElementById('autoTemperature').value = gc.temperature ?? 0.3;
+      document.getElementById('autoMaxTokens').value = gc.max_tokens ?? 2000;
+      document.getElementById('autoApiKey').placeholder = gc.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
+      applyAutoProviderPreset(gc.api_provider || 'deepseek');
+
+      // Prompt type list
+      const ptList = document.getElementById('adminPromptTypeList');
+      if (ptList) {
+        ptList.innerHTML = '';
+        const adminPts = data.prompt_types || [];
+        for (const pt of adminPts) {
+          const div = document.createElement('div');
+          div.className = 'prompt-type-item' + (pt.id === cfg.prompt_type_id ? ' active' : '');
+          div.innerHTML = `<div class="pt-title">${pt.title || '未命名'}</div><div class="pt-desc">${pt.description || ''}</div><div class="pt-meta">品种: ${(pt.symbols||[]).join(', ')} · 间隔: ${pt.interval_minutes}分钟 · ${pt.is_active ? '启用' : '禁用'}</div>`;
+          div.dataset.id = pt.id;
+          div.onclick = () => loadAdminPromptType(pt);
+          ptList.appendChild(div);
+        }
+      }
+    }
   } catch (e) {
     setText('autoConfigStatus', '加载失败: ' + e.message);
   }
+}
+
+function loadAdminPromptType(pt) {
+  document.getElementById('adminPtId').value = pt.id || '';
+  document.getElementById('adminPtTitle').value = pt.title || '';
+  document.getElementById('adminPtDescription').value = pt.description || '';
+  document.getElementById('adminPtSymbols').value = (pt.symbols || []).join(', ');
+  document.getElementById('adminPtInterval').value = pt.interval_minutes || 5;
+  document.getElementById('adminPtPrompt').value = pt.system_prompt || '';
+  document.getElementById('adminPtActive').checked = pt.is_active !== false;
+  document.getElementById('adminPtSortOrder').value = pt.sort_order || 0;
 }
 
 function initAutoSymbolsSelector() {
@@ -2251,29 +2297,65 @@ function initAutoSymbolsSelector() {
 }
 
 async function saveAutoConfig() {
-  const symbol = document.getElementById('autoSymbolSelect').value.trim();
-  const intervalMinutes = parseInt(document.getElementById('autoIntervalMin').value) || 5;
-  const apiKey = document.getElementById('autoApiKey').value.trim();
+  const isAdmin = state.user?.role === 'admin';
 
   try {
-    const payload = {
-      symbols: [symbol],
-      interval_minutes: intervalMinutes,
-      api_provider: document.getElementById('autoApiProvider').value,
-      model_name: document.getElementById('autoModelName').value,
-      api_base_url: document.getElementById('autoApiBaseUrl').value,
-      temperature: parseFloat(document.getElementById('autoTemperature').value) || 0.3,
-      max_tokens: parseInt(document.getElementById('autoMaxTokens').value) || 2000,
+    // Save user config (all users)
+    const userPayload = {
+      prompt_type_id: parseInt(document.getElementById('autoPromptTypeSelect')?.value) || undefined,
       risk_level: document.getElementById('autoRiskLevel').value,
       max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
       selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
       enable_auto_trade: document.getElementById('autoEnableAutoTrade').checked,
-      system_prompt: document.getElementById('autoSystemPrompt').value || null,
     };
-    if (apiKey) payload.api_key = apiKey;
-    await wsApi('save_auto_config', payload);
-    document.getElementById('autoApiKey').value = '';
-    toast('自动推理配置已保存', 'success');
+    await wsApi('save_user_auto_config', userPayload);
+
+    // Admin: save global config
+    if (isAdmin) {
+      const apiKey = document.getElementById('autoApiKey')?.value?.trim();
+      const globalPayload = {
+        api_provider: document.getElementById('autoApiProvider').value,
+        model_name: document.getElementById('autoModelName').value,
+        api_base_url: document.getElementById('autoApiBaseUrl').value,
+        temperature: parseFloat(document.getElementById('autoTemperature').value) || 0.3,
+        max_tokens: parseInt(document.getElementById('autoMaxTokens').value) || 2000,
+        risk_level: document.getElementById('autoRiskLevel').value,
+        max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
+        selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
+        enable_auto_trade: document.getElementById('autoEnableAutoTrade').checked,
+      };
+      if (apiKey) globalPayload.api_key = apiKey;
+      await wsApi('admin_save_auto_global_config', globalPayload);
+      if (apiKey) document.getElementById('autoApiKey').value = '';
+    }
+
+    toast('配置已保存', 'success');
+    await loadAutoConfig();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveAdminPromptType() {
+  try {
+    const payload = {
+      id: parseInt(document.getElementById('adminPtId')?.value) || undefined,
+      title: document.getElementById('adminPtTitle').value,
+      description: document.getElementById('adminPtDescription').value,
+      symbols: document.getElementById('adminPtSymbols').value.split(',').map(s => s.trim()).filter(Boolean),
+      interval_minutes: parseInt(document.getElementById('adminPtInterval').value) || 5,
+      system_prompt: document.getElementById('adminPtPrompt').value,
+      is_active: document.getElementById('adminPtActive').checked,
+      sort_order: parseInt(document.getElementById('adminPtSortOrder').value) || 0,
+    };
+    await wsApi('admin_save_auto_prompt_type', payload);
+    toast('策略已保存', 'success');
+    await loadAutoConfig();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function disableAdminPromptType(id) {
+  try {
+    await wsApi('admin_disable_auto_prompt_type', { id });
+    toast('策略已禁用', 'success');
     await loadAutoConfig();
   } catch (e) { toast(e.message, 'error'); }
 }

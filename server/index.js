@@ -335,13 +335,13 @@ app.get('*', (req, res) => {
 
 // Start MT5 Bridge (use venv Python with MetaTrader5 package)
 // Init DB and start
-initAutoSchedulers()
 const server = http.createServer(app)
 initBridgeWS(server)
 
 ;(async () => {
   await initDB()
   await runMigrations()
+  await initAutoSchedulers()
   server.listen(PORT, () => {
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })

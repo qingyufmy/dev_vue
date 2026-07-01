@@ -127,6 +127,115 @@ const migrations = [
         }
       } catch {}
     }
+  },
+  {
+    id: '011_add_auto_scheduler_new_columns',
+    up: async () => {
+      const cols = [
+        { name: 'prompt_type_id', def: "ADD COLUMN prompt_type_id INT DEFAULT NULL AFTER user_id" },
+        { name: 'risk_level', def: "ADD COLUMN risk_level VARCHAR(20) NOT NULL DEFAULT 'medium' AFTER enabled" },
+        { name: 'max_position_size', def: "ADD COLUMN max_position_size DOUBLE NOT NULL DEFAULT 0.05 AFTER risk_level" },
+        { name: 'selected_take_profit', def: "ADD COLUMN selected_take_profit INT NOT NULL DEFAULT 2 AFTER max_position_size" },
+        { name: 'enable_auto_trade', def: "ADD COLUMN enable_auto_trade TINYINT NOT NULL DEFAULT 0 AFTER selected_take_profit" },
+      ]
+      for (const col of cols) {
+        try {
+          const [existing] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_scheduler' AND COLUMN_NAME = ?", [col.name])
+          if (!existing.length) await queryRun(`ALTER TABLE auto_scheduler ${col.def}`)
+        } catch {}
+      }
+    }
+  },
+  {
+    id: '012_add_ai_signals_new_columns',
+    up: async () => {
+      const cols = [
+        { name: 'prompt_type_id', def: "ADD COLUMN prompt_type_id INT DEFAULT NULL AFTER config_id" },
+        { name: 'source', def: "ADD COLUMN source VARCHAR(30) NOT NULL DEFAULT 'manual' AFTER session_id" },
+      ]
+      for (const col of cols) {
+        try {
+          const [existing] = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = ?", [col.name])
+          if (!existing.length) await queryRun(`ALTER TABLE ai_signals ${col.def}`)
+        } catch {}
+      }
+    }
+  },
+  {
+    id: '013_add_unified_indexes',
+    up: async () => {
+      const indexes = [
+        'CREATE INDEX idx_auto_prompt_types_active_sort ON auto_prompt_types(is_active, sort_order, id)',
+        'CREATE INDEX idx_auto_scheduler_prompt_enabled ON auto_scheduler(prompt_type_id, enabled)',
+        'CREATE INDEX idx_auto_scheduler_enabled_prompt ON auto_scheduler(enabled, prompt_type_id)',
+        'CREATE INDEX idx_auto_deliveries_user_created ON auto_signal_deliveries(user_id, created_at)',
+        'CREATE INDEX idx_auto_deliveries_signal ON auto_signal_deliveries(signal_id)',
+        'CREATE INDEX idx_auto_deliveries_prompt_symbol ON auto_signal_deliveries(prompt_type_id, symbol)',
+        'CREATE INDEX idx_ai_signals_source_created ON ai_signals(source, created_at)',
+        'CREATE INDEX idx_ai_signals_prompt_symbol_created ON ai_signals(prompt_type_id, symbol, created_at)',
+      ]
+      for (const sql of indexes) {
+        try { await queryRun(sql) } catch (e) {
+          if (!e.message?.includes('Duplicate')) console.error(`[Migrations] Index creation failed:`, e.message)
+        }
+      }
+    }
+  },
+  {
+    id: '014_migrate_old_auto_config',
+    up: async () => {
+      try {
+        // 1. 如果 auto_prompt_types 为空，从 global_auto_config 迁移默认策略
+        const [cnt] = await queryAll('SELECT COUNT(*) as c FROM auto_prompt_types')
+        if (cnt[0].c === 0) {
+          const globalCfg = await queryOne('SELECT * FROM global_auto_config WHERE id = 1')
+          if (globalCfg) {
+            let symbolsArr = ['XAUUSD']
+            try {
+              const raw = (globalCfg.symbols || 'XAUUSD').trim()
+              symbolsArr = raw.startsWith('[') ? JSON.parse(raw) : raw.split(',').map(s => s.trim()).filter(Boolean)
+            } catch {}
+            const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
+            await queryRun(
+              `INSERT INTO auto_prompt_types (title, description, system_prompt, symbols_json, interval_minutes, is_active, sort_order, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 1, 0, 1, ?, ?)`,
+              ['默认自动推理策略', '由旧全局自动推理配置迁移生成', globalCfg.system_prompt || '', JSON.stringify(symbolsArr), globalCfg.interval_minutes || 5, now, now]
+            )
+            console.log('[Migrations] Migrated default prompt type from global_auto_config')
+          }
+        }
+
+        // 2. 旧 auto_scheduler.enabled=1 但 prompt_type_id 为空的用户，指向默认策略
+        const [defaultPt] = await queryAll('SELECT id FROM auto_prompt_types LIMIT 1')
+        if (defaultPt.length) {
+          const ptId = defaultPt[0].id
+          await queryRun(
+            'UPDATE auto_scheduler SET prompt_type_id = ? WHERE enabled = 1 AND prompt_type_id IS NULL',
+            [ptId]
+          )
+          // 同步 user_bridge_settings
+          await queryRun(
+            `INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at)
+             SELECT user_id, 1, NOW() FROM auto_scheduler WHERE enabled = 1
+             ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = NOW()`
+          )
+        }
+
+        // 3. 迁移 ai_configs.auto_config_override 的风控字段到 auto_scheduler
+        const [overrides] = await queryAll(
+          "SELECT user_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade FROM ai_configs WHERE auto_config_override = 1 AND is_active = 1"
+        )
+        for (const cfg of overrides) {
+          await queryRun(
+            `UPDATE auto_scheduler SET risk_level = ?, max_position_size = ?, selected_take_profit = ?, enable_auto_trade = ?
+             WHERE user_id = ?`,
+            [cfg.risk_level || 'medium', cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.enable_auto_trade ? 1 : 0, cfg.user_id]
+          )
+        }
+      } catch (e) {
+        console.error('[Migrations] 014_migrate_old_auto_config warning:', e.message)
+      }
+    }
   }
 ]
 

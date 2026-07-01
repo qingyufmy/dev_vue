@@ -191,17 +191,14 @@ export async function getAutoInferenceConfig(userId) {
 }
 
 export async function getExecuteRiskConfig(userId, signal) {
-  const isAuto = (signal.config_id === 0)
-  if (isAuto) {
-    const override = await queryOne(
-      "SELECT * FROM ai_configs WHERE user_id = ? AND session_id = 'default' AND is_active = 1 AND auto_config_override = 1 ORDER BY updated_at DESC LIMIT 1",
-      [userId]
-    )
-    if (override) {
+  const isAuto = (signal.config_id === 0 && signal.source !== 'auto_shared')
+  if (isAuto || signal.source === 'auto_shared') {
+    const userScheduler = await queryOne('SELECT risk_level, max_position_size, selected_take_profit, enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
+    if (userScheduler) {
       return {
-        enable_auto_trade: !!override.enable_auto_trade,
-        selected_take_profit: override.selected_take_profit ?? 1,
-        max_position_size: override.max_position_size ?? 0.05,
+        enable_auto_trade: !!userScheduler.enable_auto_trade,
+        selected_take_profit: userScheduler.selected_take_profit ?? 1,
+        max_position_size: userScheduler.max_position_size ?? 0.05,
       }
     }
     const globalCfg = await getGlobalAutoConfig()
@@ -226,19 +223,181 @@ export async function getExecuteRiskConfig(userId, signal) {
   }
 }
 
-export async function upsertAutoConfig(db, userId, symbols, enabled) {
+export async function upsertAutoConfig(db, userId, symbols, enabled, promptTypeId = null) {
   const now = beijingNow()
   await queryRun(`
-    INSERT INTO auto_scheduler (user_id, symbols, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO auto_scheduler (user_id, symbols, enabled, prompt_type_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       symbols = VALUES(symbols), enabled = VALUES(enabled),
+      prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
       updated_at = VALUES(updated_at)
-  `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, now, now])
+  `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, promptTypeId, now, now])
   await queryRun(
     'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = ?',
     [userId, enabled ? 1 : 0, now, enabled ? 1 : 0, now]
   ).catch(e => console.error('[AutoConfig] Failed to sync user_bridge_settings:', e.message))
+}
+
+// === Auto Prompt Types (admin-managed strategies) ===
+
+export async function getAutoPromptTypes({ includeInactive = false } = {}) {
+  const where = includeInactive ? 'deleted_at IS NULL' : 'is_active = 1 AND deleted_at IS NULL'
+  return await queryAll(`SELECT * FROM auto_prompt_types WHERE ${where} ORDER BY sort_order ASC, id ASC`)
+}
+
+export async function getAutoPromptTypeById(promptTypeId) {
+  return await queryOne('SELECT * FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [promptTypeId])
+}
+
+export async function saveAutoPromptType(adminUserId, payload) {
+  const now = beijingNow()
+  let symbols = Array.isArray(payload.symbols) ? payload.symbols : []
+  symbols = symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean)
+  const uniqueSymbols = [...new Set(symbols)]
+  const intervalMinutes = Math.max(1, Number(payload.interval_minutes) || 5)
+
+  if (payload.id) {
+    await queryRun(
+      `UPDATE auto_prompt_types SET title = ?, description = ?, system_prompt = ?, symbols_json = ?,
+       interval_minutes = ?, is_active = ?, sort_order = ?, updated_at = ?
+       WHERE id = ? AND deleted_at IS NULL`,
+      [payload.title || '未命名策略', payload.description || '', payload.system_prompt || '',
+       JSON.stringify(uniqueSymbols), intervalMinutes,
+       payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : 1,
+       payload.sort_order || 0, now, payload.id]
+    )
+    return await getAutoPromptTypeById(payload.id)
+  }
+
+  const result = await queryRun(
+    `INSERT INTO auto_prompt_types (title, description, system_prompt, symbols_json, interval_minutes, is_active, sort_order, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [payload.title || '未命名策略', payload.description || '', payload.system_prompt || '',
+     JSON.stringify(uniqueSymbols), intervalMinutes,
+     payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : 1,
+     payload.sort_order || 0, adminUserId, now, now]
+  )
+  return await getAutoPromptTypeById(result.insertId)
+}
+
+export async function disableAutoPromptType(adminUserId, promptTypeId) {
+  const now = beijingNow()
+  await queryRun(
+    'UPDATE auto_prompt_types SET is_active = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+    [now, promptTypeId]
+  )
+}
+
+// === User Auto Config (user-facing settings) ===
+
+export async function getUserAutoConfig(userId) {
+  const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  const running = isAutoSchedulerKeyRunningForUser(userId)
+  let pausedReason = ''
+  if (scheduler?.enabled && !running) {
+    if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
+    else {
+      const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
+      if (!pt || !pt.is_active) pausedReason = 'prompt_disabled'
+    }
+  }
+  return { scheduler, running, pausedReason }
+}
+
+function isAutoSchedulerKeyRunningForUser(userId) {
+  // This will be called from scheduler.js via a callback pattern; for now check via import
+  try {
+    const { autoSchedulerState } = require ? {} : {}
+  } catch {}
+  return false
+}
+
+export async function saveUserAutoConfig(userId, payload) {
+  const now = beijingNow()
+  const { prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade } = payload
+
+  if (prompt_type_id !== undefined) {
+    const pt = await getAutoPromptTypeById(prompt_type_id)
+    if (!pt || !pt.is_active) throw new Error('策略不存在或已禁用')
+  }
+
+  const tp = Number(selected_take_profit)
+  if (tp && ![1, 2, 3].includes(tp)) throw new Error('止盈档位只能是 1、2 或 3')
+
+  const mps = parseFloat(max_position_size)
+  if (mps !== undefined && (isNaN(mps) || mps <= 0)) throw new Error('最大手数必须大于 0')
+
+  await queryRun(
+    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, created_at, updated_at)
+     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
+       risk_level = COALESCE(VALUES(risk_level), risk_level),
+       max_position_size = COALESCE(VALUES(max_position_size), max_position_size),
+       selected_take_profit = COALESCE(VALUES(selected_take_profit), selected_take_profit),
+       enable_auto_trade = COALESCE(VALUES(enable_auto_trade), enable_auto_trade),
+       updated_at = VALUES(updated_at)`,
+    [userId, prompt_type_id || null, risk_level || 'medium', mps || 0.05, tp || 2,
+     enable_auto_trade ? 1 : 0, now, now]
+  )
+}
+
+// === Unified Auto Inference Config (for signal generation) ===
+
+export async function getUnifiedAutoInferenceConfig(promptTypeId) {
+  const globalCfg = await getGlobalAutoConfig()
+  if (!globalCfg) return null
+  const pt = await getAutoPromptTypeById(promptTypeId)
+  if (!pt) return null
+  return {
+    api_provider: globalCfg.api_provider || 'deepseek',
+    model_name: globalCfg.model_name || 'deepseek-chat',
+    api_key_encrypted: globalCfg.api_key_encrypted,
+    api_base_url: globalCfg.api_base_url || 'https://api.deepseek.com',
+    temperature: globalCfg.temperature ?? 0.3,
+    max_tokens: globalCfg.max_tokens ?? 2000,
+    system_prompt: pt.system_prompt || '',
+    risk_level: globalCfg.risk_level || 'medium',
+    max_position_size: globalCfg.max_position_size ?? 0.05,
+    selected_take_profit: globalCfg.selected_take_profit ?? 2,
+    enable_auto_trade: !!globalCfg.enable_auto_trade,
+    _source: 'unified',
+    prompt_type_id: promptTypeId,
+  }
+}
+
+// === Auto Subscribers ===
+
+export async function getAutoSubscribers(promptTypeId, symbol) {
+  return await queryAll(
+    `SELECT s.user_id, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
+            u.plan, u.role
+     FROM auto_scheduler s
+     JOIN users u ON u.id = s.user_id
+     WHERE s.prompt_type_id = ? AND s.enabled = 1 AND u.plan = 'pro'`,
+    [promptTypeId]
+  )
+}
+
+// === Delivery Execute Risk Config ===
+
+export async function getDeliveryExecuteRiskConfig(userId) {
+  const scheduler = await queryOne('SELECT risk_level, max_position_size, selected_take_profit, enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
+  if (scheduler) {
+    return {
+      enable_auto_trade: !!scheduler.enable_auto_trade,
+      selected_take_profit: scheduler.selected_take_profit ?? 1,
+      max_position_size: scheduler.max_position_size ?? 0.05,
+    }
+  }
+  const globalCfg = await getGlobalAutoConfig()
+  if (!globalCfg) return null
+  return {
+    enable_auto_trade: !!globalCfg.enable_auto_trade,
+    selected_take_profit: globalCfg.selected_take_profit ?? 2,
+    max_position_size: globalCfg.max_position_size ?? 0.05,
+  }
 }
 
 export function validateTradeRequest(config, account, positions, request) {
