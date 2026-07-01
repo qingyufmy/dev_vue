@@ -453,7 +453,7 @@ const AUTO_REASON_LABELS = {
 
 function autoReasonText(reason) {
   if (!reason) return '未知';
-  return AUTO_REASON_LABELS[reason] || reason;
+  return AUTO_REASON_LABELS[reason] || '未知状态';
 }
 
 function isMarketClosedReason(reason) {
