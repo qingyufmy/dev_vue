@@ -119,7 +119,17 @@ export async function getAnalyzeApiKey(userId, sessionId) {
 }
 
 export async function getAutoConfig(db, userId) {
-  return await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  const row = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  if (row && row.symbols) {
+    try {
+      row.selected_symbols = JSON.parse(row.symbols)
+    } catch {
+      row.selected_symbols = row.symbols.split(',').map(s => s.trim()).filter(Boolean)
+    }
+  } else {
+    row.selected_symbols = []
+  }
+  return row
 }
 
 export async function getGlobalAutoConfig() {
@@ -307,7 +317,9 @@ export async function getUserAutoConfig(userId) {
 export async function saveUserAutoConfig(userId, payload) {
   const now = beijingNow()
 
-  if (payload.prompt_type_id !== undefined) {
+  const existing = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+
+  if (payload.prompt_type_id !== undefined && payload.prompt_type_id !== null) {
     const pt = await getAutoPromptTypeById(payload.prompt_type_id)
     if (!pt || !pt.is_active) throw new Error('策略不存在或已禁用')
   }
@@ -322,27 +334,51 @@ export async function saveUserAutoConfig(userId, payload) {
     if (isNaN(mps) || mps <= 0) throw new Error('最大手数必须大于 0')
   }
 
-  const existing = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  // Validate selected_symbols if provided
+  let selectedSymbols = null
+  if (payload.selected_symbols !== undefined) {
+    if (!Array.isArray(payload.selected_symbols) || payload.selected_symbols.length === 0) {
+      throw new Error('selected_symbols 必须是非空数组')
+    }
+    const normalized = [...new Set(payload.selected_symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
+    if (normalized.length === 0) throw new Error('selected_symbols 不能为空')
+
+    const promptTypeId = payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null)
+    if (promptTypeId) {
+      const pt = await getAutoPromptTypeById(promptTypeId)
+      if (pt) {
+        let strategySymbols = []
+        try { strategySymbols = JSON.parse(pt.symbols_json || '[]') } catch {}
+        const invalid = normalized.filter(s => !strategySymbols.includes(s))
+        if (invalid.length > 0) {
+          throw new Error(`品种 ${invalid.join(', ')} 不在策略支持列表中`)
+        }
+      }
+    }
+    selectedSymbols = normalized
+  }
+
   const next = {
     prompt_type_id: payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null),
     risk_level: payload.risk_level !== undefined ? payload.risk_level : (existing?.risk_level ?? 'medium'),
     max_position_size: payload.max_position_size !== undefined ? Number(payload.max_position_size) : (existing?.max_position_size ?? 0.05),
     selected_take_profit: payload.selected_take_profit !== undefined ? Number(payload.selected_take_profit) : (existing?.selected_take_profit ?? 2),
-    enable_auto_trade: payload.enable_auto_trade !== undefined ? (payload.enable_auto_trade ? 1 : 0) : (existing?.enable_auto_trade ?? 0),
+    enable_auto_trade: payload.enable_auto_trade !== undefined ? (payload.enable_auto_trade ? 1 : 0) : (existing?.enable_auto_trade ?? 1),
+    symbols: selectedSymbols !== null ? JSON.stringify(selectedSymbols) : (existing?.symbols || '[]'),
   }
-
   await queryRun(
-    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, created_at, updated_at)
-     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, symbols, created_at, updated_at)
+     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        prompt_type_id = VALUES(prompt_type_id),
        risk_level = VALUES(risk_level),
        max_position_size = VALUES(max_position_size),
        selected_take_profit = VALUES(selected_take_profit),
        enable_auto_trade = VALUES(enable_auto_trade),
+       symbols = VALUES(symbols),
        updated_at = VALUES(updated_at)`,
     [userId, next.prompt_type_id, next.risk_level, next.max_position_size, next.selected_take_profit,
-     next.enable_auto_trade, now, now]
+     next.enable_auto_trade, next.symbols, now, now]
   )
 }
 
@@ -372,15 +408,25 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
 
 // === Auto Subscribers ===
 
-export async function getAutoSubscribers(promptTypeId, symbol) {
-  return await queryAll(
-    `SELECT s.user_id, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
+export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck = null) {
+  const rows = await queryAll(
+    `SELECT s.user_id, s.symbols, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
             u.plan, u.role
      FROM auto_scheduler s
      JOIN users u ON u.id = s.user_id
      WHERE s.prompt_type_id = ? AND s.enabled = 1 AND u.plan = 'pro'`,
     [promptTypeId]
   )
+  const filtered = rows.filter(r => {
+    let userSymbols = []
+    try { userSymbols = JSON.parse(r.symbols || '[]') } catch {}
+    return userSymbols.includes(symbol)
+  })
+  // Filter by bridge alive if check function provided
+  if (typeof bridgeAliveCheck === 'function') {
+    return filtered.filter(r => bridgeAliveCheck(r.user_id))
+  }
+  return filtered
 }
 
 // === Delivery Execute Risk Config ===

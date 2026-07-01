@@ -681,30 +681,29 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'signals_latest_id': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const queryUserId = hasOwnBridge ? userId : (adminUserId || userId)
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
         const sessionParam = params.session_id ? [params.session_id] : []
 
-        // Old user signals
+        // Old user signals: always query current user
         const oldRow = await queryOne(
-          `SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY id DESC LIMIT 1`,
-          [queryUserId, ...sessionParam]
+          `SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [userId, ...sessionParam]
         )
 
-        // Shared delivery signals
+        // Shared delivery signals: always query current user's deliveries
+        const delivSessionFilter = params.session_id ? 'AND s.session_id = ?' : ''
         const delivRow = await queryOne(
           `SELECT s.id, s.signal_type, d.is_executed, s.created_at, s.ttl_seconds, s.timeframe, 'auto_shared' as signal_source, d.execution_status
            FROM auto_signal_deliveries d
            JOIN ai_signals s ON s.id = d.signal_id
-           WHERE d.user_id = ? ORDER BY s.id DESC LIMIT 1`,
-          [queryUserId]
+           WHERE d.user_id = ? ${delivSessionFilter} ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
+          [userId, ...sessionParam]
         )
 
         // Pick the newest of both
         let row = null
         if (oldRow && delivRow) {
-          row = (oldRow.id >= delivRow.id) ? oldRow : delivRow
+          row = (oldRow.created_at >= delivRow.created_at) ? oldRow : delivRow
         } else {
           row = oldRow || delivRow
         }
@@ -797,11 +796,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Old signals subquery
         const oldSessionFilter = (params.direction !== 'close' && params.session_id) ? ' AND session_id = ?' : ''
         const oldSessionParam = (params.direction !== 'close' && params.session_id) ? [params.session_id] : []
+        const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, created_at, delivery_id, execution_status'
         const oldSubquery = `(SELECT s.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.market_data_json, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, s.created_at, NULL as delivery_id, NULL as execution_status FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const oldParams = [userId, ...oldSessionParam, ...sharedParams]
 
-        // Shared signals subquery
-        const delivSubquery = `(SELECT s.id, s.user_id, s.config_id, s.prompt_type_id, d.prompt_type_id as delivery_prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.market_data_json, s.ai_model, s.ttl_seconds, d.is_executed as delivery_is_executed, d.executed_at as delivery_executed_at, d.trade_ticket as delivery_trade_ticket, d.execution_result as delivery_execution_result, d.id as delivery_id, d.execution_status FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
+        // Shared signals subquery (delivery overrides user-level execution state)
+        const delivSubquery = `(SELECT s.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.market_data_json, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, s.created_at, d.id as delivery_id, d.execution_status FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const delivParams = [userId, ...sharedParams]
 
         // Count total
@@ -810,30 +810,21 @@ async function handleBrowserCommand(ws, userId, msg) {
         const totalCount = countRow?.total || 0
 
         // Fetch page
-        const dataSql = `SELECT * FROM (${oldSubquery} UNION ALL ${delivSubquery}) t ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
+        const dataSql = `SELECT ${selectCols} FROM (${oldSubquery} UNION ALL ${delivSubquery}) t ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
         const allRows = await queryAll(dataSql, [...oldParams, ...delivParams, limit + 1, offset])
         const hasMore = allRows.length > limit
         const sliced = allRows.slice(0, limit)
 
         const signals = sliced.map(row => {
           const item = { ...row }
-          // Shared signal overrides
+          // Both subqueries already output unified columns: delivery_* fields are named as their final names.
+          // For shared signals, delivery_id is non-null; mark source as auto_shared.
           if (item.delivery_id) {
-            item.is_executed = !!item.delivery_is_executed
-            item.executed_at = item.delivery_executed_at
-            item.trade_ticket = item.delivery_trade_ticket
-            item.execution_result = item.delivery_execution_result
-            item.prompt_type_id = item.delivery_prompt_type_id
             item.source = 'auto_shared'
           }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
           delete item.market_data_json
           delete item.delivery_id
-          delete item.delivery_is_executed
-          delete item.delivery_executed_at
-          delete item.delivery_trade_ticket
-          delete item.delivery_execution_result
-          delete item.delivery_prompt_type_id
           item.is_executed = !!item.is_executed
           ai.attachSignalTiming(item)
           return item
@@ -891,17 +882,28 @@ async function handleBrowserCommand(ws, userId, msg) {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         const statusUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
         const cfg = await ai.getAutoConfig(null, statusUserId)
-        const globalCfg = await ai.getGlobalAutoConfig()
-        let symbols = parseSymbols(globalCfg?.symbols)
-        let intervalMin = globalCfg?.interval_minutes || 5
-        // Use actual in-memory scheduler state for running field
         const running = ai.isAutoSchedulerRunning(statusUserId)
-        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, symbols, interval_minutes: intervalMin, running } }
+        let promptTypeName = ''
+        if (cfg?.prompt_type_id) {
+          const pt = await ai.getAutoPromptTypeById(cfg.prompt_type_id)
+          if (pt && pt.is_active) promptTypeName = pt.title || ''
+        }
+        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, prompt_type_id: cfg?.prompt_type_id || null, prompt_type_name: promptTypeName, running } }
         break
       }
       case 'toggle_auto': {
         const cfg = await ai.getAutoConfig(null, userId)
         const newEnabled = !cfg?.enabled
+
+        // Check bridge connection when enabling
+        if (newEnabled) {
+          const bridge = bridges.get(userId)
+          if (!bridge || bridge.ws?.readyState !== 1) {
+            result = { status: 'error', message: '请先连接 MT5 桥接后再开启自动推理' }
+            break
+          }
+        }
+
         if (newEnabled) {
           // Ensure user has a prompt_type_id
           const pt = await ai.getAutoPromptTypes()
@@ -911,8 +913,17 @@ async function handleBrowserCommand(ws, userId, msg) {
           }
           const userCfg = cfg || {}
           if (!userCfg.prompt_type_id) {
-            // Assign first active strategy as default
-            await ai.saveUserAutoConfig(userId, { prompt_type_id: pt[0].id })
+            const firstPt = pt[0]
+            let symbols = []
+            try { symbols = JSON.parse(firstPt.symbols_json || '[]') } catch {}
+            await ai.saveUserAutoConfig(userId, { prompt_type_id: firstPt.id, selected_symbols: symbols })
+          } else if (!userCfg.selected_symbols || userCfg.selected_symbols.length === 0) {
+            const ptRow = await ai.getAutoPromptTypeById(userCfg.prompt_type_id)
+            if (ptRow) {
+              let symbols = []
+              try { symbols = JSON.parse(ptRow.symbols_json || '[]') } catch {}
+              await ai.saveUserAutoConfig(userId, { prompt_type_id: userCfg.prompt_type_id, selected_symbols: symbols })
+            }
           }
         }
         // Update enabled in auto_scheduler
@@ -936,7 +947,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Update in-memory bridge state
         const bridgeAuto = bridges.get(userId)
         if (bridgeAuto) bridgeAuto.autoReasoningEnabled = newEnabled
-        // Reconcile schedulers
+        // Sync Redis + reconcile
+        const updatedCfg = await ai.getAutoConfig(null, userId)
+        if (newEnabled) {
+          await ai.syncUserRedisSubscription(userId, updatedCfg?.prompt_type_id, updatedCfg?.selected_symbols || [], true)
+        } else {
+          await ai.syncUserRedisSubscription(userId, null, [], false)
+        }
         await ai.reconcileAutoSchedulers()
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
         break
@@ -960,15 +977,16 @@ async function handleBrowserCommand(ws, userId, msg) {
           max_position_size: userAuto.scheduler?.max_position_size ?? 0.05,
           selected_take_profit: userAuto.scheduler?.selected_take_profit ?? 2,
           enable_auto_trade: !!userAuto.scheduler?.enable_auto_trade,
+          selected_symbols: (() => { try { return JSON.parse(userAuto.scheduler?.symbols || '[]') } catch { return [] } })(),
           running,
           paused_reason: userAuto.pausedReason || '',
         }
 
-        const promptTypes = await ai.getAutoPromptTypes()
+        const promptTypes = await ai.getAutoPromptTypes({ includeInactive: isAdmin })
 
         if (isAdmin) {
           const globalCfg = await ai.getGlobalAutoConfig()
-          const { autoSchedulerState } = await import('./scheduler.js')
+          const { autoSchedulerState } = await import('./routes/ai/scheduler.js')
           const schedulerStates = Object.values(autoSchedulerState).map(s => ({
             key: s.key, promptTypeId: s.promptTypeId, symbol: s.symbol,
             running: s.running, subscriberCount: s.subscriberCount, lastError: s.lastError,
@@ -1001,7 +1019,10 @@ async function handleBrowserCommand(ws, userId, msg) {
             status: 'success',
             config,
             prompt_types: promptTypes.map(pt => ({
-              id: pt.id, title: pt.title, description: pt.description, is_active: !!pt.is_active,
+              id: pt.id, title: pt.title, description: pt.description,
+              symbols: JSON.parse(pt.symbols_json || '[]'),
+              interval_minutes: pt.interval_minutes,
+              is_active: !!pt.is_active,
             })),
           }
         }
@@ -1010,6 +1031,14 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'save_user_auto_config': {
         try {
           await ai.saveUserAutoConfig(userId, params)
+          // Sync Redis only if enabled AND bridge is online
+          const savedCfg = await ai.getAutoConfig(null, userId)
+          const bridgeOnline = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+          if (savedCfg?.enabled && bridgeOnline) {
+            await ai.syncUserRedisSubscription(userId, savedCfg.prompt_type_id, savedCfg.selected_symbols || [], true)
+          } else if (!savedCfg?.enabled) {
+            await ai.syncUserRedisSubscription(userId, null, [], false)
+          }
           await ai.reconcileAutoSchedulers()
           result = { status: 'success', message: '配置已保存' }
         } catch (e) {

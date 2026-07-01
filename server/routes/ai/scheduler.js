@@ -19,6 +19,131 @@ function buildSchedulerKey(promptTypeId, symbol) {
   return `${promptTypeId}:${symbol}`
 }
 
+// === Redis Subscription Keys ===
+const REDIS_SCHEDULER_KEYS = 'auto:scheduler:keys'
+const REDIS_SUBS_PREFIX = 'auto:scheduler:'
+const REDIS_SUBS_SUFFIX = ':subs'
+const REDIS_USER_PREFIX = 'auto:user:'
+const REDIS_USER_SUFFIX = ':auto'
+
+// === Redis Subscription Helpers ===
+export async function syncUserRedisSubscription(userId, promptTypeId, symbols, enabled) {
+  const redis = getRedis()
+  if (!redis) return
+
+  try {
+    const userKey = `${REDIS_USER_PREFIX}${userId}${REDIS_USER_SUFFIX}`
+
+    // Remove old subscriptions for this user
+    const oldKeys = await redis.smembers(REDIS_SCHEDULER_KEYS)
+    for (const k of oldKeys) {
+      await redis.srem(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`, userId)
+    }
+
+    if (!enabled || !promptTypeId || !symbols || symbols.length === 0) {
+      await redis.del(userKey)
+      // Clean up empty subs sets
+      for (const k of oldKeys) {
+        const count = await redis.scard(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`)
+        if (count === 0) {
+          await redis.del(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`)
+          await redis.del(`${REDIS_SUBS_PREFIX}${k}:state`)
+          await redis.srem(REDIS_SCHEDULER_KEYS, k)
+        }
+      }
+      return
+    }
+
+    // Write user config
+    await redis.hset(userKey, {
+      prompt_type_id: String(promptTypeId),
+      selected_symbols: JSON.stringify(symbols),
+      enabled: '1'
+    })
+
+    // Add new subscriptions
+    for (const sym of symbols) {
+      const k = buildSchedulerKey(promptTypeId, sym)
+      await redis.sadd(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`, userId)
+      await redis.sadd(REDIS_SCHEDULER_KEYS, k)
+    }
+
+    // Clean up empty subs sets
+    for (const k of oldKeys) {
+      const count = await redis.scard(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`)
+      if (count === 0) {
+        await redis.del(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`)
+        await redis.del(`${REDIS_SUBS_PREFIX}${k}:state`)
+        await redis.srem(REDIS_SCHEDULER_KEYS, k)
+      }
+    }
+  } catch (e) {
+    console.error('[Redis] syncUserRedisSubscription error:', e.message)
+  }
+}
+
+export async function rebuildRedisSubscriptions() {
+  const redis = getRedis()
+  if (!redis) return
+
+  try {
+    // Clear all existing subscription data
+    const oldKeys = await redis.smembers(REDIS_SCHEDULER_KEYS)
+    for (const k of oldKeys) {
+      await redis.del(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`)
+      await redis.del(`${REDIS_SUBS_PREFIX}${k}:state`)
+    }
+    await redis.del(REDIS_SCHEDULER_KEYS)
+
+    // Query all enabled users from DB
+    const rows = await queryAll(`
+      SELECT s.user_id, s.prompt_type_id, s.symbols
+      FROM auto_scheduler s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL AND u.plan = 'pro'
+    `)
+
+    for (const row of rows) {
+      let userSymbols = []
+      try { userSymbols = JSON.parse(row.symbols || '[]') } catch {}
+      if (userSymbols.length === 0) continue
+
+      const userKey = `${REDIS_USER_PREFIX}${row.user_id}${REDIS_USER_SUFFIX}`
+      await redis.hset(userKey, {
+        prompt_type_id: String(row.prompt_type_id),
+        selected_symbols: JSON.stringify(userSymbols),
+        enabled: '1'
+      })
+
+      for (const sym of userSymbols) {
+        const k = buildSchedulerKey(row.prompt_type_id, sym)
+        await redis.sadd(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`, row.user_id)
+        await redis.sadd(REDIS_SCHEDULER_KEYS, k)
+      }
+    }
+
+    const keysCount = await redis.scard(REDIS_SCHEDULER_KEYS)
+    console.log(`[Redis] Rebuilt subscription index: ${keysCount} scheduler keys, ${rows.length} users`)
+  } catch (e) {
+    console.error('[Redis] rebuildRedisSubscriptions error:', e.message)
+  }
+}
+
+export async function updateSchedulerRedisState(key, state) {
+  const redis = getRedis()
+  if (!redis) return
+
+  try {
+    await redis.hset(`${REDIS_SUBS_PREFIX}${key}:state`, {
+      running: state.running ? '1' : '0',
+      interval_minutes: String(state.intervalMinutes || 5),
+      subscriber_count: String(state.subscriberCount || 0),
+      last_error: state.lastError || '',
+      last_run_at: state.lastRunAt || ''
+    })
+  } catch {}
+}
+
 // === Compatibility: isAutoSchedulerRunning(userId) ===
 export function isAutoSchedulerRunning(userId) {
   for (const key in autoSchedulerState) {
@@ -91,12 +216,13 @@ function broadcastAutoProgress(promptTypeId, symbol, progress) {
 export async function reconcileAutoSchedulers() {
   try {
     const rows = await queryAll(`
-      SELECT DISTINCT
-        apt.id AS prompt_type_id,
+      SELECT
+        s.prompt_type_id,
+        s.symbols AS user_symbols,
         apt.symbols_json,
         apt.interval_minutes
-      FROM auto_prompt_types apt
-      JOIN auto_scheduler s ON s.prompt_type_id = apt.id
+      FROM auto_scheduler s
+      JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
       JOIN users u ON u.id = s.user_id
       WHERE s.enabled = 1
         AND apt.is_active = 1
@@ -108,9 +234,13 @@ export async function reconcileAutoSchedulers() {
     const neededKeyMeta = {}
 
     for (const row of rows) {
-      let symbols = ['XAUUSD']
-      try { symbols = JSON.parse(row.symbols_json || '["XAUUSD"]') } catch {}
-      for (const sym of symbols) {
+      let userSymbols = []
+      try { userSymbols = JSON.parse(row.user_symbols || '[]') } catch {}
+      let strategySymbols = []
+      try { strategySymbols = JSON.parse(row.symbols_json || '[]') } catch {}
+      // Intersect user selection with strategy support
+      const validSymbols = userSymbols.filter(s => strategySymbols.includes(s))
+      for (const sym of validSymbols) {
         const k = buildSchedulerKey(row.prompt_type_id, sym)
         neededKeys.add(k)
         neededKeyMeta[k] = { promptTypeId: row.prompt_type_id, symbol: sym, intervalMinutes: row.interval_minutes || 5 }
@@ -130,6 +260,7 @@ export async function reconcileAutoSchedulers() {
       if (autoSchedulerState[k]) {
         autoSchedulerState[k].intervalMinutes = meta.intervalMinutes
         autoSchedulerState[k].subscriberCount = countSubscribers(meta.promptTypeId)
+        await updateSchedulerRedisState(k, autoSchedulerState[k])
       } else {
         await startUnifiedScheduler(meta.promptTypeId, meta.symbol, meta.intervalMinutes)
       }
@@ -176,6 +307,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
   }
 
   console.log(`[UnifiedScheduler] Started ${key} (subscribers=${subSet.size}, interval=${intervalMinutes}min)`)
+  await updateSchedulerRedisState(key, autoSchedulerState[key])
 
   const tick = async () => {
     const st = autoSchedulerState[key]
@@ -279,6 +411,7 @@ function stopUnifiedScheduler(promptTypeId, symbol) {
   if (autoSchedulerState[key]) autoSchedulerState[key].running = false
   delete autoSchedulerState[key]
   console.log(`[UnifiedScheduler] Stopped ${key}`)
+  updateSchedulerRedisState(key, { running: false, intervalMinutes: 0, subscriberCount: 0, lastError: '', lastRunAt: '' })
 }
 
 // === Unified Auto Cycle: shared signal generation ===
@@ -518,6 +651,7 @@ export function stopAutoScheduler(userId) {
 
 export async function initAutoSchedulers() {
   console.log('[initAutoSchedulers] Starting unified scheduler reconciliation')
+  await rebuildRedisSubscriptions()
   await reconcileAutoSchedulers()
 }
 
