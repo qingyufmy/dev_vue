@@ -428,33 +428,76 @@ function setBadge(id, text, type, withDot = true) {
 const AUTO_REASON_LABELS = {
   admin_bridge_offline: '管理员桥接离线',
   user_bridge_offline: '用户桥接离线',
+  bridge_offline: '桥接离线',
+  market_open: '市场开放',
   market_closed: '休市',
   market_unknown: '市场状态未知',
-  market_unknown_no_tick: '等待行情 tick',
+  market_unknown_no_tick: '等待行情数据',
   market_stale_tick: '行情停滞',
-  redis_unavailable: 'Redis 未连接',
-  redis_lock_failed: 'Redis 锁获取失败',
-  no_api_key: '未配置 API Key',
+  redis_unavailable: '缓存服务未连接',
+  redis_lock_failed: '调度锁获取失败',
+  redis_cooldown_active: '等待下一轮调度',
+  no_api_key: '未配置接口密钥',
   strategy_disabled: '策略已停用',
   symbol_not_supported: '品种不支持',
   no_runtime_scheduler: '调度器未运行',
-  no_online_subscribers: '无在线订阅者',
-  rates_failed: '行情获取失败',
-  rates_empty: '行情为空',
+  no_online_subscribers: '无在线订阅用户',
   no_strategy: '未选择策略',
   no_symbols: '未选择品种',
+  rates_failed: '行情获取失败',
+  rates_empty: '行情为空',
+  exception: '运行异常',
   disabled: '已关闭',
+  unknown: '未知',
 };
+
+function autoReasonText(reason) {
+  if (!reason) return '未知';
+  return AUTO_REASON_LABELS[reason] || reason;
+}
 
 function isMarketClosedReason(reason) {
   return ['market_closed', 'market_stale_tick', 'market_unknown_no_tick', 'market_unknown'].includes(reason);
+}
+
+// Badge cache to avoid flickering on hover
+const _autoBadgeCache = { label: '', type: '', title: '' };
+let _autoBadgeHovering = false;
+
+function setAutoBadgeText(el, label) {
+  let textSpan = el.querySelector('.badge-text');
+  if (!textSpan) {
+    el.innerHTML = '<span class="badge-dot"></span><span class="badge-text"></span>';
+    textSpan = el.querySelector('.badge-text');
+  }
+  if (textSpan.textContent !== label) textSpan.textContent = label;
+}
+
+function applyAutoBadge(label, type, title) {
+  const el = $('autoAnalyzeMode');
+  if (!el) return;
+
+  // Update className only if changed
+  const newClass = `status-badge status-${type} clickable-badge`;
+  if (el.className !== newClass) el.className = newClass;
+
+  // Update text only if changed (avoids innerHTML flicker)
+  setAutoBadgeText(el, label);
+
+  // Update title: skip if hovering, buffer for later
+  if (!_autoBadgeHovering) {
+    if (el.title !== title) el.title = title;
+    _autoBadgeCache.title = title;
+  } else {
+    _autoBadgeCache.pendingTitle = title;
+  }
 }
 
 function renderAutoAnalyzeBadge(s) {
   if (!s) return;
   const ptName = s.prompt_type_name || '';
   const symbols = s.selected_symbols || [];
-  const symbolsStr = symbols.join(', ') || '未选择品种';
+  const symbolsStr = symbols.join('、') || '未选择品种';
 
   // Calculate remaining time
   let remaining = null;
@@ -467,7 +510,7 @@ function renderAutoAnalyzeBadge(s) {
   if (!s.enabled) {
     label = '自动推理关闭';
     type = 'neutral';
-    title = '自动推理关闭';
+    title = '状态：自动推理关闭';
   } else if (s.in_flight) {
     label = '自动推理中';
     type = 'running';
@@ -476,31 +519,29 @@ function renderAutoAnalyzeBadge(s) {
   } else if (s.paused_reason && isMarketClosedReason(s.paused_reason)) {
     label = '自动推理暂停 · 休市';
     type = 'warning';
-    const reasonLabel = AUTO_REASON_LABELS[s.paused_reason] || s.paused_reason;
     const msState = s.market_state || {};
-    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：休市暂停\n市场：${msState.reason || s.paused_reason}`;
-    if (msState.tickAgeMs) title += `\nTick 延迟：${msState.tickAgeMs}ms`;
-    if (msState.mt5TimeStr) title += `\nMT5 时间：${msState.mt5TimeStr}`;
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：休市暂停`;
+    title += `\n市场状态：${autoReasonText(msState.reason || s.paused_reason)}`;
+    if (msState.tickAgeMs) title += `\n行情延迟：${msState.tickAgeMs}毫秒`;
+    if (msState.mt5TimeStr) title += `\n桥接行情时间：${msState.mt5TimeStr}`;
   } else if (remaining !== null && remaining > 0) {
     const min = Math.floor(remaining / 60);
     const sec = remaining % 60;
     const countdown = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
     label = `自动推理开启 · 下次 ${countdown}`;
     type = 'active';
-    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启\n下次运行：${countdown}`;
-    if (s.paused_reason) title += `\n内部状态：${AUTO_REASON_LABELS[s.paused_reason] || s.paused_reason}`;
-    if (s.market_state) title += `\n市场：${s.market_state.reason || ''}`;
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启\n下次运行：等待倒计时结束`;
+    if (s.paused_reason) title += `\n内部状态：${autoReasonText(s.paused_reason)}`;
+    if (s.market_state) title += `\n市场状态：${autoReasonText(s.market_state.reason)}`;
   } else {
     label = '自动推理开启';
     type = 'active';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启`;
-    if (s.paused_reason) title += `\n内部状态：${AUTO_REASON_LABELS[s.paused_reason] || s.paused_reason}`;
-    if (s.market_state) title += `\n市场：${s.market_state.reason || ''}`;
+    if (s.paused_reason) title += `\n内部状态：${autoReasonText(s.paused_reason)}`;
+    if (s.market_state) title += `\n市场状态：${autoReasonText(s.market_state.reason)}`;
   }
 
-  setBadge('autoAnalyzeMode', label, type);
-  const el = $('autoAnalyzeMode');
-  if (el) el.title = title;
+  applyAutoBadge(label, type, title);
 }
 
 function updatePnlStyle(elementId, value) {
@@ -3927,6 +3968,20 @@ function bindEvents() {
 
   // Auto analyze badge — simple toggle on/off
   $("autoAnalyzeMode")?.addEventListener("click", handleAutoToggle);
+
+  // Auto badge hover — prevent title flicker during countdown
+  const autoMode = $('autoAnalyzeMode');
+  if (autoMode) {
+    autoMode.addEventListener('mouseenter', () => { _autoBadgeHovering = true; });
+    autoMode.addEventListener('mouseleave', () => {
+      _autoBadgeHovering = false;
+      if (_autoBadgeCache.pendingTitle) {
+        autoMode.title = _autoBadgeCache.pendingTitle;
+        _autoBadgeCache.title = _autoBadgeCache.pendingTitle;
+        delete _autoBadgeCache.pendingTitle;
+      }
+    });
+  }
 
   // Config sub-tabs
   initConfigSubTabs();
