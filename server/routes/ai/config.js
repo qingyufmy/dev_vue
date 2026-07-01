@@ -120,7 +120,8 @@ export async function getAnalyzeApiKey(userId, sessionId) {
 
 export async function getAutoConfig(db, userId) {
   const row = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
-  if (row && row.symbols) {
+  if (!row) return null
+  if (row.symbols) {
     try {
       row.selected_symbols = JSON.parse(row.symbols)
     } catch {

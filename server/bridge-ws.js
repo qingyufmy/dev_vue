@@ -885,17 +885,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'auto_status': {
-        // In observation mode (no own bridge), show admin's auto state
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const statusUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
-        const cfg = await ai.getAutoConfig(null, statusUserId)
-        const running = ai.isAutoSchedulerRunning(statusUserId)
-        let promptTypeName = ''
-        if (cfg?.prompt_type_id) {
-          const pt = await ai.getAutoPromptTypeById(cfg.prompt_type_id)
-          if (pt && pt.is_active) promptTypeName = pt.title || ''
-        }
-        result = { status: 'success', scheduler: { enabled: !!cfg?.enabled, prompt_type_id: cfg?.prompt_type_id || null, prompt_type_name: promptTypeName, running } }
+        const runtimeStatus = await ai.getUserAutoRuntimeStatus(userId)
+        result = { status: 'success', scheduler: runtimeStatus }
         break
       }
       case 'toggle_auto': {
@@ -912,7 +903,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
 
         if (newEnabled) {
-          // Ensure user has a prompt_type_id
+          // Ensure user has a prompt_type_id and selected_symbols
           const pt = await ai.getAutoPromptTypes()
           if (!pt || pt.length === 0) {
             result = { status: 'error', message: '暂无可用策略，请联系管理员' }
@@ -933,17 +924,17 @@ async function handleBrowserCommand(ws, userId, msg) {
             }
           }
         }
-        // Update enabled in auto_scheduler
-        if (cfg) {
-          await queryRun('UPDATE auto_scheduler SET enabled = ?, updated_at = NOW() WHERE user_id = ?', [newEnabled ? 1 : 0, userId])
-        } else {
-          const pt = await ai.getAutoPromptTypes()
-          const defaultPtId = pt?.[0]?.id || null
-          await queryRun(
-            `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())`,
-            [userId, newEnabled ? 1 : 0, defaultPtId]
-          )
-        }
+
+        // Unified UPSERT for enabled state
+        const pt = await ai.getAutoPromptTypes()
+        const defaultPtId = pt?.[0]?.id || null
+        await queryRun(
+          `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, created_at, updated_at)
+           VALUES (?, ?, ?, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE enabled = ?, updated_at = NOW()`,
+          [userId, newEnabled ? 1 : 0, defaultPtId, newEnabled ? 1 : 0]
+        )
+
         // Sync user_bridge_settings
         try {
           await queryRun(

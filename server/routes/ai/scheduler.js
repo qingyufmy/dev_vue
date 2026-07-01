@@ -202,6 +202,90 @@ export async function removeUserRuntimeAutoSubscription(userId) {
   }
 }
 
+// === User Auto Runtime Status ===
+export async function getUserAutoRuntimeStatus(userId) {
+  const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  if (!scheduler || !scheduler.enabled) {
+    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, stage: 'idle', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+  }
+
+  let selectedSymbols = []
+  try { selectedSymbols = JSON.parse(scheduler.symbols || '[]') } catch {}
+  let promptTypeName = ''
+  if (scheduler.prompt_type_id) {
+    const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
+    if (pt) promptTypeName = pt.title || ''
+  }
+
+  const redis = getRedis()
+  const redisAvailable = !!redis && isRedisAvailable()
+  const adminUserId = await getActiveAdminBridgeUserId()
+  const adminBridgeOnline = !!adminUserId
+  const marketState = adminUserId ? getOwnBridgeMarketState(adminUserId) : { alive: false, isOpen: false, tradeMode: -1, reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null }
+
+  // Find user's active scheduler keys
+  const activeKeys = []
+  let earliestNextRun = Infinity
+  let anyInFlight = false
+  let overallLastError = ''
+  let overallLastRunAt = ''
+  let overallLastSignalId = null
+  let totalSubscribers = 0
+
+  for (const sym of selectedSymbols) {
+    const key = buildSchedulerKey(scheduler.prompt_type_id, sym)
+    const st = autoSchedulerState[key]
+    if (st) {
+      activeKeys.push(key)
+      totalSubscribers += st.subscriberCount || 0
+      if (st.inFlight) anyInFlight = true
+      if (st.lastError) overallLastError = st.lastError
+      if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
+      if (st.lastSignalId) overallLastSignalId = st.lastSignalId
+
+      // Check cooldown TTL
+      if (redis) {
+        try {
+          const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+          if (ttl > 0 && ttl < earliestNextRun) earliestNextRun = ttl
+        } catch {}
+      }
+    }
+  }
+
+  // Determine paused reason
+  let pausedReason = ''
+  if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
+  else if (selectedSymbols.length === 0) pausedReason = 'no_symbols'
+  else if (!adminBridgeOnline) pausedReason = 'admin_bridge_offline'
+  else if (!marketState.isOpen) pausedReason = marketState.reason
+  else if (!redisAvailable) pausedReason = 'redis_unavailable'
+  else if (overallLastError && !anyInFlight) pausedReason = overallLastError
+
+  const running = activeKeys.length > 0 && !pausedReason
+  const nextRunSeconds = earliestNextRun === Infinity ? 0 : Math.max(0, earliestNextRun)
+
+  return {
+    enabled: true,
+    running,
+    prompt_type_id: scheduler.prompt_type_id,
+    prompt_type_name: promptTypeName,
+    selected_symbols: selectedSymbols,
+    active_scheduler_keys: activeKeys,
+    subscriber_count: totalSubscribers,
+    in_flight: anyInFlight,
+    stage: anyInFlight ? 'running' : (pausedReason ? 'paused' : 'idle'),
+    last_error: overallLastError,
+    paused_reason: pausedReason,
+    next_run_in_seconds: nextRunSeconds,
+    last_run_at: overallLastRunAt,
+    last_signal_id: overallLastSignalId,
+    admin_bridge_online: adminBridgeOnline,
+    market_state: marketState,
+    redis_available: redisAvailable,
+  }
+}
+
 // === Redis Lock Helpers ===
 const REDIS_LOCK_PREFIX = 'auto:scheduler:lock:'
 const REDIS_COOLDOWN_PREFIX = 'auto:scheduler:cooldown:'
@@ -629,9 +713,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
     }, {
       status: signal.signal_type === 'hold' ? 'skipped_hold' : 'success',
       signal_id: signalId, signal_type: signal.signal_type, confidence: signal.confidence,
-      subscriber_count: subscribers.size, inference_source: aiSource,
+      subscriber_count: onlineSubscribers.size, inference_source: aiSource,
     }, 'success')
-    l(`<<< cycle complete (signal=#${signalId}, subscribers=${subscribers.size})`)
+    l(`<<< cycle complete (signal=#${signalId}, subscribers=${onlineSubscribers.size})`)
   } catch (err) {
     l(`<<< EXCEPTION: ${err.message}`)
     console.error(`[UnifiedCycle] ${key} error:`, err.message)

@@ -56,7 +56,8 @@ export { insertAudit, getActiveConfig, getAnalyzeApiKey,
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,
-  syncUserRedisSubscription, rebuildRedisSubscriptions, removeUserRuntimeAutoSubscription } from './scheduler.js'
+  syncUserRedisSubscription, rebuildRedisSubscriptions, removeUserRuntimeAutoSubscription,
+  getUserAutoRuntimeStatus } from './scheduler.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'

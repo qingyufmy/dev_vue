@@ -1004,11 +1004,15 @@ function handleHeartbeat(msg) {
     // Only overwrite badge if state actually changed (avoid heartbeat flash)
     if (msg.auto_reasoning_enabled && state.autoConfig) {
       const ptName = state.autoConfig.prompt_type_name || '';
-      const marketClosed = state.marketTradeMode !== 4;
-      const label = marketClosed
-        ? `自动推理暂停 · ${ptName || '未选择策略'}`
-        : `自动推理 · ${ptName || '未选择策略'}`;
-      setBadge("autoAnalyzeMode", label, marketClosed ? "warning" : "active");
+      const pausedReason = state.autoConfig.paused_reason || '';
+      const inFlight = state.autoConfig.in_flight || false;
+      if (inFlight) {
+        setBadge("autoAnalyzeMode", `自动推理中 · ${ptName || '策略'}`, "running");
+      } else if (pausedReason) {
+        setBadge("autoAnalyzeMode", `自动推理暂停 · ${pausedReason}`, "warning");
+      } else {
+        setBadge("autoAnalyzeMode", `自动推理 · ${ptName || '策略'}`, "active");
+      }
     } else if (!msg.auto_reasoning_enabled) {
       setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
     }
@@ -1280,20 +1284,48 @@ async function loadStatus() {
     const enabled = scheduler.enabled;
     const running = scheduler.running;
     const ptName = scheduler.prompt_type_name || '';
+    const pausedReason = scheduler.paused_reason || '';
+    const inFlight = scheduler.in_flight || false;
+    const nextRunSec = scheduler.next_run_in_seconds || 0;
+
+    const REASON_LABELS = {
+      'admin_bridge_offline': '管理员桥接离线',
+      'market_closed': '休市',
+      'market_unknown': '市场状态未知',
+      'market_unknown_no_tick': '等待行情 tick',
+      'market_stale_tick': '行情停滞',
+      'redis_unavailable': 'Redis 未连接',
+      'no_api_key': '未配置 API Key',
+      'strategy_disabled': '策略已停用',
+      'symbol_not_supported': '品种不支持',
+      'no_subscribers': '无在线订阅者',
+      'rates_failed': '行情获取失败',
+      'rates_empty': '行情为空',
+      'no_strategy': '未选择策略',
+      'no_symbols': '未选择品种',
+      'disabled': '已关闭',
+    };
+
     let label, type;
-    if (marketClosed && enabled) {
-      label = `自动推理暂停 · ${ptName || '未选择策略'}`;
+    if (!enabled) {
+      label = '自动推理关闭';
+      type = 'neutral';
+    } else if (inFlight) {
+      label = `自动推理中 · ${ptName || '策略'}`;
+      type = 'running';
+    } else if (pausedReason) {
+      const reasonLabel = REASON_LABELS[pausedReason] || pausedReason;
+      label = `自动推理暂停 · ${reasonLabel}`;
       type = 'warning';
-    } else if (enabled && !ptName) {
-      label = '自动推理暂停 · 未选择策略';
-      type = 'warning';
+    } else if (nextRunSec > 0) {
+      const min = Math.floor(nextRunSec / 60);
+      const sec = nextRunSec % 60;
+      const countdown = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+      label = `自动推理 · ${ptName || '策略'} · 下次 ${countdown}`;
+      type = 'active';
     } else {
-      label = enabled
-        ? running ? `自动推理 · ${ptName}` : `自动推理 · ${ptName}`
-        : '自动推理关闭';
-      type = enabled
-        ? running ? 'active' : 'connected'
-        : 'neutral';
+      label = `自动推理 · ${ptName || '策略'}`;
+      type = 'active';
     }
     setBadge('autoAnalyzeMode', label, type);
 
@@ -1301,6 +1333,9 @@ async function loadStatus() {
       enabled,
       prompt_type_id: scheduler.prompt_type_id || null,
       prompt_type_name: ptName,
+      next_run_in_seconds: nextRunSec,
+      paused_reason: pausedReason,
+      in_flight: inFlight,
     };
     state.autoEnabled = enabled;
   } catch {
@@ -1387,20 +1422,7 @@ async function handleAutoToggle() {
   try {
     const result = await wsApi('toggle_auto');
     await loadAutoConfig();
-    const isMarketClosed = state.marketTradeMode !== 4;
-    const ptName = state.autoConfig?.prompt_type_name || '';
-    let label, type;
-    if (result.enabled && isMarketClosed) {
-      label = `自动推理暂停 · ${ptName || '未选择策略'}`;
-      type = 'warning';
-    } else if (result.enabled) {
-      label = `自动推理 · ${ptName || '未选择策略'}`;
-      type = 'active';
-    } else {
-      label = '自动推理关闭';
-      type = 'neutral';
-    }
-    setBadge('autoAnalyzeMode', label, type);
+    await loadStatus();
     toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
   } catch (e) {
     toast('切换失败: ' + e.message, 'error');

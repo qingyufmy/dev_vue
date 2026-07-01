@@ -298,6 +298,23 @@ button {
   animation: pulse-dot-gold 2s ease-in-out infinite;
 }
 
+.status-running {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.status-running .badge-dot {
+  background: #10b981;
+  box-shadow: 0 0 4px rgba(16, 185, 129, 0.5);
+  animation: pulse-dot-green 1s ease-in-out infinite;
+}
+
+@keyframes pulse-dot-green {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .status-success {
   color: #e53e3e;
   background: rgba(229, 62, 62, 0.08);
