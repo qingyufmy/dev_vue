@@ -223,6 +223,7 @@ async function _initBridge(ws, userId) {
     try {
       const ai = await import('./routes/ai/index.js')
       ai.stopAutoScheduler(userId)
+      await ai.removeUserRuntimeAutoSubscription(userId)
       sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
     } catch (e) {
       console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
@@ -292,6 +293,12 @@ async function _initBridge(ws, userId) {
       if (_bridgeInitGen.get(userId) !== gen) return
       ai.stopAutoScheduler(userId)
       await ai.startAutoScheduler(userId)
+      // Sync Redis subscription
+      const restoredCfg = await ai.getAutoConfig(null, userId)
+      if (restoredCfg?.enabled) {
+        await ai.syncUserRedisSubscription(userId, restoredCfg.prompt_type_id, restoredCfg.selected_symbols || [], true)
+        await ai.reconcileAutoSchedulers()
+      }
       console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
       sendToBrowsers(userId, { type: 'auto_state', enabled: true, reason: 'bridge_connected' })
     } catch (e) {

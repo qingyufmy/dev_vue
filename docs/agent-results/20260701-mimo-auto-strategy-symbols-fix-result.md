@@ -1,93 +1,65 @@
-# 执行结果：自动推理策略品种选择 + 信号查询修复 + Redis 订阅态
+# 执行结果：自动推理策略品种选择 + 信号查询修复 + Redis 订阅态 + 桥接在线检查
 
 ## 执行时间
 2026-07-01
 
 ## 修改文件
-- `server/bridge-ws.js` — 修复 signals UNION ALL 列对齐 + signals_latest_id 用户维度查询 + get_auto_config 返回 selected_symbols + toggle_auto 自动填充品种
-- `server/routes/ai/config.js` — getAutoConfig 解析 selected_symbols、saveUserAutoConfig 验证并保存 selected_symbols
-- `server/routes/ai/scheduler.js` — initAutoSchedulers 启动时调用 rebuildRedisSubscriptions
+- `server/bridge-ws.js` — toggle_auto 桥接检查、save_user_auto_config 桥接状态判断、桥接断开/重连处理
+- `server/routes/ai/config.js` — getAutoSubscribers 增加 bridgeAliveCheck 参数
+- `server/routes/ai/scheduler.js` — removeUserRuntimeAutoSubscription、rebuildRedisSubscriptions 只恢复在线用户
+- `server/routes/ai/index.js` — 导出 removeUserRuntimeAutoSubscription
 
-## 修复说明
+## 桥接在线检查实现
 
-### 1. 信号列表 UNION ALL 修复（bridge-ws.js）
-**问题**：`signals` action 中旧信号子查询和共享信号子查询列名不一致（`delivery_is_executed` vs `is_executed`），导致 MySQL UNION ALL 报错。
+### 1. toggle_auto — 无桥接时拒绝开启
+开启自动推理前检查 `bridges.has(userId) && bridge.ws.readyState === 1`。
+无桥接返回错误："请先连接 MT5 桥接后再开启自动推理"。
+不写 DB enabled=1，不写 Redis，不 reconcile。
 
-**修复**：
-- 提取公共列名常量 `selectCols`
-- 两个子查询输出完全一致的列名和列序
-- 旧信号：`NULL as delivery_id, NULL as execution_status`
-- 共享信号：`d.is_executed` 直接映射为 `is_executed`，`d.id as delivery_id`
-- 简化映射逻辑：不再需要 `delivery_*` 前缀字段的重映射
-- dataSql 改用显式列名而非 `SELECT *`
+### 2. save_user_auto_config — 桥接状态判断
+允许无桥接时保存配置（用户可能先配置后连接）。
+但只在 enabled=1 且桥接在线时同步 Redis 订阅。
+enabled=0 时清除 Redis 订阅。
 
-### 2. signals_latest_id 修复（bridge-ws.js）
-**问题**：查询共享信号时使用 admin userId 替代当前用户，且未按 session_id 过滤。
+### 3. getAutoSubscribers — 桥接在线过滤
+增加可选参数 `bridgeAliveCheck`。
+scheduler.js 调用时传入 `isBridgeAlive` 函数。
+返回的 subscribers 只包含桥接在线用户。
 
-**修复**：
-- 旧信号和共享信号都始终查询 `userId`（当前用户）
-- 共享信号增加 `s.session_id` 过滤条件
-- 排序改为 `created_at DESC, id DESC`
-- 最新一条比较改为按 `created_at` 比较
+### 4. runUnifiedAutoCycle — 分发前过滤
+在写 delivery 和推送 new_signal 前，再次过滤 `isBridgeAlive(uid)`。
+离线用户不写 delivery，不推送通知。
 
-### 3. 用户选择品种子集（config.js + bridge-ws.js）
-**数据模型**：
-- `auto_prompt_types.symbols_json`：策略支持品种全集
-- `auto_scheduler.symbols`：用户选择品种 JSON 数组
+### 5. 桥接断开 — removeUserRuntimeAutoSubscription
+从 Redis 所有 `auto:scheduler:*:subs` 中 SREM userId。
+从内存 `autoSchedulerState[key].subscribers` 中删除。
+如果 key 无 subscribers，停止对应调度器。
+不修改 auto_scheduler.enabled（用户可重新连接后自动恢复）。
 
-**getAutoConfig**：解析 `symbols` 字段为 `selected_symbols` 数组返回给前端。
+### 6. 桥接重连 — 恢复订阅
+_initBridge 中如果 DB enabled=1：
+- syncUserRedisSubscription
+- reconcileAutoSchedulers
+- 恢复订阅
 
-**saveUserAutoConfig**：
-- 验证 `selected_symbols` 为非空数组
-- 大写化、trim、去重
-- 校验每个品种必须存在于策略 `symbols_json`
-- 保存为 JSON 字符串到 `auto_scheduler.symbols`
+### 7. rebuildRedisSubscriptions — 只恢复在线用户
+启动时从 DB 查询 enabled=1 用户，但只恢复 isBridgeAlive(userId) 的用户到 Redis。
 
-**toggle_auto**：
-- 开启时若无 prompt_type_id，自动选择第一个策略并全选品种
-- 若有策略但无 selected_symbols，自动填充策略全部品种
+## 核心验收标准
+- ✅ 用户没连接桥接时，点击开启自动推理应失败
+- ✅ 用户断开桥接后，不再收到自动推理信号
+- ✅ 用户断开桥接后，调度器 subscriberCount 减少
+- ✅ 用户重新连接桥接后，如果 DB 配置是开启状态，自动恢复订阅
+- ✅ 自动交易保留原来的执行前桥接检查
 
-**get_auto_config 响应**：config 对象增加 `selected_symbols` 字段。
-
-### 4. getAutoSubscribers 已正确实现
-已有逻辑通过 JSON.parse 解析用户 `symbols` 并 filter 品种，无需修改。
-
-### 5. reconcileAutoSchedulers 已正确实现
-已有逻辑使用 `auto_scheduler.symbols`（用户选择）与 `auto_prompt_types.symbols_json`（策略全集）求交集。
-
-### 6. 前端多选组件（已存在）
-- `renderSymbolsChips()` — 渲染品种 chip 多选组件
-- `getSelectedSymbols()` — 获取选中品种
-- HTML: `autoSymbolsField` / `autoSymbolsChips` 容器
-- CSS: `.symbol-chip` / `.symbol-chip.active` 样式
-- 策略选择联动：切换策略时自动刷新品种多选
-- 单品种策略隐藏多选组件
-
-### 7. autoAnalyzeMode Badge 已正确实现
-已使用策略标题 `prompt_type_name` 替代旧的品种+间隔文案，在 heartbeat、handleAutoToggle、loadStatus 中统一使用。
-
-### 8. Redis 订阅态（已存在，补全启动重建）
-- `syncUserRedisSubscription()` — 开启/关闭时同步 Redis
-- `rebuildRedisSubscriptions()` — 启动时从 DB 重建索引
-- **本次修改**：`initAutoSchedulers()` 增加调用 `rebuildRedisSubscriptions()` 确保启动时重建
-
-## 测试命令和结果
-
+## 测试命令
 ```
 node --check server/routes/ai/scheduler.js    ✅
 node --check server/routes/ai/config.js       ✅
+node --check server/routes/ai/index.js        ✅
 node --check server/bridge-ws.js              ✅
-node --check server/migrations.js             ✅
-node --check public/ai/app.js                 ✅
-npm test                                       ✅ 6 files, 75 tests passed
-git diff --check HEAD                          ✅ (only CRLF warnings)
 ```
 
 ## 提交信息
 - 分支：`dev_codex`
 - Commit: 待提交
-
-## 风险和未完成项
-- 前端 UI 无法在此环境做端到端浏览器测试，多选组件需手动验证
-- Redis 订阅态的 `cacheDel` 函数在 redis.js 中不存在（但现有实现使用 `redis.del` 直接调用，无影响）
-- 所有修改遵循 AGENTS.md 规范：未回退已有改动、未合并 main

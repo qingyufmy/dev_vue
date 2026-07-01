@@ -429,7 +429,7 @@ export async function initDB() {
       model_name VARCHAR(100) NOT NULL DEFAULT 'deepseek-chat',
       temperature DOUBLE NOT NULL DEFAULT 0.7,
       max_tokens INT NOT NULL DEFAULT 2000,
-      enable_auto_trade TINYINT NOT NULL DEFAULT 0,
+      enable_auto_trade TINYINT NOT NULL DEFAULT 1,
       enable_futures_trading TINYINT NOT NULL DEFAULT 0,
       risk_level VARCHAR(20) NOT NULL DEFAULT 'medium',
       max_position_size DOUBLE NOT NULL DEFAULT 0.05,
@@ -519,7 +519,7 @@ export async function initDB() {
       risk_level VARCHAR(20) NOT NULL DEFAULT 'medium',
       max_position_size DOUBLE NOT NULL DEFAULT 0.05,
       selected_take_profit INT NOT NULL DEFAULT 2,
-      enable_auto_trade TINYINT NOT NULL DEFAULT 0,
+      enable_auto_trade TINYINT NOT NULL DEFAULT 1,
       last_run_at DATETIME,
       created_at DATETIME NOT NULL DEFAULT (NOW()),
       updated_at DATETIME NOT NULL DEFAULT (NOW())
@@ -555,7 +555,7 @@ export async function initDB() {
       risk_level VARCHAR(20) DEFAULT 'medium',
       max_position_size DOUBLE DEFAULT 0.05,
       selected_take_profit INT DEFAULT 2,
-      enable_auto_trade TINYINT NOT NULL DEFAULT 0,
+      enable_auto_trade TINYINT NOT NULL DEFAULT 1,
       system_prompt TEXT,
       updated_at DATETIME NOT NULL DEFAULT (NOW()),
       CONSTRAINT chk_singleton CHECK (id = 1)

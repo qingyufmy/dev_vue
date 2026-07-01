@@ -55,3 +55,30 @@ export function getRedis() {
 export function isRedisAvailable() {
   return _redisAvailable
 }
+
+export async function cacheGetJSON(key) {
+  const r = getRedis()
+  if (!r) return null
+  try {
+    const raw = await r.get(key)
+    return raw ? JSON.parse(raw) : null
+  } catch (err) {
+    console.error('[Redis] cacheGetJSON error:', err.message)
+    return null
+  }
+}
+
+export async function cacheSetJSON(key, value, ttlSeconds) {
+  const r = getRedis()
+  if (!r) return
+  try {
+    const json = JSON.stringify(value)
+    if (ttlSeconds) {
+      await r.set(key, json, 'EX', ttlSeconds)
+    } else {
+      await r.set(key, json)
+    }
+  } catch (err) {
+    console.error('[Redis] cacheSetJSON error:', err.message)
+  }
+}

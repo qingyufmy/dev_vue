@@ -374,15 +374,7 @@
                   </div>
                   <small class="field-help">开启后，未配置模型的用户将自动使用您的模型设置</small>
                 </label>
-                <label class="model-sharing-toggle" id="autoConfigOverrideWrap">
-                  <div class="model-sharing-row">
-                    <span>应用当前配置给自动推理</span>
-                    <label class="switch">
-                      <input type="checkbox" id="autoConfigOverride">
-                      <span class="slider round"></span>
-                    </label>
-                  </div>
-                  <small class="field-help" style="color:var(--color-warning)">开启后，自动推理逻辑将使用您当前设置的配置（包括模型+交易约束+系统提示词）</small>
+                <label class="model-sharing-toggle" id="autoConfigOverrideWrap" style="display:none">
                 </label>
                 <div class="config-grid">
                   <label><span>模型供应商</span><select id="apiProvider">
@@ -456,7 +448,18 @@
               <div class="config-section">
                 <div class="config-section-title">自动推理策略</div>
                 <div class="config-grid">
-                  <label><span>选择策略</span><select id="autoPromptTypeSelect"><option value="">加载中...</option></select></label>
+                  <div class="config-field">
+                    <span class="config-field-label">选择策略</span>
+                    <div class="custom-pt-select" id="autoPromptTypeWrap">
+                      <select id="autoPromptTypeSelect" style="display:none"><option value="">选择策略...</option></select>
+                      <div class="custom-pt-trigger" id="autoPromptTypeTrigger">选择策略...</div>
+                      <div class="custom-pt-dropdown" id="autoPromptTypeDropdown"></div>
+                    </div>
+                  </div>
+                  <div class="config-field" id="autoSymbolsField" style="display:none">
+                    <span class="config-field-label">订阅品种</span>
+                    <div class="symbols-chips" id="autoSymbolsChips"></div>
+                  </div>
                 </div>
               </div>
               <div class="config-section">
@@ -476,12 +479,8 @@
                   <label class="check-row auto-execute-label"><input id="autoEnableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
                 </div>
               </div>
-              <div id="autoConfigStatus" class="inline-status">正在读取配置</div>
-              <div class="config-actions">
-                <button id="saveAutoConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
-              </div>
 
-              <!-- Admin-only: Global model/API config -->
+              <!-- Admin-only: Global model/API config + Prompt types -->
               <div class="admin-only-auto-config" style="display:none">
                 <div class="config-section" style="margin-top:20px;border-top:2px solid var(--color-border);padding-top:20px">
                   <div class="config-section-title">全局模型/API 配置 <span class="admin-badge">仅管理员</span></div>
@@ -505,25 +504,16 @@
                 </div>
 
                 <div class="config-section">
-                  <div class="config-section-title">提示词策略管理</div>
-                  <div id="adminPromptTypeList" style="max-height:200px;overflow-y:auto;margin-bottom:12px"></div>
-                  <div style="margin-top:12px;padding:12px;background:var(--color-surface-alt);border-radius:8px">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-                      <input id="adminPtId" type="hidden" value="" />
-                      <label><span>策略标题</span><input id="adminPtTitle" placeholder="如: 黄金5分钟趋势" /></label>
-                      <label><span>排序</span><input id="adminPtSortOrder" type="number" value="0" /></label>
-                    </div>
-                    <label><span>描述</span><input id="adminPtDescription" placeholder="策略说明" /></label>
-                    <label><span>绑定品种 (逗号分隔)</span><input id="adminPtSymbols" placeholder="XAUUSD, EURUSD" /></label>
-                    <label><span>循环间隔 (分钟)</span><input id="adminPtInterval" type="number" min="1" value="5" /></label>
-                    <label><span>系统提示词</span><textarea id="adminPtPrompt" rows="6" spellcheck="false" placeholder="输入提示词..."></textarea></label>
-                    <label class="check-row"><input id="adminPtActive" type="checkbox" checked /><span>启用</span></label>
-                    <div style="display:flex;gap:8px;margin-top:8px">
-                      <button class="btn btn-primary" onclick="saveAdminPromptType()">保存策略</button>
-                      <button class="btn btn-secondary" onclick="document.getElementById('adminPtId').value='';document.getElementById('adminPtTitle').value='';document.getElementById('adminPtDescription').value='';document.getElementById('adminPtSymbols').value='';document.getElementById('adminPtInterval').value='5';document.getElementById('adminPtPrompt').value='';document.getElementById('adminPtActive').checked=true;document.getElementById('adminPtSortOrder').value='0'">新建策略</button>
-                    </div>
+                  <div class="config-section-title" style="display:flex;justify-content:space-between;align-items:center">
+                    <span>提示词策略管理</span>
+                    <button class="btn btn-primary btn-sm" onclick="openPromptTypeModal()">+ 新建策略</button>
                   </div>
+                  <div id="adminPromptTypeList" style="margin-top:12px"></div>
                 </div>
+              </div>
+
+              <div class="config-actions">
+                <button id="saveAutoConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
               </div>
             </div>
 
@@ -945,6 +935,31 @@
       </div>
     </div>
     <div id="toastHost" class="toast-host"></div>
+
+    <!-- Prompt Type Modal -->
+    <div id="promptTypeModal" class="modal-overlay" style="display:none">
+      <div class="modal" style="max-width:560px">
+        <button class="modal-close" onclick="closePromptTypeModal()">&times;</button>
+        <div class="modal-header">
+          <h2 id="promptTypeModalTitle">新建策略</h2>
+        </div>
+        <div class="modal-body">
+          <input id="adminPtId" type="hidden" value="" />
+          <label><span>策略标题</span><input id="adminPtTitle" placeholder="如: 黄金5分钟趋势" /></label>
+          <label><span>描述</span><textarea id="adminPtDescription" rows="3" placeholder="策略说明，支持多行" spellcheck="false"></textarea></label>
+          <label><span>绑定品种 (逗号分隔)</span><input id="adminPtSymbols" placeholder="XAUUSD, EURUSD" /></label>
+          <label><span>循环间隔 (分钟)</span><input id="adminPtInterval" type="number" min="1" value="5" /></label>
+          <label><span>系统提示词</span><textarea id="adminPtPrompt" rows="6" spellcheck="false" placeholder="输入提示词..."></textarea></label>
+          <label><span>排序</span><input id="adminPtSortOrder" type="number" value="0" /></label>
+          <label class="check-row"><input id="adminPtActive" type="checkbox" checked /><span>启用</span></label>
+          <div class="config-actions" style="margin-top:16px">
+            <button class="btn btn-primary" onclick="saveAdminPromptType()">保存策略</button>
+            <button class="btn btn-secondary" onclick="closePromptTypeModal()">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="lucide.js?v=20260627b"></script>
     <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260627b"></script>
     <script src="/ai/js/chart.umd.min.js?v=20260627b"></script>

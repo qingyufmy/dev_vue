@@ -1003,12 +1003,11 @@ function handleHeartbeat(msg) {
     state.autoEnabled = msg.auto_reasoning_enabled;
     // Only overwrite badge if state actually changed (avoid heartbeat flash)
     if (msg.auto_reasoning_enabled && state.autoConfig) {
-      const sym = (state.autoConfig.symbols && state.autoConfig.symbols[0]) || 'XAUUSD';
-      const intervalMin = state.autoConfig.interval_minutes || 5;
+      const ptName = state.autoConfig.prompt_type_name || '';
       const marketClosed = state.marketTradeMode !== 4;
       const label = marketClosed
-        ? '市场休市 · 自动推理暂停'
-        : `自动推理运行中 · ${sym} · ${intervalMin}分钟`;
+        ? `自动推理暂停 · ${ptName || '未选择策略'}`
+        : `自动推理 · ${ptName || '未选择策略'}`;
       setBadge("autoAnalyzeMode", label, marketClosed ? "warning" : "active");
     } else if (!msg.auto_reasoning_enabled) {
       setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
@@ -1280,17 +1279,17 @@ async function loadStatus() {
     const scheduler = auto.scheduler || {};
     const enabled = scheduler.enabled;
     const running = scheduler.running;
-    const symbols = scheduler.symbols || [];
-    const sym = symbols[0] || 'XAUUSD';
-    const intervalMin = scheduler.interval_minutes || 5;
+    const ptName = scheduler.prompt_type_name || '';
     let label, type;
     if (marketClosed && enabled) {
-      // Market closed — show paused even if scheduler is enabled
-      label = `市场休市 · 自动推理暂停`;
+      label = `自动推理暂停 · ${ptName || '未选择策略'}`;
+      type = 'warning';
+    } else if (enabled && !ptName) {
+      label = '自动推理暂停 · 未选择策略';
       type = 'warning';
     } else {
       label = enabled
-        ? running ? `自动推理运行中 · ${sym} · ${intervalMin}分钟` : `自动推理 · ${sym} · ${intervalMin}分钟`
+        ? running ? `自动推理 · ${ptName}` : `自动推理 · ${ptName}`
         : '自动推理关闭';
       type = enabled
         ? running ? 'active' : 'connected'
@@ -1298,11 +1297,10 @@ async function loadStatus() {
     }
     setBadge('autoAnalyzeMode', label, type);
 
-    // Store current auto config
     state.autoConfig = {
       enabled,
-      symbols: scheduler.symbols || ['XAUUSD'],
-      interval_minutes: intervalMin,
+      prompt_type_id: scheduler.prompt_type_id || null,
+      prompt_type_name: ptName,
     };
     state.autoEnabled = enabled;
   } catch {
@@ -1390,12 +1388,13 @@ async function handleAutoToggle() {
     const result = await wsApi('toggle_auto');
     await loadAutoConfig();
     const isMarketClosed = state.marketTradeMode !== 4;
+    const ptName = state.autoConfig?.prompt_type_name || '';
     let label, type;
     if (result.enabled && isMarketClosed) {
-      label = `市场休市 · 自动推理暂停`;
+      label = `自动推理暂停 · ${ptName || '未选择策略'}`;
       type = 'warning';
     } else if (result.enabled) {
-      label = `自动推理运行中`;
+      label = `自动推理 · ${ptName || '未选择策略'}`;
       type = 'active';
     } else {
       label = '自动推理关闭';
@@ -1897,10 +1896,10 @@ function applyRoleUI() {
   const modelTab = document.querySelector('.nav-item[data-tab="ai-config"]');
   if (modelTab) modelTab.style.display = isPlusReadOnly ? "none" : "";
 
-  // Hide auto config sub-tab from non-admin
+  // Show auto config sub-tab for admin and pro users
   const autoTab = document.querySelector('.config-sub-tab[data-config-tab="auto-config"]');
-  if (autoTab) autoTab.style.display = (isAdmin && !isPlusReadOnly) ? "" : "none";
-  if (!isAdmin || isPlusReadOnly) {
+  if (autoTab) autoTab.style.display = (isAdmin || isPro) ? "" : "none";
+  if (!isAdmin && !isPro || isPlusReadOnly) {
     const manualTab = document.querySelector('.config-sub-tab[data-config-tab="manual-config"]');
     if (manualTab) manualTab.click();
   }
@@ -2057,13 +2056,9 @@ async function loadConfig() {
   if (isAdmin && $("modelSharingEnabled")) {
     $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
   }
-  // Auto config override toggle - restore state first (visibility set after sharing check)
-  if ($("autoConfigOverride")) $("autoConfigOverride").checked = Boolean(cfg.auto_config_override);
   // Restore per-user auto symbol + interval (backend fills defaults from global auto config)
   if ($("overrideSymbolSelect")) $("overrideSymbolSelect").value = cfg.auto_symbols;
   if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
-  // Sync override section visibility
-  syncOverrideSection();
   // 模型共享：只要管理员开启了共享且当前用户非管理员，API Key 为空就共享
   const isUsingShared = !isAdmin && cfg._model_shared;
   if (isUsingShared) {
@@ -2082,10 +2077,6 @@ async function loadConfig() {
     $("apiKey").placeholder = "";
   }
   state._isUsingSharedModel = isUsingShared;
-  // 自动推理配置覆盖开关：有自有API Key / 使用共享模型 / Pro会员 均可使用
-  const overrideWrap = $("autoConfigOverrideWrap");
-  const isPro = state.user?.plan === 'pro';
-  if (overrideWrap) overrideWrap.style.display = (state.currentConfigHasApiKey || isUsingShared || isPro) ? "" : "none";
 }
 
 async function saveConfig() {
@@ -2113,7 +2104,6 @@ async function saveConfig() {
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
       model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
-      auto_config_override: $("autoConfigOverride")?.checked ? 1 : 0,
       system_prompt: $("systemPrompt").value.trim() || null,
     },
   };
@@ -2138,17 +2128,8 @@ async function saveConfig() {
   }
 }
 
-// ---- Auto-config override section (show symbol + interval inside manual config) ---
-async function syncOverrideSection() {
-  const section = $("autoConfigOverrideSection");
-  const checkbox = $("autoConfigOverride");
-  if (!section || !checkbox) return;
-  const on = checkbox.checked;
-  section.style.display = on ? "" : "none";
-  if (on) {
-    initOverrideSymbolsSelector();
-  }
-}
+// ---- Auto-config override section removed ----
+async function syncOverrideSection() {}
 
 function initOverrideSymbolsSelector() {
   const input = $("overrideSymbolSelect");
@@ -2206,43 +2187,30 @@ async function loadAutoConfig() {
 
   try {
     const data = await wsApi('get_auto_config');
-    if (data.status !== 'success') { setText('autoConfigStatus', data.message || '加载失败'); return; }
+    if (data.status !== 'success') { toast(data.message || '加载失败', 'error'); return; }
     const cfg = data.config;
     const promptTypes = data.prompt_types || [];
+    window._loadedPromptTypes = promptTypes;
 
     // Show/hide admin sections
     const adminSections = document.querySelectorAll('.admin-only-auto-config');
     adminSections.forEach(el => { el.style.display = isAdmin ? '' : 'none'; });
 
-    // User config section
-    const ptSelect = document.getElementById('autoPromptTypeSelect');
-    if (ptSelect) {
-      ptSelect.innerHTML = '<option value="">选择策略...</option>';
-      for (const pt of promptTypes) {
-        const opt = document.createElement('option');
-        opt.value = pt.id;
-        opt.textContent = pt.title + (pt.description ? ` - ${pt.description}` : '');
-        if (pt.id === cfg.prompt_type_id) opt.selected = true;
-        ptSelect.appendChild(opt);
-      }
+    // User config section - custom prompt type dropdown (only active)
+    const activePts = promptTypes.filter(pt => pt.is_active);
+    renderPromptTypeDropdown(activePts, cfg.prompt_type_id);
+    // Render symbols chips for selected strategy
+    const selectedPt = activePts.find(pt => pt.id === cfg.prompt_type_id);
+    if (selectedPt) {
+      renderSymbolsChips(selectedPt.symbols || [], cfg.selected_symbols || []);
+    } else {
+      renderSymbolsChips(null, []);
     }
 
     document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
     document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
     document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enable_auto_trade);
-
-    // Running status
-    const statusEl = document.getElementById('autoConfigStatus');
-    let statusText = '';
-    if (cfg.running) {
-      statusText = cfg.paused_reason ? `暂停: ${cfg.paused_reason}` : '运行中';
-    } else if (cfg.enabled) {
-      statusText = cfg.paused_reason ? `暂停: ${cfg.paused_reason}` : '已启用';
-    } else {
-      statusText = '已关闭';
-    }
-    setText('autoConfigStatus', statusText);
 
     // Admin: global config
     if (isAdmin && data.admin) {
@@ -2255,35 +2223,218 @@ async function loadAutoConfig() {
       document.getElementById('autoApiKey').placeholder = gc.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
       applyAutoProviderPreset(gc.api_provider || 'deepseek');
 
-      // Prompt type list
-      const ptList = document.getElementById('adminPromptTypeList');
-      if (ptList) {
-        ptList.innerHTML = '';
-        const adminPts = data.prompt_types || [];
-        for (const pt of adminPts) {
-          const div = document.createElement('div');
-          div.className = 'prompt-type-item' + (pt.id === cfg.prompt_type_id ? ' active' : '');
-          div.innerHTML = `<div class="pt-title">${pt.title || '未命名'}</div><div class="pt-desc">${pt.description || ''}</div><div class="pt-meta">品种: ${(pt.symbols||[]).join(', ')} · 间隔: ${pt.interval_minutes}分钟 · ${pt.is_active ? '启用' : '禁用'}</div>`;
-          div.dataset.id = pt.id;
-          div.onclick = () => loadAdminPromptType(pt);
-          ptList.appendChild(div);
-        }
-      }
+      // Prompt type table
+      renderPromptTypeTable(data.prompt_types || [], cfg.prompt_type_id);
     }
   } catch (e) {
-    setText('autoConfigStatus', '加载失败: ' + e.message);
+    console.error('[loadAutoConfig]', e);
   }
 }
 
-function loadAdminPromptType(pt) {
-  document.getElementById('adminPtId').value = pt.id || '';
-  document.getElementById('adminPtTitle').value = pt.title || '';
-  document.getElementById('adminPtDescription').value = pt.description || '';
-  document.getElementById('adminPtSymbols').value = (pt.symbols || []).join(', ');
-  document.getElementById('adminPtInterval').value = pt.interval_minutes || 5;
-  document.getElementById('adminPtPrompt').value = pt.system_prompt || '';
-  document.getElementById('adminPtActive').checked = pt.is_active !== false;
-  document.getElementById('adminPtSortOrder').value = pt.sort_order || 0;
+function renderPromptTypeTable(pts, activePtId) {
+  const container = document.getElementById('adminPromptTypeList');
+  if (!container) return;
+  if (!pts.length) {
+    container.innerHTML = '<div style="color:var(--color-text-muted);padding:12px 0">暂无策略，点击上方按钮新建</div>';
+    return;
+  }
+  let html = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="border-bottom:1px solid var(--color-border)">
+      <th style="text-align:left;padding:8px 12px">标题</th>
+      <th style="text-align:left;padding:8px 12px">品种</th>
+      <th style="text-align:center;padding:8px 12px">间隔</th>
+      <th style="text-align:center;padding:8px 12px">状态</th>
+      <th style="text-align:center;padding:8px 12px">操作</th>
+    </tr></thead><tbody>`;
+  for (const pt of pts) {
+    const isActive = pt.id === activePtId;
+    const symbols = (pt.symbols || []).join(', ');
+    const descTip = pt.description ? ` title="${pt.description.replace(/"/g, '&quot;')}"` : '';
+    html += `<tr style="border-bottom:1px solid var(--color-border);${isActive ? 'background:var(--color-primary-bg)' : ''}">
+      <td style="padding:8px 12px;font-weight:${isActive ? '600' : '400'}"${descTip}>${pt.title || '未命名'}</td>
+      <td style="padding:8px 12px;color:var(--color-text-secondary)">${symbols || '-'}</td>
+      <td style="padding:8px 12px;text-align:center">${pt.interval_minutes || 5}分钟</td>
+      <td style="padding:8px 12px;text-align:center"><span style="color:${pt.is_active !== false ? 'var(--color-success)' : 'var(--color-text-muted)'}">${pt.is_active !== false ? '启用' : '禁用'}</span></td>
+      <td style="padding:8px 12px;text-align:center"><button class="btn btn-secondary btn-sm" onclick="openPromptTypeModal(${pt.id})">编辑</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function renderPromptTypeDropdown(pts, selectedId) {
+  const hidden = document.getElementById('autoPromptTypeSelect');
+  const trigger = document.getElementById('autoPromptTypeTrigger');
+  const dropdown = document.getElementById('autoPromptTypeDropdown');
+  const wrap = document.getElementById('autoPromptTypeWrap');
+  if (!hidden || !trigger || !dropdown || !wrap) return;
+
+  // populate hidden select for form submission
+  hidden.innerHTML = '<option value="">选择策略...</option>';
+  for (const pt of pts) {
+    const opt = document.createElement('option');
+    opt.value = pt.id;
+    opt.textContent = pt.title || '未命名';
+    if (pt.id === selectedId) opt.selected = true;
+    hidden.appendChild(opt);
+  }
+
+  // single tooltip element
+  wrap.querySelectorAll('.custom-pt-tooltip').forEach(t => t.remove());
+  const tooltip = document.createElement('div');
+  tooltip.className = 'custom-pt-tooltip';
+  wrap.appendChild(tooltip);
+
+  // render dropdown options
+  dropdown.innerHTML = '';
+  const placeholder = document.createElement('div');
+  placeholder.className = 'custom-pt-option' + (!selectedId ? ' selected' : '');
+  placeholder.textContent = '选择策略...';
+  placeholder.onclick = (e) => { e.stopPropagation(); selectPt(null); };
+  dropdown.appendChild(placeholder);
+
+  for (const pt of pts) {
+    const div = document.createElement('div');
+    div.className = 'custom-pt-option' + (pt.id === selectedId ? ' selected' : '');
+    div.dataset.id = pt.id;
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'custom-pt-option-title';
+    titleSpan.textContent = pt.title || '未命名';
+    div.appendChild(titleSpan);
+
+    div.onmouseenter = () => {
+      tooltip.innerHTML = `<strong>${pt.title || '未命名'}</strong>` +
+        `<div class="pt-desc-line" style="margin-bottom:4px">品种: ${(pt.symbols || []).join(', ') || '-'} &nbsp;·&nbsp; 间隔: ${pt.interval_minutes || 5}分钟</div>` +
+        `<div class="pt-desc-line">${pt.description || '无描述'}</div>`;
+      const dr = div.getBoundingClientRect();
+      const wr = wrap.getBoundingClientRect();
+      tooltip.style.top = (dr.top - wr.top) + 'px';
+      tooltip.style.display = 'block';
+    };
+    div.onmouseleave = () => { tooltip.style.display = ''; };
+
+    div.onclick = (e) => { e.stopPropagation(); selectPt(pt.id); };
+    dropdown.appendChild(div);
+  }
+
+  function selectPt(id) {
+    hidden.value = id || '';
+    if (id) {
+      const pt = pts.find(p => p.id === id);
+      trigger.textContent = pt ? (pt.title || '未命名') : '选择策略...';
+      // Update symbols chips
+      if (pt) renderSymbolsChips(pt.symbols || [], pt.symbols || []);
+    } else {
+      trigger.textContent = '选择策略...';
+      renderSymbolsChips(null, []);
+    }
+    dropdown.querySelectorAll('.custom-pt-option').forEach(o => {
+      const oId = o.dataset.id ? parseInt(o.dataset.id) : null;
+      o.classList.toggle('selected', oId === id);
+    });
+    dropdown.classList.remove('open');
+  }
+
+  // set trigger text
+  if (selectedId) {
+    const selected = pts.find(p => p.id === selectedId);
+    trigger.textContent = selected ? (selected.title || '未命名') : '选择策略...';
+  } else {
+    trigger.textContent = '选择策略...';
+  }
+
+  // toggle dropdown — only bind once
+  trigger.onclick = (e) => { e.stopPropagation(); dropdown.classList.toggle('open'); };
+  if (!dropdown._docBound) {
+    document.addEventListener('click', () => dropdown.classList.remove('open'));
+    dropdown._docBound = true;
+  }
+}
+
+// --- Symbols chips multi-select ---
+function renderSymbolsChips(strategySymbols, selectedSymbols) {
+  const field = document.getElementById('autoSymbolsField');
+  const container = document.getElementById('autoSymbolsChips');
+  if (!field || !container) return;
+
+  if (!strategySymbols || strategySymbols.length <= 1) {
+    field.style.display = 'none';
+    // Single symbol: auto-select it
+    if (strategySymbols && strategySymbols.length === 1) {
+      container._selected = [strategySymbols[0]];
+    }
+    return;
+  }
+
+  field.style.display = '';
+  container.innerHTML = '';
+  container._selected = [...selectedSymbols];
+
+  for (const sym of strategySymbols) {
+    const chip = document.createElement('span');
+    chip.className = 'symbol-chip' + (container._selected.includes(sym) ? ' active' : '');
+    chip.innerHTML = `<span class="chip-check">✓</span>${sym}`;
+    chip.onclick = () => {
+      const idx = container._selected.indexOf(sym);
+      if (idx >= 0) {
+        container._selected.splice(idx, 1);
+      } else {
+        container._selected.push(sym);
+      }
+      chip.classList.toggle('active');
+    };
+    container.appendChild(chip);
+  }
+}
+
+function getSelectedSymbols() {
+  const container = document.getElementById('autoSymbolsChips');
+  if (container && container._selected) return container._selected;
+  // Fallback: try hidden select value to find strategy symbols
+  const ptVal = document.getElementById('autoPromptTypeSelect')?.value;
+  if (ptVal) {
+    const pts = window._loadedPromptTypes || [];
+    const pt = pts.find(p => p.id === parseInt(ptVal));
+    if (pt && pt.symbols) return [...pt.symbols];
+  }
+  return [];
+}
+
+function openPromptTypeModal(ptId) {
+  const modal = document.getElementById('promptTypeModal');
+  const title = document.getElementById('promptTypeModalTitle');
+  if (ptId) {
+    // Edit mode - find prompt type from loaded data
+    const pts = window._loadedPromptTypes || [];
+    const pt = pts.find(p => p.id === ptId);
+    if (!pt) return;
+    title.textContent = '编辑策略';
+    document.getElementById('adminPtId').value = pt.id;
+    document.getElementById('adminPtTitle').value = pt.title || '';
+    document.getElementById('adminPtDescription').value = pt.description || '';
+    document.getElementById('adminPtSymbols').value = (pt.symbols || []).join(', ');
+    document.getElementById('adminPtInterval').value = pt.interval_minutes || 5;
+    document.getElementById('adminPtPrompt').value = pt.system_prompt || '';
+    document.getElementById('adminPtSortOrder').value = pt.sort_order || 0;
+    document.getElementById('adminPtActive').checked = pt.is_active !== false;
+  } else {
+    // Create mode
+    title.textContent = '新建策略';
+    document.getElementById('adminPtId').value = '';
+    document.getElementById('adminPtTitle').value = '';
+    document.getElementById('adminPtDescription').value = '';
+    document.getElementById('adminPtSymbols').value = 'XAUUSD';
+    document.getElementById('adminPtInterval').value = '5';
+    document.getElementById('adminPtPrompt').value = '';
+    document.getElementById('adminPtSortOrder').value = '0';
+    document.getElementById('adminPtActive').checked = true;
+  }
+  modal.style.display = 'flex';
+}
+
+function closePromptTypeModal() {
+  document.getElementById('promptTypeModal').style.display = 'none';
 }
 
 function initAutoSymbolsSelector() {
@@ -2301,8 +2452,11 @@ async function saveAutoConfig() {
 
   try {
     // Save user config (all users)
+    const ptVal = document.getElementById('autoPromptTypeSelect')?.value;
+    const selectedSymbols = getSelectedSymbols();
     const userPayload = {
-      prompt_type_id: parseInt(document.getElementById('autoPromptTypeSelect')?.value) || undefined,
+      prompt_type_id: ptVal ? parseInt(ptVal) : null,
+      selected_symbols: selectedSymbols,
       risk_level: document.getElementById('autoRiskLevel').value,
       max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
       selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
@@ -2336,8 +2490,9 @@ async function saveAutoConfig() {
 
 async function saveAdminPromptType() {
   try {
+    const idVal = document.getElementById('adminPtId')?.value;
     const payload = {
-      id: parseInt(document.getElementById('adminPtId')?.value) || undefined,
+      id: idVal ? parseInt(idVal) : undefined,
       title: document.getElementById('adminPtTitle').value,
       description: document.getElementById('adminPtDescription').value,
       symbols: document.getElementById('adminPtSymbols').value.split(',').map(s => s.trim()).filter(Boolean),
@@ -2346,10 +2501,11 @@ async function saveAdminPromptType() {
       is_active: document.getElementById('adminPtActive').checked,
       sort_order: parseInt(document.getElementById('adminPtSortOrder').value) || 0,
     };
-    await wsApi('admin_save_auto_prompt_type', payload);
+    const res = await wsApi('admin_save_auto_prompt_type', payload);
     toast('策略已保存', 'success');
+    closePromptTypeModal();
     await loadAutoConfig();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { console.error('[saveAdminPromptType] error:', e); toast(e.message, 'error'); }
 }
 
 async function disableAdminPromptType(id) {
@@ -3715,8 +3871,6 @@ function bindEvents() {
   // Config sub-tabs
   initConfigSubTabs();
   initAutoSymbolsSelector();
-  // Auto config override toggle — show/hide symbol+interval section
-  $("autoConfigOverride")?.addEventListener("change", syncOverrideSection);
   $("saveAutoConfigBtn")?.addEventListener("click", saveAutoConfig);
   $("autoApiProvider")?.addEventListener("change", (e) => applyAutoProviderPreset(e.target.value));
 

@@ -104,6 +104,9 @@ export async function rebuildRedisSubscriptions() {
     `)
 
     for (const row of rows) {
+      // Only restore online bridge users
+      if (!isBridgeAlive(row.user_id)) continue
+
       let userSymbols = []
       try { userSymbols = JSON.parse(row.symbols || '[]') } catch {}
       if (userSymbols.length === 0) continue
@@ -151,6 +154,45 @@ export function isAutoSchedulerRunning(userId) {
     if (st?.subscribers?.has(userId) && st.running) return true
   }
   return false
+}
+
+// === Remove user from runtime subscriptions (bridge disconnect) ===
+export async function removeUserRuntimeAutoSubscription(userId) {
+  const redis = getRedis()
+  try {
+    // Remove from Redis
+    if (redis) {
+      const keys = await redis.smembers(REDIS_SCHEDULER_KEYS)
+      for (const k of keys) {
+        await redis.srem(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`, userId)
+        // Clean up empty sets
+        const count = await redis.scard(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`)
+        if (count === 0) {
+          await redis.del(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`)
+          await redis.del(`${REDIS_SUBS_PREFIX}${k}:state`)
+          await redis.srem(REDIS_SCHEDULER_KEYS, k)
+        }
+      }
+      await redis.del(`${REDIS_USER_PREFIX}${userId}${REDIS_USER_SUFFIX}`)
+    }
+
+    // Remove from memory subscribers
+    for (const key of Object.keys(autoSchedulerState)) {
+      const st = autoSchedulerState[key]
+      if (st?.subscribers?.has(userId)) {
+        st.subscribers.delete(userId)
+        st.subscriberCount = st.subscribers.size
+        // Stop scheduler if no subscribers left
+        if (st.subscribers.size === 0) {
+          stopUnifiedScheduler(st.promptTypeId, st.symbol)
+        } else if (redis) {
+          await updateSchedulerRedisState(key, st)
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[removeUserRuntimeAutoSubscription] Error:', e.message)
+  }
 }
 
 // === Redis Lock Helpers ===
@@ -284,7 +326,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
   const key = buildSchedulerKey(promptTypeId, symbol)
   if (autoSchedulerState[key]?.running) return
 
-  const subscribers = await getAutoSubscribers(promptTypeId, symbol)
+  const subscribers = await getAutoSubscribers(promptTypeId, symbol, isBridgeAlive)
   if (subscribers.length === 0) return
 
   const subSet = new Set(subscribers.map(s => s.user_id))
@@ -315,7 +357,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
 
     // Refresh subscribers
     try {
-      const freshSubs = await getAutoSubscribers(promptTypeId, symbol)
+      const freshSubs = await getAutoSubscribers(promptTypeId, symbol, isBridgeAlive)
       st.subscribers = new Set(freshSubs.map(s => s.user_id))
       st.subscriberCount = st.subscribers.size
       if (st.subscribers.size === 0) {
@@ -507,12 +549,18 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
     attachSignalTiming(signal)
     l(`shared signal #${signalId} saved`)
 
-    // 5. Batch write deliveries + notify subscribers
+    // 5. Filter subscribers by bridge alive
     const st = autoSchedulerState[key]
-    const subscribers = st?.subscribers || new Set()
+    const allSubscribers = st?.subscribers || new Set()
+    const onlineSubscribers = new Set()
+    for (const uid of allSubscribers) {
+      if (isBridgeAlive(uid)) onlineSubscribers.add(uid)
+    }
+
+    // 6. Batch write deliveries + notify online subscribers only
     const deliveryValues = []
     const deliveryParams = []
-    for (const uid of subscribers) {
+    for (const uid of onlineSubscribers) {
       deliveryValues.push('(?, ?, ?, ?, ?, ?, ?, ?)')
       deliveryParams.push(signalId, uid, promptTypeId, symbol, 'delivered', 'not_attempted', 0, createdAt)
     }
@@ -524,8 +572,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
       )
     }
 
-    // 6. Notify all subscribers
-    for (const uid of subscribers) {
+    // 7. Notify online subscribers
+    for (const uid of onlineSubscribers) {
       sendToBrowsers(uid, {
         type: 'new_signal',
         signal_id: signalId,
@@ -539,10 +587,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
       })
     }
 
-    // 7. Auto-trade for eligible subscribers (limited concurrency)
+    // 8. Auto-trade for eligible subscribers (limited concurrency)
     if (signal.signal_type !== 'hold' && aiSource === 'ai' && !signal.is_stale) {
       const eligibleSubs = []
-      for (const uid of subscribers) {
+      for (const uid of onlineSubscribers) {
         const subCfg = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ? AND enabled = 1', [uid])
         if (!subCfg || !subCfg.enable_auto_trade) continue
         if (subCfg.prompt_type_id !== promptTypeId) continue

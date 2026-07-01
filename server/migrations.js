@@ -244,6 +244,22 @@ const migrations = [
         console.error('[Migrations] 014_migrate_old_auto_config error:', e.message)
       }
     }
+  },
+  {
+    id: '015_default_enable_auto_trade_and_prompt',
+    up: async () => {
+      try {
+        await queryRun('UPDATE auto_scheduler SET enable_auto_trade = 1 WHERE enable_auto_trade = 0')
+        await queryRun('UPDATE ai_configs SET enable_auto_trade = 1 WHERE enable_auto_trade = 0')
+        await queryRun('UPDATE global_auto_config SET enable_auto_trade = 1 WHERE enable_auto_trade = 0 AND id = 1')
+        const defaultPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
+        if (defaultPt) {
+          await queryRun('UPDATE auto_scheduler SET prompt_type_id = ? WHERE prompt_type_id IS NULL', [defaultPt.id])
+        }
+      } catch (e) {
+        console.error('[Migrations] 015 error:', e.message)
+      }
+    }
   }
 ]
 
