@@ -1,6 +1,6 @@
 // ai/config.js — 配置管理 + 风控 + 审计
 
-import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { round2, round3, configPublic } from './utils.js'
 
 // Parse strategy symbols from JSON string: parse, trim, uppercase, deduplicate
@@ -243,18 +243,20 @@ export async function getExecuteRiskConfig(userId, signal) {
 
 export async function upsertAutoConfig(db, userId, symbols, enabled, promptTypeId = null) {
   const now = beijingNow()
-  await queryRun(`
-    INSERT INTO auto_scheduler (user_id, symbols, enabled, prompt_type_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      symbols = VALUES(symbols), enabled = VALUES(enabled),
-      prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
-      updated_at = VALUES(updated_at)
-  `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, promptTypeId, now, now])
-  await queryRun(
-    'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = ?',
-    [userId, enabled ? 1 : 0, now, enabled ? 1 : 0, now]
-  ).catch(e => console.error('[AutoConfig] Failed to sync user_bridge_settings:', e.message))
+  await withTransaction(async (conn) => {
+    await conn.query(`
+      INSERT INTO auto_scheduler (user_id, symbols, enabled, prompt_type_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        symbols = VALUES(symbols), enabled = VALUES(enabled),
+        prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
+        updated_at = VALUES(updated_at)
+    `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, promptTypeId, now, now])
+    await conn.query(
+      'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = ?',
+      [userId, enabled ? 1 : 0, now, enabled ? 1 : 0, now]
+    )
+  })
 }
 
 // === Auto Prompt Types (admin-managed strategies) ===
@@ -420,18 +422,20 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
 // === Auto Subscribers ===
 
 export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck = null) {
+  const sym = String(symbol).toUpperCase().trim()
   const rows = await queryAll(
     `SELECT s.user_id, s.symbols, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
             u.plan, u.role
      FROM auto_scheduler s
      JOIN users u ON u.id = s.user_id
-     WHERE s.prompt_type_id = ? AND s.enabled = 1 AND u.plan = 'pro'`,
-    [promptTypeId]
+     WHERE s.prompt_type_id = ? AND s.enabled = 1 AND u.plan = 'pro'
+       AND (s.symbols LIKE ? OR s.symbols LIKE ?)`,
+    [promptTypeId, `%"${sym}"%`, `%${sym}%`]
   )
   const filtered = rows.filter(r => {
     let userSymbols = []
     try { userSymbols = JSON.parse(r.symbols || '[]') } catch {}
-    return userSymbols.map(s => String(s).toUpperCase().trim()).includes(symbol.toUpperCase())
+    return userSymbols.map(s => String(s).toUpperCase().trim()).includes(sym)
   })
   // Filter by bridge alive if check function provided
   if (typeof bridgeAliveCheck === 'function') {

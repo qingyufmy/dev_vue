@@ -2,7 +2,7 @@
 
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 
-export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages }) {
+export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, timeout = 45000 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
@@ -11,7 +11,7 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(timeout),
   })
   if (!response.ok) throw new Error(`LLM HTTP ${response.status}`)
   const data = await response.json()
@@ -32,7 +32,7 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(repairBody),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(timeout),
     })
     if (!repairResp.ok) throw new Error(`LLM repair HTTP ${repairResp.status}`)
     const repairedData = await repairResp.json()

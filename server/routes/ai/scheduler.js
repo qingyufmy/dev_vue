@@ -193,7 +193,7 @@ export async function removeUserRuntimeAutoSubscription(userId) {
         st.subscriberCount = st.subscribers.size
         // Stop scheduler if no subscribers left
         if (st.subscribers.size === 0) {
-          stopUnifiedScheduler(st.promptTypeId, st.symbol)
+          await stopUnifiedScheduler(st.promptTypeId, st.symbol)
         } else if (redis) {
           await updateSchedulerRedisState(key, st)
         }
@@ -436,7 +436,7 @@ export async function reconcileAutoSchedulers() {
     // Stop schedulers no longer needed
     for (const key of Object.keys(autoSchedulerState)) {
       if (!neededKeys.has(key)) {
-        stopUnifiedScheduler(autoSchedulerState[key].promptTypeId, autoSchedulerState[key].symbol)
+        await stopUnifiedScheduler(autoSchedulerState[key].promptTypeId, autoSchedulerState[key].symbol)
       }
     }
 
@@ -508,7 +508,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.subscriberCount = st.subscribers.size
       if (st.subscribers.size === 0) {
         console.log(`[UnifiedScheduler] No subscribers for ${key}, stopping`)
-        stopUnifiedScheduler(promptTypeId, symbol)
+        await stopUnifiedScheduler(promptTypeId, symbol)
         return
       }
     } catch (e) { console.error(`[UnifiedScheduler] ${key} subscriber refresh failed:`, e.message) }
@@ -671,14 +671,14 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
   autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
 }
 
-function stopUnifiedScheduler(promptTypeId, symbol) {
+async function stopUnifiedScheduler(promptTypeId, symbol) {
   const key = buildSchedulerKey(promptTypeId, symbol)
   const state = autoSchedulerState[key]
   if (state?.timer) clearTimeout(state.timer)
   if (autoSchedulerState[key]) autoSchedulerState[key].running = false
   delete autoSchedulerState[key]
   console.log(`[UnifiedScheduler] Stopped ${key}`)
-  updateSchedulerRedisState(key, { running: false, intervalMinutes: 0, subscriberCount: 0, lastError: '', lastRunAt: '' })
+  await updateSchedulerRedisState(key, { running: false, intervalMinutes: 0, subscriberCount: 0, lastError: '', lastRunAt: '' })
 }
 
 // === Unified Auto Cycle: shared signal generation ===
