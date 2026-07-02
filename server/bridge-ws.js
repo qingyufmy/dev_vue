@@ -852,7 +852,8 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // Fallback: old signal check
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const detailUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const adminId = await getAdminUserId()
+        const detailUserId = hasOwnBridge ? userId : (adminId || userId)
         const row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, detailUserId])
         if (row) {
           const item = { ...row }
@@ -871,7 +872,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         const limit = Math.min(Number(params.limit) || 6, 100)
         // 观摩模式：始终用 admin 的信号
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const queryUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const adminId = await getAdminUserId()
+        const queryUserId = hasOwnBridge ? userId : (adminId || userId)
 
         // Build shared WHERE conditions for both queries
         const sharedConditions = []
@@ -979,7 +981,8 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'auto_status': {
         // 观摩模式：用 admin 的自动推理状态
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const autoQueryUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const adminId = await getAdminUserId()
+        const autoQueryUserId = hasOwnBridge ? userId : (adminId || userId)
         const runtimeStatus = await ai.getUserAutoRuntimeStatus(autoQueryUserId)
         result = { status: 'success', scheduler: runtimeStatus }
         break
@@ -1311,7 +1314,8 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'close_signal_tickets': {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const closeTicketUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const adminId = await getAdminUserId()
+        const closeTicketUserId = hasOwnBridge ? userId : (adminId || userId)
         const map = await ai.getCloseSignalTickets(closeTicketUserId)
         result = { status: 'success', tickets: map }
         break
@@ -1334,7 +1338,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           created_at: s.created_at, symbol: s.symbol,
         })
 
-        let expUserId = adminUserId || userId
+        const adminId = await getAdminUserId()
+        let expUserId = adminId || userId
         let bridgeOk = bridges.get(expUserId)?.ws?.readyState === 1
         if (!bridgeOk && bridges.get(userId)?.ws?.readyState === 1) {
           expUserId = userId; bridgeOk = true
