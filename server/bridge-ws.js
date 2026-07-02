@@ -783,20 +783,25 @@ async function handleBrowserCommand(ws, userId, msg) {
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
         const sessionParam = params.session_id ? [params.session_id] : []
 
-        // Old user signals: always query current user
+        // 观摩模式：用 admin 的信号
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const adminId = await getAdminUserId()
+        const queryUserId = hasOwnBridge ? userId : (adminId || userId)
+
+        // Old user signals
         const oldRow = await queryOne(
           `SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
-          [userId, ...sessionParam]
+          [queryUserId, ...sessionParam]
         )
 
-        // Shared delivery signals: always query current user's deliveries
+        // Shared delivery signals
         const delivSessionFilter = params.session_id ? 'AND s.session_id = ?' : ''
         const delivRow = await queryOne(
           `SELECT s.id, s.signal_type, d.is_executed, s.created_at, s.ttl_seconds, s.timeframe, 'auto_shared' as signal_source, d.execution_status
            FROM auto_signal_deliveries d
            JOIN ai_signals s ON s.id = d.signal_id
            WHERE d.user_id = ? ${delivSessionFilter} ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
-          [userId, ...sessionParam]
+          [queryUserId, ...sessionParam]
         )
 
         // Pick the newest of both
