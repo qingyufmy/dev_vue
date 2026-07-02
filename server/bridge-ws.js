@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { query, queryOne, queryAll, queryRun, logAudit, withTransaction, beijingNow } from './db.js'
+import { getRedis, isRedisAvailable } from './redis.js'
 
 // Parse symbols from DB: handles legacy JSON array or plain comma-separated text
 function parseSymbols(raw) {
@@ -1482,7 +1483,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
-        const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList] = await Promise.all([
+        const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList, schedulerData] = await Promise.all([
           // 1. User stats
           queryOne(`SELECT
             (SELECT COUNT(*) FROM users) AS total_users,
@@ -1546,6 +1547,48 @@ async function handleBrowserCommand(ws, userId, msg) {
               }
             }
             return list
+          })(),
+
+          // 9. Scheduler state from Redis + DB subscription stats
+          (async () => {
+            const redis = getRedis()
+            const schedulers = []
+            const dbRows = await queryAll(`
+              SELECT s.prompt_type_id, apt.title AS prompt_type_name, apt.symbols_json, apt.interval_minutes,
+                     COUNT(DISTINCT s.user_id) AS subscriber_count
+              FROM auto_scheduler s
+              JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
+              WHERE s.enabled = 1 AND apt.is_active = 1 AND apt.deleted_at IS NULL
+              GROUP BY s.prompt_type_id, apt.title, apt.symbols_json, apt.interval_minutes
+              ORDER BY subscriber_count DESC
+            `)
+            if (redis && isRedisAvailable()) {
+              try {
+                const keys = await redis.smembers('auto:scheduler:keys')
+                for (const k of keys) {
+                  const state = await redis.hgetall(`auto:scheduler:${k}:state`)
+                  if (!state || !state.running) continue
+                  const [ptId, symbol] = k.split(':')
+                  const dbInfo = dbRows.find(r => String(r.prompt_type_id) === ptId)
+                  schedulers.push({
+                    key: k,
+                    prompt_type_id: Number(ptId),
+                    prompt_type_name: dbInfo?.prompt_type_name || '',
+                    symbol,
+                    running: state.running === '1',
+                    in_flight: state.in_flight === '1',
+                    subscriber_count: Number(state.subscriber_count || 0),
+                    interval_minutes: Number(state.interval_minutes || 5),
+                    last_run_at: state.last_run_at || '',
+                    last_error: state.last_error || '',
+                    wait_reason: state.wait_reason || '',
+                    next_run_in_seconds: Number(state.next_run_in_seconds || 0),
+                    market_reason: state.market_reason || '',
+                  })
+                }
+              } catch (e) { console.error('[admin_dashboard] Redis scheduler read error:', e.message) }
+            }
+            return { schedulers, dbStats: dbRows }
           })()
         ])
 
@@ -1559,7 +1602,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             autoReasonStats: autoReasonStats || {},
             tokenStats: tokenStats || {},
             tokenTrend: tokenTrend || [],
-            bridges: bridgeList || []
+            bridges: bridgeList || [],
+            schedulerData: schedulerData || { schedulers: [], dbStats: [] }
           }
         }
         break

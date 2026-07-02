@@ -139,6 +139,7 @@ export async function updateSchedulerRedisState(key, state) {
   try {
     const fields = {
       running: state.running ? '1' : '0',
+      in_flight: state.inFlight ? '1' : '0',
       interval_minutes: String(state.intervalMinutes || 5),
       subscriber_count: String(state.subscriberCount || 0),
       last_error: state.lastError || '',

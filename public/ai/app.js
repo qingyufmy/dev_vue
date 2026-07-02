@@ -4357,6 +4357,12 @@ async function updateAdminDashboard() {
       charts.tokenTrend.update('none');
     }
 
+    // Update scheduler grid in-place
+    const schedulerGrid = container.querySelector('#schedulerGrid');
+    if (schedulerGrid && d.schedulerData) {
+      schedulerGrid.innerHTML = renderSchedulerCards(d.schedulerData);
+    }
+
     // Update user list in-place
     if (userListResp && userListResp.status === 'success') {
       _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
@@ -4392,6 +4398,93 @@ function stopDashAutoRefresh() {
   }
   const el = $('dashCountdown');
   if (el) el.textContent = '';
+}
+
+function renderSchedulerCards(data) {
+  if (!data) return '<div class="scheduler-empty">暂无调度器数据</div>';
+  const { schedulers = [], dbStats = [] } = data;
+  
+  // If no active schedulers, show DB stats as fallback
+  if (schedulers.length === 0 && dbStats.length === 0) {
+    return '<div class="scheduler-empty">暂无启用的调度器</div>';
+  }
+  
+  // Merge DB stats with runtime state
+  const cards = [];
+  const runtimeKeys = new Set(schedulers.map(s => s.key));
+  
+  // Add runtime schedulers
+  for (const s of schedulers) {
+    const dbInfo = dbStats.find(r => String(r.prompt_type_id) === String(s.prompt_type_id));
+    const symbols = (() => { try { return JSON.parse(dbInfo?.symbols_json || '[]') } catch { return [] } })();
+    const statusClass = s.in_flight ? 'running' : s.wait_reason ? 'waiting' : s.running ? 'idle' : 'stopped';
+    const statusText = s.in_flight ? '推理中' : s.wait_reason ? waitReasonText(s.wait_reason) : s.running ? '运行中' : '已停止';
+    const countdown = s.next_run_in_seconds > 0 ? formatCountdown(s.next_run_in_seconds) : '--';
+    
+    cards.push(`
+      <div class="scheduler-card">
+        <div class="scheduler-header">
+          <span class="scheduler-title">${escapeHtml(s.prompt_type_name || '策略#' + s.prompt_type_id)}</span>
+          <span class="scheduler-badge ${statusClass}">${statusText}</span>
+        </div>
+        <div class="scheduler-detail">
+          <span>品种: ${escapeHtml(s.symbol)}</span>
+          <span>订阅者: ${s.subscriber_count}</span>
+          <span>间隔: ${s.interval_minutes}分钟</span>
+          <span>下次运行: ${countdown}</span>
+          ${s.last_error ? '<span class="scheduler-error">错误: ' + escapeHtml(s.last_error) + '</span>' : ''}
+          ${s.market_reason ? '<span>市场: ' + escapeHtml(s.market_reason) + '</span>' : ''}
+        </div>
+      </div>
+    `);
+  }
+  
+  // Add DB-only schedulers (enabled but no runtime state)
+  for (const db of dbStats) {
+    const runtimeKey = `${db.prompt_type_id}:`;
+    const hasRuntime = schedulers.some(s => String(s.prompt_type_id) === String(db.prompt_type_id));
+    if (hasRuntime) continue;
+    
+    const symbols = (() => { try { return JSON.parse(db.symbols_json || '[]') } catch { return [] } })();
+    cards.push(`
+      <div class="scheduler-card">
+        <div class="scheduler-header">
+          <span class="scheduler-title">${escapeHtml(db.prompt_type_name || '策略#' + db.prompt_type_id)}</span>
+          <span class="scheduler-badge waiting">等待中</span>
+        </div>
+        <div class="scheduler-detail">
+          <span>品种: ${escapeHtml(symbols.join(', ') || '--')}</span>
+          <span>订阅者: ${db.subscriber_count}</span>
+          <span>间隔: ${db.interval_minutes || 5}分钟</span>
+          <span class="scheduler-hint">等待桥接连接后启动</span>
+        </div>
+      </div>
+    `);
+  }
+  
+  return cards.join('') || '<div class="scheduler-empty">暂无启用的调度器</div>';
+}
+
+function waitReasonText(reason) {
+  const map = {
+    cooldown: '冷却中',
+    admin_bridge_offline: '管理员桥接离线',
+    market_closed: '市场休市',
+    market_stale_tick: '行情停滞',
+    market_unknown: '行情未知',
+    redis_unavailable: 'Redis不可用',
+    no_api_key: '无API密钥',
+    strategy_disabled: '策略已禁用',
+    user_bridge_offline: '用户桥接离线',
+  };
+  return map[reason] || reason;
+}
+
+function formatCountdown(seconds) {
+  if (seconds <= 0) return '--';
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}秒`;
 }
 
 function renderAdminDashboard(el, d, userListResp) {
@@ -4445,6 +4538,14 @@ function renderAdminDashboard(el, d, userListResp) {
     '  <div class="chart-cell"><h4>近30天信号趋势</h4><div class="chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>',
     '  <div class="chart-cell"><h4>近30天 Token 消耗</h4><div class="chart-wrap"><canvas id="adChartTokenTrend"></canvas></div></div>',
     '</div>',
+    '',
+    '<hr class="dash-divider">',
+    '',
+    '<div class="section-inline">',
+    '  <h3><i data-lucide="settings-2"></i>调度器状态</h3>',
+    '</div>',
+    '',
+    '<div class="scheduler-grid" id="schedulerGrid">' + renderSchedulerCards(d.schedulerData) + '</div>',
     '',
     '<hr class="dash-divider">',
     '',
