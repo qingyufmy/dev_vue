@@ -101,12 +101,15 @@ function buildBis(fractals, bars) {
     }
   }
   const bis = []
+  let invalidCount = 0
   for (let i = 1; i < pivots.length; i++) {
     const s = pivots[i - 1], e = pivots[i]
+    const dir = s.type === 'bottom' ? 'up' : 'down'
+    if (dir === 'up' && e.price <= s.price) { invalidCount++; continue }
+    if (dir === 'down' && e.price >= s.price) { invalidCount++; continue }
     const isLast = i === pivots.length - 1
     bis.push({
-      id: bis.length + 1,
-      dir: s.type === 'bottom' ? 'up' : 'down',
+      id: bis.length + 1, dir,
       start_idx: s.idx, end_idx: e.idx,
       raw_start_idx: s.raw_idx, raw_end_idx: e.raw_idx,
       start_price: s.price, end_price: e.price,
@@ -114,8 +117,8 @@ function buildBis(fractals, bars) {
       confirmed: !isLast,
     })
   }
-  if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
-  return bis
+  if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}, invalid=${invalidCount}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
+  return { bis, invalidCount }
 }
 
 // === Chan Theory: Segment Construction (conservative) ===
@@ -172,10 +175,13 @@ function buildSegments(confirmedBis) {
 
     const biIds = confirmedBis.slice(segStart, segEnd + 1).map(b => b.id)
     if (biIds.length >= MIN_BIS_PER_SEGMENT) {
+      const segBis = confirmedBis.slice(segStart, segEnd + 1)
       const seg = {
         id: segments.length + 1, dir: segDir,
         start_price: confirmedBis[segStart].start_price,
         end_price: confirmedBis[segEnd].end_price,
+        high: Math.max(...segBis.map(b => b.high)),
+        low: Math.min(...segBis.map(b => b.low)),
         bi_ids: biIds, broken, weak: false,
       }
       segments.push(seg)
@@ -230,10 +236,15 @@ function buildCenters(confirmedBis) {
 }
 
 // === Chan Theory: Divergence Detection (conservative) ===
-function detectDivergence(segments, bis, macdHist) {
-  if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return { type: 'none', strength: 'none', reason: 'no_macd_data' }
+function detectDivergence(segments, bis, macdHist, centers = []) {
+  if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return { type: 'none', strength: 'none', reason: 'no_macd_data', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
-  if (validSegs.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_valid_segments' }
+  if (validSegs.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_valid_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const validCenters = centers.filter(c => c.status !== 'closed')
+  if (validCenters.length === 0) return { type: 'none', strength: 'none', reason: 'no_valid_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+
+  const lastCenter = validCenters[validCenters.length - 1]
+  const lastCenterEndBiId = lastCenter.end_bi_id || 0
 
   function calcArea(biIds) {
     let area = 0
@@ -247,19 +258,29 @@ function detectDivergence(segments, bis, macdHist) {
     return area
   }
 
+  function isAfterCenter(seg) {
+    return seg.bi_ids.some(id => id > lastCenterEndBiId)
+  }
+
   const sameDown = validSegs.filter(s => s.dir === 'down')
   if (sameDown.length >= 2) {
     const a = sameDown[sameDown.length - 2], b = sameDown[sameDown.length - 1]
+    if (!isAfterCenter(b)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+    if (b.low >= a.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: 0, area_prev: 0, price_extreme_cur: round5(b.low), price_extreme_prev: round5(a.low) }
     const areaA = calcArea(a.bi_ids), areaB = calcArea(b.bi_ids)
-    if (areaB < areaA) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaB), area_prev: round2(areaA) }
+    if (areaB < areaA) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.low), price_extreme_prev: round5(a.low) }
+    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.low), price_extreme_prev: round5(a.low) }
   }
   const sameUp = validSegs.filter(s => s.dir === 'up')
   if (sameUp.length >= 2) {
     const a = sameUp[sameUp.length - 2], b = sameUp[sameUp.length - 1]
+    if (!isAfterCenter(b)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+    if (b.high <= a.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: 0, area_prev: 0, price_extreme_cur: round5(b.high), price_extreme_prev: round5(a.high) }
     const areaA = calcArea(a.bi_ids), areaB = calcArea(b.bi_ids)
-    if (areaB < areaA) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaB), area_prev: round2(areaA) }
+    if (areaB < areaA) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.high), price_extreme_prev: round5(a.high) }
+    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.high), price_extreme_prev: round5(a.high) }
   }
-  return { type: 'none', strength: 'none', reason: 'no_divergence_detected' }
+  return { type: 'none', strength: 'none', reason: 'no_divergence_detected', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
 }
 
 // === Chan Theory: Assembly ===
@@ -271,7 +292,8 @@ function computeChan(rates, timeframe, macdHist) {
   const bars = normalizeBarsForChan(rates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
   const fractals = detectFractals(bars)
-  const allBis = buildBis(fractals, bars)
+  const { bis: allBis, invalidCount } = buildBis(fractals, bars)
+  if (invalidCount > 0) warnings.push('invalid_bi_price_direction')
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
   if (confirmedBis.length < 3) {
     return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings: ['insufficient_confirmed_bis'] }
@@ -292,11 +314,17 @@ function computeChan(rates, timeframe, macdHist) {
     else if (latest < lastCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
   }
-  const divergence = detectDivergence(validSegs, allBis, macdHist)
+  const divergence = detectDivergence(validSegs, allBis, macdHist, validCenters)
   if (divergence.type !== 'none') {
     // ok
   } else if (divergence.reason === 'insufficient_valid_segments') {
     warnings.push('divergence_skipped_no_valid_segment')
+  } else if (divergence.reason === 'no_valid_center') {
+    warnings.push('divergence_skipped_no_valid_center')
+  } else if (divergence.reason === 'not_after_center') {
+    warnings.push('divergence_skipped_not_after_center')
+  } else if (divergence.reason === 'no_price_extreme_break') {
+    warnings.push('divergence_skipped_no_price_extreme_break')
   }
 
   let reliability = 'low'

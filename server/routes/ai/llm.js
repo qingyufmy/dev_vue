@@ -88,7 +88,7 @@ export async function maybeAiSignal(db, config, market) {
 
     // Check if prompt wants Chan theory data
     const useChan = /\{\{USE_CHAN\}\}/.test(config.system_prompt || '')
-    const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '')
+    const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
     console.log(`[LLM] USE_CHAN tag: ${useChan ? 'detected' : 'not found'}`)
 
     const aiPayload = {
@@ -122,7 +122,7 @@ export async function maybeAiSignal(db, config, market) {
       temperature: parseFloat(config.temperature || 0.7),
       maxTokens: parseInt(config.max_tokens || 2000),
       messages: [
-        { role: 'system', content: fullPrompt },
+        { role: 'system', content: cleanPrompt },
         { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(aiPayload) },
       ],
     })

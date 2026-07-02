@@ -6,8 +6,10 @@ const { normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCent
 function makeRates(n, base = 4000) {
   const rates = []
   for (let i = 0; i < n; i++) {
-    const h = base + Math.sin(i * 0.5) * 20 + Math.random() * 5
-    const l = h - 8 - Math.random() * 4
+    const wave = Math.sin(i * 0.5) * 20
+    const jitter = ((i * 7) % 5) * 0.8
+    const h = base + wave + jitter
+    const l = h - 8 - ((i * 3) % 4) * 0.7
     rates.push({ time: `2026-01-01 ${String(i).padStart(2, '0')}:00:00`, open: l + 2, high: h, low: l, close: h - 2, tick_volume: 100 })
   }
   return rates
@@ -80,7 +82,7 @@ describe('buildBis', () => {
     const rates = makeRates(50)
     const bars = normalizeBarsForChan(rates)
     const fractals = detectFractals(bars)
-    const bis = buildBis(fractals, bars)
+    const { bis } = buildBis(fractals, bars)
     expect(bis.length).toBeLessThanOrEqual(fractals.length - 1)
   })
 
@@ -88,7 +90,7 @@ describe('buildBis', () => {
     const rates = makeRates(50)
     const bars = normalizeBarsForChan(rates)
     const fractals = detectFractals(bars)
-    const bis = buildBis(fractals, bars)
+    const { bis } = buildBis(fractals, bars)
     if (bis.length > 0) {
       expect(bis[bis.length - 1].confirmed).toBe(false)
     }
@@ -98,10 +100,34 @@ describe('buildBis', () => {
     const rates = makeRates(60)
     const bars = normalizeBarsForChan(rates)
     const fractals = detectFractals(bars)
-    const bis = buildBis(fractals, bars)
+    const { bis } = buildBis(fractals, bars)
     for (let i = 1; i < bis.length; i++) {
       expect(bis[i].dir).not.toBe(bis[i - 1].dir)
     }
+  })
+
+  it('非法价格方向不生成笔', () => {
+    const fractals = [
+      { idx: 0, raw_idx: 0, type: 'bottom', price: 100, high: 100, low: 100, time: 't0' },
+      { idx: 5, raw_idx: 5, type: 'top', price: 90, high: 90, low: 90, time: 't5' },
+    ]
+    const { bis, invalidCount } = buildBis(fractals, [])
+    expect(bis.length).toBe(0)
+    expect(invalidCount).toBe(1)
+  })
+
+  it('合法up/down笔正常生成', () => {
+    const fractals = [
+      { idx: 0, raw_idx: 0, type: 'bottom', price: 100, high: 100, low: 100, time: 't0' },
+      { idx: 5, raw_idx: 5, type: 'top', price: 120, high: 120, low: 120, time: 't5' },
+      { idx: 10, raw_idx: 10, type: 'bottom', price: 110, high: 110, low: 110, time: 't10' },
+    ]
+    const { bis } = buildBis(fractals, [])
+    expect(bis.length).toBe(2)
+    expect(bis[0].dir).toBe('up')
+    expect(bis[0].end_price).toBeGreaterThan(bis[0].start_price)
+    expect(bis[1].dir).toBe('down')
+    expect(bis[1].end_price).toBeLessThan(bis[1].start_price)
   })
 })
 
@@ -116,7 +142,7 @@ describe('buildSegments', () => {
     const rates = makeRates(80)
     const bars = normalizeBarsForChan(rates)
     const fractals = detectFractals(bars)
-    const allBis = buildBis(fractals, bars)
+    const { bis: allBis } = buildBis(fractals, bars)
     const confirmed = allBis.filter(b => b.confirmed !== false)
     const { segments } = buildSegments(confirmed)
     segments.forEach(s => {
@@ -128,7 +154,7 @@ describe('buildSegments', () => {
     const rates = makeRates(80)
     const bars = normalizeBarsForChan(rates)
     const fractals = detectFractals(bars)
-    const allBis = buildBis(fractals, bars)
+    const { bis: allBis } = buildBis(fractals, bars)
     const confirmed = allBis.filter(b => b.confirmed !== false)
     const { segments } = buildSegments(confirmed)
     if (confirmed.length > 5) {
@@ -175,7 +201,7 @@ describe('computeChan', () => {
 
   it('返回结构包含必要字段', () => {
     const rates = makeRates(50)
-    const macdHist = rates.map(() => Math.random() * 10 - 5)
+    const macdHist = rates.map((_, i) => Math.sin(i * 0.3) * 5)
     const result = computeChan(rates, 'H1', macdHist)
     expect(result.status).toBeDefined()
     expect(result.reliability).toBeDefined()
@@ -186,7 +212,7 @@ describe('computeChan', () => {
 
   it('segment_count不等于bi_count', () => {
     const rates = makeRates(80)
-    const macdHist = rates.map(() => Math.random() * 10 - 5)
+    const macdHist = rates.map((_, i) => Math.sin(i * 0.3) * 5)
     const result = computeChan(rates, 'H1', macdHist)
     if (result.bi_count > 5 && result.segment_count > 0) {
       expect(result.segment_count).toBeLessThan(result.bi_count)
