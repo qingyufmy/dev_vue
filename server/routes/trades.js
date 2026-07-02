@@ -22,15 +22,6 @@ router.get('/trades', optionalAuth, async (req, res) => {
       const { user_id, is_public, ...safe } = trade
       return res.json({ ok: true, trade: safe })
     }
-      // Visibility: admin sees all, owner sees own, others see public only
-      const userId = req.user?.id
-      const isAdmin = req.user?.role === 'admin'
-      const { user_id, is_public, ...publicFields } = trade
-      if (isAdmin || is_public === 1 || (userId && user_id === userId)) {
-        return res.json({ ok: true, trade: publicFields })
-      }
-      return res.json({ ok: false, error: '无权查看或记录不存在' })
-    }
 
     const trades = await queryAll(`
       SELECT t.*, u.nickname FROM trades t LEFT JOIN users u ON t.user_id = u.id
