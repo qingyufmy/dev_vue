@@ -841,7 +841,7 @@ function connectBridgeStatusWs(onReady) {
           else pending.resolve(msg);
         }
       }
-    } catch {}
+    } catch (e) { console.error('[WS] message handler error:', e) }
   };
   ws.onclose = (e) => {
     if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }

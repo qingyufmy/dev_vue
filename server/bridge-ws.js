@@ -506,7 +506,7 @@ function sendToBrowsers(userId, data) {
   }
   // If this is admin's bridge data, also forward to users without their own bridge
   // Throttle: max 4 broadcasts per second per user to prevent flooding browsers
-  if (userId === adminUserId && data.type === 'data') {
+  if (userId === adminUserId && data.type === 'data' && browsers.size > 0) {
     const adminJson = JSON.stringify({ ...data, _source: 'admin_fallback' })
     const now = Date.now()
     for (const [uid, browserSet] of browsers) {
@@ -517,7 +517,7 @@ function sendToBrowsers(userId, data) {
       _broadcastThrottle.set(uid, now)
       for (const ws of browserSet) {
         if (ws.readyState === 1) {
-          try { ws.send(adminJson) } catch {}
+          try { ws.send(adminJson) } catch (e) { console.error('[BridgeWS] admin broadcast send failed:', uid, e.message) }
         } else {
           browserSet.delete(ws)
         }

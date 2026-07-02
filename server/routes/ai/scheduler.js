@@ -153,7 +153,7 @@ export async function updateSchedulerRedisState(key, state) {
       fields.market_mt5_time = state.marketState.mt5TimeStr || ''
     }
     await redis.hset(`${REDIS_SUBS_PREFIX}${key}:state`, fields)
-  } catch {}
+  } catch (e) { console.error('[updateSchedulerRedisState]', key, e.message) }
 }
 
 // === Compatibility: isAutoSchedulerRunning(userId) ===
@@ -307,7 +307,7 @@ async function acquireLock(key) {
   try {
     const ok = await redis.set(`${REDIS_LOCK_PREFIX}${key}`, token, 'NX', 'PX', 600000)
     return ok ? token : null
-  } catch { return null }
+  } catch (e) { console.error('[acquireLock]', key, e.message); return null }
 }
 
 async function releaseLock(key, token) {
@@ -316,7 +316,7 @@ async function releaseLock(key, token) {
   try {
     const current = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
     if (current === token) await redis.del(`${REDIS_LOCK_PREFIX}${key}`)
-  } catch {}
+  } catch (e) { console.error('[releaseLock]', key, e.message) }
 }
 
 async function setCooldown(key, intervalSeconds) {
@@ -325,7 +325,7 @@ async function setCooldown(key, intervalSeconds) {
   try {
     await redis.set(`${REDIS_COOLDOWN_PREFIX}${key}`, '1', 'EX', intervalSeconds)
     return true
-  } catch { return false }
+  } catch (e) { console.error('[setCooldown]', key, e.message); return false }
 }
 
 function retryDelayMs(reason) {
@@ -511,7 +511,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         stopUnifiedScheduler(promptTypeId, symbol)
         return
       }
-    } catch {}
+    } catch (e) { console.error(`[UnifiedScheduler] ${key} subscriber refresh failed:`, e.message) }
 
     // Check admin bridge
     const adminUserId = await getActiveAdminBridgeUserId()

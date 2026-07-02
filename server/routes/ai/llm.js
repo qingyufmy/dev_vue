@@ -15,7 +15,10 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
   })
   if (!response.ok) throw new Error(`LLM HTTP ${response.status}`)
   const data = await response.json()
-  const content = data.choices[0].message.content
+  const msg = data.choices?.[0]?.message
+  if (!msg) throw new Error(`LLM response missing choices[0].message, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
+  const content = msg.content || msg.reasoning_content || ''
+  if (!content) throw new Error('LLM response content is empty')
   try {
     return parseJsonObject(content)
   } catch (exc) {
@@ -33,7 +36,10 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
     })
     if (!repairResp.ok) throw new Error(`LLM repair HTTP ${repairResp.status}`)
     const repairedData = await repairResp.json()
-    const repaired = repairedData.choices[0].message.content
+    const repairedMsg = repairedData.choices?.[0]?.message
+    if (!repairedMsg) throw new Error(`LLM repair response missing choices[0].message`)
+    const repaired = repairedMsg.content || repairedMsg.reasoning_content || ''
+    if (!repaired) throw new Error('LLM repair response content is empty')
     return parseJsonObject(repaired)
   }
 }
