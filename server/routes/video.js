@@ -4,7 +4,7 @@ import { join, dirname, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, unlinkSync, statSync, createReadStream } from 'fs'
 import { queryOne, queryAll, queryRun } from '../db.js'
-import { authMiddleware, optionalAuth } from '../middleware/auth.js'
+import { authMiddleware, optionalAuth, adminOnly } from '../middleware/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const uploadDir = join(__dirname, '..', 'uploads', 'videos')
@@ -304,19 +304,32 @@ router.delete('/video-stream', authMiddleware, async (req, res) => {
 })
 
 // ===== Qiniu callback =====
-router.post('/qiniu-callback', authMiddleware, async (req, res) => {
+router.post('/qiniu-callback', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { episodeId, key, size } = req.body
 
-    // Save video stream info
-    const existing = await queryOne('SELECT id FROM video_streams WHERE episode_id = ?', [episodeId])
-    if (existing) {
-      await queryRun("UPDATE video_streams SET qiniu_key = ?, file_size = ? WHERE episode_id = ?", [key, size || 0, episodeId])
-    } else {
-      await queryRun("INSERT INTO video_streams (episode_id, qiniu_key, video_key, file_size) VALUES (?, ?, ?, ?)", [episodeId, key, `ep${episodeId}`, size || 0])
+    // Input validation
+    const eid = Number(episodeId)
+    if (!eid || eid <= 0 || !Number.isInteger(eid)) {
+      return res.json({ ok: false, error: 'episodeId 必须是正整数' })
+    }
+    if (!key || typeof key !== 'string' || key.trim().length === 0) {
+      return res.json({ ok: false, error: 'key 必须是非空字符串' })
+    }
+    const fileSize = size != null ? Number(size) : 0
+    if (size != null && (isNaN(fileSize) || fileSize < 0)) {
+      return res.json({ ok: false, error: 'size 必须是非负数字' })
     }
 
-    await queryRun("UPDATE courses SET has_stream_video = 1, updated_at = NOW() WHERE episode_id = ?", [episodeId])
+    // Save video stream info
+    const existing = await queryOne('SELECT id FROM video_streams WHERE episode_id = ?', [eid])
+    if (existing) {
+      await queryRun("UPDATE video_streams SET qiniu_key = ?, file_size = ? WHERE episode_id = ?", [key.trim(), fileSize, eid])
+    } else {
+      await queryRun("INSERT INTO video_streams (episode_id, qiniu_key, video_key, file_size) VALUES (?, ?, ?, ?)", [eid, key.trim(), `ep${eid}`, fileSize])
+    }
+
+    await queryRun("UPDATE courses SET has_stream_video = 1, updated_at = NOW() WHERE episode_id = ?", [eid])
 
     res.json({ ok: true })
   } catch (err) {

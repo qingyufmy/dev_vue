@@ -9,8 +9,27 @@ router.get('/trades', optionalAuth, async (req, res) => {
     const { id } = req.query
 
     if (id) {
-      const trade = await queryOne('SELECT * FROM trades WHERE id = ?', [id])
-      return res.json({ ok: true, trade })
+      const fields = 't.id, t.trade_date, t.symbol, t.direction, t.result, t.entry_price, t.exit_price, t.profit_pct, t.notes, t.screenshot_url, t.title, t.created_at, t.user_id, t.is_public'
+      let trade
+      if (req.user?.role === 'admin') {
+        trade = await queryOne(`SELECT ${fields} FROM trades t WHERE t.id = ?`, [id])
+      } else if (req.user?.id) {
+        trade = await queryOne(`SELECT ${fields} FROM trades t WHERE t.id = ? AND (t.is_public = 1 OR t.user_id = ?)`, [id, req.user.id])
+      } else {
+        trade = await queryOne(`SELECT ${fields} FROM trades t WHERE t.id = ? AND t.is_public = 1`, [id])
+      }
+      if (!trade) return res.json({ ok: false, error: '无权查看或记录不存在' })
+      const { user_id, is_public, ...safe } = trade
+      return res.json({ ok: true, trade: safe })
+    }
+      // Visibility: admin sees all, owner sees own, others see public only
+      const userId = req.user?.id
+      const isAdmin = req.user?.role === 'admin'
+      const { user_id, is_public, ...publicFields } = trade
+      if (isAdmin || is_public === 1 || (userId && user_id === userId)) {
+        return res.json({ ok: true, trade: publicFields })
+      }
+      return res.json({ ok: false, error: '无权查看或记录不存在' })
     }
 
     const trades = await queryAll(`

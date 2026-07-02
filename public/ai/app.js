@@ -1,5 +1,10 @@
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'))
+  return match ? decodeURIComponent(match[1]) : ''
+}
+
 const state = {
-  token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || "",
+  token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || getCookie("ws_token") || "",
   user: null,
   symbols: [],
   signals: [],
@@ -4528,7 +4533,9 @@ function renderAdminDashboard(el, d, userListResp) {
     '  <div class="stat-cell"><div class="stat-label"><i data-lucide="activity"></i>在线</div><div class="stat-val" data-field="onlineNow">' + (us.online_now||0) + '</div><div class="stat-sub">5分钟活跃</div></div>',
     '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="database"></i>Token</div><div class="stat-val" data-field="todayTokens">' + fmt(tk.today_tokens) + '</div><div class="stat-sub" data-field="totalTokens">累计 ' + fmt(tk.total_tokens) + '</div></div>',
     '</div>',
-    '',
+
+    '<div class="scheduler-grid" id="schedulerGrid">' + renderSchedulerCards(d.schedulerData) + '</div>',
+
     '<div class="signal-row">',
     '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(212,175,55,0.1)"><i data-lucide="activity" style="color:var(--gold-primary)"></i></div><div class="sig-info"><span class="sig-lbl">总信号</span><span class="sig-num" data-field="sigTotal">' + (ss.total||0) + '</span></div></div>',
     '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(34,197,94,0.1)"><i data-lucide="trending-up" style="color:#22c55e"></i></div><div class="sig-info"><span class="sig-lbl">今日</span><span class="sig-num" data-field="sigToday">' + (ss.today||0) + '</span></div></div>',
@@ -4553,14 +4560,6 @@ function renderAdminDashboard(el, d, userListResp) {
     '  <div class="chart-cell"><h4>近30天信号趋势</h4><div class="chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>',
     '  <div class="chart-cell"><h4>近30天 Token 消耗</h4><div class="chart-wrap"><canvas id="adChartTokenTrend"></canvas></div></div>',
     '</div>',
-    '',
-    '<hr class="dash-divider">',
-    '',
-    '<div class="section-inline">',
-    '  <h3><i data-lucide="settings-2"></i>调度器状态</h3>',
-    '</div>',
-    '',
-    '<div class="scheduler-grid" id="schedulerGrid">' + renderSchedulerCards(d.schedulerData) + '</div>',
     '',
     '<hr class="dash-divider">',
     '',

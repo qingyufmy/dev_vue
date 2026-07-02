@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { fetchSentiment } from '../services/sentiment.js'
 import { cacheGetJSON, cacheSetJSON } from '../redis.js'
+import { authMiddleware, adminOnly } from '../middleware/auth.js'
 
 const router = Router()
 const CACHE_KEY = 'sentiment:data'
@@ -21,7 +22,7 @@ router.get('/sentiment', async (req, res) => {
   }
 })
 
-router.post('/sentiment/refresh', async (req, res) => {
+router.post('/sentiment/refresh', authMiddleware, adminOnly, async (req, res) => {
   try {
     const data = await fetchSentiment()
     const updatedAt = new Date().toISOString()

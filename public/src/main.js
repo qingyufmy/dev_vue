@@ -7843,9 +7843,8 @@ function setupGlobalEvents() {
   $('#navAI').addEventListener('click', (e) => {
     e.preventDefault()
     if (!requireLogin()) return
-    const token = localStorage.getItem('ws_token')
-    const url = `/ai?token=${encodeURIComponent(token)}`
-    window.open(url, '_blank')
+    syncAuthCookieFromStorage()
+    window.open('/ai', '_blank')
   })
 
   $('#loginBtn').addEventListener('click', () => showAuthModal('login_password'))
