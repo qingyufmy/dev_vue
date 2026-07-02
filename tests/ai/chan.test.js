@@ -368,7 +368,6 @@ describe('detectFractals strict', () => {
       { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 110, low: 90, open: 115, close: 92, time: 't2' },
     ]
     const fractals = detectFractals(bars)
-    // c.low=95 is not > p.low=100, so no top fractal
     expect(fractals.some(f => f.type === 'top')).toBe(false)
   })
 
@@ -379,8 +378,114 @@ describe('detectFractals strict', () => {
       { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 120, low: 85, open: 115, close: 110, time: 't2' },
     ]
     const fractals = detectFractals(bars)
-    // c.high=120 is not > n.high=120, so no top fractal
     expect(fractals.some(f => f.type === 'top')).toBe(false)
+  })
+
+  it('标准底分型可识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 120, low: 100, open: 115, close: 105, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 115, low: 80, open: 105, close: 85, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 125, low: 90, open: 85, close: 120, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'bottom')).toBe(true)
+  })
+
+  it('非标准底分型不识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 120, low: 100, open: 115, close: 105, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 125, low: 80, open: 105, close: 120, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 130, low: 90, open: 120, close: 125, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'bottom')).toBe(false)
+  })
+
+  it('相等低点不识别分型', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 120, low: 80, open: 115, close: 85, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 115, low: 80, open: 85, close: 90, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 125, low: 90, open: 90, close: 120, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'bottom')).toBe(false)
+  })
+})
+
+describe('early return warnings preserved', () => {
+  it('computeChan同时保留invalid_bi和insufficient_bis warnings', () => {
+    const rates = makeRates(30)
+    const fractalsForTest = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, type: 'bottom', price: 100, high: 100, low: 100, time: 't0' },
+      { idx: 5, raw_start_idx: 5, raw_end_idx: 5, type: 'top', price: 90, high: 90, low: 90, time: 't5' },
+      { idx: 10, raw_start_idx: 10, raw_end_idx: 10, type: 'bottom', price: 85, high: 85, low: 85, time: 't10' },
+    ]
+    const hist = Array(30).fill(0)
+    const result = computeChan(rates, 'M5', hist, { fractalsForTest })
+    expect(result.warnings).toContain('invalid_bi_price_direction')
+    expect(result.warnings).toContain('insufficient_confirmed_bis')
+  })
+})
+
+describe('detectFractals strict', () => {
+  it('标准顶分型可识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 100, low: 90, open: 95, close: 98, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 120, low: 95, open: 98, close: 115, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 110, low: 88, open: 115, close: 92, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'top')).toBe(true)
+  })
+
+  it('非标准顶分型不识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 100, low: 100, open: 100, close: 100, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 120, low: 95, open: 100, close: 115, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 110, low: 90, open: 115, close: 92, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'top')).toBe(false)
+  })
+
+  it('相等高点不识别分型', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 100, low: 90, open: 95, close: 98, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 120, low: 85, open: 98, close: 115, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 120, low: 85, open: 115, close: 110, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'top')).toBe(false)
+  })
+
+  it('标准底分型可识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 120, low: 100, open: 115, close: 105, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 115, low: 80, open: 105, close: 85, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 125, low: 90, open: 85, close: 120, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'bottom')).toBe(true)
+  })
+
+  it('非标准底分型不识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 120, low: 100, open: 115, close: 105, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 125, low: 80, open: 105, close: 120, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 130, low: 90, open: 120, close: 125, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'bottom')).toBe(false)
+  })
+
+  it('相等低点不识别分型', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 120, low: 80, open: 115, close: 85, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 115, low: 80, open: 85, close: 90, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 125, low: 90, open: 90, close: 120, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'bottom')).toBe(false)
   })
 })
 
@@ -434,18 +539,5 @@ describe('divergence equal area no divergence', () => {
     expect(result.reason).toBe('macd_area_not_shrunk_enough')
     expect(result.area_cur).toBeGreaterThan(0)
     expect(result.area_prev).toBeGreaterThan(0)
-  })
-})
-
-describe('early return warnings preserved', () => {
-  it('invalid_bi和insufficient_bis同时出现', () => {
-    const fractals = [
-      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, type: 'bottom', price: 100, high: 100, low: 100, time: 't0' },
-      { idx: 5, raw_start_idx: 5, raw_end_idx: 5, type: 'top', price: 90, high: 90, low: 90, time: 't5' },
-      { idx: 10, raw_start_idx: 10, raw_end_idx: 10, type: 'bottom', price: 85, high: 85, low: 85, time: 't10' },
-    ]
-    const bars = Array(15).fill(null).map((_, i) => ({ idx: i, raw_start_idx: i, raw_end_idx: i, high: 100 + Math.sin(i), low: 90 + Math.sin(i), open: 95, close: 98, time: `t${i}` }))
-    const { bis, invalidCount } = buildBis(fractals, bars)
-    expect(invalidCount).toBeGreaterThan(0)
   })
 })

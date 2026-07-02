@@ -322,14 +322,14 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
 }
 
 // === Chan Theory: Assembly ===
-function computeChan(rates, timeframe, macdHist) {
+function computeChan(rates, timeframe, macdHist, options = {}) {
   const warnings = []
   if (!rates || rates.length < MIN_KLINES_FOR_CHAN) {
     return { status: 'insufficient_klines', reliability: 'low', raw_bar_count: rates?.length || 0, processed_bar_count: 0, fractal_count: 0, bi_count: 0, segment_count: 0, center_count: 0, warnings: ['raw_bars_too_few'] }
   }
   const bars = normalizeBarsForChan(rates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
-  const fractals = detectFractals(bars)
+  const fractals = options.fractalsForTest || detectFractals(bars)
   const { bis: allBis, invalidCount } = buildBis(fractals, bars)
   if (invalidCount > 0) warnings.push('invalid_bi_price_direction')
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
@@ -463,8 +463,8 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
 
   const ema12 = ema(closes, 12)
   const ema26 = ema(closes, 26)
-  const macdLine = ema12 - ema26
   const macdSeries = calculateMacdSeries(closes)
+  const macdLine = macdSeries.latestDif
   const macdSignal = macdSeries.latestDea
   const macdHistogram = macdSeries.latestHist
 

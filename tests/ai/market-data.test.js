@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { calculateMarketData } from '../../server/routes/ai/market-data.js'
+import { calculateMarketData, __chanTest } from '../../server/routes/ai/market-data.js'
 
 describe('calculateMarketData', () => {
   const baseAccount = { balance: 10000, equity: 10500 }
@@ -131,5 +131,15 @@ describe('calculateMarketData', () => {
     const result = calculateMarketData('XAUUSD', 'M5', rates, baseAccount, basePositions)
     expect(result.volatility_pct).toBeGreaterThanOrEqual(0)
     expect(result.avg_volatility).toBeGreaterThanOrEqual(0)
+  })
+
+  it('MACD输出line/signal/histogram来自同一套序列', () => {
+    const rates = generateRates(80)
+    const result = calculateMarketData('XAUUSD', 'M5', rates, baseAccount, basePositions)
+    const series = __chanTest.calculateMacdSeries(rates.map(r => parseFloat(r.close)))
+    expect(result.macd.line).toBeCloseTo(series.latestDif, 5)
+    expect(result.macd.signal).toBeCloseTo(series.latestDea, 5)
+    expect(result.macd.histogram).toBeCloseTo(series.latestHist, 5)
+    expect(Math.abs((result.macd.line - result.macd.signal) - result.macd.histogram)).toBeLessThan(0.00002)
   })
 })
