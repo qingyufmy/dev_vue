@@ -81,13 +81,31 @@ export async function maybeAiSignal(db, config, market) {
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
 
     const fullPrompt = prompt + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat
+
+    // Check if prompt wants Chan theory data
+    const useChan = /\{\{USE_CHAN\}\}/.test(config.system_prompt || '')
+    const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '')
+
     const aiPayload = {
       symbol: market.symbol, timeframe: market.timeframe, timestamp: market.timestamp,
       latest_price: market.latest_price, price_change: market.price_change,
       price_change_pct: market.price_change_pct, account: market.account,
       positions: market.positions, kline_count: market.kline_count,
     }
-    if (market.strategy_context) aiPayload.strategy_context = market.strategy_context
+    if (market.strategy_context) {
+      const ctx = { ...market.strategy_context }
+      // Strip chan data if prompt doesn't have {{USE_CHAN}}
+      if (!useChan && ctx.timeframes) {
+        for (const tf of Object.keys(ctx.timeframes)) {
+          if (ctx.timeframes[tf]?.summary) {
+            const s = { ...ctx.timeframes[tf].summary }
+            delete s.chan
+            ctx.timeframes[tf] = { ...ctx.timeframes[tf], summary: s }
+          }
+        }
+      }
+      aiPayload.strategy_context = ctx
+    }
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
