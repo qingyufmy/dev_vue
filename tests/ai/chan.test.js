@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 
-const { normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCenters, detectDivergence, computeChan } = __chanTest
+const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCenters, detectDivergence, computeChan } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -48,14 +48,13 @@ describe('normalizeBarsForChan', () => {
 
 describe('detectFractals', () => {
   it('识别顶底分型', () => {
-    const rates = [
-      { time: 't0', open: 100, high: 110, low: 95, close: 105 },
-      { time: 't1', open: 105, high: 120, low: 100, close: 115 },
-      { time: 't2', open: 115, high: 118, low: 108, close: 112 },
-      { time: 't3', open: 112, high: 115, low: 98, close: 100 },
-      { time: 't4', open: 100, high: 108, low: 90, close: 95 },
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 100, low: 90, open: 95, close: 98, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 120, low: 95, open: 98, close: 115, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 110, low: 88, open: 115, close: 92, time: 't2' },
+      { idx: 3, raw_start_idx: 3, raw_end_idx: 3, high: 115, low: 80, open: 92, close: 85, time: 't3' },
+      { idx: 4, raw_start_idx: 4, raw_end_idx: 4, high: 105, low: 75, open: 85, close: 78, time: 't4' },
     ]
-    const bars = rates.map((r, i) => ({ ...r, idx: i, raw_idx: i }))
     const fractals = detectFractals(bars)
     expect(fractals.length).toBeGreaterThanOrEqual(1)
     fractals.forEach(f => {
@@ -225,8 +224,11 @@ describe('detectDivergence', () => {
       { id: 3, dir: 'up', bi_ids: [7, 8, 9], weak: false, high: 120, low: 95 },
       { id: 4, dir: 'down', bi_ids: [10, 11, 12], weak: false, high: 115, low: 92 },
     ]
-    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
-    const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+    const bis = [
+      { id: 4, raw_start_idx: 0, raw_end_idx: 1 }, { id: 5, raw_start_idx: 2, raw_end_idx: 3 }, { id: 6, raw_start_idx: 4, raw_end_idx: 5 },
+      { id: 10, raw_start_idx: 6, raw_end_idx: 7 }, { id: 11, raw_start_idx: 8, raw_end_idx: 9 }, { id: 12, raw_start_idx: 10, raw_end_idx: 11 },
+    ]
+    const macd = [-5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5]
     const centers = [{ status: 'confirmed', end_bi_id: 6 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('none')
@@ -271,9 +273,12 @@ describe('detectDivergence', () => {
       { id: 3, dir: 'up', bi_ids: [7, 8, 9], weak: false, high: 120, low: 95 },
       { id: 4, dir: 'down', bi_ids: [10, 11, 12], weak: false, high: 115, low: 85 },
     ]
-    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
-    // seg2 area=15, seg4 area=3 → divergence
-    const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 1]
+    const bis = [
+      { id: 4, raw_start_idx: 0, raw_end_idx: 1 }, { id: 5, raw_start_idx: 2, raw_end_idx: 3 }, { id: 6, raw_start_idx: 4, raw_end_idx: 5 },
+      { id: 10, raw_start_idx: 6, raw_end_idx: 7 }, { id: 11, raw_start_idx: 8, raw_end_idx: 9 }, { id: 12, raw_start_idx: 10, raw_end_idx: 11 },
+    ]
+    // seg2 area=15, seg4 area=3 → divergence (negative for down)
+    const macd = [-5, -5, -5, -5, -5, -5, -5, -5, -5, -1, -1, -1]
     const centers = [{ status: 'confirmed', end_bi_id: 9 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('bottom')
@@ -308,5 +313,139 @@ describe('computeChan', () => {
     if (result.bi_count > 5 && result.segment_count > 0) {
       expect(result.segment_count).toBeLessThan(result.bi_count)
     }
+  })
+})
+
+describe('calculateMacdSeries', () => {
+  it('histSeries长度等于closes长度', () => {
+    const closes = [100, 102, 101, 103, 105, 104, 106, 108, 107, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130]
+    const series = calculateMacdSeries(closes)
+    expect(series.histSeries.length).toBe(closes.length)
+    expect(series.difSeries.length).toBe(closes.length)
+    expect(series.deaSeries.length).toBe(closes.length)
+  })
+
+  it('空数组返回全零', () => {
+    const series = calculateMacdSeries([])
+    expect(series.histSeries.length).toBe(0)
+    expect(series.latestHist).toBe(0)
+  })
+})
+
+describe('normalizeBarsForChan idx', () => {
+  it('包含处理后idx连续', () => {
+    const rates = makeRates(20)
+    const bars = normalizeBarsForChan(rates)
+    bars.forEach((bar, idx) => expect(bar.idx).toBe(idx))
+  })
+
+  it('每根处理后K线都有raw_start_idx和raw_end_idx', () => {
+    const rates = makeRates(20)
+    const bars = normalizeBarsForChan(rates)
+    bars.forEach(bar => {
+      expect(bar.raw_start_idx).toBeDefined()
+      expect(bar.raw_end_idx).toBeDefined()
+      expect(bar.raw_start_idx).toBeLessThanOrEqual(bar.raw_end_idx)
+    })
+  })
+})
+
+describe('detectFractals strict', () => {
+  it('标准顶分型可识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 100, low: 90, open: 95, close: 98, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 120, low: 95, open: 98, close: 115, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 110, low: 88, open: 115, close: 92, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    expect(fractals.some(f => f.type === 'top')).toBe(true)
+  })
+
+  it('非标准顶分型不识别', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 100, low: 100, open: 100, close: 100, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 120, low: 95, open: 100, close: 115, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 110, low: 90, open: 115, close: 92, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    // c.low=95 is not > p.low=100, so no top fractal
+    expect(fractals.some(f => f.type === 'top')).toBe(false)
+  })
+
+  it('相等高点不识别分型', () => {
+    const bars = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, high: 100, low: 90, open: 95, close: 98, time: 't0' },
+      { idx: 1, raw_start_idx: 1, raw_end_idx: 1, high: 120, low: 85, open: 98, close: 115, time: 't1' },
+      { idx: 2, raw_start_idx: 2, raw_end_idx: 2, high: 120, low: 85, open: 115, close: 110, time: 't2' },
+    ]
+    const fractals = detectFractals(bars)
+    // c.high=120 is not > n.high=120, so no top fractal
+    expect(fractals.some(f => f.type === 'top')).toBe(false)
+  })
+})
+
+describe('divergence min area ratio', () => {
+  it('areaCur=99 areaPrev=100不判背驰', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 100 },
+    ]
+    const bis = []
+    for (let i = 1; i <= 6; i++) bis.push({ id: i, raw_start_idx: i + 40, raw_end_idx: i + 40 })
+    const hist = Array(80).fill(5)
+    const centers = [{ status: 'confirmed', end_bi_id: 3 }]
+    const result = detectDivergence(segs, bis, hist, centers)
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('macd_area_not_shrunk_enough')
+  })
+
+  it('areaCur=0不判强背驰', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 135, low: 100 },
+    ]
+    const bis = []
+    for (let i = 1; i <= 6; i++) bis.push({ id: i, raw_start_idx: i + 40, raw_end_idx: i + 40 })
+    const hist = Array(80).fill(0)
+    const centers = [{ status: 'confirmed', end_bi_id: 3 }]
+    const result = detectDivergence(segs, bis, hist, centers)
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('invalid_macd_area')
+  })
+})
+
+describe('divergence equal area no divergence', () => {
+  it('所有histogram面积相等时不返回top/bottom', () => {
+    const segs = [
+      { id: 1, dir: 'down', bi_ids: [1, 2, 3], weak: false, high: 120, low: 90 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 125, low: 95 },
+      { id: 3, dir: 'down', bi_ids: [7, 8, 9], weak: false, high: 118, low: 95 },
+      { id: 4, dir: 'up', bi_ids: [10, 11, 12], weak: false, high: 130, low: 100 },
+    ]
+    const bis = []
+    for (let i = 1; i <= 12; i++) {
+      const raw = 40 + i
+      bis.push({ id: i, raw_start_idx: raw, raw_end_idx: raw })
+    }
+    const hist = Array(80).fill(5)
+    const centers = [{ status: 'confirmed', end_bi_id: 9 }]
+    const result = detectDivergence(segs, bis, hist, centers)
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('macd_area_not_shrunk_enough')
+    expect(result.area_cur).toBeGreaterThan(0)
+    expect(result.area_prev).toBeGreaterThan(0)
+  })
+})
+
+describe('early return warnings preserved', () => {
+  it('invalid_bi和insufficient_bis同时出现', () => {
+    const fractals = [
+      { idx: 0, raw_start_idx: 0, raw_end_idx: 0, type: 'bottom', price: 100, high: 100, low: 100, time: 't0' },
+      { idx: 5, raw_start_idx: 5, raw_end_idx: 5, type: 'top', price: 90, high: 90, low: 90, time: 't5' },
+      { idx: 10, raw_start_idx: 10, raw_end_idx: 10, type: 'bottom', price: 85, high: 85, low: 85, time: 't10' },
+    ]
+    const bars = Array(15).fill(null).map((_, i) => ({ idx: i, raw_start_idx: i, raw_end_idx: i, high: 100 + Math.sin(i), low: 90 + Math.sin(i), open: 95, close: 98, time: `t${i}` }))
+    const { bis, invalidCount } = buildBis(fractals, bars)
+    expect(invalidCount).toBeGreaterThan(0)
   })
 })

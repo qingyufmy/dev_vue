@@ -12,7 +12,35 @@ const MIN_BIS_PER_SEGMENT = 3
 const FEED_LAST_N_BIS = 3
 const ENABLE_DIVERGENCE = true
 const MIN_KLINES_FOR_CHAN = 30
+const DIVERGENCE_MIN_AREA_RATIO = 0.85
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
+
+// === MACD Series Calculation ===
+function calculateMacdSeries(closes) {
+  const n = closes.length
+  const ema12 = new Array(n).fill(0)
+  const ema26 = new Array(n).fill(0)
+  const dif = new Array(n).fill(0)
+  const dea = new Array(n).fill(0)
+  const hist = new Array(n).fill(0)
+  if (n === 0) return { difSeries: dif, deaSeries: dea, histSeries: hist, latestDif: 0, latestDea: 0, latestHist: 0 }
+
+  const k12 = 2 / 13, k26 = 2 / 27, k9 = 2 / 10
+  ema12[0] = closes[0]
+  ema26[0] = closes[0]
+  dif[0] = 0
+  dea[0] = 0
+  hist[0] = 0
+
+  for (let i = 1; i < n; i++) {
+    ema12[i] = closes[i] * k12 + ema12[i - 1] * (1 - k12)
+    ema26[i] = closes[i] * k26 + ema26[i - 1] * (1 - k26)
+    dif[i] = ema12[i] - ema26[i]
+    dea[i] = dif[i] * k9 + dea[i - 1] * (1 - k9)
+    hist[i] = dif[i] - dea[i]
+  }
+  return { difSeries: dif, deaSeries: dea, histSeries: hist, latestDif: dif[n - 1], latestDea: dea[n - 1], latestHist: hist[n - 1] }
+}
 
 // === Chan Theory: Normalize bars (inclusion processing) ===
 function normalizeBarsForChan(rates) {
@@ -24,9 +52,9 @@ function normalizeBarsForChan(rates) {
     const c = parseFloat(rates[i].close)
     if (!Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(o) || !Number.isFinite(c)) continue
     if (h < l) continue
-    bars.push({ idx: bars.length, raw_idx: i, high: h, low: l, open: o, close: c, time: rates[i].time })
+    bars.push({ idx: bars.length, raw_idx: i, raw_start_idx: i, raw_end_idx: i, high: h, low: l, open: o, close: c, time: rates[i].time })
   }
-  if (bars.length < 3) return bars
+  if (bars.length < 3) return bars.map((bar, idx) => ({ ...bar, idx }))
 
   const merged = [bars[0]]
   let direction = 0
@@ -44,28 +72,29 @@ function normalizeBarsForChan(rates) {
         if (direction === 0) direction = 1
       }
       if (direction > 0) {
-        merged[merged.length - 1] = { ...prev, high: Math.max(prev.high, cur.high), low: Math.max(prev.low, cur.low), raw_end_idx: cur.raw_idx }
+        merged[merged.length - 1] = { ...prev, high: Math.max(prev.high, cur.high), low: Math.max(prev.low, cur.low), raw_end_idx: cur.raw_end_idx }
       } else {
-        merged[merged.length - 1] = { ...prev, high: Math.min(prev.high, cur.high), low: Math.min(prev.low, cur.low), raw_end_idx: cur.raw_idx }
+        merged[merged.length - 1] = { ...prev, high: Math.min(prev.high, cur.high), low: Math.min(prev.low, cur.low), raw_end_idx: cur.raw_end_idx }
       }
     } else {
       direction = cur.high > prev.high ? 1 : -1
-      merged.push({ ...cur, raw_start_idx: cur.raw_idx, raw_end_idx: cur.raw_idx })
+      merged.push({ ...cur })
     }
   }
-  return merged
+  // Renumber idx after inclusion processing
+  return merged.map((bar, idx) => ({ ...bar, idx, raw_start_idx: bar.raw_start_idx ?? bar.raw_idx, raw_end_idx: bar.raw_end_idx ?? bar.raw_idx }))
 }
 
-// === Chan Theory: Fractal Detection (on processed bars) ===
+// === Chan Theory: Fractal Detection (strict) ===
 function detectFractals(bars) {
   if (bars.length < 3) return []
   const fractals = []
   for (let i = 1; i < bars.length - 1; i++) {
     const p = bars[i - 1], c = bars[i], n = bars[i + 1]
-    if (c.high > p.high && c.high > n.high && c.low >= Math.min(p.low, n.low)) {
-      fractals.push({ idx: c.idx, raw_idx: c.raw_idx, type: 'top', price: c.high, high: c.high, low: c.low, time: c.time })
-    } else if (c.low < p.low && c.low < n.low && c.high <= Math.max(p.high, n.high)) {
-      fractals.push({ idx: c.idx, raw_idx: c.raw_idx, type: 'bottom', price: c.low, high: c.high, low: c.low, time: c.time })
+    if (c.high > p.high && c.high > n.high && c.low > p.low && c.low > n.low) {
+      fractals.push({ idx: c.idx, raw_start_idx: c.raw_start_idx, raw_end_idx: c.raw_end_idx, type: 'top', price: c.high, high: c.high, low: c.low, time: c.time })
+    } else if (c.low < p.low && c.low < n.low && c.high < p.high && c.high < n.high) {
+      fractals.push({ idx: c.idx, raw_start_idx: c.raw_start_idx, raw_end_idx: c.raw_end_idx, type: 'bottom', price: c.low, high: c.high, low: c.low, time: c.time })
     }
   }
   // Ensure alternating and deduplicate same-type
@@ -111,7 +140,8 @@ function buildBis(fractals, bars) {
     bis.push({
       id: bis.length + 1, dir,
       start_idx: s.idx, end_idx: e.idx,
-      raw_start_idx: s.raw_idx, raw_end_idx: e.raw_idx,
+      raw_start_idx: Math.min(s.raw_start_idx ?? s.raw_idx, e.raw_start_idx ?? e.raw_idx),
+      raw_end_idx: Math.max(s.raw_end_idx ?? s.raw_idx, e.raw_end_idx ?? e.raw_idx),
       start_price: s.price, end_price: e.price,
       high: Math.max(s.high, e.high), low: Math.min(s.low, e.low),
       confirmed: !isLast,
@@ -185,7 +215,8 @@ function buildSegments(confirmedBis) {
         bi_ids: biIds, broken, weak: false,
       }
       segments.push(seg)
-      segStart = broken ? segEnd : segEnd
+      // Next segment starts from the last bi of current segment
+      segStart = segEnd
     } else {
       segStart++
     }
@@ -246,13 +277,15 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
   const lastCenter = validCenters[validCenters.length - 1]
   const lastCenterEndBiId = lastCenter.end_bi_id || 0
 
-  function calcArea(biIds) {
+  function calcArea(biIds, dir) {
     let area = 0
     for (const bid of biIds) {
       const bi = bis.find(b => b.id === bid)
       if (!bi) continue
       for (let j = bi.raw_start_idx; j <= bi.raw_end_idx && j < macdHist.length; j++) {
-        area += Math.abs(macdHist[j] || 0)
+        const v = macdHist[j] || 0
+        if (dir === 'up' && v > 0) area += v
+        else if (dir === 'down' && v < 0) area += Math.abs(v)
       }
     }
     return area
@@ -262,7 +295,7 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
     return seg.bi_ids.some(id => id > lastCenterEndBiId)
   }
 
-  // Use latest segment direction to decide which divergence to check
+  // Use latest segment direction
   const current = validSegs[validSegs.length - 1]
   const sameDir = validSegs.filter(s => s.dir === current.dir)
   if (sameDir.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_same_direction_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
@@ -272,17 +305,19 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
 
   if (!isAfterCenter(cur)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
 
-  const areaPrev = calcArea(prev.bi_ids)
-  const areaCur = calcArea(cur.bi_ids)
+  const areaPrev = calcArea(prev.bi_ids, cur.dir)
+  const areaCur = calcArea(cur.bi_ids, cur.dir)
+
+  if (areaCur === 0 || areaPrev === 0) return { type: 'none', strength: 'none', reason: 'invalid_macd_area', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: 0, price_extreme_prev: 0 }
 
   if (cur.dir === 'up') {
     if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    if (areaCur < areaPrev) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
   } else {
     if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    if (areaCur < areaPrev) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
   }
 }
 
@@ -299,7 +334,8 @@ function computeChan(rates, timeframe, macdHist) {
   if (invalidCount > 0) warnings.push('invalid_bi_price_direction')
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
   if (confirmedBis.length < 3) {
-    return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings: ['insufficient_confirmed_bis'] }
+    warnings.push('insufficient_confirmed_bis')
+    return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
   }
   const { segments, candidate } = buildSegments(confirmedBis)
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
@@ -356,7 +392,7 @@ function computeChan(rates, timeframe, macdHist) {
 }
 
 // Export for testing
-export const __chanTest = { normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCenters, detectDivergence, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCenters, detectDivergence, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks[userId] || Promise.resolve()
@@ -428,21 +464,9 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const ema12 = ema(closes, 12)
   const ema26 = ema(closes, 26)
   const macdLine = ema12 - ema26
-  const macdHistory = []
-  if (n >= 26) {
-    const k12 = 2 / 13, k26 = 2 / 27
-    let e12 = closes.slice(0, 12).reduce((a, b) => a + b, 0) / 12
-    let e26 = closes.slice(0, 26).reduce((a, b) => a + b, 0) / 26
-    for (let i = 12; i < n; i++) {
-      e12 = closes[i] * k12 + e12 * (1 - k12)
-      if (i >= 26) {
-        e26 = closes[i] * k26 + e26 * (1 - k26)
-        macdHistory.push(e12 - e26)
-      }
-    }
-  }
-  const macdSignal = macdHistory.length >= 9 ? ema(macdHistory, 9) : macdLine
-  const macdHistogram = macdLine - macdSignal
+  const macdSeries = calculateMacdSeries(closes)
+  const macdSignal = macdSeries.latestDea
+  const macdHistogram = macdSeries.latestHist
 
   const rsi14 = calcRsi(closes, 14)
 
@@ -509,7 +533,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const shortPositions = positions.filter(p => p.type === 'sell')
   const totalProfit = positions.reduce((sum, p) => sum + parseFloat(p.profit || 0), 0)
 
-  const chan = computeChan(rates, timeframe, macdHistory)
+  const chan = computeChan(rates, timeframe, macdSeries.histSeries)
 
   return {
     symbol, timeframe,
