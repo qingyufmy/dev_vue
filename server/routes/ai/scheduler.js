@@ -104,9 +104,6 @@ export async function rebuildRedisSubscriptions() {
     `)
 
     for (const row of rows) {
-      // Only restore online bridge users
-      if (!isBridgeAlive(row.user_id)) continue
-
       let userSymbols = []
       try { userSymbols = JSON.parse(row.symbols || '[]') } catch {}
       if (userSymbols.length === 0) continue

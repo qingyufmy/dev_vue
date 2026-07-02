@@ -4482,8 +4482,11 @@ function waitReasonText(reason) {
 
 function formatCountdown(seconds) {
   if (seconds <= 0) return '--';
+  // Use MT5 server time (UTC+3)
   const now = new Date();
-  const target = new Date(now.getTime() + seconds * 1000);
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const mt5Ms = utcMs + 3 * 3600000;
+  const target = new Date(mt5Ms + seconds * 1000);
   const pad = n => String(n).padStart(2, '0');
   return `${pad(target.getHours())}:${pad(target.getMinutes())}:${pad(target.getSeconds())}`;
 }
