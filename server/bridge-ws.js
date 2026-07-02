@@ -253,7 +253,7 @@ async function _initBridge(ws, userId, user) {
     }
     try {
       const ai = await import('./routes/ai/index.js')
-      ai.stopAutoScheduler(userId)
+      await ai.stopAutoScheduler(userId)
       await ai.removeUserRuntimeAutoSubscription(userId)
       // Query actual DB state instead of hardcoding enabled: false
       let schedulerEnabled = false
@@ -314,7 +314,7 @@ async function _initBridge(ws, userId, user) {
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled, trade_mode: -1 })
 
-  // Restore auto-reasoning — check BOTH user_bridge_settings AND auto_scheduler table
+  // Restore auto-reasoning — require BOTH user_bridge_settings AND auto_scheduler.enabled
   const shouldRestoreAuto = dbAutoReasoningEnabled
   let schedulerEnabled = false
   try {
@@ -323,38 +323,34 @@ async function _initBridge(ws, userId, user) {
     schedulerEnabled = !!(schedulerRow?.enabled)
   } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
   console.log(`[BridgeWS] _initBridge user ${userId}: dbAutoReason=${dbAutoReasoningEnabled} schedulerEnabled=${schedulerEnabled} hasDbRow=${hasDbRow}`)
-  if (shouldRestoreAuto || schedulerEnabled) {
+  if (shouldRestoreAuto && schedulerEnabled) {
     try {
       const ai = await import('./routes/ai/index.js')
       if (_bridgeInitGen.get(userId) !== gen) return
-      const cfg = await ai.getAutoConfig(null, userId)
-      if (_bridgeInitGen.get(userId) !== gen) return
-      if (!cfg?.enabled) {
-        const globalCfg = await ai.getGlobalAutoConfig()
-        const symbols = globalCfg?.symbols || 'XAUUSD'
-        await ai.upsertAutoConfig(null, userId, symbols, true)
+      // Do NOT re-enable if user explicitly disabled — only restore runtime subscription
+      if (schedulerEnabled) {
+        if (!shouldRestoreAuto) {
+          try {
+            await queryRun(
+              'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, 1) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = NOW()',
+              [userId]
+            )
+            const current = bridges.get(userId)
+            if (current && current.ws === ws) current.autoReasoningEnabled = true
+          } catch (e) { console.error('[BridgeWS] Failed to sync user_bridge_settings:', e.message) }
+        }
+        if (_bridgeInitGen.get(userId) !== gen) return
+        ai.stopAutoScheduler(userId)
+        await ai.startAutoScheduler(userId)
+        // Sync Redis subscription
+        const restoredCfg = await ai.getAutoConfig(null, userId)
+        if (restoredCfg?.enabled) {
+          await ai.syncUserRedisSubscription(userId, restoredCfg.prompt_type_id, restoredCfg.selected_symbols || [], true)
+          await ai.reconcileAutoSchedulers()
+        }
+        console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
+        sendToBrowsers(userId, { type: 'auto_state', enabled: true, runtime_subscribed: true, reason: 'bridge_connected' })
       }
-      if (schedulerEnabled && !shouldRestoreAuto) {
-        try {
-          await queryRun(
-            'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, 1) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = NOW()',
-            [userId]
-          )
-          const current = bridges.get(userId)
-          if (current && current.ws === ws) current.autoReasoningEnabled = true
-        } catch (e) { console.error('[BridgeWS] Failed to sync user_bridge_settings:', e.message) }
-      }
-      if (_bridgeInitGen.get(userId) !== gen) return
-      ai.stopAutoScheduler(userId)
-      await ai.startAutoScheduler(userId)
-      // Sync Redis subscription
-      const restoredCfg = await ai.getAutoConfig(null, userId)
-      if (restoredCfg?.enabled) {
-        await ai.syncUserRedisSubscription(userId, restoredCfg.prompt_type_id, restoredCfg.selected_symbols || [], true)
-        await ai.reconcileAutoSchedulers()
-      }
-      console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
-      sendToBrowsers(userId, { type: 'auto_state', enabled: true, runtime_subscribed: true, reason: 'bridge_connected' })
     } catch (e) {
       console.error(`[BridgeWS] Failed to restore auto-reasoning for user ${userId}:`, e.message)
     }

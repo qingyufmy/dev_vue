@@ -1084,7 +1084,7 @@ async function runSmartClose(userId, closeConfig, account, positions) {
   }
 
   const recentSignal = await queryOne(
-    'SELECT signal_type, analysis FROM ai_signals WHERE user_id = ? ORDER BY id DESC LIMIT 1',
+    "SELECT signal_type, analysis FROM ai_signals WHERE user_id = ? AND signal_type IN ('buy', 'sell') ORDER BY id DESC LIMIT 1",
     [userId]
   )
 
