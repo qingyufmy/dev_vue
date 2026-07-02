@@ -6,6 +6,188 @@ import { round2, round3, round5, clamp, compactRates } from './utils.js'
 
 const _bridgeLocks = {}
 
+// === Chan Theory Constants ===
+const KLINE_PER_BI = 3
+const MIN_BIS_PER_SEGMENT = 3
+const FEED_LAST_N_BIS = 3
+const ENABLE_DIVERGENCE = true
+const MIN_KLINES_FOR_CHAN = 30
+
+// === Chan Theory: Fractal Detection ===
+function detectFractals(rates) {
+  const fractals = []
+  for (let i = 1; i < rates.length - 1; i++) {
+    const high = parseFloat(rates[i].high)
+    const prevHigh = parseFloat(rates[i - 1].high)
+    const nextHigh = parseFloat(rates[i + 1].high)
+    const low = parseFloat(rates[i].low)
+    const prevLow = parseFloat(rates[i - 1].low)
+    const nextLow = parseFloat(rates[i + 1].low)
+    if (high > prevHigh && high > nextHigh) {
+      fractals.push({ idx: i, type: 'top', price: high })
+    } else if (low < prevLow && low < nextLow) {
+      fractals.push({ idx: i, type: 'bottom', price: low })
+    }
+  }
+  return fractals
+}
+
+// === Chan Theory: Bi (Stroke) Construction ===
+function buildBis(fractals, rates) {
+  const pivots = []
+  for (const f of fractals) {
+    if (pivots.length === 0) { pivots.push(f); continue }
+    const last = pivots[pivots.length - 1]
+    if (f.type === last.type) {
+      if ((f.type === 'top' && f.price >= last.price) || (f.type === 'bottom' && f.price <= last.price)) {
+        pivots[pivots.length - 1] = f
+      }
+    } else {
+      if (f.idx - last.idx >= KLINE_PER_BI - 1) {
+        pivots.push(f)
+      }
+    }
+  }
+  const bis = []
+  for (let i = 1; i < pivots.length; i++) {
+    const s = pivots[i - 1], e = pivots[i]
+    bis.push({
+      id: bis.length + 1,
+      dir: s.type === 'bottom' ? 'up' : 'down',
+      start_idx: s.idx, start_price: s.price,
+      end_idx: e.idx, end_price: e.price,
+    })
+  }
+  return bis
+}
+
+// === Chan Theory: Segment Construction ===
+function buildSegments(bis) {
+  if (bis.length < MIN_BIS_PER_SEGMENT) return []
+  const segments = []
+  let seg = { id: 1, dir: bis[0].dir, start_price: bis[0].start_price, end_price: bis[0].end_price, bi_ids: [bis[0].id], broken: false, weak: false }
+  let extreme = bis[0].end_price
+  let lastOpp = bis[0].start_price
+
+  for (let i = 1; i < bis.length; i++) {
+    const bi = bis[i]
+    if (seg.dir === 'up') {
+      if (bi.dir === 'up') {
+        if (bi.end_price > extreme) { extreme = bi.end_price }
+        seg.bi_ids.push(bi.id)
+        seg.end_price = bi.end_price
+      } else {
+        if (bi.end_price < lastOpp) {
+          seg.weak = seg.bi_ids.length < MIN_BIS_PER_SEGMENT
+          segments.push(seg)
+          seg = { id: segments.length + 1, dir: 'down', start_price: seg.end_price, end_price: bi.end_price, bi_ids: [bi.id], broken: false, weak: false }
+          extreme = bi.end_price
+          lastOpp = bi.end_price
+        } else {
+          lastOpp = bi.end_price
+          seg.bi_ids.push(bi.id)
+          seg.end_price = bi.end_price
+        }
+      }
+    } else {
+      if (bi.dir === 'down') {
+        if (bi.end_price < extreme) { extreme = bi.end_price }
+        seg.bi_ids.push(bi.id)
+        seg.end_price = bi.end_price
+      } else {
+        if (bi.end_price > lastOpp) {
+          seg.weak = seg.bi_ids.length < MIN_BIS_PER_SEGMENT
+          segments.push(seg)
+          seg = { id: segments.length + 1, dir: 'up', start_price: seg.end_price, end_price: bi.end_price, bi_ids: [bi.id], broken: false, weak: false }
+          extreme = bi.end_price
+          lastOpp = bi.end_price
+        } else {
+          lastOpp = bi.end_price
+          seg.bi_ids.push(bi.id)
+          seg.end_price = bi.end_price
+        }
+      }
+    }
+  }
+  seg.weak = seg.bi_ids.length < MIN_BIS_PER_SEGMENT
+  segments.push(seg)
+  return segments
+}
+
+// === Chan Theory: Center (Zhongshu) Detection ===
+function buildCenters(bis) {
+  if (bis.length < 3) return []
+  const centers = []
+  for (let i = 0; i + 2 < bis.length; i++) {
+    const b1 = bis[i], b2 = bis[i + 1], b3 = bis[i + 2]
+    const ranges = [b1, b2, b3].map(b => [Math.min(b.start_price, b.end_price), Math.max(b.start_price, b.end_price)])
+    const zh = Math.min(ranges[0][1], ranges[1][1], ranges[2][1])
+    const zl = Math.max(ranges[0][0], ranges[1][0], ranges[2][0])
+    if (zl < zh) {
+      const existing = centers[centers.length - 1]
+      if (existing && zh >= existing.zl && zl <= existing.zh) {
+        existing.zh = Math.max(existing.zh, zh)
+        existing.zl = Math.min(existing.zl, zl)
+        existing.bi_ids.push(b3.id)
+        existing.status = 'expand'
+      } else {
+        centers.push({ id: centers.length + 1, zl, zh, level: '', bi_ids: [b1.id, b2.id, b3.id], status: 'range' })
+      }
+    }
+  }
+  return centers
+}
+
+// === Chan Theory: Divergence Detection ===
+function detectDivergence(segments, bis, macdHist) {
+  if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return { type: 'none', strength: 'none' }
+  const sameDir = segments.filter(s => s.dir === 'down')
+  if (sameDir.length < 2) {
+    const sameDirUp = segments.filter(s => s.dir === 'up')
+    if (sameDirUp.length < 2) return { type: 'none', strength: 'none' }
+    const a = sameDirUp[sameDirUp.length - 2], b = sameDirUp[sameDirUp.length - 1]
+    const areaA = bis.filter(x => x.id >= a.bi_ids[0] && x.id <= a.bi_ids[a.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
+    const areaB = bis.filter(x => x.id >= b.bi_ids[0] && x.id <= b.bi_ids[b.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
+    if (areaB < areaA) return { type: 'top', strength: 'strong', area_cur: areaB, area_prev: areaA }
+    return { type: 'none', strength: 'none' }
+  }
+  const a = sameDir[sameDir.length - 2], b = sameDir[sameDir.length - 1]
+  const areaA = bis.filter(x => x.id >= a.bi_ids[0] && x.id <= a.bi_ids[a.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
+  const areaB = bis.filter(x => x.id >= b.bi_ids[0] && x.id <= b.bi_ids[b.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
+  if (areaB < areaA) return { type: 'bottom', strength: 'strong', area_cur: areaB, area_prev: areaA }
+  return { type: 'none', strength: 'none' }
+}
+
+// === Chan Theory: Assembly ===
+function computeChan(rates, timeframe, macdHist) {
+  if (!rates || rates.length < MIN_KLINES_FOR_CHAN) return { status: 'insufficient_klines' }
+  const fractals = detectFractals(rates)
+  const bis = buildBis(fractals, rates)
+  if (bis.length < 3) return { status: 'insufficient_klines' }
+  const segments = buildSegments(bis)
+  const centers = buildCenters(bis)
+  const lastCenter = centers.length > 0 ? centers[centers.length - 1] : null
+  const lastSeg = segments.length > 0 ? segments[segments.length - 1] : null
+  const lastBi = bis[bis.length - 1]
+  const latest = parseFloat(rates[rates.length - 1].close)
+  let priceVsCenter = 'none'
+  if (lastCenter) {
+    if (latest > lastCenter.zh) priceVsCenter = 'above'
+    else if (latest < lastCenter.zl) priceVsCenter = 'below'
+    else priceVsCenter = 'inside'
+  }
+  const divergence = detectDivergence(segments, bis, macdHist)
+  return {
+    status: 'ok',
+    current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price) } : null,
+    recent_bis: bis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price) })),
+    current_segment: lastSeg ? { id: lastSeg.id, dir: lastSeg.dir, start_price: round5(lastSeg.start_price), end_price: round5(lastSeg.end_price), broken: lastSeg.broken } : null,
+    current_center: lastCenter ? { id: lastCenter.id, zl: round5(lastCenter.zl), zh: round5(lastCenter.zh), level: timeframe, status: lastCenter.status } : null,
+    price_vs_center: priceVsCenter,
+    divergence,
+  }
+}
+
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks[userId] || Promise.resolve()
   const current = prev.then(async () => {
@@ -157,6 +339,8 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const shortPositions = positions.filter(p => p.type === 'sell')
   const totalProfit = positions.reduce((sum, p) => sum + parseFloat(p.profit || 0), 0)
 
+  const chan = computeChan(rates, timeframe, macdHistory)
+
   return {
     symbol, timeframe,
     timestamp: beijingNow(),
@@ -231,5 +415,6 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
       })),
     },
     account: account ? { balance: account.balance, equity: account.equity } : null,
+    chan,
   }
 }
