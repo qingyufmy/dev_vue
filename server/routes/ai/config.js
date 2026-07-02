@@ -243,8 +243,8 @@ export async function getExecuteRiskConfig(userId, signal) {
 
 export async function upsertAutoConfig(db, userId, symbols, enabled, promptTypeId = null) {
   const now = beijingNow()
-  await withTransaction(async (conn) => {
-    await conn.query(`
+  await withTransaction(async (run) => {
+    await run(`
       INSERT INTO auto_scheduler (user_id, symbols, enabled, prompt_type_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
@@ -252,7 +252,7 @@ export async function upsertAutoConfig(db, userId, symbols, enabled, promptTypeI
         prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
         updated_at = VALUES(updated_at)
     `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, promptTypeId, now, now])
-    await conn.query(
+    await run(
       'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = ?',
       [userId, enabled ? 1 : 0, now, enabled ? 1 : 0, now]
     )
@@ -358,8 +358,7 @@ export async function saveUserAutoConfig(userId, payload) {
     if (promptTypeId) {
       const pt = await getAutoPromptTypeById(promptTypeId)
       if (pt) {
-        let strategySymbols = []
-        try { strategySymbols = JSON.parse(pt.symbols_json || '[]') } catch {}
+        const strategySymbols = parsePromptSymbols(pt.symbols_json || '[]')
         const invalid = normalized.filter(s => !strategySymbols.includes(s))
         if (invalid.length > 0) {
           throw new Error(`品种 ${invalid.join(', ')} 不在策略支持列表中`)
@@ -423,6 +422,7 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
 
 export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck = null) {
   const sym = String(symbol).toUpperCase().trim()
+  // LIKE is a pre-filter to reduce candidate rows; final matching is done by JS JSON.parse below.
   const rows = await queryAll(
     `SELECT s.user_id, s.symbols, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
             u.plan, u.role

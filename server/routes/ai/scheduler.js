@@ -103,7 +103,11 @@ export async function rebuildRedisSubscriptions() {
       WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL AND u.plan = 'pro'
     `)
 
+    let onlineCount = 0
     for (const row of rows) {
+      // Only add to runtime subs if bridge is online
+      if (!isBridgeAlive(row.user_id)) continue
+
       let userSymbols = []
       try { userSymbols = JSON.parse(row.symbols || '[]') } catch {}
       if (userSymbols.length === 0) continue
@@ -120,10 +124,11 @@ export async function rebuildRedisSubscriptions() {
         await redis.sadd(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`, row.user_id)
         await redis.sadd(REDIS_SCHEDULER_KEYS, k)
       }
+      onlineCount++
     }
 
     const keysCount = await redis.scard(REDIS_SCHEDULER_KEYS)
-    console.log(`[Redis] Rebuilt subscription index: ${keysCount} scheduler keys, ${rows.length} users`)
+    console.log(`[Redis] Rebuilt subscription index: ${keysCount} scheduler keys, ${onlineCount} online users (of ${rows.length} configured)`)
   } catch (e) {
     console.error('[Redis] rebuildRedisSubscriptions error:', e.message)
   }
@@ -236,22 +241,23 @@ export async function getUserAutoRuntimeStatus(userId) {
   for (const sym of selectedSymbols) {
     const key = buildSchedulerKey(scheduler.prompt_type_id, sym)
     const st = autoSchedulerState[key]
-    if (st) {
-      activeKeys.push(key)
-      totalSubscribers += st.subscriberCount || 0
-      if (st.inFlight) anyInFlight = true
-      if (st.lastError) overallLastError = st.lastError
-      if (st.waitReason && !overallWaitReason) overallWaitReason = st.waitReason
-      if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
-      if (st.lastSignalId) overallLastSignalId = st.lastSignalId
+    if (!st || !st.subscribers || !st.subscribers.has(userId)) {
+      continue
+    }
+    activeKeys.push(key)
+    totalSubscribers += st.subscribers.size
+    if (st.inFlight) anyInFlight = true
+    if (st.lastError) overallLastError = st.lastError
+    if (st.waitReason && !overallWaitReason) overallWaitReason = st.waitReason
+    if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
+    if (st.lastSignalId) overallLastSignalId = st.lastSignalId
 
-      // Check cooldown TTL
-      if (redis) {
-        try {
-          const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
-          if (ttl > 0 && ttl < earliestNextRun) earliestNextRun = ttl
-        } catch {}
-      }
+    // Check cooldown TTL
+    if (redis) {
+      try {
+        const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+        if (ttl > 0 && ttl < earliestNextRun) earliestNextRun = ttl
+      } catch {}
     }
   }
 
@@ -418,11 +424,9 @@ export async function reconcileAutoSchedulers() {
     const neededKeyMeta = {}
 
     for (const row of rows) {
-      let userSymbols = []
-      try { userSymbols = JSON.parse(row.user_symbols || '[]') } catch {}
-      let strategySymbols = []
-      try { strategySymbols = JSON.parse(row.symbols_json || '[]') } catch {}
-      // Intersect user selection with strategy support
+      let userSymbols = parsePromptSymbols(row.user_symbols || '[]')
+      let strategySymbols = parsePromptSymbols(row.symbols_json || '[]')
+      // Intersect user selection with strategy support (both normalized)
       const validSymbols = userSymbols.filter(s => strategySymbols.includes(s))
       for (const sym of validSymbols) {
         const k = buildSchedulerKey(row.prompt_type_id, sym)
@@ -443,7 +447,7 @@ export async function reconcileAutoSchedulers() {
       const meta = neededKeyMeta[k]
       if (autoSchedulerState[k]) {
         autoSchedulerState[k].intervalMinutes = meta.intervalMinutes
-        autoSchedulerState[k].subscriberCount = countSubscribers(meta.promptTypeId)
+        autoSchedulerState[k].subscriberCount = autoSchedulerState[k].subscribers?.size || 0
         await updateSchedulerRedisState(k, autoSchedulerState[k])
       } else {
         await startUnifiedScheduler(meta.promptTypeId, meta.symbol, meta.intervalMinutes)
@@ -736,7 +740,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
     const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
     market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
     market.primary_timeframe = primaryTf
-    market.used_timeframes = usedTimeframes
+    const actualUsedTimeframes = Object.keys(market.strategy_context?.timeframes || {})
+    market.requested_timeframes = usedTimeframes
+    market.used_timeframes = actualUsedTimeframes
+    market.missing_timeframes = usedTimeframes.filter(tf => !actualUsedTimeframes.includes(tf))
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型推理中...' })
@@ -900,7 +907,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       order.volume = round2(userMaxVolume)
       l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
     }
-    const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute')
+    const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', { noFallback: true })
 
     if (execResult.status === 'success') {
       const ticket = execResult.order || execResult.ticket || null
@@ -1225,16 +1232,16 @@ async function runSmartClose(userId, closeConfig, account, positions) {
   }
 }
 
-async function executeOrder(userId, config, request, action) {
+async function executeOrder(userId, config, request, action, options = {}) {
   let accountResult, positionsResult, quote
-  accountResult = await mt5Bridge(userId, 'account', {})
-  positionsResult = await mt5Bridge(userId, 'positions', {})
+  accountResult = await mt5Bridge(userId, 'account', {}, options)
+  positionsResult = await mt5Bridge(userId, 'positions', {}, options)
   const positions = positionsResult.positions || []
   const account = accountResult
 
   if (request.symbol) {
     try {
-      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol })
+      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol }, options)
       request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
       const pointSize = quote.point || (request.quote_price > 1000 ? 0.01 : 0.0001)
       if (request.stop_loss_points && !request.sl) {

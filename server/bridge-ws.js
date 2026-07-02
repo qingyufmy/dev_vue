@@ -897,11 +897,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         const oldSessionParam = (params.direction !== 'close' && params.session_id) ? [params.session_id] : []
         const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, created_at, delivery_id, execution_status'
         const oldSubquery = `(SELECT s.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.market_data_json, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, s.created_at, NULL as delivery_id, NULL as execution_status FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
-        const oldParams = [userId, ...oldSessionParam, ...sharedParams]
+        const oldParams = [queryUserId, ...oldSessionParam, ...sharedParams]
 
         // Shared signals subquery (delivery overrides user-level execution state)
         const delivSubquery = `(SELECT s.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.market_data_json, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, s.created_at, d.id as delivery_id, d.execution_status FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
-        const delivParams = [userId, ...sharedParams]
+        const delivParams = [queryUserId, ...sharedParams]
 
         // Count total
         const countSql = `SELECT COUNT(*) as total FROM (${oldSubquery} UNION ALL ${delivSubquery}) t`
@@ -977,7 +977,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'auto_status': {
-        const runtimeStatus = await ai.getUserAutoRuntimeStatus(userId)
+        // 观摩模式：用 admin 的自动推理状态
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const autoQueryUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const runtimeStatus = await ai.getUserAutoRuntimeStatus(autoQueryUserId)
         result = { status: 'success', scheduler: runtimeStatus }
         break
       }
@@ -1772,16 +1775,18 @@ async function handleBrowserCommand(ws, userId, msg) {
 }
 
 // Send command to bridge and wait for result
-export function sendBridgeCommand(userId, action, params, timeoutMs = 5000) {
+export function sendBridgeCommand(userId, action, params, timeoutMs = 5000, options = {}) {
   return new Promise((resolve) => {
     let bridge = bridges.get(userId)
     let usingFallback = false
 
-    // Fall back to admin bridge for read operations
-    const readActions = ['account', 'positions', 'rates', 'symbols', 'quote']
-    if ((!bridge || bridge.ws.readyState !== 1) && readActions.includes(action) && adminUserId) {
-      bridge = bridges.get(adminUserId)
-      usingFallback = true
+    // Fall back to admin bridge for read operations (unless noFallback)
+    if (!options.noFallback) {
+      const readActions = ['account', 'positions', 'rates', 'symbols', 'quote']
+      if ((!bridge || bridge.ws.readyState !== 1) && readActions.includes(action) && adminUserId) {
+        bridge = bridges.get(adminUserId)
+        usingFallback = true
+      }
     }
 
     if (!bridge || bridge.ws.readyState !== 1) {

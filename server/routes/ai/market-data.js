@@ -6,10 +6,10 @@ import { round2, round3, round5, clamp, compactRates } from './utils.js'
 
 const _bridgeLocks = {}
 
-export async function mt5Bridge(userId, action, params = {}) {
+export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks[userId] || Promise.resolve()
   const current = prev.then(async () => {
-    let result = await executeViaBridge(userId, action, params)
+    let result = await executeViaBridge(userId, action, params, undefined, options)
     if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
       let base = params.symbol
       const knownSuffixes = ['.s', '.c', 'm', '.pro', '.std', '.z', '.ecn', '_']
@@ -20,7 +20,7 @@ export async function mt5Bridge(userId, action, params = {}) {
       let fallback_used = null
       for (const v of variants) {
         if (v === params.symbol) continue
-        result = await executeViaBridge(userId, action, { ...params, symbol: v })
+        result = await executeViaBridge(userId, action, { ...params, symbol: v }, undefined, options)
         if (result?.status !== 'error') { fallback_used = v; break }
       }
       if (fallback_used) {
@@ -33,8 +33,8 @@ export async function mt5Bridge(userId, action, params = {}) {
   return current
 }
 
-export async function executeViaBridge(userId, action, params, timeoutMs = 10000) {
-  return sendBridgeCommand(userId, action, params, timeoutMs)
+export async function executeViaBridge(userId, action, params, timeoutMs = 10000, options = {}) {
+  return sendBridgeCommand(userId, action, params, timeoutMs, options)
 }
 
 export function calculateMarketData(symbol, timeframe, rates, account, positions) {

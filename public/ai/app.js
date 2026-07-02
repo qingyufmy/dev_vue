@@ -1393,10 +1393,17 @@ async function loadStatus() {
 
   // Gateway badge — bridge connection status
   if (usingFallback) {
-    setBadge("gatewayMode", "观摩模式-数据同步中", "warning");
+    if (state.isPlusReadOnly) {
+      setBadge("gatewayMode", "观摩模式", "warning");
+    } else {
+      setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
+    }
   } else {
     setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
   }
+
+  // Sync role-based UI (observation hint, button states, etc.)
+  applyRoleUI();
 
   // Reload symbols when bridge just came online
   if (isLive && !wasLive) {
@@ -1520,6 +1527,7 @@ let _autoToggleLock = false;
 async function handleAutoToggle() {
   if (_autoToggleLock) return;
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
+  if (!state.isAdmin && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   _autoToggleLock = true;
   try {
     const result = await wsApi('toggle_auto');
@@ -2081,6 +2089,9 @@ function applyRoleUI() {
       el.disabled = true;
       el.title = '请先连接您的 MT5 账户';
     });
+    // Disable auto-inference badge (observation mode)
+    const autoMode = document.getElementById("autoAnalyzeMode");
+    if (autoMode) { autoMode.classList.add("clickable-badge"); autoMode.title = "请先连接您的 MT5 账户"; }
     // 绑定 sidebar 观摩提示中的下载链接
     setTimeout(() => {
       document.getElementById("sidebarBridgeLink")?.addEventListener("click", (e) => {
