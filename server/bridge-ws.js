@@ -1020,14 +1020,12 @@ async function handleBrowserCommand(ws, userId, msg) {
           }
         }
 
-        // Unified UPSERT for enabled state
-        const pt = await ai.getAutoPromptTypes()
-        const defaultPtId = pt?.[0]?.id || null
+        // Unified UPSERT for enabled state — preserve existing prompt_type_id
         await queryRun(
           `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, created_at, updated_at)
            VALUES (?, ?, ?, NOW(), NOW())
            ON DUPLICATE KEY UPDATE enabled = ?, updated_at = NOW()`,
-          [userId, newEnabled ? 1 : 0, defaultPtId, newEnabled ? 1 : 0]
+          [userId, newEnabled ? 1 : 0, cfg?.prompt_type_id || null, newEnabled ? 1 : 0]
         )
 
         // Sync user_bridge_settings

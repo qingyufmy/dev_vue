@@ -375,6 +375,8 @@ export async function saveUserAutoConfig(userId, payload) {
     enable_auto_trade: payload.enable_auto_trade !== undefined ? (payload.enable_auto_trade ? 1 : 0) : (existing?.enable_auto_trade ?? 1),
     symbols: selectedSymbols !== null ? JSON.stringify(selectedSymbols) : (existing?.symbols || '[]'),
   }
+  // INSERT enabled=0 is correct: first save means user hasn't toggled auto yet.
+  // ON DUPLICATE KEY UPDATE preserves existing enabled value.
   await queryRun(
     `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, symbols, created_at, updated_at)
      VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)

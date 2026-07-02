@@ -649,12 +649,13 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.nextRunInSeconds = Math.round(delay / 1000)
       await setCooldown(key, Math.round(delay / 1000))
     } finally {
-      st.inFlight = false
-      st.stage = 'idle'
+      // Release lock BEFORE clearing inFlight to prevent TOCTOU race
       if (st._lockToken) {
         await releaseLock(key, st._lockToken)
         st._lockToken = null
       }
+      st.inFlight = false
+      st.stage = 'idle'
       await updateSchedulerRedisState(key, st)
     }
 
@@ -926,8 +927,10 @@ export async function startAutoScheduler(userId) {
   await reconcileAutoSchedulers()
 }
 
-export function stopAutoScheduler(userId) {
-  reconcileAutoSchedulers()
+// Trigger reconcile after user state change (bridge disconnect/reconnect, config save)
+// Actual subscriber removal is handled by removeUserRuntimeAutoSubscription
+export async function stopAutoScheduler(userId) {
+  await reconcileAutoSchedulers()
 }
 
 export async function initAutoSchedulers() {
@@ -978,7 +981,7 @@ export function stopSmartCloseScheduler(userId) {
   closeSchedulerState[userId] = null
 }
 
-async function runSmartCloseCycle(userId) {
+export async function runSmartCloseCycle(userId) {
   const closeCfg = await getCloseConfig(userId)
   if (!closeCfg || !closeCfg.enabled) return
 

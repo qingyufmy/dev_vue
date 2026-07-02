@@ -8,7 +8,7 @@ import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getActiveConfig, getAnalyzeApiKey, getAutoConfig, getGlobalAutoConfig, saveGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, insertAudit, getAutoPromptTypes, getAutoPromptTypeById, saveAutoPromptType, disableAutoPromptType, getUserAutoConfig, saveUserAutoConfig, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
-import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler } from './scheduler.js'
+import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 
 const router = Router()
@@ -75,7 +75,7 @@ export { insertAudit, getActiveConfig, getAnalyzeApiKey,
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,
-  syncUserRedisSubscription, rebuildRedisSubscriptions, removeUserRuntimeAutoSubscription,
+  runSmartCloseCycle, syncUserRedisSubscription, rebuildRedisSubscriptions, removeUserRuntimeAutoSubscription,
   getUserAutoRuntimeStatus } from './scheduler.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
