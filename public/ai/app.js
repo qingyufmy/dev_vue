@@ -4,7 +4,7 @@ function getCookie(name) {
 }
 
 const state = {
-  token: new URLSearchParams(window.location.search).get("token") || localStorage.getItem("authToken") || getCookie("ws_token") || "",
+  token: localStorage.getItem("authToken") || getCookie("ws_token") || "",
   user: null,
   symbols: [],
   signals: [],
@@ -1306,6 +1306,13 @@ async function bootstrap() {
       const url = new URL(window.location);
       url.searchParams.delete("token");
       window.history.replaceState({}, "", url);
+    }
+    if (!state.token) {
+      const cookieToken = getCookie("ws_token");
+      if (cookieToken) {
+        state.token = cookieToken;
+        localStorage.setItem("authToken", cookieToken);
+      }
     }
     if (!state.token) {
       window.location.href = "/";

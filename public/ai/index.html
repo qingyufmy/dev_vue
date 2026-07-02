@@ -15,7 +15,11 @@
     " />
     <script>
       (function() {
-        var t = new URLSearchParams(window.location.search).get('token') || localStorage.getItem('authToken');
+        var t = localStorage.getItem('authToken');
+        if (!t) {
+          var m = document.cookie.match(/(?:^|;\s*)ws_token=([^;]*)/);
+          if (m) t = decodeURIComponent(m[1]);
+        }
         if (!t) { window.location.replace('/'); }
       })();
     </script>
