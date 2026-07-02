@@ -173,10 +173,16 @@ function detectDivergence(segments, bis, macdHist) {
 
 // === Chan Theory: Assembly ===
 function computeChan(rates, timeframe, macdHist) {
-  if (!rates || rates.length < MIN_KLINES_FOR_CHAN) return { status: 'insufficient_klines' }
+  if (!rates || rates.length < MIN_KLINES_FOR_CHAN) {
+    console.log(`[Chan] ${timeframe}: insufficient_klines (${rates?.length || 0}/${MIN_KLINES_FOR_CHAN})`)
+    return { status: 'insufficient_klines' }
+  }
   const fractals = detectFractals(rates)
   const bis = buildBis(fractals, rates)
-  if (bis.length < 3) return { status: 'insufficient_klines' }
+  if (bis.length < 3) {
+    console.log(`[Chan] ${timeframe}: insufficient_bis (${bis.length})`)
+    return { status: 'insufficient_klines' }
+  }
   const segments = buildSegments(bis)
   const centers = buildCenters(bis)
   const lastCenter = centers.length > 0 ? centers[centers.length - 1] : null
@@ -190,6 +196,7 @@ function computeChan(rates, timeframe, macdHist) {
     else priceVsCenter = 'inside'
   }
   const divergence = detectDivergence(segments, bis, macdHist)
+  console.log(`[Chan] ${timeframe}: ok (bis=${bis.length}, segs=${segments.length}, centers=${centers.length}, price_vs=${priceVsCenter}, div=${divergence.type})`)
   return {
     status: 'ok',
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price) } : null,

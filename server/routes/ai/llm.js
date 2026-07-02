@@ -74,17 +74,20 @@ export async function maybeAiSignal(db, config, market) {
 
     // Load output schema from DB
     let outputFormat = ''
+    let schemaSource = 'default'
     try {
       const schema = await queryOne('SELECT schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
-      if (schema?.schema_json) outputFormat = schema.schema_json
+      if (schema?.schema_json) { outputFormat = schema.schema_json; schemaSource = 'database' }
     } catch {}
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
+    console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
     const fullPrompt = prompt + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat
 
     // Check if prompt wants Chan theory data
     const useChan = /\{\{USE_CHAN\}\}/.test(config.system_prompt || '')
     const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '')
+    console.log(`[LLM] USE_CHAN tag: ${useChan ? 'detected' : 'not found'}`)
 
     const aiPayload = {
       symbol: market.symbol, timeframe: market.timeframe, timestamp: market.timestamp,
@@ -96,13 +99,16 @@ export async function maybeAiSignal(db, config, market) {
       const ctx = { ...market.strategy_context }
       // Strip chan data if prompt doesn't have {{USE_CHAN}}
       if (!useChan && ctx.timeframes) {
+        let stripped = 0
         for (const tf of Object.keys(ctx.timeframes)) {
-          if (ctx.timeframes[tf]?.summary) {
+          if (ctx.timeframes[tf]?.summary?.chan) {
             const s = { ...ctx.timeframes[tf].summary }
             delete s.chan
             ctx.timeframes[tf] = { ...ctx.timeframes[tf], summary: s }
+            stripped++
           }
         }
+        if (stripped > 0) console.log(`[LLM] Stripped chan from ${stripped} timeframe(s) (no {{USE_CHAN}} tag)`)
       }
       aiPayload.strategy_context = ctx
     }
