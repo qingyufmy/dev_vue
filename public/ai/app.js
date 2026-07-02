@@ -15,6 +15,7 @@ const state = {
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
   accountBalance: 0,
+  historyNetResult: 0,
 
   auditRows: [],
   signalTableData: [],
@@ -3485,6 +3486,7 @@ async function loadHistory(forceRefresh) {
 function _applyHistoryData(data) {
   if (!data) return;
   const stats = data.statistics || {};
+  state.historyNetResult = parseFloat(stats.net_result) || 0;
   setText("historyProfit", fmt(stats.total_profit));
   setText("historyCredit", fmt(stats.credit));
   setText("historyDeposit", fmt(stats.deposit));
@@ -3551,7 +3553,7 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="${profitClass(row.profit || 0)}">${row.profit != null && state.accountBalance > 0 ? (row.profit / state.accountBalance * 100).toFixed(2) + '%' : '--'}</td>
+      <td class="${profitClass(row.profit || 0)}">${row.profit != null && state.historyNetResult > 0 ? (row.profit / state.historyNetResult * 100).toFixed(2) + '%' : '--'}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>  `;
   }).join("") : '<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>';
@@ -3808,7 +3810,7 @@ async function exportHistory() {
       sheetData.push([
         r.ticket || '', r.symbol || '', r.direction || '', r.volume || '',
         r.entry_price ?? '', r.entry_time || '', r.exit_price ?? '', r.close_time || '',
-        r.stop_loss ?? '', r.take_profit ?? '', r.profit ?? '', (r.profit != null && state.accountBalance > 0 ? (r.profit / state.accountBalance * 100).toFixed(2) + '%' : ''), r.comment || '',
+        r.stop_loss ?? '', r.take_profit ?? '', r.profit ?? '', (r.profit != null && state.historyNetResult > 0 ? (r.profit / state.historyNetResult * 100).toFixed(2) + '%' : ''), r.comment || '',
         r.signal_id || '', r.signal_type || '', r.signal_confidence ?? '', r.signal_volume ?? '',
         r.signal_analysis || '', r.signal_reasoning || '',
         r.signal_stop_loss ?? '', r.signal_tp1 ?? '', r.signal_tp2 ?? '', r.signal_tp3 ?? '',
