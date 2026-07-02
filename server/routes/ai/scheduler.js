@@ -889,6 +889,13 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     }
 
     const order = signalOrderPayload(signal, riskConfig, market, true)
+    // Scale down volume if it exceeds user's max_position_size
+    const userMaxVolume = parseFloat(riskConfig.max_position_size || 0.05)
+    if (order.volume > userMaxVolume) {
+      const originalVolume = order.volume
+      order.volume = round2(userMaxVolume)
+      l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
+    }
     const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute')
 
     if (execResult.status === 'success') {
@@ -897,10 +904,10 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         `UPDATE auto_signal_deliveries SET execution_status = 'success', is_executed = 1, executed_at = NOW(),
          trade_ticket = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
         [ticket, JSON.stringify(execResult), signalId, userId])
-      l(`auto-executed: ticket=${ticket}`)
+      l(`auto-executed: ticket=${ticket}, volume=${order.volume}`)
       await insertAudit(null, userId, 'ai_auto_execute', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, ticket },
-        { status: 'success', ticket }, 'success')
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, ticket, volume: order.volume },
+        { status: 'success', ticket, volume: order.volume }, 'success')
     } else {
       const status = execResult.status === 'rejected' ? 'rejected' : 'failed'
       await queryRun(
