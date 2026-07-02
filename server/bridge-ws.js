@@ -1570,6 +1570,8 @@ async function handleBrowserCommand(ws, userId, msg) {
                   if (!state || !state.running) continue
                   const [ptId, symbol] = k.split(':')
                   const dbInfo = dbRows.find(r => String(r.prompt_type_id) === ptId)
+                  // Real-time subscriber count from Redis Set
+                  const realTimeCount = await redis.scard(`auto:scheduler:${k}:subs`)
                   schedulers.push({
                     key: k,
                     prompt_type_id: Number(ptId),
@@ -1577,7 +1579,7 @@ async function handleBrowserCommand(ws, userId, msg) {
                     symbol,
                     running: state.running === '1',
                     in_flight: state.in_flight === '1',
-                    subscriber_count: Number(state.subscriber_count || 0),
+                    subscriber_count: realTimeCount || 0,
                     interval_minutes: Number(state.interval_minutes || 5),
                     last_run_at: state.last_run_at || '',
                     last_error: state.last_error || '',
