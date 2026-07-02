@@ -79,6 +79,7 @@ function buildSegments(bis) {
       } else {
         if (bi.end_price < lastOpp) {
           seg.weak = seg.bi_ids.length < MIN_BIS_PER_SEGMENT
+          seg.broken = true
           segments.push(seg)
           seg = { id: segments.length + 1, dir: 'down', start_price: seg.end_price, end_price: bi.end_price, bi_ids: [bi.id], broken: false, weak: false }
           extreme = bi.end_price
@@ -97,6 +98,7 @@ function buildSegments(bis) {
       } else {
         if (bi.end_price > lastOpp) {
           seg.weak = seg.bi_ids.length < MIN_BIS_PER_SEGMENT
+          seg.broken = true
           segments.push(seg)
           seg = { id: segments.length + 1, dir: 'up', start_price: seg.end_price, end_price: bi.end_price, bi_ids: [bi.id], broken: false, weak: false }
           extreme = bi.end_price
@@ -141,20 +143,31 @@ function buildCenters(bis) {
 // === Chan Theory: Divergence Detection ===
 function detectDivergence(segments, bis, macdHist) {
   if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return { type: 'none', strength: 'none' }
-  const sameDir = segments.filter(s => s.dir === 'down')
-  if (sameDir.length < 2) {
-    const sameDirUp = segments.filter(s => s.dir === 'up')
-    if (sameDirUp.length < 2) return { type: 'none', strength: 'none' }
-    const a = sameDirUp[sameDirUp.length - 2], b = sameDirUp[sameDirUp.length - 1]
-    const areaA = bis.filter(x => x.id >= a.bi_ids[0] && x.id <= a.bi_ids[a.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
-    const areaB = bis.filter(x => x.id >= b.bi_ids[0] && x.id <= b.bi_ids[b.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
-    if (areaB < areaA) return { type: 'top', strength: 'strong', area_cur: areaB, area_prev: areaA }
-    return { type: 'none', strength: 'none' }
+
+  function calcArea(biIds) {
+    let area = 0
+    for (const bid of biIds) {
+      const bi = bis.find(b => b.id === bid)
+      if (!bi) continue
+      for (let j = bi.start_idx; j <= bi.end_idx && j < macdHist.length; j++) {
+        area += Math.abs(macdHist[j] || 0)
+      }
+    }
+    return area
   }
-  const a = sameDir[sameDir.length - 2], b = sameDir[sameDir.length - 1]
-  const areaA = bis.filter(x => x.id >= a.bi_ids[0] && x.id <= a.bi_ids[a.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
-  const areaB = bis.filter(x => x.id >= b.bi_ids[0] && x.id <= b.bi_ids[b.bi_ids.length - 1]).reduce((s, x) => s + Math.abs(macdHist[Math.min(x.end_idx, macdHist.length - 1)] || 0), 0)
-  if (areaB < areaA) return { type: 'bottom', strength: 'strong', area_cur: areaB, area_prev: areaA }
+
+  const sameDown = segments.filter(s => s.dir === 'down')
+  if (sameDown.length >= 2) {
+    const a = sameDown[sameDown.length - 2], b = sameDown[sameDown.length - 1]
+    const areaA = calcArea(a.bi_ids), areaB = calcArea(b.bi_ids)
+    if (areaB < areaA) return { type: 'bottom', strength: 'strong', area_cur: round2(areaB), area_prev: round2(areaA) }
+  }
+  const sameUp = segments.filter(s => s.dir === 'up')
+  if (sameUp.length >= 2) {
+    const a = sameUp[sameUp.length - 2], b = sameUp[sameUp.length - 1]
+    const areaA = calcArea(a.bi_ids), areaB = calcArea(b.bi_ids)
+    if (areaB < areaA) return { type: 'top', strength: 'strong', area_cur: round2(areaB), area_prev: round2(areaA) }
+  }
   return { type: 'none', strength: 'none' }
 }
 
