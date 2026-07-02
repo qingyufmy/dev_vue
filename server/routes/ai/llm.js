@@ -1,6 +1,19 @@
 // ai/llm.js — AI 推理 + 信号标准化
 
+import { queryOne } from '../../db.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
+
+const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
+  signal_type: "buy | sell | hold",
+  confidence: "0.00-1.00",
+  recommended_volume: "手数",
+  analysis: "简要分析",
+  reasoning: "详细推理过程",
+  stop_loss_price: "止损价",
+  take_profit_1_price: "止盈1",
+  take_profit_2_price: "止盈2",
+  take_profit_3_price: "止盈3"
+}, null, 2)
 
 export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, timeout = 45000 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
@@ -58,6 +71,16 @@ export async function maybeAiSignal(db, config, market) {
 
   try {
     const prompt = stripTimeframeTags(config.system_prompt || DEFAULT_PROMPT)
+
+    // Load output schema from DB
+    let outputFormat = ''
+    try {
+      const schema = await queryOne('SELECT schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
+      if (schema?.schema_json) outputFormat = schema.schema_json
+    } catch {}
+    if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
+
+    const fullPrompt = prompt + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat
     const aiPayload = {
       symbol: market.symbol, timeframe: market.timeframe, timestamp: market.timestamp,
       latest_price: market.latest_price, price_change: market.price_change,
@@ -71,7 +94,7 @@ export async function maybeAiSignal(db, config, market) {
       temperature: parseFloat(config.temperature || 0.7),
       maxTokens: parseInt(config.max_tokens || 2000),
       messages: [
-        { role: 'system', content: prompt },
+        { role: 'system', content: fullPrompt },
         { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(aiPayload) },
       ],
     })

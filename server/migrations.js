@@ -284,6 +284,41 @@ const migrations = [
         console.error('[Migrations] 016 error:', e.message)
       }
     }
+  },
+  {
+    id: '017_ai_signal_schema',
+    up: async () => {
+      try {
+        const cols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signal_schema' AND COLUMN_NAME = 'name'")
+        if (!cols || !cols.length) {
+          await queryRun(`CREATE TABLE IF NOT EXISTS ai_signal_schema (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(50) NOT NULL DEFAULT 'default',
+            schema_json TEXT NOT NULL,
+            is_active TINYINT NOT NULL DEFAULT 1,
+            created_at DATETIME DEFAULT (NOW()),
+            updated_at DATETIME DEFAULT (NOW())
+          )`)
+        }
+        const existing = await queryAll('SELECT COUNT(*) as c FROM ai_signal_schema')
+        if ((existing[0]?.c || 0) === 0) {
+          const defaultSchema = JSON.stringify({
+            signal_type: "buy | sell | hold",
+            confidence: "0.00-1.00",
+            recommended_volume: "手数",
+            analysis: "简要分析",
+            reasoning: "详细推理过程",
+            stop_loss_price: "止损价",
+            take_profit_1_price: "止盈1",
+            take_profit_2_price: "止盈2",
+            take_profit_3_price: "止盈3"
+          }, null, 2)
+          await queryRun('INSERT INTO ai_signal_schema (name, schema_json, is_active) VALUES (?, ?, 1)', ['default', defaultSchema])
+        }
+      } catch (e) {
+        console.error('[Migrations] 017 error:', e.message)
+      }
+    }
   }
 ]
 

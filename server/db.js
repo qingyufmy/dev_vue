@@ -632,6 +632,15 @@ export async function initDB() {
       enabled TINYINT NOT NULL DEFAULT 1,
       UNIQUE KEY uk_plan_period (plan, period)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS ai_signal_schema (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(50) NOT NULL DEFAULT 'default',
+      schema_json TEXT NOT NULL,
+      is_active TINYINT NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT (NOW()),
+      updated_at DATETIME DEFAULT (NOW())
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ]
 
   for (const sql of tables) {
