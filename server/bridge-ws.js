@@ -1590,6 +1590,23 @@ async function handleBrowserCommand(ws, userId, msg) {
                 }
               } catch (e) { console.error('[admin_dashboard] Redis scheduler read error:', e.message) }
             }
+            // Fill in Redis subs counts for DB-only schedulers (no runtime state)
+            if (redis && isRedisAvailable()) {
+              try {
+                for (const db of dbRows) {
+                  const hasRuntime = schedulers.some(s => String(s.prompt_type_id) === String(db.prompt_type_id))
+                  if (hasRuntime) continue
+                  let totalSubs = 0
+                  const symbols = (() => { try { return JSON.parse(db.symbols_json || '[]') } catch { return [] } })()
+                  for (const sym of symbols) {
+                    const k = `${db.prompt_type_id}:${sym}`
+                    const count = await redis.scard(`auto:scheduler:${k}:subs`)
+                    totalSubs += count || 0
+                  }
+                  db.subscriber_count = totalSubs
+                }
+              } catch (e) { console.error('[admin_dashboard] Redis subs count error:', e.message) }
+            }
             return { schedulers, dbStats: dbRows }
           })()
         ])
