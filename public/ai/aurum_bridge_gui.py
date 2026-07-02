@@ -1132,10 +1132,33 @@ class BridgeWorker(QThread):
     # ── Async core (websockets) ──────────────────────────────
 
     @staticmethod
+    def _is_sensitive_key(key):
+        """Check if a dict key represents sensitive data."""
+        k = str(key).lower()
+        return k in ('authorization', 'cookie', 'set-cookie') or 'token' in k
+
+    @staticmethod
     def _mask_sensitive_text(value):
-        """Mask sensitive fields (token/Authorization/Cookie) before logging."""
+        """Mask sensitive fields (token/Authorization/Cookie) before logging. Supports dict/Mapping."""
         import re
+        from collections.abc import Mapping
+
+        # Structured masking for dict/Mapping
+        if isinstance(value, Mapping):
+            masked = {}
+            for k, v in value.items():
+                key = str(k)
+                if BridgeWorker._is_sensitive_key(key):
+                    masked[key] = '[已脱敏]'
+                else:
+                    masked[key] = BridgeWorker._mask_sensitive_text(v)
+            return str(masked)
+
         s = str(value)
+        # Dict string form: {'Authorization': 'Bearer abc', "Cookie": "sid=123"}
+        dict_pattern = r"""(?i)(['"]?(?:authorization|cookie|set-cookie|access_token|refresh_token|token)['"]?\s*:\s*['"])[^'"]+(['"])"""
+        s = re.sub(dict_pattern, r'\1[已脱敏]\2', s)
+        # Plain text patterns
         patterns = [
             (r'(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+', r'\1[已脱敏]'),
             (r'(?i)(authorization\s*[:=]\s*)[^\s,;]+', r'\1[已脱敏]'),
