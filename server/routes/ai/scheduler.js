@@ -4,7 +4,7 @@ import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
 import { getOwnBridgeTradeMode, getOwnBridgeMarketState, isBridgeAlive, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols } from './config.js'
+import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -405,6 +405,25 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, schedul
 // === Reconcile: start/stop schedulers based on DB state ===
 export async function reconcileAutoSchedulers() {
   try {
+    // Auto-assign first strategy to users with enabled=1 but prompt_type_id=NULL
+    const unassigned = await queryAll(`
+      SELECT s.user_id FROM auto_scheduler s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.enabled = 1 AND s.prompt_type_id IS NULL AND u.plan = 'pro'
+    `)
+    if (unassigned.length > 0) {
+      const allPt = await getAutoPromptTypes()
+      if (allPt.length > 0) {
+        const firstPt = allPt[0]
+        const symbols = parsePromptSymbols(firstPt.symbols_json || '[]')
+        for (const row of unassigned) {
+          await queryRun('UPDATE auto_scheduler SET prompt_type_id = ?, symbols = ? WHERE user_id = ? AND prompt_type_id IS NULL',
+            [firstPt.id, JSON.stringify(symbols), row.user_id])
+          console.log(`[Reconciler] Auto-assigned strategy ${firstPt.id} to user ${row.user_id}`)
+        }
+      }
+    }
+
     const rows = await queryAll(`
       SELECT
         s.prompt_type_id,
