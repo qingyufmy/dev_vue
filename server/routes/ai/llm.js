@@ -3,6 +3,8 @@
 import { queryOne } from '../../db.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 
+const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
+
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   signal_type: "buy | sell | hold",
   confidence: "0.00-1.00",
@@ -112,6 +114,8 @@ export async function maybeAiSignal(db, config, market) {
       }
       aiPayload.strategy_context = ctx
     }
+    console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
+    if (DEBUG_LLM_PAYLOAD) console.log(JSON.stringify(aiPayload, null, 2).substring(0, 3000))
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
