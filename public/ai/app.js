@@ -4482,9 +4482,10 @@ function waitReasonText(reason) {
 
 function formatCountdown(seconds) {
   if (seconds <= 0) return '--';
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}秒`;
+  const now = new Date();
+  const target = new Date(now.getTime() + seconds * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(target.getHours())}:${pad(target.getMinutes())}:${pad(target.getSeconds())}`;
 }
 
 function renderAdminDashboard(el, d, userListResp) {
