@@ -3,6 +3,13 @@
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
 import { round2, round3, configPublic } from './utils.js'
 
+// Parse strategy symbols from JSON string: parse, trim, uppercase, deduplicate
+export function parsePromptSymbols(symbolsJson) {
+  let arr = []
+  try { arr = JSON.parse(symbolsJson || '[]') } catch {}
+  return [...new Set(arr.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
+}
+
 export class RiskReject extends Error {
   constructor(reason, details = {}) {
     super(reason)
@@ -266,6 +273,7 @@ export async function saveAutoPromptType(adminUserId, payload) {
   let symbols = Array.isArray(payload.symbols) ? payload.symbols : []
   symbols = symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean)
   const uniqueSymbols = [...new Set(symbols)]
+  if (uniqueSymbols.length === 0) throw new Error('策略品种不能为空')
   const intervalMinutes = Math.max(1, Number(payload.interval_minutes) || 5)
 
   if (payload.id) {
@@ -421,7 +429,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   const filtered = rows.filter(r => {
     let userSymbols = []
     try { userSymbols = JSON.parse(r.symbols || '[]') } catch {}
-    return userSymbols.includes(symbol)
+    return userSymbols.map(s => String(s).toUpperCase().trim()).includes(symbol.toUpperCase())
   })
   // Filter by bridge alive if check function provided
   if (typeof bridgeAliveCheck === 'function') {

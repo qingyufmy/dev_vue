@@ -792,10 +792,33 @@ function connectBridgeStatusWs(onReady) {
         handleDisconnect(msg);
       } else if (msg.type === 'auto_state') {
         state.autoEnabled = !!msg.enabled;
-        if (msg.reason === 'bridge_disconnected' && !msg.enabled) {
-          toast('MT5桥接断开，自动推理已自动关闭', 'warning');
-          setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
+        if (msg.reason === 'user_bridge_offline') {
+          if (msg.enabled) {
+            toast('MT5桥接断开，等待连接后自动恢复订阅', 'warning');
+          } else {
+            toast('MT5桥接断开', 'warning');
+          }
         }
+        // Update runtime state with enabled info
+        if (state.autoRuntime) {
+          state.autoRuntime.enabled = msg.enabled;
+          state.autoRuntime.runtime_subscribed = msg.runtime_subscribed;
+        }
+        renderAutoAnalyzeBadge(state.autoRuntime || { enabled: msg.enabled });
+        loadStatus().catch(() => {});
+      } else if (msg.type === 'auto_progress_done') {
+        // Cycle finished — clear in_flight state
+        if (state.autoRuntime) {
+          state.autoRuntime.in_flight = false;
+          state.autoRuntime.stage = 'idle';
+          state.autoRuntime.stage_label = '';
+          if (msg.status === 'blocked' || msg.status === 'error') {
+            state.autoRuntime.paused_reason = msg.reason || '';
+          } else {
+            state.autoRuntime.paused_reason = '';
+          }
+        }
+        renderAutoAnalyzeBadge(state.autoRuntime || { enabled: true });
         loadStatus().catch(() => {});
       } else if (msg.type === 'auto_progress') {
         // Update runtime state and render badge

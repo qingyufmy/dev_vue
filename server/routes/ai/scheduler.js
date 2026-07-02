@@ -4,7 +4,7 @@ import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
 import { getOwnBridgeTradeMode, getOwnBridgeMarketState, isBridgeAlive, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
+import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -142,6 +142,8 @@ export async function updateSchedulerRedisState(key, state) {
       interval_minutes: String(state.intervalMinutes || 5),
       subscriber_count: String(state.subscriberCount || 0),
       last_error: state.lastError || '',
+      wait_reason: state.waitReason || '',
+      next_run_in_seconds: String(state.nextRunInSeconds || 0),
       last_run_at: state.lastRunAt || ''
     }
     if (state.marketState) {
@@ -228,6 +230,7 @@ export async function getUserAutoRuntimeStatus(userId) {
   let earliestNextRun = Infinity
   let anyInFlight = false
   let overallLastError = ''
+  let overallWaitReason = ''
   let overallLastRunAt = ''
   let overallLastSignalId = null
   let totalSubscribers = 0
@@ -240,6 +243,7 @@ export async function getUserAutoRuntimeStatus(userId) {
       totalSubscribers += st.subscriberCount || 0
       if (st.inFlight) anyInFlight = true
       if (st.lastError) overallLastError = st.lastError
+      if (st.waitReason && !overallWaitReason) overallWaitReason = st.waitReason
       if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
       if (st.lastSignalId) overallLastSignalId = st.lastSignalId
 
@@ -253,12 +257,11 @@ export async function getUserAutoRuntimeStatus(userId) {
     }
   }
 
-  // Determine paused reason
+  // Determine paused reason — only real errors/blockers, not normal cooldown
   let pausedReason = ''
   if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
   else if (selectedSymbols.length === 0) pausedReason = 'no_symbols'
   else if (activeKeys.length === 0) {
-    // No scheduler running — diagnose why
     const userBridgeAlive = isBridgeAlive(userId)
     if (!userBridgeAlive) pausedReason = 'user_bridge_offline'
     else pausedReason = 'no_runtime_scheduler'
@@ -282,6 +285,7 @@ export async function getUserAutoRuntimeStatus(userId) {
     in_flight: anyInFlight,
     stage: anyInFlight ? 'running' : (pausedReason ? 'paused' : 'idle'),
     last_error: overallLastError,
+    wait_reason: overallWaitReason,
     paused_reason: pausedReason,
     next_run_in_seconds: nextRunSeconds,
     last_run_at: overallLastRunAt,
@@ -319,9 +323,31 @@ async function setCooldown(key, intervalSeconds) {
   const redis = getRedis()
   if (!redis) return false
   try {
-    const ok = await redis.set(`${REDIS_COOLDOWN_PREFIX}${key}`, '1', 'NX', 'EX', intervalSeconds)
-    return !!ok
+    await redis.set(`${REDIS_COOLDOWN_PREFIX}${key}`, '1', 'EX', intervalSeconds)
+    return true
   } catch { return false }
+}
+
+function retryDelayMs(reason) {
+  switch (reason) {
+    case 'admin_bridge_offline':
+    case 'market_closed':
+    case 'market_stale_tick':
+    case 'market_unknown_no_tick':
+    case 'market_unknown':
+    case 'redis_unavailable':
+      return 5000
+    case 'rates_failed':
+    case 'rates_empty':
+    case 'exception':
+      return 20000
+    case 'no_api_key':
+    case 'strategy_disabled':
+    case 'symbol_not_supported':
+      return 45000
+    default:
+      return 15000
+  }
 }
 
 // === Admin Bridge ===
@@ -345,6 +371,27 @@ function broadcastAutoProgress(promptTypeId, symbol, progress) {
     if (st.promptTypeId === promptTypeId && st.symbol === symbol && st.subscribers) {
       for (const uid of st.subscribers) {
         try { sendToBrowsers(uid, { type: 'auto_progress', ...progress }) } catch {}
+      }
+      break
+    }
+  }
+}
+
+function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, schedulerState) {
+  for (const key in autoSchedulerState) {
+    const st = autoSchedulerState[key]
+    if (st.promptTypeId === promptTypeId && st.symbol === symbol && st.subscribers) {
+      for (const uid of st.subscribers) {
+        try {
+          sendToBrowsers(uid, {
+            type: 'auto_progress_done',
+            status,
+            reason,
+            prompt_type_id: promptTypeId,
+            symbol,
+            next_run_in_seconds: status === 'success' ? (st.intervalMinutes || 5) * 60 : Math.round(retryDelayMs(reason) / 1000),
+          })
+        } catch {}
       }
       break
     }
@@ -440,6 +487,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     inFlight: false,
     lastRunAt: null,
     lastError: null,
+    waitReason: '',
+    nextRunInSeconds: 0,
     subscriberCount: subSet.size,
     subscribers: subSet,
     _waitCount: 0,
@@ -471,8 +520,12 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       if (st._waitCount === 1 || st._waitCount % 10 === 0) {
         console.log(`[UnifiedScheduler] ${key}: admin bridge offline, pausing (retry#${st._waitCount})`)
       }
-      st.lastError = 'admin_bridge_offline'
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      st.lastError = null
+      st.waitReason = 'admin_bridge_offline'
+      const delay = retryDelayMs('admin_bridge_offline')
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
 
@@ -483,30 +536,40 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       if (st._waitCount === 1 || st._waitCount % 10 === 0) {
         console.log(`[UnifiedScheduler] ${key}: ${marketState.reason}, pausing (retry#${st._waitCount})`)
       }
-      st.lastError = marketState.reason
+      st.lastError = null
+      st.waitReason = marketState.reason
       st.marketState = marketState
+      const delay = retryDelayMs(marketState.reason)
+      st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
 
     st._waitCount = 0
     st.lastError = null
+    st.waitReason = ''
 
-    // Preflight: check API key and strategy before setting cooldown
+    // Preflight: check API key and strategy
     const ptRow = await getAutoPromptTypeById(promptTypeId)
     if (!ptRow || !ptRow.is_active) {
       st.lastError = 'strategy_disabled'
+      st.waitReason = ''
+      const delay = retryDelayMs('strategy_disabled')
+      st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
     // Check API key
     const globalCfg = await getGlobalAutoConfig()
     if (!globalCfg?.api_key_encrypted) {
       st.lastError = 'no_api_key'
+      st.waitReason = ''
+      const delay = retryDelayMs('no_api_key')
+      st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
 
@@ -517,10 +580,27 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       if (st._waitCount === 1 || st._waitCount % 10 === 0) {
         console.log(`[UnifiedScheduler] ${key}: Redis unavailable, pausing (retry#${st._waitCount})`)
       }
-      st.lastError = 'redis_unavailable'
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      st.lastError = null
+      st.waitReason = 'redis_unavailable'
+      const delay = retryDelayMs('redis_unavailable')
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
+
+    // Check cooldown TTL — skip if still active
+    try {
+      const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+      if (ttl > 0) {
+        st.nextRunInSeconds = ttl
+        st.waitReason = 'cooldown'
+        await updateSchedulerRedisState(key, st)
+        autoSchedulerState[key].timer = setTimeout(tick, Math.min(ttl * 1000, tickIntervalMs))
+        return
+      }
+    } catch {}
+
     if (st.inFlight) {
       autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
       return
@@ -531,30 +611,43 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
       return
     }
-    const cooldownSet = await setCooldown(key, st.intervalMinutes * 60)
-    if (!cooldownSet) {
-      st.lastError = 'redis_cooldown_active'
-      await releaseLock(key, lockToken)
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
-      return
-    }
     st.inFlight = true
     st._lockToken = lockToken
     st.stage = 'running'
+    st.waitReason = ''
 
+    let cycleStatus = 'error'
+    let cycleReason = 'exception'
     try {
-      const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol, 'M5')
+      const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol)
       if (cycleResult?.status === 'success') {
         st.lastError = ''
         st.lastRunAt = cycleResult.createdAt
         st.lastSignalId = cycleResult.signalId
         st.subscriberCount = cycleResult.subscriberCount
+        cycleStatus = 'success'
+        await setCooldown(key, st.intervalMinutes * 60)
+        st.nextRunInSeconds = st.intervalMinutes * 60
       } else if (cycleResult?.status === 'blocked') {
         st.lastError = cycleResult.reason
+        cycleStatus = 'blocked'
+        cycleReason = cycleResult.reason
+        const delay = retryDelayMs(cycleReason)
+        st.nextRunInSeconds = Math.round(delay / 1000)
+        await setCooldown(key, Math.round(delay / 1000))
+      } else {
+        cycleReason = cycleResult?.reason || 'unknown'
+        const delay = retryDelayMs(cycleReason)
+        st.nextRunInSeconds = Math.round(delay / 1000)
+        await setCooldown(key, Math.round(delay / 1000))
       }
     } catch (e) {
       console.error(`[UnifiedScheduler] ${key} cycle error:`, e.message)
       st.lastError = 'exception'
+      cycleReason = 'exception'
+      const delay = retryDelayMs('exception')
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await setCooldown(key, Math.round(delay / 1000))
     } finally {
       st.inFlight = false
       st.stage = 'idle'
@@ -565,8 +658,12 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       await updateSchedulerRedisState(key, st)
     }
 
+    // Broadcast progress done
+    broadcastAutoProgressDone(promptTypeId, symbol, cycleStatus, cycleReason, st)
+
     if (autoSchedulerState[key]?.running) {
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      const delay = cycleStatus === 'success' ? tickIntervalMs : retryDelayMs(cycleReason)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
     }
   }
 
@@ -584,10 +681,10 @@ function stopUnifiedScheduler(promptTypeId, symbol) {
 }
 
 // === Unified Auto Cycle: shared signal generation ===
-async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
+async function runUnifiedAutoCycle(promptTypeId, symbol) {
   const key = buildSchedulerKey(promptTypeId, symbol)
   const ts = () => new Date().toISOString()
-  const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}/${timeframe}: ${msg}`)
+  const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}: ${msg}`)
 
   l('>>> cycle start')
   broadcastAutoProgress(promptTypeId, symbol, { stage: 'config', label: '检查配置...' })
@@ -595,7 +692,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
   // 1. Read prompt type
   const pt = await getAutoPromptTypeById(promptTypeId)
   if (!pt || !pt.is_active) { l('BLOCKED: prompt type not found or disabled'); return { status: 'blocked', reason: 'strategy_disabled' } }
-  if (!pt.symbols_json.includes(symbol)) { l(`BLOCKED: symbol ${symbol} not in strategy symbols`); return { status: 'blocked', reason: 'symbol_not_supported' } }
+  const supportedSymbols = parsePromptSymbols(pt.symbols_json)
+  if (!supportedSymbols.includes(symbol.toUpperCase())) { l(`BLOCKED: symbol ${symbol} not in strategy symbols`); return { status: 'blocked', reason: 'symbol_not_supported' } }
 
   // 2. Get unified config (model/API from global, prompt from strategy)
   const config = await getUnifiedAutoInferenceConfig(promptTypeId)
@@ -624,7 +722,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
 
     const prompt = config.system_prompt || ''
     const tags = parseTimeframeTags(prompt, 'auto')
-    const primaryTf = tags.length > 0 ? tags[0].tf : timeframe.toUpperCase()
+    const primaryTf = tags.length > 0 ? tags[0].tf : 'M5'
+    const usedTimeframes = tags.length > 0 ? tags.map(t => t.tf) : ['M5']
     const primaryCount = tags.length > 0 ? tags[0].count : 100
     const t1 = Date.now()
     const ratesResp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
@@ -637,6 +736,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
     const t2 = Date.now()
     const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
     market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
+    market.primary_timeframe = primaryTf
+    market.used_timeframes = usedTimeframes
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型推理中...' })
@@ -658,16 +759,16 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
         take_profit_2_price, take_profit_3_price, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `, [
-      0, 0, promptTypeId, 'auto_shared', 'auto_shared', symbol, timeframe.toUpperCase(),
+      0, 0, promptTypeId, 'auto_shared', 'auto_shared', symbol, primaryTf,
       signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price,
       signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
-      marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt
+      marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt
     ])
     const signalId = result.insertId
     signal.id = signalId
     signal.symbol = symbol
-    signal.timeframe = timeframe.toUpperCase()
+    signal.timeframe = primaryTf
     signal.created_at = createdAt
     signal.market_data = market
     signal.is_executed = false
@@ -709,7 +810,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
         signal_id: signalId,
         signal_type: signal.signal_type,
         symbol,
-        timeframe: timeframe.toUpperCase(),
+        timeframe: primaryTf,
         confidence: signal.confidence,
         created_at: createdAt,
         source: 'auto_shared',
@@ -744,7 +845,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
 
     // 8. Audit
     await insertAudit(null, adminUserId, 'ai_auto_scan', symbol, {
-      trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe, signal_id: signalId
+      trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf, signal_id: signalId
     }, {
       status: signal.signal_type === 'hold' ? 'skipped_hold' : 'success',
       signal_id: signalId, signal_type: signal.signal_type, confidence: signal.confidence,
@@ -755,7 +856,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, timeframe = 'M5') {
   } catch (err) {
     l(`<<< EXCEPTION: ${err.message}`)
     console.error(`[UnifiedCycle] ${key} error:`, err.message)
-    await insertAudit(null, adminUserId || 0, 'ai_auto_scan', symbol, { prompt_type_id: promptTypeId, symbol, timeframe }, { status: 'error', message: err.message }, 'error')
+    await insertAudit(null, adminUserId || 0, 'ai_auto_scan', symbol, { prompt_type_id: promptTypeId, symbol }, { status: 'error', message: err.message }, 'error')
     return { status: 'error', reason: 'exception', message: err.message }
   }
 }
@@ -833,6 +934,16 @@ export async function initAutoSchedulers() {
   console.log('[initAutoSchedulers] Starting unified scheduler reconciliation')
   await rebuildRedisSubscriptions()
   await reconcileAutoSchedulers()
+  startAutoSchedulerReconciler()
+}
+
+let _reconcileInterval = null
+export function startAutoSchedulerReconciler() {
+  if (_reconcileInterval) return
+  _reconcileInterval = setInterval(async () => {
+    try { await reconcileAutoSchedulers() } catch (e) { console.error('[Reconciler] Error:', e.message) }
+  }, 60_000)
+  console.log('[Reconciler] Started periodic reconciliation (every 60s)')
 }
 
 function sendAutoProgress(userId, progress) {

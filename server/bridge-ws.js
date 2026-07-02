@@ -255,7 +255,13 @@ async function _initBridge(ws, userId, user) {
       const ai = await import('./routes/ai/index.js')
       ai.stopAutoScheduler(userId)
       await ai.removeUserRuntimeAutoSubscription(userId)
-      sendToBrowsers(userId, { type: 'auto_state', enabled: false, reason: 'bridge_disconnected' })
+      // Query actual DB state instead of hardcoding enabled: false
+      let schedulerEnabled = false
+      try {
+        const schedRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
+        schedulerEnabled = !!schedRow?.enabled
+      } catch {}
+      sendToBrowsers(userId, { type: 'auto_state', enabled: schedulerEnabled, runtime_subscribed: false, reason: 'user_bridge_offline' })
     } catch (e) {
       console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
     }
@@ -348,7 +354,7 @@ async function _initBridge(ws, userId, user) {
         await ai.reconcileAutoSchedulers()
       }
       console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
-      sendToBrowsers(userId, { type: 'auto_state', enabled: true, reason: 'bridge_connected' })
+      sendToBrowsers(userId, { type: 'auto_state', enabled: true, runtime_subscribed: true, reason: 'bridge_connected' })
     } catch (e) {
       console.error(`[BridgeWS] Failed to restore auto-reasoning for user ${userId}:`, e.message)
     }
