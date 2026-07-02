@@ -1,7 +1,7 @@
 // ai/index.js — 入口，re-export + Router
 
 import { Router } from 'express'
-import { queryOne, queryRun } from '../../db.js'
+import { queryOne, queryRun, queryAll } from '../../db.js'
 import { authMiddleware } from '../../middleware/auth.js'
 import { attachSignalTiming, configPublic, timeframeIntervalMs, STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
@@ -45,7 +45,9 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
     recentStatus = await queryAll(
       'SELECT user_id AS userId, connected, connected_at AS connectedAt, disconnected_at AS disconnectedAt, last_close_code AS lastCloseCode, last_close_reason AS lastCloseReason, last_error AS lastError, client_version AS clientVersion, mt5_collect_timeout_count AS mt5CollectTimeoutCount, updated_at AS updatedAt FROM bridge_connection_status ORDER BY updated_at DESC LIMIT 50'
     )
-  } catch {}
+  } catch (e) {
+    console.error('[BridgeWS] ws-health recentStatus query failed:', e.message)
+  }
   res.json({
     ok: true,
     serverTime: new Date().toISOString(),

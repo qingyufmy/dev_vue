@@ -238,10 +238,10 @@ async function _initBridge(ws, userId, user) {
     // Persist close status to DB
     try {
       await queryRun(
-        `INSERT INTO bridge_connection_status (user_id, connected, disconnected_at, last_close_code, last_close_reason, last_error, updated_at)
-         VALUES (?, 0, NOW(), ?, ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE connected=0, disconnected_at=NOW(), last_close_code=?, last_close_reason=?, last_error=?, updated_at=NOW()`,
-        [userId, code, reasonStr.slice(0, 255), '', code, reasonStr.slice(0, 255), '']
+        `INSERT INTO bridge_connection_status (user_id, connected, disconnected_at, last_close_code, last_close_reason, updated_at)
+         VALUES (?, 0, NOW(), ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE connected=0, disconnected_at=NOW(), last_close_code=?, last_close_reason=?, updated_at=NOW()`,
+        [userId, code, reasonStr.slice(0, 255), code, reasonStr.slice(0, 255)]
       )
     } catch (e) { console.error(`[BridgeWS] Failed to persist close status user=${userId}:`, e.message) }
     for (const [cmdId, pending] of pendingCommands) {
@@ -262,7 +262,13 @@ async function _initBridge(ws, userId, user) {
   })
 
   ws.on('error', (err) => {
-    console.error(`[BridgeWS] Bridge error for user ${userId}:`, err.message)
+    console.error(`[BridgeWS] Bridge error user=${userId}:`, err.message)
+    try {
+      queryRun(
+        `UPDATE bridge_connection_status SET last_error=?, updated_at=NOW() WHERE user_id=?`,
+        [err.message?.slice(0, 255) || '', userId]
+      ).catch(() => {})
+    } catch {}
   })
 
   // Read bridge settings from DB (trade_send / auto_reasoning state)
@@ -390,8 +396,10 @@ async function _initBridge(ws, userId, user) {
       queryRun('UPDATE users SET bridge_heartbeat = NOW() WHERE id = ?', [userId]).catch(() => {})
       // Also update bridge_connection_status
       const hb = bridge._clientHeartbeat || {}
+      const isHeartbeat = msg.type === 'hb' || msg.type === 'pong'
+      const pongUpdate = isHeartbeat ? ', last_pong_at=NOW()' : ''
       queryRun(
-        `UPDATE bridge_connection_status SET last_seen_at=NOW(), last_message_type=?, client_version=?, mt5_collect_timeout_count=?, updated_at=NOW() WHERE user_id=?`,
+        `UPDATE bridge_connection_status SET last_seen_at=NOW(), last_message_type=?, client_version=?, mt5_collect_timeout_count=?${pongUpdate}, updated_at=NOW() WHERE user_id=?`,
         [msg.type || '?', hb.client_version || null, hb.mt5_collect_timeout_count || 0, userId]
       ).catch(() => {})
     }

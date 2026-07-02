@@ -1257,17 +1257,17 @@ class BridgeWorker(QThread):
                     ssl_ctx = _get_ssl_context()
                     self.log_signal.emit("已重建 SSL 上下文，继续尝试连接 WebSocket。")
 
-                # HTTP health check (throttled)
+                # HTTP health check (throttled, uses sync http_get_json via executor)
                 if should_health_check():
                     try:
-                        import aiohttp
-                        health_url = f"{http_base}/health"
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                                if resp.status != 200:
-                                    self.log_signal.emit(f"HTTP 健康检查异常：状态码 {resp.status}")
-                    except ImportError:
-                        pass  # aiohttp not available, skip
+                        loop = asyncio.get_running_loop()
+                        status_code, data = await loop.run_in_executor(
+                            None, lambda: http_get_json(f"{http_base}/health", timeout=5)
+                        )
+                        if status_code != 200:
+                            self.log_signal.emit(f"服务器健康检查失败：HTTP {status_code}")
+                        else:
+                            self._last_health_ok = True
                     except Exception as he:
                         self.log_signal.emit(f"服务器健康检查失败：{BridgeWorker._brief_ws_error(he)}")
 
@@ -1362,8 +1362,8 @@ class BridgeWorker(QThread):
         last_plan_check = time.time()
         last_send_time = time.time()
         mt5_timeout_count = 0
-        last_mt5_timeout_count = 0
-        mt5_inflight = False
+        mt5_was_slow = False
+        mt5_future = None
 
         while self.running:
             try:
@@ -1378,32 +1378,33 @@ class BridgeWorker(QThread):
                         self.plan_expired_signal.emit(reason)
                         break
 
-                # Collect MT5 data with timeout protection
-                if mt5_inflight:
-                    await asyncio.sleep(1)
-                    continue
-                mt5_inflight = True
+                # Collect MT5 data with timeout protection (asyncio.shield prevents cancel)
                 loop = asyncio.get_running_loop()
+                if mt5_future is None:
+                    mt5_future = loop.run_in_executor(None, self._collect_mt5_data)
                 try:
-                    dm = await asyncio.wait_for(
-                        loop.run_in_executor(None, self._collect_mt5_data),
-                        timeout=MT5_COLLECT_TIMEOUT_SEC
-                    )
+                    dm = await asyncio.wait_for(asyncio.shield(mt5_future), timeout=MT5_COLLECT_TIMEOUT_SEC)
+                    mt5_future = None
                 except asyncio.TimeoutError:
                     mt5_timeout_count += 1
+                    self._mt5_timeout_count = mt5_timeout_count
+                    mt5_was_slow = True
                     if mt5_timeout_count <= 3 or mt5_timeout_count % 10 == 0:
                         self.log_signal.emit(f"MT5 数据采集超时（第 {mt5_timeout_count} 次），本轮跳过发送。")
                     if mt5_timeout_count >= 10:
                         self.status_signal.emit("MT5响应慢", "#f59e0b", "")
                     await asyncio.sleep(1)
                     continue
-                finally:
-                    mt5_inflight = False
+                except Exception:
+                    mt5_future = None
+                    raise
 
                 # MT5 recovered
-                if last_mt5_timeout_count > 0 and mt5_timeout_count == 0:
+                if mt5_was_slow:
                     self.log_signal.emit("MT5 数据采集已恢复。")
-                last_mt5_timeout_count = mt5_timeout_count
+                mt5_timeout_count = 0
+                self._mt5_timeout_count = 0
+                mt5_was_slow = False
 
                 if dm is None:
                     await asyncio.sleep(1)
