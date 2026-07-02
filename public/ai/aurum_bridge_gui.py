@@ -1238,6 +1238,10 @@ class BridgeWorker(QThread):
         def should_rebuild_ssl():
             return retry_count in (1, 10, 30, 60) or (retry_count > 60 and retry_count % 30 == 0)
 
+        last_health_ok = False
+        last_health_check_retry = 0
+        last_wss_hint_retry = 0
+
         while self.running:
             retry_start = time.time()
             ws = None
@@ -1265,10 +1269,13 @@ class BridgeWorker(QThread):
                             None, lambda: http_get_json(f"{http_base}/health", timeout=5)
                         )
                         if status_code != 200:
+                            last_health_ok = False
                             self.log_signal.emit(f"服务器健康检查失败：HTTP {status_code}")
                         else:
-                            self._last_health_ok = True
+                            last_health_ok = True
+                            last_health_check_retry = retry_count
                     except Exception as he:
+                        last_health_ok = False
                         self.log_signal.emit(f"服务器健康检查失败：{BridgeWorker._brief_ws_error(he)}")
 
                 try:
@@ -1295,6 +1302,9 @@ class BridgeWorker(QThread):
                         self.log_signal.emit(f"连接失败（第{retry_count}次）：{self._format_ws_error(e)}，{delay}秒后重试...")
                     else:
                         self.log_signal.emit(f"连接失败（第{retry_count}次）：{self._brief_ws_error(e)}，{delay}秒后重试...")
+                    # Hint: HTTP OK but WSS failed — likely Nginx WebSocket proxy issue
+                    if last_health_ok and last_health_check_retry == retry_count:
+                        self.log_signal.emit("HTTP 健康检查正常，但 WebSocket 连接失败，优先检查 Nginx WebSocket 反代。")
                     self.status_signal.emit(f"重连中...（第{retry_count}次）", "#f59e0b", "")
                     await asyncio.sleep(delay)
 
