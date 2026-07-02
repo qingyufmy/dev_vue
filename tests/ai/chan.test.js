@@ -190,6 +190,97 @@ describe('detectDivergence', () => {
     const result = detectDivergence(segs, [], [])
     expect(result.type).toBe('none')
   })
+
+  it('没有中枢时返回no_valid_center', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 120, low: 100 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 105 },
+    ]
+    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
+    const macd = [5, 5, 5, 3, 3, 3]
+    const result = detectDivergence(segs, bis, macd, [])
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('no_valid_center')
+  })
+
+  it('上行没有创新高返回no_price_extreme_break', () => {
+    const segs = [
+      { id: 1, dir: 'down', bi_ids: [1, 2, 3], weak: false, high: 120, low: 90 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 125, low: 95 },
+      { id: 3, dir: 'down', bi_ids: [7, 8, 9], weak: false, high: 118, low: 95 },
+      { id: 4, dir: 'up', bi_ids: [10, 11, 12], weak: false, high: 123, low: 100 },
+    ]
+    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
+    const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+    const centers = [{ status: 'confirmed', end_bi_id: 6 }]
+    const result = detectDivergence(segs, bis, macd, centers)
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('no_price_extreme_break')
+  })
+
+  it('下行没有创新低返回no_price_extreme_break', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },
+      { id: 2, dir: 'down', bi_ids: [4, 5, 6], weak: false, high: 118, low: 90 },
+      { id: 3, dir: 'up', bi_ids: [7, 8, 9], weak: false, high: 120, low: 95 },
+      { id: 4, dir: 'down', bi_ids: [10, 11, 12], weak: false, high: 115, low: 92 },
+    ]
+    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
+    const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+    const centers = [{ status: 'confirmed', end_bi_id: 6 }]
+    const result = detectDivergence(segs, bis, macd, centers)
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('no_price_extreme_break')
+  })
+
+  it('最新线段不在中枢后返回not_after_center', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 120, low: 100 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 105 },
+    ]
+    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
+    const macd = [5, 5, 5, 3, 3, 3]
+    const centers = [{ status: 'confirmed', end_bi_id: 10 }]
+    const result = detectDivergence(segs, bis, macd, centers)
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('not_after_center')
+  })
+
+  it('顶背驰成功返回top', () => {
+    const segs = [
+      { id: 1, dir: 'down', bi_ids: [1, 2, 3], weak: false, high: 120, low: 90 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 125, low: 95 },
+      { id: 3, dir: 'down', bi_ids: [7, 8, 9], weak: false, high: 118, low: 95 },
+      { id: 4, dir: 'up', bi_ids: [10, 11, 12], weak: false, high: 130, low: 100 },
+    ]
+    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
+    // seg2 area=15, seg4 area=3 → divergence
+    const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 1]
+    const centers = [{ status: 'confirmed', end_bi_id: 9 }]
+    const result = detectDivergence(segs, bis, macd, centers)
+    expect(result.type).toBe('top')
+    expect(result.reason).toBe('macd_area_divergence')
+    expect(result.price_extreme_cur).toBe(130)
+    expect(result.price_extreme_prev).toBe(125)
+  })
+
+  it('底背驰成功返回bottom', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },
+      { id: 2, dir: 'down', bi_ids: [4, 5, 6], weak: false, high: 118, low: 90 },
+      { id: 3, dir: 'up', bi_ids: [7, 8, 9], weak: false, high: 120, low: 95 },
+      { id: 4, dir: 'down', bi_ids: [10, 11, 12], weak: false, high: 115, low: 85 },
+    ]
+    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
+    // seg2 area=15, seg4 area=3 → divergence
+    const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 1]
+    const centers = [{ status: 'confirmed', end_bi_id: 9 }]
+    const result = detectDivergence(segs, bis, macd, centers)
+    expect(result.type).toBe('bottom')
+    expect(result.reason).toBe('macd_area_divergence')
+    expect(result.price_extreme_cur).toBe(85)
+    expect(result.price_extreme_prev).toBe(90)
+  })
 })
 
 describe('computeChan', () => {

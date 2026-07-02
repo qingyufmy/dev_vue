@@ -199,4 +199,57 @@ describe('maybeAiSignal', () => {
     expect(result.signal_type).toBe('buy')
     expect(result._inference_source).toBe('ai')
   })
+
+  it('有{{USE_CHAN}}时system prompt不包含原始标签', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"signal_type":"hold","confidence":0.5,"recommended_volume":0,"analysis":"t","reasoning":"t"}' } }] })
+    })
+    const config = {
+      api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}'
+    }
+    const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
+      strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
+    }
+    await maybeAiSignal(null, config, market)
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body.messages[0].content).not.toContain('{{USE_CHAN}}')
+  })
+
+  it('有{{USE_CHAN}}时payload保留chan', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"signal_type":"hold","confidence":0.5,"recommended_volume":0,"analysis":"t","reasoning":"t"}' } }] })
+    })
+    const config = {
+      api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}'
+    }
+    const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
+      strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
+    }
+    await maybeAiSignal(null, config, market)
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
+  })
+
+  it('无{{USE_CHAN}}时payload剥离chan', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"signal_type":"hold","confidence":0.5,"recommended_volume":0,"analysis":"t","reasoning":"t"}' } }] })
+    })
+    const config = {
+      api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场'
+    }
+    const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
+      strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
+    }
+    await maybeAiSignal(null, config, market)
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeUndefined()
+  })
 })

@@ -262,25 +262,28 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
     return seg.bi_ids.some(id => id > lastCenterEndBiId)
   }
 
-  const sameDown = validSegs.filter(s => s.dir === 'down')
-  if (sameDown.length >= 2) {
-    const a = sameDown[sameDown.length - 2], b = sameDown[sameDown.length - 1]
-    if (!isAfterCenter(b)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
-    if (b.low >= a.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: 0, area_prev: 0, price_extreme_cur: round5(b.low), price_extreme_prev: round5(a.low) }
-    const areaA = calcArea(a.bi_ids), areaB = calcArea(b.bi_ids)
-    if (areaB < areaA) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.low), price_extreme_prev: round5(a.low) }
-    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.low), price_extreme_prev: round5(a.low) }
+  // Use latest segment direction to decide which divergence to check
+  const current = validSegs[validSegs.length - 1]
+  const sameDir = validSegs.filter(s => s.dir === current.dir)
+  if (sameDir.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_same_direction_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+
+  const prev = sameDir[sameDir.length - 2]
+  const cur = sameDir[sameDir.length - 1]
+
+  if (!isAfterCenter(cur)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+
+  const areaPrev = calcArea(prev.bi_ids)
+  const areaCur = calcArea(cur.bi_ids)
+
+  if (cur.dir === 'up') {
+    if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (areaCur < areaPrev) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+  } else {
+    if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (areaCur < areaPrev) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
   }
-  const sameUp = validSegs.filter(s => s.dir === 'up')
-  if (sameUp.length >= 2) {
-    const a = sameUp[sameUp.length - 2], b = sameUp[sameUp.length - 1]
-    if (!isAfterCenter(b)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
-    if (b.high <= a.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: 0, area_prev: 0, price_extreme_cur: round5(b.high), price_extreme_prev: round5(a.high) }
-    const areaA = calcArea(a.bi_ids), areaB = calcArea(b.bi_ids)
-    if (areaB < areaA) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.high), price_extreme_prev: round5(a.high) }
-    return { type: 'none', strength: 'none', reason: 'no_macd_divergence', area_cur: round2(areaB), area_prev: round2(areaA), price_extreme_cur: round5(b.high), price_extreme_prev: round5(a.high) }
-  }
-  return { type: 'none', strength: 'none', reason: 'no_divergence_detected', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
 }
 
 // === Chan Theory: Assembly ===
