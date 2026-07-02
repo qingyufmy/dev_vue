@@ -821,24 +821,30 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
 
     // 8. Auto-trade for eligible subscribers (limited concurrency)
     if (signal.signal_type !== 'hold' && aiSource === 'ai' && !signal.is_stale) {
-      const eligibleSubs = []
-      for (const uid of onlineSubscribers) {
-        const subCfg = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ? AND enabled = 1', [uid])
-        if (!subCfg || !subCfg.enable_auto_trade) continue
-        if (subCfg.prompt_type_id !== promptTypeId) continue
-        const subUser = await queryOne('SELECT plan FROM users WHERE id = ?', [uid])
-        if (!subUser || subUser.plan !== 'pro') continue
-        const subSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [uid])
-        if (!subSettings?.trade_send_enabled) continue
-        if (!isBridgeAlive(uid)) continue
-        eligibleSubs.push({ userId: uid, subCfg })
+      // Single JOIN query instead of N+1 per subscriber
+      const onlineUserIds = [...onlineSubscribers]
+      let eligibleSubs = []
+      if (onlineUserIds.length > 0) {
+        const placeholders = onlineUserIds.map(() => '?').join(',')
+        const eligibleRows = await queryAll(`
+          SELECT s.user_id, s.enable_auto_trade, s.prompt_type_id
+          FROM auto_scheduler s
+          JOIN users u ON u.id = s.user_id
+          LEFT JOIN user_bridge_settings ubs ON ubs.user_id = s.user_id
+          WHERE s.user_id IN (${placeholders})
+            AND s.enabled = 1 AND s.enable_auto_trade = 1
+            AND u.plan = 'pro'
+            AND COALESCE(ubs.trade_send_enabled, 0) = 1
+        `, onlineUserIds)
+        const eligibleSet = new Set(eligibleRows.map(r => r.user_id))
+        eligibleSubs = onlineUserIds.filter(uid => eligibleSet.has(uid) && isBridgeAlive(uid))
       }
 
       // Run with concurrency limit of 5
       const CONCURRENCY = 5
       for (let i = 0; i < eligibleSubs.length; i += CONCURRENCY) {
         const batch = eligibleSubs.slice(i, i + CONCURRENCY)
-        await Promise.allSettled(batch.map(({ userId: uid, subCfg }) =>
+        await Promise.allSettled(batch.map(uid =>
           executeDelivery(uid, signalId, signal, config, market, promptTypeId, symbol, createdAt)
         ))
       }
