@@ -732,12 +732,22 @@ async function handleBrowserCommand(ws, userId, msg) {
             "SELECT api_provider, model_name FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
           )
           if (sharedRow) {
+            // Read user's auto_scheduler for enable_auto_trade default
+            const userScheduler = await queryOne('SELECT enable_auto_trade, selected_take_profit, max_position_size, risk_level FROM auto_scheduler WHERE user_id = ?', [userId])
             if (cfg) {
               cfg._model_shared = true
             }
             result = {
               status: 'success',
-              config: cfg || { _model_shared: true, api_provider: sharedRow.api_provider, model_name: sharedRow.model_name, enable_auto_trade: false, max_position_size: 0.05, selected_take_profit: 1, risk_level: 'medium' }
+              config: cfg || {
+                _model_shared: true,
+                api_provider: sharedRow.api_provider,
+                model_name: sharedRow.model_name,
+                enable_auto_trade: userScheduler ? !!userScheduler.enable_auto_trade : true,
+                max_position_size: userScheduler?.max_position_size ?? 0.05,
+                selected_take_profit: userScheduler?.selected_take_profit ?? 1,
+                risk_level: userScheduler?.risk_level || 'medium',
+              }
             }
             break
           }
