@@ -38,12 +38,19 @@ router.get('/bridge/version', (req, res) => {
   })
 })
 
-router.get('/bridge/ws-health', authMiddleware, (req, res) => {
+router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' })
+  let recentStatus = []
+  try {
+    recentStatus = await queryAll(
+      'SELECT user_id AS userId, connected, connected_at AS connectedAt, disconnected_at AS disconnectedAt, last_close_code AS lastCloseCode, last_close_reason AS lastCloseReason, last_error AS lastError, client_version AS clientVersion, mt5_collect_timeout_count AS mt5CollectTimeoutCount, updated_at AS updatedAt FROM bridge_connection_status ORDER BY updated_at DESC LIMIT 50'
+    )
+  } catch {}
   res.json({
     ok: true,
     serverTime: new Date().toISOString(),
     bridges: getBridgeDiagnostics(),
+    recentStatus,
   })
 })
 

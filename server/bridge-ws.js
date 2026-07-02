@@ -66,9 +66,14 @@ export function initBridgeWS(server) {
 
     if (req.url.startsWith('/aurum-api/bridge/ws')) {
       console.log(`[BridgeWS] upgrade path=/aurum-api/bridge/ws type=${type} tokenPresent=${tokenPresent} ip=${ip}`)
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, req)
-      })
+      try {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit('connection', ws, req)
+        })
+      } catch (e) {
+        console.error(`[BridgeWS] upgrade failed path=/aurum-api/bridge/ws type=${type} ip=${ip} error=${e.message}`)
+        try { socket.destroy() } catch {}
+      }
     } else {
       socket.destroy()
     }
@@ -230,6 +235,15 @@ async function _initBridge(ws, userId, user) {
 
     bridges.delete(userId)
     sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
+    // Persist close status to DB
+    try {
+      await queryRun(
+        `INSERT INTO bridge_connection_status (user_id, connected, disconnected_at, last_close_code, last_close_reason, last_error, updated_at)
+         VALUES (?, 0, NOW(), ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE connected=0, disconnected_at=NOW(), last_close_code=?, last_close_reason=?, last_error=?, updated_at=NOW()`,
+        [userId, code, reasonStr.slice(0, 255), '', code, reasonStr.slice(0, 255), '']
+      )
+    } catch (e) { console.error(`[BridgeWS] Failed to persist close status user=${userId}:`, e.message) }
     for (const [cmdId, pending] of pendingCommands) {
       if (pending.userId === userId) {
         clearTimeout(pending.timer)
@@ -275,6 +289,15 @@ async function _initBridge(ws, userId, user) {
   bridges.set(userId, bridgeEntry)
   ws._userId = userId
   console.log(`[BridgeWS] bridge connected user=${userId} role=${user?.role || 'unknown'} plan=${user?.plan || 'unknown'} replacedOld=${replacedOld}`)
+  // Persist connection status to DB
+  try {
+    await queryRun(
+      `INSERT INTO bridge_connection_status (user_id, connected, connected_at, last_close_code, last_close_reason, last_error, updated_at)
+       VALUES (?, 1, NOW(), NULL, NULL, NULL, NOW())
+       ON DUPLICATE KEY UPDATE connected=1, connected_at=NOW(), last_close_code=NULL, last_close_reason=NULL, last_error=NULL, updated_at=NOW()`,
+      [userId]
+    )
+  } catch (e) { console.error(`[BridgeWS] Failed to persist connect status user=${userId}:`, e.message) }
 
   // Notify browsers with current trade/auto state
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled, trade_mode: -1 })
@@ -365,6 +388,24 @@ async function _initBridge(ws, userId, user) {
     if (bridge && (!bridge._lastDbWrite || Date.now() - bridge._lastDbWrite > 60000)) {
       bridge._lastDbWrite = Date.now()
       queryRun('UPDATE users SET bridge_heartbeat = NOW() WHERE id = ?', [userId]).catch(() => {})
+      // Also update bridge_connection_status
+      const hb = bridge._clientHeartbeat || {}
+      queryRun(
+        `UPDATE bridge_connection_status SET last_seen_at=NOW(), last_message_type=?, client_version=?, mt5_collect_timeout_count=?, updated_at=NOW() WHERE user_id=?`,
+        [msg.type || '?', hb.client_version || null, hb.mt5_collect_timeout_count || 0, userId]
+      ).catch(() => {})
+    }
+
+    // Store client heartbeat data
+    if (msg.type === 'hb' && bridge) {
+      bridge._clientHeartbeat = {
+        ts: msg.ts,
+        client_version: msg.client_version,
+        mt5_collect_timeout_count: msg.mt5_collect_timeout_count || 0,
+        last_data_sent_age_sec: msg.last_data_sent_age_sec ?? -1,
+        last_quote_time: msg.last_quote_time || null,
+        receivedAt: Date.now(),
+      }
     }
 
     if (msg.type === 'data') {
@@ -1785,21 +1826,28 @@ export function getAllBridges() {
 
 export function getBridgeDiagnostics() {
   const now = Date.now()
-  return Array.from(bridges.entries()).map(([userId, bridge]) => ({
-    userId,
-    readyState: bridge.ws?.readyState ?? -1,
-    connected: bridge.ws?.readyState === 1,
-    alive: !!(bridge.ws?.readyState === 1 && now - bridge.lastSeen < 20000),
-    connectedSeconds: bridge._connectTime ? Math.round((now - bridge._connectTime) / 1000) : 0,
-    lastSeenAgeSeconds: bridge.lastSeen ? Math.round((now - bridge.lastSeen) / 1000) : -1,
-    lastPongAgeSeconds: bridge.lastPong ? Math.round((now - bridge.lastPong) / 1000) : -1,
-    lastMessageType: bridge._lastMessageType || '?',
-    tradeEnabled: !!bridge.tradeEnabled,
-    autoReasoningEnabled: !!bridge.autoReasoningEnabled,
-    lastTradeMode: typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
-    mt5TimeStr: bridge.mt5TimeStr || null,
-    lastTickAgeSeconds: bridge.lastTickMs ? Math.round((now - bridge.lastTickMs) / 1000) : -1,
-  }))
+  return Array.from(bridges.entries()).map(([userId, bridge]) => {
+    const hb = bridge._clientHeartbeat || {}
+    return {
+      userId,
+      readyState: bridge.ws?.readyState ?? -1,
+      connected: bridge.ws?.readyState === 1,
+      alive: !!(bridge.ws?.readyState === 1 && now - bridge.lastSeen < 20000),
+      connectedSeconds: bridge._connectTime ? Math.round((now - bridge._connectTime) / 1000) : 0,
+      lastSeenAgeSeconds: bridge.lastSeen ? Math.round((now - bridge.lastSeen) / 1000) : -1,
+      lastPongAgeSeconds: bridge.lastPong ? Math.round((now - bridge.lastPong) / 1000) : -1,
+      lastMessageType: bridge._lastMessageType || '?',
+      tradeEnabled: !!bridge.tradeEnabled,
+      autoReasoningEnabled: !!bridge.autoReasoningEnabled,
+      lastTradeMode: typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
+      mt5TimeStr: bridge.mt5TimeStr || null,
+      lastTickAgeSeconds: bridge.lastTickMs ? Math.round((now - bridge.lastTickMs) / 1000) : -1,
+      clientVersion: hb.client_version || null,
+      mt5CollectTimeoutCount: hb.mt5_collect_timeout_count || 0,
+      lastDataSentAgeSec: hb.last_data_sent_age_sec ?? -1,
+      lastQuoteTime: hb.last_quote_time || null,
+    }
+  })
 }
 
 export { sendToBrowsers }

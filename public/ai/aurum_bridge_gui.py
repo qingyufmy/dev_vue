@@ -27,10 +27,11 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.1.2"
+APP_VERSION = "v2.1.3"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 MAX_LOG_MESSAGE_CHARS = 1000
+MT5_COLLECT_TIMEOUT_SEC = 3
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 
 # PyInstaller bundle resource path
@@ -1208,21 +1209,34 @@ class BridgeWorker(QThread):
 
         server = self.server_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
         ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
+        http_base = self.server_url.rstrip("/")
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
         ssl_ctx = _get_ssl_context() if ws_url.startswith('wss://') else None
         MAX_RAPID_FAILS = 5
         rapid_fails = 0
         retry_count = 0
+        last_health_check = 0
 
         def get_backoff_delay():
             """Progressive backoff: 5s → 10s → 30s, max 60s."""
-            if retry_count <= 12:  # first ~1 minute
+            if retry_count <= 12:
                 return 5
-            elif retry_count <= 60:  # 1-5 minutes
+            elif retry_count <= 60:
                 return 10
-            else:  # 5+ minutes
+            else:
                 return 30
+
+        def should_health_check():
+            nonlocal last_health_check
+            if retry_count == 1 or retry_count == 3 or retry_count == 10:
+                return True
+            if retry_count > 10 and retry_count % 10 == 0:
+                return True
+            return False
+
+        def should_rebuild_ssl():
+            return retry_count in (1, 10, 30, 60) or (retry_count > 60 and retry_count % 30 == 0)
 
         while self.running:
             retry_start = time.time()
@@ -1237,6 +1251,25 @@ class BridgeWorker(QThread):
 
                 if elapsed >= 300 and retry_count % 6 == 0:
                     self.log_signal.emit(f"已连续重连 {int(elapsed/60)} 分钟，仍在继续尝试。请检查服务器或反向代理状态。")
+
+                # SSL context rebuild
+                if ws_url.startswith('wss://') and should_rebuild_ssl():
+                    ssl_ctx = _get_ssl_context()
+                    self.log_signal.emit("已重建 SSL 上下文，继续尝试连接 WebSocket。")
+
+                # HTTP health check (throttled)
+                if should_health_check():
+                    try:
+                        import aiohttp
+                        health_url = f"{http_base}/health"
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                                if resp.status != 200:
+                                    self.log_signal.emit(f"HTTP 健康检查异常：状态码 {resp.status}")
+                    except ImportError:
+                        pass  # aiohttp not available, skip
+                    except Exception as he:
+                        self.log_signal.emit(f"服务器健康检查失败：{BridgeWorker._brief_ws_error(he)}")
 
                 try:
                     ws = await asyncio.wait_for(
@@ -1258,7 +1291,6 @@ class BridgeWorker(QThread):
                         self.log_signal.emit(f"连接失败: {err_str}")
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
                         return
-                    # Noise reduction: full error for first 3 attempts, then every 10th
                     if retry_count <= 3 or retry_count % 10 == 0:
                         self.log_signal.emit(f"连接失败（第{retry_count}次）：{self._format_ws_error(e)}，{delay}秒后重试...")
                     else:
@@ -1329,6 +1361,9 @@ class BridgeWorker(QThread):
         last_quote_time = None
         last_plan_check = time.time()
         last_send_time = time.time()
+        mt5_timeout_count = 0
+        last_mt5_timeout_count = 0
+        mt5_inflight = False
 
         while self.running:
             try:
@@ -1343,16 +1378,38 @@ class BridgeWorker(QThread):
                         self.plan_expired_signal.emit(reason)
                         break
 
-                # Collect MT5 data (in executor to avoid blocking)
+                # Collect MT5 data with timeout protection
+                if mt5_inflight:
+                    await asyncio.sleep(1)
+                    continue
+                mt5_inflight = True
                 loop = asyncio.get_running_loop()
-                dm = await loop.run_in_executor(None, self._collect_mt5_data)
+                try:
+                    dm = await asyncio.wait_for(
+                        loop.run_in_executor(None, self._collect_mt5_data),
+                        timeout=MT5_COLLECT_TIMEOUT_SEC
+                    )
+                except asyncio.TimeoutError:
+                    mt5_timeout_count += 1
+                    if mt5_timeout_count <= 3 or mt5_timeout_count % 10 == 0:
+                        self.log_signal.emit(f"MT5 数据采集超时（第 {mt5_timeout_count} 次），本轮跳过发送。")
+                    if mt5_timeout_count >= 10:
+                        self.status_signal.emit("MT5响应慢", "#f59e0b", "")
+                    await asyncio.sleep(1)
+                    continue
+                finally:
+                    mt5_inflight = False
+
+                # MT5 recovered
+                if last_mt5_timeout_count > 0 and mt5_timeout_count == 0:
+                    self.log_signal.emit("MT5 数据采集已恢复。")
+                last_mt5_timeout_count = mt5_timeout_count
+
                 if dm is None:
-                    # No data (MT5 unavailable), just wait
                     await asyncio.sleep(1)
                     continue
 
                 # Dedup: hash the data, skip if unchanged (but force send every 5s for market status detection)
-                # Always send if quote.time changed (for market status detection)
                 payload = json.dumps(dm, sort_keys=True, default=str, ensure_ascii=False, separators=(',', ':'))
                 data_hash = hash(payload)
                 quote_time = dm.get("quote", {}).get("time", "")
@@ -1364,6 +1421,9 @@ class BridgeWorker(QThread):
                 last_data_hash = data_hash
                 last_quote_time = quote_time
                 last_send_time = time.time()
+                self._last_data_sent_at = last_send_time
+                self._last_quote_time = quote_time
+                self._mt5_timeout_count = mt5_timeout_count
 
                 await ws.send(payload)
 
@@ -1457,12 +1517,19 @@ class BridgeWorker(QThread):
                 self.log_signal.emit(f"完成: {json.dumps(resp, ensure_ascii=False)[:80]}")
 
     async def _async_heartbeat_loop(self, ws):
-        """Send client heartbeat every 15s to keep connection alive."""
+        """Send client heartbeat every 15s with status summary."""
         import websockets
         while self.running:
             await asyncio.sleep(15)
             try:
-                hb = {"type": "hb", "ts": int(time.time() * 1000), "client_version": APP_VERSION}
+                hb = {
+                    "type": "hb",
+                    "ts": int(time.time() * 1000),
+                    "client_version": APP_VERSION,
+                    "mt5_collect_timeout_count": getattr(self, '_mt5_timeout_count', 0),
+                    "last_data_sent_age_sec": int(time.time() - getattr(self, '_last_data_sent_at', 0)) if getattr(self, '_last_data_sent_at', 0) else -1,
+                    "last_quote_time": getattr(self, '_last_quote_time', None),
+                }
                 await ws.send(json.dumps(hb))
             except (websockets.ConnectionClosed, OSError):
                 break

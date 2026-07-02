@@ -260,6 +260,30 @@ const migrations = [
         console.error('[Migrations] 015 error:', e.message)
       }
     }
+  },
+  {
+    id: '016_bridge_connection_status',
+    up: async () => {
+      try {
+        await queryRun(`CREATE TABLE IF NOT EXISTS bridge_connection_status (
+          user_id BIGINT PRIMARY KEY,
+          connected TINYINT DEFAULT 0,
+          connected_at DATETIME NULL,
+          disconnected_at DATETIME NULL,
+          last_seen_at DATETIME NULL,
+          last_pong_at DATETIME NULL,
+          last_message_type VARCHAR(32) NULL,
+          last_close_code INT NULL,
+          last_close_reason VARCHAR(255) NULL,
+          last_error VARCHAR(255) NULL,
+          client_version VARCHAR(32) NULL,
+          mt5_collect_timeout_count INT DEFAULT 0,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )`)
+      } catch (e) {
+        console.error('[Migrations] 016 error:', e.message)
+      }
+    }
   }
 ]
 
