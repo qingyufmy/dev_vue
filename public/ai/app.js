@@ -1460,10 +1460,10 @@ function initBridgeModal() {
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
   $("downloadExe")?.addEventListener("click", async () => {
-    const url = "https://qiniu.acadfx.com/AURUM_Bridge_v2.1.1.exe";
+    const url = "https://qiniu.acadfx.com/AURUM_Bridge_v2.1.3.exe";
     const a = document.createElement("a");
-    a.href = url; a.download = "AURUM_Bridge_v2.1.1.exe"; a.click();
-    toast("正在下载 MT5 桥接客户端 v2.1.1", "success");
+    a.href = url; a.download = "AURUM_Bridge_v2.1.3.exe"; a.click();
+    toast("正在下载 MT5 桥接客户端 v2.1.3", "success");
     modal.classList.add("hidden");
   });
 
