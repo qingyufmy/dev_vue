@@ -14,6 +14,7 @@ const state = {
   lastQuote: null,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
+  accountBalance: 0,
 
   auditRows: [],
   signalTableData: [],
@@ -1613,6 +1614,7 @@ async function loadAccount() {
   // 观摩账户：服务器名含 Demo 时显示为 Live
   const server = state._usingFallback ? rawServer.replace(/Demo/gi, 'Live') : rawServer;
   const currency = data.currency || "USD";
+  state.accountBalance = parseFloat(data.balance) || 0;
   setText("mt5Server", server);
   setText("accountServerName", server);
   setText("accountBalance", fmt(data.balance));
@@ -3549,7 +3551,7 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="${profitClass(row.profit_points || 0)}">${row.profit_points != null ? fmt(row.profit_points, 0) : '--'}</td>
+      <td class="${profitClass(row.profit || 0)}">${row.profit != null && state.accountBalance > 0 ? (row.profit / state.accountBalance * 100).toFixed(2) + '%' : '--'}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>  `;
   }).join("") : '<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>';
@@ -3795,7 +3797,7 @@ async function exportHistory() {
     const headers = [
       '订单号', '品种', '方向', '手数',
       '入场价', '开仓时间', '平仓价', '平仓时间',
-      '止损', '止盈', '盈亏', '盈点', '备注',
+      '止损', '止盈', '盈亏', '盈亏%', '备注',
       '信号ID', '信号类型', '信号置信度', '信号建议手数',
       '信号分析', '信号推理',
       '信号止损', '信号止盈1', '信号止盈2', '信号止盈3',
@@ -3806,7 +3808,7 @@ async function exportHistory() {
       sheetData.push([
         r.ticket || '', r.symbol || '', r.direction || '', r.volume || '',
         r.entry_price ?? '', r.entry_time || '', r.exit_price ?? '', r.close_time || '',
-        r.stop_loss ?? '', r.take_profit ?? '', r.profit ?? '', r.profit_points ?? '', r.comment || '',
+        r.stop_loss ?? '', r.take_profit ?? '', r.profit ?? '', (r.profit != null && state.accountBalance > 0 ? (r.profit / state.accountBalance * 100).toFixed(2) + '%' : ''), r.comment || '',
         r.signal_id || '', r.signal_type || '', r.signal_confidence ?? '', r.signal_volume ?? '',
         r.signal_analysis || '', r.signal_reasoning || '',
         r.signal_stop_loss ?? '', r.signal_tp1 ?? '', r.signal_tp2 ?? '', r.signal_tp3 ?? '',
