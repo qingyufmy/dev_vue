@@ -3229,6 +3229,7 @@ function initOrderTypeSelector() {
 async function loadPendingOrders() {
   try {
     const data = await wsApi("pending_list", {});
+    console.log("[PendingOrders] raw data:", JSON.stringify(data.orders || []));
     const orders = data.orders || [];
     renderPendingOrders(orders);
   } catch (e) {

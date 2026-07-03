@@ -1013,6 +1013,11 @@ class BridgeWorker(QThread):
                         from datetime import datetime
                         if isinstance(val, datetime):
                             return val.strftime("%Y-%m-%d %H:%M:%S")
+                        n = float(val)
+                        if n == 0: return None
+                        # If it looks like a Unix timestamp (large number)
+                        if n > 1000000000:
+                            return datetime.fromtimestamp(n).strftime("%Y-%m-%d %H:%M:%S")
                         s = str(val)
                         if s == "0" or s == "None": return None
                         return s
@@ -1021,7 +1026,7 @@ class BridgeWorker(QThread):
 
                 result_orders = []
                 for o in orders:
-                    result_orders.append({
+                    entry = {
                         "ticket": o.ticket,
                         "symbol": o.symbol,
                         "side": side_map.get(o.type, "buy"),
@@ -1035,7 +1040,9 @@ class BridgeWorker(QThread):
                         "created_at": _fmt_time(o.time_setup),
                         "mt5_ticket": str(o.ticket),
                         "state": "pending",
-                    })
+                    }
+                    self.log_signal.emit(f"[PendingList] ticket={o.ticket} symbol={o.symbol} type={entry['pending_type']} created={entry['created_at']} valid={entry['valid_until']}")
+                    result_orders.append(entry)
                 return {"status": "success", "orders": result_orders}
 
             elif action == "modify":
