@@ -1007,6 +1007,18 @@ class BridgeWorker(QThread):
                     self.mt5.ORDER_TYPE_BUY_STOP_LIMIT: "buy",
                     self.mt5.ORDER_TYPE_SELL_STOP_LIMIT: "sell",
                 }
+                def _fmt_time(val):
+                    if not val: return None
+                    try:
+                        from datetime import datetime
+                        if isinstance(val, datetime):
+                            return val.strftime("%Y-%m-%d %H:%M:%S")
+                        s = str(val)
+                        if s == "0" or s == "None": return None
+                        return s
+                    except:
+                        return None
+
                 result_orders = []
                 for o in orders:
                     result_orders.append({
@@ -1019,8 +1031,8 @@ class BridgeWorker(QThread):
                         "sl": o.sl,
                         "tp": o.tp,
                         "comment": o.comment,
-                        "valid_until": str(o.time_expiration) if o.time_expiration and str(o.time_expiration) != "0" else None,
-                        "created_at": str(o.time_setup) if o.time_setup else None,
+                        "valid_until": _fmt_time(o.time_expiration),
+                        "created_at": _fmt_time(o.time_setup),
                         "mt5_ticket": str(o.ticket),
                         "state": "pending",
                     })
