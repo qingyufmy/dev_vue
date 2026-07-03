@@ -628,10 +628,17 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Check if this is a pending order
         const entryMethod = params.entry_method || 'market'
         if (entryMethod !== 'market' && entryMethod !== 'observe') {
-          // Route to pending command
+          // Build pending type from entry_method + order_type
+          const orderType = params.order_type || 'buy'
+          const pendingTypeMap = {
+            'limit': orderType === 'buy' ? 'buy_limit' : 'sell_limit',
+            'stop': orderType === 'buy' ? 'buy_stop' : 'sell_stop',
+            'stop_limit': orderType === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
+          }
+          const pendingType = pendingTypeMap[entryMethod] || entryMethod
           const pendingParams = {
             symbol: params.symbol,
-            order_type: entryMethod,
+            order_type: pendingType,
             price: params.limit_price,
             volume: params.volume,
             sl: params.sl,
@@ -1377,7 +1384,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (!ticket) return reply({ status: 'error', message: 'ticket required' })
         try {
           const cancelResult = await ai.mt5Bridge(userId, 'cancel_pending', { ticket })
-          result = { status: 'success', message: '挂单已取消', cancelResult }
+          if (cancelResult?.status === 'success') {
+            result = { status: 'success', message: '挂单已取消', cancelResult }
+          } else {
+            result = { status: 'error', message: cancelResult?.message || '取消挂单失败' }
+          }
         } catch (e) {
           console.error('[BridgeWS] cancel_pending error:', e.message)
           result = { status: 'error', message: '取消挂单失败: ' + e.message }
