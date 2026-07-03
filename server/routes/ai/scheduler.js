@@ -1059,8 +1059,13 @@ export async function runSmartCloseCycle(userId) {
 
   const ruleResults = runCloseRules(closeCfg, positions, account)
   if (ruleResults.length > 0) {
+    const canTrade = isTradeEnabled(userId)
     for (const r of ruleResults) {
       try {
+        if (!canTrade) {
+          await insertAudit(null, userId, 'smart_close_rule', r.symbol || 'XAUUSD', { ticket: r.ticket, rule: r.rule, reason: r.reason }, { status: 'rejected', message: '交易发送已关闭' }, 'rejected')
+          continue
+        }
         const closeResult = await mt5Bridge(userId, 'close', { ticket: r.ticket })
         await insertAudit(null, userId, 'smart_close_rule', r.symbol || 'XAUUSD', { ticket: r.ticket, rule: r.rule, reason: r.reason }, closeResult, 'success')
       } catch (e) {
@@ -1113,6 +1118,7 @@ function runCloseRules(cfg, positions, account) {
 
 async function runSmartClose(userId, closeConfig, account, positions) {
   if (!positions || positions.length === 0) return []
+  if (!isTradeEnabled(userId)) return []
 
   const symbol = positions[0].symbol || 'XAUUSD'
   const prompt = closeConfig.system_prompt

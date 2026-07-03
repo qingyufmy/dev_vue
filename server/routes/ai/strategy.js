@@ -1,7 +1,7 @@
 // ai/strategy.js — 策略上下文 + 执行 + 分析
 
 import { queryOne, queryRun, beijingNow } from '../../db.js'
-import { isBridgeAlive, sendToBrowsers } from '../../bridge-ws.js'
+import { isBridgeAlive, isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
@@ -167,6 +167,10 @@ export async function handleAnalyze(userId, params) {
   })
 
   if (signal.signal_type !== 'hold' && config && config.enable_auto_trade) {
+    if (!isTradeEnabled(userId)) {
+      console.log(`[Analyze] Auto-execute blocked: trade_send_enabled=0`)
+      await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', reason: 'trade_send_disabled' }, { status: 'rejected', message: '交易发送已关闭' }, 'rejected')
+    } else {
     try {
       const riskCfg = {
         enable_auto_trade: true,
@@ -190,7 +194,25 @@ export async function handleAnalyze(userId, params) {
         return { status: 'success', signal, market }
       }
 
-      const execResult = await mt5Bridge(userId, 'open', orderPayload)
+      const execResult = await (async () => {
+        const isPendingOrder = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
+        if (isPendingOrder) {
+          const pendingTypeMap = {
+            'limit': orderPayload.order_type === 'buy' ? 'buy_limit' : 'sell_limit',
+            'stop': orderPayload.order_type === 'buy' ? 'buy_stop' : 'sell_stop',
+            'stop_limit': orderPayload.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
+          }
+          const pendingType = pendingTypeMap[orderPayload.entry_method] || orderPayload.entry_method
+          let expiration = 0
+          if (orderPayload.pending_valid_until) {
+            const expDate = new Date(orderPayload.pending_valid_until.replace(' ', 'T') + 'Z')
+            if (!isNaN(expDate.getTime())) expiration = Math.floor(expDate.getTime() / 1000) + 10800
+          }
+          if (!expiration) { const nowMt5 = Math.floor(Date.now() / 1000) + 10800; expiration = nowMt5 + 240 * 60 }
+          return mt5Bridge(userId, 'pending', { symbol: orderPayload.symbol, order_type: pendingType, price: orderPayload.limit_price, volume: orderPayload.volume, sl: orderPayload.sl, tp: orderPayload.tp, expiration })
+        }
+        return mt5Bridge(userId, 'open', orderPayload)
+      })()
       if (execResult && execResult.status === 'success') {
         await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
           [beijingNow(), execResult.ticket || null, signal.id])
@@ -202,6 +224,7 @@ export async function handleAnalyze(userId, params) {
       await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto' }, execResult, execResult?.status || 'error')
     } catch (e) {
       console.error('[Analyze] Auto-execute failed:', e.message)
+    }
     }
   }
 
