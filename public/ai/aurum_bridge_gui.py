@@ -974,13 +974,17 @@ class BridgeWorker(QThread):
                 if not orders or len(orders) == 0:
                     return {"status": "error", "message": f"Pending order {ticket} not found"}
 
-                # Delete the pending order
-                ok = self.mt5.orders_delete(ticket)
-                if ok:
+                # Cancel using TRADE_ACTION_REMOVE
+                req = {
+                    "action": self.mt5.TRADE_ACTION_REMOVE,
+                    "order": ticket,
+                }
+                result = self.mt5.order_send(req)
+                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                     return {"status": "success", "ticket": ticket}
-                else:
-                    err = self.mt5.last_error()
-                    return {"status": "error", "message": f"cancel failed: {err}"}
+                err_msg = result.comment if result else "cancel failed"
+                err_code = result.retcode if result else -1
+                return {"status": "error", "message": f"{err_msg} (code={err_code})"}
 
             elif action == "pending_list":
                 symbol = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None

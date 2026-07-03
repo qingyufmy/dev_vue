@@ -624,10 +624,27 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         break
       }
-      case 'open':
-        result = await ai.mt5Bridge(userId, 'open', params)
+      case 'open': {
+        // Check if this is a pending order
+        const entryMethod = params.entry_method || 'market'
+        if (entryMethod !== 'market' && entryMethod !== 'observe') {
+          // Route to pending command
+          const pendingParams = {
+            symbol: params.symbol,
+            order_type: entryMethod,
+            price: params.limit_price,
+            volume: params.volume,
+            sl: params.sl,
+            tp: params.tp,
+            expiration: params.pending_valid_until || null,
+          }
+          result = await ai.mt5Bridge(userId, 'pending', pendingParams)
+        } else {
+          result = await ai.mt5Bridge(userId, 'open', params)
+        }
         await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
         break
+      }
       case 'close':
         result = await ai.mt5Bridge(userId, 'close', params)
         await ai.insertAudit(null, userId, 'manual_close', null, params, result, result?.status || 'unknown')
@@ -1359,7 +1376,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const ticket = params.ticket
         if (!ticket) return reply({ status: 'error', message: 'ticket required' })
         try {
-          const cancelResult = await ai.mt5Bridge(userId, 'cancel_pending', { ticket }, options)
+          const cancelResult = await ai.mt5Bridge(userId, 'cancel_pending', { ticket })
           result = { status: 'success', message: '挂单已取消', cancelResult }
         } catch (e) {
           console.error('[BridgeWS] cancel_pending error:', e.message)

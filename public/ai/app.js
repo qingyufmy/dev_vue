@@ -1230,7 +1230,7 @@ function setTab(tabId) {
 async function refreshTabData(tabId) {
   if (!state.token) return;
   if (tabId === "trading") {
-    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders()]);
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders(), refreshQuote()]);
   } else if (tabId === "dashboard") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadKlineData()]);
     startKlineRefreshTimer();
@@ -3318,10 +3318,16 @@ function renderManualOrderModal(order) {
     : meta.marginShortfall > 0
       ? `可用保证金不足，缺口约 ${fmt(meta.marginShortfall)} USD。`
       : "保证金预检通过，最终结果以 MT5 返回为准。";
+  const entryMethod = meta.entryMethod || "market";
+  const entryMethodLabel = { market: "市价", limit: "限价", stop: "止损", stop_limit: "止损限价" }[entryMethod] || entryMethod;
+  const isPending = entryMethod !== "market" && entryMethod !== "observe";
   body.innerHTML = `
     <div><span>品种</span><strong>${escapeHtml(meta.symbol)}</strong></div>
     <div><span>方向</span><strong class="${meta.orderType}">${escapeHtml(meta.sideLabel)}</strong></div>
-    <div><span>预估入场价</span><strong>${priceDisplay(meta.entryPrice)}</strong></div>
+    <div><span>订单类型</span><strong>${entryMethodLabel}</strong></div>
+    ${isPending ? `<div><span>挂单价</span><strong>${priceDisplay(meta.limitPrice)}</strong></div>` : ""}
+    ${isPending ? `<div><span>有效期</span><strong>${meta.pendingValidMinutes} 分钟</strong></div>` : ""}
+    <div><span>预估入场价</span><strong>${isPending ? priceDisplay(meta.limitPrice) : priceDisplay(meta.entryPrice)}</strong></div>
     <div><span>交易手数</span><strong>${escapeHtml(volumeText(meta.volume))}</strong></div>
     <div><span>止盈价格</span><strong>${meta.takeProfitPrice ? `${priceDisplay(meta.takeProfitPrice)}（约 ${meta.takeProfitPoints} 点）` : "未设置"}</strong></div>
     <div><span>止损价格</span><strong>${meta.stopLossPrice ? `${priceDisplay(meta.stopLossPrice)}（约 ${meta.stopLossPoints} 点）` : "未设置"}</strong></div>
@@ -3361,7 +3367,7 @@ async function submitManualOrder() {
     const result = await wsApi("open", order.payload);
     closeManualOrderModal();
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadAudit(), loadStatus()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadAudit(), loadStatus(), loadPendingOrders()]);
   } catch (error) {
     toast(error.message, "error");
   } finally {
