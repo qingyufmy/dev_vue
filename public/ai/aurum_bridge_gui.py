@@ -968,20 +968,25 @@ class BridgeWorker(QThread):
             elif action == "cancel_pending":
                 ticket = params.get("ticket")
                 if not ticket: return {"status": "error", "message": "ticket is required"}
+                ticket = int(ticket)  # Ensure integer type
+                self.log_signal.emit(f"[CancelPending] Looking for ticket={ticket}")
 
-                # Try to find the pending order first
+                # Try to find the pending order
                 orders = self.mt5.orders_get(ticket=ticket)
-                if not orders or len(orders) == 0:
-                    return {"status": "error", "message": f"Pending order {ticket} not found"}
+                if orders is None or len(orders) == 0:
+                    # Maybe already filled/cancelled, check positions
+                    self.log_signal.emit(f"[CancelPending] Order {ticket} not found, might be filled/cancelled")
+                    return {"status": "error", "message": f"挂单 {ticket} 已不存在（可能已成交或已取消）"}
+
+                self.log_signal.emit(f"[CancelPending] Found order: {orders[0].ticket} {orders[0].symbol} {orders[0].type_name}")
 
                 # Cancel using TRADE_ACTION_REMOVE
                 req = {
                     "action": self.mt5.TRADE_ACTION_REMOVE,
                     "order": ticket,
                 }
-                self.log_signal.emit(f"[CancelPending] ticket={ticket} sending TRADE_ACTION_REMOVE")
                 result = self.mt5.order_send(req)
-                self.log_signal.emit(f"[CancelPending] result: retcode={result.retcode if result else 'None'} comment={result.comment if result else 'None'}")
+                self.log_signal.emit(f"[CancelPending] order_send result: retcode={result.retcode if result else 'None'} comment={result.comment if result else 'None'}")
                 if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                     return {"status": "success", "ticket": ticket}
                 err_msg = result.comment if result else "cancel failed"
