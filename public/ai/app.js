@@ -3254,7 +3254,9 @@ function renderPendingOrders(orders) {
     const isPending = state === "pending";
     const parseDate = (v) => {
       if (!v || v === "None" || v === "0" || v === "0.0") return null;
-      try { return new Date(v.replace(" ", "T")); } catch { return null; }
+      const n = Number(v);
+      if (n > 1000000000) { const d = new Date(n * 1000); return d.toISOString().replace("T", " ").slice(0, 19); }
+      try { return new Date(v.replace(" ", "T")).toISOString().replace("T", " ").slice(0, 19); } catch { return null; }
     };
     const validUntil = parseDate(o.valid_until);
     const createdAt = parseDate(o.created_at);
@@ -3267,8 +3269,8 @@ function renderPendingOrders(orders) {
       <td class="num">${Number(o.volume).toFixed(2)}</td>
       <td class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
       <td class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
-      <td>${createdAt ? createdAt.toLocaleString("zh-CN") : "--"}</td>
-      <td>${validUntil ? validUntil.toLocaleString("zh-CN") : "永久有效"}</td>
+      <td class="num">${createdAt || "--"}</td>
+      <td>${validUntil || "永久有效"}</td>
       <td><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[state] || state}</span></td>
       <td>${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>` : ""}</td>
     </tr>`;
