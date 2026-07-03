@@ -3229,7 +3229,7 @@ function initOrderTypeSelector() {
 async function loadPendingOrders() {
   try {
     const data = await wsApi("pending_list", {});
-    console.log("[PendingOrders] raw data:", JSON.stringify(data.orders || []));
+    console.log("[PendingOrders] raw:", JSON.stringify(data.orders || []));
     const orders = data.orders || [];
     renderPendingOrders(orders);
   } catch (e) {
@@ -3265,7 +3265,6 @@ function renderPendingOrders(orders) {
       <td>${escapeHtml(o.symbol)}</td>
       <td>${typeLabels[o.pending_type] || o.pending_type || "--"}</td>
       <td class="num">${Number(o.price).toFixed(2)}</td>
-      <td class="num">--</td>
       <td class="num">${Number(o.volume).toFixed(2)}</td>
       <td class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
       <td class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
