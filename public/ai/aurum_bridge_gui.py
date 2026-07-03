@@ -943,16 +943,11 @@ class BridgeWorker(QThread):
                 exp_str = params.get("expiration")
                 if exp_str:
                     try:
-                        # Get current MT5 time
                         from datetime import timedelta
-                        mt5_info = self.mt5.terminal_info()
-                        mt5_time = datetime.now() if not mt5_info else datetime.fromtimestamp(mt5_info.time)
-                        # Parse expiration from server (UTC+8) and convert to MT5 time
+                        # Server is UTC+8, MT5 terminal is UTC+3, offset = -5h
                         if isinstance(exp_str, str):
                             server_dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-                            # Calculate offset: MT5 time - server time
-                            offset = mt5_time - datetime.now()
-                            expiration = server_dt + offset
+                            expiration = server_dt - timedelta(hours=5)
                         elif isinstance(exp_str, (int, float)):
                             expiration = datetime.fromtimestamp(int(exp_str))
                     except: pass
