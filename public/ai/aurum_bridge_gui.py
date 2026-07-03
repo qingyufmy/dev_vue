@@ -407,7 +407,6 @@ class BridgeWorker(QThread):
             if plan in ("free", "plus"):
                 return plan, True, f"当前会员等级: {plan.upper()}，桥接功能仅限 Pro 会员"
             if expires_at:
-                from datetime import datetime
                 exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
                 if exp <= datetime.now(exp.tzinfo):
                     return plan, True, f"会员已过期({expires_at[:10]})，请续费后重试"
@@ -680,7 +679,7 @@ class BridgeWorker(QThread):
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
             elif action == "history":
                 import math
-                # 防止 page/page_size 类型错误或除零
+                self.log_signal.emit(f"[History] called with params={params}")
                 try:
                     page = int(params.get("page", 1))
                     page_size = int(params.get("page_size", 20))
@@ -689,7 +688,6 @@ class BridgeWorker(QThread):
                 if page < 1: page = 1
                 if page_size < 1: page_size = 20
                 deposit = withdrawal = credit = 0.0
-                # Use caller-supplied date range, default to last 31 days
                 if "date_to" in params:
                     try: date_to = datetime.strptime(params["date_to"][:10], "%Y-%m-%d") + timedelta(days=1)
                     except (ValueError, KeyError, TypeError): date_to = datetime.utcnow() + timedelta(days=1)
@@ -700,7 +698,9 @@ class BridgeWorker(QThread):
                     except (ValueError, KeyError, TypeError): date_from = date_to - timedelta(days=31)
                 else:
                     date_from = date_to - timedelta(days=31)
+                self.log_signal.emit(f"[History] date_from={date_from}, date_to={date_to}")
                 deals = self.mt5.history_deals_get(date_from, date_to)
+                self.log_signal.emit(f"[History] deals={len(deals) if deals else 'None'}")
                 if deals is None: return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
                 deal_rows = [d._asdict() for d in deals]
                 orders = self.mt5.history_orders_get(date_from, date_to)
@@ -795,6 +795,7 @@ class BridgeWorker(QThread):
                     "trade_count": total, "total_volume": round(sum(float(r.get("volume") or 0) for r in rows),2)},
                     "pagination": {"current_page": page, "page_size": page_size,
                         "total_count": total, "total_pages": max(math.ceil(total/page_size),1)}, "source": "mt5"}
+                self.log_signal.emit(f"[History] returned {total} trades, {len(rows)} rows")
             elif action == "chart_data":
                 # Chart aggregation: returns daily stats, cumulative, drawdown
                 import math
@@ -942,7 +943,6 @@ class BridgeWorker(QThread):
                 exp_str = params.get("expiration")
                 if exp_str:
                     try:
-                        from datetime import datetime
                         if isinstance(exp_str, str):
                             expiration = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
                         else:
@@ -1010,14 +1010,11 @@ class BridgeWorker(QThread):
                 def _fmt_time(val):
                     if not val: return None
                     try:
-                        from datetime import datetime
-                        if isinstance(val, datetime):
-                            return val.strftime("%Y-%m-%d %H:%M:%S")
                         n = float(val)
                         if n == 0: return None
-                        # If it looks like a Unix timestamp (large number)
                         if n > 1000000000:
-                            return datetime.fromtimestamp(n).strftime("%Y-%m-%d %H:%M:%S")
+                            from datetime import datetime as _dt
+                            return _dt.fromtimestamp(n).strftime("%Y-%m-%d %H:%M:%S")
                         s = str(val)
                         if s == "0" or s == "None": return None
                         return s
