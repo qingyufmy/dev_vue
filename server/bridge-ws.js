@@ -625,6 +625,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'open': {
+        // Check trade send enabled
+        const openBridge = bridges.get(userId)
+        if (openBridge && openBridge.tradeEnabled === false) {
+          result = { status: 'rejected', message: '交易发送已关闭，请先开启', details: {} }
+          await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, 'rejected')
+          break
+        }
         // Check if this is a pending order
         const entryMethod = params.entry_method || 'market'
         if (entryMethod !== 'market' && entryMethod !== 'observe') {
@@ -656,10 +663,17 @@ async function handleBrowserCommand(ws, userId, msg) {
         await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
         break
       }
-      case 'close':
+      case 'close': {
+        const clBridge = bridges.get(userId)
+        if (clBridge && clBridge.tradeEnabled === false) {
+          result = { status: 'rejected', message: '交易发送已关闭，请先开启', details: {} }
+          await ai.insertAudit(null, userId, 'manual_close', null, params, result, 'rejected')
+          break
+        }
         result = await ai.mt5Bridge(userId, 'close', params)
         await ai.insertAudit(null, userId, 'manual_close', null, params, result, result?.status || 'unknown')
         break
+      }
       case 'toggle_trade': {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
         // Update local trade state
@@ -981,6 +995,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'execute': {
+        // Check trade send enabled
+        const exBridge = bridges.get(userId)
+        if (exBridge && exBridge.tradeEnabled === false) {
+          result = { status: 'rejected', message: '交易发送已关闭，请先开启', details: {} }
+          await ai.insertAudit(null, userId, 'ai_execute', null, params, result, 'rejected')
+          break
+        }
         // Check shared delivery first
         const delivery = await queryOne(
           'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?',
