@@ -1230,7 +1230,7 @@ function setTab(tabId) {
 async function refreshTabData(tabId) {
   if (!state.token) return;
   if (tabId === "trading") {
-    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus()]);
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders()]);
   } else if (tabId === "dashboard") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadKlineData()]);
     startKlineRefreshTimer();
@@ -3152,6 +3152,25 @@ function buildManualOrder(orderType) {
   const marginShortfall = Number.isFinite(Number(estimatedMargin)) && Number.isFinite(Number(freeMargin))
     ? Math.max(0, Number(estimatedMargin) - Number(freeMargin))
     : null;
+
+  // Pending order fields
+  const entryMethod = state.selectedOrderType || "market";
+  let limitPrice = null;
+  let pendingValidMinutes = null;
+  if (entryMethod !== "market") {
+    const pp = parseFloat($("pendingPrice")?.value);
+    if (!pp || pp <= 0) throw new Error("请填写挂单价");
+    limitPrice = pp;
+    const deviation = Math.abs(limitPrice - entryPrice) / entryPrice;
+    if (deviation > 0.05) throw new Error("挂单价偏离当前价超过 5%");
+    pendingValidMinutes = parseInt($("pendingValidMinutes")?.value) || 240;
+  }
+  if (entryMethod === "stop_limit") {
+    const slp = parseFloat($("stopLimitPrice")?.value);
+    if (!slp || slp <= 0) throw new Error("请填写止损限价");
+    limitPrice = slp; // For stop_limit, the actual price field is the limit price
+  }
+
   return {
     payload: {
       symbol,
@@ -3161,6 +3180,9 @@ function buildManualOrder(orderType) {
       stop_loss_points: stopLossPoints,
       confirm: true,
       source: "manual",
+      entry_method: entryMethod,
+      limit_price: limitPrice,
+      pending_valid_minutes: pendingValidMinutes,
     },
     meta: {
       symbol,
@@ -3175,8 +3197,84 @@ function buildManualOrder(orderType) {
       estimatedMargin,
       freeMargin,
       marginShortfall,
+      entryMethod,
+      limitPrice,
+      pendingValidMinutes,
     },
   };
+}
+
+// === Pending Order: Order Type Selector ===
+function initOrderTypeSelector() {
+  const btns = document.querySelectorAll(".order-type-btn");
+  btns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      btns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      const type = btn.dataset.type;
+      state.selectedOrderType = type;
+      const pendingRow = $("pendingPriceRow");
+      const stopLimitWrap = $("stopLimitPriceWrap");
+      if (type === "market") {
+        pendingRow.style.display = "none";
+      } else {
+        pendingRow.style.display = "";
+        stopLimitWrap.style.display = type === "stop_limit" ? "" : "none";
+      }
+    });
+  });
+}
+
+// === Pending Order: List & Cancel ===
+async function loadPendingOrders() {
+  try {
+    const data = await wsApi("pending_list", {});
+    const orders = data.orders || [];
+    renderPendingOrders(orders);
+  } catch (e) {
+    console.error("loadPendingOrders:", e);
+  }
+}
+
+function renderPendingOrders(orders) {
+  const tbody = $("pendingOrdersBody");
+  const empty = $("pendingEmpty");
+  if (!tbody) return;
+  if (!orders.length) {
+    tbody.innerHTML = "";
+    if (empty) empty.style.display = "";
+    return;
+  }
+  if (empty) empty.style.display = "none";
+  const typeLabels = { buy_limit: "买入限价", sell_limit: "卖出限价", buy_stop: "买入止损", sell_stop: "卖出止损", buy_stop_limit: "买入止损限价", sell_stop_limit: "卖出止损限价" };
+  const stateLabels = { pending: "等待中", filled: "已成交", expired: "已过期", cancelled: "已取消", superseded: "已取代" };
+  tbody.innerHTML = orders.map((o) => {
+    const isPending = o.state === "pending";
+    return `<tr>
+      <td class="num">${escapeHtml(String(o.mt5_ticket || o.id))}</td>
+      <td>${escapeHtml(o.symbol)}</td>
+      <td>${o.side === "buy" ? "买入" : "卖出"}</td>
+      <td>${typeLabels[o.pending_type] || o.pending_type}</td>
+      <td class="num">${Number(o.price).toFixed(2)}</td>
+      <td class="num">${Number(o.volume).toFixed(2)}</td>
+      <td class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
+      <td class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
+      <td>${o.valid_until ? new Date(o.valid_until).toLocaleString("zh-CN") : "--"}</td>
+      <td><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[o.state] || o.state}</span></td>
+      <td>${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.id))}')">撤单</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function cancelPendingOrder(ticket) {
+  if (!window.confirm(`确认取消挂单 ${ticket}？`)) return;
+  try {
+    const result = await wsApi("cancel_pending", { ticket });
+    toast(result.message || "操作完成", result.status === "success" ? "success" : "warning");
+    await loadPendingOrders();
+  } catch (e) {
+    toast(e.message, "error");
+  }
 }
 
 function closeManualOrderModal() {
@@ -3991,6 +4089,9 @@ function bindEvents() {
   $("orderConfirmModal")?.addEventListener("click", (event) => {
     if (event.target === $("orderConfirmModal")) closeManualOrderModal();
   });
+  initOrderTypeSelector();
+  // Refresh pending orders
+  document.querySelector('[data-action="refresh-pending"]')?.addEventListener("click", () => loadPendingOrders());
   // Symbol change is handled by searchable selector + setGlobalSymbol
   $("signalFilterDirection")?.addEventListener("change", (event) => {
     state.signalFilters.direction = event.target.value;

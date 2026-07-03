@@ -468,6 +468,11 @@ export async function initDB() {
       executed_at DATETIME,
       trade_ticket VARCHAR(100),
       execution_result TEXT,
+      entry_method VARCHAR(8) DEFAULT 'market',
+      limit_price DOUBLE DEFAULT NULL,
+      pending_valid_until DATETIME DEFAULT NULL,
+      order_state VARCHAR(12) DEFAULT NULL,
+      pending_ticket VARCHAR(32) DEFAULT NULL,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -631,6 +636,24 @@ export async function initDB() {
       rate_bps INT NOT NULL DEFAULT 1000,
       enabled TINYINT NOT NULL DEFAULT 1,
       UNIQUE KEY uk_plan_period (plan, period)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS pending_orders (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      signal_id INT NOT NULL,
+      symbol VARCHAR(50) NOT NULL,
+      side VARCHAR(4) NOT NULL,
+      pending_type VARCHAR(12) NOT NULL,
+      price DOUBLE NOT NULL,
+      sl DOUBLE DEFAULT NULL,
+      tp DOUBLE DEFAULT NULL,
+      volume DOUBLE NOT NULL,
+      mt5_ticket VARCHAR(32) DEFAULT NULL,
+      state VARCHAR(12) NOT NULL DEFAULT 'pending',
+      valid_until DATETIME DEFAULT NULL,
+      created_at DATETIME DEFAULT (NOW()),
+      resolved_at DATETIME DEFAULT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS ai_signal_schema (

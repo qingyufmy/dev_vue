@@ -1338,6 +1338,42 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = { status: 'success', tickets: map }
         break
       }
+      case 'pending_list': {
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const pendingUserId = hasOwnBridge ? userId : userId
+        let pendingOrders = []
+        try {
+          pendingOrders = await queryAll(
+            'SELECT * FROM pending_orders WHERE user_id = ? AND state = ? ORDER BY created_at DESC',
+            [pendingUserId, 'pending']
+          )
+        } catch (e) {
+          console.error('[BridgeWS] pending_list error:', e.message)
+        }
+        result = { status: 'success', orders: pendingOrders }
+        break
+      }
+      case 'cancel_pending': {
+        const ticket = params.ticket
+        if (!ticket) return reply({ status: 'error', message: 'ticket required' })
+        try {
+          const order = await queryOne('SELECT * FROM pending_orders WHERE mt5_ticket = ? AND user_id = ? AND state = ?', [ticket, userId, 'pending'])
+          if (!order) {
+            result = { status: 'error', message: '挂单不存在或已处理' }
+            break
+          }
+          // Try to cancel on MT5
+          const cancelResult = await ai.mt5Bridge(userId, 'cancel', { ticket }, options)
+          // Update DB state
+          await queryRun("UPDATE pending_orders SET state = 'cancelled', resolved_at = NOW() WHERE mt5_ticket = ? AND user_id = ?", [ticket, userId])
+          await queryRun("UPDATE ai_signals SET order_state = 'cancelled' WHERE id = ? AND user_id = ?", [order.signal_id, userId])
+          result = { status: 'success', message: '挂单已取消', cancelResult }
+        } catch (e) {
+          console.error('[BridgeWS] cancel_pending error:', e.message)
+          result = { status: 'error', message: '取消挂单失败: ' + e.message }
+        }
+        break
+      }
       case 'export_history': {
         // Admin-only: export all history + reasoning as structured data
         const adminUser = user

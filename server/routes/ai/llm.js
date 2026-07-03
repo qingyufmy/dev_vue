@@ -142,6 +142,28 @@ export function normalizeAiSignal(parsed, config, market) {
   let signalType = String(parsed.signal_type || 'hold').toLowerCase()
   if (!['buy', 'sell', 'hold'].includes(signalType)) signalType = 'hold'
 
+  // Entry method handling
+  let entryMethod = String(parsed.entry_method || 'market').toLowerCase()
+  if (!['market', 'limit', 'stop', 'stop_limit', 'observe'].includes(entryMethod)) entryMethod = 'market'
+  if (signalType === 'hold') entryMethod = 'observe'
+  if (entryMethod === 'observe') { signalType = 'hold'; }
+
+  // Limit price validation
+  let limitPrice = parsed.limit_price ? parseFloat(parsed.limit_price) : null
+  if (entryMethod === 'limit' || entryMethod === 'stop' || entryMethod === 'stop_limit') {
+    if (!limitPrice || !Number.isFinite(limitPrice) || limitPrice <= 0) {
+      console.log(`[LLM] Invalid limit_price for ${entryMethod}, falling back to market`)
+      entryMethod = 'market'
+      limitPrice = null
+    }
+  }
+
+  // Pending validity
+  let pendingValidMinutes = parseInt(parsed.pending_valid_minutes) || 240
+  const pendingValidUntil = entryMethod !== 'market' && entryMethod !== 'observe'
+    ? new Date(Date.now() + pendingValidMinutes * 60000).toISOString().replace('T', ' ').substring(0, 19)
+    : null
+
   const riskLevel = (config || {}).risk_level || 'medium'
   const RISK_TABLE = {
     low:    { minConfidence: 0.60, volumeMultiplier: 0.5, slAtrMult: 2.0, tp1AtrMult: 1.5, tp2AtrMult: 2.5, tp3AtrMult: 4.0 },
@@ -204,6 +226,11 @@ export function normalizeAiSignal(parsed, config, market) {
       }
     }
   }
+
+  // Attach pending order fields
+  parsed.entry_method = entryMethod
+  parsed.limit_price = limitPrice
+  parsed.pending_valid_until = pendingValidUntil
 
   return parsed
 }
