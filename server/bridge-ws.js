@@ -627,8 +627,8 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'open': {
         // Check trade send enabled
         const openBridge = bridges.get(userId)
-        if (openBridge && openBridge.tradeEnabled === false) {
-          result = { status: 'rejected', message: '交易发送已关闭，请先开启', details: {} }
+        if (!openBridge || openBridge.ws?.readyState !== 1 || openBridge.tradeEnabled === false) {
+          result = { status: 'rejected', message: !openBridge || openBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
           await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, 'rejected')
           break
         }
@@ -643,10 +643,19 @@ async function handleBrowserCommand(ws, userId, msg) {
             'stop_limit': orderType === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
           }
           const pendingType = pendingTypeMap[entryMethod] || entryMethod
-          // Calculate expiration as MT5 time (UTC+3) Unix timestamp (seconds)
-          const validMinutes = params.pending_valid_minutes || params.pending_valid_until || 240
-          const nowMt5 = Math.floor(Date.now() / 1000) + 10800  // UTC+3
-          const expiration = nowMt5 + Number(validMinutes) * 60
+          // pending_valid_until / pending_valid_minutes → MT5 expiration (Unix ts)
+          let expiration = 0
+          if (params.pending_valid_until) {
+            const expDate = new Date(params.pending_valid_until.replace(' ', 'T') + 'Z')
+            if (!isNaN(expDate.getTime())) {
+              expiration = Math.floor(expDate.getTime() / 1000) + 10800  // UTC → UTC+3
+            }
+          }
+          if (!expiration) {
+            const validMinutes = params.pending_valid_minutes || 240
+            const nowMt5 = Math.floor(Date.now() / 1000) + 10800
+            expiration = nowMt5 + Number(validMinutes) * 60
+          }
           const pendingParams = {
             symbol: params.symbol,
             order_type: pendingType,
@@ -665,8 +674,8 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'close': {
         const clBridge = bridges.get(userId)
-        if (clBridge && clBridge.tradeEnabled === false) {
-          result = { status: 'rejected', message: '交易发送已关闭，请先开启', details: {} }
+        if (!clBridge || clBridge.ws?.readyState !== 1 || clBridge.tradeEnabled === false) {
+          result = { status: 'rejected', message: !clBridge || clBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
           await ai.insertAudit(null, userId, 'manual_close', null, params, result, 'rejected')
           break
         }
@@ -997,8 +1006,8 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'execute': {
         // Check trade send enabled
         const exBridge = bridges.get(userId)
-        if (exBridge && exBridge.tradeEnabled === false) {
-          result = { status: 'rejected', message: '交易发送已关闭，请先开启', details: {} }
+        if (!exBridge || exBridge.ws?.readyState !== 1 || exBridge.tradeEnabled === false) {
+          result = { status: 'rejected', message: !exBridge || exBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
           await ai.insertAudit(null, userId, 'ai_execute', null, params, result, 'rejected')
           break
         }
@@ -1039,9 +1048,18 @@ async function handleBrowserCommand(ws, userId, msg) {
             'stop_limit': orderPayload.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
           }
           const pendingType = pendingTypeMap[orderPayload.entry_method] || orderPayload.entry_method
-          const validMinutes = orderPayload.pending_valid_until || 240
-          const nowMt5 = Math.floor(Date.now() / 1000) + 10800
-          const expiration = nowMt5 + Number(validMinutes) * 60
+          // pending_valid_until is a datetime string, convert to MT5 expiration (Unix ts)
+          let expiration = 0
+          if (orderPayload.pending_valid_until) {
+            const expDate = new Date(orderPayload.pending_valid_until.replace(' ', 'T') + 'Z')
+            if (!isNaN(expDate.getTime())) {
+              expiration = Math.floor(expDate.getTime() / 1000) + 10800  // UTC → UTC+3
+            }
+          }
+          if (!expiration) {
+            const nowMt5 = Math.floor(Date.now() / 1000) + 10800
+            expiration = nowMt5 + 240 * 60  // fallback 4h
+          }
           const pendingParams = {
             symbol: orderPayload.symbol,
             order_type: pendingType,

@@ -1307,9 +1307,18 @@ async function executeOrder(userId, config, request, action, options = {}) {
         'stop_limit': request.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
       }
       const pendingType = pendingTypeMap[request.entry_method] || request.entry_method
-      const validMinutes = request.pending_valid_until || 240
-      const nowMt5 = Math.floor(Date.now() / 1000) + 10800
-      const expiration = nowMt5 + Number(validMinutes) * 60
+      // pending_valid_until is a datetime string, convert to MT5 expiration (Unix ts)
+      let expiration = 0
+      if (request.pending_valid_until) {
+        const expDate = new Date(request.pending_valid_until.replace(' ', 'T') + 'Z')
+        if (!isNaN(expDate.getTime())) {
+          expiration = Math.floor(expDate.getTime() / 1000) + 10800  // UTC → UTC+3
+        }
+      }
+      if (!expiration) {
+        const nowMt5 = Math.floor(Date.now() / 1000) + 10800
+        expiration = nowMt5 + 240 * 60  // fallback 4h
+      }
       const pendingParams = {
         symbol: request.symbol,
         order_type: pendingType,
