@@ -3260,12 +3260,15 @@ function renderPendingOrders(orders) {
     };
     const validUntil = parseDate(o.valid_until);
     const createdAt = parseDate(o.created_at);
+    const quote = state.lastQuote;
+    const currentPrice = (quote && quote.symbol === o.symbol) ? (o.side === "buy" ? quote.ask : quote.bid) : "--";
+    const priceDiff = currentPrice !== "--" ? ((currentPrice - o.price) / o.price * 100).toFixed(2) : "--";
     return `<tr>
       <td class="num">${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}</td>
       <td>${escapeHtml(o.symbol)}</td>
-      <td>${o.side === "buy" ? "买入" : "卖出"}</td>
       <td>${typeLabels[o.pending_type] || o.pending_type || "--"}</td>
       <td class="num">${Number(o.price).toFixed(2)}</td>
+      <td class="num">${currentPrice !== "--" ? Number(currentPrice).toFixed(2) : "--"} <small class="${Number(priceDiff) >= 0 ? "text-green" : "text-red"}">(${priceDiff}%)</small></td>
       <td class="num">${Number(o.volume).toFixed(2)}</td>
       <td class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
       <td class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
