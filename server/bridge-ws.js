@@ -636,6 +636,10 @@ async function handleBrowserCommand(ws, userId, msg) {
             'stop_limit': orderType === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
           }
           const pendingType = pendingTypeMap[entryMethod] || entryMethod
+          // Calculate expiration from pending_valid_minutes
+          const validMinutes = params.pending_valid_minutes || params.pending_valid_until || 240
+          const expirationDate = new Date(Date.now() + Number(validMinutes) * 60000)
+          const expiration = expirationDate.toISOString().replace('T', ' ').substring(0, 19)
           const pendingParams = {
             symbol: params.symbol,
             order_type: pendingType,
@@ -643,7 +647,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             volume: params.volume,
             sl: params.sl,
             tp: params.tp,
-            expiration: params.pending_valid_until || null,
+            expiration: expiration,
           }
           result = await ai.mt5Bridge(userId, 'pending', pendingParams)
         } else {
