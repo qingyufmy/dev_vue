@@ -1340,17 +1340,19 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'pending_list': {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const pendingUserId = hasOwnBridge ? userId : userId
-        let pendingOrders = []
+        if (!hasOwnBridge) {
+          result = { status: 'error', message: '请先连接 MT5 桥接' }
+          break
+        }
         try {
-          pendingOrders = await queryAll(
-            'SELECT * FROM pending_orders WHERE user_id = ? AND state = ? ORDER BY created_at DESC',
-            [pendingUserId, 'pending']
-          )
+          const bridge = bridges.get(userId)
+          const symbol = params.symbol ? params.symbol : null
+          const listResult = await ai.mt5Bridge(userId, 'pending_list', { symbol })
+          result = listResult
         } catch (e) {
           console.error('[BridgeWS] pending_list error:', e.message)
+          result = { status: 'error', message: '获取挂单列表失败: ' + e.message }
         }
-        result = { status: 'success', orders: pendingOrders }
         break
       }
       case 'cancel_pending': {

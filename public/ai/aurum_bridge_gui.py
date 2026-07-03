@@ -990,19 +990,38 @@ class BridgeWorker(QThread):
                 orders = self.mt5.orders_get(symbol=symbol) if symbol else self.mt5.orders_get()
                 if orders is None:
                     return {"status": "success", "orders": []}
+
+                type_map = {
+                    self.mt5.ORDER_TYPE_BUY_LIMIT: "buy_limit",
+                    self.mt5.ORDER_TYPE_SELL_LIMIT: "sell_limit",
+                    self.mt5.ORDER_TYPE_BUY_STOP: "buy_stop",
+                    self.mt5.ORDER_TYPE_SELL_STOP: "sell_stop",
+                    self.mt5.ORDER_TYPE_BUY_STOP_LIMIT: "buy_stop_limit",
+                    self.mt5.ORDER_TYPE_SELL_STOP_LIMIT: "sell_stop_limit",
+                }
+                side_map = {
+                    self.mt5.ORDER_TYPE_BUY_LIMIT: "buy",
+                    self.mt5.ORDER_TYPE_SELL_LIMIT: "sell",
+                    self.mt5.ORDER_TYPE_BUY_STOP: "buy",
+                    self.mt5.ORDER_TYPE_SELL_STOP: "sell",
+                    self.mt5.ORDER_TYPE_BUY_STOP_LIMIT: "buy",
+                    self.mt5.ORDER_TYPE_SELL_STOP_LIMIT: "sell",
+                }
                 result_orders = []
                 for o in orders:
                     result_orders.append({
                         "ticket": o.ticket,
                         "symbol": o.symbol,
-                        "type": o.type,
+                        "side": side_map.get(o.type, "buy"),
+                        "pending_type": type_map.get(o.type, str(o.type)),
+                        "price": o.price_open,
                         "volume": o.volume_current,
-                        "price_open": o.price_open,
                         "sl": o.sl,
                         "tp": o.tp,
                         "comment": o.comment,
-                        "time_setup": str(o.time_setup) if o.time_setup else None,
-                        "time_expiration": str(o.time_expiration) if o.time_expiration else None,
+                        "valid_until": str(o.time_expiration) if o.time_expiration else None,
+                        "created_at": str(o.time_setup) if o.time_setup else None,
+                        "mt5_ticket": str(o.ticket),
                     })
                 return {"status": "success", "orders": result_orders}
 

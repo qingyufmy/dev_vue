@@ -3249,19 +3249,20 @@ function renderPendingOrders(orders) {
   const typeLabels = { buy_limit: "买入限价", sell_limit: "卖出限价", buy_stop: "买入止损", sell_stop: "卖出止损", buy_stop_limit: "买入止损限价", sell_stop_limit: "卖出止损限价" };
   const stateLabels = { pending: "等待中", filled: "已成交", expired: "已过期", cancelled: "已取消", superseded: "已取代" };
   tbody.innerHTML = orders.map((o) => {
-    const isPending = o.state === "pending";
+    const state = o.state || "pending";
+    const isPending = state === "pending";
     return `<tr>
-      <td class="num">${escapeHtml(String(o.mt5_ticket || o.id))}</td>
+      <td class="num">${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}</td>
       <td>${escapeHtml(o.symbol)}</td>
       <td>${o.side === "buy" ? "买入" : "卖出"}</td>
-      <td>${typeLabels[o.pending_type] || o.pending_type}</td>
+      <td>${typeLabels[o.pending_type] || o.pending_type || "--"}</td>
       <td class="num">${Number(o.price).toFixed(2)}</td>
       <td class="num">${Number(o.volume).toFixed(2)}</td>
       <td class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
       <td class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
-      <td>${o.valid_until ? new Date(o.valid_until).toLocaleString("zh-CN") : "--"}</td>
-      <td><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[o.state] || o.state}</span></td>
-      <td>${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.id))}')">撤单</button>` : ""}</td>
+      <td>${o.valid_until && o.valid_until !== "None" ? new Date(o.valid_until).toLocaleString("zh-CN") : "--"}</td>
+      <td><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[state] || state}</span></td>
+      <td>${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>` : ""}</td>
     </tr>`;
   }).join("");
 }
