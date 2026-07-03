@@ -938,22 +938,8 @@ class BridgeWorker(QThread):
                 ot = ot_map[dir_str]
                 fill = self._get_filling_mode(symbol)
 
-                # Parse expiration — MT5 expects datetime in terminal timezone
-                expiration = None
-                exp_str = params.get("expiration")
-                if exp_str:
-                    try:
-                        from datetime import timedelta
-                        # Server is UTC+8, MT5 terminal is UTC+3, offset = -5h
-                        if isinstance(exp_str, str):
-                            server_dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-                            expiration = server_dt - timedelta(hours=5)
-                        elif isinstance(exp_str, (int, float)):
-                            expiration = datetime.fromtimestamp(int(exp_str))
-                    except: pass
-
-                # Set type_time: ORDER_TIME_SPECIFIED if expiration, else GTC
-                type_time = self.mt5.ORDER_TIME_SPECIFIED if expiration else self.mt5.ORDER_TIME_GTC
+                # Pending orders use GTC (Good till Cancel) — broker doesn't support ORDER_TIME_SPECIFIED
+                type_time = self.mt5.ORDER_TIME_GTC
 
                 req = {
                     "action": self.mt5.TRADE_ACTION_PENDING,
@@ -963,8 +949,6 @@ class BridgeWorker(QThread):
                     "type_filling": self.mt5.ORDER_FILLING_FOK,
                     "type_time": type_time,
                 }
-                if expiration:
-                    req["expiration"] = expiration
                 if sl: req["sl"] = sl
                 if tp: req["tp"] = tp
 
