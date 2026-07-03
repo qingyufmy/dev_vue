@@ -938,7 +938,7 @@ class BridgeWorker(QThread):
                 ot = ot_map[dir_str]
                 fill = self._get_filling_mode(symbol)
 
-                # Parse expiration — MT5 expects integer timestamp
+                # Parse expiration — MT5 expects integer timestamp in terminal timezone
                 expiration = None
                 exp_str = params.get("expiration")
                 if exp_str:
@@ -947,7 +947,11 @@ class BridgeWorker(QThread):
                             expiration = int(exp_str)
                         elif isinstance(exp_str, str):
                             dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-                            expiration = int(dt.timestamp())
+                            # Convert from server timezone (UTC+8) to MT5 timezone (UTC+3)
+                            # Subtract 5 hours
+                            from datetime import timedelta
+                            mt5_dt = dt - timedelta(hours=5)
+                            expiration = int(mt5_dt.timestamp())
                     except: pass
 
                 # Set type_time: ORDER_TIME_SPECIFIED if expiration, else GTC
