@@ -422,6 +422,8 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
 
 export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck = null) {
   const sym = String(symbol).toUpperCase().trim()
+  // Strip broker suffixes for matching: XAUUSD.s -> XAUUSD
+  const symBase = sym.replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '')
   // LIKE is a pre-filter to reduce candidate rows; final matching is done by JS JSON.parse below.
   const rows = await queryAll(
     `SELECT s.user_id, s.symbols, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
@@ -435,7 +437,10 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   const filtered = rows.filter(r => {
     let userSymbols = []
     try { userSymbols = JSON.parse(r.symbols || '[]') } catch {}
-    return userSymbols.map(s => String(s).toUpperCase().trim()).includes(sym)
+    return userSymbols.some(s => {
+      const sNorm = String(s).toUpperCase().trim()
+      return sNorm === sym || sNorm.replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '') === symBase
+    })
   })
   // Filter by bridge alive if check function provided
   if (typeof bridgeAliveCheck === 'function') {

@@ -15,8 +15,13 @@ import crypto from 'crypto'
 export const autoSchedulerState = {}
 export const closeSchedulerState = {}
 
+function normalizeSymbolForScheduler(sym) {
+  // Strip broker suffixes: .s/.c/.pro/.std/.z/.ecn/m so XAUUSD.s -> XAUUSD
+  return String(sym).toUpperCase().replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '')
+}
+
 function buildSchedulerKey(promptTypeId, symbol) {
-  return `${promptTypeId}:${symbol}`
+  return `${promptTypeId}:${normalizeSymbolForScheduler(symbol)}`
 }
 
 // === Redis Subscription Keys ===
@@ -445,8 +450,8 @@ export async function reconcileAutoSchedulers() {
     for (const row of rows) {
       let userSymbols = parsePromptSymbols(row.user_symbols || '[]')
       let strategySymbols = parsePromptSymbols(row.symbols_json || '[]')
-      // Intersect user selection with strategy support (both normalized)
-      const validSymbols = userSymbols.filter(s => strategySymbols.includes(s))
+      // Intersect user selection with strategy support (normalize suffixes for matching)
+      const validSymbols = userSymbols.filter(s => strategySymbols.some(ss => ss === s || normalizeSymbolForScheduler(ss) === normalizeSymbolForScheduler(s)))
       for (const sym of validSymbols) {
         const k = buildSchedulerKey(row.prompt_type_id, sym)
         neededKeys.add(k)
