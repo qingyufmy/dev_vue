@@ -949,20 +949,21 @@ class BridgeWorker(QThread):
                             expiration = datetime.fromtimestamp(exp_str)
                     except: pass
 
+                # Set type_time: ORDER_TIME_SPECIFIED if expiration, else GTC
+                type_time = self.mt5.ORDER_TIME_SPECIFIED if expiration else self.mt5.ORDER_TIME_GTC
+
                 req = {
                     "action": self.mt5.TRADE_ACTION_PENDING,
                     "symbol": symbol, "volume": volume, "type": ot,
                     "price": price, "magic": 234000,
                     "comment": params.get("comment", "AI挂单"),
-                    "type_filling": fill,
-                    "type_time": self.mt5.ORDER_TIME_GTC,
+                    "type_filling": self.mt5.ORDER_FILLING_FOK,
+                    "type_time": type_time,
                 }
-                if sl: req["sl"] = sl
-                if tp: req["tp"] = tp
                 if expiration:
                     req["expiration"] = expiration
-                    req["type_time"] = self.mt5.ORDER_TIME_SPECIFIED
-                    self.log_signal.emit(f"[Pending] expiration={expiration} type_time=ORDER_TIME_SPECIFIED")
+                if sl: req["sl"] = sl
+                if tp: req["tp"] = tp
 
                 self.log_signal.emit(f"[Pending] req={req}")
                 result = self.mt5.order_send(req)
