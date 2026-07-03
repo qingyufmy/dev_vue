@@ -1,7 +1,7 @@
 // ai/scheduler.js — 统一自动调度 + 智能平仓
 
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
-import { getOwnBridgeTradeMode, getOwnBridgeMarketState, isBridgeAlive, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
+import { getOwnBridgeTradeMode, getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols } from './config.js'
@@ -1271,6 +1271,12 @@ async function runSmartClose(userId, closeConfig, account, positions) {
 }
 
 async function executeOrder(userId, config, request, action, options = {}) {
+  // Defense: block if trade send is disabled
+  if (!isTradeEnabled(userId)) {
+    const result = { status: 'rejected', message: '交易发送已关闭，请先开启' }
+    await insertAudit(null, userId, action, request.symbol, request, result, 'rejected')
+    return result
+  }
   let accountResult, positionsResult, quote
   accountResult = await mt5Bridge(userId, 'account', {}, options)
   positionsResult = await mt5Bridge(userId, 'positions', {}, options)

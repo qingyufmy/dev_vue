@@ -159,13 +159,12 @@ export function normalizeAiSignal(parsed, config, market) {
   if (signalType === 'hold') entryMethod = 'observe'
   if (entryMethod === 'observe') { signalType = 'hold'; }
 
-  // Limit price validation
+  // Limit price validation — reject signal if pending order has no valid price
   let limitPrice = parsed.limit_price ? parseFloat(parsed.limit_price) : null
   if (entryMethod === 'limit' || entryMethod === 'stop' || entryMethod === 'stop_limit') {
     if (!limitPrice || !Number.isFinite(limitPrice) || limitPrice <= 0) {
-      console.log(`[LLM] Invalid limit_price for ${entryMethod}, falling back to market`)
-      entryMethod = 'market'
-      limitPrice = null
+      console.log(`[LLM] Missing/invalid limit_price for ${entryMethod}, rejecting signal (not falling back to market)`)
+      return { signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_minutes: 0, pending_valid_until: null }
     }
   }
 
