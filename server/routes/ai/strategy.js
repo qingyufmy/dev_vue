@@ -18,7 +18,7 @@ export async function buildStrategyContext(userId, symbol, account, positions, p
       const resp = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count })
       rates = (resp && resp.rates) ? resp.rates : []
     }
-    const summary = calculateMarketData(symbol, tf, rates, account, positions)
+    const summary = calculateMarketData(symbol, tf, rates, account, positions, { computeChan: false })
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
     timeframes[tf] = { summary: slimSummary, klines: compactRates(rates) }
   }
@@ -36,6 +36,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     const count = STRATEGY_TIMEFRAME_COUNTS[tf] || 100
     tags = [{ tf, count }]
   }
+  const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
   const timeframes = {}
   for (const { tf, count } of tags) {
     let rates
@@ -46,7 +47,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
       rates = (resp && resp.rates) ? resp.rates : []
     }
     if (rates.length === 0) continue
-    const summary = calculateMarketData(symbol, tf, rates, account, positions)
+    const summary = calculateMarketData(symbol, tf, rates, account, positions, { computeChan: hasUseChanTag })
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
     timeframes[tf] = { summary: slimSummary, klines: compactRates(rates) }
   }
@@ -125,7 +126,8 @@ export async function handleAnalyze(userId, params) {
   const rates = ratesResp.rates || []
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
-  const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
+  const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
+  const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { computeChan: hasUseChanTag })
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
   const signal = await maybeAiSignal(null, config, market)
   market.inference_source = signal._inference_source || 'unknown'

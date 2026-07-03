@@ -425,7 +425,7 @@ export async function executeViaBridge(userId, action, params, timeoutMs = 10000
   return sendBridgeCommand(userId, action, params, timeoutMs, options)
 }
 
-export function calculateMarketData(symbol, timeframe, rates, account, positions) {
+export function calculateMarketData(symbol, timeframe, rates, account, positions, options = {}) {
   const closes = rates.map(r => parseFloat(r.close))
   const highs = rates.map(r => parseFloat(r.high))
   const lows = rates.map(r => parseFloat(r.low))
@@ -533,7 +533,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const shortPositions = positions.filter(p => p.type === 'sell')
   const totalProfit = positions.reduce((sum, p) => sum + parseFloat(p.profit || 0), 0)
 
-  const chan = computeChan(rates, timeframe, macdSeries.histSeries)
+  const chan = options.computeChan ? computeChan(rates, timeframe, macdSeries.histSeries) : undefined
 
   return {
     symbol, timeframe,
