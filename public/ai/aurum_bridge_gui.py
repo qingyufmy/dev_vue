@@ -945,7 +945,7 @@ class BridgeWorker(QThread):
                     try:
                         if isinstance(exp_str, str):
                             expiration = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-                        else:
+                        elif isinstance(exp_str, (int, float)):
                             expiration = datetime.fromtimestamp(exp_str)
                     except: pass
 
