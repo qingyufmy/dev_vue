@@ -966,6 +966,7 @@ class BridgeWorker(QThread):
 
                 self.log_signal.emit(f"[Pending] req={req}")
                 result = self.mt5.order_send(req)
+                self.log_signal.emit(f"[Pending] retcode={result.retcode if result else 'None'} comment={result.comment if result else 'None'} order={result.order if result else 'None'}")
                 if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                     return {"status": "success", "order": result.order, "price": result.price}
                 return {"status": "error", "message": result.comment if result else "pending order failed"}
