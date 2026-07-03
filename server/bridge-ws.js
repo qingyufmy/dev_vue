@@ -640,7 +640,6 @@ async function handleBrowserCommand(ws, userId, msg) {
           const validMinutes = params.pending_valid_minutes || params.pending_valid_until || 240
           const nowMt5 = Math.floor(Date.now() / 1000) + 10800  // UTC+3
           const expiration = nowMt5 + Number(validMinutes) * 60
-          console.log(`[BridgeWS] pending expiration: validMinutes=${validMinutes} nowMt5=${nowMt5} expiration=${expiration} diff=${expiration - nowMt5}s`)
           const pendingParams = {
             symbol: params.symbol,
             order_type: pendingType,

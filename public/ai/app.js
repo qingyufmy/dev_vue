@@ -662,6 +662,34 @@ function toast(message, type = "info") {
   setTimeout(() => node.remove(), 3600);
 }
 
+function showConfirm(title, message, { confirmText = "确认", cancelText = "取消", danger = false } = {}) {
+  return new Promise((resolve) => {
+    const modal = $("genericConfirmModal");
+    if (!modal) { resolve(false); return; }
+    $("genericConfirmTitle").textContent = title;
+    $("genericConfirmBody").innerHTML = `<div>${escapeHtml(message)}</div>`;
+    const okBtn = $("genericConfirmOk");
+    const cancelBtn = $("genericConfirmCancel");
+    okBtn.textContent = confirmText;
+    cancelBtn.textContent = cancelText;
+    okBtn.className = danger ? "btn btn-danger" : "btn btn-primary";
+    modal.classList.remove("hidden");
+    const cleanup = (val) => {
+      modal.classList.add("hidden");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      modal.removeEventListener("click", onBg);
+      resolve(val);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBg = (e) => { if (e.target === modal) cleanup(false); };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    modal.addEventListener("click", onBg);
+  });
+}
+
 function showLoading(container, text = "加载中...", size = "lg") {
   if (!container) return;
   container.innerHTML = `<div class="loading-state ${size === 'lg' ? 'loading-state-lg' : ''}"><div class="loading-spinner ${size === 'sm' ? 'loading-spinner-sm' : ''}"></div><div class="loading-text">${escapeHtml(text)}</div></div>`;
@@ -1366,7 +1394,6 @@ async function bootstrap() {
     // Connect WebSocket FIRST — all data flows through it (with 10s timeout)
     await new Promise((resolve) => {
       const timer = setTimeout(() => {
-        console.warn('WebSocket connection timeout, continuing anyway');
         resolve();
       }, 10000);
       connectBridgeStatusWs(() => {
@@ -1537,6 +1564,9 @@ async function handleTradeModeClick() {
     return;
   }
 
+  // Turning OFF requires confirmation
+  if (currentlyEnabled && !await showConfirm("关闭交易发送", "确认关闭交易发送？关闭后将停止向 MT5 发送交易指令。", { confirmText: "关闭", danger: true })) return;
+
   try {
     const result = await wsApi("toggle_trade", { enable: !currentlyEnabled });
     toast(currentlyEnabled ? "交易发送已关闭" : "交易发送已开启", "success");
@@ -1552,6 +1582,8 @@ async function handleAutoToggle() {
   if (_autoToggleLock) return;
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   if (!state.isAdmin && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
+  // Turning OFF requires confirmation
+  if (state.autoEnabled && !await showConfirm("关闭自动推理", "确认关闭自动推理？关闭后将停止自动 AI 分析和信号推送。", { confirmText: "关闭", danger: true })) return;
   _autoToggleLock = true;
   try {
     const result = await wsApi('toggle_auto');
@@ -3103,7 +3135,7 @@ async function executeSignal() {
     return;
   }
   const dir = signalType(state.selectedSignal.signal_type).toUpperCase();
-  const ok = window.confirm(`复核执行 AI 信号 #${state.selectedSignal.id}（${state.selectedSignal.symbol} ${dir}）？后台会重取报价并检查有效期。`);
+  const ok = await showConfirm("复核执行信号", `复核执行 AI 信号 #${state.selectedSignal.id}（${state.selectedSignal.symbol} ${dir}）？后台会重取报价并检查有效期。`, { confirmText: "确认执行" });
   if (!ok) return;
 
   try {
@@ -3315,7 +3347,6 @@ function validatePendingPrice() {
 async function loadPendingOrders() {
   try {
     const data = await wsApi("pending_list", {});
-    console.log("[PendingOrders] raw:", JSON.stringify(data.orders || []));
     const orders = data.orders || [];
     renderPendingOrders(orders);
   } catch (e) {
@@ -3387,7 +3418,7 @@ async function navigateToSignalByTicket(ticket) {
 }
 
 async function cancelPendingOrder(ticket) {
-  if (!window.confirm(`确认取消挂单 ${ticket}？`)) return;
+  if (!await showConfirm("取消挂单", `确认取消挂单 ${ticket}？`, { confirmText: "取消挂单", danger: true })) return;
   try {
     const result = await wsApi("cancel_pending", { ticket });
     toast(result.message || "操作完成", result.status === "success" ? "success" : "warning");
@@ -3482,7 +3513,7 @@ async function submitManualOrder() {
 }
 
 async function closePosition(ticket) {
-  if (!window.confirm(`复核平仓 ticket ${ticket}？`)) return;
+  if (!await showConfirm("复核平仓", `复核平仓 ticket ${ticket}？`, { confirmText: "确认平仓", danger: true })) return;
   try {
     const result = await wsApi("close", { ticket: Number(ticket), confirm: true });
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");

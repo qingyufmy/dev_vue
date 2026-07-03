@@ -646,6 +646,17 @@ button {
   border-color: var(--color-positive);
 }
 
+.btn-danger {
+  color: var(--text-inverse);
+  background: var(--status-danger);
+  border-color: var(--status-danger);
+}
+
+.btn-danger:hover {
+  color: var(--text-inverse);
+  background: #dc2626;
+}
+
 .btn-buy {
   color: #fff;
   background: linear-gradient(180deg, #ef4444, #b91c1c);
