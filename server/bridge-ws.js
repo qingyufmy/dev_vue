@@ -1359,16 +1359,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const ticket = params.ticket
         if (!ticket) return reply({ status: 'error', message: 'ticket required' })
         try {
-          const order = await queryOne('SELECT * FROM pending_orders WHERE mt5_ticket = ? AND user_id = ? AND state = ?', [ticket, userId, 'pending'])
-          if (!order) {
-            result = { status: 'error', message: '挂单不存在或已处理' }
-            break
-          }
-          // Try to cancel on MT5
-          const cancelResult = await ai.mt5Bridge(userId, 'cancel', { ticket }, options)
-          // Update DB state
-          await queryRun("UPDATE pending_orders SET state = 'cancelled', resolved_at = NOW() WHERE mt5_ticket = ? AND user_id = ?", [ticket, userId])
-          await queryRun("UPDATE ai_signals SET order_state = 'cancelled' WHERE id = ? AND user_id = ?", [order.signal_id, userId])
+          const cancelResult = await ai.mt5Bridge(userId, 'cancel_pending', { ticket }, options)
           result = { status: 'success', message: '挂单已取消', cancelResult }
         } catch (e) {
           console.error('[BridgeWS] cancel_pending error:', e.message)

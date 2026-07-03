@@ -1019,9 +1019,10 @@ class BridgeWorker(QThread):
                         "sl": o.sl,
                         "tp": o.tp,
                         "comment": o.comment,
-                        "valid_until": str(o.time_expiration) if o.time_expiration else None,
+                        "valid_until": str(o.time_expiration) if o.time_expiration and str(o.time_expiration) != "0" else None,
                         "created_at": str(o.time_setup) if o.time_setup else None,
                         "mt5_ticket": str(o.ticket),
+                        "state": "pending",
                     })
                 return {"status": "success", "orders": result_orders}
 

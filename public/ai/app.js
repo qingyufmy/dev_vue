@@ -3251,6 +3251,8 @@ function renderPendingOrders(orders) {
   tbody.innerHTML = orders.map((o) => {
     const state = o.state || "pending";
     const isPending = state === "pending";
+    const validUntil = o.valid_until && o.valid_until !== "0" && o.valid_until !== "None" ? new Date(o.valid_until).toLocaleString("zh-CN") : "永久有效";
+    const createdAt = o.created_at && o.created_at !== "None" ? new Date(o.created_at).toLocaleString("zh-CN") : "--";
     return `<tr>
       <td class="num">${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}</td>
       <td>${escapeHtml(o.symbol)}</td>
@@ -3260,7 +3262,8 @@ function renderPendingOrders(orders) {
       <td class="num">${Number(o.volume).toFixed(2)}</td>
       <td class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
       <td class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
-      <td>${o.valid_until && o.valid_until !== "None" ? new Date(o.valid_until).toLocaleString("zh-CN") : "--"}</td>
+      <td>${createdAt}</td>
+      <td>${validUntil}</td>
       <td><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[state] || state}</span></td>
       <td>${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>` : ""}</td>
     </tr>`;

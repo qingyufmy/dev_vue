@@ -319,45 +319,6 @@ const migrations = [
         console.error('[Migrations] 017 error:', e.message)
       }
     }
-  },
-  {
-    id: '018_pending_orders',
-    up: async () => {
-      try {
-        // Add pending order columns to ai_signals
-        const cols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = 'entry_method'")
-        if (!cols || !cols.length) {
-          await queryRun("ALTER TABLE ai_signals ADD COLUMN entry_method VARCHAR(8) DEFAULT 'market' AFTER execution_result")
-          await queryRun('ALTER TABLE ai_signals ADD COLUMN limit_price DOUBLE DEFAULT NULL AFTER entry_method')
-          await queryRun('ALTER TABLE ai_signals ADD COLUMN pending_valid_until DATETIME DEFAULT NULL AFTER limit_price')
-          await queryRun("ALTER TABLE ai_signals ADD COLUMN order_state VARCHAR(12) DEFAULT NULL AFTER pending_valid_until")
-          await queryRun('ALTER TABLE ai_signals ADD COLUMN pending_ticket VARCHAR(32) DEFAULT NULL AFTER order_state')
-        }
-        // Create pending_orders table
-        const tables = await queryAll("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pending_orders'")
-        if (!tables || !tables.length) {
-          await queryRun(`CREATE TABLE IF NOT EXISTS pending_orders (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            signal_id INT NOT NULL,
-            symbol VARCHAR(50) NOT NULL,
-            side VARCHAR(4) NOT NULL,
-            pending_type VARCHAR(12) NOT NULL,
-            price DOUBLE NOT NULL,
-            sl DOUBLE DEFAULT NULL,
-            tp DOUBLE DEFAULT NULL,
-            volume DOUBLE NOT NULL,
-            mt5_ticket VARCHAR(32) DEFAULT NULL,
-            state VARCHAR(12) NOT NULL DEFAULT 'pending',
-            valid_until DATETIME DEFAULT NULL,
-            created_at DATETIME DEFAULT (NOW()),
-            resolved_at DATETIME DEFAULT NULL
-          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
-        }
-      } catch (e) {
-        console.error('[Migrations] 018 error:', e.message)
-      }
-    }
   }
 ]
 

@@ -637,33 +637,6 @@ export async function initDB() {
       enabled TINYINT NOT NULL DEFAULT 1,
       UNIQUE KEY uk_plan_period (plan, period)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-
-    `CREATE TABLE IF NOT EXISTS pending_orders (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      user_id INT NOT NULL,
-      signal_id INT NOT NULL,
-      symbol VARCHAR(50) NOT NULL,
-      side VARCHAR(4) NOT NULL,
-      pending_type VARCHAR(12) NOT NULL,
-      price DOUBLE NOT NULL,
-      sl DOUBLE DEFAULT NULL,
-      tp DOUBLE DEFAULT NULL,
-      volume DOUBLE NOT NULL,
-      mt5_ticket VARCHAR(32) DEFAULT NULL,
-      state VARCHAR(12) NOT NULL DEFAULT 'pending',
-      valid_until DATETIME DEFAULT NULL,
-      created_at DATETIME DEFAULT (NOW()),
-      resolved_at DATETIME DEFAULT NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-
-    `CREATE TABLE IF NOT EXISTS ai_signal_schema (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      name VARCHAR(50) NOT NULL DEFAULT 'default',
-      schema_json TEXT NOT NULL,
-      is_active TINYINT NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT (NOW()),
-      updated_at DATETIME DEFAULT (NOW())
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ]
 
   for (const sql of tables) {
