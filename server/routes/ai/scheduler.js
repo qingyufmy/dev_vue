@@ -927,8 +927,8 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
 
     // Defense-in-depth: check trade_send_enabled
     const ubSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
-    if (ubSettings && !ubSettings.trade_send_enabled) {
-      l('skipped: trade_send_enabled=0')
+    if (!ubSettings || !ubSettings.trade_send_enabled) {
+      l('skipped: trade_send_enabled=0 (or no row)')
       await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
         ['skipped', signalId, userId])
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
