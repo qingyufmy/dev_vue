@@ -955,10 +955,13 @@ class BridgeWorker(QThread):
                     "price": price, "magic": 234000,
                     "comment": params.get("comment", "AI挂单"),
                     "type_filling": fill,
+                    "type_time": self.mt5.ORDER_TIME_GTC,
                 }
                 if sl: req["sl"] = sl
                 if tp: req["tp"] = tp
-                if expiration: req["expiration"] = expiration
+                if expiration:
+                    req["expiration"] = expiration
+                    req["type_time"] = self.mt5.ORDER_TIME_SPECIFIED
 
                 result = self.mt5.order_send(req)
                 if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
@@ -978,7 +981,7 @@ class BridgeWorker(QThread):
                     self.log_signal.emit(f"[CancelPending] Order {ticket} not found, might be filled/cancelled")
                     return {"status": "error", "message": f"挂单 {ticket} 已不存在（可能已成交或已取消）"}
 
-                self.log_signal.emit(f"[CancelPending] Found order: {orders[0].ticket} {orders[0].symbol} {orders[0].type_name}")
+                self.log_signal.emit(f"[CancelPending] Found order: {orders[0].ticket} {orders[0].symbol} type={orders[0].type}")
 
                 # Cancel using TRADE_ACTION_REMOVE
                 req = {
