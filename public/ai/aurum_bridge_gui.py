@@ -909,6 +909,103 @@ class BridgeWorker(QThread):
             elif action == "set_quote_symbol":
                 self._resolved_symbol = self._resolve_symbol(params.get("symbol", "XAUUSD"))
                 return {"status": "success", "symbol": self._resolved_symbol}
+
+            elif action == "pending":
+                symbol = self._resolve_symbol(params.get("symbol"))
+                self.mt5.symbol_select(symbol, True)
+                info = self.mt5.symbol_info(symbol)
+                if not info: return {"status": "error", "message": f"Symbol not available: {symbol}"}
+
+                dir_str = (params.get("type") or params.get("order_type") or "").strip().lower()
+                price = float(params["price"]) if params.get("price") else None
+                volume = float(params.get("lot") or params.get("volume") or 0.01)
+                sl = float(params["sl"]) if params.get("sl") else None
+                tp = float(params["tp"]) if params.get("tp") else None
+
+                if not price: return {"status": "error", "message": "price is required for pending order"}
+                if dir_str not in ("buy_limit", "sell_limit", "buy_stop", "sell_stop", "buy_stop_limit", "sell_stop_limit"):
+                    return {"status": "error", "message": f"Invalid pending type: {dir_str}"}
+
+                ot_map = {
+                    "buy_limit": self.mt5.ORDER_TYPE_BUY_LIMIT,
+                    "sell_limit": self.mt5.ORDER_TYPE_SELL_LIMIT,
+                    "buy_stop": self.mt5.ORDER_TYPE_BUY_STOP,
+                    "sell_stop": self.mt5.ORDER_TYPE_SELL_STOP,
+                    "buy_stop_limit": self.mt5.ORDER_TYPE_BUY_STOP_LIMIT,
+                    "sell_stop_limit": self.mt5.ORDER_TYPE_SELL_STOP_LIMIT,
+                }
+                ot = ot_map[dir_str]
+                fill = self._get_filling_mode(symbol)
+
+                # Parse expiration
+                expiration = None
+                exp_str = params.get("expiration")
+                if exp_str:
+                    try:
+                        from datetime import datetime
+                        if isinstance(exp_str, str):
+                            expiration = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
+                        else:
+                            expiration = datetime.fromtimestamp(exp_str)
+                    except: pass
+
+                req = {
+                    "action": self.mt5.TRADE_ACTION_PENDING,
+                    "symbol": symbol, "volume": volume, "type": ot,
+                    "price": price, "magic": 234000,
+                    "comment": params.get("comment", "AI挂单"),
+                    "type_filling": fill,
+                }
+                if sl: req["sl"] = sl
+                if tp: req["tp"] = tp
+                if expiration: req["expiration"] = expiration
+
+                result = self.mt5.order_send(req)
+                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                    return {"status": "success", "order": result.order, "price": result.price}
+                return {"status": "error", "message": result.comment if result else "pending order failed"}
+
+            elif action == "cancel_pending":
+                ticket = params.get("ticket")
+                if not ticket: return {"status": "error", "message": "ticket is required"}
+
+                # Try to find the pending order
+                orders = self.mt5.orders_get(ticket=ticket)
+                if not orders or len(orders) == 0:
+                    return {"status": "error", "message": f"Pending order {ticket} not found"}
+
+                order = orders[0]
+                req = {
+                    "action": self.mt5.TRADE_ACTION_REMOVE,
+                    "order": ticket,
+                    "symbol": order.symbol,
+                }
+                result = self.mt5.order_send(req)
+                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                    return {"status": "success", "ticket": ticket}
+                return {"status": "error", "message": result.comment if result else "cancel failed"}
+
+            elif action == "pending_list":
+                symbol = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
+                orders = self.mt5.orders_get(symbol=symbol) if symbol else self.mt5.orders_get()
+                if orders is None:
+                    return {"status": "success", "orders": []}
+                result_orders = []
+                for o in orders:
+                    result_orders.append({
+                        "ticket": o.ticket,
+                        "symbol": o.symbol,
+                        "type": o.type,
+                        "volume": o.volume_current,
+                        "price_open": o.price_open,
+                        "sl": o.sl,
+                        "tp": o.tp,
+                        "comment": o.comment,
+                        "time_setup": str(o.time_setup) if o.time_setup else None,
+                        "time_expiration": str(o.time_expiration) if o.time_expiration else None,
+                    })
+                return {"status": "success", "orders": result_orders}
+
             elif action == "modify":
                 ticket = params.get("ticket")
                 if not ticket:
