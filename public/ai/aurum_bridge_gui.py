@@ -962,7 +962,9 @@ class BridgeWorker(QThread):
                 if expiration:
                     req["expiration"] = expiration
                     req["type_time"] = self.mt5.ORDER_TIME_SPECIFIED
+                    self.log_signal.emit(f"[Pending] expiration={expiration} type_time=ORDER_TIME_SPECIFIED")
 
+                self.log_signal.emit(f"[Pending] req={req}")
                 result = self.mt5.order_send(req)
                 if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
                     return {"status": "success", "order": result.order, "price": result.price}
