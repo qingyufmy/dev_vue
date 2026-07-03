@@ -944,7 +944,13 @@ class BridgeWorker(QThread):
                 if exp_str:
                     try:
                         if isinstance(exp_str, str):
-                            expiration = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
+                            # Parse string, ensure seconds are included
+                            parts = exp_str.split(' ')
+                            if len(parts) == 2 and ':' in parts[1]:
+                                ts = parts[1].split(':')
+                                if len(ts) == 2:
+                                    ts.append('00')  # Add seconds
+                                expiration = datetime.strptime(f"{parts[0]} {':'.join(ts)}", "%Y-%m-%d %H:%M:%S")
                         elif isinstance(exp_str, (int, float)):
                             expiration = datetime.fromtimestamp(exp_str)
                     except: pass
