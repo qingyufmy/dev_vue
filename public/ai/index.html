@@ -656,6 +656,7 @@
                   <label><span>挂单价</span><input id="pendingPrice" class="num" type="number" step="0.01" placeholder="如：4450.00" /><small class="field-help">限价/止损触发价</small></label>
                   <label id="stopLimitPriceWrap" style="display:none"><span>限价</span><input id="stopLimitPrice" class="num" type="number" step="0.01" placeholder="如：4452.00" /><small class="field-help">止损限价的实际成交价</small></label>
                 </div>
+                <div id="pendingPriceHint" class="pending-price-hint"></div>
                 <label><span>有效期（分钟）</span><input id="pendingValidMinutes" class="num" type="number" value="240" min="1" max="1440" /><small class="field-help">挂单有效期，到期自动撤销</small></label>
               </div>
               <div class="two-fields">
@@ -679,8 +680,6 @@
                 </table>
               </div>
             </div>
-          </div>
-          <div class="pending-orders-section">
             <div class="card">
               <div class="card-header">
                 <span class="card-title">挂单管理</span>

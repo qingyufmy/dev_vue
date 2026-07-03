@@ -938,21 +938,37 @@ class BridgeWorker(QThread):
                 ot = ot_map[dir_str]
                 fill = self._get_filling_mode(symbol)
 
-                # Pending orders use GTC (Good till Cancel) — broker doesn't support ORDER_TIME_SPECIFIED
+                # Expiration: Unix timestamp (int) or datetime string
+                expiration_val = params.get("expiration") or params.get("valid_until")
+                exp_ts = 0
                 type_time = self.mt5.ORDER_TIME_GTC
+                if expiration_val:
+                    try:
+                        n = float(expiration_val)
+                        if n > 1000000000:
+                            exp_ts = int(n)
+                            type_time = self.mt5.ORDER_TIME_SPECIFIED
+                    except (ValueError, TypeError):
+                        try:
+                            exp_dt = datetime.strptime(str(expiration_val)[:19], "%Y-%m-%d %H:%M:%S")
+                            exp_ts = int(exp_dt.timestamp())
+                            type_time = self.mt5.ORDER_TIME_SPECIFIED
+                        except (ValueError, TypeError):
+                            pass
 
                 req = {
                     "action": self.mt5.TRADE_ACTION_PENDING,
                     "symbol": symbol, "volume": volume, "type": ot,
                     "price": price, "magic": 234000,
                     "comment": params.get("comment", "AI挂单"),
-                    "type_filling": self.mt5.ORDER_FILLING_FOK,
+                    "type_filling": self.mt5.ORDER_FILLING_RETURN,
                     "type_time": type_time,
+                    "expiration": exp_ts,
                 }
                 if sl: req["sl"] = sl
                 if tp: req["tp"] = tp
 
-                self.log_signal.emit(f"[Pending] req={req}")
+                self.log_signal.emit(f"[Pending] type_filling=RETURN type_time={type_time} exp_ts={exp_ts}")
                 result = self.mt5.order_send(req)
                 if result is None:
                     err = self.mt5.last_error()
@@ -1020,7 +1036,7 @@ class BridgeWorker(QThread):
                         if n == 0: return None
                         if n > 1000000000:
                             from datetime import datetime as _dt
-                            return _dt.fromtimestamp(n).strftime("%Y-%m-%d %H:%M:%S")
+                            return _dt.utcfromtimestamp(n).strftime("%Y-%m-%d %H:%M:%S")
                         s = str(val)
                         if s == "0" or s == "None": return None
                         return s

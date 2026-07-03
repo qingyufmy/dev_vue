@@ -636,10 +636,11 @@ async function handleBrowserCommand(ws, userId, msg) {
             'stop_limit': orderType === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
           }
           const pendingType = pendingTypeMap[entryMethod] || entryMethod
-          // Calculate expiration from pending_valid_minutes
+          // Calculate expiration as MT5 time (UTC+3) Unix timestamp (seconds)
           const validMinutes = params.pending_valid_minutes || params.pending_valid_until || 240
-          const expirationDate = new Date(Date.now() + Number(validMinutes) * 60000)
-          const expiration = expirationDate.toISOString().replace('T', ' ').substring(0, 19)
+          const nowMt5 = Math.floor(Date.now() / 1000) + 10800  // UTC+3
+          const expiration = nowMt5 + Number(validMinutes) * 60
+          console.log(`[BridgeWS] pending expiration: validMinutes=${validMinutes} nowMt5=${nowMt5} expiration=${expiration} diff=${expiration - nowMt5}s`)
           const pendingParams = {
             symbol: params.symbol,
             order_type: pendingType,
@@ -1012,13 +1013,18 @@ async function handleBrowserCommand(ws, userId, msg) {
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
         result = await ai.mt5Bridge(userId, 'open', orderPayload)
         if (result.status === 'success') {
+          const isPending = signal.entry_method && signal.entry_method !== 'market' && signal.entry_method !== 'observe'
+          const orderTicket = result.order || result.ticket || null
           if (signalSource === 'auto_shared' && delivery) {
-            const ticket = result.order || result.ticket || null
             await queryRun(
               'UPDATE auto_signal_deliveries SET execution_status = ?, is_executed = 1, executed_at = NOW(), trade_ticket = ?, execution_result = ? WHERE id = ?',
-              ['success', ticket, JSON.stringify(result), delivery.id])
+              ['success', orderTicket, JSON.stringify(result), delivery.id])
           } else {
-            await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), result.ticket || null, signal.id])
+            if (isPending) {
+              await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, pending_ticket = ?, order_state = ? WHERE id = ?', [beijingNow(), String(orderTicket), 'pending', signal.id])
+            } else {
+              await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), orderTicket, signal.id])
+            }
           }
         }
         await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm, source: signalSource }, result, result.status)
@@ -1396,6 +1402,27 @@ async function handleBrowserCommand(ws, userId, msg) {
         } catch (e) {
           console.error('[BridgeWS] cancel_pending error:', e.message)
           result = { status: 'error', message: '取消挂单失败: ' + e.message }
+        }
+        break
+      }
+      case 'signal_by_ticket': {
+        const ticket = params.ticket
+        if (!ticket) return reply({ status: 'error', message: 'ticket required' })
+        try {
+          const signal = await queryOne(
+            'SELECT id, signal_type, entry_method, limit_price, stop_limit_price, pending_valid_until, order_state, pending_ticket, symbol, timeframe, created_at, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, is_executed, executed_at FROM ai_signals WHERE pending_ticket = ? AND (user_id = ? OR user_id = 0)',
+            [String(ticket), userId]
+          )
+          if (signal) {
+            try { signal.market_data = JSON.parse(signal.market_data_json || '{}') } catch { signal.market_data = {} }
+            delete signal.market_data_json
+            result = { status: 'success', signal }
+          } else {
+            result = { status: 'not_found', message: '未找到关联信号' }
+          }
+        } catch (e) {
+          console.error('[BridgeWS] signal_by_ticket error:', e.message)
+          result = { status: 'error', message: '查询失败: ' + e.message }
         }
         break
       }

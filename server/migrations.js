@@ -303,20 +303,39 @@ const migrations = [
         const existing = await queryAll('SELECT COUNT(*) as c FROM ai_signal_schema')
         if ((existing[0]?.c || 0) === 0) {
           const defaultSchema = JSON.stringify({
-            signal_type: "buy | sell | hold",
+            signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit",
             confidence: "0.00-1.00",
-            recommended_volume: "手数",
-            analysis: "简要分析",
-            reasoning: "详细推理过程",
+            recommended_volume: "0.01-0.05手",
+            entry_method: "market | limit | stop | stop_limit",
+            limit_price: "挂单价(数字或null)",
+            stop_limit_price: "止损限价(仅stop_limit,数字或null)",
+            pending_valid_minutes: "1-1440,默认240",
             stop_loss_price: "止损价",
             take_profit_1_price: "止盈1",
             take_profit_2_price: "止盈2",
-            take_profit_3_price: "止盈3"
+            take_profit_3_price: "止盈3",
+            analysis: "简要分析",
+            reasoning: "详细推理过程"
           }, null, 2)
           await queryRun('INSERT INTO ai_signal_schema (name, schema_json, is_active) VALUES (?, ?, 1)', ['default', defaultSchema])
         }
       } catch (e) {
         console.error('[Migrations] 017 error:', e.message)
+      }
+    }
+  },
+  {
+    id: '018_add_stop_limit_price_column',
+    up: async () => {
+      try {
+        const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = 'stop_limit_price'")
+        if (!existing || existing.length === 0) {
+          await queryRun('ALTER TABLE ai_signals ADD COLUMN stop_limit_price DOUBLE DEFAULT NULL AFTER limit_price')
+        }
+      } catch (e) {
+        if (!e.message?.includes('Duplicate column')) {
+          console.error('[Migrations] 018 error:', e.message)
+        }
       }
     }
   }

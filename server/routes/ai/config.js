@@ -509,9 +509,15 @@ export function validateTradeRequest(config, account, positions, request) {
 
 export function signalOrderPayload(signal, config, market, confirm) {
   const tpKey = `take_profit_${(config || {}).selected_take_profit || 1}_price`
-  return {
+
+  // Extract base order_type from signal_type (buy_limit → buy, sell_stop → sell)
+  const st = String(signal.signal_type || '').toLowerCase()
+  const baseOrderType = st.startsWith('buy') ? 'buy' : st.startsWith('sell') ? 'sell' : st
+  const entryMethod = signal.entry_method || (st.includes('stop_limit') ? 'stop_limit' : st.includes('limit') ? 'limit' : st.includes('stop') ? 'stop' : 'market')
+
+  const payload = {
     symbol: signal.symbol,
-    order_type: signal.signal_type,
+    order_type: baseOrderType,
     volume: parseFloat(signal.recommended_volume),
     sl: signal.stop_loss_price,
     tp: signal[tpKey],
@@ -521,6 +527,18 @@ export function signalOrderPayload(signal, config, market, confirm) {
     signal_id: signal.id,
     reference_price: market.latest_price,
   }
+
+  // Pending order fields
+  if (entryMethod !== 'market' && entryMethod !== 'observe') {
+    payload.entry_method = entryMethod
+    payload.limit_price = signal.limit_price
+    payload.pending_valid_until = signal.pending_valid_until
+    if (entryMethod === 'stop_limit' && signal.stop_limit_price) {
+      payload.stop_limit_price = signal.stop_limit_price
+    }
+  }
+
+  return payload
 }
 
 export async function getCloseConfig(userId) {

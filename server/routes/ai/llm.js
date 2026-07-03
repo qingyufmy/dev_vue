@@ -6,15 +6,19 @@ import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureH
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
-  signal_type: "buy | sell | hold",
+  signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit",
   confidence: "0.00-1.00",
-  recommended_volume: "手数",
-  analysis: "简要分析",
-  reasoning: "详细推理过程",
+  recommended_volume: "0.01-0.05手",
+  entry_method: "market | limit | stop | stop_limit",
+  limit_price: "挂单价(数字或null)",
+  stop_limit_price: "止损限价(仅stop_limit,数字或null)",
+  pending_valid_minutes: "1-1440,默认240",
   stop_loss_price: "止损价",
   take_profit_1_price: "止盈1",
   take_profit_2_price: "止盈2",
-  take_profit_3_price: "止盈3"
+  take_profit_3_price: "止盈3",
+  analysis: "简要分析",
+  reasoning: "详细推理过程"
 }, null, 2)
 
 export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, timeout = 45000 }) {
@@ -140,10 +144,17 @@ export async function maybeAiSignal(db, config, market) {
 
 export function normalizeAiSignal(parsed, config, market) {
   let signalType = String(parsed.signal_type || 'hold').toLowerCase()
-  if (!['buy', 'sell', 'hold'].includes(signalType)) signalType = 'hold'
+  const validTypes = ['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
+  if (!validTypes.includes(signalType)) signalType = 'hold'
 
-  // Entry method handling
-  let entryMethod = String(parsed.entry_method || 'market').toLowerCase()
+  // signal_type → entry_method + order_type auto mapping
+  const typeEntryMap = {
+    buy_limit: 'limit', sell_limit: 'limit',
+    buy_stop: 'stop', sell_stop: 'stop',
+    buy_stop_limit: 'stop_limit', sell_stop_limit: 'stop_limit',
+    buy: 'market', sell: 'market',
+  }
+  let entryMethod = String(parsed.entry_method || typeEntryMap[signalType] || 'market').toLowerCase()
   if (!['market', 'limit', 'stop', 'stop_limit', 'observe'].includes(entryMethod)) entryMethod = 'market'
   if (signalType === 'hold') entryMethod = 'observe'
   if (entryMethod === 'observe') { signalType = 'hold'; }
@@ -156,6 +167,16 @@ export function normalizeAiSignal(parsed, config, market) {
       entryMethod = 'market'
       limitPrice = null
     }
+  }
+
+  // Stop-limit price (the actual limit price for stop_limit orders)
+  let stopLimitPrice = parsed.stop_limit_price ? parseFloat(parsed.stop_limit_price) : null
+  if (entryMethod === 'stop_limit') {
+    if (!stopLimitPrice || !Number.isFinite(stopLimitPrice) || stopLimitPrice <= 0) {
+      stopLimitPrice = null // optional, fallback to limit_price
+    }
+  } else {
+    stopLimitPrice = null
   }
 
   // Pending validity
@@ -230,6 +251,7 @@ export function normalizeAiSignal(parsed, config, market) {
   // Attach pending order fields
   parsed.entry_method = entryMethod
   parsed.limit_price = limitPrice
+  parsed.stop_limit_price = stopLimitPrice
   parsed.pending_valid_until = pendingValidUntil
 
   return parsed

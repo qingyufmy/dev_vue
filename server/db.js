@@ -470,6 +470,7 @@ export async function initDB() {
       execution_result TEXT,
       entry_method VARCHAR(8) DEFAULT 'market',
       limit_price DOUBLE DEFAULT NULL,
+      stop_limit_price DOUBLE DEFAULT NULL,
       pending_valid_until DATETIME DEFAULT NULL,
       order_state VARCHAR(12) DEFAULT NULL,
       pending_ticket VARCHAR(32) DEFAULT NULL,

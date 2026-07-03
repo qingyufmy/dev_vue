@@ -373,11 +373,21 @@ function setSignalBadge(signal) {
 
 function signalType(value) {
   const type = String(value || "hold").toLowerCase();
-  return ["buy", "sell", "close"].includes(type) ? type : "hold";
+  if (["buy", "sell", "close"].includes(type)) return type;
+  if (type.startsWith("buy")) return "buy";
+  if (type.startsWith("sell")) return "sell";
+  return "hold";
 }
 
 function directionText(value) {
-  return { buy: "买入", sell: "卖出", hold: "观望", close: "持仓分析" }[signalType(value)] || "观望";
+  const type = String(value || "hold").toLowerCase();
+  const labels = {
+    buy_limit: "买入限价", sell_limit: "卖出限价",
+    buy_stop: "买入止损", sell_stop: "卖出止损",
+    buy_stop_limit: "买入止损限价", sell_stop_limit: "卖出止损限价",
+    buy: "买入", sell: "卖出", hold: "观望", close: "持仓分析"
+  };
+  return labels[type] || labels[signalType(value)] || "观望";
 }
 
 function volumeText(value) {
@@ -667,7 +677,7 @@ function showSignalNotification(signal) {
   const host = $("toastHost");
   if (!host) return;
   const dir = signalType(signal.signal_type);
-  const dirLabel = dir.toUpperCase() + " " + directionText(dir);
+  const dirLabel = dir.toUpperCase() + " " + directionText(signal.signal_type);
   const node = document.createElement("div");
   node.className = "toast signal-notification";
   const conf = typeof signal.confidence === 'number' ? (signal.confidence > 1 ? signal.confidence : signal.confidence * 100) : 0;
@@ -1645,6 +1655,7 @@ function updateTradingQuotePreview(quote) {
   setText("tradeSpread", Number.isFinite(Number(quote.spread)) ? fmt(quote.spread, 2) : "--");
   setText("buyBtnPrice", `ASK ${priceDisplay(quote.ask)}`);
   setText("sellBtnPrice", `BID ${priceDisplay(quote.bid)}`);
+  validatePendingPrice();
 }
 
 async function refreshQuote() {
@@ -2792,7 +2803,7 @@ function updateSignalDisplay(signal) {
   setText("sigSymbol", signal.symbol || "--");
   setText("sigTimeframe", signal.timeframe || "--");
   setText("sigDirection", dir.toUpperCase());
-  setText("sigDirectionText", directionText(dir));
+  setText("sigDirectionText", directionText(signal.signal_type));
   $("sigDirection").className = `signal-direction ${dir}`;
   $("sigDirectionText").className = `signal-direction-text ${dir}`;
   setText("sigConfidence", confidence.label);
@@ -2801,7 +2812,7 @@ function updateSignalDisplay(signal) {
   setText("sigTime", signalDisplayTime(signal));
   setText("sigGeneratedAt", signalDisplayTime(signal));
   setText("sigValidWindow", signalFreshness(signal));
-  setText("lastSigDirection", directionText(dir));
+  setText("lastSigDirection", directionText(signal.signal_type));
   setText("lastSigTimeframe", signal.timeframe || "--");
   setText("lastSigConfidence", confidence.label);
   setText("lastSigTime", signalDisplayTime(signal));
@@ -2842,6 +2853,25 @@ function executionStatus(signal) {
 function marketValue(market, key, digits = 2) {
   if (!market || market[key] === undefined || market[key] === null) return "--";
   return fmt(market[key], digits);
+}
+
+function renderPendingSignalInfo(signal, market) {
+  const em = signal.entry_method || 'market'
+  if (em === 'market' || em === 'observe' || !em) return ''
+  const entryLabels = { limit: '限价', stop: '止损', stop_limit: '止损限价' }
+  const st = String(signal.signal_type || '').toLowerCase()
+  const sideLabel = st.startsWith('buy') ? '买入' : st.startsWith('sell') ? '卖出' : ''
+  const typeLabel = sideLabel + (entryLabels[em] || em)
+  let rows = ''
+  rows += `<div><span>订单类型</span><strong>${escapeHtml(typeLabel)}</strong></div>`
+  if (signal.limit_price) rows += `<div><span>挂单价</span><strong>${escapeHtml(priceDisplay(signal.limit_price))}</strong></div>`
+  if (em === 'stop_limit' && signal.stop_limit_price) rows += `<div><span>限价</span><strong>${escapeHtml(priceDisplay(signal.stop_limit_price))}</strong></div>`
+  if (em === 'stop_limit' && Number.isFinite(Number(market.latest_price))) rows += `<div><span>当前市价</span><strong>${escapeHtml(priceDisplay(market.latest_price))}</strong></div>`
+  if (signal.pending_valid_until) {
+    const validDate = parseDate(signal.pending_valid_until)
+    if (validDate) rows += `<div><span>有效期至</span><strong>${escapeHtml(validDate)}</strong></div>`
+  }
+  return `<div class="signal-pending-info">${rows}</div>`
 }
 
 function renderSignal(signal, elapsedMs = null, options = {}) {
@@ -2914,7 +2944,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div class="analysis-summary-title">
         <span class="analysis-symbol">${escapeHtml(signal.symbol)}</span>
         <span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span>
-        <span class="analysis-direction-badge ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span>
+        <span class="analysis-direction-badge ${dir}">${dir.toUpperCase()} ${directionText(signal.signal_type)}</span>
       </div>
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
     </div>
@@ -2924,6 +2954,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div><span>有效期</span><strong id="analysisValidity" class="status-tag ${freshnessClass}">${escapeHtml(signalFreshness(signal))}</strong></div>
       <div><span>执行状态</span><strong class="status-tag ${freshnessClass}">${escapeHtml(executionStatus(signal))}</strong></div>
     </div>
+    ${renderPendingSignalInfo(signal, market)}
     <div class="signal-detail-grid">
       <div><span>止损</span><strong>${escapeHtml(signal.stop_loss_price || "--")}</strong></div>
       <div><span>TP1</span><strong>${escapeHtml(signal.take_profit_1_price || "--")}</strong></div>
@@ -3221,8 +3252,63 @@ function initOrderTypeSelector() {
         pendingRow.style.display = "";
         stopLimitWrap.style.display = type === "stop_limit" ? "" : "none";
       }
+      validatePendingPrice();
     });
   });
+  $("pendingPrice")?.addEventListener("input", validatePendingPrice);
+  $("stopLimitPrice")?.addEventListener("input", validatePendingPrice);
+}
+
+function validatePendingPrice() {
+  const orderType = state.selectedOrderType || "market";
+  const buyBtn = $("buyBtn");
+  const sellBtn = $("sellBtn");
+  const hint = $("pendingPriceHint");
+  if (!buyBtn || !sellBtn) return;
+
+  if (orderType === "market") {
+    buyBtn.disabled = false;
+    sellBtn.disabled = false;
+    if (hint) hint.textContent = "";
+    return;
+  }
+
+  const quote = state.lastQuote;
+  if (!quote || !Number.isFinite(quote.bid) || !Number.isFinite(quote.ask)) return;
+
+  const price = parseFloat($("pendingPrice")?.value);
+  if (!price || price <= 0) {
+    buyBtn.disabled = false;
+    sellBtn.disabled = false;
+    if (hint) hint.textContent = "";
+    return;
+  }
+
+  const { bid, ask } = quote;
+  let disableBuy = false;
+  let disableSell = false;
+  let hintMsg = "";
+
+  switch (orderType) {
+    case "limit":
+      if (price >= ask) { disableBuy = true; hintMsg = `买入限价需低于 ${priceDisplay(ask)}`; }
+      if (price <= bid) { disableSell = true; hintMsg = hintMsg || `卖出限价需高于 ${priceDisplay(bid)}`; }
+      break;
+    case "stop":
+      if (price <= ask) { disableBuy = true; hintMsg = `买入止损需高于 ${priceDisplay(ask)}`; }
+      if (price >= bid) { disableSell = true; hintMsg = hintMsg || `卖出止损需低于 ${priceDisplay(bid)}`; }
+      break;
+    case "stop_limit": {
+      const slp = parseFloat($("stopLimitPrice")?.value);
+      if (slp > 0 && slp >= ask) { disableBuy = true; hintMsg = `止损限价需低于 ${priceDisplay(ask)}`; }
+      if (slp > 0 && slp <= bid) { disableSell = true; hintMsg = hintMsg || `止损限价需高于 ${priceDisplay(bid)}`; }
+      break;
+    }
+  }
+
+  buyBtn.disabled = disableBuy;
+  sellBtn.disabled = disableSell;
+  if (hint) hint.textContent = hintMsg;
 }
 
 // === Pending Order: List & Cancel ===
@@ -3252,16 +3338,23 @@ function renderPendingOrders(orders) {
   tbody.innerHTML = orders.map((o) => {
     const state = o.state || "pending";
     const isPending = state === "pending";
+    const fmtUtc = (d) => {
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+    };
     const parseDate = (v) => {
       if (!v || v === "None" || v === "0" || v === "0.0") return null;
       const n = Number(v);
-      if (n > 1000000000) { const d = new Date(n * 1000); return d.toISOString().replace("T", " ").slice(0, 19); }
-      try { return new Date(v.replace(" ", "T")).toISOString().replace("T", " ").slice(0, 19); } catch { return null; }
+      if (n > 1000000000) return fmtUtc(new Date(n * 1000));
+      const s = String(v);
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) return s;
+      try { return fmtUtc(new Date(v.replace(" ", "T"))); } catch { return null; }
     };
     const validUntil = parseDate(o.valid_until);
     const createdAt = parseDate(o.created_at);
+    const ticket = String(o.mt5_ticket || o.ticket || o.id);
     return `<tr>
-      <td class="num">${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}</td>
+      <td class="num"><a href="#" class="pending-ticket-link" onclick="event.preventDefault(); navigateToSignalByTicket('${escapeHtml(ticket)}')">${escapeHtml(ticket)}</a></td>
       <td>${escapeHtml(o.symbol)}</td>
       <td>${typeLabels[o.pending_type] || o.pending_type || "--"}</td>
       <td class="num">${Number(o.price).toFixed(2)}</td>
@@ -3274,6 +3367,23 @@ function renderPendingOrders(orders) {
       <td>${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>` : ""}</td>
     </tr>`;
   }).join("");
+}
+
+async function navigateToSignalByTicket(ticket) {
+  try {
+    const data = await wsApi("signal_by_ticket", { ticket });
+    if (data.status === "success" && data.signal) {
+      setTab("signals");
+      const signal = data.signal;
+      renderSignal(signal);
+      highlightActiveAnalysis(signal.id);
+      toast(`已定位信号 #${signal.id}`, "success");
+    } else {
+      toast(data.message || "未找到关联信号", "warning");
+    }
+  } catch (e) {
+    toast("查询信号失败: " + e.message, "error");
+  }
 }
 
 async function cancelPendingOrder(ticket) {
@@ -3420,7 +3530,7 @@ function buildHistoryItemHTML(signal) {
       <button class="analysis-history-item" data-analysis-id="${escapeHtml(signal.id)}">
         <span class="history-item-top">
           <span class="history-item-symbol">${escapeHtml(signal.symbol)} · ${escapeHtml(signal.timeframe)}</span>
-          <span class="history-item-dir ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span>
+          <span class="history-item-dir ${dir}">${dir.toUpperCase()} ${directionText(signal.signal_type)}</span>
         </span>
         <span class="history-item-meta">
           <span>#${escapeHtml(signal.id)}</span>
@@ -3482,7 +3592,7 @@ function renderSignalRows() {
         <td>${compactTimeHtml(signal?.created_at_mt5 || signal?.created_at)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
         <td><span class="signal-tf-badge ${dir === 'close' ? 'close-badge' : ''}">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
-        <td><span class="tag ${dir}">${dir.toUpperCase()} ${directionText(dir)}</span></td>
+        <td><span class="tag ${dir}">${dir.toUpperCase()} ${directionText(signal.signal_type)}</span></td>
         <td>
           <div class="conf-mini ${confidenceClass(signal.confidence)}">
             <span class="conf-mini-track"><span class="conf-mini-fill" style="width:${confidence.value}%"></span></span>
