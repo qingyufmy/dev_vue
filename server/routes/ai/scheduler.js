@@ -925,6 +925,18 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
+    // Defense-in-depth: check trade_send_enabled
+    const ubSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
+    if (ubSettings && !ubSettings.trade_send_enabled) {
+      l('skipped: trade_send_enabled=0')
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['skipped', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'trade_send_disabled' },
+        { status: 'skipped' }, 'info')
+      return
+    }
+
     const order = signalOrderPayload(signal, riskConfig, market, true)
     // Scale down volume if it exceeds user's max_position_size
     const userMaxVolume = parseFloat(riskConfig.max_position_size || 0.05)
@@ -1287,7 +1299,30 @@ async function executeOrder(userId, config, request, action, options = {}) {
   try {
     const risk = validateTradeRequest(config, account, positions, request)
     let openResult
-    openResult = await mt5Bridge(userId, 'open', request)
+    const isPendingOrder = request.entry_method && request.entry_method !== 'market' && request.entry_method !== 'observe'
+    if (isPendingOrder) {
+      const pendingTypeMap = {
+        'limit': request.order_type === 'buy' ? 'buy_limit' : 'sell_limit',
+        'stop': request.order_type === 'buy' ? 'buy_stop' : 'sell_stop',
+        'stop_limit': request.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
+      }
+      const pendingType = pendingTypeMap[request.entry_method] || request.entry_method
+      const validMinutes = request.pending_valid_until || 240
+      const nowMt5 = Math.floor(Date.now() / 1000) + 10800
+      const expiration = nowMt5 + Number(validMinutes) * 60
+      const pendingParams = {
+        symbol: request.symbol,
+        order_type: pendingType,
+        price: request.limit_price,
+        volume: request.volume,
+        sl: request.sl,
+        tp: request.tp,
+        expiration: expiration,
+      }
+      openResult = await mt5Bridge(userId, 'pending', pendingParams)
+    } else {
+      openResult = await mt5Bridge(userId, 'open', request)
+    }
     result = { ...openResult, risk }
     if (quote) result.quote = quote
   } catch (err) {

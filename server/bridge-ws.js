@@ -1031,7 +1031,30 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         const marketData = JSON.parse(signal.market_data_json || '{}')
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
-        result = await ai.mt5Bridge(userId, 'open', orderPayload)
+        const isPendingOrder = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
+        if (isPendingOrder) {
+          const pendingTypeMap = {
+            'limit': orderPayload.order_type === 'buy' ? 'buy_limit' : 'sell_limit',
+            'stop': orderPayload.order_type === 'buy' ? 'buy_stop' : 'sell_stop',
+            'stop_limit': orderPayload.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
+          }
+          const pendingType = pendingTypeMap[orderPayload.entry_method] || orderPayload.entry_method
+          const validMinutes = orderPayload.pending_valid_until || 240
+          const nowMt5 = Math.floor(Date.now() / 1000) + 10800
+          const expiration = nowMt5 + Number(validMinutes) * 60
+          const pendingParams = {
+            symbol: orderPayload.symbol,
+            order_type: pendingType,
+            price: orderPayload.limit_price,
+            volume: orderPayload.volume,
+            sl: orderPayload.sl,
+            tp: orderPayload.tp,
+            expiration: expiration,
+          }
+          result = await ai.mt5Bridge(userId, 'pending', pendingParams)
+        } else {
+          result = await ai.mt5Bridge(userId, 'open', orderPayload)
+        }
         if (result.status === 'success') {
           const isPending = signal.entry_method && signal.entry_method !== 'market' && signal.entry_method !== 'observe'
           const orderTicket = result.order || result.ticket || null
