@@ -338,6 +338,45 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '021_add_phone_auth',
+    up: async () => {
+      try {
+        const usersCols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'")
+        const usersColNames = (usersCols || []).map(c => c.COLUMN_NAME)
+
+        if (!usersColNames.includes('email_verified')) {
+          await queryRun("ALTER TABLE users ADD COLUMN email_verified TINYINT DEFAULT 1 AFTER email")
+        }
+        if (!usersColNames.includes('auth_method')) {
+          await queryRun("ALTER TABLE users ADD COLUMN auth_method VARCHAR(20) DEFAULT 'email' AFTER email_verified")
+        }
+        if (!usersColNames.includes('phone')) {
+          await queryRun("ALTER TABLE users ADD COLUMN phone VARCHAR(20) DEFAULT NULL AFTER email")
+        }
+        if (!usersColNames.includes('phone_verified')) {
+          await queryRun("ALTER TABLE users ADD COLUMN phone_verified TINYINT DEFAULT 0 AFTER phone")
+        }
+      } catch (e) {
+        if (!e.message?.includes('Duplicate column')) {
+          console.error('[Migrations] 021 users columns error:', e.message)
+        }
+      }
+
+      try {
+        const vcCols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'verification_codes'")
+        const vcColNames = (vcCols || []).map(c => c.COLUMN_NAME)
+
+        if (!vcColNames.includes('phone')) {
+          await queryRun("ALTER TABLE verification_codes ADD COLUMN phone VARCHAR(20) DEFAULT NULL AFTER email")
+        }
+      } catch (e) {
+        if (!e.message?.includes('Duplicate column')) {
+          console.error('[Migrations] 021 verification_codes columns error:', e.message)
+        }
+      }
+    }
   }
 ]
 
