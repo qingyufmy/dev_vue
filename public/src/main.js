@@ -7050,7 +7050,6 @@ const AUTH_MODE_META = {
     showPasswordRules: true,
     showConfirmPassword: true,
     showTos: true,
-    showRegTabs: true,
   },
   reset_password: {
     title: '忘记密码',
@@ -7116,7 +7115,7 @@ async function handleSendCode() {
   const sendBtn = document.getElementById('sendCodeBtn')
   const codeGroup = document.getElementById('codeGroup')
 
-  const isPhone = meta.phoneLogin || (meta.showRegTabs && state.authRegType === 'phone')
+  const isPhone = meta.phoneLogin || (meta.codePurpose === 'register' && state.authRegType === 'phone')
   const email = emailInput?.value?.trim()
   const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
   const phoneRaw = phoneInput?.value?.trim()
@@ -7215,7 +7214,7 @@ async function handleCodeVerify(code) {
   const codeStatus = document.getElementById('codeStatus')
   const codeHint = document.getElementById('codeHint')
 
-  const isPhone = meta.phoneLogin || (meta.showRegTabs && state.authRegType === 'phone')
+  const isPhone = meta.phoneLogin || (meta.codePurpose === 'register' && state.authRegType === 'phone')
   const email = emailInput?.value?.trim()
   const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
   const phoneRaw = phoneInput?.value?.trim()
@@ -7311,13 +7310,13 @@ function showAuthModal(mode, options = {}) {
           <p class="form-hint">该邀请码来自邀请链接，注册后由后端自动归因，不能修改。</p>
         </div>
       ` : ''}
-      ${meta.showRegTabs ? `
+      ${meta.codePurpose === 'register' && emailEnabled && phoneEnabled ? `
         <div class="auth-reg-tabs">
           <button type="button" class="auth-reg-tab ${state.authRegType !== 'phone' ? 'active' : ''}" data-reg-type="email">邮箱注册</button>
           <button type="button" class="auth-reg-tab ${state.authRegType === 'phone' ? 'active' : ''}" data-reg-type="phone">手机号注册</button>
         </div>
       ` : ''}
-      ${state.authRegType === 'phone' && meta.showRegTabs ? `
+      ${state.authRegType === 'phone' && meta.codePurpose === 'register' && phoneEnabled ? `
         <div class="form-group">
           <label class="form-label">手机号</label>
           ${meta.codePurpose ? `
@@ -7379,13 +7378,13 @@ function showAuthModal(mode, options = {}) {
           `}
         </div>
       `}
-      ${(mode === 'register' || mode === 'register_phone') && !(state.authRegType === 'phone' && meta.showRegTabs) ? `
+      ${(mode === 'register' || mode === 'register_phone') && !(state.authRegType === 'phone' && phoneEnabled && emailEnabled) ? `
         <div class="form-group">
           <label class="form-label">昵称</label>
           <input type="text" class="form-input" name="nickname" id="authNickname" placeholder="给自己取个名字（选填）">
         </div>
       ` : ''}
-      ${state.authRegType === 'phone' && meta.showRegTabs ? `
+      ${state.authRegType === 'phone' && phoneEnabled && emailEnabled ? `
         <div class="form-group">
           <label class="form-label">昵称</label>
           <input type="text" class="form-input" name="nickname" id="authNickname" placeholder="给自己取个名字（选填）">
