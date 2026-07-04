@@ -22,6 +22,7 @@ server/stderr.log
 _build/
 build/
 dist/
+dist_nuitka/
 
 __pycache__/
 .codebuddy/

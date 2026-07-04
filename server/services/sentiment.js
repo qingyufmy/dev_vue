@@ -61,5 +61,3 @@ export async function fetchSentiment() {
   }
   return results
 }
-
-export { MARKETS, fetchOneMarket }
