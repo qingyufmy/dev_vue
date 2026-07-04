@@ -10,12 +10,16 @@ router.get('/profile', authMiddleware, async (req, res) => {
       SELECT id, uid, email, nickname, avatar, role, plan, plan_period, plan_expires_at,
              referral_code, referral_credit, telegram_id, telegram_username, telegram_name,
              telegram_chat_id, telegram_group_status, telegram_bot_started_at,
-             telegram_joined_at, telegram_last_invite_sent_at, created_at, last_seen_at
+             telegram_joined_at, telegram_last_invite_sent_at, created_at, last_seen_at,
+             phone, phone_verified, email_verified, auth_method
       FROM users WHERE id = ?
     `, [req.user.id])
 
     user.name = user.nickname
     user.isAdmin = user.role === 'admin'
+    user.phoneVerified = !!user.phone_verified
+    user.emailVerified = !!user.email_verified
+    user.authMethod = user.auth_method || 'email'
     user.telegramBinding = user.telegram_id || user.telegram_username ? {
       username: user.telegram_username || '',
       name: user.telegram_name || '',
@@ -53,12 +57,16 @@ router.put('/profile', authMiddleware, async (req, res) => {
       SELECT id, uid, email, nickname, avatar, role, plan, plan_period, plan_expires_at,
              referral_code, referral_credit, telegram_id, telegram_username, telegram_name,
              telegram_group_status, telegram_bot_started_at, telegram_joined_at,
-             telegram_last_invite_sent_at, created_at
+             telegram_last_invite_sent_at, created_at,
+             phone, phone_verified, email_verified, auth_method
       FROM users WHERE id = ?
     `, [req.user.id])
 
     user.name = user.nickname
     user.isAdmin = user.role === 'admin'
+    user.phoneVerified = !!user.phone_verified
+    user.emailVerified = !!user.email_verified
+    user.authMethod = user.auth_method || 'email'
     user.telegramBinding = user.telegram_id || user.telegram_username ? {
       username: user.telegram_username || '',
       name: user.telegram_name || '',

@@ -5964,6 +5964,7 @@ function renderProfile() {
               <h2 class="settings-section-title">账号设置</h2>
               <p class="settings-section-desc">管理你的邮箱和密码</p>
 
+              ${state.user.email ? `
               <div class="settings-card">
                 <div class="form-group">
                   <label class="form-label">电子邮箱</label>
@@ -5971,6 +5972,55 @@ function renderProfile() {
                   <p class="settings-hint">暂不支持更改邮箱，如需更改请联系管理员</p>
                 </div>
               </div>
+              ` : ''}
+
+              ${state.user.phone ? `
+              <div class="settings-card">
+                <div class="form-group">
+                  <label class="form-label">手机号</label>
+                  <input type="text" class="form-input" value="${state.user.phone}" disabled style="opacity:0.6">
+                  <p class="settings-hint">已绑定手机号</p>
+                </div>
+              </div>
+              ` : ''}
+
+              ${state.user.authMethod === 'email' && !state.user.phone ? `
+              <div class="settings-card">
+                <h3 class="settings-card-title">绑定手机号</h3>
+                <div class="form-group">
+                  <label class="form-label">手机号</label>
+                  <div class="form-row">
+                    <input type="tel" class="form-input" id="bindPhoneInput" placeholder="请输入手机号" style="flex:1">
+                    <button class="btn-send-code" id="bindPhoneSendCode">发送验证码</button>
+                  </div>
+                </div>
+                <div class="form-group" id="bindPhoneCodeGroup" style="display:none">
+                  <label class="form-label">验证码</label>
+                  <input type="text" class="form-input" id="bindPhoneCode" placeholder="输入6位验证码" maxlength="6">
+                </div>
+                <button class="btn btn-primary" id="bindPhoneBtn" style="width:100%;margin-top:8px;display:none">绑定</button>
+                <div id="bindPhoneMsg" class="settings-msg" style="display:none"></div>
+              </div>
+              ` : ''}
+
+              ${state.user.authMethod === 'phone' && !state.user.email ? `
+              <div class="settings-card">
+                <h3 class="settings-card-title">绑定邮箱</h3>
+                <div class="form-group">
+                  <label class="form-label">邮箱</label>
+                  <div class="form-row">
+                    <input type="email" class="form-input" id="bindEmailInput" placeholder="请输入邮箱" style="flex:1">
+                    <button class="btn-send-code" id="bindEmailSendCode">发送验证码</button>
+                  </div>
+                </div>
+                <div class="form-group" id="bindEmailCodeGroup" style="display:none">
+                  <label class="form-label">验证码</label>
+                  <input type="text" class="form-input" id="bindEmailCode" placeholder="输入6位验证码" maxlength="6">
+                </div>
+                <button class="btn btn-primary" id="bindEmailBtn" style="width:100%;margin-top:8px;display:none">绑定</button>
+                <div id="bindEmailMsg" class="settings-msg" style="display:none"></div>
+              </div>
+              ` : ''}
 
               <div class="settings-card">
                 <h3 class="settings-card-title">更改密码</h3>
@@ -6231,6 +6281,152 @@ function renderProfile() {
       }
       savePwdBtn.disabled = false
       savePwdBtn.textContent = '更改密码'
+    })
+  }
+
+  // Bind phone: send code
+  const bindPhoneSendBtn = document.getElementById('bindPhoneSendCode')
+  if (bindPhoneSendBtn) {
+    bindPhoneSendBtn.addEventListener('click', async () => {
+      const phone = document.getElementById('bindPhoneInput')?.value?.trim()
+      if (!phone || phone.length < 6) { showSettingsMsg('bindPhoneMsg', '请输入有效手机号', 'err'); return }
+      bindPhoneSendBtn.disabled = true
+      bindPhoneSendBtn.textContent = '发送中...'
+      try {
+        const captchaRes = await api.get('/api/captcha')
+        if (!captchaRes.ok) { showSettingsMsg('bindPhoneMsg', '验证码加载失败', 'err'); bindPhoneSendBtn.disabled = false; bindPhoneSendBtn.textContent = '发送验证码'; return }
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+          try {
+            const res = await api.post('/api/send-bind-code', { phone, captchaId, captchaAnswer: captchaCode })
+            if (res.ok) {
+              showSettingsMsg('bindPhoneMsg', '验证码已发送', 'ok')
+              document.getElementById('bindPhoneCodeGroup').style.display = 'block'
+              document.getElementById('bindPhoneBtn').style.display = 'block'
+              let cd = 60
+              const timer = setInterval(() => {
+                cd--
+                bindPhoneSendBtn.textContent = `${cd}s`
+                if (cd <= 0) { clearInterval(timer); bindPhoneSendBtn.textContent = '发送验证码'; bindPhoneSendBtn.disabled = false }
+              }, 1000)
+            } else {
+              showSettingsMsg('bindPhoneMsg', res.error || '发送失败', 'err')
+              bindPhoneSendBtn.disabled = false
+              bindPhoneSendBtn.textContent = '发送验证码'
+            }
+          } catch {
+            showSettingsMsg('bindPhoneMsg', '发送失败', 'err')
+            bindPhoneSendBtn.disabled = false
+            bindPhoneSendBtn.textContent = '发送验证码'
+          }
+        })
+      } catch {
+        showSettingsMsg('bindPhoneMsg', '验证码加载失败', 'err')
+        bindPhoneSendBtn.disabled = false
+        bindPhoneSendBtn.textContent = '发送验证码'
+      }
+    })
+  }
+
+  // Bind phone: verify code and bind
+  const bindPhoneBtn = document.getElementById('bindPhoneBtn')
+  if (bindPhoneBtn) {
+    bindPhoneBtn.addEventListener('click', async () => {
+      const phone = document.getElementById('bindPhoneInput')?.value?.trim()
+      const code = document.getElementById('bindPhoneCode')?.value?.trim()
+      if (!phone) { showSettingsMsg('bindPhoneMsg', '请输入手机号', 'err'); return }
+      if (!code || code.length !== 6) { showSettingsMsg('bindPhoneMsg', '请输入6位验证码', 'err'); return }
+      bindPhoneBtn.disabled = true
+      bindPhoneBtn.textContent = '绑定中...'
+      try {
+        const vRes = await api.post('/api/verify-code', { phone, code, purpose: 'bind' })
+        if (!vRes.ok) { showSettingsMsg('bindPhoneMsg', vRes.error || '验证码错误', 'err'); bindPhoneBtn.disabled = false; bindPhoneBtn.textContent = '绑定'; return }
+        const res = await api.post('/api/bind-phone', { phone, verifyToken: vRes.token })
+        if (res.ok) {
+          showSettingsMsg('bindPhoneMsg', '手机绑定成功', 'ok')
+          state.user.phone = phone
+          localStorage.setItem('ws_user', JSON.stringify(state.user))
+          setTimeout(() => renderProfile(), 1500)
+        } else {
+          showSettingsMsg('bindPhoneMsg', res.error || '绑定失败', 'err')
+        }
+      } catch {
+        showSettingsMsg('bindPhoneMsg', '绑定失败', 'err')
+      }
+      bindPhoneBtn.disabled = false
+      bindPhoneBtn.textContent = '绑定'
+    })
+  }
+
+  // Bind email: send code
+  const bindEmailSendBtn = document.getElementById('bindEmailSendCode')
+  if (bindEmailSendBtn) {
+    bindEmailSendBtn.addEventListener('click', async () => {
+      const email = document.getElementById('bindEmailInput')?.value?.trim()
+      if (!email || !email.includes('@')) { showSettingsMsg('bindEmailMsg', '请输入有效邮箱', 'err'); return }
+      bindEmailSendBtn.disabled = true
+      bindEmailSendBtn.textContent = '发送中...'
+      try {
+        const captchaRes = await api.get('/api/captcha')
+        if (!captchaRes.ok) { showSettingsMsg('bindEmailMsg', '验证码加载失败', 'err'); bindEmailSendBtn.disabled = false; bindEmailSendBtn.textContent = '发送验证码'; return }
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+          try {
+            const res = await api.post('/api/send-bind-code', { email, captchaId, captchaAnswer: captchaCode })
+            if (res.ok) {
+              showSettingsMsg('bindEmailMsg', '验证码已发送', 'ok')
+              document.getElementById('bindEmailCodeGroup').style.display = 'block'
+              document.getElementById('bindEmailBtn').style.display = 'block'
+              let cd = 60
+              const timer = setInterval(() => {
+                cd--
+                bindEmailSendBtn.textContent = `${cd}s`
+                if (cd <= 0) { clearInterval(timer); bindEmailSendBtn.textContent = '发送验证码'; bindEmailSendBtn.disabled = false }
+              }, 1000)
+            } else {
+              showSettingsMsg('bindEmailMsg', res.error || '发送失败', 'err')
+              bindEmailSendBtn.disabled = false
+              bindEmailSendBtn.textContent = '发送验证码'
+            }
+          } catch {
+            showSettingsMsg('bindEmailMsg', '发送失败', 'err')
+            bindEmailSendBtn.disabled = false
+            bindEmailSendBtn.textContent = '发送验证码'
+          }
+        })
+      } catch {
+        showSettingsMsg('bindEmailMsg', '验证码加载失败', 'err')
+        bindEmailSendBtn.disabled = false
+        bindEmailSendBtn.textContent = '发送验证码'
+      }
+    })
+  }
+
+  // Bind email: verify code and bind
+  const bindEmailBtn = document.getElementById('bindEmailBtn')
+  if (bindEmailBtn) {
+    bindEmailBtn.addEventListener('click', async () => {
+      const email = document.getElementById('bindEmailInput')?.value?.trim()
+      const code = document.getElementById('bindEmailCode')?.value?.trim()
+      if (!email || !email.includes('@')) { showSettingsMsg('bindEmailMsg', '请输入有效邮箱', 'err'); return }
+      if (!code || code.length !== 6) { showSettingsMsg('bindEmailMsg', '请输入6位验证码', 'err'); return }
+      bindEmailBtn.disabled = true
+      bindEmailBtn.textContent = '绑定中...'
+      try {
+        const vRes = await api.post('/api/verify-code', { email, code, purpose: 'bind' })
+        if (!vRes.ok) { showSettingsMsg('bindEmailMsg', vRes.error || '验证码错误', 'err'); bindEmailBtn.disabled = false; bindEmailBtn.textContent = '绑定'; return }
+        const res = await api.post('/api/bind-email', { email, verifyToken: vRes.token })
+        if (res.ok) {
+          showSettingsMsg('bindEmailMsg', '邮箱绑定成功', 'ok')
+          state.user.email = email
+          localStorage.setItem('ws_user', JSON.stringify(state.user))
+          setTimeout(() => renderProfile(), 1500)
+        } else {
+          showSettingsMsg('bindEmailMsg', res.error || '绑定失败', 'err')
+        }
+      } catch {
+        showSettingsMsg('bindEmailMsg', '绑定失败', 'err')
+      }
+      bindEmailBtn.disabled = false
+      bindEmailBtn.textContent = '绑定'
     })
   }
 
@@ -6562,6 +6758,72 @@ function showPwdMsg(el, msg, type) {
   el.textContent = msg
   el.className = `settings-msg settings-msg-${type}`
   setTimeout(() => { el.style.display = 'none' }, 3000)
+}
+
+function showSettingsMsg(elId, msg, type) {
+  const el = document.getElementById(elId)
+  if (el) {
+    el.textContent = msg
+    el.className = `settings-msg settings-msg-${type}`
+    el.style.display = 'block'
+    if (type === 'ok') setTimeout(() => { el.style.display = 'none' }, 4000)
+  }
+}
+
+function showCaptchaModal(captchaId, svg, callback) {
+  const overlay = document.createElement('div')
+  overlay.className = 'captcha-modal-overlay'
+  overlay.innerHTML = `
+    <div class="captcha-modal">
+      <div class="captcha-modal-header">
+        <h3>图形验证</h3>
+        <button class="captcha-modal-close" id="captchaModalClose">&times;</button>
+      </div>
+      <div class="captcha-modal-body">
+        <div class="captcha-img-wrap" id="captchaImgWrap">${svg}</div>
+        <button class="btn btn-ghost btn-sm" id="captchaRefreshBtn" style="margin-bottom:12px">刷新验证码</button>
+        <div class="form-group">
+          <input type="text" class="form-input" id="captchaInput" placeholder="请输入验证码" maxlength="4" autocomplete="off">
+        </div>
+      </div>
+      <div class="captcha-modal-footer">
+        <button class="btn btn-ghost" id="captchaCancelBtn">取消</button>
+        <button class="btn btn-primary" id="captchaVerifyBtn">验证</button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+  requestAnimationFrame(() => overlay.classList.add('active'))
+
+  const close = () => {
+    overlay.classList.remove('active')
+    setTimeout(() => overlay.remove(), 300)
+  }
+  overlay.querySelector('#captchaModalClose').addEventListener('click', close)
+  overlay.querySelector('#captchaCancelBtn').addEventListener('click', close)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close() })
+
+  overlay.querySelector('#captchaRefreshBtn').addEventListener('click', async () => {
+    const imgWrap = overlay.querySelector('#captchaImgWrap')
+    const res = await api.get('/api/captcha')
+    if (res.ok) {
+      overlay._captchaId = res.id
+      imgWrap.innerHTML = res.svg
+    }
+  })
+
+  overlay.querySelector('#captchaVerifyBtn').addEventListener('click', () => {
+    const code = overlay.querySelector('#captchaInput').value.trim()
+    if (!code) return
+    close()
+    callback(overlay._captchaId || captchaId, code)
+  })
+
+  overlay.querySelector('#captchaInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') overlay.querySelector('#captchaVerifyBtn').click()
+  })
+
+  overlay._captchaId = captchaId
 }
 
 function getPasswordRuleError(password) {

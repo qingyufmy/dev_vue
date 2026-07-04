@@ -94,6 +94,7 @@ router.post('/register', async (req, res) => {
       const token = generateToken(result.insertId)
       const user = await queryOne('SELECT id, uid, phone, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
       user.name = user.nickname
+      user.authMethod = 'phone'
       user.planExpiresAt = user.plan_expires_at || ''
 
       if (referredBy) {
@@ -134,6 +135,7 @@ router.post('/register', async (req, res) => {
     const token = generateToken(result.insertId)
     const user = await queryOne('SELECT id, uid, email, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
     user.name = user.nickname
+    user.authMethod = 'email'
     user.planExpiresAt = user.plan_expires_at || ''
 
     if (referredBy) {
@@ -206,6 +208,7 @@ router.post('/login', async (req, res) => {
     safeUser.planExpiresAt = user.plan_expires_at || ''
     safeUser.planPeriod = user.plan_period || ''
     safeUser.createdAt = user.created_at || ''
+    safeUser.authMethod = user.auth_method || 'email'
     safeUser.telegramBinding = getTelegramBinding(user)
 
     logAudit({ userId: user.id, action: 'login', ip: req.ip, userAgent: req.get('user-agent') })
