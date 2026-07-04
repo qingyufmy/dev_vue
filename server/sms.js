@@ -1,5 +1,5 @@
 import Dysmsapi from '@alicloud/dysmsapi20170525'
-import * as OpenApiClient from '@alicloud/openapi-client'
+import * as OpenApi from '@alicloud/openapi-client'
 import { queryAll, queryRun } from './db.js'
 
 let cachedConfig = null
@@ -49,7 +49,7 @@ export async function sendSms(phone, templateCode, templateParams = {}) {
     throw new Error('[SMS] 短信模板未配置')
   }
 
-  const client = new OpenApiClient.default({
+  const config = new OpenApi.Config({
     accessKeyId: cfg.accessKeyId,
     accessKeySecret: cfg.accessKeySecret,
     endpoint: 'dysmsapi.aliyuncs.com',
@@ -62,8 +62,8 @@ export async function sendSms(phone, templateCode, templateParams = {}) {
     templateParam: JSON.stringify(templateParams),
   })
 
-  const runtime = { autoretry: true, timeout: 10000 }
-  const resp = await new Dysmsapi.default(client).sendSms(request, runtime)
+  const client = new Dysmsapi.default(config)
+  const resp = await client.sendSms(request, {})
 
   if (resp.body?.code !== 'OK') {
     console.error('[SMS] Send failed:', resp.body?.code, resp.body?.message)
