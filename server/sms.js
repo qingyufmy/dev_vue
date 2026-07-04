@@ -1,6 +1,6 @@
 import Dysmsapi from '@alicloud/dysmsapi20170525'
 import * as OpenApiClient from '@alicloud/openapi-client'
-import { queryAll, queryRun, beijingNow } from './db.js'
+import { queryAll, queryRun } from './db.js'
 
 let cachedConfig = null
 
@@ -12,7 +12,7 @@ export async function loadSmsConfig() {
   if (cachedConfig) return cachedConfig
 
   const rows = await queryAll(
-    "SELECT `key`, value FROM system_config WHERE category = 'sms'"
+    "SELECT `key`, `value` FROM system_config WHERE category = 'sms'"
   )
 
   if (!rows.length) {
@@ -22,10 +22,15 @@ export async function loadSmsConfig() {
   const map = Object.fromEntries(rows.map(r => [r.key, r.value]))
 
   cachedConfig = {
-    accessKeyId: map.accessKeyId || '',
-    accessKeySecret: map.accessKeySecret || '',
-    signName: map.signName || '',
-    templateCodes: JSON.parse(map.templateCodes || '{}'),
+    accessKeyId: map.access_key_id || '',
+    accessKeySecret: map.access_key_secret || '',
+    signName: map.sign_name || '',
+    templateCodes: {
+      login: map.template_code_login || '',
+      register: map.template_code_register || '',
+      reset: map.template_code_reset || '',
+      bind: map.template_code_bind || '',
+    },
   }
 
   return cachedConfig
@@ -33,6 +38,16 @@ export async function loadSmsConfig() {
 
 export async function sendSms(phone, templateCode, templateParams = {}) {
   const cfg = await loadSmsConfig()
+
+  if (!cfg.accessKeyId || !cfg.accessKeySecret) {
+    throw new Error('[SMS] AccessKey 未配置')
+  }
+  if (!cfg.signName) {
+    throw new Error('[SMS] 短信签名未配置')
+  }
+  if (!templateCode) {
+    throw new Error('[SMS] 短信模板未配置')
+  }
 
   const client = new OpenApiClient.default({
     accessKeyId: cfg.accessKeyId,
@@ -67,19 +82,15 @@ export async function sendVerificationSms(phone, purpose = 'login') {
     throw new Error(`[SMS] No template code for purpose: ${purpose}`)
   }
 
-  const now = new Date()
-  const expiresMs = now.getTime() + 10 * 60 * 1000
-  const expires = new Date(expiresMs + 8 * 3600_000)
-    .toISOString()
-    .replace('T', ' ')
-    .substring(0, 19)
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000)
+    .toISOString().replace('T', ' ').substring(0, 19)
 
   await queryRun(
-    'INSERT INTO verification_codes (email, phone, code, purpose, expires_at) VALUES (?, ?, ?, ?, ?)',
-    [phone, phone, code, purpose, expires]
+    'INSERT INTO verification_codes (phone, code, purpose, expires_at) VALUES (?, ?, ?, ?)',
+    [phone, code, purpose, expiresAt]
   )
 
   await sendSms(phone, templateCode, { code })
 
-  return { code, expires }
+  return { code, expiresAt }
 }

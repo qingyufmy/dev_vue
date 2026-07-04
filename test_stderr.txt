@@ -1,0 +1,7 @@
+[FATAL] Uncaught exception: listen EADDRINUSE: address already in use :::3000
+Error: listen EADDRINUSE: address already in use :::3000
+    at Server.setupListenHandle [as _listen2] (node:net:1941:16)
+    at listenInCluster (node:net:1998:12)
+    at Server.listen (node:net:2103:7)
+    at file:///D:/dev_codex/wall-street-skill-local/server/index.js:353:10
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)

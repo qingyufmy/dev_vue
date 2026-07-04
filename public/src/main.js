@@ -7178,60 +7178,74 @@ async function handleSendCode() {
   }
 
   if (state._codeSending) return
-  state._codeSending = true
-  sendBtn.textContent = '发送中...'
-  sendBtn.disabled = true
 
+  // Show CAPTCHA first
   try {
-    const payload = { purpose: meta.codePurpose }
-    if (isPhone) {
-      payload.phone = phone
-    } else {
-      payload.email = email
-    }
-    const res = await api.post('/api/send-code', payload)
-
-    if (!res.ok) {
-      showFormMsg(res.error || '发送失败，请稍后重试', 'err')
-      sendBtn.textContent = '发送验证码'
-      sendBtn.disabled = false
-      state._codeSending = false
+    const captchaRes = await api.get('/api/captcha')
+    if (!captchaRes.ok) {
+      showFormMsg('获取验证码失败，请稍后重试', 'err')
       return
     }
 
-    // Show code input group
-    if (codeGroup) codeGroup.style.display = 'block'
-    showFormMsg(res.message || (isPhone ? '验证码已发送到您的手机' : '验证码已发送到您的邮箱'), 'ok')
-    state._emailVerified = false
-    state._verifyToken = null
+    showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+      state._codeSending = true
+      sendBtn.textContent = '发送中...'
+      sendBtn.disabled = true
 
-    // Lock input after sending
-    const lockInput = isPhone ? phoneInput : emailInput
-    if (lockInput) {
-      lockInput.readOnly = true
-      lockInput.style.opacity = '0.7'
-    }
+      try {
+        const payload = { purpose: meta.codePurpose, captchaId, captchaAnswer: captchaCode }
+        if (isPhone) {
+          payload.phone = phone
+        } else {
+          payload.email = email
+        }
+        const res = await api.post('/api/send-code', payload)
 
-    // Start 60s countdown
-    clearAuthCodeTimer()
-    state._codeCountdown = 60
-    state._authCodeTimer = setInterval(() => {
-      state._codeCountdown--
-      if (state._codeCountdown <= 0) {
+        if (!res.ok) {
+          showFormMsg(res.error || '发送失败，请稍后重试', 'err')
+          sendBtn.textContent = '发送验证码'
+          sendBtn.disabled = false
+          state._codeSending = false
+          return
+        }
+
+        // Show code input group
+        if (codeGroup) codeGroup.style.display = 'block'
+        showFormMsg(res.message || (isPhone ? '验证码已发送到您的手机' : '验证码已发送到您的邮箱'), 'ok')
+        state._emailVerified = false
+        state._verifyToken = null
+
+        // Lock input after sending
+        const lockInput = isPhone ? phoneInput : emailInput
+        if (lockInput) {
+          lockInput.readOnly = true
+          lockInput.style.opacity = '0.7'
+        }
+
+        // Start 60s countdown
         clearAuthCodeTimer()
-        sendBtn.textContent = '重新发送'
+        state._codeCountdown = 60
+        state._authCodeTimer = setInterval(() => {
+          state._codeCountdown--
+          if (state._codeCountdown <= 0) {
+            clearAuthCodeTimer()
+            sendBtn.textContent = '重新发送'
+            sendBtn.disabled = false
+            state._codeSending = false
+          } else {
+            sendBtn.textContent = `${state._codeCountdown}s`
+          }
+        }, 1000)
+
+      } catch (err) {
+        showFormMsg('网络错误，请检查网络后重试', 'err')
+        sendBtn.textContent = '发送验证码'
         sendBtn.disabled = false
         state._codeSending = false
-      } else {
-        sendBtn.textContent = `${state._codeCountdown}s`
       }
-    }, 1000)
-
+    })
   } catch (err) {
-    showFormMsg('网络错误，请检查网络后重试', 'err')
-    sendBtn.textContent = '发送验证码'
-    sendBtn.disabled = false
-    state._codeSending = false
+    showFormMsg('获取验证码失败，请稍后重试', 'err')
   }
 }
 

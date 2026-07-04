@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import { generateToken, authMiddleware } from '../middleware/auth.js'
 import nodemailer from 'nodemailer'
-import { sendSms, sendVerificationSms, loadSmsConfig, resetSmsConfig } from '../sms.js'
+import { sendVerificationSms } from '../sms.js'
 import { generateCaptcha, verifyCaptcha } from '../captcha.js'
 
 const router = Router()
@@ -268,15 +268,10 @@ router.post('/send-code', async (req, res) => {
         if (existing) return res.json({ ok: false, error: '该手机号已注册' })
       }
 
-      const code = String(Math.floor(100000 + Math.random() * 900000))
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
-      await queryRun('INSERT INTO verification_codes (phone, code, purpose, expires_at) VALUES (?, ?, ?, ?)', [targetPhone, code, purpose || 'login', expiresAt])
-
       let smsSent = false
       try {
-        await loadSmsConfig()
-        const smsResult = await sendVerificationSms(targetPhone, code)
-        smsSent = smsResult && smsResult.ok
+        await sendVerificationSms(targetPhone, purpose || 'login')
+        smsSent = true
       } catch (smsErr) {
         console.error('[send-code] SMS error:', smsErr.message)
       }
@@ -469,15 +464,10 @@ router.post('/send-bind-code', authMiddleware, async (req, res) => {
       const existing = await queryOne('SELECT id FROM users WHERE phone = ? AND id != ?', [phone, req.user.id])
       if (existing) return res.json({ ok: false, error: '该手机号已被其他账号绑定' })
 
-      const code = String(Math.floor(100000 + Math.random() * 900000))
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
-      await queryRun('INSERT INTO verification_codes (phone, code, purpose, expires_at) VALUES (?, ?, ?, ?)', [phone, code, 'bind', expiresAt])
-
       let smsSent = false
       try {
-        await loadSmsConfig()
-        const smsResult = await sendVerificationSms(phone, code)
-        smsSent = smsResult && smsResult.ok
+        await sendVerificationSms(phone, 'bind')
+        smsSent = true
       } catch (smsErr) {
         console.error('[send-bind-code] SMS error:', smsErr.message)
       }

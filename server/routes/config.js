@@ -173,12 +173,8 @@ router.post('/system-config/sms/test', authMiddleware, adminOnly, async (req, re
       return res.json({ ok: false, error: '请先配置短信模板' })
     }
 
-    const result = await sendSms(to, templateCode, { code: '123456' })
-    if (result.ok) {
-      res.json({ ok: true })
-    } else {
-      res.json({ ok: false, error: result.error })
-    }
+    await sendSms(to, templateCode, { code: '123456' })
+    res.json({ ok: true })
   } catch (err) {
     res.json({ ok: false, error: err.message || '发送失败' })
   }
