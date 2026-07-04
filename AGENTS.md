@@ -21,7 +21,7 @@ npm run dev             # runs: node --watch server/index.js
 
 - **Stack**: Node.js (ESM) + Express + MySQL (mysql2/promise) + WebSocket (ws) + optional Redis
 - **Frontend**: Vanilla HTML/CSS/JS (no framework, no build step)
-- **Bridge**: Separate Python app (`aurum_bridge_gui.py`) — not part of npm; packaged with PyInstaller
+- **Bridge**: Separate Python app (`aurum_bridge_gui.py`) — not part of npm; packaged with Nuitka (onefile mode)
 - **Entry point**: `server/index.js`
 - **Database**: MySQL, auto-migrates on startup via `initDB()` in `server/db.js` + tracked migrations in `server/migrations.js`
 
@@ -39,7 +39,7 @@ Browser <-> WebSocket (bridge-ws.js) <-> Python Bridge <-> MT5 Terminal
 - `server/redis.js` — Optional Redis caching. No `REDIS_HOST` = no cache, graceful degradation. Exports `cacheGetJSON`, `cacheSetJSON`, `cacheDel`.
 - `server/middleware/auth.js` — JWT auth. Exports `authMiddleware` and `optionalAuth`. Auto-downgrades expired plans.
 - `server/config.js` — Loads `.env` via dotenv. **Exits if `JWT_SECRET` is missing.**
-- `server/routes/ai.js` — AI trading logic + auto-scheduler + signal generation + smart close.
+- `server/routes/ai/index.js` — AI trading entry point + Router. Split into 7 modules: utils/market-data/llm/config/strategy/scheduler/index.
 
 ## Dual API Prefix
 
@@ -53,11 +53,11 @@ Both `/api` and `/aurum-api` serve the same routes. `/aurum-api` is used by the 
 2. **JWT_SECRET required**: `server/config.js` calls `process.exit(1)` if unset. Must be in `server/.env`.
 3. **`.env` location**: Environment variables live in `server/.env`, loaded by `server/config.js` (dotenv) and `server/index.js` (manual fallback).
 4. **Beijing time hardcoded**: `db.js:beijingNow()` returns UTC+8. MT5 broker time is UTC+3 (convert with -5h offset).
-5. **No test/lint/CI**: No test framework, ESLint, or GitHub Actions. Verification: `npm run dev` and check for `[FATAL]` in console.
+5. **Testing**: Vitest with 124 unit tests (`npm test`). No ESLint or CI pipeline. Additional verification: `npm run dev` and check for `[FATAL]` in console.
 6. **Multi-role access**: `admin > pro > plus > free`. Pro needs bridge connected for trading. Plus is read-only (observe mode). Free sees upgrade overlay.
 7. **Bridge status matters**: `bridge-ws.js` checks user role AND bridge connection. Many features gate on `bridge` status in user state.
 8. **Auto-scheduler dual-table**: Auto-scheduler state stored in both `auto_scheduler` and `user_bridge_settings` tables. Changes must write both.
-9. **PyInstaller `.spec`**: Hardcoded paths (`D:\\web\\public\\ai\\...`). Only builds on original dev machine. `.spec` files are gitignored.
+9. **Nuitka packaging**: Bridge uses Nuitka onefile mode. Build: `python public/ai/build_nuitka.py`. Requires MinGW-w64 (`winget install BrechtSanders.WinLibs.POSIX.UCRT`). `resource_path()` supports both PyInstaller (`sys._MEIPASS`) and Nuitka (`os.path.dirname(sys.executable)`). `.spec` files are gitignored.
 10. **No hot reload for frontend**: Static files served from `public/`. Edit HTML/JS directly; browser refresh.
 11. **Memory limit**: Deploy with `--max-old-space-size=256`. Without it, PM2 restarts from heap exhaustion.
 12. **Redis is optional**: If `REDIS_HOST` is not set, all cache calls silently return null. No crash.
@@ -115,17 +115,12 @@ See `CODE_REVIEW.md` for the full review checklist. Key rules:
 - Dual-table sync, N+1 queries, resource leaks = should fix
 - Every PR self-check against historical bug patterns in CODE_REVIEW.md
 
-## Recent Improvements (2026-06-26)
+## Recent Improvements (2026-07-04)
 
 ### Performance Indexes
 Added to `migrations.js`:
-- `users(last_seen_at)` — admin dashboard queries
-- `ai_signals(user_id, created_at)` — signal history
-- `orders(user_id, status)` — revenue stats
-- `auto_scheduler(enabled)` — startup scheduler init
-- `audit_logs(user_id, action)` — audit log pagination
-- `notifications(user_id, is_read)` — unread count
-- `trades(user_id)` — user trade list
+- `users(last_seen_at)`, `ai_signals(user_id, created_at)`, `orders(user_id, status)`
+- `auto_scheduler(enabled)`, `audit_logs(user_id, action)`, `notifications(user_id, is_read)`, `trades(user_id)`
 
 ### Code Quality
 - Fixed empty catch blocks in `admin.js` and `ai.js` — now log errors with `[Admin]`/`[AI]` prefix
@@ -143,12 +138,13 @@ Added to `migrations.js`:
 - Cache invalidated on write/update/delete
 
 ### Architecture
-- `ai.js` uses shared `authMiddleware` from `middleware/auth.js` (removed private duplicate)
 - `ai.js` split into 7 modules: utils/market-data/llm/config/strategy/scheduler/index
+- Bridge packaging switched from PyInstaller to Nuitka (lower AV false positives, 58.9MB vs 64.2MB)
+- `resource_path()` supports both PyInstaller and Nuitka runtimes
 
 ### Testing
-- Added Vitest framework with 69 unit tests
-- Coverage: ai/utils.js (28), ai/llm.js (14), ai/config.js (14), ai/market-data.js (13)
+- Vitest framework with 124 unit tests
+- Coverage: ai/utils.js (28), ai/llm.js (17), ai/config.js (14), ai/market-data.js (14), ai/chan.js (45), ai/strategy.js (4), ai/scheduler.js (2)
 - Run: `npm test`
 
 ### Frontend Performance
