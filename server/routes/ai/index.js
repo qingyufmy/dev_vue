@@ -59,7 +59,7 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
 export { initAutoSchedulers }
 
 export { executeViaBridge, mt5Bridge } from './market-data.js'
-export { isBridgeAlive, getBridgeStatus, getAllBridges, getBridgeTradeMode, getOwnBridgeTradeMode } from '../../bridge-ws.js'
+export { isBridgeAlive, getAllBridges, getBridgeTradeMode } from '../../bridge-ws.js'
 
 export { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
 

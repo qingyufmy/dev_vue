@@ -1,6 +1,5 @@
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
-import { v4 as uuidv4 } from 'uuid'
 /** Get current Beijing time as 'YYYY-MM-DD HH:MM:SS' for MySQL DATETIME */
 export function beijingNow() {
   const d = new Date(Date.now() + 8 * 3600_000)

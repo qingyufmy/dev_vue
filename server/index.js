@@ -353,17 +353,26 @@ initBridgeWS(server)
   server.listen(PORT, () => {
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })
-  // Sentiment data: initial fetch + 30-min refresh
-  try {
-    const data = await fetchSentiment()
-    await cacheSetJSON('sentiment:data', { data, updatedAt: new Date().toISOString() }, 2100)
-    console.log('[Sentiment] Initial data loaded')
-  } catch (e) { console.error('[Sentiment] Initial fetch failed:', e.message) }
+  // Sentiment data: non-blocking initial fetch + 30-min refresh
+  fetchSentiment().then(data => {
+    const hasValid = data.some(d => d.longPct !== null)
+    if (hasValid) {
+      cacheSetJSON('sentiment:data', { data, updatedAt: new Date().toISOString() }, 2100)
+      console.log('[Sentiment] Initial data loaded')
+    } else {
+      console.log('[Sentiment] Initial fetch returned no valid data, keeping existing cache')
+    }
+  }).catch(e => console.error('[Sentiment] Initial fetch failed:', e.message))
   setInterval(async () => {
     try {
       const data = await fetchSentiment()
-      await cacheSetJSON('sentiment:data', { data, updatedAt: new Date().toISOString() }, 2100)
-      console.log('[Sentiment] 30min refresh done')
+      const hasValid = data.some(d => d.longPct !== null)
+      if (hasValid) {
+        await cacheSetJSON('sentiment:data', { data, updatedAt: new Date().toISOString() }, 2100)
+        console.log('[Sentiment] 30min refresh done')
+      } else {
+        console.log('[Sentiment] Refresh returned no valid data, keeping existing cache')
+      }
     } catch (e) { console.error('[Sentiment] Refresh failed:', e.message) }
   }, 30 * 60 * 1000)
 })()

@@ -5724,20 +5724,38 @@ async function renderTools() {
 
 let _sentimentData = null
 
-async function loadSentimentGauge() {
+let _sentimentRetryCount = 0
+const MAX_SENTIMENT_RETRIES = 3
+
+async function loadSentimentGauge(retryCount = 0) {
   const previewEl = document.getElementById('sentimentPreview')
   if (!previewEl) return
 
   try {
     const res = await api.get('/api/sentiment')
-    if (!res.ok || !res.data) {
-      if (previewEl) previewEl.innerHTML = '<div class="sentiment-preview-hint">数据更新中，请稍后查看</div>'
+    if (!res.ok) {
+      previewEl.innerHTML = '<div class="sentiment-preview-hint">暂时无法加载</div>'
+      return
+    }
+
+    if (res.status === 'empty' || res.status === 'fetching') {
+      if (retryCount < MAX_SENTIMENT_RETRIES) {
+        previewEl.innerHTML = `<div class="sentiment-preview-hint">数据加载中，${30 * (retryCount + 1)}秒后重试...</div>`
+        setTimeout(() => loadSentimentGauge(retryCount + 1), 30000)
+      } else {
+        previewEl.innerHTML = '<div class="sentiment-preview-hint">数据暂不可用，请手动刷新页面</div>'
+      }
+      return
+    }
+
+    if (!res.data || res.data.length === 0) {
+      previewEl.innerHTML = '<div class="sentiment-preview-hint">暂无数据</div>'
       return
     }
 
     const validItems = res.data.filter(d => d.longPct !== null)
     if (validItems.length === 0) {
-      if (previewEl) previewEl.innerHTML = '<div class="sentiment-preview-hint">数据更新中，请稍后查看</div>'
+      previewEl.innerHTML = '<div class="sentiment-preview-hint">数据暂不可用</div>'
       return
     }
 

@@ -1,7 +1,7 @@
 // ai/scheduler.js — 统一自动调度 + 智能平仓
 
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
-import { getOwnBridgeTradeMode, getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
+import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols } from './config.js'
@@ -480,15 +480,6 @@ export async function reconcileAutoSchedulers() {
   } catch (e) {
     console.error('[reconcileAutoSchedulers] Error:', e.message)
   }
-}
-
-function countSubscribers(promptTypeId) {
-  let count = 0
-  for (const key in autoSchedulerState) {
-    const st = autoSchedulerState[key]
-    if (st.promptTypeId === promptTypeId) count += st.subscribers?.size || 0
-  }
-  return count
 }
 
 // === Unified Scheduler Start/Stop ===
@@ -1003,10 +994,6 @@ export function startAutoSchedulerReconciler() {
     try { await reconcileAutoSchedulers() } catch (e) { console.error('[Reconciler] Error:', e.message) }
   }, 60_000)
   console.log('[Reconciler] Started periodic reconciliation (every 60s)')
-}
-
-function sendAutoProgress(userId, progress) {
-  try { sendToBrowsers(userId, { type: 'auto_progress', ...progress }) } catch {}
 }
 
 export async function startSmartCloseScheduler(userId) {

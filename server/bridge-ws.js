@@ -1,15 +1,7 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { query, queryOne, queryAll, queryRun, logAudit, withTransaction, beijingNow } from './db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from './db.js'
 import { getRedis, isRedisAvailable } from './redis.js'
-
-// Parse symbols from DB: handles legacy JSON array or plain comma-separated text
-function parseSymbols(raw) {
-  if (!raw) return ['XAUUSD']
-  const s = raw.trim()
-  if (s.startsWith('[')) { try { return JSON.parse(s) } catch { return [s] } }
-  return s.split(',').map(x => x.trim()).filter(Boolean)
-}
 
 function toMt5Time(str) {
   // Beijing time (UTC+8) → MT5 broker time (UTC+3): subtract 5 hours
@@ -1998,16 +1990,6 @@ export function isTradeEnabled(userId) {
 
 // Market status: bridge connected + tick time unchanged for 5 min → closed
 // Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
-// Check market status for user's OWN bridge only — NO admin fallback.
-// Used by auto-scheduler, auto-cycle, smart-close, etc.
-// Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
-export function getOwnBridgeTradeMode(userId) {
-  const bridge = bridges.get(userId)
-  if (!bridge || bridge.ws.readyState !== 1) return -1
-  if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
-  return -1
-}
-
 // Market tick thresholds
 const MARKET_SAME_TICK_CLOSED_MS = 60_000
 const MARKET_TICK_STALE_MS = 120_000
@@ -2053,17 +2035,6 @@ export async function getBridgeTradeMode(userId) {
   if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
   // No trade mode data yet → unknown
   return -1
-}
-
-// Get bridge status for a user
-export function getBridgeStatus(userId) {
-  const bridge = bridges.get(userId)
-  if (!bridge || bridge.ws.readyState !== 1) return { connected: false }
-  return {
-    connected: true,
-    alive: Date.now() - bridge.lastSeen < 20000,
-    lastSeen: bridge.lastSeen,
-  }
 }
 
 // Get all connected bridges (for admin)

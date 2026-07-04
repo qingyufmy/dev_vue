@@ -1,7 +1,7 @@
 // ai/strategy.js — 策略上下文 + 执行 + 分析
 
 import { queryOne, queryRun, beijingNow } from '../../db.js'
-import { isBridgeAlive, isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
+import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'

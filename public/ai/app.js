@@ -105,50 +105,6 @@ const DEFAULT_PROMPT = `你是一个严谨的交易分析师。根据提供的�
 }
 \`\`\``;
 
-const DEFAULT_CLOSE_PROMPT = `你是一个严格的持仓管理分析师。根据持仓数据和当前行情，判断每笔持仓是否应该平仓。
-
-## 输出格式（JSON Schema）
-
-你必须输出一个合法的 JSON 对象，结构如下：
-
-\`\`\`json
-{
-  "positions": [
-    {
-      "ticket": "持仓票据号（必须与输入中的 ticket 完全一致）",
-      "action": "close 或 hold",
-      "confidence": 0.00,
-      "reason": "中文分析理由，必须引用具体数值（价格/浮盈/点数/时间）"
-    }
-  ]
-}
-\`\`\`
-
-## 分析规则
-
-1. 对 positions.details 中的每一笔持仓，给出 close 或 hold 判断。
-2. confidence 为 0-1 的小数，必须根据持仓状态动态评估：
-   - 浮盈且趋势延续 → hold 0.70-0.90
-   - 浮盈但趋势减弱 → hold 0.50-0.65
-   - 浮亏但在止损范围内 → hold 0.55-0.70
-   - 浮亏且趋势反向 → close 0.65-0.85
-   - 浮盈但趋势反转 → close 0.60-0.80
-3. reason 必须引用具体行情数据（当前价格、浮盈金额、持仓时长、技术指标等），禁止空洞描述。
-4. ticket 必须是输入持仓中已存在的 ticket，禁止编造。
-5. 如果所有持仓都没有明确的平仓依据，全部返回 hold。
-6. 禁止因为“保守起见”就建议平仓，必须有明确的行情依据。
-
-## 输出示例
-
-\`\`\`json
-{
-  "positions": [
-    {"ticket": "12345", "action": "hold", "confidence": 0.75, "reason": "当前价2038.50高于开仓价2035.00，浮盈$35.00，SMA20上行趋势延续"},
-    {"ticket": "12346", "action": "close", "confidence": 0.72, "reason": "当前价2031.20低于开仓价2036.00，浮亏$48.00，EMA12下穿EMA26形成死叉，趋势反向"}
-  ]
-}
-\`\`\``;
-
 function getGlobalSymbol() {
   return localStorage.getItem(SYMBOL_STORAGE_KEY) || "XAUUSD";
 }
@@ -1291,11 +1247,6 @@ async function withBusy(button, task) {
   }
 }
 
-async function login(event) {
-  if (event) event.preventDefault();
-  window.location.href = "/";
-}
-
 function logout() {
   if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopRealtimeSync();
@@ -2007,32 +1958,6 @@ function ticketCell(ticket, signalTickets) {
   return `<td class="num">${escapeHtml(ticket)}</td>`;
 }
 
-function updatePositionRow(tbody, position, withAction) {
-  const ticket = String(position.ticket);
-  let row = tbody.querySelector(`tr[data-ticket="${CSS.escape(ticket)}"]`);
-  if (!row) {
-    tbody.innerHTML = renderPositionRows([position], withAction);
-    initIcons();
-    return;
-  }
-  const type = String(position.type || "").toLowerCase();
-  const directionLabel = type === "buy" ? "买入 多" : "卖出 空";
-  const directionClass = type === "buy" ? "dir-buy" : type === "close" ? "dir-close" : "dir-sell";
-  const digits = Number(position.digits);
-  const priceDigits = Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
-  const cells = row.querySelectorAll("td");
-  if (cells[1]) cells[1].textContent = position.symbol;
-  if (cells[2]) cells[2].innerHTML = `<span class="${directionClass}">${directionLabel}</span>`;
-  if (cells[3]) cells[3].textContent = volumeText(position.volume);
-  if (cells[4]) cells[4].textContent = fmt(position.price_open, priceDigits);
-  if (cells[5]) cells[5].textContent = fmt(position.price_current, priceDigits);
-  const profitCell = cells[withAction ? 8 : 7];
-  if (profitCell) {
-    profitCell.textContent = fmt(position.profit);
-    profitCell.className = profitClass(position.profit);
-  }
-}
-
 async function loadPositions() {
   const [data] = await Promise.all([
     wsApi("positions", {}),
@@ -2319,18 +2244,6 @@ async function saveConfig() {
   } catch (error) {
     toast(error.message, "error");
   }
-}
-
-// ---- Auto-config override section removed ----
-async function syncOverrideSection() {}
-
-function initOverrideSymbolsSelector() {
-  const input = $("overrideSymbolSelect");
-  if (!input) return;
-  if (input.closest(".sym-selector")) return;
-  const symbolNames = (state.symbols || []).map(s => typeof s === "string" ? s : s.name).filter(Boolean);
-  if (!symbolNames.length) return;
-  createSymbolSelector("overrideSymbolSelect", symbolNames, { noGlobalSync: true });
 }
 
 function selectedTimeframes() {
@@ -2699,14 +2612,6 @@ async function saveAdminPromptType() {
     closePromptTypeModal();
     await loadAutoConfig();
   } catch (e) { console.error('[saveAdminPromptType] error:', e); toast(e.message, 'error'); }
-}
-
-async function disableAdminPromptType(id) {
-  try {
-    await wsApi('admin_disable_auto_prompt_type', { id });
-    toast('策略已禁用', 'success');
-    await loadAutoConfig();
-  } catch (e) { toast(e.message, 'error'); }
 }
 
 // [disabled] 智能平仓
