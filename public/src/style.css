@@ -6209,6 +6209,32 @@ button { cursor: pointer; font-family: inherit; }
 .form-hint-err { color: #f44336; }
 .pwd-rules { color: var(--text-3); margin-top: 6px; }
 
+.phone-input-wrap {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.phone-prefix {
+  flex-shrink: 0;
+  width: 72px;
+  padding: 10px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  appearance: auto;
+}
+
+.form-input-phone {
+  flex: 1;
+  min-width: 0;
+}
+
 .form-msg {
   padding: 10px 14px;
   border-radius: var(--radius-xs);

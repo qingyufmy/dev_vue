@@ -6671,6 +6671,30 @@ const AUTH_MODE_META = {
     showPasswordRules: true,
     showConfirmPassword: true,
   },
+  login_phone: {
+    title: '手机号登录',
+    submitLabel: '登录',
+    phoneLogin: true,
+    passwordLabel: '密码',
+    passwordPlaceholder: '请输入密码',
+  },
+  login_phone_code: {
+    title: '手机验证码登录',
+    submitLabel: '登录',
+    phoneLogin: true,
+    codePurpose: 'login',
+  },
+  register_phone: {
+    title: '手机号注册',
+    submitLabel: '注册',
+    phoneRegister: true,
+    codePurpose: 'register',
+    passwordLabel: '密码',
+    passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
+    showPasswordRules: true,
+    showConfirmPassword: true,
+    showTos: true,
+  },
 }
 
 function getAuthModeMeta(mode) {
@@ -6689,38 +6713,55 @@ function clearAuthCodeTimer() {
 }
 
 function renderAuthModeLinks(mode) {
+  const { emailEnabled = true, phoneEnabled = true } = state.authMethods || {}
+
   if (mode === 'login_password') {
-    return `
-      <div class="auth-mode-links">
-        <a data-auth-mode="login_code">使用邮箱验证码登录</a>
-        <a data-auth-mode="reset_password">忘记密码</a>
-      </div>
-    `
+    const links = []
+    if (emailEnabled) links.push('<a data-auth-mode="login_code">使用邮箱验证码登录</a>')
+    if (phoneEnabled) links.push('<a data-auth-mode="login_phone">使用手机号登录</a>')
+    links.push('<a data-auth-mode="reset_password">忘记密码</a>')
+    return `<div class="auth-mode-links">${links.join('')}</div>`
   }
   if (mode === 'login_code') {
-    return `
-      <div class="auth-mode-links">
-        <a data-auth-mode="login_password">使用密码登录</a>
-        <a data-auth-mode="reset_password">忘记密码</a>
-      </div>
-    `
+    const links = ['<a data-auth-mode="login_password">使用密码登录</a>']
+    if (phoneEnabled) links.push('<a data-auth-mode="login_phone">使用手机号登录</a>')
+    links.push('<a data-auth-mode="reset_password">忘记密码</a>')
+    return `<div class="auth-mode-links">${links.join('')}</div>`
+  }
+  if (mode === 'login_phone') {
+    const links = []
+    if (emailEnabled) links.push('<a data-auth-mode="login_password">使用密码登录</a>')
+    links.push('<a data-auth-mode="login_phone_code">使用手机验证码登录</a>')
+    links.push('<a data-auth-mode="reset_password">忘记密码</a>')
+    return `<div class="auth-mode-links">${links.join('')}</div>`
+  }
+  if (mode === 'login_phone_code') {
+    const links = ['<a data-auth-mode="login_phone">使用密码登录</a>']
+    if (emailEnabled) links.push('<a data-auth-mode="login_password">使用邮箱密码登录</a>')
+    links.push('<a data-auth-mode="reset_password">忘记密码</a>')
+    return `<div class="auth-mode-links">${links.join('')}</div>`
+  }
+  if (mode === 'register_phone') {
+    return `<div class="auth-mode-links"><a data-auth-mode="login_phone">已有账号？立即登录</a></div>`
   }
   if (mode === 'reset_password') {
-    return `
-      <div class="auth-mode-links">
-        <a data-auth-mode="login_password">返回密码登录</a>
-        <a data-auth-mode="login_code">使用验证码登录</a>
-      </div>
-    `
+    const links = ['<a data-auth-mode="login_password">返回密码登录</a>']
+    if (emailEnabled) links.push('<a data-auth-mode="login_code">使用验证码登录</a>')
+    if (phoneEnabled) links.push('<a data-auth-mode="login_phone">使用手机号登录</a>')
+    return `<div class="auth-mode-links">${links.join('')}</div>`
   }
   return ''
 }
 
 function renderAuthFooter(mode) {
-  if (mode === 'register') {
+  if (mode === 'register' || mode === 'register_phone') {
     return '已有账号？<a data-auth-mode="login_password">立即登录</a>'
   }
-  return '还没有账号？<a data-auth-mode="register">立即注册</a>'
+  const { emailEnabled = true, phoneEnabled = true } = state.authMethods || {}
+  const links = ['还没有账号？']
+  if (emailEnabled) links.push('<a data-auth-mode="register">邮箱注册</a>')
+  if (phoneEnabled) links.push('<a data-auth-mode="register_phone">手机号注册</a>')
+  return links.join('')
 }
 
 async function handleSendCode() {
@@ -6728,12 +6769,26 @@ async function handleSendCode() {
   if (!meta.codePurpose) return
 
   const emailInput = document.getElementById('authEmail')
+  const phoneInput = document.getElementById('authPhone')
   const sendBtn = document.getElementById('sendCodeBtn')
   const codeGroup = document.getElementById('codeGroup')
 
-  if (!emailInput || !emailInput.value || !emailInput.value.includes('@')) {
-    showFormMsg('请先输入有效的邮箱地址', 'err')
-    return
+  const isPhone = meta.phoneLogin || meta.phoneRegister
+  const email = emailInput?.value?.trim()
+  const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
+  const phoneRaw = phoneInput?.value?.trim()
+  const phone = phoneRaw ? phonePrefix + phoneRaw : ''
+
+  if (isPhone) {
+    if (!phoneRaw || phoneRaw.length < 6) {
+      showFormMsg('请先输入有效的手机号', 'err')
+      return
+    }
+  } else {
+    if (!email || !email.includes('@')) {
+      showFormMsg('请先输入有效的邮箱地址', 'err')
+      return
+    }
   }
 
   if (state._codeSending) return
@@ -6742,10 +6797,13 @@ async function handleSendCode() {
   sendBtn.disabled = true
 
   try {
-    const res = await api.post('/api/send-code', {
-      email: emailInput.value,
-      purpose: meta.codePurpose,
-    })
+    const payload = { purpose: meta.codePurpose }
+    if (isPhone) {
+      payload.phone = phone
+    } else {
+      payload.email = email
+    }
+    const res = await api.post('/api/send-code', payload)
 
     if (!res.ok) {
       showFormMsg(res.error || '发送失败，请稍后重试', 'err')
@@ -6757,13 +6815,16 @@ async function handleSendCode() {
 
     // Show code input group
     if (codeGroup) codeGroup.style.display = 'block'
-    showFormMsg(res.message || '验证码已发送到您的邮箱', 'ok')
+    showFormMsg(res.message || (isPhone ? '验证码已发送到您的手机' : '验证码已发送到您的邮箱'), 'ok')
     state._emailVerified = false
     state._verifyToken = null
 
-    // Lock email input after sending
-    emailInput.readOnly = true
-    emailInput.style.opacity = '0.7'
+    // Lock input after sending
+    const lockInput = isPhone ? phoneInput : emailInput
+    if (lockInput) {
+      lockInput.readOnly = true
+      lockInput.style.opacity = '0.7'
+    }
 
     // Start 60s countdown
     clearAuthCodeTimer()
@@ -6793,25 +6854,36 @@ async function handleCodeVerify(code) {
   if (!meta.codePurpose) return
 
   const emailInput = document.getElementById('authEmail')
+  const phoneInput = document.getElementById('authPhone')
   const codeStatus = document.getElementById('codeStatus')
   const codeHint = document.getElementById('codeHint')
 
-  if (!emailInput || !code || code.length !== 6) return
+  const isPhone = meta.phoneLogin || meta.phoneRegister
+  const email = emailInput?.value?.trim()
+  const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
+  const phoneRaw = phoneInput?.value?.trim()
+  const phone = phoneRaw ? phonePrefix + phoneRaw : ''
+
+  if (!code || code.length !== 6) return
+  if (isPhone && !phone) return
+  if (!isPhone && !email) return
 
   if (codeStatus) { codeStatus.textContent = '...'; codeStatus.className = 'code-status' }
 
   try {
-    const res = await api.post('/api/verify-code', {
-      email: emailInput.value,
-      code,
-      purpose: meta.codePurpose,
-    })
+    const payload = { code, purpose: meta.codePurpose }
+    if (isPhone) {
+      payload.phone = phone
+    } else {
+      payload.email = email
+    }
+    const res = await api.post('/api/verify-code', payload)
 
     if (res.ok) {
       state._emailVerified = true
       state._verifyToken = res.token
       if (codeStatus) { codeStatus.textContent = '✓'; codeStatus.className = 'code-status code-status-ok' }
-      if (codeHint) { codeHint.textContent = '邮箱验证成功'; codeHint.className = 'form-hint form-hint-ok' }
+      if (codeHint) { codeHint.textContent = isPhone ? '手机验证成功' : '邮箱验证成功'; codeHint.className = 'form-hint form-hint-ok' }
     } else {
       state._emailVerified = false
       state._verifyToken = null
@@ -6837,6 +6909,15 @@ function showFormMsg(msg, type) {
   }
 }
 
+async function loadAuthMethods() {
+  try {
+    const res = await api.get('/api/auth-methods')
+    if (res.ok) {
+      state.authMethods = { emailEnabled: res.emailEnabled, phoneEnabled: res.phoneEnabled }
+    }
+  } catch (e) { /* ignore */ }
+}
+
 function showAuthModal(mode, options = {}) {
   const meta = getAuthModeMeta(mode)
   const prefillEmail = (options.email ?? getCurrentAuthEmail() ?? state.authPrefillEmail ?? '').trim()
@@ -6846,6 +6927,7 @@ function showAuthModal(mode, options = {}) {
     : ''
 
   state.authMode = mode
+  loadAuthMethods()
   state.authPrefillEmail = prefillEmail
   if (referralCode) state.referralInviteCode = referralCode
   if (hasNextUrl) {
@@ -6872,18 +6954,50 @@ function showAuthModal(mode, options = {}) {
           <p class="form-hint">该邀请码来自邀请链接，注册后由后端自动归因，不能修改。</p>
         </div>
       ` : ''}
-      <div class="form-group">
-        <label class="form-label">邮箱</label>
-        ${meta.codePurpose ? `
-          <div class="form-row">
+      ${meta.phoneLogin || meta.phoneRegister ? `
+        <div class="form-group">
+          <label class="form-label">手机号</label>
+          ${meta.codePurpose ? `
+            <div class="form-row">
+              <div class="phone-input-wrap">
+                <select class="form-select phone-prefix" name="phonePrefix" id="authPhonePrefix">
+                  <option value="+86">+86</option>
+                  <option value="+1">+1</option>
+                  <option value="+44">+44</option>
+                  <option value="+81">+81</option>
+                  <option value="+82">+82</option>
+                </select>
+                <input type="tel" class="form-input form-input-phone" name="phone" id="authPhone" required placeholder="请输入手机号">
+              </div>
+              <button type="button" class="btn-send-code" id="sendCodeBtn">发送验证码</button>
+            </div>
+          ` : `
+            <div class="phone-input-wrap">
+              <select class="form-select phone-prefix" name="phonePrefix" id="authPhonePrefix">
+                <option value="+86">+86</option>
+                <option value="+1">+1</option>
+                <option value="+44">+44</option>
+                <option value="+81">+81</option>
+                <option value="+82">+82</option>
+              </select>
+              <input type="tel" class="form-input form-input-phone" name="phone" id="authPhone" required placeholder="请输入手机号">
+            </div>
+          `}
+        </div>
+      ` : `
+        <div class="form-group">
+          <label class="form-label">邮箱</label>
+          ${meta.codePurpose ? `
+            <div class="form-row">
+              <input type="email" class="form-input" name="email" id="authEmail" required placeholder="请输入邮箱" value="${escapeHtml(prefillEmail)}">
+              <button type="button" class="btn-send-code" id="sendCodeBtn">发送验证码</button>
+            </div>
+          ` : `
             <input type="email" class="form-input" name="email" id="authEmail" required placeholder="请输入邮箱" value="${escapeHtml(prefillEmail)}">
-            <button type="button" class="btn-send-code" id="sendCodeBtn">发送验证码</button>
-          </div>
-        ` : `
-          <input type="email" class="form-input" name="email" id="authEmail" required placeholder="请输入邮箱" value="${escapeHtml(prefillEmail)}">
-        `}
-      </div>
-      ${mode === 'register' ? `
+          `}
+        </div>
+      `}
+      ${mode === 'register' || mode === 'register_phone' ? `
         <div class="form-group">
           <label class="form-label">昵称</label>
           <input type="text" class="form-input" name="nickname" id="authNickname" placeholder="给自己取个名字（选填）">
@@ -7990,7 +8104,7 @@ function setupGlobalEvents() {
 
   // Auto-verify when 6-digit code is entered
   modalBody.addEventListener('input', (e) => {
-    if (e.target.id === 'authEmail') {
+    if (e.target.id === 'authEmail' || e.target.id === 'authPhone') {
       state._emailVerified = false
       state._verifyToken = null
     }
@@ -8108,6 +8222,122 @@ function setupGlobalEvents() {
           persistAuthSession(result, { syncProgress: true })
         } else {
           showFormMsg(result.error || '登录失败，请稍后重试', 'err')
+        }
+      } catch (err) {
+        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
+    if (mode === 'login_phone') {
+      const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
+      const phoneRaw = data.phone?.trim()
+      const phone = phoneRaw ? phonePrefix + phoneRaw : ''
+      if (!phone) {
+        showFormMsg('请输入手机号', 'err')
+        return
+      }
+      if (!data.password) {
+        showFormMsg('请输入密码', 'err')
+        return
+      }
+
+      setSubmitting(true)
+      try {
+        const result = await api.post('/api/login', {
+          method: 'password',
+          phone,
+          password: data.password,
+        })
+        if (result.ok) {
+          persistAuthSession(result, { syncProgress: true })
+        } else {
+          showFormMsg(result.error || '登录失败，手机号或密码错误', 'err')
+        }
+      } catch (err) {
+        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
+    if (mode === 'login_phone_code') {
+      const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
+      const phoneRaw = data.phone?.trim()
+      const phone = phoneRaw ? phonePrefix + phoneRaw : ''
+      if (!phone) {
+        showFormMsg('请输入手机号', 'err')
+        return
+      }
+      if (!state._emailVerified || !state._verifyToken) {
+        showFormMsg('请先完成手机验证', 'err')
+        return
+      }
+
+      setSubmitting(true)
+      try {
+        const result = await api.post('/api/login', {
+          method: 'code',
+          phone,
+          verifyToken: state._verifyToken,
+        })
+        if (result.ok) {
+          persistAuthSession(result, { syncProgress: true })
+        } else {
+          showFormMsg(result.error || '登录失败，请稍后重试', 'err')
+        }
+      } catch (err) {
+        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
+    if (mode === 'register_phone') {
+      const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
+      const phoneRaw = data.phone?.trim()
+      const phone = phoneRaw ? phonePrefix + phoneRaw : ''
+      if (!phone) {
+        showFormMsg('请输入手机号', 'err')
+        return
+      }
+      const tosCheck = document.getElementById('tosAgree')
+      if (!tosCheck?.checked) {
+        showFormMsg('请阅读并同意《用户服务协议》', 'err')
+        return
+      }
+      if (!state._emailVerified) {
+        showFormMsg('请先完成手机验证', 'err')
+        return
+      }
+      const pwdError = getPasswordRuleError(data.password)
+      if (pwdError) {
+        showFormMsg(pwdError, 'err')
+        return
+      }
+      if (data.password !== data.confirmPassword) {
+        showFormMsg('两次输入的密码不一致', 'err')
+        return
+      }
+
+      setSubmitting(true)
+      try {
+        const result = await api.post('/api/register', {
+          phone,
+          nickname: data.nickname || '',
+          password: data.password,
+          verifyToken: state._verifyToken,
+          tosAgree: true,
+          tosVersion: TOS_AGREEMENT_VERSION,
+        })
+        if (result.ok) {
+          persistAuthSession(result)
+        } else {
+          showFormMsg(result.error || '注册失败，请稍后重试', 'err')
         }
       } catch (err) {
         showFormMsg('服务器连接失败，请检查网络后重试', 'err')
