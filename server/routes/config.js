@@ -5,7 +5,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth.js'
 const router = Router()
 
 // 仅允许这些公开类别，敏感类别（smtp、qiniu、ai_provider 等）不可通过此接口访问
-const PUBLIC_CATEGORIES = new Set(['toolbox', 'market_menu', 'announcements', 'features'])
+const PUBLIC_CATEGORIES = new Set(['toolbox', 'market_menu', 'announcements', 'features', 'auth_toggle'])
 
 // Public: get config by category (for toolbox and market menu)
 router.get('/system-config-public/:category', async (req, res) => {
@@ -148,6 +148,37 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
     })
 
     res.json({ ok: true })
+  } catch (err) {
+    res.json({ ok: false, error: err.message || '发送失败' })
+  }
+})
+
+// Send test SMS
+router.post('/system-config/sms/test', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { to } = req.body
+    if (!to) return res.json({ ok: false, error: '请输入测试手机号' })
+
+    const { sendSms, loadSmsConfig } = await import('../sms.js')
+    const cfg = await loadSmsConfig()
+    if (!cfg.accessKeyId || !cfg.accessKeySecret) {
+      return res.json({ ok: false, error: '请先配置阿里云 AccessKey' })
+    }
+    if (!cfg.signName) {
+      return res.json({ ok: false, error: '请先配置短信签名' })
+    }
+
+    const templateCode = cfg.templateCodes?.login || cfg.templateCodes?.register
+    if (!templateCode) {
+      return res.json({ ok: false, error: '请先配置短信模板' })
+    }
+
+    const result = await sendSms(to, templateCode, { code: '123456' })
+    if (result.ok) {
+      res.json({ ok: true })
+    } else {
+      res.json({ ok: false, error: result.error })
+    }
   } catch (err) {
     res.json({ ok: false, error: err.message || '发送失败' })
   }
