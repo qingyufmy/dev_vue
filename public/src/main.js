@@ -3668,6 +3668,8 @@ function renderAdminConfigSection() {
         <button class="admin-board-tab" type="button" data-config-tab="qiniu">七牛云存储</button>
         <button class="admin-board-tab" type="button" data-config-tab="toolbox">金融工具箱</button>
         <button class="admin-board-tab" type="button" data-config-tab="market_menu">股票研究菜单</button>
+        <button class="admin-board-tab" type="button" data-config-tab="sms">短信服务</button>
+        <button class="admin-board-tab" type="button" data-config-tab="auth_toggle">登录注册</button>
       </div>
       <div id="adminConfigContent" class="admin-config-content">
         <div class="loading-spinner">加载中...</div>
@@ -3719,6 +3721,12 @@ function renderAdminConfigContent() {
       break
     case 'market_menu':
       renderMarketMenuConfig(container)
+      break
+    case 'sms':
+      renderSmsConfig(container)
+      break
+    case 'auth_toggle':
+      renderAuthToggleConfig(container)
       break
   }
 }
@@ -4090,6 +4098,122 @@ function setupMarketMenuEvents(menuItems) {
     const res = await api.put('/api/system-config/market_menu', { items })
     if (res.ok) {
       showToast('菜单配置已保存', 'success')
+      loadAdminConfig()
+    } else {
+      showToast(res.error || '保存失败', 'error')
+    }
+  })
+}
+
+function renderSmsConfig(container) {
+  const items = adminConfigData.sms || []
+  const getVal = (key) => items.find(i => i.key === key)?.value || ''
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <div class="admin-config-row">
+        <label>AccessKey ID</label>
+        <input type="text" class="admin-plan-input" id="smsAccessKeyId" value="${escapeHtml(getVal('access_key_id'))}" placeholder="阿里云 AccessKey ID">
+      </div>
+      <div class="admin-config-row">
+        <label>AccessKey Secret</label>
+        <input type="password" class="admin-plan-input" id="smsAccessKeySecret" value="${escapeHtml(getVal('access_key_secret'))}" placeholder="阿里云 AccessKey Secret">
+      </div>
+      <div class="admin-config-row">
+        <label>短信签名</label>
+        <input type="text" class="admin-plan-input" id="smsSignName" value="${escapeHtml(getVal('sign_name'))}" placeholder="量见课堂">
+      </div>
+      <div class="admin-config-row">
+        <label>登录验证码模板</label>
+        <input type="text" class="admin-plan-input" id="smsTemplateLogin" value="${escapeHtml(getVal('template_code_login'))}" placeholder="SMS_XXXXXX">
+      </div>
+      <div class="admin-config-row">
+        <label>注册验证码模板</label>
+        <input type="text" class="admin-plan-input" id="smsTemplateRegister" value="${escapeHtml(getVal('template_code_register'))}" placeholder="SMS_XXXXXX">
+      </div>
+      <div class="admin-config-row">
+        <label>重置密码模板</label>
+        <input type="text" class="admin-plan-input" id="smsTemplateReset" value="${escapeHtml(getVal('template_code_reset'))}" placeholder="SMS_XXXXXX">
+      </div>
+      <div class="admin-config-row">
+        <label>绑定验证码模板</label>
+        <input type="text" class="admin-plan-input" id="smsTemplateBind" value="${escapeHtml(getVal('template_code_bind'))}" placeholder="SMS_XXXXXX">
+      </div>
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="saveSmsConfig">保存配置</button>
+        <button class="btn btn-ghost" id="testSmsConfig">发送测试短信</button>
+      </div>
+      <div id="smsTestResult" class="admin-config-test-result"></div>
+    </div>
+  `
+
+  document.getElementById('saveSmsConfig')?.addEventListener('click', async () => {
+    const items = [
+      { key: 'access_key_id', value: document.getElementById('smsAccessKeyId').value, label: 'AccessKey ID', sort_order: 0 },
+      { key: 'access_key_secret', value: document.getElementById('smsAccessKeySecret').value, label: 'AccessKey Secret', sort_order: 1 },
+      { key: 'sign_name', value: document.getElementById('smsSignName').value, label: '短信签名', sort_order: 2 },
+      { key: 'template_code_login', value: document.getElementById('smsTemplateLogin').value, label: '登录验证码模板', sort_order: 3 },
+      { key: 'template_code_register', value: document.getElementById('smsTemplateRegister').value, label: '注册验证码模板', sort_order: 4 },
+      { key: 'template_code_reset', value: document.getElementById('smsTemplateReset').value, label: '重置密码模板', sort_order: 5 },
+      { key: 'template_code_bind', value: document.getElementById('smsTemplateBind').value, label: '绑定验证码模板', sort_order: 6 },
+    ]
+    const res = await api.put('/api/system-config/sms', { items })
+    if (res.ok) {
+      showToast('短信配置已保存', 'success')
+      loadAdminConfig()
+    } else {
+      showToast(res.error || '保存失败', 'error')
+    }
+  })
+
+  document.getElementById('testSmsConfig')?.addEventListener('click', async () => {
+    const resultEl = document.getElementById('smsTestResult')
+    const testPhone = prompt('请输入测试手机号：')
+    if (!testPhone) return
+    resultEl.innerHTML = '<span style="color:var(--text-3)">发送中...</span>'
+    const res = await api.post('/api/system-config/sms/test', { to: testPhone })
+    if (res.ok) {
+      resultEl.innerHTML = '<span style="color:#10b981">✓ 测试短信已发送，请检查手机</span>'
+    } else {
+      resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
+    }
+  })
+}
+
+function renderAuthToggleConfig(container) {
+  const items = adminConfigData.auth_toggle || []
+  const getVal = (key) => items.find(i => i.key === key)?.value || 'true'
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <div class="admin-config-row">
+        <label>邮箱注册登录</label>
+        <select class="admin-plan-select" id="authEmailEnabled">
+          <option value="true" ${getVal('email_enabled') === 'true' ? 'selected' : ''}>开启</option>
+          <option value="false" ${getVal('email_enabled') === 'false' ? 'selected' : ''}>关闭</option>
+        </select>
+      </div>
+      <div class="admin-config-row">
+        <label>手机号注册登录</label>
+        <select class="admin-plan-select" id="authPhoneEnabled">
+          <option value="true" ${getVal('phone_enabled') === 'true' ? 'selected' : ''}>开启</option>
+          <option value="false" ${getVal('phone_enabled') === 'false' ? 'selected' : ''}>关闭</option>
+        </select>
+      </div>
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="saveAuthToggle">保存配置</button>
+      </div>
+    </div>
+  `
+
+  document.getElementById('saveAuthToggle')?.addEventListener('click', async () => {
+    const items = [
+      { key: 'email_enabled', value: document.getElementById('authEmailEnabled').value, label: '邮箱注册登录', sort_order: 0 },
+      { key: 'phone_enabled', value: document.getElementById('authPhoneEnabled').value, label: '手机号注册登录', sort_order: 1 },
+    ]
+    const res = await api.put('/api/system-config/auth_toggle', { items })
+    if (res.ok) {
+      showToast('登录注册配置已保存', 'success')
       loadAdminConfig()
     } else {
       showToast(res.error || '保存失败', 'error')
