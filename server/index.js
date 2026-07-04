@@ -92,6 +92,9 @@ app.use('/api/register', authLimiter)
 app.use('/api/send-code', authLimiter)
 app.use('/api/verify-code', authLimiter)
 app.use('/api/reset-password', authLimiter)
+app.use('/api/send-bind-code', authLimiter)
+app.use('/api/bind-phone', authLimiter)
+app.use('/api/bind-email', authLimiter)
 
 // Serve uploaded files
 app.use('/uploads', express.static(join(__dirname, uploadDir), {
