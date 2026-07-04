@@ -6315,6 +6315,37 @@ button { cursor: pointer; font-family: inherit; }
   min-width: 0;
 }
 
+.auth-reg-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.auth-reg-tab {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  background: var(--bg-1);
+  color: var(--text-3);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.auth-reg-tab:hover {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.auth-reg-tab.active {
+  background: var(--gold-primary);
+  color: #fff;
+}
+
 .form-msg {
   padding: 10px 14px;
   border-radius: var(--radius-xs);
