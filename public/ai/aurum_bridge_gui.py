@@ -27,16 +27,19 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.1.3"
+APP_VERSION = "v2.2.0"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 MAX_LOG_MESSAGE_CHARS = 1000
 MT5_COLLECT_TIMEOUT_SEC = 3
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 
-# PyInstaller bundle resource path
+# Bundle resource path — compatible with PyInstaller and Nuitka
 if getattr(sys, 'frozen', False):
-    BUNDLE_DIR = sys._MEIPASS
+    if getattr(sys, '_MEIPASS', None):
+        BUNDLE_DIR = sys._MEIPASS
+    else:
+        BUNDLE_DIR = os.path.dirname(sys.executable)
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -2640,6 +2643,8 @@ class MainWindow(QMainWindow):
         ico_path = resource_path("aurum_icon.ico")
         if os.path.exists(ico_path):
             self.setWindowIcon(QIcon(ico_path))
+        elif getattr(sys, 'frozen', False):
+            self.setWindowIcon(QIcon(sys.executable))
 
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self._auto_check_update)
@@ -2750,6 +2755,8 @@ class MainWindow(QMainWindow):
         ico_path = resource_path("aurum_icon.ico")
         if os.path.exists(ico_path):
             tray_icon = QIcon(ico_path)
+        elif not self.windowIcon().isNull():
+            tray_icon = self.windowIcon()
         else:
             tray_icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
         self.tray = QSystemTrayIcon(tray_icon, self)

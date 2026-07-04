@@ -28,13 +28,13 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
 
 router.get('/bridge/version', (req, res) => {
   res.json({
-    version: '2.1.3',
-    build_date: '2026-07-02',
-    changelog: 'v2.1.3: 依赖打包修复(numpy+MetaTrader5)+重连/心跳/诊断增强',
-    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.1.3.exe',
+    version: '2.2.0',
+    build_date: '2026-07-04',
+    changelog: 'v2.2.0: Nuitka打包+项目清理+晴雨表修复+死代码移除',
+    download_url: 'https://qiniu.acadfx.com/AURUM_Bridge_v2.2.0.exe',
     updater_url: 'https://qiniu.acadfx.com/AURUM_Bridge/aurum_updater.exe',
-    file_size: 67276704,
-    md5: ''
+    file_size: 61798912,
+    md5: '7439df1d786a93c57869999f5c0a78e6'
   })
 })
 
