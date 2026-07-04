@@ -484,8 +484,12 @@ router.post('/send-bind-code', authMiddleware, async (req, res) => {
     const { phone, email, captchaId, captchaAnswer } = req.body
     if (!phone && !email) return res.json({ ok: false, error: '请输入手机号或邮箱' })
 
-    // CAPTCHA verification
-    if (captchaId) {
+    // CAPTCHA verification (mandatory for phone)
+    if (phone) {
+      if (!captchaId || !captchaAnswer) return res.json({ ok: false, error: '请输入图形验证码' })
+      const captchaOk = verifyCaptcha(captchaId, captchaAnswer)
+      if (!captchaOk) return res.json({ ok: false, error: '图形验证码错误' })
+    } else if (captchaId) {
       if (!captchaAnswer) return res.json({ ok: false, error: '请输入图形验证码' })
       const captchaOk = verifyCaptcha(captchaId, captchaAnswer)
       if (!captchaOk) return res.json({ ok: false, error: '图形验证码错误' })

@@ -7040,6 +7040,9 @@ const AUTH_MODE_META = {
     title: '验证码登录',
     submitLabel: '登录',
     codePurpose: 'login',
+    showAccountInput: true,
+    accountLabel: '账号',
+    accountPlaceholder: '邮箱或手机号',
   },
   register: {
     title: '注册',
@@ -7055,6 +7058,9 @@ const AUTH_MODE_META = {
     title: '忘记密码',
     submitLabel: '重置密码',
     codePurpose: 'reset',
+    showAccountInput: true,
+    accountLabel: '账号',
+    accountPlaceholder: '邮箱或手机号',
     passwordLabel: '新密码',
     passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
     showPasswordRules: true,
@@ -7112,14 +7118,29 @@ async function handleSendCode() {
 
   const emailInput = document.getElementById('authEmail')
   const phoneInput = document.getElementById('authPhone')
+  const loginIdInput = document.getElementById('authLoginId')
   const sendBtn = document.getElementById('sendCodeBtn')
   const codeGroup = document.getElementById('codeGroup')
 
   const isPhone = meta.phoneLogin || (meta.codePurpose === 'register' && state.authRegType === 'phone')
-  const email = emailInput?.value?.trim()
+
+  let email = emailInput?.value?.trim() || ''
+  let phone = ''
   const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
-  const phoneRaw = phoneInput?.value?.trim()
-  const phone = phoneRaw ? phonePrefix + phoneRaw : ''
+
+  if (meta.showAccountInput && loginIdInput) {
+    const loginId = loginIdInput.value.trim()
+    const isPhoneId = /^(\+?\d{1,3})?\d{7,15}$/.test(loginId.replace(/\s/g, ''))
+    if (isPhoneId) {
+      phone = loginId.startsWith('+') ? loginId : '+86' + loginId
+      email = ''
+    } else {
+      email = loginId
+    }
+  } else if (isPhone) {
+    const phoneRaw = phoneInput?.value?.trim()
+    phone = phoneRaw ? phonePrefix + phoneRaw : ''
+  }
 
   if (isPhone) {
     if (!phoneRaw || phoneRaw.length < 6) {
@@ -7211,14 +7232,29 @@ async function handleCodeVerify(code) {
 
   const emailInput = document.getElementById('authEmail')
   const phoneInput = document.getElementById('authPhone')
+  const loginIdInput = document.getElementById('authLoginId')
   const codeStatus = document.getElementById('codeStatus')
   const codeHint = document.getElementById('codeHint')
 
   const isPhone = meta.phoneLogin || (meta.codePurpose === 'register' && state.authRegType === 'phone')
-  const email = emailInput?.value?.trim()
+
+  let email = emailInput?.value?.trim() || ''
+  let phone = ''
   const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
-  const phoneRaw = phoneInput?.value?.trim()
-  const phone = phoneRaw ? phonePrefix + phoneRaw : ''
+
+  if (meta.showAccountInput && loginIdInput) {
+    const loginId = loginIdInput.value.trim()
+    const isPhoneId = /^(\+?\d{1,3})?\d{7,15}$/.test(loginId.replace(/\s/g, ''))
+    if (isPhoneId) {
+      phone = loginId.startsWith('+') ? loginId : '+86' + loginId
+      email = ''
+    } else {
+      email = loginId
+    }
+  } else if (isPhone) {
+    const phoneRaw = phoneInput?.value?.trim()
+    phone = phoneRaw ? phonePrefix + phoneRaw : ''
+  }
 
   if (!code || code.length !== 6) return
   if (isPhone && !phone) return
@@ -7336,6 +7372,18 @@ function showAuthModal(mode, options = {}) {
               </select>
               <input type="tel" class="form-input form-input-phone" name="phone" id="authPhone" required placeholder="请输入手机号">
             </div>
+          `}
+        </div>
+      ` : meta.showAccountInput ? `
+        <div class="form-group">
+          <label class="form-label">${meta.accountLabel || '账号'}</label>
+          ${meta.codePurpose ? `
+            <div class="form-row">
+              <input type="text" class="form-input" name="loginId" id="authLoginId" required placeholder="${meta.accountPlaceholder || '邮箱或手机号'}" value="${escapeHtml(prefillEmail)}">
+              <button type="button" class="btn-send-code" id="sendCodeBtn">发送验证码</button>
+            </div>
+          ` : `
+            <input type="text" class="form-input" name="loginId" id="authLoginId" required placeholder="${meta.accountPlaceholder || '邮箱或手机号'}" value="${escapeHtml(prefillEmail)}">
           `}
         </div>
       ` : mode === 'login_password' ? `
@@ -8626,17 +8674,25 @@ function setupGlobalEvents() {
 
     if (mode === 'login_code') {
       if (!state._emailVerified || !state._verifyToken) {
-        showFormMsg('请先完成邮箱验证', 'err')
+        showFormMsg('请先完成验证', 'err')
         return
+      }
+      const loginId = (data.loginId || '').trim()
+      if (!loginId) {
+        showFormMsg('请输入邮箱或手机号', 'err')
+        return
+      }
+      const isPhoneLogin = /^(\+?\d{1,3})?\d{7,15}$/.test(loginId.replace(/\s/g, ''))
+      const codePayload = { method: 'code', verifyToken: state._verifyToken }
+      if (isPhoneLogin) {
+        codePayload.phone = loginId.startsWith('+') ? loginId : '+86' + loginId
+      } else {
+        codePayload.email = loginId
       }
 
       setSubmitting(true)
       try {
-        const result = await api.post('/api/login', {
-          method: 'code',
-          email: data.email,
-          verifyToken: state._verifyToken,
-        })
+        const result = await api.post('/api/login', codePayload)
         if (result.ok) {
           persistAuthSession(result, { syncProgress: true })
         } else {
@@ -8716,60 +8772,22 @@ function setupGlobalEvents() {
       return
     }
 
-    if (mode === 'register_phone') {
-      const phonePrefix = document.getElementById('authPhonePrefix')?.value || '+86'
-      const phoneRaw = data.phone?.trim()
-      const phone = phoneRaw ? phonePrefix + phoneRaw : ''
-      if (!phone) {
-        showFormMsg('请输入手机号', 'err')
-        return
-      }
-      const tosCheck = document.getElementById('tosAgree')
-      if (!tosCheck?.checked) {
-        showFormMsg('请阅读并同意《用户服务协议》', 'err')
-        return
-      }
-      if (!state._emailVerified) {
-        showFormMsg('请先完成手机验证', 'err')
-        return
-      }
-      const pwdError = getPasswordRuleError(data.password)
-      if (pwdError) {
-        showFormMsg(pwdError, 'err')
-        return
-      }
-      if (data.password !== data.confirmPassword) {
-        showFormMsg('两次输入的密码不一致', 'err')
-        return
-      }
-
-      setSubmitting(true)
-      try {
-        const result = await api.post('/api/register', {
-          phone,
-          nickname: data.nickname || '',
-          password: data.password,
-          verifyToken: state._verifyToken,
-          tosAgree: true,
-          tosVersion: TOS_AGREEMENT_VERSION,
-        })
-        if (result.ok) {
-          persistAuthSession(result)
-        } else {
-          showFormMsg(result.error || '注册失败，请稍后重试', 'err')
-        }
-      } catch (err) {
-        showFormMsg('服务器连接失败，请检查网络后重试', 'err')
-      } finally {
-        setSubmitting(false)
-      }
-      return
-    }
-
     if (mode === 'reset_password') {
       if (!state._emailVerified || !state._verifyToken) {
-        showFormMsg('请先完成邮箱验证', 'err')
+        showFormMsg('请先完成验证', 'err')
         return
+      }
+      const loginId = (data.loginId || '').trim()
+      if (!loginId) {
+        showFormMsg('请输入邮箱或手机号', 'err')
+        return
+      }
+      const isPhoneReset = /^(\+?\d{1,3})?\d{7,15}$/.test(loginId.replace(/\s/g, ''))
+      const resetPayload = { verifyToken: state._verifyToken, newPassword: data.password }
+      if (isPhoneReset) {
+        resetPayload.phone = loginId.startsWith('+') ? loginId : '+86' + loginId
+      } else {
+        resetPayload.email = loginId
       }
 
       const pwdError = getPasswordRuleError(data.password)
@@ -8784,14 +8802,9 @@ function setupGlobalEvents() {
 
       setSubmitting(true)
       try {
-        const result = await api.post('/api/reset-password', {
-          email: data.email,
-          verifyToken: state._verifyToken,
-          newPassword: data.password,
-        })
+        const result = await api.post('/api/reset-password', resetPayload)
         if (result.ok) {
           showAuthModal('login_password', {
-            email: data.email,
             message: result.message || '密码已更新，请重新登录',
           })
         } else {
