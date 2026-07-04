@@ -7180,7 +7180,7 @@ async function handleSendCode() {
 
         // Start 60s countdown
         clearAuthCodeTimer()
-        state._codeCountdown = 60
+        state._codeCountdown = 120
         state._authCodeTimer = setInterval(() => {
           state._codeCountdown--
           if (state._codeCountdown <= 0) {

@@ -12,23 +12,22 @@ const router = Router()
 async function checkSmsRateLimit(phone) {
   const [rows] = await queryAll(
     `SELECT created_at FROM verification_codes
-     WHERE phone = ? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+     WHERE phone = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)
      ORDER BY created_at DESC`,
     [phone]
   )
-  if (rows.length >= 10) return { ok: false, error: '今日发送次数已达上限，请明天再试' }
 
   const recent = rows.filter(r => {
     const diff = Date.now() - new Date(r.created_at).getTime()
-    return diff < 60 * 1000
+    return diff < 2 * 60 * 1000
   })
-  if (recent.length > 0) return { ok: false, error: '发送过于频繁，请1分钟后再试' }
+  if (recent.length > 0) return { ok: false, error: '发送过于频繁，请2分钟后再试' }
 
-  const hourly = rows.filter(r => {
+  const quarter = rows.filter(r => {
     const diff = Date.now() - new Date(r.created_at).getTime()
-    return diff < 60 * 60 * 1000
+    return diff < 15 * 60 * 1000
   })
-  if (hourly.length >= 5) return { ok: false, error: '每小时最多发送5次，请稍后再试' }
+  if (quarter.length >= 5) return { ok: false, error: '15分钟内最多发送5次，请稍后再试' }
 
   return { ok: true }
 }
