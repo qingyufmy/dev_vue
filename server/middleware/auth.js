@@ -11,7 +11,7 @@ export function authMiddleware(req, res, next) {
   const token = authHeader.slice(7)
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    queryOne('SELECT id, email, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit, telegram_id FROM users WHERE id = ?', [decoded.userId])
+    queryOne('SELECT id, email, phone, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit, telegram_id FROM users WHERE id = ?', [decoded.userId])
       .then(async user => {
         if (!user) {
           return res.status(401).json({ ok: false, error: '用户不存在' })
@@ -40,7 +40,7 @@ export function optionalAuth(req, res, next) {
     try {
       const token = authHeader.slice(7)
       const decoded = jwt.verify(token, JWT_SECRET)
-      queryOne('SELECT id, email, nickname, avatar, role, plan, referral_code, referral_credit FROM users WHERE id = ?', [decoded.userId])
+        queryOne('SELECT id, email, phone, nickname, avatar, role, plan, referral_code, referral_credit FROM users WHERE id = ?', [decoded.userId])
         .then(user => { req.user = user; next() })
         .catch(() => next())
     } catch { next() }

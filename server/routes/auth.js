@@ -254,8 +254,12 @@ router.post('/send-code', async (req, res) => {
       console.error('[send-code] toggle check error:', toggleErr.message)
     }
 
-    // CAPTCHA verification
-    if (captchaId) {
+    // CAPTCHA verification (mandatory for phone)
+    if (targetPhone) {
+      if (!captchaId || !captchaAnswer) return res.json({ ok: false, error: '请输入图形验证码' })
+      const captchaOk = verifyCaptcha(captchaId, captchaAnswer)
+      if (!captchaOk) return res.json({ ok: false, error: '图形验证码错误' })
+    } else if (captchaId) {
       if (!captchaAnswer) return res.json({ ok: false, error: '请输入图形验证码' })
       const captchaOk = verifyCaptcha(captchaId, captchaAnswer)
       if (!captchaOk) return res.json({ ok: false, error: '图形验证码错误' })
