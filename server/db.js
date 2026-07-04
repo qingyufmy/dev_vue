@@ -743,6 +743,29 @@ async function seedData(p) {
     await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [cat, key, val, label, order])
   }
 
+  // SMS config
+  const smsConfigs = [
+    ['sms', 'access_key_id', '', 'AccessKey ID', 0],
+    ['sms', 'access_key_secret', '', 'AccessKey Secret', 1],
+    ['sms', 'sign_name', '', '短信签名', 2],
+    ['sms', 'template_code_login', '', '登录验证码模板', 3],
+    ['sms', 'template_code_register', '', '注册验证码模板', 4],
+    ['sms', 'template_code_reset', '', '重置密码模板', 5],
+    ['sms', 'template_code_bind', '', '绑定验证码模板', 6],
+  ]
+  for (const [cat, key, val, label, order] of smsConfigs) {
+    await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [cat, key, val, label, order])
+  }
+
+  // Auth toggles
+  const authToggles = [
+    ['auth_toggle', 'email_enabled', 'true', '邮箱注册登录', 0],
+    ['auth_toggle', 'phone_enabled', 'true', '手机号注册登录', 1],
+  ]
+  for (const [cat, key, val, label, order] of authToggles) {
+    await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [cat, key, val, label, order])
+  }
+
   // Financial toolbox
   await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [
     'toolbox', 'items', JSON.stringify([
