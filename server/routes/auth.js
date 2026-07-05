@@ -11,7 +11,7 @@ const router = Router()
 
 async function checkSmsRateLimit(phone) {
   const dbPhone = phone.replace(/^\+86/, '')
-  const [rows] = await queryAll(
+  const rows = await queryAll(
     `SELECT created_at FROM verification_codes
      WHERE (phone = ? OR phone = ?) AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)
      ORDER BY created_at DESC`,
