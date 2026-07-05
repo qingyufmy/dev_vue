@@ -6319,21 +6319,22 @@ button { cursor: pointer; font-family: inherit; }
   display: flex;
   gap: 0;
   margin-bottom: 16px;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
 .auth-reg-tab {
   flex: 1;
-  padding: 10px 16px;
+  padding: 12px 16px;
   border: none;
   background: var(--bg-1);
   color: var(--text-3);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
+  position: relative;
 }
 
 .auth-reg-tab:hover {
@@ -6342,8 +6343,13 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 .auth-reg-tab.active {
-  background: var(--gold-primary);
+  background: #2F5D54;
   color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+}
+
+.auth-reg-tab + .auth-reg-tab {
+  border-left: 2px solid var(--border);
 }
 
 .form-msg {

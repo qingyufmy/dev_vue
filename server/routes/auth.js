@@ -10,11 +10,12 @@ import { generateCaptcha, verifyCaptcha } from '../captcha.js'
 const router = Router()
 
 async function checkSmsRateLimit(phone) {
+  const dbPhone = phone.replace(/^\+86/, '')
   const [rows] = await queryAll(
     `SELECT created_at FROM verification_codes
-     WHERE phone = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)
+     WHERE (phone = ? OR phone = ?) AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)
      ORDER BY created_at DESC`,
-    [phone]
+    [dbPhone, phone]
   )
 
   const recent = rows.filter(r => {
@@ -200,7 +201,7 @@ router.post('/login', async (req, res) => {
     }
 
     const user = phone
-      ? await queryOne('SELECT * FROM users WHERE phone = ?', [phone])
+      ? await queryOne('SELECT * FROM users WHERE phone = ? OR phone = ?', [phone.replace(/^\+86/, ''), phone])
       : await queryOne('SELECT * FROM users WHERE email = ?', [email])
     if (!user) return res.json({ ok: false, error: '账号或密码错误' })
 
@@ -277,6 +278,18 @@ router.post('/send-code', async (req, res) => {
       console.error('[send-code] toggle check error:', toggleErr.message)
     }
 
+    // Check registration BEFORE CAPTCHA (clear error message)
+    const normalizePhone = (p) => p ? p.replace(/^\+86/, '') : p
+    const dbPhone = normalizePhone(targetPhone)
+    if (dbPhone && purpose === 'register') {
+      const existing = await queryOne('SELECT id FROM users WHERE phone = ? OR phone = ?', [dbPhone, targetPhone])
+      if (existing) return res.json({ ok: false, error: '该手机号已注册，请直接登录' })
+    }
+    if (targetEmail && !targetPhone && purpose === 'register') {
+      const existing = await queryOne('SELECT id FROM users WHERE email = ?', [targetEmail])
+      if (existing) return res.json({ ok: false, error: '该邮箱已注册，请直接登录' })
+    }
+
     // CAPTCHA verification (mandatory for phone)
     if (targetPhone) {
       if (!captchaId || !captchaAnswer) return res.json({ ok: false, error: '请输入图形验证码' })
@@ -292,12 +305,6 @@ router.post('/send-code', async (req, res) => {
       // Rate limit check
       const rateCheck = await checkSmsRateLimit(targetPhone)
       if (!rateCheck.ok) return res.json({ ok: false, error: rateCheck.error })
-
-      // Phone: check registration
-      if (purpose === 'register') {
-        const existing = await queryOne('SELECT id FROM users WHERE phone = ?', [targetPhone])
-        if (existing) return res.json({ ok: false, error: '该手机号已注册' })
-      }
 
       let smsSent = false
       try {
@@ -353,8 +360,8 @@ router.post('/send-code', async (req, res) => {
 
     res.json({ ok: true, message: emailSent ? '验证码已发送到您的邮箱' : '验证码已发送（本地开发模式请查看控制台）' })
   } catch (err) {
-    console.error('[send-code]', err.message)
-    res.json({ ok: false, error: '发送验证码失败' })
+    console.error('[send-code] FATAL:', err.message, err.stack)
+    res.json({ ok: false, error: '发送验证码失败: ' + err.message })
   }
 })
 
@@ -369,9 +376,9 @@ router.post('/verify-code', async (req, res) => {
     const record = targetPhone
       ? await queryOne(`
           SELECT * FROM verification_codes
-          WHERE phone = ? AND code = ? AND purpose = ? AND used = 0 AND expires_at > NOW()
+          WHERE (phone = ? OR phone = ?) AND code = ? AND purpose = ? AND used = 0 AND expires_at > NOW()
           ORDER BY created_at DESC LIMIT 1
-        `, [targetPhone, code, purpose || 'login'])
+        `, [targetPhone.replace(/^\+86/, ''), targetPhone, code, purpose || 'login'])
       : await queryOne(`
           SELECT * FROM verification_codes
           WHERE email = ? AND code = ? AND purpose = ? AND used = 0 AND expires_at > NOW()
@@ -400,8 +407,8 @@ router.post('/reset-password', async (req, res) => {
     if (verifyToken) {
       const tokenRecord = targetPhone
         ? await queryOne(
-            'SELECT id FROM verification_codes WHERE phone = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
-            [targetPhone, verifyToken, 'reset']
+            'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+            [targetPhone.replace(/^\+86/, ''), targetPhone, verifyToken, 'reset']
           )
         : await queryOne(
             'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
@@ -411,7 +418,7 @@ router.post('/reset-password', async (req, res) => {
 
       const hash = await bcrypt.hash(newPassword, 10)
       if (targetPhone) {
-        await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE phone = ?", [hash, targetPhone])
+        await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE phone = ? OR phone = ?", [hash, targetPhone.replace(/^\+86/, ''), targetPhone])
       } else {
         await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, targetEmail])
       }
@@ -424,9 +431,9 @@ router.post('/reset-password', async (req, res) => {
     const record = targetPhone
       ? await queryOne(`
           SELECT * FROM verification_codes
-          WHERE phone = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > NOW()
+          WHERE (phone = ? OR phone = ?) AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > NOW()
           ORDER BY created_at DESC LIMIT 1
-        `, [targetPhone, code])
+        `, [targetPhone.replace(/^\+86/, ''), targetPhone, code])
       : await queryOne(`
           SELECT * FROM verification_codes
           WHERE email = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > NOW()
@@ -437,7 +444,7 @@ router.post('/reset-password', async (req, res) => {
 
     const hash = await bcrypt.hash(newPassword, 10)
     if (targetPhone) {
-      await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE phone = ?", [hash, targetPhone])
+      await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE phone = ? OR phone = ?", [hash, targetPhone.replace(/^\+86/, ''), targetPhone])
     } else {
       await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, targetEmail])
     }
@@ -496,10 +503,11 @@ router.post('/send-bind-code', authMiddleware, async (req, res) => {
     }
 
     if (phone) {
+      const dbPhone = phone.replace(/^\+86/, '')
       const rateCheck = await checkSmsRateLimit(phone)
       if (!rateCheck.ok) return res.json({ ok: false, error: rateCheck.error })
 
-      const existing = await queryOne('SELECT id FROM users WHERE phone = ? AND id != ?', [phone, req.user.id])
+      const existing = await queryOne('SELECT id FROM users WHERE (phone = ? OR phone = ?) AND id != ?', [dbPhone, phone, req.user.id])
       if (existing) return res.json({ ok: false, error: '该手机号已被其他账号绑定' })
 
       let smsSent = false
@@ -569,10 +577,10 @@ router.post('/bind-phone', authMiddleware, async (req, res) => {
     )
     if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
 
-    const existing = await queryOne('SELECT id FROM users WHERE phone = ? AND id != ?', [phone, req.user.id])
+    const existing = await queryOne('SELECT id FROM users WHERE (phone = ? OR phone = ?) AND id != ?', [phone.replace(/^\+86/, ''), phone, req.user.id])
     if (existing) return res.json({ ok: false, error: '该手机号已被其他账号绑定' })
 
-    await queryRun("UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?", [phone, req.user.id])
+    await queryRun("UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?", [phone.replace(/^\+86/, ''), req.user.id])
     await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
 
     res.json({ ok: true, message: '手机绑定成功' })
