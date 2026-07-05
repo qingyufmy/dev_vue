@@ -393,6 +393,57 @@ const migrations = [
         await queryRun("ALTER TABLE auto_signal_deliveries ADD COLUMN pending_valid_until VARCHAR(20) DEFAULT NULL AFTER pending_state")
       }
     }
+  },
+  {
+    id: '023_cleanup_indexes_and_dead_columns',
+    up: async () => {
+      // 1. Add missing indexes on frequently queried columns
+      const indexes = [
+        'CREATE INDEX idx_comments_episode ON comments(episode_id)',
+        'CREATE INDEX idx_post_replies_post ON post_replies(post_id)',
+        'CREATE INDEX idx_quiz_questions_episode ON quiz_questions(episode_id)',
+        'CREATE INDEX idx_course_resources_episode ON course_resources(episode_id)',
+        'CREATE INDEX idx_verification_codes_phone ON verification_codes(phone)',
+      ]
+      for (const sql of indexes) {
+        try { await queryRun(sql) } catch (e) {
+          if (!e.message?.includes('Duplicate')) console.error(`[Migrations] Index creation failed:`, e.message)
+        }
+      }
+
+      // 2. Drop duplicate index on auto_scheduler (keep prompt_enabled, drop enabled_prompt)
+      try { await queryRun('DROP INDEX idx_auto_scheduler_enabled_prompt ON auto_scheduler') } catch {}
+
+      // 3. Drop dead columns — each wrapped individually for safety
+      const deadCols = [
+        "ALTER TABLE notifications DROP COLUMN `read`",
+        'ALTER TABLE trades DROP COLUMN description',
+        'ALTER TABLE trades DROP COLUMN image_url',
+        'ALTER TABLE trades DROP COLUMN pnl',
+        'ALTER TABLE trades DROP COLUMN status',
+        'ALTER TABLE trades DROP COLUMN updated_at',
+        'ALTER TABLE quiz_questions DROP COLUMN answer',
+        'ALTER TABLE video_streams DROP COLUMN video_key',
+      ]
+      for (const sql of deadCols) {
+        try { await queryRun(sql) } catch (e) {
+          if (!e.message?.includes('Duplicate') && !e.message?.includes('doesn\'t exist') && !e.message?.includes('Can\'t DROP')) {
+            console.error(`[Migrations] Column drop failed:`, e.message)
+          }
+        }
+      }
+    }
+  },
+  {
+    id: '024_drop_dead_tables_and_fix_bigint',
+    up: async () => {
+      // Drop tables that are never queried
+      try { await queryRun('DROP TABLE IF EXISTS user_notices') } catch {}
+      try { await queryRun('DROP TABLE IF EXISTS broadcast_messages') } catch {}
+
+      // Fix BIGINT → INT for bridge_connection_status.user_id (all other user_id columns are INT)
+      try { await queryRun('ALTER TABLE bridge_connection_status MODIFY COLUMN user_id INT PRIMARY KEY') } catch {}
+    }
   }
 ]
 

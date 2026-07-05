@@ -1,7 +1,8 @@
 // ai/config.js — 配置管理 + 风控 + 审计
 
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
-import { round2, round3, configPublic } from './utils.js'
+import { round3 } from './utils.js'
+import { DEFAULT_API_BASE_URL } from '../../config.js'
 
 // Parse strategy symbols from JSON string: parse, trim, uppercase, deduplicate
 export function parsePromptSymbols(symbolsJson) {
@@ -210,7 +211,7 @@ export async function getAutoInferenceConfig(userId) {
         api_provider: userConfig.api_provider || 'deepseek',
         model_name: userConfig.model_name || 'deepseek-chat',
         api_key_encrypted: userConfig.api_key_encrypted,
-        api_base_url: userConfig.api_base_url || 'https://api.deepseek.com',
+        api_base_url: userConfig.api_base_url || DEFAULT_API_BASE_URL,
         temperature: userConfig.temperature ?? 0.7,
         max_tokens: userConfig.max_tokens ?? 2000,
         risk_level: userConfig.risk_level || 'medium',
@@ -231,7 +232,7 @@ export async function getAutoInferenceConfig(userId) {
     api_provider: globalCfg.api_provider || 'deepseek',
     model_name: globalCfg.model_name || 'deepseek-chat',
     api_key_encrypted: globalCfg.api_key_encrypted,
-    api_base_url: globalCfg.api_base_url || 'https://api.deepseek.com',
+    api_base_url: globalCfg.api_base_url || DEFAULT_API_BASE_URL,
     temperature: globalCfg.temperature ?? 0.3,
     max_tokens: globalCfg.max_tokens ?? 2000,
     risk_level: globalCfg.risk_level || 'medium',
@@ -440,7 +441,7 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
     api_provider: globalCfg.api_provider || 'deepseek',
     model_name: globalCfg.model_name || 'deepseek-chat',
     api_key_encrypted: globalCfg.api_key_encrypted,
-    api_base_url: globalCfg.api_base_url || 'https://api.deepseek.com',
+    api_base_url: globalCfg.api_base_url || DEFAULT_API_BASE_URL,
     temperature: globalCfg.temperature ?? 0.3,
     max_tokens: globalCfg.max_tokens ?? 2000,
     system_prompt: pt.system_prompt || '',
@@ -596,7 +597,7 @@ export async function saveCloseConfig(userId, cfg) {
     rule_timeout_minutes = VALUES(rule_timeout_minutes), rule_max_loss_pct = VALUES(rule_max_loss_pct),
     rule_reverse_signal = VALUES(rule_reverse_signal), updated_at = VALUES(updated_at)`,
     [userId, cfg.enabled ? 1 : 0, cfg.check_interval_seconds || 60, cfg.model_name || 'deepseek-chat',
-      cfg.api_provider || 'deepseek', cfg.api_base_url || 'https://api.deepseek.com', keyEnc,
+      cfg.api_provider || 'deepseek', cfg.api_base_url || DEFAULT_API_BASE_URL, keyEnc,
       cfg.temperature ?? 0.3, cfg.max_tokens || 4000,
       cfg.system_prompt || null, cfg.rule_soft_sl ?? null, cfg.rule_soft_tp ?? null,
       cfg.rule_timeout_minutes ?? null, cfg.rule_max_loss_pct ?? null, cfg.rule_reverse_signal ? 1 : 0, now])

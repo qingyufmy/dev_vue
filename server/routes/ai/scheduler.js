@@ -1,10 +1,11 @@
 // ai/scheduler.js — 统一自动调度 + 智能平仓
 
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
+import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, buildBridgeOrderCall } from './config.js'
+import { getGlobalAutoConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, buildBridgeOrderCall } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -1268,12 +1269,12 @@ async function runSmartClose(userId, closeConfig, account, positions) {
   let apiKey, baseUrl
   if (closeConfig.api_key_encrypted) {
     apiKey = closeConfig.api_key_encrypted
-    baseUrl = closeConfig.api_base_url || 'https://api.deepseek.com'
+    baseUrl = closeConfig.api_base_url || DEFAULT_API_BASE_URL
   } else {
     const config = await getActiveConfig(null, userId)
     if (!config) return []
     apiKey = config.api_key_encrypted
-    baseUrl = closeConfig.api_base_url || config.api_base_url || 'https://api.deepseek.com'
+    baseUrl = closeConfig.api_base_url || config.api_base_url || DEFAULT_API_BASE_URL
   }
   const temperature = closeConfig.temperature ?? 0.3
   let maxTokens = closeConfig.max_tokens || 4000

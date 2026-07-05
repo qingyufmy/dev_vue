@@ -10,6 +10,21 @@ const __postsDirname = dirname(fileURLToPath(import.meta.url))
 const __uploadDir = join(__postsDirname, '..', process.env.UPLOAD_DIR || 'uploads')
 if (!existsSync(__uploadDir)) mkdirSync(__uploadDir, { recursive: true })
 
+const DANGEROUS_TAGS_RE = /<\s*\/?\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>|<\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*\/?\s*>/gi
+const EVENT_HANDLER_RE = /\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi
+const JS_URL_RE = /(href|src|action)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi
+const DATA_ATTR_RE = /\s+data-(?!(?:asset-id|reply-id|post-id|update-target|mindmap-structure|fallback-image|quote-reply|report-reply|post-report|post-pin|next-pin|user-id|referral-approve|referral-void|rule-rate|rule-enabled|board|field)\b)[a-z][\w-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi
+
+export function sanitizeContentHtml(html) {
+  if (!html || typeof html !== 'string') return ''
+  let out = html
+  out = out.replace(DANGEROUS_TAGS_RE, '')
+  out = out.replace(EVENT_HANDLER_RE, '')
+  out = out.replace(JS_URL_RE, '$1="#"')
+  out = out.replace(DATA_ATTR_RE, '')
+  return out
+}
+
 const postImageStorage = multer.diskStorage({
   destination: __uploadDir,
   filename(req, file, cb) {
@@ -191,6 +206,7 @@ router.post('/posts', authMiddleware, async (req, res) => {
     const { title, content, contentHtml, contentText, board, category, images, tags, assetIds } = req.body
     if (!title?.trim()) return res.json({ ok: false, error: '标题不能为空' })
 
+    const safeContentHtml = sanitizeContentHtml(contentHtml)
     const tagStr = typeof tags === 'string' ? JSON.stringify(tags.split(',').map(t => t.trim()).filter(Boolean)) : JSON.stringify(tags || [])
     const imageArr = Array.isArray(images) ? images : []
     const assetArr = Array.isArray(assetIds) ? assetIds : []
@@ -198,7 +214,7 @@ router.post('/posts', authMiddleware, async (req, res) => {
     const result = await queryRun(`
       INSERT INTO posts (user_id, board, title, content, content_html, content_text, category, tags, images, asset_ids, image_count, last_reply_at, last_reply_user_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
-    `, [req.user.id, board || 'ideas', title.trim(), contentHtml || contentText || content || '', contentHtml || '', contentText || '', category || 'general', tagStr, JSON.stringify(imageArr), JSON.stringify(assetArr), imageArr.length, req.user.id])
+    `, [req.user.id, board || 'ideas', title.trim(), safeContentHtml || contentText || content || '', safeContentHtml || '', contentText || '', category || 'general', tagStr, JSON.stringify(imageArr), JSON.stringify(assetArr), imageArr.length, req.user.id])
 
     // Update tag counts
     const tagList = typeof tags === 'string' ? tags.split(',').map(t => t.trim()).filter(Boolean) : (tags || [])
@@ -326,6 +342,8 @@ router.post('/post-replies', authMiddleware, async (req, res) => {
     const post = await queryOne('SELECT locked FROM posts WHERE id = ?', [postId])
     if (post?.locked) return res.json({ ok: false, error: '帖子已锁定' })
 
+    const safeContentHtml = sanitizeContentHtml(contentHtml)
+
     // Get floor number
     const maxFloorRow = await queryOne('SELECT MAX(floor_number) as m FROM post_replies WHERE post_id = ?', [postId])
     const maxFloor = maxFloorRow?.m || 0
@@ -333,7 +351,7 @@ router.post('/post-replies', authMiddleware, async (req, res) => {
     const result = await queryRun(`
       INSERT INTO post_replies (post_id, user_id, content, content_html, content_text, asset_ids, quote_reply_id, floor_number)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [postId, req.user.id, contentHtml || contentText || content?.trim() || '', contentHtml || '', contentText || content?.trim() || '', JSON.stringify(assetIds || []), quoteReplyId || null, maxFloor + 1])
+    `, [postId, req.user.id, safeContentHtml || contentText || content?.trim() || '', safeContentHtml || '', contentText || content?.trim() || '', JSON.stringify(assetIds || []), quoteReplyId || null, maxFloor + 1])
 
     await queryRun('UPDATE posts SET reply_count = reply_count + 1, last_reply_at = NOW(), last_reply_user_id = ? WHERE id = ?', [req.user.id, postId])
 

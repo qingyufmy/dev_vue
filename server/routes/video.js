@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import multer from 'multer'
-import { join, dirname, extname } from 'path'
+import { join, dirname, extname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, unlinkSync, statSync, createReadStream } from 'fs'
 import { queryOne, queryAll, queryRun } from '../db.js'
@@ -159,7 +159,10 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
 // ===== Serve video files with range request support =====
 router.get('/video-file/:filename', (req, res) => {
   try {
-    const filePath = join(uploadDir, req.params.filename)
+    const filePath = resolve(join(uploadDir, req.params.filename))
+    if (!filePath.startsWith(resolve(uploadDir))) {
+      return res.status(403).json({ error: '禁止访问' })
+    }
     if (!existsSync(filePath)) return res.status(404).json({ error: '视频不存在' })
 
     const stat = statSync(filePath)

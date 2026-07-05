@@ -361,7 +361,7 @@ router.post('/send-code', async (req, res) => {
     res.json({ ok: true, message: emailSent ? '验证码已发送到您的邮箱' : '验证码已发送（本地开发模式请查看控制台）' })
   } catch (err) {
     console.error('[send-code] FATAL:', err.message, err.stack)
-    res.json({ ok: false, error: '发送验证码失败: ' + err.message })
+    res.json({ ok: false, error: '发送验证码失败' })
   }
 })
 

@@ -1,8 +1,7 @@
 import { Router } from 'express'
 import nodemailer from 'nodemailer'
 import { queryOne, queryAll, queryRun } from '../db.js'
-import jwt from 'jsonwebtoken'
-import { JWT_SECRET } from '../config.js'
+import { authMiddleware } from '../middleware/auth.js'
 
 function escapeHtml(text) {
   if (!text) return ''
@@ -12,26 +11,6 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;')
-}
-
-function withAuth(req, res, next) {
-  const authHeader = req.headers.authorization
-  if (!authHeader || !authHeader.startsWith('Bearer '))
-    return res.status(401).json({ ok: false, error: '请先登录' })
-
-  const token = authHeader.slice(7)
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    queryOne('SELECT id, email, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [decoded.userId])
-      .then(user => {
-        if (!user) return res.status(401).json({ ok: false, error: '用户不存在' })
-        req.user = user
-        next()
-      })
-      .catch(() => res.status(401).json({ ok: false, error: 'Token无效或已过期' }))
-  } catch {
-    return res.status(401).json({ ok: false, error: 'Token无效或已过期' })
-  }
 }
 
 const router = Router()
@@ -45,7 +24,7 @@ const TYPE_LABELS = {
 }
 
 // POST /api/feedback — 提交需求反馈
-router.post('/feedback', withAuth, async (req, res) => {
+router.post('/feedback', authMiddleware, async (req, res) => {
   try {
     const { type, title, description, contact } = req.body
 
@@ -131,7 +110,7 @@ router.post('/feedback', withAuth, async (req, res) => {
 })
 
 // GET /api/feedback/history — 当前用户的提交记录
-router.get('/feedback/history', withAuth, async (req, res) => {
+router.get('/feedback/history', authMiddleware, async (req, res) => {
   try {
     const rows = await queryAll(
       'SELECT id, type, title, description, contact, created_at FROM feedback WHERE user_id = ? ORDER BY created_at DESC LIMIT 50',

@@ -13,3 +13,4 @@ if (!secret) {
 }
 
 export const JWT_SECRET = secret
+export const DEFAULT_API_BASE_URL = 'https://api.deepseek.com'

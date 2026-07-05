@@ -214,6 +214,12 @@ router.post('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { userId, plan, expiresAt, role, nickname } = req.body
 
+    const VALID_PLANS = ['free', 'plus', 'pro']
+    const VALID_ROLES = ['user', 'admin']
+
+    if (plan && !VALID_PLANS.includes(plan)) return res.json({ ok: false, error: '无效的套餐类型' })
+    if (role && !VALID_ROLES.includes(role)) return res.json({ ok: false, error: '无效的角色' })
+
     if (plan) await queryRun('UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?', [plan, userId])
     if (expiresAt !== undefined) await queryRun('UPDATE users SET plan_expires_at = ?, updated_at = NOW() WHERE id = ?', [expiresAt, userId])
     if (role) await queryRun('UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?', [role, userId])
@@ -228,6 +234,12 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     const { id, userId, role, plan, nickname, email, password, avatar, expiresAt } = req.body
     const uid = id || userId
     if (!uid) return res.json({ ok: false, error: '缺少用户ID' })
+
+    const VALID_PLANS = ['free', 'plus', 'pro']
+    const VALID_ROLES = ['user', 'admin']
+    if (plan && !VALID_PLANS.includes(plan)) return res.json({ ok: false, error: '无效的套餐类型' })
+    if (role && !VALID_ROLES.includes(role)) return res.json({ ok: false, error: '无效的角色' })
+
     const updates = []
     const params = []
     if (email) { updates.push('email = ?'); params.push(email) }
@@ -257,7 +269,6 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     let msg = '更新失败'
     if (err.code === 'ER_DUP_ENTRY') msg = '邮箱已被其他用户使用'
     else if (err.code === 'ER_DATA_TOO_LONG') msg = '数据超长'
-    else if (err.sqlMessage) msg = err.sqlMessage
     res.json({ ok: false, error: msg })
   }
 })
@@ -293,7 +304,7 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
     res.json({ ok: true })
   } catch (err) {
     console.error('Delete user error:', err)
-    res.json({ ok: false, error: err.sqlMessage || '删除失败' })
+    res.json({ ok: false, error: '删除失败' })
   }
 })
 
@@ -686,7 +697,7 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
     res.json({ ok: true, quizFiles, assetFiles, skipped })
   } catch (err) {
     console.error('Resource upload error:', err)
-    res.json({ ok: false, error: '上传失败: ' + err.message })
+    res.json({ ok: false, error: '上传失败' })
   }
 })
 

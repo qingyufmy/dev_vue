@@ -1,6 +1,7 @@
 // ai/llm.js — AI 推理 + 信号标准化
 
 import { queryOne } from '../../db.js'
+import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
@@ -71,7 +72,7 @@ export async function maybeAiSignal(db, config, market) {
   if (!apiKey) return aiFailureHold(market, 'empty_ai_key')
 
   let url
-  if (provider === 'deepseek') url = (baseUrl || 'https://api.deepseek.com') + '/chat/completions'
+  if (provider === 'deepseek') url = (baseUrl || DEFAULT_API_BASE_URL) + '/chat/completions'
   else if (provider === 'gpt') url = (baseUrl || 'https://api.openai.com') + '/v1/chat/completions'
   else return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
 

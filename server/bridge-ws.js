@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from './db.js'
+import { DEFAULT_API_BASE_URL } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 
 function toMt5Time(str) {
@@ -1203,7 +1204,7 @@ async function handleBrowserCommand(ws, userId, msg) {
                 api_provider: globalCfg?.api_provider || 'deepseek',
                 model_name: globalCfg?.model_name || 'deepseek-chat',
                 has_api_key: !!globalCfg?.api_key_encrypted,
-                api_base_url: globalCfg?.api_base_url || 'https://api.deepseek.com',
+                api_base_url: globalCfg?.api_base_url || DEFAULT_API_BASE_URL,
                 temperature: globalCfg?.temperature ?? 0.3,
                 max_tokens: globalCfg?.max_tokens ?? 2000,
                 risk_level: globalCfg?.risk_level || 'medium',
@@ -1255,7 +1256,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
           api_key_encrypted: params.api_key || existing?.api_key_encrypted || null,
-          api_base_url: params.api_base_url ?? existing?.api_base_url ?? 'https://api.deepseek.com',
+          api_base_url: params.api_base_url ?? existing?.api_base_url ?? DEFAULT_API_BASE_URL,
           temperature: params.temperature ?? existing?.temperature ?? 0.3,
           max_tokens: params.max_tokens ?? existing?.max_tokens ?? 2000,
           system_prompt: existing?.system_prompt || null,

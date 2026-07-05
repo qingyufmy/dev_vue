@@ -10,6 +10,8 @@ server/uploads/
 *.sqlite-shm
 *.sqlite-wal
 .env
+.env.*
+!.env.example
 _*.js
 _*.mjs
 _*.cjs

@@ -94,6 +94,16 @@ function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
+// ===== Rich HTML sanitizer (defense-in-depth for Quill editor output) =====
+function sanitizeRichHtml(html) {
+  if (!html || typeof html !== 'string') return ''
+  let out = html
+  out = out.replace(/<\s*\/?\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>|<\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*\/?\s*>/gi, '')
+  out = out.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+  out = out.replace(/(href|src|action)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi, '$1="#"')
+  return out
+}
+
 function formatMinorUsd(cents) {
   const value = Number(cents || 0)
   return `$${(Math.max(0, value) / 100).toFixed(2)}`
@@ -2490,8 +2500,9 @@ function renderVideo() {
 
       if (r.bilibiliId) {
         const container = document.getElementById('videoContainer')
-        if (container) {
-          container.innerHTML = '<iframe id="biliPlayer" src="https://player.bilibili.com/player.html?bvid=' + r.bilibiliId + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
+        const safeBvid = /^BV[a-zA-Z0-9]+$/.test(r.bilibiliId) ? r.bilibiliId : ''
+        if (container && safeBvid) {
+          container.innerHTML = '<iframe id="biliPlayer" src="https://player.bilibili.com/player.html?bvid=' + safeBvid + '&high_quality=1&danmaku=0" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;"></iframe>'
           biliPlayer = document.getElementById('biliPlayer')
           if (ep && state.user) {
             const p = progress.get(ep.id)
@@ -8496,7 +8507,7 @@ function renderReplyItem(reply) {
           </button>
         ` : ''}
         <div class="reply-body ${reply.contentHtml ? 'reply-body-rich post-detail-content-rich' : ''}">
-          ${reply.contentHtml || escapeHtml(reply.content || '').replace(/\n/g, '<br>')}
+          ${reply.contentHtml ? sanitizeRichHtml(reply.contentHtml) : escapeHtml(reply.content || '').replace(/\n/g, '<br>')}
         </div>
         <div class="forum-floor-actions">
           <button class="forum-floor-action" data-open-reply-quote="${reply.id}">引用</button>
@@ -8587,7 +8598,7 @@ async function renderPost() {
                 </div>
               </div>
             ` : `
-              <div class="post-detail-content ${richContent ? 'post-detail-content-rich' : ''}" id="${richContent ? 'postRichContent' : ''}">${richContent ? (post.contentHtml || '') : escapeHtml(post.content || '').replace(/\n/g, '<br>')}</div>
+              <div class="post-detail-content ${richContent ? 'post-detail-content-rich' : ''}" id="${richContent ? 'postRichContent' : ''}">${richContent ? sanitizeRichHtml(post.contentHtml || '') : escapeHtml(post.content || '').replace(/\n/g, '<br>')}</div>
             `}
           </div>
         </div>

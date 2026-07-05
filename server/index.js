@@ -86,6 +86,13 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { ok: false, error: '操作过于频繁，请稍后再试' }
 })
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10, // content creation: 10 req/min per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: '发布过于频繁，请稍后再试' }
+})
 app.use('/api', apiLimiter)
 app.use('/api/login', authLimiter)
 app.use('/api/register', authLimiter)
@@ -95,6 +102,10 @@ app.use('/api/reset-password', authLimiter)
 app.use('/api/send-bind-code', authLimiter)
 app.use('/api/bind-phone', authLimiter)
 app.use('/api/bind-email', authLimiter)
+app.use('/api/feedback', writeLimiter)
+app.use('/api/comments', writeLimiter)
+app.use('/api/posts', writeLimiter)
+app.use('/api/post-replies', writeLimiter)
 
 // Serve uploaded files
 app.use('/uploads', express.static(join(__dirname, uploadDir), {

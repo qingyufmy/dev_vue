@@ -17,7 +17,8 @@ router.get('/system-config-public/:category', async (req, res) => {
     const items = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [category])
     res.json({ ok: true, items })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Public config error:', err)
+    res.json({ ok: false, error: '加载失败' })
   }
 })
 
@@ -32,7 +33,8 @@ router.get('/system-config', authMiddleware, adminOnly, async (req, res) => {
     }
     res.json({ ok: true, config: grouped })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Load config error:', err)
+    res.json({ ok: false, error: '加载配置失败' })
   }
 })
 
@@ -42,7 +44,8 @@ router.get('/system-config/:category', authMiddleware, adminOnly, async (req, re
     const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [req.params.category])
     res.json({ ok: true, items: rows })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Load category error:', err)
+    res.json({ ok: false, error: '加载配置失败' })
   }
 })
 
@@ -62,7 +65,8 @@ router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
     }
     res.json({ ok: true, id: existing?.id, action: existing ? 'updated' : 'created' })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Save config error:', err)
+    res.json({ ok: false, error: '保存配置失败' })
   }
 })
 
@@ -83,7 +87,8 @@ router.put('/system-config/:category', authMiddleware, adminOnly, async (req, re
     }
     res.json({ ok: true, count: items.length })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Batch update error:', err)
+    res.json({ ok: false, error: '批量更新失败' })
   }
 })
 
@@ -97,7 +102,8 @@ router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) 
     }
     res.json({ ok: true })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Delete config error:', err)
+    res.json({ ok: false, error: '删除失败' })
   }
 })
 
@@ -107,7 +113,8 @@ router.delete('/system-config/category/:category', authMiddleware, adminOnly, as
     await queryRun('DELETE FROM system_config WHERE category = ?', [req.params.category])
     res.json({ ok: true })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Delete category error:', err)
+    res.json({ ok: false, error: '删除分类失败' })
   }
 })
 
@@ -149,7 +156,8 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
 
     res.json({ ok: true })
   } catch (err) {
-    res.json({ ok: false, error: err.message || '发送失败' })
+    console.error('[Config] SMTP test error:', err)
+    res.json({ ok: false, error: '邮件发送失败' })
   }
 })
 
@@ -176,7 +184,8 @@ router.post('/system-config/sms/test', authMiddleware, adminOnly, async (req, re
     await sendSms(to, templateCode, { code: '123456' })
     res.json({ ok: true })
   } catch (err) {
-    res.json({ ok: false, error: err.message || '发送失败' })
+    console.error('[Config] SMS test error:', err)
+    res.json({ ok: false, error: '短信发送失败' })
   }
 })
 
@@ -201,7 +210,8 @@ router.get('/site-updates', async (req, res) => {
     })
     res.json({ ok: true, items })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Config] Site updates error:', err)
+    res.json({ ok: false, error: '加载更新失败' })
   }
 })
 

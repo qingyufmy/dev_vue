@@ -417,6 +417,7 @@ export async function mt5Bridge(userId, action, params = {}, options = {}) {
     }
     return result
   }).catch(e => ({ status: 'error', message: e.message }))
+    .finally(() => { if (_bridgeLocks[userId] === current) delete _bridgeLocks[userId] })
   _bridgeLocks[userId] = current
   return current
 }
