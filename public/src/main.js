@@ -7142,8 +7142,8 @@ async function handleSendCode() {
     phone = phoneRaw ? phonePrefix + phoneRaw : ''
   }
 
-  if (isPhone) {
-    if (!phoneRaw || phoneRaw.length < 6) {
+  if (isPhone || phone) {
+    if (!phone || phone.length < 8) {
       showFormMsg('请先输入有效的手机号', 'err')
       return
     }
