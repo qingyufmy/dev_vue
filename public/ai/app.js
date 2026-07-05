@@ -3564,6 +3564,7 @@ async function loadHistoryChart(forceRefresh) {
     const data = await wsApi("history_chart_data", params);
     if (data?.status === 'success') {
       _historyChartCache = { filters: filterKey, data };
+      await ensureChartJs();
       _renderHistoryChart(data);
     }
   } catch (e) { console.error("loadHistoryChart:", e); }
@@ -3677,7 +3678,6 @@ function _renderHistoryChart(data) {
   const ctx = canvas.getContext('2d');
 
   if (_historyChart) _historyChart.destroy();
-  await ensureChartJs();
   _historyChart = new Chart(ctx, {
     type: 'bar',
     plugins: [zeroLinePlugin, barLabelPlugin],
