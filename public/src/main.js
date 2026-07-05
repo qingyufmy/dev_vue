@@ -7336,6 +7336,7 @@ function showAuthModal(mode, options = {}) {
   state._codeSending = false
   state._codeCountdown = 0
 
+  const { emailEnabled = true, phoneEnabled = true } = state.authMethods || {}
   modalBody.innerHTML = `
     <form id="authForm">
       <div class="form-msg" id="formMsg" style="display:none"></div>
