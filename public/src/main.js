@@ -7319,6 +7319,11 @@ function showAuthModal(mode, options = {}) {
     : ''
 
   state.authMode = mode
+  if (mode === 'register') {
+    state.authRegType = state.authRegType || 'email'
+  } else {
+    state.authRegType = 'email'
+  }
   loadAuthMethods()
   state.authPrefillEmail = prefillEmail
   if (referralCode) state.referralInviteCode = referralCode
