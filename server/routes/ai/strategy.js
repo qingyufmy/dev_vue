@@ -5,7 +5,7 @@ import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload } from './config.js'
+import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall } from './config.js'
 import { round2 } from './utils.js'
 
 export async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
@@ -87,7 +87,8 @@ export async function executeOrder(userId, config, request, action) {
   try {
     const risk = validateTradeRequest(config, account, positions, request)
     let openResult
-    openResult = await mt5Bridge(userId, 'open', request)
+    const { bridgeAction, bridgeParams } = buildBridgeOrderCall(request)
+    openResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
     result = { ...openResult, risk }
     if (quote) result.quote = quote
   } catch (err) {

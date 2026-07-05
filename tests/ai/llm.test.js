@@ -253,3 +253,45 @@ describe('maybeAiSignal', () => {
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeUndefined()
   })
 })
+
+describe('normalizeAiSignal - SL/TP fallback', () => {
+  const market = { latest_price: 4000, atr_14: 10, strategy_score: {} }
+  const config = { risk_level: 'medium', max_position_size: 0.05 }
+
+  it('buy_limit: SL below limitPrice, TP above limitPrice', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980
+    }, config, market)
+    expect(result.stop_loss_price).toBeLessThan(3980)
+    expect(result.take_profit_1_price).toBeGreaterThan(3980)
+    expect(result.stop_loss_price).toBe(3965)
+    expect(result.take_profit_1_price).toBe(3995)
+  })
+
+  it('sell_stop: SL above limitPrice, TP below limitPrice', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'sell_stop', confidence: 0.8, limit_price: 3990
+    }, config, market)
+    expect(result.stop_loss_price).toBeGreaterThan(3990)
+    expect(result.take_profit_1_price).toBeLessThan(3990)
+    expect(result.stop_loss_price).toBe(4005)
+    expect(result.take_profit_1_price).toBe(3975)
+  })
+
+  it('buy (market): SL/TP anchored to latest_price', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy', confidence: 0.8
+    }, config, market)
+    expect(result.stop_loss_price).toBe(3985)
+    expect(result.take_profit_1_price).toBe(4015)
+  })
+
+  it('model-provided SL/TP not overwritten', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980,
+      stop_loss_price: 3970, take_profit_1_price: 4000
+    }, config, market)
+    expect(result.stop_loss_price).toBe(3970)
+    expect(result.take_profit_1_price).toBe(4000)
+  })
+})

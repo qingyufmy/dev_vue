@@ -225,24 +225,25 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.recommended_volume = recommendedVolume
 
   if (signalType !== 'hold') {
-    const price = market.latest_price || 0
+    const isBuySide = signalType.startsWith('buy')
+    const anchorPrice = (entryMethod !== 'market' && entryMethod !== 'observe' && limitPrice) ? limitPrice : (market.latest_price || 0)
     const atr = market.atr_14 || 0
-    if (atr > 0 && price > 0) {
+    if (atr > 0 && anchorPrice > 0) {
       if (!parsed.stop_loss_price) {
-        parsed.stop_loss_price = signalType === 'buy'
-          ? round2(price - atr * risk.slAtrMult) : round2(price + atr * risk.slAtrMult)
+        parsed.stop_loss_price = isBuySide
+          ? round2(anchorPrice - atr * risk.slAtrMult) : round2(anchorPrice + atr * risk.slAtrMult)
       }
       if (!parsed.take_profit_1_price) {
-        parsed.take_profit_1_price = signalType === 'buy'
-          ? round2(price + atr * risk.tp1AtrMult) : round2(price - atr * risk.tp1AtrMult)
+        parsed.take_profit_1_price = isBuySide
+          ? round2(anchorPrice + atr * risk.tp1AtrMult) : round2(anchorPrice - atr * risk.tp1AtrMult)
       }
       if (!parsed.take_profit_2_price) {
-        parsed.take_profit_2_price = signalType === 'buy'
-          ? round2(price + atr * risk.tp2AtrMult) : round2(price - atr * risk.tp2AtrMult)
+        parsed.take_profit_2_price = isBuySide
+          ? round2(anchorPrice + atr * risk.tp2AtrMult) : round2(anchorPrice - atr * risk.tp2AtrMult)
       }
       if (!parsed.take_profit_3_price) {
-        parsed.take_profit_3_price = signalType === 'buy'
-          ? round2(price + atr * risk.tp3AtrMult) : round2(price - atr * risk.tp3AtrMult)
+        parsed.take_profit_3_price = isBuySide
+          ? round2(anchorPrice + atr * risk.tp3AtrMult) : round2(anchorPrice - atr * risk.tp3AtrMult)
       }
     }
   }

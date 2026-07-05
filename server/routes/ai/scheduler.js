@@ -4,7 +4,7 @@ import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols } from './config.js'
+import { getAutoConfig, getGlobalAutoConfig, getAutoInferenceConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, buildBridgeOrderCall } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -1298,39 +1298,8 @@ async function executeOrder(userId, config, request, action, options = {}) {
   try {
     const risk = validateTradeRequest(config, account, positions, request)
     let openResult
-    const isPendingOrder = request.entry_method && request.entry_method !== 'market' && request.entry_method !== 'observe'
-    if (isPendingOrder) {
-      const pendingTypeMap = {
-        'limit': request.order_type === 'buy' ? 'buy_limit' : 'sell_limit',
-        'stop': request.order_type === 'buy' ? 'buy_stop' : 'sell_stop',
-        'stop_limit': request.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
-      }
-      const pendingType = pendingTypeMap[request.entry_method] || request.entry_method
-      // pending_valid_until is a datetime string, convert to MT5 expiration (Unix ts)
-      let expiration = 0
-      if (request.pending_valid_until) {
-        const expDate = new Date(request.pending_valid_until.replace(' ', 'T') + 'Z')
-        if (!isNaN(expDate.getTime())) {
-          expiration = Math.floor(expDate.getTime() / 1000) + 10800  // UTC → UTC+3
-        }
-      }
-      if (!expiration) {
-        const nowMt5 = Math.floor(Date.now() / 1000) + 10800
-        expiration = nowMt5 + 240 * 60  // fallback 4h
-      }
-      const pendingParams = {
-        symbol: request.symbol,
-        order_type: pendingType,
-        price: request.limit_price,
-        volume: request.volume,
-        sl: request.sl,
-        tp: request.tp,
-        expiration: expiration,
-      }
-      openResult = await mt5Bridge(userId, 'pending', pendingParams)
-    } else {
-      openResult = await mt5Bridge(userId, 'open', request)
-    }
+    const { bridgeAction, bridgeParams } = buildBridgeOrderCall(request)
+    openResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
     result = { ...openResult, risk }
     if (quote) result.quote = quote
   } catch (err) {

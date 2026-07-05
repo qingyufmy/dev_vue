@@ -18,6 +18,41 @@ export class RiskReject extends Error {
   }
 }
 
+export function buildBridgeOrderCall(request) {
+  const entryMethod = request.entry_method || 'market'
+  if (entryMethod === 'market' || entryMethod === 'observe') {
+    return { bridgeAction: 'open', bridgeParams: request }
+  }
+  const orderType = request.order_type || 'buy'
+  const pendingTypeMap = {
+    'limit':      orderType === 'buy' ? 'buy_limit'      : 'sell_limit',
+    'stop':       orderType === 'buy' ? 'buy_stop'       : 'sell_stop',
+    'stop_limit': orderType === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
+  }
+  const pendingType = pendingTypeMap[entryMethod] || entryMethod
+  let expiration = 0
+  if (request.pending_valid_until) {
+    const expDate = new Date(request.pending_valid_until.replace(' ', 'T') + 'Z')
+    if (!isNaN(expDate.getTime())) expiration = Math.floor(expDate.getTime() / 1000) + 10800
+  }
+  if (!expiration) {
+    const validMinutes = Number(request.pending_valid_minutes) || 240
+    expiration = Math.floor(Date.now() / 1000) + 10800 + validMinutes * 60
+  }
+  return {
+    bridgeAction: 'pending',
+    bridgeParams: {
+      symbol: request.symbol,
+      order_type: pendingType,
+      price: request.limit_price,
+      volume: request.volume,
+      sl: request.sl,
+      tp: request.tp,
+      expiration,
+    },
+  }
+}
+
 export async function insertAudit(db, userId, action, symbol, request, result, status) {
   await queryRun(`
     INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
@@ -485,7 +520,7 @@ export function validateTradeRequest(config, account, positions, request) {
 
   const referencePrice = request.reference_price
   const quotePrice = request.quote_price
-  if (request.source === 'ai' && referencePrice && quotePrice) {
+  if (request.source === 'ai' && referencePrice && quotePrice && (request.entry_method || 'market') === 'market') {
     const reference = parseFloat(referencePrice)
     const current = parseFloat(quotePrice)
     if (reference > 0) {

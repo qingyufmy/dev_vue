@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { RiskReject, validateTradeRequest, signalOrderPayload } from '../../server/routes/ai/config.js'
+import { RiskReject, validateTradeRequest, signalOrderPayload, buildBridgeOrderCall } from '../../server/routes/ai/config.js'
 import { configPublic } from '../../server/routes/ai/utils.js'
 
 describe('RiskReject', () => {
@@ -171,5 +171,75 @@ describe('configPublic', () => {
     const original = { ...row }
     configPublic(row)
     expect(row).toEqual(original)
+  })
+})
+
+describe('buildBridgeOrderCall', () => {
+  it('market 请求 → bridgeAction open', () => {
+    const result = buildBridgeOrderCall({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.01 })
+    expect(result.bridgeAction).toBe('open')
+    expect(result.bridgeParams).toBe(result.bridgeParams)
+  })
+
+  it('limit 请求 → bridgeAction pending, order_type buy_limit', () => {
+    const result = buildBridgeOrderCall({
+      symbol: 'XAUUSD', entry_method: 'limit', order_type: 'buy',
+      limit_price: 3980, volume: 0.01, sl: 3970, tp: 4000,
+      pending_valid_until: '2026-07-04 12:00:00',
+    })
+    expect(result.bridgeAction).toBe('pending')
+    expect(result.bridgeParams.order_type).toBe('buy_limit')
+    expect(result.bridgeParams.price).toBe(3980)
+    const expectedExpiration = Math.floor(new Date('2026-07-04T12:00:00Z').getTime() / 1000) + 10800
+    expect(result.bridgeParams.expiration).toBe(expectedExpiration)
+  })
+
+  it('sell stop 请求 → bridgeAction pending, order_type sell_stop', () => {
+    const result = buildBridgeOrderCall({
+      symbol: 'XAUUSD', entry_method: 'stop', order_type: 'sell',
+      limit_price: 4050, volume: 0.01,
+    })
+    expect(result.bridgeAction).toBe('pending')
+    expect(result.bridgeParams.order_type).toBe('sell_stop')
+    expect(result.bridgeParams.expiration).toBeGreaterThan(Math.floor(Date.now() / 1000) + 10800)
+  })
+
+  it('无 pending_valid_until 时 fallback 240 分钟', () => {
+    const before = Math.floor(Date.now() / 1000) + 10800 + 240 * 60
+    const result = buildBridgeOrderCall({
+      symbol: 'XAUUSD', entry_method: 'limit', order_type: 'buy',
+      limit_price: 3980, volume: 0.01,
+    })
+    const after = before + 5
+    expect(result.bridgeParams.expiration).toBeGreaterThanOrEqual(before)
+    expect(result.bridgeParams.expiration).toBeLessThanOrEqual(after)
+  })
+})
+
+describe('validateTradeRequest - slippage skip for pending', () => {
+  const baseConfig = { max_position_size: 0.05 }
+  const baseAccount = { equity: 10000 }
+  const basePositions = []
+
+  it('市价单触发滑点校验', () => {
+    const request = {
+      symbol: 'XAUUSD', order_type: 'buy', volume: 0.01,
+      source: 'ai', entry_method: 'market',
+      reference_price: 4000, quote_price: 4010,
+      confirm: true,
+    }
+    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+      .toThrow(RiskReject)
+  })
+
+  it('挂单跳过滑点校验', () => {
+    const request = {
+      symbol: 'XAUUSD', order_type: 'buy', volume: 0.01,
+      source: 'ai', entry_method: 'limit', limit_price: 3980,
+      reference_price: 4000, quote_price: 4010,
+      confirm: true,
+    }
+    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+      .not.toThrow()
   })
 })
