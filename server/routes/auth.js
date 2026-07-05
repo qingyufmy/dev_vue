@@ -486,6 +486,65 @@ router.post('/change-password', authMiddleware, async (req, res) => {
   }
 })
 
+router.post('/change-email', authMiddleware, async (req, res) => {
+  try {
+    const { oldPassword, newEmail, verifyToken } = req.body
+    if (!newEmail || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
+
+    const user = await queryOne('SELECT password, email FROM users WHERE id = ?', [req.user.id])
+    if (!oldPassword || !await bcrypt.compare(oldPassword, user.password)) {
+      return res.json({ ok: false, error: '原密码错误' })
+    }
+
+    const existing = await queryOne('SELECT id FROM users WHERE email = ? AND id != ?', [newEmail, req.user.id])
+    if (existing) return res.json({ ok: false, error: '该邮箱已被其他账号使用' })
+
+    const tokenRecord = await queryOne(
+      'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+      [newEmail, verifyToken, 'change_email']
+    )
+    if (!tokenRecord) return res.json({ ok: false, error: '邮箱验证码无效或已过期' })
+
+    await queryRun("UPDATE users SET email = ?, email_verified = 1, updated_at = NOW() WHERE id = ?", [newEmail, req.user.id])
+    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+
+    res.json({ ok: true, message: '邮箱已更换' })
+  } catch (err) {
+    console.error('[change-email]', err.message)
+    res.json({ ok: false, error: '更换邮箱失败' })
+  }
+})
+
+router.post('/change-phone', authMiddleware, async (req, res) => {
+  try {
+    const { oldPassword, newPhone, verifyToken } = req.body
+    if (!newPhone || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
+
+    const user = await queryOne('SELECT password, phone FROM users WHERE id = ?', [req.user.id])
+    if (!oldPassword || !await bcrypt.compare(oldPassword, user.password)) {
+      return res.json({ ok: false, error: '原密码错误' })
+    }
+
+    const dbPhone = newPhone.replace(/^\+86/, '')
+    const existing = await queryOne('SELECT id FROM users WHERE (phone = ? OR phone = ?) AND id != ?', [dbPhone, newPhone, req.user.id])
+    if (existing) return res.json({ ok: false, error: '该手机号已被其他账号使用' })
+
+    const tokenRecord = await queryOne(
+      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+      [dbPhone, newPhone, verifyToken, 'change_phone']
+    )
+    if (!tokenRecord) return res.json({ ok: false, error: '手机验证码无效或已过期' })
+
+    await queryRun("UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?", [dbPhone, req.user.id])
+    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+
+    res.json({ ok: true, message: '手机号已更换' })
+  } catch (err) {
+    console.error('[change-phone]', err.message)
+    res.json({ ok: false, error: '更换手机号失败' })
+  }
+})
+
 router.post('/send-bind-code', authMiddleware, async (req, res) => {
   try {
     const { phone, email, captchaId, captchaAnswer } = req.body

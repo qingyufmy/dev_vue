@@ -3231,6 +3231,34 @@ button { cursor: pointer; font-family: inherit; }
   color: var(--text-3);
   margin-top: 6px;
 }
+.account-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.account-info-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.btn-account-change {
+  flex-shrink: 0;
+  padding: 6px 16px;
+  background: var(--glass-light);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  transition: var(--transition);
+  font-family: inherit;
+}
+.btn-account-change:hover {
+  background: var(--glass);
+  transform: translateY(-1px);
+}
 .settings-info-card {
   display: flex;
   flex-direction: column;

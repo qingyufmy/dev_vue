@@ -6091,20 +6091,62 @@ function renderProfile() {
 
               ${state.user.email ? `
               <div class="settings-card">
-                <div class="form-group">
-                  <label class="form-label">电子邮箱</label>
-                  <input type="email" class="form-input" value="${state.user.email}" disabled style="opacity:0.6">
-                  <p class="settings-hint">暂不支持更改邮箱，如需更改请联系管理员</p>
+                <div class="account-info-row">
+                  <div>
+                    <label class="form-label">电子邮箱</label>
+                    <span class="account-info-value">${state.user.email}</span>
+                  </div>
+                  <button class="btn-account-change" id="changeEmailToggle">更换</button>
+                </div>
+                <div id="changeEmailForm" style="display:none">
+                  <div class="form-group">
+                    <label class="form-label">原密码</label>
+                    <input type="password" class="form-input" id="changeEmailOldPwd" placeholder="输入当前密码">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">新邮箱</label>
+                    <div class="form-row">
+                      <input type="email" class="form-input" id="changeEmailInput" placeholder="请输入新邮箱" style="flex:1">
+                      <button class="btn-send-code" id="changeEmailSendCode">发送验证码</button>
+                    </div>
+                  </div>
+                  <div class="form-group" id="changeEmailCodeGroup" style="display:none">
+                    <label class="form-label">验证码</label>
+                    <input type="text" class="form-input" id="changeEmailCode" placeholder="输入6位验证码" maxlength="6">
+                  </div>
+                  <button class="btn btn-primary" id="changeEmailBtn" style="width:100%;margin-top:8px;display:none">确认更换</button>
+                  <div id="changeEmailMsg" class="settings-msg" style="display:none"></div>
                 </div>
               </div>
               ` : ''}
 
               ${state.user.phone ? `
               <div class="settings-card">
-                <div class="form-group">
-                  <label class="form-label">手机号</label>
-                  <input type="text" class="form-input" value="${state.user.phone}" disabled style="opacity:0.6">
-                  <p class="settings-hint">已绑定手机号</p>
+                <div class="account-info-row">
+                  <div>
+                    <label class="form-label">手机号</label>
+                    <span class="account-info-value">${state.user.phone}</span>
+                  </div>
+                  <button class="btn-account-change" id="changePhoneToggle">更换</button>
+                </div>
+                <div id="changePhoneForm" style="display:none">
+                  <div class="form-group">
+                    <label class="form-label">原密码</label>
+                    <input type="password" class="form-input" id="changePhoneOldPwd" placeholder="输入当前密码">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">新手机号</label>
+                    <div class="form-row">
+                      <input type="tel" class="form-input" id="changePhoneInput" placeholder="请输入新手机号" style="flex:1">
+                      <button class="btn-send-code" id="changePhoneSendCode">发送验证码</button>
+                    </div>
+                  </div>
+                  <div class="form-group" id="changePhoneCodeGroup" style="display:none">
+                    <label class="form-label">验证码</label>
+                    <input type="text" class="form-input" id="changePhoneCode" placeholder="输入6位验证码" maxlength="6">
+                  </div>
+                  <button class="btn btn-primary" id="changePhoneBtn" style="width:100%;margin-top:8px;display:none">确认更换</button>
+                  <div id="changePhoneMsg" class="settings-msg" style="display:none"></div>
                 </div>
               </div>
               ` : ''}
@@ -6152,6 +6194,7 @@ function renderProfile() {
                 <div class="pwd-change-tabs">
                   <button class="pwd-tab active" data-pwd-mode="old">使用原密码</button>
                   <button class="pwd-tab" data-pwd-mode="email">使用邮箱验证</button>
+                  <button class="pwd-tab" data-pwd-mode="phone">使用手机号验证</button>
                 </div>
 
                 <div id="pwdChangeForm">
@@ -6172,6 +6215,19 @@ function renderProfile() {
                     <div class="form-group">
                       <label class="form-label">验证码</label>
                       <input type="text" class="form-input" id="pwdVerifyCode" placeholder="输入6位验证码" maxlength="6">
+                    </div>
+                  </div>
+                  <div id="pwdPhoneMode" style="display:none">
+                    <div class="form-group">
+                      <label class="form-label">手机号验证</label>
+                      <div class="form-row">
+                        <input type="text" class="form-input" value="${state.user.phone || ''}" disabled style="opacity:0.6;flex:1">
+                        <button class="btn-send-code" id="pwdPhoneSendCode">发送验证码</button>
+                      </div>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">验证码</label>
+                      <input type="text" class="form-input" id="pwdPhoneVerifyCode" placeholder="输入6位验证码" maxlength="6">
                     </div>
                   </div>
                   <div class="form-group">
@@ -6304,8 +6360,10 @@ function renderProfile() {
       const mode = tab.dataset.pwdMode
       const oldDiv = document.getElementById('pwdOldMode')
       const emailDiv = document.getElementById('pwdEmailMode')
+      const phoneDiv = document.getElementById('pwdPhoneMode')
       if (oldDiv) oldDiv.style.display = mode === 'old' ? 'block' : 'none'
       if (emailDiv) emailDiv.style.display = mode === 'email' ? 'block' : 'none'
+      if (phoneDiv) phoneDiv.style.display = mode === 'phone' ? 'block' : 'none'
     })
   })
 
@@ -6341,6 +6399,50 @@ function renderProfile() {
     })
   }
 
+  // Send verification code for password reset via phone
+  const pwdPhoneSendBtn = document.getElementById('pwdPhoneSendCode')
+  if (pwdPhoneSendBtn) {
+    pwdPhoneSendBtn.addEventListener('click', async () => {
+      pwdPhoneSendBtn.disabled = true
+      pwdPhoneSendBtn.textContent = '发送中...'
+      try {
+        const captchaRes = await api.get('/api/captcha')
+        if (!captchaRes.ok) { showFormMsgProfile('图形验证码加载失败', 'err'); pwdPhoneSendBtn.disabled = false; pwdPhoneSendBtn.textContent = '发送验证码'; return }
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+          try {
+            const res = await api.post('/api/send-code', {
+              phone: state.user.phone,
+              purpose: 'change_password',
+              captchaId,
+              captchaAnswer: captchaCode,
+            })
+            if (res.ok) {
+              showFormMsgProfile('验证码已发送', 'ok')
+              let cd = 60
+              const timer = setInterval(() => {
+                cd--
+                pwdPhoneSendBtn.textContent = `${cd}s`
+                if (cd <= 0) { clearInterval(timer); pwdPhoneSendBtn.textContent = '发送验证码'; pwdPhoneSendBtn.disabled = false }
+              }, 1000)
+            } else {
+              showFormMsgProfile(res.error || '发送失败', 'err')
+              pwdPhoneSendBtn.disabled = false
+              pwdPhoneSendBtn.textContent = '发送验证码'
+            }
+          } catch {
+            showFormMsgProfile('发送失败', 'err')
+            pwdPhoneSendBtn.disabled = false
+            pwdPhoneSendBtn.textContent = '发送验证码'
+          }
+        })
+      } catch {
+        showFormMsgProfile('图形验证码加载失败', 'err')
+        pwdPhoneSendBtn.disabled = false
+        pwdPhoneSendBtn.textContent = '发送验证码'
+      }
+    })
+  }
+
   // Save password
   const savePwdBtn = document.getElementById('savePasswordBtn')
   if (savePwdBtn) {
@@ -6364,10 +6466,19 @@ function renderProfile() {
         const oldPwd = document.getElementById('oldPassword')?.value
         if (!oldPwd) { showPwdMsg(msgDiv, '请输入原密码', 'err'); return }
         body.oldPassword = oldPwd
+      } else if (activeMode === 'phone') {
+        const code = document.getElementById('pwdPhoneVerifyCode')?.value
+        if (!code || code.length !== 6) { showPwdMsg(msgDiv, '请输入6位验证码', 'err'); return }
+        const vRes = await api.post('/api/verify-code', {
+          phone: state.user.phone,
+          code,
+          purpose: 'change_password',
+        })
+        if (!vRes.ok) { showPwdMsg(msgDiv, vRes.error || '验证码错误', 'err'); return }
+        body.verifyToken = vRes.token
       } else {
         const code = document.getElementById('pwdVerifyCode')?.value
         if (!code || code.length !== 6) { showPwdMsg(msgDiv, '请输入6位验证码', 'err'); return }
-        // First verify code to get token
         const vRes = await api.post('/api/verify-code', {
           email: state.user.email,
           code,
@@ -6396,7 +6507,7 @@ function renderProfile() {
             return
           }
           showPwdMsg(msgDiv, '密码修改成功', 'ok')
-          const fields = ['oldPassword', 'newPassword', 'confirmPassword', 'pwdVerifyCode']
+          const fields = ['oldPassword', 'newPassword', 'confirmPassword', 'pwdVerifyCode', 'pwdPhoneVerifyCode']
           fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = '' })
         } else {
           showPwdMsg(msgDiv, res.error || '修改失败', 'err')
@@ -6552,6 +6663,196 @@ function renderProfile() {
       }
       bindEmailBtn.disabled = false
       bindEmailBtn.textContent = '绑定'
+    })
+  }
+
+  // Change email: toggle form
+  const changeEmailToggle = document.getElementById('changeEmailToggle')
+  if (changeEmailToggle) {
+    changeEmailToggle.addEventListener('click', () => {
+      const form = document.getElementById('changeEmailForm')
+      const isHidden = form.style.display === 'none'
+      form.style.display = isHidden ? 'block' : 'none'
+      changeEmailToggle.textContent = isHidden ? '收起' : '更换'
+    })
+  }
+
+  // Change email: send code
+  const changeEmailSendBtn = document.getElementById('changeEmailSendCode')
+  if (changeEmailSendBtn) {
+    changeEmailSendBtn.addEventListener('click', async () => {
+      const newEmail = document.getElementById('changeEmailInput')?.value?.trim()
+      if (!newEmail || !newEmail.includes('@')) { showSettingsMsg('changeEmailMsg', '请输入有效邮箱', 'err'); return }
+      changeEmailSendBtn.disabled = true
+      changeEmailSendBtn.textContent = '发送中...'
+      try {
+        const captchaRes = await api.get('/api/captcha')
+        if (!captchaRes.ok) { showSettingsMsg('changeEmailMsg', '图形验证码加载失败', 'err'); changeEmailSendBtn.disabled = false; changeEmailSendBtn.textContent = '发送验证码'; return }
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+          try {
+            const res = await api.post('/api/send-code', {
+              email: newEmail,
+              purpose: 'change_email',
+              captchaId,
+              captchaAnswer: captchaCode,
+            })
+            if (res.ok) {
+              showSettingsMsg('changeEmailMsg', '验证码已发送', 'ok')
+              document.getElementById('changeEmailCodeGroup').style.display = 'block'
+              document.getElementById('changeEmailBtn').style.display = 'block'
+              let cd = 60
+              const timer = setInterval(() => {
+                cd--
+                changeEmailSendBtn.textContent = `${cd}s`
+                if (cd <= 0) { clearInterval(timer); changeEmailSendBtn.textContent = '发送验证码'; changeEmailSendBtn.disabled = false }
+              }, 1000)
+            } else {
+              showSettingsMsg('changeEmailMsg', res.error || '发送失败', 'err')
+              changeEmailSendBtn.disabled = false
+              changeEmailSendBtn.textContent = '发送验证码'
+            }
+          } catch {
+            showSettingsMsg('changeEmailMsg', '发送失败', 'err')
+            changeEmailSendBtn.disabled = false
+            changeEmailSendBtn.textContent = '发送验证码'
+          }
+        })
+      } catch {
+        showSettingsMsg('changeEmailMsg', '图形验证码加载失败', 'err')
+        changeEmailSendBtn.disabled = false
+        changeEmailSendBtn.textContent = '发送验证码'
+      }
+    })
+  }
+
+  // Change email: confirm
+  const changeEmailBtn = document.getElementById('changeEmailBtn')
+  if (changeEmailBtn) {
+    changeEmailBtn.addEventListener('click', async () => {
+      const oldPwd = document.getElementById('changeEmailOldPwd')?.value
+      const newEmail = document.getElementById('changeEmailInput')?.value?.trim()
+      const code = document.getElementById('changeEmailCode')?.value?.trim()
+      if (!oldPwd) { showSettingsMsg('changeEmailMsg', '请输入原密码', 'err'); return }
+      if (!newEmail || !newEmail.includes('@')) { showSettingsMsg('changeEmailMsg', '请输入有效邮箱', 'err'); return }
+      if (!code || code.length !== 6) { showSettingsMsg('changeEmailMsg', '请输入6位验证码', 'err'); return }
+      changeEmailBtn.disabled = true
+      changeEmailBtn.textContent = '更换中...'
+      try {
+        const vRes = await api.post('/api/verify-code', {
+          email: newEmail,
+          code,
+          purpose: 'change_email',
+        })
+        if (!vRes.ok) { showSettingsMsg('changeEmailMsg', vRes.error || '验证码错误', 'err'); changeEmailBtn.disabled = false; changeEmailBtn.textContent = '确认更换'; return }
+        const res = await api.post('/api/change-email', { oldPassword: oldPwd, newEmail, verifyToken: vRes.token })
+        if (res.ok) {
+          showSettingsMsg('changeEmailMsg', '邮箱已更换', 'ok')
+          state.user.email = newEmail
+          localStorage.setItem('ws_user', JSON.stringify(state.user))
+          setTimeout(() => renderProfile(), 1500)
+        } else {
+          showSettingsMsg('changeEmailMsg', res.error || '更换失败', 'err')
+        }
+      } catch {
+        showSettingsMsg('changeEmailMsg', '更换失败', 'err')
+      }
+      changeEmailBtn.disabled = false
+      changeEmailBtn.textContent = '确认更换'
+    })
+  }
+
+  // Change phone: toggle form
+  const changePhoneToggle = document.getElementById('changePhoneToggle')
+  if (changePhoneToggle) {
+    changePhoneToggle.addEventListener('click', () => {
+      const form = document.getElementById('changePhoneForm')
+      const isHidden = form.style.display === 'none'
+      form.style.display = isHidden ? 'block' : 'none'
+      changePhoneToggle.textContent = isHidden ? '收起' : '更换'
+    })
+  }
+
+  // Change phone: send code
+  const changePhoneSendBtn = document.getElementById('changePhoneSendCode')
+  if (changePhoneSendBtn) {
+    changePhoneSendBtn.addEventListener('click', async () => {
+      const newPhone = document.getElementById('changePhoneInput')?.value?.trim()
+      if (!newPhone || newPhone.length < 6) { showSettingsMsg('changePhoneMsg', '请输入有效手机号', 'err'); return }
+      changePhoneSendBtn.disabled = true
+      changePhoneSendBtn.textContent = '发送中...'
+      try {
+        const captchaRes = await api.get('/api/captcha')
+        if (!captchaRes.ok) { showSettingsMsg('changePhoneMsg', '图形验证码加载失败', 'err'); changePhoneSendBtn.disabled = false; changePhoneSendBtn.textContent = '发送验证码'; return }
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+          try {
+            const res = await api.post('/api/send-code', {
+              phone: newPhone,
+              purpose: 'change_phone',
+              captchaId,
+              captchaAnswer: captchaCode,
+            })
+            if (res.ok) {
+              showSettingsMsg('changePhoneMsg', '验证码已发送', 'ok')
+              document.getElementById('changePhoneCodeGroup').style.display = 'block'
+              document.getElementById('changePhoneBtn').style.display = 'block'
+              let cd = 60
+              const timer = setInterval(() => {
+                cd--
+                changePhoneSendBtn.textContent = `${cd}s`
+                if (cd <= 0) { clearInterval(timer); changePhoneSendBtn.textContent = '发送验证码'; changePhoneSendBtn.disabled = false }
+              }, 1000)
+            } else {
+              showSettingsMsg('changePhoneMsg', res.error || '发送失败', 'err')
+              changePhoneSendBtn.disabled = false
+              changePhoneSendBtn.textContent = '发送验证码'
+            }
+          } catch {
+            showSettingsMsg('changePhoneMsg', '发送失败', 'err')
+            changePhoneSendBtn.disabled = false
+            changePhoneSendBtn.textContent = '发送验证码'
+          }
+        })
+      } catch {
+        showSettingsMsg('changePhoneMsg', '图形验证码加载失败', 'err')
+        changePhoneSendBtn.disabled = false
+        changePhoneSendBtn.textContent = '发送验证码'
+      }
+    })
+  }
+
+  // Change phone: confirm
+  const changePhoneBtn = document.getElementById('changePhoneBtn')
+  if (changePhoneBtn) {
+    changePhoneBtn.addEventListener('click', async () => {
+      const oldPwd = document.getElementById('changePhoneOldPwd')?.value
+      const newPhone = document.getElementById('changePhoneInput')?.value?.trim()
+      const code = document.getElementById('changePhoneCode')?.value?.trim()
+      if (!oldPwd) { showSettingsMsg('changePhoneMsg', '请输入原密码', 'err'); return }
+      if (!newPhone || newPhone.length < 6) { showSettingsMsg('changePhoneMsg', '请输入有效手机号', 'err'); return }
+      if (!code || code.length !== 6) { showSettingsMsg('changePhoneMsg', '请输入6位验证码', 'err'); return }
+      changePhoneBtn.disabled = true
+      changePhoneBtn.textContent = '更换中...'
+      try {
+        const vRes = await api.post('/api/verify-code', {
+          phone: newPhone,
+          code,
+          purpose: 'change_phone',
+        })
+        if (!vRes.ok) { showSettingsMsg('changePhoneMsg', vRes.error || '验证码错误', 'err'); changePhoneBtn.disabled = false; changePhoneBtn.textContent = '确认更换'; return }
+        const res = await api.post('/api/change-phone', { oldPassword: oldPwd, newPhone, verifyToken: vRes.token })
+        if (res.ok) {
+          showSettingsMsg('changePhoneMsg', '手机号已更换', 'ok')
+          state.user.phone = newPhone
+          localStorage.setItem('ws_user', JSON.stringify(state.user))
+          setTimeout(() => renderProfile(), 1500)
+        } else {
+          showSettingsMsg('changePhoneMsg', res.error || '更换失败', 'err')
+        }
+      } catch {
+        showSettingsMsg('changePhoneMsg', '更换失败', 'err')
+      }
+      changePhoneBtn.disabled = false
+      changePhoneBtn.textContent = '确认更换'
     })
   }
 
