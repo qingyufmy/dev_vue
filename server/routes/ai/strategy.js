@@ -1,11 +1,11 @@
 // ai/strategy.js — 策略上下文 + 执行 + 分析
 
-import { queryOne, queryRun, beijingNow } from '../../db.js'
+import { queryRun, beijingNow } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall } from './config.js'
+import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore } from './config.js'
 import { round2 } from './utils.js'
 
 export async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
@@ -59,52 +59,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
 }
 
 export async function executeOrder(userId, config, request, action) {
-  let accountResult, positionsResult, quote
-  accountResult = await mt5Bridge(userId, 'account', {})
-  positionsResult = await mt5Bridge(userId, 'positions', {})
-  const positions = positionsResult.positions || []
-  const account = accountResult
-
-  if (request.symbol) {
-    try {
-      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol })
-      request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
-      const pointSize = quote.point || (request.quote_price > 1000 ? 0.01 : 0.0001)
-      if (request.stop_loss_points && !request.sl) {
-        request.sl = request.order_type === 'buy'
-          ? round2(request.quote_price - request.stop_loss_points * pointSize)
-          : round2(request.quote_price + request.stop_loss_points * pointSize)
-      }
-      if (request.take_profit_points && !request.tp) {
-        request.tp = request.order_type === 'buy'
-          ? round2(request.quote_price + request.take_profit_points * pointSize)
-          : round2(request.quote_price - request.take_profit_points * pointSize)
-      }
-    } catch (e) { console.warn('[Strategy] Failed to fetch quote for SL/TP calculation:', e.message) }
-  }
-
-  let result
-  try {
-    const risk = validateTradeRequest(config, account, positions, request)
-    let openResult
-    const { bridgeAction, bridgeParams } = buildBridgeOrderCall(request)
-    openResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
-    result = { ...openResult, risk }
-    if (quote) result.quote = quote
-  } catch (err) {
-    if (err instanceof RiskReject) {
-      result = {
-        status: err.reason === 'confirmation_required' ? 'needs_confirmation' : 'rejected',
-        message: err.reason,
-        details: err.details,
-      }
-    } else {
-      result = { status: 'error', message: err.message }
-    }
-  }
-
-  await insertAudit(null, userId, action, request.symbol, request, result, result.status)
-  return result
+  return executeOrderCore(userId, config, request, action)
 }
 
 export async function handleAnalyze(userId, params) {

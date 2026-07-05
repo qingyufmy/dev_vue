@@ -1453,17 +1453,6 @@ async function loadStatus() {
     setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
   }
 
-  // [disabled] 智能平仓 badge
-  // try {
-  //   const closeData = await wsApi('get_close_config');
-  //   const closeStatus = await wsApi('close_status');
-  //   const closeCfg = closeData.config || {};
-  //   state.closeScheduler = closeStatus.scheduler || {};
-  //   state.closeEnabled = !!closeCfg.enabled;
-  //   updateSmartCloseBadge(!!closeCfg.enabled, closeCfg.check_interval_seconds);
-  // } catch {
-  //   setBadge('smartCloseMode', '智能平仓 --', 'neutral');
-  // }
 }
 
 // ============ Gateway Badge Click ============
@@ -1492,10 +1481,17 @@ function initBridgeModal() {
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
   $("downloadExe")?.addEventListener("click", async () => {
-    const url = "https://qiniu.acadfx.com/AURUM_Bridge_v2.2.0.exe";
+    let url = "https://qiniu.acadfx.com/AURUM_Bridge_v2.2.0.exe";
+    let version = "v2.2.0";
+    try {
+      const resp = await fetch("/api/bridge/version");
+      const data = await resp.json();
+      if (data.download_url) url = data.download_url;
+      if (data.version) version = "v" + data.version;
+    } catch {}
     const a = document.createElement("a");
-    a.href = url; a.download = "AURUM_Bridge_v2.2.0.exe"; a.click();
-    toast("正在下载 MT5 桥接客户端 v2.2.0", "success");
+    a.href = url; a.download = url.split("/").pop(); a.click();
+    toast(`正在下载 MT5 桥接客户端 ${version}`, "success");
     modal.classList.add("hidden");
   });
 
@@ -1547,34 +1543,6 @@ async function handleAutoToggle() {
     _autoToggleLock = false;
   }
 }
-
-// [disabled] 智能平仓
-// async function handleSmartCloseToggle() {
-//   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
-//   if (!state.isAdmin && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
-//   try {
-//     const data = await wsApi('get_close_config');
-//     const cfg = data.config || {};
-//     const newEnabled = !cfg.enabled;
-//     await wsApi('toggle_close', { enabled: newEnabled });
-//     toast(newEnabled ? '智能平仓已开启' : '智能平仓已关闭', 'success');
-//     const closeStatus = await wsApi('close_status');
-//     state.closeScheduler = closeStatus.scheduler || {};
-//     updateSmartCloseBadge(newEnabled, cfg.check_interval_seconds);
-//     if (newEnabled) {
-//       toast('正在执行首次持仓分析...', 'info');
-//       try {
-//         await wsApi('run_close_now', { _timeout: 60000 });
-//         loadSignals({ limit: 6, offset: 0 });
-//         loadSignalTable();
-//       } catch (e) {
-//         console.error('run_close_now:', e);
-//       }
-//     }
-//   } catch (e) {
-//     toast('切换失败: ' + e.message, 'error');
-//   }
-// }
 
 async function loadSymbols() {
   const data = await wsApi("symbols");
@@ -2098,11 +2066,6 @@ function applyRoleUI() {
   if (gatewayBadge3) { gatewayBadge3.classList.add("clickable-badge"); gatewayBadge3.title = ""; }
   // Show model tab
   if (modelTab) modelTab.style.display = "";
-  // [disabled] 智能平仓
-  // const closeConfig = document.getElementById("close-config");
-  // if (closeConfig) closeConfig.style.display = "";
-  // const scMode = document.getElementById("smartCloseMode");
-  // if (scMode) { scMode.classList.add("clickable-badge"); scMode.title = ""; }
 }
 
 /* ---- Provider presets: model name → API base URL ---- */
@@ -2268,22 +2231,13 @@ function initConfigSubTabs() {
 
 // ============ Auto Config ============
 function applyAutoProviderPreset(provider) {
-  const presets = {
-    deepseek: { url: 'https://api.deepseek.com', model: 'deepseek-chat' },
-    gpt: { url: 'https://api.openai.com/v1', model: 'gpt-4o' },
-    kimi: { url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-    qwen: { url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-    zhipu: { url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
-    doubao: { url: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-1.5-pro-256k' },
-    claude: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514' },
-    gemini: { url: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash' },
-  };
-  const p = presets[provider];
-  if (!p) return;
+  const preset = PROVIDER_PRESETS[provider];
+  if (!preset) return;
+  const defaultModel = preset.models?.[0] || '';
   const urlEl = document.getElementById('autoApiBaseUrl');
   const modelEl = document.getElementById('autoModelName');
-  if (urlEl && !urlEl.value) urlEl.value = p.url;
-  if (modelEl && (!modelEl.value || modelEl.value === 'deepseek-chat')) modelEl.value = p.model;
+  if (urlEl && !urlEl.value) urlEl.value = preset.url;
+  if (modelEl && (!modelEl.value || modelEl.value === 'deepseek-chat')) modelEl.value = defaultModel;
 }
 
 async function loadAutoConfig() {
@@ -2615,81 +2569,6 @@ async function saveAdminPromptType() {
 }
 
 // [disabled] 智能平仓
-// async function loadCloseConfig() {
-//   try {
-//     const data = await wsApi('get_close_config');
-//     const cfg = data.config || {};
-//     document.getElementById('closeApiProvider').value = cfg.api_provider || 'deepseek';
-//     document.getElementById('closeModelName').value = cfg.model_name || 'deepseek-chat';
-//     document.getElementById('closeApiBaseUrl').value = cfg.api_base_url || 'https://api.deepseek.com';
-//     document.getElementById('closeTemperature').value = cfg.temperature ?? 0.3;
-//     document.getElementById('closeMaxTokens').value = cfg.max_tokens || 4000;
-//     document.getElementById('closeCheckInterval').value = Math.round((cfg.check_interval_seconds || 60) / 60);
-//     document.getElementById('closeRuleSoftSl').value = cfg.rule_soft_sl ?? '';
-//     document.getElementById('closeRuleSoftTp').value = cfg.rule_soft_tp ?? '';
-//     document.getElementById('closeRuleTimeout').value = cfg.rule_timeout_minutes ?? '';
-//     document.getElementById('closeRuleMaxLoss').value = cfg.rule_max_loss_pct ?? '';
-//     document.getElementById('closeRuleReverse').checked = !!cfg.rule_reverse_signal;
-//     document.getElementById('closeSystemPrompt').value = cfg.system_prompt || DEFAULT_CLOSE_PROMPT;
-//   } catch (e) { console.error('loadCloseConfig:', e); }
-// }
-//
-// async function saveCloseConfig() {
-//   try {
-//     const closeCfg = await wsApi('get_close_config');
-//     const payload = {
-//       enabled: closeCfg?.config?.enabled || false,
-//       api_provider: document.getElementById('closeApiProvider').value,
-//       model_name: document.getElementById('closeModelName').value,
-//       api_base_url: document.getElementById('closeApiBaseUrl').value,
-//       temperature: parseFloat(document.getElementById('closeTemperature').value) || 0.3,
-//       max_tokens: parseInt(document.getElementById('closeMaxTokens').value) || 1500,
-//       check_interval_seconds: (parseInt(document.getElementById('closeCheckInterval').value) || 1) * 60,
-//       rule_soft_sl: parseFloat(document.getElementById('closeRuleSoftSl').value) || null,
-//       rule_soft_tp: parseFloat(document.getElementById('closeRuleSoftTp').value) || null,
-//       rule_timeout_minutes: parseInt(document.getElementById('closeRuleTimeout').value) || null,
-//       rule_max_loss_pct: parseFloat(document.getElementById('closeRuleMaxLoss').value) || null,
-//       rule_reverse_signal: document.getElementById('closeRuleReverse').checked,
-//       system_prompt: document.getElementById('closeSystemPrompt').value || null,
-//     };
-//     await wsApi('save_close_config', { config: payload });
-//     toast('智能平仓配置已保存', 'success');
-//     await loadCloseConfig();
-//     const closeStatus = await wsApi('close_status');
-//     state.closeScheduler = closeStatus.scheduler || {};
-//     updateSmartCloseBadge(payload.enabled, payload.check_interval_seconds);
-//   } catch (e) { toast(e.message, 'error'); }
-// }
-//
-// function updateSmartCloseBadge(enabled, intervalSeconds) {
-//   let label;
-//   let type;
-//   if (enabled) {
-//     const min = Math.round((intervalSeconds || 60) / 60);
-//     const paused = state.closeScheduler?.paused;
-//     const reason = state.closeScheduler?.pause_reason || '';
-//     if (paused) {
-//       if (reason === 'market_closed') {
-//         label = '市场休市 · 智能平仓暂停';
-//         type = 'warning';
-//       } else if (reason === 'no_positions') {
-//         label = '无持仓 · 智能平仓待机';
-//         type = 'warning';
-//       } else {
-//         label = `智能平仓暂停 · ${min}分钟`;
-//         type = 'warning';
-//       }
-//     } else {
-//       label = `智能平仓运行中 · ${min}分钟`;
-//       type = 'danger';
-//     }
-//   } else {
-//     label = '智能平仓关闭';
-//     type = 'neutral';
-//   }
-//   setBadge('smartCloseMode', label, type);
-// }
-
 function updateSignalDisplay(signal) {
   const card = $("signalCard");
   if (!card) return;
@@ -4201,10 +4080,6 @@ function bindEvents() {
   initAutoSymbolsSelector();
   $("saveAutoConfigBtn")?.addEventListener("click", saveAutoConfig);
   $("autoApiProvider")?.addEventListener("change", (e) => applyAutoProviderPreset(e.target.value));
-
-  // [disabled] 智能平仓
-  // $("saveCloseConfigBtn")?.addEventListener("click", saveCloseConfig);
-  // $("smartCloseMode")?.addEventListener("click", handleSmartCloseToggle);
 
   // Timeframe checkbox change → update confirm text
   // (removed old modal handlers)

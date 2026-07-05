@@ -5,7 +5,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getGlobalAutoConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, buildBridgeOrderCall } from './config.js'
+import { getGlobalAutoConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, buildBridgeOrderCall, executeOrderCore } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -1388,58 +1388,12 @@ async function runSmartClose(userId, closeConfig, account, positions) {
 }
 
 async function executeOrder(userId, config, request, action, options = {}) {
-  // Defense: block if trade send is disabled
   if (!isTradeEnabled(userId)) {
     const result = { status: 'rejected', message: '交易发送已关闭，请先开启' }
     await insertAudit(null, userId, action, request.symbol, request, result, 'rejected')
     return result
   }
-  let accountResult, positionsResult, quote
-  accountResult = await mt5Bridge(userId, 'account', {}, options)
-  positionsResult = await mt5Bridge(userId, 'positions', {}, options)
-  const positions = positionsResult.positions || []
-  const account = accountResult
-
-  if (request.symbol) {
-    try {
-      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol }, options)
-      request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
-      const pointSize = quote.point || (request.quote_price > 1000 ? 0.01 : 0.0001)
-      if (request.stop_loss_points && !request.sl) {
-        request.sl = request.order_type === 'buy'
-          ? round2(request.quote_price - request.stop_loss_points * pointSize)
-          : round2(request.quote_price + request.stop_loss_points * pointSize)
-      }
-      if (request.take_profit_points && !request.tp) {
-        request.tp = request.order_type === 'buy'
-          ? round2(request.quote_price + request.take_profit_points * pointSize)
-          : round2(request.quote_price - request.take_profit_points * pointSize)
-      }
-    } catch (e) { console.error('[ExecuteOrder] Failed to get quote:', e.message) }
-  }
-
-  let result
-  try {
-    const risk = validateTradeRequest(config, account, positions, request)
-    let openResult
-    const { bridgeAction, bridgeParams } = buildBridgeOrderCall(request)
-    openResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
-    result = { ...openResult, risk }
-    if (quote) result.quote = quote
-  } catch (err) {
-    if (err instanceof RiskReject) {
-      result = {
-        status: err.reason === 'confirmation_required' ? 'needs_confirmation' : 'rejected',
-        message: err.reason,
-        details: err.details,
-      }
-    } else {
-      result = { status: 'error', message: err.message }
-    }
-  }
-
-  await insertAudit(null, userId, action, request.symbol, request, result, result.status)
-  return result
+  return executeOrderCore(userId, config, request, action, options)
 }
 
 // getActiveConfig is now imported from config.js directly

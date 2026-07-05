@@ -254,9 +254,9 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
   } catch (err) { res.json({ ok: false, error: '获取推荐信息失败' }) }
 })
 
-router.get('/referrals/track', (req, res) => {
+router.get('/referrals/track', authMiddleware, (req, res) => {
   try {
-    res.json({ ok: true, referralCode: 'WSS' + String(req.user?.id || 0).padStart(4, '0') })
+    res.json({ ok: true, referralCode: req.user?.referral_code || 'WSS' + String(req.user?.id || 0).padStart(4, '0') })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 

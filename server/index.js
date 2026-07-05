@@ -94,6 +94,7 @@ const writeLimiter = rateLimit({
   message: { ok: false, error: '发布过于频繁，请稍后再试' }
 })
 app.use('/api', apiLimiter)
+app.use('/aurum-api', apiLimiter)
 app.use('/api/login', authLimiter)
 app.use('/api/register', authLimiter)
 app.use('/api/send-code', authLimiter)

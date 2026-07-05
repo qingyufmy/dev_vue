@@ -1,8 +1,9 @@
 // ai/config.js — 配置管理 + 风控 + 审计
 
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
-import { round3 } from './utils.js'
+import { round2, round3 } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
+import { mt5Bridge } from './market-data.js'
 
 // Parse strategy symbols from JSON string: parse, trim, uppercase, deduplicate
 export function parsePromptSymbols(symbolsJson) {
@@ -611,4 +612,52 @@ export async function getCloseSignalTickets(userId) {
     map[String(r.original_ticket)] = { signalId: r.close_signal_id, price: r.close_price, takeProfit: r.take_profit_1_price }
   }
   return map
+}
+
+export async function executeOrderCore(userId, config, request, action, options = {}) {
+  let accountResult, positionsResult, quote
+  accountResult = await mt5Bridge(userId, 'account', {}, options)
+  positionsResult = await mt5Bridge(userId, 'positions', {}, options)
+  const positions = positionsResult.positions || []
+  const account = accountResult
+
+  if (request.symbol) {
+    try {
+      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol }, options)
+      request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
+      const pointSize = quote.point || (request.quote_price > 1000 ? 0.01 : 0.0001)
+      if (request.stop_loss_points && !request.sl) {
+        request.sl = request.order_type === 'buy'
+          ? round2(request.quote_price - request.stop_loss_points * pointSize)
+          : round2(request.quote_price + request.stop_loss_points * pointSize)
+      }
+      if (request.take_profit_points && !request.tp) {
+        request.tp = request.order_type === 'buy'
+          ? round2(request.quote_price + request.take_profit_points * pointSize)
+          : round2(request.quote_price - request.take_profit_points * pointSize)
+      }
+    } catch (e) { console.error('[ExecuteOrder] Failed to get quote:', e.message) }
+  }
+
+  let result
+  try {
+    const risk = validateTradeRequest(config, account, positions, request)
+    const { bridgeAction, bridgeParams } = buildBridgeOrderCall(request)
+    const openResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
+    result = { ...openResult, risk }
+    if (quote) result.quote = quote
+  } catch (err) {
+    if (err instanceof RiskReject) {
+      result = {
+        status: err.reason === 'confirmation_required' ? 'needs_confirmation' : 'rejected',
+        message: err.reason,
+        details: err.details,
+      }
+    } else {
+      result = { status: 'error', message: err.message }
+    }
+  }
+
+  await insertAudit(null, userId, action, request.symbol, request, result, result.status)
+  return result
 }
