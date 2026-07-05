@@ -3677,6 +3677,7 @@ function _renderHistoryChart(data) {
   const ctx = canvas.getContext('2d');
 
   if (_historyChart) _historyChart.destroy();
+  await ensureChartJs();
   _historyChart = new Chart(ctx, {
     type: 'bar',
     plugins: [zeroLinePlugin, barLabelPlugin],
@@ -4556,7 +4557,7 @@ function formatCountdown(seconds) {
   return `${pad(target.getHours())}:${pad(target.getMinutes())}:${pad(target.getSeconds())}`;
 }
 
-function renderAdminDashboard(el, d, userListResp) {
+async function renderAdminDashboard(el, d, userListResp) {
   Object.values(_adminDashState.charts).forEach(c => { try { c.destroy() } catch {} });
   _adminDashState.charts = {};
 
@@ -4645,6 +4646,7 @@ function renderAdminDashboard(el, d, userListResp) {
       if (t === 'sell' || t === 'strong_sell') return '#ef4444';
       if (t === 'hold') return '#3b82f6'; return '#6b7280';
     });
+    await ensureChartJs();
     _adminDashState.charts.signalType = new Chart($('adChartSignalType'), {
       type: 'doughnut',
       data: { labels: typeLabels, datasets: [{ data: d.signalTypeDist.map(r => r.cnt), backgroundColor: typeColors, borderWidth: 0 }] },

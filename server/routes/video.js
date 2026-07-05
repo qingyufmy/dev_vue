@@ -157,7 +157,7 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
 })
 
 // ===== Serve video files with range request support =====
-router.get('/video-file/:filename', (req, res) => {
+router.get('/video-file/:filename', authMiddleware, (req, res) => {
   try {
     const filePath = resolve(join(uploadDir, req.params.filename))
     if (!filePath.startsWith(resolve(uploadDir))) {
