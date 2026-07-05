@@ -92,8 +92,8 @@ router.post('/register', async (req, res) => {
       if (!verifyToken) return res.json({ ok: false, error: '请先完成手机验证' })
 
       const tokenRecord = await queryOne(
-        'SELECT id FROM verification_codes WHERE phone = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
-        [phone, verifyToken, 'register']
+        'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+        [phone.replace(/^\+86/, ''), phone, verifyToken, 'register']
       )
       if (!tokenRecord) return res.json({ ok: false, error: '手机验证已过期，请重新验证' })
 
@@ -215,8 +215,8 @@ router.post('/login', async (req, res) => {
       if (!verifyToken) return res.json({ ok: false, error: '请先完成验证' })
       const tokenRecord = phone
         ? await queryOne(
-            'SELECT id FROM verification_codes WHERE phone = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
-            [phone, verifyToken, 'login']
+            'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+            [phone.replace(/^\+86/, ''), phone, verifyToken, 'login']
           )
         : await queryOne(
             'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
@@ -572,8 +572,8 @@ router.post('/bind-phone', authMiddleware, async (req, res) => {
     if (!phone || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
 
     const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE phone = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
-      [phone, verifyToken, 'bind']
+      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+      [phone.replace(/^\+86/, ''), phone, verifyToken, 'bind']
     )
     if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
 
