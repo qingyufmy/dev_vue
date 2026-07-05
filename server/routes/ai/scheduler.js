@@ -115,7 +115,7 @@ export async function rebuildRedisSubscriptions() {
       if (!isBridgeAlive(row.user_id)) continue
 
       let userSymbols = []
-      try { userSymbols = JSON.parse(row.symbols || '[]') } catch {}
+      try { userSymbols = JSON.parse(row.symbols || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse user symbols:', e.message) }
       if (userSymbols.length === 0) continue
 
       const userKey = `${REDIS_USER_PREFIX}${row.user_id}${REDIS_USER_SUFFIX}`
@@ -221,7 +221,7 @@ export async function getUserAutoRuntimeStatus(userId) {
   }
 
   let selectedSymbols = []
-  try { selectedSymbols = JSON.parse(scheduler.symbols || '[]') } catch {}
+  try { selectedSymbols = JSON.parse(scheduler.symbols || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse scheduler symbols:', e.message) }
   let promptTypeName = ''
   if (scheduler.prompt_type_id) {
     const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
@@ -401,9 +401,8 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, schedul
             symbol,
             next_run_in_seconds: status === 'success' ? (st.intervalMinutes || 5) * 60 : Math.round(retryDelayMs(reason) / 1000),
           })
-        } catch {}
+        } catch (e) { console.warn('[Scheduler] Failed to send progress_done to browser:', e.message) }
       }
-      break
     }
   }
 }
@@ -617,7 +616,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         autoSchedulerState[key].timer = setTimeout(tick, Math.min(ttl * 1000, tickIntervalMs))
         return
       }
-    } catch {}
+    } catch (e) { console.warn('[Scheduler] Redis TTL check failed:', e.message) }
 
     if (st.inFlight) {
       autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)

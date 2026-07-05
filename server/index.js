@@ -318,7 +318,7 @@ app.post('/api/presence', async (req, res) => {
         await queryRun("UPDATE users SET last_seen_at = NOW() WHERE id = ?", [payload.userId])
       }
     }
-  } catch {}
+  } catch (e) { console.warn('[Presence] Failed to update last_seen_at:', e.message) }
   res.json({ ok: true })
 })
 

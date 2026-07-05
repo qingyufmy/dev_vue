@@ -444,6 +444,23 @@ const migrations = [
       // Fix BIGINT → INT for bridge_connection_status.user_id (all other user_id columns are INT)
       try { await queryRun('ALTER TABLE bridge_connection_status MODIFY COLUMN user_id INT PRIMARY KEY') } catch {}
     }
+  },
+  {
+    id: '025_drop_ui_configs_and_dead_columns',
+    up: async () => {
+      // Drop ui_configs — never SELECTed/INSERTed/UPDATEd, only DELETEd on user removal
+      try { await queryRun('DROP TABLE IF EXISTS ui_configs') } catch {}
+
+      // Drop users.current_view — zero SQL references in codebase
+      try { await queryRun('ALTER TABLE users DROP COLUMN current_view') } catch (e) {
+        if (!e.message?.includes("doesn't exist") && !e.message?.includes("Can't DROP")) {
+          console.error('[Migrations] 025 drop current_view failed:', e.message)
+        }
+      }
+
+      // Drop trades.dead columns already handled by migration 023, but ensure CREATE TABLE is consistent
+      // (description, image_url, pnl removed from CREATE TABLE in db.js)
+    }
   }
 ]
 

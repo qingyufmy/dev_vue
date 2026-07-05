@@ -224,6 +224,9 @@ router.post('/login', async (req, res) => {
           )
       if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
     }
+    else {
+      return res.json({ ok: false, error: '不支持的登录方式' })
+    }
 
     const token = generateToken(user.id)
     const { password: _, ...safeUser } = user

@@ -298,7 +298,6 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
       await run('DELETE FROM user_bridge_settings WHERE user_id = ?', [userId])
       await run('DELETE FROM close_config WHERE user_id = ?', [userId])
       await run('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
-      await run('DELETE FROM ui_configs WHERE user_id = ?', [userId])
       await run('DELETE FROM users WHERE id = ?', [userId])
     })
     res.json({ ok: true })

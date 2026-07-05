@@ -141,7 +141,6 @@ export async function initDB() {
       referral_credit INT DEFAULT 0,
       referred_by VARCHAR(50),
       last_seen_at DATETIME,
-      current_view VARCHAR(100) DEFAULT '',
       created_at DATETIME DEFAULT (NOW()),
       updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -261,18 +260,14 @@ export async function initDB() {
       user_id INT,
       trade_date DATE DEFAULT NULL,
       title VARCHAR(500) NOT NULL,
-      description TEXT,
       symbol VARCHAR(50) DEFAULT '',
       direction VARCHAR(20) DEFAULT '',
       result VARCHAR(20) DEFAULT '',
       entry_price VARCHAR(50) DEFAULT '',
       exit_price VARCHAR(50) DEFAULT '',
       profit_pct VARCHAR(50) DEFAULT '',
-      pnl VARCHAR(50) DEFAULT '',
       notes TEXT,
-      image_url VARCHAR(500) DEFAULT '',
       screenshot_url VARCHAR(500) DEFAULT '',
-      status VARCHAR(20) DEFAULT 'open',
       is_public TINYINT DEFAULT 1,
       created_at DATETIME DEFAULT (NOW()),
       updated_at DATETIME DEFAULT (NOW())
@@ -485,12 +480,6 @@ export async function initDB() {
       result_json TEXT NOT NULL,
       status VARCHAR(20) NOT NULL,
       created_at DATETIME NOT NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-
-    `CREATE TABLE IF NOT EXISTS ui_configs (
-      user_id INT PRIMARY KEY,
-      theme VARCHAR(50) NOT NULL DEFAULT 'theme2',
-      updated_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS user_bridge_settings (

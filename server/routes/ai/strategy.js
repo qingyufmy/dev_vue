@@ -80,7 +80,7 @@ export async function executeOrder(userId, config, request, action) {
           ? round2(request.quote_price + request.take_profit_points * pointSize)
           : round2(request.quote_price - request.take_profit_points * pointSize)
       }
-    } catch {}
+    } catch (e) { console.warn('[Strategy] Failed to fetch quote for SL/TP calculation:', e.message) }
   }
 
   let result

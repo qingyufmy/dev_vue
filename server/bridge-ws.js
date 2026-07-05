@@ -254,7 +254,7 @@ async function _initBridge(ws, userId, user) {
       try {
         const schedRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
         schedulerEnabled = !!schedRow?.enabled
-      } catch {}
+      } catch (e) { console.warn('[BridgeWS] Failed to read scheduler state on disconnect:', e.message) }
       sendToBrowsers(userId, { type: 'auto_state', enabled: schedulerEnabled, runtime_subscribed: false, reason: 'user_bridge_offline' })
     } catch (e) {
       console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
@@ -267,7 +267,7 @@ async function _initBridge(ws, userId, user) {
       queryRun(
         `UPDATE bridge_connection_status SET last_error=?, updated_at=NOW() WHERE user_id=?`,
         [err.message?.slice(0, 255) || '', userId]
-      ).catch(() => {})
+      ).catch((e) => console.warn('[BridgeWS] Failed to log bridge error:', e.message))
     } catch {}
   })
 
@@ -1117,13 +1117,13 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (!userCfg.prompt_type_id) {
             const firstPt = pt[0]
             let symbols = []
-            try { symbols = JSON.parse(firstPt.symbols_json || '[]') } catch {}
+            try { symbols = JSON.parse(firstPt.symbols_json || '[]') } catch (e) { console.warn('[BridgeWS] Failed to parse prompt type symbols_json:', e.message) }
             await ai.saveUserAutoConfig(userId, { prompt_type_id: firstPt.id, selected_symbols: symbols })
           } else if (!userCfg.selected_symbols || userCfg.selected_symbols.length === 0) {
             const ptRow = await ai.getAutoPromptTypeById(userCfg.prompt_type_id)
             if (ptRow) {
               let symbols = []
-              try { symbols = JSON.parse(ptRow.symbols_json || '[]') } catch {}
+              try { symbols = JSON.parse(ptRow.symbols_json || '[]') } catch (e) { console.warn('[BridgeWS] Failed to parse prompt type symbols_json:', e.message) }
               await ai.saveUserAutoConfig(userId, { prompt_type_id: userCfg.prompt_type_id, selected_symbols: symbols })
             }
           }
@@ -1242,7 +1242,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.reconcileAutoSchedulers()
           result = { status: 'success', message: '配置已保存' }
         } catch (e) {
-          result = { status: 'error', message: e.message }
+          console.error('[BridgeWS] save_auto_config error:', e.message)
+          result = { status: 'error', message: '保存配置失败，请重试' }
         }
         break
       }
@@ -1278,7 +1279,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.reconcileAutoSchedulers()
           result = { status: 'success', prompt_type: saved }
         } catch (e) {
-          result = { status: 'error', message: e.message }
+          console.error('[BridgeWS] save_auto_prompt_type error:', e.message)
+          result = { status: 'error', message: '保存策略失败，请重试' }
         }
         break
       }
@@ -1439,7 +1441,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           result = listResult
         } catch (e) {
           console.error('[BridgeWS] pending_list error:', e.message)
-          result = { status: 'error', message: '获取挂单列表失败: ' + e.message }
+          result = { status: 'error', message: '获取挂单列表失败' }
         }
         break
       }
@@ -1455,7 +1457,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           }
         } catch (e) {
           console.error('[BridgeWS] cancel_pending error:', e.message)
-          result = { status: 'error', message: '取消挂单失败: ' + e.message }
+          result = { status: 'error', message: '取消挂单失败' }
         }
         break
       }
@@ -1476,7 +1478,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           }
         } catch (e) {
           console.error('[BridgeWS] signal_by_ticket error:', e.message)
-          result = { status: 'error', message: '查询失败: ' + e.message }
+          result = { status: 'error', message: '查询失败' }
         }
         break
       }
@@ -1642,12 +1644,12 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.runSmartCloseCycle(userId)
           result = { status: 'success' }
         } catch (e) {
-          result = { status: 'error', message: e.message }
+          console.error('[BridgeWS] run_close_now error:', e.message)
+          result = { status: 'error', message: '执行平仓检查失败' }
         }
         break
       }
       case 'admin_dashboard': {
-        // Admin-only data dashboard
         const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 

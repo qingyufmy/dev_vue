@@ -136,9 +136,9 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
             ], { timeout: 10000 }, (err) => err ? reject(err) : resolve())
           })
           cover = `/uploads/covers/${coverFilename}`
-        } catch {}
+        } catch (e) { console.warn('[Video] Cover generation failed:', e.message) }
       }
-    } catch {}
+    } catch (e) { console.warn('[Video] Post-upload processing failed:', e.message) }
     
     res.json({
       ok: true,
@@ -250,10 +250,9 @@ router.post('/video-stream', authMiddleware, async (req, res) => {
             courseParams.push(bd.data.duration)
           }
         }
-      } catch {}
+      } catch (e) { console.warn('[Video] Bilibili data fetch failed:', e.message) }
     }
     if (localPath) { courseUpdates.push('local_video_path = ?'); courseParams.push(localPath) }
-    if (cover) { courseUpdates.push('cover = ?'); courseParams.push(cover) }
     if (youtubeId) { courseUpdates.push('youtube_id = ?'); courseParams.push(youtubeId) }
     if (accessLevel) { courseUpdates.push('access_level = ?'); courseParams.push(accessLevel) }
     courseParams.push(episodeId)
