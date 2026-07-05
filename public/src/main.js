@@ -6408,7 +6408,7 @@ function renderProfile() {
       try {
         const captchaRes = await api.get('/api/captcha')
         if (!captchaRes.ok) { showFormMsgProfile('图形验证码加载失败', 'err'); pwdPhoneSendBtn.disabled = false; pwdPhoneSendBtn.textContent = '发送验证码'; return }
-        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode, closeModal, modalOverlay) => {
           try {
             const res = await api.post('/api/send-code', {
               phone: state.user.phone,
@@ -6417,6 +6417,7 @@ function renderProfile() {
               captchaAnswer: captchaCode,
             })
             if (res.ok) {
+              closeModal()
               showFormMsgProfile('验证码已发送', 'ok')
               let cd = 60
               const timer = setInterval(() => {
@@ -6424,12 +6425,18 @@ function renderProfile() {
                 pwdPhoneSendBtn.textContent = `${cd}s`
                 if (cd <= 0) { clearInterval(timer); pwdPhoneSendBtn.textContent = '发送验证码'; pwdPhoneSendBtn.disabled = false }
               }, 1000)
+            } else if (res.error && res.error.includes('验证码')) {
+              handleCaptchaError(res, modalOverlay)
+              pwdPhoneSendBtn.disabled = false
+              pwdPhoneSendBtn.textContent = '发送验证码'
             } else {
+              closeModal()
               showFormMsgProfile(res.error || '发送失败', 'err')
               pwdPhoneSendBtn.disabled = false
               pwdPhoneSendBtn.textContent = '发送验证码'
             }
           } catch {
+            closeModal()
             showFormMsgProfile('发送失败', 'err')
             pwdPhoneSendBtn.disabled = false
             pwdPhoneSendBtn.textContent = '发送验证码'
@@ -6531,10 +6538,11 @@ function renderProfile() {
       try {
         const captchaRes = await api.get('/api/captcha')
         if (!captchaRes.ok) { showSettingsMsg('bindPhoneMsg', '验证码加载失败', 'err'); bindPhoneSendBtn.disabled = false; bindPhoneSendBtn.textContent = '发送验证码'; return }
-        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode, closeModal, modalOverlay) => {
           try {
             const res = await api.post('/api/send-bind-code', { phone, captchaId, captchaAnswer: captchaCode })
             if (res.ok) {
+              closeModal()
               showSettingsMsg('bindPhoneMsg', '验证码已发送', 'ok')
               document.getElementById('bindPhoneCodeGroup').style.display = 'block'
               document.getElementById('bindPhoneBtn').style.display = 'block'
@@ -6544,12 +6552,18 @@ function renderProfile() {
                 bindPhoneSendBtn.textContent = `${cd}s`
                 if (cd <= 0) { clearInterval(timer); bindPhoneSendBtn.textContent = '发送验证码'; bindPhoneSendBtn.disabled = false }
               }, 1000)
+            } else if (res.error && res.error.includes('验证码')) {
+              handleCaptchaError(res, modalOverlay)
+              bindPhoneSendBtn.disabled = false
+              bindPhoneSendBtn.textContent = '发送验证码'
             } else {
+              closeModal()
               showSettingsMsg('bindPhoneMsg', res.error || '发送失败', 'err')
               bindPhoneSendBtn.disabled = false
               bindPhoneSendBtn.textContent = '发送验证码'
             }
           } catch {
+            closeModal()
             showSettingsMsg('bindPhoneMsg', '发送失败', 'err')
             bindPhoneSendBtn.disabled = false
             bindPhoneSendBtn.textContent = '发送验证码'
@@ -6604,10 +6618,11 @@ function renderProfile() {
       try {
         const captchaRes = await api.get('/api/captcha')
         if (!captchaRes.ok) { showSettingsMsg('bindEmailMsg', '验证码加载失败', 'err'); bindEmailSendBtn.disabled = false; bindEmailSendBtn.textContent = '发送验证码'; return }
-        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode, closeModal, modalOverlay) => {
           try {
             const res = await api.post('/api/send-bind-code', { email, captchaId, captchaAnswer: captchaCode })
             if (res.ok) {
+              closeModal()
               showSettingsMsg('bindEmailMsg', '验证码已发送', 'ok')
               document.getElementById('bindEmailCodeGroup').style.display = 'block'
               document.getElementById('bindEmailBtn').style.display = 'block'
@@ -6617,12 +6632,18 @@ function renderProfile() {
                 bindEmailSendBtn.textContent = `${cd}s`
                 if (cd <= 0) { clearInterval(timer); bindEmailSendBtn.textContent = '发送验证码'; bindEmailSendBtn.disabled = false }
               }, 1000)
+            } else if (res.error && res.error.includes('验证码')) {
+              handleCaptchaError(res, modalOverlay)
+              bindEmailSendBtn.disabled = false
+              bindEmailSendBtn.textContent = '发送验证码'
             } else {
+              closeModal()
               showSettingsMsg('bindEmailMsg', res.error || '发送失败', 'err')
               bindEmailSendBtn.disabled = false
               bindEmailSendBtn.textContent = '发送验证码'
             }
           } catch {
+            closeModal()
             showSettingsMsg('bindEmailMsg', '发送失败', 'err')
             bindEmailSendBtn.disabled = false
             bindEmailSendBtn.textContent = '发送验证码'
@@ -6688,7 +6709,7 @@ function renderProfile() {
       try {
         const captchaRes = await api.get('/api/captcha')
         if (!captchaRes.ok) { showSettingsMsg('changeEmailMsg', '图形验证码加载失败', 'err'); changeEmailSendBtn.disabled = false; changeEmailSendBtn.textContent = '发送验证码'; return }
-        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode, closeModal, modalOverlay) => {
           try {
             const res = await api.post('/api/send-code', {
               email: newEmail,
@@ -6697,6 +6718,7 @@ function renderProfile() {
               captchaAnswer: captchaCode,
             })
             if (res.ok) {
+              closeModal()
               showSettingsMsg('changeEmailMsg', '验证码已发送', 'ok')
               document.getElementById('changeEmailCodeGroup').style.display = 'block'
               document.getElementById('changeEmailBtn').style.display = 'block'
@@ -6706,12 +6728,18 @@ function renderProfile() {
                 changeEmailSendBtn.textContent = `${cd}s`
                 if (cd <= 0) { clearInterval(timer); changeEmailSendBtn.textContent = '发送验证码'; changeEmailSendBtn.disabled = false }
               }, 1000)
+            } else if (res.error && res.error.includes('验证码')) {
+              handleCaptchaError(res, modalOverlay)
+              changeEmailSendBtn.disabled = false
+              changeEmailSendBtn.textContent = '发送验证码'
             } else {
+              closeModal()
               showSettingsMsg('changeEmailMsg', res.error || '发送失败', 'err')
               changeEmailSendBtn.disabled = false
               changeEmailSendBtn.textContent = '发送验证码'
             }
           } catch {
+            closeModal()
             showSettingsMsg('changeEmailMsg', '发送失败', 'err')
             changeEmailSendBtn.disabled = false
             changeEmailSendBtn.textContent = '发送验证码'
@@ -6783,7 +6811,7 @@ function renderProfile() {
       try {
         const captchaRes = await api.get('/api/captcha')
         if (!captchaRes.ok) { showSettingsMsg('changePhoneMsg', '图形验证码加载失败', 'err'); changePhoneSendBtn.disabled = false; changePhoneSendBtn.textContent = '发送验证码'; return }
-        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+        showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode, closeModal, modalOverlay) => {
           try {
             const res = await api.post('/api/send-code', {
               phone: newPhone,
@@ -6792,6 +6820,7 @@ function renderProfile() {
               captchaAnswer: captchaCode,
             })
             if (res.ok) {
+              closeModal()
               showSettingsMsg('changePhoneMsg', '验证码已发送', 'ok')
               document.getElementById('changePhoneCodeGroup').style.display = 'block'
               document.getElementById('changePhoneBtn').style.display = 'block'
@@ -6801,12 +6830,18 @@ function renderProfile() {
                 changePhoneSendBtn.textContent = `${cd}s`
                 if (cd <= 0) { clearInterval(timer); changePhoneSendBtn.textContent = '发送验证码'; changePhoneSendBtn.disabled = false }
               }, 1000)
+            } else if (res.error && res.error.includes('验证码')) {
+              handleCaptchaError(res, modalOverlay)
+              changePhoneSendBtn.disabled = false
+              changePhoneSendBtn.textContent = '发送验证码'
             } else {
+              closeModal()
               showSettingsMsg('changePhoneMsg', res.error || '发送失败', 'err')
               changePhoneSendBtn.disabled = false
               changePhoneSendBtn.textContent = '发送验证码'
             }
           } catch {
+            closeModal()
             showSettingsMsg('changePhoneMsg', '发送失败', 'err')
             changePhoneSendBtn.disabled = false
             changePhoneSendBtn.textContent = '发送验证码'
@@ -7196,6 +7231,25 @@ function showSettingsMsg(elId, msg, type) {
   }
 }
 
+function handleCaptchaError(res, modalOverlay) {
+  const errEl = modalOverlay.querySelector('.captcha-modal-body')
+  const oldMsg = errEl.querySelector('.captcha-err-msg')
+  if (oldMsg) oldMsg.remove()
+  const msg = document.createElement('p')
+  msg.className = 'captcha-err-msg'
+  msg.style.cssText = 'color:#ef4444;font-size:13px;margin:8px 0 0;text-align:center'
+  msg.textContent = res.error || '验证码错误'
+  errEl.appendChild(msg)
+  const inputEl = modalOverlay.querySelector('#captchaInput')
+  if (inputEl) { inputEl.value = ''; inputEl.focus() }
+  api.get('/api/captcha').then(r => {
+    if (r.ok) {
+      modalOverlay._captchaId = r.id
+      modalOverlay.querySelector('#captchaImgWrap').innerHTML = r.svg
+    }
+  })
+}
+
 function showCaptchaModal(captchaId, svg, callback) {
   const overlay = document.createElement('div')
   overlay.className = 'captcha-modal-overlay'
@@ -7241,8 +7295,7 @@ function showCaptchaModal(captchaId, svg, callback) {
   overlay.querySelector('#captchaVerifyBtn').addEventListener('click', () => {
     const code = overlay.querySelector('#captchaInput').value.trim()
     if (!code) return
-    close()
-    callback(overlay._captchaId || captchaId, code)
+    callback(overlay._captchaId || captchaId, code, close, overlay)
   })
 
   overlay.querySelector('#captchaInput').addEventListener('keydown', (e) => {
@@ -7465,7 +7518,7 @@ async function handleSendCode() {
       return
     }
 
-    showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode) => {
+    showCaptchaModal(captchaRes.id, captchaRes.svg, async (captchaId, captchaCode, closeModal, modalOverlay) => {
       state._codeSending = true
       sendBtn.textContent = '发送中...'
       sendBtn.disabled = true
@@ -7480,13 +7533,22 @@ async function handleSendCode() {
         const res = await api.post('/api/send-code', payload)
 
         if (!res.ok) {
+          if (res.error && res.error.includes('验证码')) {
+            handleCaptchaError(res, modalOverlay)
+            state._codeSending = false
+            sendBtn.textContent = '发送验证码'
+            sendBtn.disabled = false
+            return
+          }
           showFormMsg(res.error || '发送失败，请稍后重试', 'err')
+          closeModal()
           sendBtn.textContent = '发送验证码'
           sendBtn.disabled = false
           state._codeSending = false
           return
         }
 
+        closeModal()
         // Show code input group
         if (codeGroup) codeGroup.style.display = 'block'
         showFormMsg(res.message || (isPhone ? '验证码已发送到您的手机' : '验证码已发送到您的邮箱'), 'ok')
@@ -7516,6 +7578,7 @@ async function handleSendCode() {
         }, 1000)
 
       } catch (err) {
+        closeModal()
         showFormMsg('网络错误，请检查网络后重试', 'err')
         sendBtn.textContent = '发送验证码'
         sendBtn.disabled = false
