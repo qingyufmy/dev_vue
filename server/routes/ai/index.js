@@ -71,7 +71,7 @@ export { insertAudit, getActiveConfig, getAnalyzeApiKey,
   getExecuteRiskConfig, getAutoPromptTypes, getAutoPromptTypeById,
   saveAutoPromptType, disableAutoPromptType, getUserAutoConfig,
   saveUserAutoConfig, getUnifiedAutoInferenceConfig, getAutoSubscribers,
-  getDeliveryExecuteRiskConfig } from './config.js'
+  getDeliveryExecuteRiskConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets } from './config.js'
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,

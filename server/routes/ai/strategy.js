@@ -6,7 +6,6 @@ import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, comp
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore } from './config.js'
-import { round2 } from './utils.js'
 
 export async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
   const timeframes = {}

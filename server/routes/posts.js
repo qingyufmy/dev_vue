@@ -238,7 +238,8 @@ router.put('/posts', authMiddleware, async (req, res) => {
     if (!post) return res.json({ ok: false, error: '帖子不存在' })
     if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.json({ ok: false, error: '无权编辑' })
 
-    await queryRun('UPDATE posts SET title = ?, content = ?, category = ?, updated_at = NOW() WHERE id = ?', [title || post.title, content || post.content, category || post.category, id])
+    const sanitizedContent = content ? sanitizeContentHtml(content) : post.content
+    await queryRun('UPDATE posts SET title = ?, content = ?, category = ?, updated_at = NOW() WHERE id = ?', [title || post.title, sanitizedContent, category || post.category, id])
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '编辑失败' }) }
 })

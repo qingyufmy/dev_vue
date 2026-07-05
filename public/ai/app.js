@@ -259,6 +259,21 @@ function formatTime(value) {
   return String(value).replace("T", " ").slice(0, 19);
 }
 
+const fmtUtc = (d) => {
+  if (!d || isNaN(d)) return "--";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+};
+
+const parseDate = (v) => {
+  if (!v || v === "None" || v === "0" || v === "0.0") return null;
+  const n = Number(v);
+  if (n > 1000000000) return fmtUtc(new Date(n * 1000));
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) return s;
+  try { return fmtUtc(new Date(v.replace(" ", "T"))); } catch { return null; }
+};
+
 function compactTimeParts(value) {
   const full = formatTime(value);
   if (full === "--") return { time: "--", badge: "" };
@@ -3153,18 +3168,6 @@ function renderPendingOrders(orders) {
   tbody.innerHTML = orders.map((o) => {
     const state = o.state || "pending";
     const isPending = state === "pending";
-    const fmtUtc = (d) => {
-      const p = (n) => String(n).padStart(2, "0");
-      return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
-    };
-    const parseDate = (v) => {
-      if (!v || v === "None" || v === "0" || v === "0.0") return null;
-      const n = Number(v);
-      if (n > 1000000000) return fmtUtc(new Date(n * 1000));
-      const s = String(v);
-      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) return s;
-      try { return fmtUtc(new Date(v.replace(" ", "T"))); } catch { return null; }
-    };
     const validUntil = parseDate(o.valid_until);
     const createdAt = parseDate(o.created_at);
     const ticket = String(o.mt5_ticket || o.ticket || o.id);

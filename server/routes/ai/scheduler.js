@@ -1092,7 +1092,7 @@ export async function reconcilePendingOrders() {
           await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(() => {})
           await insertAudit(null, userId, 'pending_filled', null,
             { signal_id: row.signal_id, ticket }, { status: 'filled', ticket }, 'success')
-          sendToBrowsers(userId, { type: 'pending_filled', ticket, signal_id: row.signal_id }).catch(() => {})
+          sendToBrowsers(userId, { type: 'pending_filled', ticket, signal_id: row.signal_id })
           continue
         }
 

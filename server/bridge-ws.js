@@ -1937,7 +1937,8 @@ async function handleBrowserCommand(ws, userId, msg) {
     }
     reply(result || { status: 'error', message: 'No result' })
   } catch (err) {
-    reply({ status: 'error', message: err.message })
+    console.error('[BridgeWS] handleBrowserCommand error:', err.message)
+    reply({ status: 'error', message: '操作失败，请重试' })
   }
 }
 
