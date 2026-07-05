@@ -377,6 +377,22 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '022_pending_order_lifecycle',
+    up: async () => {
+      const cols = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_signal_deliveries'")
+      const colNames = (cols || []).map(c => c.COLUMN_NAME)
+      if (!colNames.includes('pending_ticket')) {
+        await queryRun("ALTER TABLE auto_signal_deliveries ADD COLUMN pending_ticket VARCHAR(32) DEFAULT NULL AFTER trade_ticket")
+      }
+      if (!colNames.includes('pending_state')) {
+        await queryRun("ALTER TABLE auto_signal_deliveries ADD COLUMN pending_state VARCHAR(12) DEFAULT NULL AFTER pending_ticket")
+      }
+      if (!colNames.includes('pending_valid_until')) {
+        await queryRun("ALTER TABLE auto_signal_deliveries ADD COLUMN pending_valid_until VARCHAR(20) DEFAULT NULL AFTER pending_state")
+      }
+    }
   }
 ]
 

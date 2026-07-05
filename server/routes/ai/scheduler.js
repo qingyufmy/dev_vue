@@ -936,17 +936,61 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       order.volume = round2(userMaxVolume)
       l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
     }
+
+    // Supersede: cancel same-direction pending orders before placing new one
+    const SUPERSEDE_SAME_DIRECTION = true
+    if (SUPERSEDE_SAME_DIRECTION && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
+      try {
+        const side = (order.order_type || 'buy').startsWith('buy') ? 'buy' : 'sell'
+        const pendingList = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
+        const pendingOrders = pendingList?.orders || pendingList?.pending_list || []
+        for (const po of pendingOrders) {
+          if (po.symbol === symbol && po.pending_type && po.pending_type.startsWith(side)) {
+            try {
+              await mt5Bridge(userId, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
+              await queryRun(
+                "UPDATE auto_signal_deliveries SET pending_state = 'superseded' WHERE pending_ticket = ? AND user_id = ?",
+                [String(po.ticket), userId])
+              l(`superseded old pending: ticket=${po.ticket} (${po.pending_type})`)
+              await insertAudit(null, userId, 'pending_superseded', symbol,
+                { signal_id: signalId, ticket: po.ticket, pending_type: po.pending_type },
+                { status: 'superseded' }, 'info')
+            } catch (cancelErr) {
+              l(`supersede cancel failed: ticket=${po.ticket}: ${cancelErr.message}`)
+              await insertAudit(null, userId, 'pending_supersede_failed', symbol,
+                { signal_id: signalId, ticket: po.ticket, error: cancelErr.message },
+                { status: 'error', message: cancelErr.message }, 'warning')
+            }
+          }
+        }
+      } catch (listErr) {
+        l(`supersede pending_list failed: ${listErr.message}`)
+      }
+    }
+
     const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', { noFallback: true })
 
     if (execResult.status === 'success') {
       const ticket = execResult.order || execResult.ticket || null
-      await queryRun(
-        `UPDATE auto_signal_deliveries SET execution_status = 'success', is_executed = 1, executed_at = NOW(),
-         trade_ticket = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
-        [ticket, JSON.stringify(execResult), signalId, userId])
-      l(`auto-executed: ticket=${ticket}, volume=${order.volume}`)
+      const isPending = order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe'
+      if (isPending) {
+        await queryRun(
+          `UPDATE auto_signal_deliveries SET execution_status = 'success',
+           pending_ticket = ?, pending_state = 'pending', pending_valid_until = ?,
+           execution_result = ? WHERE signal_id = ? AND user_id = ?`,
+          [String(ticket), signal.pending_valid_until || null, JSON.stringify(execResult), signalId, userId])
+        // Sync pending_ticket to ai_signals
+        await queryRun('UPDATE ai_signals SET pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(() => {})
+        l(`auto-executed pending: ticket=${ticket}, volume=${order.volume}`)
+      } else {
+        await queryRun(
+          `UPDATE auto_signal_deliveries SET execution_status = 'success', is_executed = 1, executed_at = NOW(),
+           trade_ticket = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
+          [ticket, JSON.stringify(execResult), signalId, userId])
+        l(`auto-executed: ticket=${ticket}, volume=${order.volume}`)
+      }
       await insertAudit(null, userId, 'ai_auto_execute', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, ticket, volume: order.volume },
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, ticket, volume: order.volume, is_pending: isPending },
         { status: 'success', ticket, volume: order.volume }, 'success')
     } else {
       const status = execResult.status === 'rejected' ? 'rejected' : 'failed'
@@ -985,6 +1029,7 @@ export async function initAutoSchedulers() {
   await rebuildRedisSubscriptions()
   await reconcileAutoSchedulers()
   startAutoSchedulerReconciler()
+  startPendingReconciler()
 }
 
 let _reconcileInterval = null
@@ -994,6 +1039,85 @@ export function startAutoSchedulerReconciler() {
     try { await reconcileAutoSchedulers() } catch (e) { console.error('[Reconciler] Error:', e.message) }
   }, 60_000)
   console.log('[Reconciler] Started periodic reconciliation (every 60s)')
+}
+
+// === Pending Order Reconciler ===
+const PENDING_RECONCILE_INTERVAL_SEC = 30
+let _pendingReconcileInterval = null
+
+export function stopPendingReconciler() {
+  if (_pendingReconcileInterval) { clearInterval(_pendingReconcileInterval); _pendingReconcileInterval = null }
+}
+
+export function startPendingReconciler() {
+  if (_pendingReconcileInterval) return
+  _pendingReconcileInterval = setInterval(async () => {
+    try { await reconcilePendingOrders() } catch (e) { console.error('[PendingReconciler] Error:', e.message) }
+  }, PENDING_RECONCILE_INTERVAL_SEC * 1000)
+  console.log(`[PendingReconciler] Started (every ${PENDING_RECONCILE_INTERVAL_SEC}s)`)
+}
+
+export async function reconcilePendingOrders() {
+  const pendingRows = await queryAll(
+    "SELECT id, user_id, signal_id, pending_ticket, pending_valid_until FROM auto_signal_deliveries WHERE pending_state = 'pending'"
+  )
+  if (!pendingRows.length) return
+
+  const byUser = {}
+  for (const row of pendingRows) {
+    if (!byUser[row.user_id]) byUser[row.user_id] = []
+    byUser[row.user_id].push(row)
+  }
+
+  for (const [userId, rows] of Object.entries(byUser)) {
+    if (!isBridgeAlive(userId)) continue
+
+    try {
+      const [pendingResp, positionsResp] = await Promise.all([
+        mt5Bridge(userId, 'pending_list', {}, { noFallback: true }).catch(() => ({})),
+        mt5Bridge(userId, 'positions', {}, { noFallback: true }).catch(() => ({})),
+      ])
+      const pendingSet = new Set((pendingResp?.orders || pendingResp?.pending_list || []).map(o => String(o.ticket)))
+      const positionSet = new Set((positionsResp?.positions || []).map(p => String(p.ticket)))
+
+      for (const row of rows) {
+        const ticket = String(row.pending_ticket)
+        if (pendingSet.has(ticket)) continue // still pending
+
+        if (positionSet.has(ticket)) {
+          // Filled
+          await queryRun(
+            "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
+            [ticket, row.id])
+          await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(() => {})
+          await insertAudit(null, userId, 'pending_filled', null,
+            { signal_id: row.signal_id, ticket }, { status: 'filled', ticket }, 'success')
+          sendToBrowsers(userId, { type: 'pending_filled', ticket, signal_id: row.signal_id }).catch(() => {})
+          continue
+        }
+
+        // Not in either set — check expiry
+        const nowUtc = Date.now()
+        let validUntilUtc = 0
+        if (row.pending_valid_until) {
+          const d = new Date(row.pending_valid_until.replace(' ', 'T') + 'Z')
+          if (!isNaN(d.getTime())) validUntilUtc = d.getTime()
+        }
+
+        if (validUntilUtc > 0 && nowUtc > validUntilUtc) {
+          await queryRun("UPDATE auto_signal_deliveries SET pending_state = 'expired' WHERE id = ?", [row.id])
+          await insertAudit(null, userId, 'pending_expired', null,
+            { signal_id: row.signal_id, ticket }, { status: 'expired' }, 'info')
+        } else {
+          await queryRun("UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE id = ?", [row.id])
+          await insertAudit(null, userId, 'pending_cancelled', null,
+            { signal_id: row.signal_id, ticket }, { status: 'cancelled' }, 'warning')
+        }
+      }
+    } catch (err) {
+      console.error(`[PendingReconciler] User ${userId} error:`, err.message)
+    }
+  }
 }
 
 export async function startSmartCloseScheduler(userId) {

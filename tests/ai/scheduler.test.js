@@ -13,6 +13,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
   getOwnBridgeTradeMode: vi.fn(() => 4),
   getBridgeTradeMode: vi.fn(() => 4),
   sendBridgeCommand: vi.fn(),
+  sendToBrowsers: vi.fn(),
 }))
 
 vi.mock('../market-data.js', () => ({
@@ -60,6 +61,9 @@ vi.mock('../strategy.js', () => ({
 }))
 
 import { isAutoSchedulerRunning, closeSchedulerState } from '../../server/routes/ai/scheduler.js'
+import * as db from '../../server/db.js'
+import * as marketData from '../market-data.js'
+import * as bridgeWs from '../../server/bridge-ws.js'
 
 describe('isAutoSchedulerRunning', () => {
   it('未启动的调度器返回 false', () => {
@@ -70,5 +74,22 @@ describe('isAutoSchedulerRunning', () => {
 describe('closeSchedulerState', () => {
   it('初始状态为空对象', () => {
     expect(typeof closeSchedulerState).toBe('object')
+  })
+})
+
+describe('Pending order lifecycle exports', () => {
+  it('reconcilePendingOrders 是函数', async () => {
+    const mod = await import('../../server/routes/ai/scheduler.js')
+    expect(typeof mod.reconcilePendingOrders).toBe('function')
+  })
+
+  it('startPendingReconciler 是函数', async () => {
+    const mod = await import('../../server/routes/ai/scheduler.js')
+    expect(typeof mod.startPendingReconciler).toBe('function')
+  })
+
+  it('stopPendingReconciler 是函数', async () => {
+    const mod = await import('../../server/routes/ai/scheduler.js')
+    expect(typeof mod.stopPendingReconciler).toBe('function')
   })
 })
