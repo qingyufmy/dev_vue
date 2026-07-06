@@ -3309,7 +3309,19 @@ function renderAdminContent(data) {
         </div>
         <div class="admin-table-wrapper">
           <table class="admin-table">
-            <thead><tr><th>用户</th><th>账号</th><th>UID</th><th>会员等级</th><th>到期日</th><th>已付</th><th>操作</th></tr></thead>
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>账号</th>
+                <th>注册时间</th>
+                <th>会员</th>
+                <th>到期日</th>
+                <th>付费</th>
+                <th>学习/互动</th>
+                <th>最近</th>
+                <th>操作</th>
+              </tr>
+            </thead>
             <tbody id="adminMemberBody"></tbody>
           </table>
         </div>
@@ -4376,7 +4388,7 @@ async function refreshAdminMemberTable(page = 1) {
     if (!tbody) return
     tbody.innerHTML = data.users.length > 0
       ? data.users.map(u => renderAdminRow(u)).join('')
-      : '<tr><td colspan="7" style="text-align:center;color:var(--text-3);padding:32px;">暂无会员</td></tr>'
+      : '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:32px;">暂无会员</td></tr>'
     renderPager('adminMemberPager', data, t => refreshAdminMemberTable(t))
   } catch (e) {
     console.error('refreshAdminMemberTable error:', e)
