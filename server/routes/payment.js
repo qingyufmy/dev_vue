@@ -18,7 +18,12 @@ const PLANS = {
 
 const PERIOD_LABELS = { month: '月付', year: '年付', lifetime: '终身' }
 
-const SUPPORTED_CHAINS = ['ETH', 'BSC', 'TRON', 'SOL']
+const SUPPORTED_CHAINS = ['ETH', 'BSC', 'TRON', 'SOL', 'TRC20', 'ERC20', 'BEP20', 'SPL']
+
+const CHAIN_MAP = {
+  'TRC20': 'TRON', 'ERC20': 'ETH', 'BEP20': 'BSC', 'SPL': 'SOL',
+  'TRON': 'TRON', 'ETH': 'ETH', 'BSC': 'BSC', 'SOL': 'SOL',
+}
 
 async function getUsdtUsdRate() {
   try {
@@ -90,7 +95,8 @@ router.post('/payment', authMiddleware, async (req, res) => {
     if (!crypto_chain || !SUPPORTED_CHAINS.includes(crypto_chain)) {
       return res.json({ ok: false, error: '不支持的支付链' })
     }
-    if (!adapters[crypto_chain]) {
+    const chainKey = CHAIN_MAP[crypto_chain]
+    if (!chainKey || !adapters[chainKey]) {
       return res.json({ ok: false, error: '支付链适配器未就绪' })
     }
 
@@ -156,10 +162,10 @@ router.post('/payment', authMiddleware, async (req, res) => {
       return res.json({ ok: true, paid_with_credit: true, orderNo })
     }
 
-    const index = await getAddressCount(crypto_chain)
-    const address = deriveAddress(crypto_chain, index)
-    await saveAddress(crypto_chain, index, address)
-    const requiredConfirmations = getRequiredConfirmations(crypto_chain)
+    const index = await getAddressCount(chainKey)
+    const address = deriveAddress(chainKey, index)
+    await saveAddress(chainKey, index, address)
+    const requiredConfirmations = getRequiredConfirmations(chainKey)
 
     const rate = await getUsdtUsdRate()
     const usdtAmount = parseFloat((finalAmount / 100 / rate).toFixed(2))
@@ -179,7 +185,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
     await addWatchAddress({
       orderId,
       userId: req.user.id,
-      chain: crypto_chain,
+      chain: chainKey,
       address,
       expectedAmount: usdtAmount,
       expiresAt,
@@ -212,13 +218,14 @@ router.post('/payment', authMiddleware, async (req, res) => {
 
     let qrCode = null
     try {
-      qrCode = await generatePaymentQR(crypto_chain, address, usdtAmount)
+      qrCode = await generatePaymentQR(chainKey, address, usdtAmount)
     } catch (qrErr) {
       console.error('[Payment] QR generation error:', qrErr.message)
     }
 
     res.json({
       ok: true,
+      label: `${planInfo.name} ${PERIOD_LABELS[periodKey] || '月付'}`,
       orderNo,
       orderId,
       crypto_chain,
