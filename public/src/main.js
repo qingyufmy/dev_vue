@@ -4254,18 +4254,21 @@ function renderCryptoWalletConfig(container) {
   const getVal = (key) => items.find(i => i.key === key)?.value || ''
   const currentMode = getVal('payment_mode') || 'dynamic'
 
+  const isDynamic = currentMode === 'dynamic'
+  const isFixed = currentMode === 'fixed'
+
   container.innerHTML = `
     <div class="admin-config-form">
       <div class="admin-config-row">
         <label>支付模式</label>
         <select class="admin-plan-select" id="paymentMode">
-          <option value="dynamic" ${currentMode === 'dynamic' ? 'selected' : ''}>动态地址（每个订单唯一地址）</option>
-          <option value="fixed" ${currentMode === 'fixed' ? 'selected' : ''}>固定地址（唯一金额匹配）</option>
+          <option value="dynamic" ${isDynamic ? 'selected' : ''}>动态地址（每个订单唯一地址）</option>
+          <option value="fixed" ${isFixed ? 'selected' : ''}>固定地址（唯一金额匹配）</option>
         </select>
         <span class="admin-config-hint">动态地址：自动对账，需归集资金。固定地址：单一地址收款，用金额区分订单。</span>
       </div>
 
-      <div id="fixedAddressSection" style="display:${currentMode === 'fixed' ? 'block' : 'none'}; margin-top:16px; padding:16px; background:var(--glass-light); border-radius:12px;">
+      <div id="fixedAddressSection" style="display:${isFixed ? 'block' : 'none'}; margin-top:16px; padding:16px; background:var(--glass-light); border-radius:12px;">
         <h4 style="margin-bottom:12px;">固定收款地址</h4>
         <div class="admin-config-row">
           <label>TRC-20 (Tron)</label>
@@ -4286,7 +4289,7 @@ function renderCryptoWalletConfig(container) {
         <span class="admin-config-hint">用户付款时显示这些地址。系统会生成唯一金额（如 50.000001）来区分不同订单。</span>
       </div>
 
-      <div style="margin-top:20px; padding-top:20px; border-top:1px solid var(--glass-border);">
+      <div id="hdWalletSection" style="display:${isDynamic ? 'block' : 'none'}; margin-top:20px; padding-top:20px; border-top:1px solid var(--glass-border);">
         <h4 style="margin-bottom:12px;">HD 钱包配置（动态地址模式使用）</h4>
         <div class="admin-config-row">
           <label>HD 钱包助记词</label>
@@ -4331,7 +4334,7 @@ function renderCryptoWalletConfig(container) {
       </div>
     </div>
 
-    <div class="admin-config-form" style="margin-top:24px; border-top: 1px solid var(--glass-border); padding-top: 24px;">
+    <div id="sweepSection" class="admin-config-form" style="display:${isDynamic ? 'block' : 'none'}; margin-top:24px; border-top: 1px solid var(--glass-border); padding-top: 24px;">
       <h3 style="margin-bottom:16px;">💰 资金归集 (TRC-20)</h3>
       <p style="font-size:13px; color:var(--text-3); margin-bottom:16px;">将所有派生地址的 USDT 归集到主地址。每次转账消耗约 1-2 USDT 的 Energy/Bandwidth。</p>
       <div id="sweepBalances">
@@ -4417,10 +4420,12 @@ function renderCryptoWalletConfig(container) {
   })
 
   document.getElementById('paymentMode')?.addEventListener('change', (e) => {
-    const section = document.getElementById('fixedAddressSection')
-    if (section) {
-      section.style.display = e.target.value === 'fixed' ? 'block' : 'none'
-    }
+    const mode = e.target.value
+    const isFixed = mode === 'fixed'
+
+    document.getElementById('fixedAddressSection').style.display = isFixed ? 'block' : 'none'
+    document.getElementById('hdWalletSection').style.display = isFixed ? 'none' : 'block'
+    document.getElementById('sweepSection').style.display = isFixed ? 'none' : 'block'
   })
 
   document.getElementById('saveCryptoWallet')?.addEventListener('click', async () => {
