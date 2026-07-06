@@ -6159,16 +6159,13 @@ async function _doInitiateCryptoPayment(plan, period) {
 }
 
 async function _doCreateCryptoPayment(plan, period) {
-  if (_isCreatingPayment) return
-  _isCreatingPayment = true
   try {
     const res = await api.post('/api/payment', { plan, period, crypto_chain: _selectedCryptoChain })
-    if (!res.ok) { showToast(res.error || '创建订单失败', 'error'); return }
-    if (res.paid_with_credit) { showToast('支付成功！', 'success'); return }
+    if (!res.ok) { showToast(res.error || '创建订单失败', 'error'); _isCreatingPayment = false; return }
+    if (res.paid_with_credit) { showToast('支付成功！', 'success'); _isCreatingPayment = false; return }
     _showCryptoPaymentPage(res)
   } catch (err) {
     showToast('网络错误，请重试', 'error')
-  } finally {
     _isCreatingPayment = false
   }
 }
