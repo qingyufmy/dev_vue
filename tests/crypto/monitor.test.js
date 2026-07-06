@@ -180,14 +180,19 @@ describe('confirmation checker', () => {
 
 describe('expiry checker', () => {
   it('marks expired watch_list records', async () => {
-    mockQueryRun.mockResolvedValue({ changes: 1 })
+    mockQueryAll.mockResolvedValue([{ order_id: 'test-order-1' }])
+    mockQueryRun.mockResolvedValue({})
 
     startMonitor()
 
     await vi.advanceTimersByTimeAsync(35000)
 
-    expect(mockQueryRun).toHaveBeenCalledWith(
+    expect(mockQueryAll).toHaveBeenCalledWith(
       expect.stringContaining("expires_at <"),
+      expect.any(Array)
+    )
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining("crypto_watch_list"),
       expect.any(Array)
     )
   })

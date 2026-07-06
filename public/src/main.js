@@ -6216,6 +6216,7 @@ function _showCryptoPaymentPage(order) {
           <span id="cryptoPaymentStatus">等待支付...</span>
           <span class="crypto-conf-count">确认数: <strong id="cryptoConfirmations">0</strong> / ${confs}</span>
         </div>
+        <button class="btn btn-sm" id="cryptoCancelOrderBtn" style="margin-top:12px; color:var(--text-3);">取消订单</button>
       </div>
     </div>
   `
@@ -6238,6 +6239,22 @@ function _showCryptoPaymentPage(order) {
       if (el) { const r = document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r) }
       showToast('地址已选中，请按 Ctrl+C 复制', 'info')
     })
+  })
+
+  overlay.querySelector('#cryptoCancelOrderBtn')?.addEventListener('click', async () => {
+    if (!confirm('确认取消此订单？')) return
+    try {
+      const res = await api.post(`/api/payment/cancel/${order.orderId}`)
+      if (res.ok) {
+        showToast('订单已取消', 'success')
+        _stopAllPaymentTimers()
+        overlay.remove()
+      } else {
+        showToast(res.error || '取消失败', 'error')
+      }
+    } catch {
+      showToast('网络错误', 'error')
+    }
   })
 
   _startPaymentCountdown(30 * 60)

@@ -105,13 +105,27 @@ function calculatePlanExpiry(period) {
 async function checkExpiry() {
   try {
     const now = beijingNow()
-    const { changes } = await queryRun(
-      `UPDATE crypto_watch_list SET status = 'expired' WHERE status IN ('pending', 'confirming') AND expires_at < ?`,
+    const expiredRows = await queryAll(
+      `SELECT order_id FROM crypto_watch_list WHERE status IN ('pending', 'confirming') AND expires_at < ?`,
       [now]
     )
-    if (changes > 0) {
-      console.log(`[Monitor] Expired ${changes} watch_list records`)
-    }
+
+    if (expiredRows.length === 0) return
+
+    const orderIds = expiredRows.map(r => r.order_id)
+    const placeholders = orderIds.map(() => '?').join(',')
+
+    await queryRun(
+      `UPDATE crypto_watch_list SET status = 'expired' WHERE order_id IN (${placeholders})`,
+      orderIds
+    )
+
+    await queryRun(
+      `UPDATE orders SET status = 'expired', status_label = '已过期' WHERE order_id IN (${placeholders}) AND status = 'pending'`,
+      orderIds
+    )
+
+    console.log(`[Monitor] Expired ${orderIds.length} orders`)
   } catch (err) {
     console.error('[Monitor] Expiry check error:', err.message)
   }

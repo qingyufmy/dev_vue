@@ -365,6 +365,31 @@ router.post('/payment', authMiddleware, async (req, res) => {
   }
 })
 
+router.post('/payment/cancel/:orderId', authMiddleware, async (req, res) => {
+  try {
+    const order = await queryOne(
+      'SELECT order_id, status FROM orders WHERE order_id = ? AND user_id = ?',
+      [req.params.orderId, req.user.id]
+    )
+    if (!order) return res.json({ ok: false, error: '订单不存在' })
+    if (order.status !== 'pending') return res.json({ ok: false, error: '订单无法取消' })
+
+    await queryRun(
+      `UPDATE orders SET status = 'cancelled', status_label = '已取消' WHERE order_id = ?`,
+      [req.params.orderId]
+    )
+    await queryRun(
+      `UPDATE crypto_watch_list SET status = 'cancelled' WHERE order_id = ?`,
+      [req.params.orderId]
+    )
+
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[Payment] 取消订单失败:', err.message)
+    res.json({ ok: false, error: '取消订单失败' })
+  }
+})
+
 router.get('/payment/status/:orderId', authMiddleware, async (req, res) => {
   try {
     const order = await queryOne(
