@@ -177,6 +177,24 @@ describe('payment.js — POST /payment', () => {
     expect(json.expires_at).toBeDefined()
     expect(json.qr_code).toBeDefined()
   })
+
+  it('支持 ETH 链创建订单', async () => {
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    const { json } = await callRoute('post', '/payment', {
+      plan: 'plus', period: 'month', crypto_chain: 'ETH'
+    })
+    expect(json.ok).toBe(true)
+    expect(json.crypto_chain).toBe('ETH')
+  })
+
+  it('支持 SOL 链创建订单', async () => {
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    const { json } = await callRoute('post', '/payment', {
+      plan: 'plus', period: 'yearly', crypto_chain: 'SOL'
+    })
+    expect(json.ok).toBe(true)
+    expect(json.crypto_chain).toBe('SOL')
+  })
 })
 
 describe('payment.js — GET /payment/status/:orderId', () => {
@@ -204,5 +222,18 @@ describe('payment.js — GET /payment/status/:orderId', () => {
     mockQueryOne.mockResolvedValue(null)
     const { json } = await callRoute('get', '/payment/status/not-found', {}, { id: 1 })
     expect(json).toMatchObject({ ok: false, error: '订单不存在' })
+  })
+
+  it('查询已支付订单返回 paid 状态', async () => {
+    mockQueryOne.mockResolvedValue({
+      order_id: 'paid-001', order_no: 'WSS456', plan: 'plus', period: 'month',
+      amount: 2900, status: 'paid', status_label: '已完成',
+      crypto_chain: 'ETH', crypto_address: '0xAddr', crypto_amount: 2.9,
+      crypto_expires_at: '2026-01-01 00:30:00', paid_at: '2026-01-01 00:15:00'
+    })
+    const { json } = await callRoute('get', '/payment/status/paid-001', {}, { id: 1 })
+    expect(json.ok).toBe(true)
+    expect(json.order.status).toBe('paid')
+    expect(json.order.paid_at).toBe('2026-01-01 00:15:00')
   })
 })
