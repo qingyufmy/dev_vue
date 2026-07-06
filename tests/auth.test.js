@@ -48,12 +48,12 @@ describe('auth.js — register', () => {
   it('密码太短返回错误', async () => {
     queryAll.mockResolvedValue([])
     const { json } = await callRoute('post', '/register', { email: 'a@b.com', password: '123' })
-    expect(json).toMatchObject({ ok: false, error: '密码至少6位' })
+    expect(json).toMatchObject({ ok: false, error: '密码至少8位' })
   })
 
   it('手机号注册缺少验证token', async () => {
     queryAll.mockResolvedValue([])
-    const { json } = await callRoute('post', '/register', { phone: '+8613800138000', password: '123456' })
+    const { json } = await callRoute('post', '/register', { phone: '+8613800138000', password: 'abc12345' })
     expect(json).toMatchObject({ ok: false, error: '请先完成手机验证' })
   })
 })

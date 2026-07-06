@@ -7,6 +7,7 @@ import { adapters } from '../crypto/chains/index.js'
 import { generatePaymentQR } from '../crypto/qr.js'
 import { addWatchAddress } from '../crypto/monitor.js'
 import { getFixedAddressForChain, generateUniqueAmount, resetFixedAddressCache } from '../crypto/fixed-address.js'
+import { calculatePlanExpiry, processReferralCommission } from '../utils.js'
 
 const router = Router()
 
@@ -82,7 +83,8 @@ router.get('/plans', async (req, res) => {
     }
     res.json({ ok: true, plans: result })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[Payment] 获取套餐失败:', err.message)
+    res.json({ ok: false, error: '获取套餐失败，请重试' })
   }
 })
 
@@ -223,7 +225,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'credit', NOW())
         `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
 
-        const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
+        const expiresAt = calculatePlanExpiry(periodKey)
         await run("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
 
         if (referralCredit > 0) {
@@ -231,32 +233,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
         }
       })
 
-      if (finalAmount > 0) {
-        try {
-          const referral = await queryOne(
-            "SELECT r.id, r.referrer_id, r.status FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
-            [req.user.id]
-          )
-          if (referral) {
-            const rule = await queryOne(
-              'SELECT rate_bps FROM referral_rules WHERE plan = ? AND period = ? AND enabled = 1',
-              [plan, periodKey]
-            )
-            const rateBps = rule ? rule.rate_bps : 1000
-            const commissionDollars = finalAmount * rateBps / 10000
-            await queryRun(
-              'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
-              [finalAmount, commissionDollars, planInfo.name, referral.id]
-            )
-            await queryRun(
-              'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
-              [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${finalAmount.toFixed(2)}，返佣 $${commissionDollars.toFixed(2)} 待审核确认`]
-            )
-          }
-        } catch (refErr) {
-          console.error('[Payment] Referral commission error:', refErr.message)
-        }
-      }
+      await processReferralCommission(req.user.id, finalAmount, plan, planInfo.name, periodKey)
 
       return res.json({ ok: true, paid_with_credit: true, orderNo })
     }
@@ -403,7 +380,7 @@ router.get('/admin/crypto/sweep/balances', authMiddleware, adminOnly, async (req
     res.json({ ok: true, mainAddress, balances })
   } catch (err) {
     console.error('[Sweep] 查询余额失败:', err.message)
-    res.json({ ok: false, error: '查询余额失败: ' + err.message })
+    res.json({ ok: false, error: '查询余额失败，请重试' })
   }
 })
 
@@ -414,7 +391,7 @@ router.post('/admin/crypto/sweep', authMiddleware, adminOnly, async (req, res) =
     res.json({ ok: true, ...result })
   } catch (err) {
     console.error('[Sweep] 归集失败:', err.message)
-    res.json({ ok: false, error: '归集失败: ' + err.message })
+    res.json({ ok: false, error: '归集失败，请重试' })
   }
 })
 
@@ -425,7 +402,7 @@ router.post('/admin/crypto/sweep/:index', authMiddleware, adminOnly, async (req,
     res.json({ ok: true, ...result })
   } catch (err) {
     console.error('[Sweep] 单地址归集失败:', err.message)
-    res.json({ ok: false, error: '归集失败: ' + err.message })
+    res.json({ ok: false, error: '单地址归集失败，请重试' })
   }
 })
 
@@ -436,7 +413,8 @@ router.get('/admin/crypto/payment-mode', authMiddleware, adminOnly, async (req, 
     const fixedAddresses = await getFixedAddress()
     res.json({ ok: true, mode, fixedAddresses })
   } catch (err) {
-    res.json({ ok: false, error: err.message })
+    console.error('[PaymentMode] 查询失败:', err.message)
+    res.json({ ok: false, error: '查询支付模式失败' })
   }
 })
 
@@ -480,7 +458,7 @@ router.post('/admin/crypto/payment-mode', authMiddleware, adminOnly, async (req,
     res.json({ ok: true })
   } catch (err) {
     console.error('[PaymentMode] 切换失败:', err.message)
-    res.json({ ok: false, error: '切换失败: ' + err.message })
+    res.json({ ok: false, error: '切换支付模式失败，请重试' })
   }
 })
 

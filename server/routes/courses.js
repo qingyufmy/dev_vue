@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { queryAll } from '../db.js'
 import { optionalAuth, authMiddleware } from '../middleware/auth.js'
+import { fetchBilibiliVideo } from '../utils.js'
 
 const router = Router()
 
@@ -100,16 +101,12 @@ router.get('/course-items/:id/resources', authMiddleware, async (req, res) => {
 router.get('/bilibili-info/:bvid', async (req, res) => {
   try {
     const bvid = req.params.bvid
-    const resp = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
-    })
-    const data = await resp.json()
-    if (data.code === 0) {
-      const d = data.data
+    const bi = await fetchBilibiliVideo(bvid)
+    if (bi) {
       res.json({
         ok: true,
-        cover: d.pic || '',
-        duration: d.duration || 0,
+        cover: bi.cover,
+        duration: bi.duration,
         title: d.title || '',
         durationFormatted: d.duration ? formatDurationSeconds(d.duration) : ''
       })

@@ -9,6 +9,30 @@ import { generateCaptcha, verifyCaptcha } from '../captcha.js'
 
 const router = Router()
 
+// Brute-force protection for verification codes
+const _verifyFailedAttempts = new Map() // key: target -> { count, lockedUntil }
+const MAX_VERIFY_ATTEMPTS = 5
+const VERIFY_LOCKOUT_MS = 15 * 60 * 1000
+
+function checkVerifyLockout(target) {
+  const entry = _verifyFailedAttempts.get(target)
+  if (!entry) return null
+  if (Date.now() < entry.lockedUntil) return `验证码已锁定，请 ${Math.ceil((entry.lockedUntil - Date.now()) / 60000)} 分钟后重试`
+  if (Date.now() >= entry.lockedUntil) { _verifyFailedAttempts.delete(target); return null }
+  return null
+}
+
+function recordVerifyFailure(target) {
+  const entry = _verifyFailedAttempts.get(target) || { count: 0, lockedUntil: 0 }
+  entry.count++
+  if (entry.count >= MAX_VERIFY_ATTEMPTS) entry.lockedUntil = Date.now() + VERIFY_LOCKOUT_MS
+  _verifyFailedAttempts.set(target, entry)
+}
+
+function clearVerifyFailures(target) {
+  _verifyFailedAttempts.delete(target)
+}
+
 async function checkSmsRateLimit(phone) {
   const dbPhone = phone.replace(/^\+86/, '')
   const rows = await queryAll(
@@ -88,7 +112,8 @@ router.post('/register', async (req, res) => {
 
     if (method === 'phone') {
       if (!phone || !password) return res.json({ ok: false, error: '手机号和密码不能为空' })
-      if (password.length < 6) return res.json({ ok: false, error: '密码至少6位' })
+      if (password.length < 8) return res.json({ ok: false, error: '密码至少8位' })
+      if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) return res.json({ ok: false, error: '密码需包含字母和数字' })
       if (!verifyToken) return res.json({ ok: false, error: '请先完成手机验证' })
 
       const tokenRecord = await queryOne(
@@ -136,7 +161,8 @@ router.post('/register', async (req, res) => {
 
     // Email registration (original logic)
     if (!email || !password) return res.json({ ok: false, error: '邮箱和密码不能为空' })
-    if (password.length < 6) return res.json({ ok: false, error: '密码至少6位' })
+    if (password.length < 8) return res.json({ ok: false, error: '密码至少8位' })
+    if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) return res.json({ ok: false, error: '密码需包含字母和数字' })
 
     const existing = await queryOne('SELECT id FROM users WHERE email = ?', [email])
     if (existing) return res.json({ ok: false, error: '该邮箱已注册' })
@@ -380,6 +406,10 @@ router.post('/verify-code', async (req, res) => {
 
     if (!targetEmail && !targetPhone) return res.json({ ok: false, error: '请输入邮箱或手机号' })
 
+    const lockTarget = targetPhone || targetEmail
+    const lockoutMsg = checkVerifyLockout(lockTarget)
+    if (lockoutMsg) return res.json({ ok: false, error: lockoutMsg })
+
     const record = targetPhone
       ? await queryOne(`
           SELECT * FROM verification_codes
@@ -392,8 +422,12 @@ router.post('/verify-code', async (req, res) => {
           ORDER BY created_at DESC LIMIT 1
         `, [targetEmail, code, purpose || 'login'])
 
-    if (!record) return res.json({ ok: false, error: '验证码无效或已过期' })
+    if (!record) {
+      recordVerifyFailure(lockTarget)
+      return res.json({ ok: false, error: '验证码无效或已过期' })
+    }
 
+    clearVerifyFailures(lockTarget)
     const verifyToken = uuidv4()
     await queryRun('UPDATE verification_codes SET used = 1, verify_token = ? WHERE id = ?', [verifyToken, record.id])
     res.json({ ok: true, message: '验证成功', token: verifyToken })
@@ -409,6 +443,8 @@ router.post('/reset-password', async (req, res) => {
     const targetEmail = email
     const targetPhone = phone
     if ((!targetEmail && !targetPhone) || !newPassword) return res.json({ ok: false, error: '参数不完整' })
+    if (newPassword.length < 8) return res.json({ ok: false, error: '新密码至少8位' })
+    if (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) return res.json({ ok: false, error: '新密码需包含字母和数字' })
 
     // verifyToken flow
     if (verifyToken) {

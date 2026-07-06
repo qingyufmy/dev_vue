@@ -422,8 +422,8 @@ export async function reconcileAutoSchedulers() {
         const firstPt = allPt[0]
         const symbols = parsePromptSymbols(firstPt.symbols_json || '[]')
         for (const row of unassigned) {
-          await queryRun('UPDATE auto_scheduler SET prompt_type_id = ?, symbols = ? WHERE user_id = ? AND prompt_type_id IS NULL',
-            [firstPt.id, JSON.stringify(symbols), row.user_id])
+          await queryRun('UPDATE auto_scheduler SET prompt_type_id = ? WHERE user_id = ? AND prompt_type_id IS NULL',
+            [firstPt.id, row.user_id])
           console.log(`[Reconciler] Auto-assigned strategy ${firstPt.id} to user ${row.user_id}`)
         }
       }

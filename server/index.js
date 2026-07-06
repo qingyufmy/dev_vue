@@ -34,18 +34,7 @@ import { initCryptoWallet } from './crypto/wallet.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
 
-// Load .env
-try {
-  const envPath = join(__dirname, '.env')
-  if (existsSync(envPath)) {
-    readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-      const [key, ...val] = line.split('=')
-      if (key && val.length) process.env[key.trim()] = val.join('=').trim()
-    })
-  } else {
-    console.warn('[ENV] .env not found at:', envPath)
-  }
-} catch (e) { console.error('[ENV] Error:', e.message) }
+// .env is loaded by server/config.js via dotenv — no manual parsing needed
 
 // Ensure upload dir
 const uploadDir = process.env.UPLOAD_DIR || './uploads'
@@ -72,6 +61,12 @@ app.use(cors({
 }))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
+
+// Security headers
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.hdslb.com https://i0.hdslb.com https://i1.hdslb.com https://i2.hdslb.com; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'")
+  next()
+})
 
 // Rate limiting — prevent brute force and DoS
 const apiLimiter = rateLimit({

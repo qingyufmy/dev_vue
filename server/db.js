@@ -296,15 +296,11 @@ export async function initDB() {
     `CREATE TABLE IF NOT EXISTS notifications (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
-      actor_id INT,
       type VARCHAR(50) DEFAULT 'system',
       title VARCHAR(500) DEFAULT '',
       message VARCHAR(2000) DEFAULT '',
       link VARCHAR(500) DEFAULT '',
-      post_id INT,
-      meta VARCHAR(2000) DEFAULT '{}',
       is_read TINYINT DEFAULT 0,
-      \`read\` TINYINT DEFAULT 0,
       created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -324,7 +320,6 @@ export async function initDB() {
       episode_id INT NOT NULL,
       question TEXT NOT NULL,
       options TEXT NOT NULL,
-      answer INT DEFAULT 0,
       correct_index INT DEFAULT 0,
       explanation VARCHAR(5000) DEFAULT '',
       explanations VARCHAR(5000) DEFAULT '[]',
@@ -508,7 +503,6 @@ export async function initDB() {
     `CREATE TABLE IF NOT EXISTS auto_scheduler (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL UNIQUE,
-      symbols VARCHAR(1000) NOT NULL DEFAULT 'XAUUSD',
       enabled TINYINT NOT NULL DEFAULT 0,
       prompt_type_id INT DEFAULT NULL,
       risk_level VARCHAR(20) NOT NULL DEFAULT 'medium',
@@ -539,7 +533,6 @@ export async function initDB() {
 
     `CREATE TABLE IF NOT EXISTS global_auto_config (
       id INT PRIMARY KEY DEFAULT 1,
-      symbols VARCHAR(1000) NOT NULL DEFAULT 'XAUUSD',
       interval_minutes INT NOT NULL DEFAULT 5,
       api_provider VARCHAR(50) DEFAULT 'deepseek',
       model_name VARCHAR(100) DEFAULT 'deepseek-chat',
@@ -551,7 +544,6 @@ export async function initDB() {
       max_position_size DOUBLE DEFAULT 0.05,
       selected_take_profit INT DEFAULT 2,
       enable_auto_trade TINYINT NOT NULL DEFAULT 1,
-      system_prompt TEXT,
       updated_at DATETIME NOT NULL DEFAULT (NOW()),
       CONSTRAINT chk_singleton CHECK (id = 1)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,

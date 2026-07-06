@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
+import { fetchBilibiliVideo } from '../utils.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const resourceDir = join(__dirname, '..', 'uploads', 'resources')
@@ -457,13 +458,10 @@ router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) =
     let finalCover = cover, finalDuration = duration
     if (bilibiliId) {
       try {
-        const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
-        })
-        const bd = await bi.json()
-        if (bd.code === 0 && bd.data) {
-          if (bd.data.pic) finalCover = bd.data.pic.replace('http://', 'https://')
-          if ((!duration || duration === '') && bd.data.duration) finalDuration = bd.data.duration
+        const bi = await fetchBilibiliVideo(bilibiliId)
+        if (bi) {
+          if (bi.cover) finalCover = bi.cover
+          if ((!duration || duration === '') && bi.duration) finalDuration = bi.duration
         }
       } catch (e) { console.error('[Admin] Bilibili API fetch failed:', e.message) }
     }
@@ -579,13 +577,12 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
             const explanations = Array.isArray(q.explanations) ? q.explanations : []
 
             await queryRun(`
-              INSERT INTO quiz_questions (episode_id, question, options, answer, correct_index, explanation, explanations, hint, status, sort_order)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'published', ?)
+              INSERT INTO quiz_questions (episode_id, question, options, correct_index, explanation, explanations, hint, status, sort_order)
+              VALUES (?, ?, ?, ?, ?, ?, ?, 'published', ?)
             `, [
               episodeId,
               q.question,
               JSON.stringify(options),
-              answer,
               answer,
               q.explanation || '',
               JSON.stringify(explanations),
@@ -664,9 +661,9 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
               const options = Array.isArray(q.options) ? q.options : [q.options]
               const answer = q.answer ?? 0
               await queryRun(`
-                INSERT INTO quiz_questions (episode_id, question, options, answer, correct_index, explanation, explanations, hint, status, sort_order)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'published', ?)
-              `, [episodeId, q.question, JSON.stringify(options), answer, answer, q.explanation || '', JSON.stringify(q.explanations || []), q.hint || '', inserted])
+                INSERT INTO quiz_questions (episode_id, question, options, correct_index, explanation, explanations, hint, status, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'published', ?)
+              `, [episodeId, q.question, JSON.stringify(options), answer, q.explanation || '', JSON.stringify(q.explanations || []), q.hint || '', inserted])
               inserted++
             }
             if (inserted > 0) { quizFiles++; const c = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episodeId])).c; await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [c, episodeId]) }
@@ -723,8 +720,8 @@ router.post('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
     // If id is provided, update existing question
     if (id) {
       await queryRun(`
-        UPDATE quiz_questions SET question=?, options=?, answer=?, correct_index=?, explanation=?, explanations=?, hint=?, status=?, sort_order=? WHERE id=?
-      `, [question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id])
+        UPDATE quiz_questions SET question=?, options=?, correct_index=?, explanation=?, explanations=?, hint=?, status=?, sort_order=? WHERE id=?
+      `, [question, JSON.stringify(options), correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0, id])
 
       // Update course quiz_count
       const q = await queryOne('SELECT episode_id FROM quiz_questions WHERE id = ?', [id])
@@ -738,9 +735,9 @@ router.post('/admin-quiz', authMiddleware, adminOnly, async (req, res) => {
 
     // Create new question
     const result = await queryRun(`
-      INSERT INTO quiz_questions (episode_id, question, options, answer, correct_index, explanation, explanations, hint, status, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [episodeId, question, JSON.stringify(options), answer ?? correctIndex ?? 0, correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0])
+      INSERT INTO quiz_questions (episode_id, question, options, correct_index, explanation, explanations, hint, status, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [episodeId, question, JSON.stringify(options), correctIndex ?? 0, explanation || '', JSON.stringify(explanations || []), hint || '', status || 'published', sortOrder || 0])
 
     const count = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episodeId])).c
     await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [count, episodeId])

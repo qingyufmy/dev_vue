@@ -282,13 +282,13 @@ export async function upsertAutoConfig(db, userId, symbols, enabled, promptTypeI
   const now = beijingNow()
   await withTransaction(async (run) => {
     await run(`
-      INSERT INTO auto_scheduler (user_id, symbols, enabled, prompt_type_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        symbols = VALUES(symbols), enabled = VALUES(enabled),
+        enabled = VALUES(enabled),
         prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
         updated_at = VALUES(updated_at)
-    `, [userId, JSON.stringify(symbols), enabled ? 1 : 0, promptTypeId, now, now])
+    `, [userId, enabled ? 1 : 0, promptTypeId, now, now])
     await run(
       'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = ?',
       [userId, enabled ? 1 : 0, now, enabled ? 1 : 0, now]
@@ -416,18 +416,17 @@ export async function saveUserAutoConfig(userId, payload) {
   // INSERT enabled=0 is correct: first save means user hasn't toggled auto yet.
   // ON DUPLICATE KEY UPDATE preserves existing enabled value.
   await queryRun(
-    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, symbols, created_at, updated_at)
-     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, created_at, updated_at)
+     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        prompt_type_id = VALUES(prompt_type_id),
        risk_level = VALUES(risk_level),
        max_position_size = VALUES(max_position_size),
        selected_take_profit = VALUES(selected_take_profit),
        enable_auto_trade = VALUES(enable_auto_trade),
-       symbols = VALUES(symbols),
        updated_at = VALUES(updated_at)`,
     [userId, next.prompt_type_id, next.risk_level, next.max_position_size, next.selected_take_profit,
-     next.enable_auto_trade, next.symbols, now, now]
+     next.enable_auto_trade, now, now]
   )
 }
 

@@ -1,6 +1,7 @@
 import { queryOne, queryRun, queryAll, beijingNow } from '../db.js'
 import { adapters, getAdapter } from './chains/index.js'
 import { getCryptoWalletApiKey } from './wallet.js'
+import { calculatePlanExpiry, processReferralCommission } from '../utils.js'
 
 const CONFIRM_POLL_MS = 15_000
 const EXPIRY_POLL_MS = 30_000
@@ -87,46 +88,9 @@ async function activateMembership(orderId, userId) {
     console.error('[Monitor] Notification error:', e.message)
   }
 
-  if (order.amount > 0) {
-    try {
-      const referral = await queryOne(
-        "SELECT r.id, r.referrer_id FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
-        [userId]
-      )
-      if (referral) {
-        const rule = await queryOne(
-          'SELECT rate_bps FROM referral_rules WHERE plan = ? AND period = ? AND enabled = 1',
-          [order.plan, order.period]
-        )
-        const rateBps = rule ? rule.rate_bps : 1000
-        const commissionDollars = order.amount * rateBps / 10000
-        await queryRun(
-          'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
-          [order.amount, commissionDollars, order.plan_label, referral.id]
-        )
-        await queryRun(
-          'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
-          [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${order.amount.toFixed(2)}，返佣 $${commissionDollars.toFixed(2)} 待审核确认`]
-        )
-      }
-    } catch (refErr) {
-      console.error('[Monitor] Referral commission error:', refErr.message)
-    }
-  }
+  await processReferralCommission(userId, order.amount, order.plan, order.plan_label, order.period)
 
   console.log(`[Monitor] Membership activated: user ${userId} -> ${order.plan} (expires ${expiresAt})`)
-}
-
-function calculatePlanExpiry(period) {
-  const now = new Date(Date.now() + 8 * 3600_000)
-  if (period === 'lifetime') {
-    return '2099-12-31 23:59:59'
-  } else if (period === 'year') {
-    now.setFullYear(now.getFullYear() + 1)
-  } else {
-    now.setMonth(now.getMonth() + 1)
-  }
-  return now.toISOString().replace('T', ' ').substring(0, 19)
 }
 
 async function checkExpiry() {

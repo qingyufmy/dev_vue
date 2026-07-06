@@ -577,6 +577,42 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '030_fix_verification_codes_email_not_null',
+    up: async () => {
+      try {
+        const col = await queryAll("SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'verification_codes' AND COLUMN_NAME = 'email'")
+        if (col && col.length && col[0].COLUMN_DEFAULT === null) {
+          await queryRun("ALTER TABLE verification_codes MODIFY COLUMN email VARCHAR(255) DEFAULT NULL")
+          console.log('[Migrations] 030 changed verification_codes.email to DEFAULT NULL')
+        }
+      } catch (e) {
+        if (!e.message?.includes('Duplicate')) {
+          console.error('[Migrations] 030 failed:', e.message)
+        }
+      }
+    }
+  },
+  {
+    id: '031_cleanup_dead_columns',
+    up: async () => {
+      const drops = [
+        'ALTER TABLE auto_scheduler DROP COLUMN symbols',
+        'ALTER TABLE global_auto_config DROP COLUMN symbols',
+        'ALTER TABLE global_auto_config DROP COLUMN system_prompt',
+        'ALTER TABLE notifications DROP COLUMN actor_id',
+        'ALTER TABLE notifications DROP COLUMN post_id',
+        'ALTER TABLE notifications DROP COLUMN meta',
+      ]
+      for (const sql of drops) {
+        try { await queryRun(sql) } catch (e) {
+          if (!e.message?.includes("doesn't exist") && !e.message?.includes("Can't DROP")) {
+            console.error(`[Migrations] 031 drop failed:`, e.message)
+          }
+        }
+      }
+    }
   }
 ]
 

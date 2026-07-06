@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, unlinkSync, statSync, createReadStream } from 'fs'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth, adminOnly } from '../middleware/auth.js'
+import { fetchBilibiliVideo } from '../utils.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const uploadDir = join(__dirname, '..', 'uploads', 'videos')
@@ -234,20 +235,15 @@ router.post('/video-stream', authMiddleware, async (req, res) => {
       courseUpdates.push('bilibili_id = ?'); courseParams.push(bilibiliId)
       // Auto-fetch cover + duration from Bilibili
       try {
-        const bi = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bilibiliId}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
-        })
-        const bd = await bi.json()
-        if (bd.code === 0 && bd.data) {
-          // Cover (always fetch, https enforced to avoid mixed content)
-          if (bd.data.pic) {
+        const bi = await fetchBilibiliVideo(bilibiliId)
+        if (bi) {
+          if (bi.cover) {
             courseUpdates.push('cover = ?')
-            courseParams.push(bd.data.pic.replace('http://', 'https://'))
+            courseParams.push(bi.cover)
           }
-          // Duration (auto-fetch if frontend didn't send one)
-          if ((!duration || duration === '0') && bd.data.duration) {
+          if ((!duration || duration === '0') && bi.duration) {
             courseUpdates.push('duration = ?')
-            courseParams.push(bd.data.duration)
+            courseParams.push(bi.duration)
           }
         }
       } catch (e) { console.warn('[Video] Bilibili data fetch failed:', e.message) }

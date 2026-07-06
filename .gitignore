@@ -39,3 +39,7 @@ public/ai/aurum_updater.exe
 .mimocode/
 coverage/
 uploads/
+*.pem
+*.key
+*.bak
+*.tmp

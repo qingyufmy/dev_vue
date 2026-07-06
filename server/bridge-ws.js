@@ -312,7 +312,7 @@ async function _initBridge(ws, userId, user) {
   const shouldRestoreAuto = dbAutoReasoningEnabled
   let schedulerEnabled = false
   try {
-    const schedulerRow = await queryOne('SELECT enabled, symbols FROM auto_scheduler WHERE user_id = ?', [userId])
+    const schedulerRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
     if (_bridgeInitGen.get(userId) !== gen) return
     schedulerEnabled = !!(schedulerRow?.enabled)
   } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
@@ -1811,7 +1811,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const tid = targetUser.id
         const [targetSettings, targetScheduler, targetSignals, bridgeStatus] = await Promise.all([
           queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [tid]),
-          queryOne('SELECT enabled, symbols, last_run_at FROM auto_scheduler WHERE user_id = ?', [tid]),
+          queryOne('SELECT enabled, last_run_at FROM auto_scheduler WHERE user_id = ?', [tid]),
           (async () => {
             const oldStats = await queryOne(`SELECT
               (SELECT COUNT(*) FROM ai_signals WHERE user_id = ?) AS old_total,

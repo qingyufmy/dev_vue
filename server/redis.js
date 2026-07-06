@@ -82,3 +82,13 @@ export async function cacheSetJSON(key, value, ttlSeconds) {
     console.error('[Redis] cacheSetJSON error:', err.message)
   }
 }
+
+export async function cacheDel(key) {
+  const r = getRedis()
+  if (!r) return
+  try {
+    await r.del(key)
+  } catch (err) {
+    console.error('[Redis] cacheDel error:', err.message)
+  }
+}
