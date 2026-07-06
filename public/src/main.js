@@ -5769,64 +5769,79 @@ function renderTos() {
 // ===== USDT Crypto Payment =====
 let _selectedCryptoChain = 'TRC20'
 let _paymentPollingTimer = null
+let _cryptoPaymentPlan = ''
+let _cryptoPaymentPeriod = ''
 
 const CRYPTO_CHAINS = [
-  { id: 'TRC20', name: 'TRC-20 (Tron)', icon: '⟠', fee: '低 (~1 USDT)', color: '#ff0013' },
-  { id: 'ERC20', name: 'ERC-20 (Ethereum)', icon: '⟠', fee: '高 (5-50 USDT)', color: '#627eea' },
-  { id: 'BEP20', name: 'BEP-20 (BSC)', icon: '⟠', fee: '低 (~0.3 USDT)', color: '#f0b90b' },
-  { id: 'SPL', name: 'SOL (Solana)', icon: '◎', fee: '极低 (~0.001 USDT)', color: '#9945ff' },
+  { id: 'TRC20', name: 'TRC-20', full: 'Tron', icon: 'T', fee: '~1 USDT', color: '#ff0013', recommended: true },
+  { id: 'ERC20', name: 'ERC-20', full: 'Ethereum', icon: 'Ξ', fee: '5-50 USDT', color: '#627eea' },
+  { id: 'BEP20', name: 'BEP-20', full: 'BNB Chain', icon: 'B', fee: '~0.3 USDT', color: '#f0b90b' },
+  { id: 'SPL', name: 'SOL', full: 'Solana', icon: '◎', fee: '~0.001 USDT', color: '#9945ff' },
 ]
 
 function initiateCryptoPayment(plan, period) {
   _selectedCryptoChain = 'TRC20'
+  _cryptoPaymentPlan = plan
+  _cryptoPaymentPeriod = period
 
-  const html = `
-    <div class="modal-overlay active" id="cryptoChainModal">
-      <div class="modal-content crypto-chain-dialog">
-        <div class="modal-header">
-          <h3>选择支付链</h3>
-          <button class="modal-close" onclick="closeCryptoModal()">&times;</button>
-        </div>
-        <div class="crypto-chain-list">
-          ${CRYPTO_CHAINS.map(c => `
-            <div class="crypto-chain-card ${c.id === _selectedCryptoChain ? 'active' : ''}"
-                 data-chain="${c.id}" onclick="selectCryptoChain('${c.id}')">
-              <span class="chain-icon" style="color:${c.color}">${c.icon}</span>
-              <div class="chain-info">
-                <div class="chain-name">${c.name}</div>
-                <div class="chain-fee">Gas 费: ${c.fee}</div>
-              </div>
-              <span class="chain-check">${c.id === _selectedCryptoChain ? '✓' : ''}</span>
-            </div>
-          `).join('')}
-        </div>
-        <div class="crypto-chain-actions">
-          <button class="btn btn-primary btn-block" onclick="confirmCryptoPayment('${plan}', '${period}')">
-            确认支付
-          </button>
-        </div>
+  const planNames = { plus: 'Plus', pro: 'Pro' }
+  const periodNames = { monthly: '月付', yearly: '年付' }
+  const planLabel = `${planNames[plan] || plan} ${periodNames[period] || period}`
+
+  const overlay = document.createElement('div')
+  overlay.id = 'cryptoChainModal'
+  overlay.className = 'modal-overlay active'
+  overlay.innerHTML = `
+    <div class="modal-content crypto-chain-dialog">
+      <div class="modal-header">
+        <h3>USDT 支付</h3>
+        <button class="modal-close" id="cryptoChainClose">&times;</button>
       </div>
+      <div class="crypto-plan-badge">${planLabel}</div>
+      <div class="crypto-chain-list">
+        ${CRYPTO_CHAINS.map(c => `
+          <div class="crypto-chain-card ${c.id === _selectedCryptoChain ? 'active' : ''}" data-chain="${c.id}">
+            <div class="chain-icon-wrap" style="background:${c.color}20; color:${c.color}">${c.icon}</div>
+            <div class="chain-info">
+              <div class="chain-name">${c.name} <span class="chain-full">(${c.full})</span></div>
+              <div class="chain-fee">Gas: ${c.fee}</div>
+            </div>
+            ${c.recommended ? '<span class="chain-tag">推荐</span>' : ''}
+            <div class="chain-radio"></div>
+          </div>
+        `).join('')}
+      </div>
+      <button class="btn btn-primary btn-block crypto-confirm-btn" id="cryptoChainConfirm">
+        确认支付
+      </button>
     </div>
   `
-  document.body.insertAdjacentHTML('beforeend', html)
-}
+  document.body.appendChild(overlay)
 
-function selectCryptoChain(chainId) {
-  _selectedCryptoChain = chainId
-  document.querySelectorAll('.crypto-chain-card').forEach(card => {
-    const isActive = card.dataset.chain === chainId
-    card.classList.toggle('active', isActive)
-    card.querySelector('.chain-check').textContent = isActive ? '✓' : ''
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.id === 'cryptoChainClose') {
+      overlay.remove()
+    }
+  })
+
+  overlay.querySelectorAll('.crypto-chain-card').forEach(card => {
+    card.addEventListener('click', () => {
+      _selectedCryptoChain = card.dataset.chain
+      overlay.querySelectorAll('.crypto-chain-card').forEach(c => {
+        const isActive = c.dataset.chain === _selectedCryptoChain
+        c.classList.toggle('active', isActive)
+        c.querySelector('.chain-radio').textContent = isActive ? '✓' : ''
+      })
+    })
+  })
+
+  overlay.querySelector('#cryptoChainConfirm').addEventListener('click', () => {
+    overlay.remove()
+    doCreateCryptoPayment(_cryptoPaymentPlan, _cryptoPaymentPeriod)
   })
 }
 
-function closeCryptoModal() {
-  document.getElementById('cryptoChainModal')?.remove()
-}
-
-async function confirmCryptoPayment(plan, period) {
-  closeCryptoModal()
-
+async function doCreateCryptoPayment(plan, period) {
   try {
     const res = await api.post('/api/payment', {
       plan,
@@ -5852,52 +5867,72 @@ async function confirmCryptoPayment(plan, period) {
 
 function showCryptoPaymentPage(order) {
   const chainInfo = CRYPTO_CHAINS.find(c => c.id === order.chain) || CRYPTO_CHAINS[0]
+  const overlay = document.createElement('div')
+  overlay.id = 'cryptoPaymentModal'
+  overlay.className = 'modal-overlay active'
 
-  const html = `
-    <div class="modal-overlay active" id="cryptoPaymentModal">
-      <div class="modal-content crypto-payment-dialog">
-        <div class="modal-header">
-          <h3>${order.label}</h3>
-          <button class="modal-close" onclick="closePaymentModal()">&times;</button>
+  overlay.innerHTML = `
+    <div class="modal-content crypto-payment-dialog">
+      <div class="modal-header">
+        <h3>${order.label}</h3>
+        <button class="modal-close" id="cryptoPaymentClose">&times;</button>
+      </div>
+      <div class="crypto-payment-body">
+        <div class="crypto-amount-display">
+          <div class="crypto-amount-usd">${order.amount} USDT</div>
+          <div class="crypto-chain-label" style="background:${chainInfo.color}">
+            <span class="crypto-chain-icon">${chainInfo.icon}</span>
+            ${chainInfo.name}
+          </div>
         </div>
-        <div class="crypto-payment-body">
-          <div class="crypto-payment-amount">
-            <span class="amount">${order.amount} USDT</span>
-            <span class="chain-badge" style="background:${chainInfo.color}">${chainInfo.name}</span>
+        <div class="crypto-qr-section">
+          <div class="crypto-qr-wrapper">
+            <img src="${order.qrCode}" alt="QR Code" class="crypto-qr-img" />
           </div>
-          <div class="crypto-payment-qr">
-            <img src="${order.qrCode}" alt="QR Code" />
+          <p class="crypto-qr-hint">使用钱包扫描二维码支付</p>
+        </div>
+        <div class="crypto-address-section">
+          <div class="crypto-address-label">收款地址</div>
+          <div class="crypto-address-box">
+            <span class="crypto-address-text" id="cryptoPayAddress">${order.address}</span>
+            <button class="crypto-copy-btn" id="cryptoCopyBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              复制
+            </button>
           </div>
-          <div class="crypto-payment-address">
-            <label>收款地址：</label>
-            <div class="address-row">
-              <input type="text" value="${order.address}" readonly id="cryptoPayAddress" />
-              <button class="btn btn-sm" onclick="copyCryptoAddress()">复制</button>
-            </div>
-          </div>
-          <div class="crypto-payment-info">
-            <p>请在 <strong>30 分钟</strong>内完成支付</p>
-            <p>确认数：<span id="cryptoConfirmations">0</span> / ${order.requiredConfirmations}</p>
-          </div>
-          <div class="crypto-payment-status" id="cryptoPaymentStatus">等待支付...</div>
+        </div>
+        <div class="crypto-timer-section">
+          <div class="crypto-timer-icon">⏱</div>
+          <span>请在 <strong>30 分钟</strong>内完成支付</span>
+        </div>
+        <div class="crypto-status-bar">
+          <div class="crypto-status-dot"></div>
+          <span id="cryptoPaymentStatus">等待支付...</span>
+          <span class="crypto-conf-count">确认数: <strong id="cryptoConfirmations">0</strong>/${order.requiredConfirmations}</span>
         </div>
       </div>
     </div>
   `
-  document.body.insertAdjacentHTML('beforeend', html)
+  document.body.appendChild(overlay)
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.id === 'cryptoPaymentClose') {
+      stopCryptoPaymentPolling()
+      overlay.remove()
+    }
+  })
+
+  overlay.querySelector('#cryptoCopyBtn').addEventListener('click', () => {
+    navigator.clipboard.writeText(order.address).then(() => {
+      const btn = overlay.querySelector('#cryptoCopyBtn')
+      btn.innerHTML = '✓ 已复制'
+      setTimeout(() => {
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> 复制'
+      }, 2000)
+    })
+  })
+
   startCryptoPaymentPolling(order.orderId, order.requiredConfirmations)
-}
-
-function copyCryptoAddress() {
-  const input = document.getElementById('cryptoPayAddress')
-  if (input) {
-    navigator.clipboard.writeText(input.value).then(() => showToast('地址已复制', 'success'))
-  }
-}
-
-function closePaymentModal() {
-  stopCryptoPaymentPolling()
-  document.getElementById('cryptoPaymentModal')?.remove()
 }
 
 function startCryptoPaymentPolling(orderId, requiredConfs) {
@@ -5909,11 +5944,34 @@ function startCryptoPaymentPolling(orderId, requiredConfs) {
       if (res.ok) {
         const confEl = document.getElementById('cryptoConfirmations')
         const statusEl = document.getElementById('cryptoPaymentStatus')
+        const dotEl = document.querySelector('.crypto-status-dot')
         if (confEl) confEl.textContent = res.confirmations
         if (statusEl) statusEl.textContent = res.statusLabel
+        if (dotEl) dotEl.className = 'crypto-status-dot ' + (res.status === 'paid' ? 'success' : res.status === 'expired' ? 'error' : 'pending')
 
         if (res.status === 'paid') {
           stopCryptoPaymentPolling()
+          showToast('支付成功！会员已激活', 'success')
+          document.getElementById('cryptoPaymentModal')?.remove()
+          setTimeout(() => location.reload(), 1500)
+        } else if (res.status === 'expired') {
+          stopCryptoPaymentPolling()
+          showToast('订单已过期，请重新下单', 'error')
+          document.getElementById('cryptoPaymentModal')?.remove()
+        }
+      }
+    } catch (err) {
+      console.error('Payment poll error:', err)
+    }
+  }, 5000)
+}
+
+function stopCryptoPaymentPolling() {
+  if (_paymentPollingTimer) {
+    clearInterval(_paymentPollingTimer)
+    _paymentPollingTimer = null
+  }
+}
           showToast('支付成功！会员已激活', 'success')
           closePaymentModal()
           setTimeout(() => location.reload(), 1500)
