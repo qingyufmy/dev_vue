@@ -1,6 +1,6 @@
 # AURUM AI Trading System — 宝塔面板部署教程
 
-> 当前版本：v2.1.1 | 最后更新：2026-06-27
+> 当前版本：v2.2.0 | 最后更新：2026-07-05
 
 ## 一、服务器准备
 
@@ -8,6 +8,7 @@
 2. 安装 Node.js 18+（推荐 20 LTS）
 3. 安装 Nginx（宝塔自带）
 4. 安装 **MySQL 5.7+**（宝塔面板 → 数据库 → MySQL）
+5. 安装 **Redis**（可选，用于缓存和调度锁，无 Redis 系统正常运行但性能降低）
 
 ## 二、上传项目
 
@@ -46,33 +47,44 @@ cp server/.env.example server/.env
 编辑 `.env` 文件：
 
 ```env
-# MySQL
+# MySQL（必填）
 MYSQL_HOST=127.0.0.1
 MYSQL_PORT=3306
 MYSQL_USER=huaerjie_aurum
 MYSQL_PASSWORD=你的密码
 MYSQL_DATABASE=huaerjie_aurum
 
-# JWT
+# JWT（必填）
 JWT_SECRET=替换为你的密钥（随便写一串长字符）
 
 # Server
 PORT=3000
+
+# Redis（可选 — 不设则禁用缓存）
+# REDIS_HOST=127.0.0.1
+# REDIS_PORT=6379
+# REDIS_PASSWORD=
+
+# CORS origins（逗号分隔）
+# CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
 ```
 
 > **说明**：首次启动会自动建表和种子数据（管理账号 admin@wallstreetskill.com / admin123）
-> 
+>
 > **⚠️ 内存配置**：启动参数需添加 `--max-old-space-size=256`，避免堆内存耗尽导致频繁重启
+>
+> **⚠️ JWT_SECRET 必填**：未设置会导致服务启动失败（process.exit）
 
 ## 五、宝塔配置 Node 项目
 
 1. 宝塔面板 → **网站** → **Node项目** → **添加Node项目**
 2. 填写：
    - **项目目录**: `/www1/wwwroot/aurum-ai`
-   - **启动文件**: `index.js`
+   - **启动文件**: `server/index.js`
    - **Node版本**: 选已安装的 18/20
    - **端口**: `3000`
    - **项目名称**: `aurum-ai`
+   - **Node启动参数**: `--max-old-space-size=256`
 3. 点击「提交」
 
 ## 六、Nginx 反向代理
@@ -209,9 +221,9 @@ curl -H "Authorization: Bearer <admin_token>" http://localhost:3000/api/bridge/w
 2. 主站页面正常加载
 3. 注册/登录后点击「AI 交易」进入量化系统
 4. 点击「下载桥接」获取桥接软件
-5. 在本地电脑（装有 MT5 的 Windows/Mac）运行桥接
+5. 在本地电脑（装有 MT5 的 Windows）运行桥接
 
-## 十、更新部署
+## 十一、更新部署
 
 > **首次拉取前设置凭证自动保存**（只需执行一次）：
 > ```bash
@@ -228,7 +240,11 @@ npm install --production
 
 ## 数据库迁移（如有 schema 变更）
 
-启动时会自动执行 `initDB()` 迁移，新增表和字段会自动创建。无需手动执行 SQL。
+启动时会自动执行 `initDB()` + `runMigrations()` 迁移。新增表、字段、索引会自动创建，删除的表/字段会自动清理。无需手动执行 SQL。
+
+## 数据库迁移版本追踪
+
+系统使用 `schema_migrations` 表追踪已执行的迁移。迁移文件在 `server/migrations.js` 中定义。当前最新迁移：`025_drop_ui_configs_and_dead_columns`。
 
 ## 注意事项
 
@@ -238,3 +254,5 @@ npm install --production
 - 首次访问需要注册账号（管理后台可配置用户权限）
 - 如果用域名，记得配 SSL（宝塔一键申请 Let's Encrypt）
 - `.env` 文件包含敏感信息，已在 `.gitignore` 中排除
+- Redis 可选，不配置时所有缓存调用静默返回 null，系统正常运行
+- 桥接软件使用 Nuitka 打包（v2.2.0+），降低杀毒软件误报
