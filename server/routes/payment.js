@@ -277,9 +277,22 @@ router.post('/payment', authMiddleware, async (req, res) => {
       usdtAmount = await generateUniqueAmount(baseUsdtAmount, orderId, plan, periodKey)
       mode = 'fixed'
     } else {
-      const index = await getAddressCount(chainKey)
-      address = deriveAddress(chainKey, index)
-      await saveAddress(chainKey, index, address)
+      let index = await getAddressCount(chainKey)
+      let saved = false
+      for (let attempt = 0; attempt < 5 && !saved; attempt++) {
+        try {
+          address = deriveAddress(chainKey, index)
+          await saveAddress(chainKey, index, address)
+          saved = true
+        } catch (e) {
+          if (e.message?.includes('Duplicate')) {
+            index++
+          } else {
+            throw e
+          }
+        }
+      }
+      if (!saved) throw new Error('地址生成失败，请重试')
       usdtAmount = parseFloat(baseUsdtAmount.toFixed(2))
       mode = 'dynamic'
     }
@@ -295,16 +308,14 @@ router.post('/payment', authMiddleware, async (req, res) => {
       }
     })
 
-    if (mode === 'dynamic') {
-      await addWatchAddress({
-        orderId,
-        userId: req.user.id,
-        chain: chainKey,
-        address,
-        expectedAmount: usdtAmount,
-        expiresAt,
-      })
-    }
+    await addWatchAddress({
+      orderId,
+      userId: req.user.id,
+      chain: chainKey,
+      address,
+      expectedAmount: usdtAmount,
+      expiresAt,
+    })
 
     let qrCode = null
     try {

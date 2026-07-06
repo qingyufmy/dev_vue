@@ -166,12 +166,13 @@ async function checkExpiry() {
 async function fallbackPoll() {
   try {
     for (const chainName of Object.keys(adapters)) {
+      const now = beijingNow()
       const rows = await queryAll(
         `SELECT w.id, w.chain, w.address, w.expected_amount, w.status, w.order_id, w.user_id, o.created_at
          FROM crypto_watch_list w
          JOIN orders o ON o.order_id = w.order_id
-         WHERE w.status = 'pending' AND w.chain = ? AND w.expires_at > NOW()`,
-        [chainName]
+         WHERE w.status = 'pending' AND w.chain = ? AND w.expires_at > ?`,
+        [chainName, now]
       )
 
       if (rows.length === 0) continue
