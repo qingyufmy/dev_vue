@@ -63,7 +63,7 @@ async function checkConfirmations() {
 }
 
 async function activateMembership(orderId, userId) {
-  const order = await queryOne('SELECT plan, period, plan_label FROM orders WHERE order_id = ?', [orderId])
+  const order = await queryOne('SELECT plan, period, plan_label, amount FROM orders WHERE order_id = ?', [orderId])
   if (!order) return
 
   const now = beijingNow()
@@ -85,6 +85,33 @@ async function activateMembership(orderId, userId) {
     )
   } catch (e) {
     console.error('[Monitor] Notification error:', e.message)
+  }
+
+  if (order.amount > 0) {
+    try {
+      const referral = await queryOne(
+        "SELECT r.id, r.referrer_id FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
+        [userId]
+      )
+      if (referral) {
+        const rule = await queryOne(
+          'SELECT rate_bps FROM referral_rules WHERE plan = ? AND period = ? AND enabled = 1',
+          [order.plan, order.period]
+        )
+        const rateBps = rule ? rule.rate_bps : 1000
+        const commissionDollars = order.amount * rateBps / 10000
+        await queryRun(
+          'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
+          [order.amount, commissionDollars, order.plan_label, referral.id]
+        )
+        await queryRun(
+          'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
+          [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${order.amount.toFixed(2)}，返佣 $${commissionDollars.toFixed(2)} 待审核确认`]
+        )
+      }
+    } catch (refErr) {
+      console.error('[Monitor] Referral commission error:', refErr.message)
+    }
   }
 
   console.log(`[Monitor] Membership activated: user ${userId} -> ${order.plan} (expires ${expiresAt})`)
@@ -232,8 +259,9 @@ const SCAN_FUNCTIONS = {
   },
 
   SOL: async (adapter, address, expectedAmount) => {
-    const rpcUrl = await getCryptoWalletApiKey('SOL')
-    const resp = await fetch(rpcUrl || 'https://api.mainnet-beta.solana.com', {
+    const USDT_SPL = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+    const rpcUrl = await getCryptoWalletApiKey('SOL') || 'https://api.mainnet-beta.solana.com'
+    const resp = await fetch(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -248,7 +276,7 @@ const SCAN_FUNCTIONS = {
 
     for (const sig of data.result.value) {
       if (sig.err) continue
-      const txResp = await fetch(rpcUrl || 'https://api.mainnet-beta.solana.com', {
+      const txResp = await fetch(rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -260,11 +288,18 @@ const SCAN_FUNCTIONS = {
       if (!txResp.ok) continue
       const txData = await txResp.json()
       const tx = txData.result
-      if (!tx?.meta?.postBalances) continue
+      if (!tx?.meta) continue
 
-      const preBal = tx.meta.preBalances[0] || 0
-      const postBal = tx.meta.postBalances[0] || 0
-      const diff = (postBal - preBal) / 1e6
+      const preTokens = tx.meta.preTokenBalances || []
+      const postTokens = tx.meta.postTokenBalances || []
+
+      const preUsdt = preTokens.find(t => t.mint === USDT_SPL && t.owner === address)
+      const postUsdt = postTokens.find(t => t.mint === USDT_SPL && t.owner === address)
+
+      const preAmount = preUsdt ? parseFloat(preUsdt.uiTokenAmount.uiAmountString || '0') : 0
+      const postAmount = postUsdt ? parseFloat(postUsdt.uiTokenAmount.uiAmountString || '0') : 0
+      const diff = postAmount - preAmount
+
       const expected = parseFloat(expectedAmount)
       if (diff > 0 && Math.abs(diff - expected) / expected <= 0.01) {
         return { hash: sig.signature, amount: diff }
