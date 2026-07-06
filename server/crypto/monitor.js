@@ -167,8 +167,10 @@ async function fallbackPoll() {
   try {
     for (const chainName of Object.keys(adapters)) {
       const rows = await queryAll(
-        `SELECT id, chain, address, expected_amount, status, order_id, user_id
-         FROM crypto_watch_list WHERE status = 'pending' AND chain = ? AND expires_at > NOW()`,
+        `SELECT w.id, w.chain, w.address, w.expected_amount, w.status, w.order_id, w.user_id, o.created_at
+         FROM crypto_watch_list w
+         JOIN orders o ON o.order_id = w.order_id
+         WHERE w.status = 'pending' AND w.chain = ? AND w.expires_at > NOW()`,
         [chainName]
       )
 
@@ -180,7 +182,7 @@ async function fallbackPoll() {
 
       for (const row of rows) {
         try {
-          const tx = await scanFn(adapter, row.address, row.expected_amount)
+          const tx = await scanFn(adapter, row.address, row.expected_amount, row.created_at)
           if (tx) {
             console.log(`[Monitor] Detected ${chainName} payment: ${tx.hash} (${tx.amount} USDT) for address ${row.address}`)
             await queryRun(
@@ -199,7 +201,7 @@ async function fallbackPoll() {
 }
 
 const SCAN_FUNCTIONS = {
-  TRON: async (adapter, address, expectedAmount) => {
+  TRON: async (adapter, address, expectedAmount, createdAt) => {
     const apiKey = await getCryptoWalletApiKey('TRON')
     const url = `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20?limit=20&contract_address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`
     const resp = await fetch(url, {
@@ -209,8 +211,10 @@ const SCAN_FUNCTIONS = {
     const data = await resp.json()
     if (!data.data) return null
 
+    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
     for (const tx of data.data) {
       if (tx.to !== address) continue
+      if (tx.block_timestamp && tx.block_timestamp < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
       const expected = parseFloat(expectedAmount)
       if (Math.abs(amount - expected) / expected <= 0.01) {
@@ -220,7 +224,7 @@ const SCAN_FUNCTIONS = {
     return null
   },
 
-  ETH: async (adapter, address, expectedAmount) => {
+  ETH: async (adapter, address, expectedAmount, createdAt) => {
     const apiKey = await getCryptoWalletApiKey('ETH')
     const url = `https://api.etherscan.io/api?module=account&action=tokentx&address=${address}&contractaddress=0xdAC17F958D2ee523a2206206994597C13D831ec7&sort=desc&page=1&offset=20&apikey=${apiKey}`
     const resp = await fetch(url)
@@ -228,8 +232,10 @@ const SCAN_FUNCTIONS = {
     const data = await resp.json()
     if (!data.result) return null
 
+    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
     for (const tx of data.result) {
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
+      if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
       const expected = parseFloat(expectedAmount)
       if (Math.abs(amount - expected) / expected <= 0.01) {
@@ -239,7 +245,7 @@ const SCAN_FUNCTIONS = {
     return null
   },
 
-  BSC: async (adapter, address, expectedAmount) => {
+  BSC: async (adapter, address, expectedAmount, createdAt) => {
     const apiKey = await getCryptoWalletApiKey('BSC')
     const url = `https://api.bscscan.com/api?module=account&action=tokentx&address=${address}&contractaddress=0x55d398326f99059fF775485246999027B3197955&sort=desc&page=1&offset=20&apikey=${apiKey}`
     const resp = await fetch(url)
@@ -247,8 +253,10 @@ const SCAN_FUNCTIONS = {
     const data = await resp.json()
     if (!data.result) return null
 
+    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
     for (const tx of data.result) {
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
+      if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
       const expected = parseFloat(expectedAmount)
       if (Math.abs(amount - expected) / expected <= 0.01) {
@@ -258,9 +266,10 @@ const SCAN_FUNCTIONS = {
     return null
   },
 
-  SOL: async (adapter, address, expectedAmount) => {
+  SOL: async (adapter, address, expectedAmount, createdAt) => {
     const USDT_SPL = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
     const rpcUrl = await getCryptoWalletApiKey('SOL') || 'https://api.mainnet-beta.solana.com'
+    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
     const resp = await fetch(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -276,6 +285,7 @@ const SCAN_FUNCTIONS = {
 
     for (const sig of data.result.value) {
       if (sig.err) continue
+      if (sig.blockTime && sig.blockTime * 1000 < createdMs) continue
       const txResp = await fetch(rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
