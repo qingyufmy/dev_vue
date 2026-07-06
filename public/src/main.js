@@ -2,7 +2,7 @@ import { episodes as staticEpisodes, categories } from './data/episodes.js'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
-import Quill from 'https://esm.sh/quill@2.0.3'
+// Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
 const MAX_POST_IMAGES = 8
