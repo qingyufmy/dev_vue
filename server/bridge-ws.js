@@ -1804,8 +1804,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (!email && !targetId) { result = { status: 'error', message: '需要 email 或 user_id 参数' }; break }
 
         const targetUser = email
-          ? await queryOne('SELECT id, nickname, email, plan, role, last_seen_at, created_at FROM users WHERE email = ?', [email])
-          : await queryOne('SELECT id, nickname, email, plan, role, last_seen_at, created_at FROM users WHERE id = ?', [targetId])
+          ? await queryOne('SELECT id, nickname, email, phone, plan, role, last_seen_at, created_at FROM users WHERE email = ?', [email])
+          : await queryOne('SELECT id, nickname, email, phone, plan, role, last_seen_at, created_at FROM users WHERE id = ?', [targetId])
         if (!targetUser) { result = { status: 'error', message: '用户不存在' }; break }
 
         const tid = targetUser.id
@@ -1899,7 +1899,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         const countRow = await queryOne('SELECT COUNT(*) AS total FROM users')
         const rows = await queryAll(
-          `SELECT id, email, nickname, plan, role, last_seen_at, bridge_heartbeat, created_at FROM users
+          `SELECT id, email, phone, nickname, plan, role, last_seen_at, bridge_heartbeat, created_at FROM users
            ORDER BY bridge_heartbeat DESC, last_seen_at DESC
            LIMIT ? OFFSET ?`,
           [pageSize, offset]

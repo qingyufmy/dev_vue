@@ -4778,10 +4778,10 @@ async function renderAdminDashboard(el, d, userListResp) {
     const totalPages = Math.ceil((data.total || 0) / (data.pageSize || 10));
     const users = data.users || [];
     container.innerHTML = users.length
-      ? '<table class="user-table"><thead><tr><th>ID</th><th>用户</th><th>计划</th><th>桥接</th><th>推理</th><th>交易</th><th>调度</th><th>心跳</th></tr></thead><tbody>' +
+      ? '<table class="user-table"><thead><tr><th>ID</th><th>账号</th><th>计划</th><th>桥接</th><th>推理</th><th>交易</th><th>调度</th><th>心跳</th></tr></thead><tbody>' +
         users.map(u => '<tr data-uid="' + u.id + '">' +
           '<td style="color:var(--text-muted);font-family:monospace;font-size:0.65rem">' + u.id + '</td>' +
-          '<td><div class="bridge-user"><span class="name">' + escapeHtml(u.nickname||'--') + '</span><span class="email">' + escapeHtml(u.email) + '</span></div></td>' +
+          '<td><div class="bridge-user"><span class="name">' + escapeHtml(u.nickname||'--') + '</span><span class="email">' + escapeHtml(u.phone || u.email) + '</span></div></td>' +
           '<td><span class="chip chip-' + (u.plan||'free') + '">' + (u.plan||'free') + (u.role==='admin'?' ★':'') + '</span></td>' +
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.bridgeConnected?'on':'off') + '"></span>' + (u.bridgeConnected?'在线':'离线') + '</span></td>' +
           '<td><span class="bridge-status"><span class="bridge-dot ' + (u.autoReasoning?'on':'off') + '"></span>' + (u.autoReasoning?'开':'关') + '</span></td>' +
@@ -4827,7 +4827,7 @@ async function renderAdminDashboard(el, d, userListResp) {
         '<div class="user-detail-card">' +
         '<div class="user-detail-header">' +
         '<div class="user-detail-avatar">' + (u.nickname||u.email||'?')[0].toUpperCase() + '</div>' +
-        '<div class="user-detail-info"><span class="name">' + escapeHtml(u.nickname||'未设置昵称') + '</span><span class="email">' + escapeHtml(u.email) + '</span></div>' +
+        '<div class="user-detail-info"><span class="name">' + escapeHtml(u.nickname||'未设置昵称') + '</span><span class="email">' + escapeHtml(u.phone || u.email) + '</span></div>' +
         '<button class="user-detail-close" onclick="document.getElementById(\'userDetailContainer\').innerHTML=\'\'">✕</button></div>' +
         '<div class="user-detail-grid">' +
         '<div class="user-detail-field"><span class="f-label">桥接状态</span><span class="f-value">' + (br.connected ? (br.alive ? '<span style="color:#22c55e">● 在线</span>' : '<span style="color:#f59e0b">● 无心跳</span>') : '<span style="color:var(--text-muted)">○ 离线</span>') + '</span></div>' +
@@ -4842,6 +4842,8 @@ async function renderAdminDashboard(el, d, userListResp) {
         '<div class="user-detail-field"><span class="f-label">最新信号</span><span class="f-value">' + (sig.last_signal_type ? sig.last_signal_type.toUpperCase() : '--') + ' ' + (sig.last_signal_at ? formatTimeAgo(sig.last_signal_at) : '') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">最后在线</span><span class="f-value">' + (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">注册时间</span><span class="f-value">' + (u.created_at ? u.created_at.slice(0,10) : '--') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">手机号</span><span class="f-value">' + (u.phone || '--') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">邮箱</span><span class="f-value">' + escapeHtml(u.email) + '</span></div>' +
         '</div></div>';
       initIcons();
     } catch (e) {
