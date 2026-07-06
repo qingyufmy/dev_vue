@@ -47,14 +47,17 @@ class SolAdapter extends BaseChainAdapter {
       const accounts = result.transaction.message?.accountKeys || []
       const from = accounts[0] || ''
       const to = accounts[1] || ''
-      const blockTime = result.blockTime || 0
+
+      const preBal = meta.preBalances?.[0] || 0
+      const postBal = meta.postBalances?.[0] || 0
+      const value = Math.max(0, (postBal - preBal) / 1e6)
 
       return {
         hash: txHash,
         from,
         to,
-        value: 0,
-        blockNumber: blockTime,
+        value,
+        blockNumber: result.slot || 0,
         confirmations: 0,
         status: 'success',
       }

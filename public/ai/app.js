@@ -4960,7 +4960,7 @@ function _showPaymentPage(order) {
       <div class="crypto-payment-address-section">
         <div class="crypto-payment-address-label">收款地址</div>
         <div class="crypto-payment-address-row">
-          <code class="crypto-payment-address">${escapeHtml(order.address)}</code>
+          <code class="crypto-payment-address">${escapeHtml(order.crypto_address)}</code>
           <button class="crypto-payment-copy-btn" type="button">复制</button>
         </div>
         <div class="crypto-payment-address-warning">请务必使用 ${chainNames[order.crypto_chain] || order.crypto_chain} 网络转账</div>
@@ -4985,7 +4985,7 @@ function _showPaymentPage(order) {
       <div class="crypto-payment-hint">支付完成后，系统将自动检测并升级您的会员</div>
     </div>
   `;
-  body.querySelector('.crypto-payment-copy-btn')?.addEventListener('click', () => _copyCryptoAddress(order.address));
+  body.querySelector('.crypto-payment-copy-btn')?.addEventListener('click', () => _copyCryptoAddress(order.crypto_address));
   $('cryptoPaymentDoneBtn')?.addEventListener('click', () => _cryptoPaymentDone());
   $('cryptoPaymentClose')?.addEventListener('click', () => { _stopPaymentPolling(); $('cryptoPaymentModal')?.classList.add('hidden'); });
   $('cryptoPaymentModal')?.addEventListener('click', (e) => {

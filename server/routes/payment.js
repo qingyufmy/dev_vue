@@ -245,11 +245,23 @@ router.post('/payment', authMiddleware, async (req, res) => {
 router.get('/payment/status/:orderId', authMiddleware, async (req, res) => {
   try {
     const order = await queryOne(
-      'SELECT order_id, order_no, plan, period, amount, status, status_label, crypto_chain, crypto_address, crypto_amount, crypto_expires_at, paid_at FROM orders WHERE order_id = ? AND user_id = ?',
+      `SELECT o.order_id, o.order_no, o.plan, o.period, o.amount, o.status, o.status_label,
+              o.crypto_chain, o.crypto_address, o.crypto_amount, o.crypto_expires_at, o.paid_at,
+              w.confirmations, w.required_confirmations, w.tx_hash
+       FROM orders o
+       LEFT JOIN crypto_watch_list w ON w.order_id = o.order_id
+       WHERE o.order_id = ? AND o.user_id = ?`,
       [req.params.orderId, req.user.id]
     )
     if (!order) return res.json({ ok: false, error: '订单不存在' })
-    res.json({ ok: true, order })
+    res.json({
+      ok: true,
+      status: order.status,
+      statusLabel: order.status_label,
+      confirmations: order.confirmations || 0,
+      requiredConfirmations: order.required_confirmations || 0,
+      txHash: order.tx_hash,
+    })
   } catch (err) {
     console.error('[Payment] 查询订单失败:', err)
     res.json({ ok: false, error: '查询订单失败' })

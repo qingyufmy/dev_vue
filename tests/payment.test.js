@@ -210,12 +210,13 @@ describe('payment.js — GET /payment/status/:orderId', () => {
       order_id: 'abc-123', order_no: 'WSS123', plan: 'pro', period: 'month',
       amount: 10000, status: 'pending', status_label: '待支付',
       crypto_chain: 'TRON', crypto_address: 'TAddr', crypto_amount: 100,
-      crypto_expires_at: '2026-01-01 00:30:00', paid_at: null
+      crypto_expires_at: '2026-01-01 00:30:00', paid_at: null,
+      confirmations: 0, required_confirmations: 19, tx_hash: null
     })
     const { json } = await callRoute('get', '/payment/status/abc-123', {}, { id: 1 })
     expect(json.ok).toBe(true)
-    expect(json.order.order_id).toBe('abc-123')
-    expect(json.order.status).toBe('pending')
+    expect(json.status).toBe('pending')
+    expect(json.confirmations).toBe(0)
   })
 
   it('订单不存在返回错误', async () => {
@@ -229,11 +230,11 @@ describe('payment.js — GET /payment/status/:orderId', () => {
       order_id: 'paid-001', order_no: 'WSS456', plan: 'plus', period: 'month',
       amount: 2900, status: 'paid', status_label: '已完成',
       crypto_chain: 'ETH', crypto_address: '0xAddr', crypto_amount: 2.9,
-      crypto_expires_at: '2026-01-01 00:30:00', paid_at: '2026-01-01 00:15:00'
+      crypto_expires_at: '2026-01-01 00:30:00', paid_at: '2026-01-01 00:15:00',
+      confirmations: 12, required_confirmations: 12, tx_hash: '0xabc'
     })
     const { json } = await callRoute('get', '/payment/status/paid-001', {}, { id: 1 })
     expect(json.ok).toBe(true)
-    expect(json.order.status).toBe('paid')
-    expect(json.order.paid_at).toBe('2026-01-01 00:15:00')
+    expect(json.status).toBe('paid')
   })
 })
