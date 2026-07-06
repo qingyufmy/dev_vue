@@ -3678,7 +3678,17 @@ async function loadAdminReferrals() {
 
 // ===== System Config Section =====
 let adminConfigData = {}
-let adminConfigSubTab = 'smtp'
+let adminConfigSubTab = 'plan_prices'
+let _planPricesCache = null
+
+async function getPlanPrices() {
+  if (_planPricesCache) return _planPricesCache
+  try {
+    const res = await api.get('/api/plans')
+    if (res.ok && res.plans) { _planPricesCache = res.plans; return res.plans }
+  } catch {}
+  return { plus: { month: { current: 5000, original: 10000 }, year: { current: 50000, original: 100000 } }, pro: { month: { current: 10000, original: 20000 }, year: { current: 100000, original: 200000 } } }
+}
 
 function renderAdminConfigSection() {
   return `
@@ -5725,9 +5735,23 @@ async function refreshNotificationUnread() {
 
 // ===== Profile Page =====
 // ===== Membership Page =====
-function renderMembership() {
+async function renderMembership() {
   const currentPlan = getEffectivePlan()
-  const currentPeriod = currentPlan === 'free' ? null : state.user?.planPeriod || null  // 'monthly' | 'yearly' | null
+  const currentPeriod = currentPlan === 'free' ? null : state.user?.planPeriod || null
+
+  let planPrices = { plus: { month: { current: 5000, original: 10000 }, year: { current: 50000, original: 100000 } }, pro: { month: { current: 10000, original: 20000 }, year: { current: 100000, original: 200000 } } }
+  try {
+    const res = await api.get('/api/plans')
+    if (res.ok && res.plans) planPrices = res.plans
+  } catch {}
+
+  const fmt = (cents) => '$' + (cents / 100).toFixed(0)
+  const discount = (orig, cur) => orig > 0 && cur > 0 && cur < orig ? Math.round((1 - cur / orig) * 100) : 0
+
+  const plusM = planPrices.plus?.month || { current: 5000, original: 10000 }
+  const plusY = planPrices.plus?.year || { current: 50000, original: 100000 }
+  const proM = planPrices.pro?.month || { current: 10000, original: 20000 }
+  const proY = planPrices.pro?.year || { current: 100000, original: 200000 }
 
   mainContent.innerHTML = `
     <div class="membership-page fade-in">
@@ -5782,12 +5806,12 @@ function renderMembership() {
               <button class="price-tab" data-period="yearly">年付</button>
             </div>
             <div class="mem-price-display">
-              <span class="mem-price-original" data-monthly="100" data-yearly="1000">$100</span>
-              <span class="mem-price" data-monthly="50" data-yearly="500">$50</span>
+              <span class="mem-price-original" data-monthly="${plusM.original}" data-yearly="${plusY.original}">${fmt(plusM.original)}</span>
+              <span class="mem-price" data-monthly="${plusM.current}" data-yearly="${plusY.current}">${fmt(plusM.current)}</span>
               <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            <div class="mem-price-discount">限时 5 折</div>
-            <div class="mem-price-save" style="display:none">年付立省 $100，低至 $50/月</div>
+            ${discount(plusM.original, plusM.current) ? `<div class="mem-price-discount">限时 ${discount(plusM.original, plusM.current)} 折</div>` : ''}
+            <div class="mem-price-save" style="display:none">年付立省 ${fmt(plusY.original - plusY.current)}，低至 ${fmt(plusY.current / 12)}/月</div>
           </div>
           <ul class="mem-features">
             <li class="mem-feat"><span class="mem-check">✓</span>新视频上线即时解锁</li>
@@ -5819,12 +5843,12 @@ function renderMembership() {
               <button class="price-tab" data-period="yearly">年付</button>
             </div>
             <div class="mem-price-display">
-              <span class="mem-price-original" data-monthly="200" data-yearly="2000">$200</span>
-              <span class="mem-price" data-monthly="100" data-yearly="1000">$100</span>
+              <span class="mem-price-original" data-monthly="${proM.original}" data-yearly="${proY.original}">${fmt(proM.original)}</span>
+              <span class="mem-price" data-monthly="${proM.current}" data-yearly="${proY.current}">${fmt(proM.current)}</span>
               <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            <div class="mem-price-discount">限时 5 折</div>
-            <div class="mem-price-save" style="display:none">年付立省 $200，低至 $100/月</div>
+            ${discount(proM.original, proM.current) ? `<div class="mem-price-discount">限时 ${discount(proM.original, proM.current)} 折</div>` : ''}
+            <div class="mem-price-save" style="display:none">年付立省 ${fmt(proY.original - proY.current)}，低至 ${fmt(proY.current / 12)}/月</div>
           </div>
           <ul class="mem-features">
             <li class="mem-feat"><span class="mem-check">✓</span>包含 Plus 全部权限</li>
@@ -5860,7 +5884,7 @@ function renderMembership() {
             <tr><td>课后测验 + 解析</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>专属街家军标识</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>AI全自动交易</td><td>✗</td><td>✗</td><td>✓</td></tr>
-            <tr><td>月付价格</td><td>免费</td><td>$50/月</td><td>$100/月</td></tr>
+            <tr><td>月付价格</td><td>免费</td><td>${fmt(plusM.current)}/月</td><td>${fmt(proM.current)}/月</td></tr>
           </tbody>
         </table>
       </div>
@@ -6899,7 +6923,7 @@ function renderProfile() {
                         <div class="sub-plan-desc">新视频即时解锁 + 图解 + 测验</div>
                       </div>
                     </div>
-                    <div class="sub-plan-price">$50/月</div>
+                    <div class="sub-plan-price sub-plan-price-plus">$50/月</div>
                     ${currentPlan === 'plus' ? '<span class="sub-plan-current">当前</span>' : currentPlan === 'pro' ? '' : '<button class="btn btn-sm btn-primary sub-plan-btn" data-plan="plus">USDT 支付</button>'}
                   </div>
                   <div class="sub-plan-row ${currentPlan === 'pro' ? 'sub-plan-active' : ''}" data-plan="pro">
@@ -6910,7 +6934,7 @@ function renderProfile() {
                         <div class="sub-plan-desc">全部权限 + AI信号</div>
                       </div>
                     </div>
-                    <div class="sub-plan-price">$100/月</div>
+                    <div class="sub-plan-price sub-plan-price-pro">$100/月</div>
                     ${currentPlan === 'pro' ? '<span class="sub-plan-current">当前</span>' : '<button class="btn btn-sm btn-primary sub-plan-btn" data-plan="pro">USDT 支付</button>'}
                   </div>
                 </div>
@@ -7515,6 +7539,14 @@ function renderProfile() {
   if (creditCenterEl) {
     loadSubscriptionCreditCenter(creditCenterEl)
   }
+
+  getPlanPrices().then(prices => {
+    const fmt = (cents) => '$' + (cents / 100).toFixed(0) + '/月'
+    const plusEl = document.querySelector('.sub-plan-price-plus')
+    const proEl = document.querySelector('.sub-plan-price-pro')
+    if (plusEl && prices.plus) plusEl.textContent = fmt(prices.plus.month?.current || 5000)
+    if (proEl && prices.pro) proEl.textContent = fmt(prices.pro.month?.current || 10000)
+  })
 
   const forumNotificationsEl = document.getElementById('forumNotificationsList')
   if (forumNotificationsEl) {
