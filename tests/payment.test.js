@@ -154,6 +154,7 @@ describe('payment.js — POST /payment', () => {
     const userObj = { plan: 'free', plan_expires_at: null, referral_credit: 2900 }
     mockQueryOne.mockImplementation((sql) => {
       if (sql.includes('referrals')) return Promise.resolve(null)
+      if (sql.includes('existing') || sql.includes('crypto_expires_at')) return Promise.resolve(null)
       return Promise.resolve(userObj)
     })
     const { json } = await callRoute('post', '/payment', {
@@ -165,7 +166,10 @@ describe('payment.js — POST /payment', () => {
   })
 
   it('创建加密订单返回支付信息', async () => {
-    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    mockQueryOne.mockImplementation((sql) => {
+      if (sql.includes('crypto_expires_at')) return Promise.resolve(null)
+      return Promise.resolve({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    })
     const { json } = await callRoute('post', '/payment', {
       plan: 'pro', period: 'month', crypto_chain: 'TRON'
     })

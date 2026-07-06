@@ -193,6 +193,35 @@ router.post('/payment', authMiddleware, async (req, res) => {
     }
 
     const finalAmount = Math.max(0, amount - credit - referralCredit)
+
+    const existingOrder = await queryOne(
+      `SELECT order_id, order_no, crypto_address, crypto_amount, crypto_expires_at, crypto_chain
+       FROM orders
+       WHERE user_id = ? AND plan = ? AND period = ? AND crypto_chain = ? AND status = 'pending'
+         AND crypto_expires_at > DATE_ADD(NOW(), INTERVAL 15 MINUTE)
+       ORDER BY created_at DESC LIMIT 1`,
+      [req.user.id, plan, periodKey, crypto_chain]
+    )
+
+    if (existingOrder) {
+      const qrCode = await generatePaymentQR(chainKey, existingOrder.crypto_address, existingOrder.crypto_amount).catch(() => null)
+      return res.json({
+        ok: true,
+        label: `${planInfo.name} ${PERIOD_LABELS[periodKey] || '月付'}`,
+        orderNo: existingOrder.order_no,
+        orderId: existingOrder.order_id,
+        crypto_chain,
+        crypto_address: existingOrder.crypto_address,
+        crypto_amount: parseFloat(existingOrder.crypto_amount),
+        usd_amount: finalAmount.toFixed(2),
+        expires_at: existingOrder.crypto_expires_at,
+        required_confirmations: getRequiredConfirmations(chainKey),
+        qr_code: qrCode,
+        payment_mode: await getPaymentMode(),
+        reused: true,
+      })
+    }
+
     const orderNo = `WSS${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`
     const orderId = uuidv4()
 
