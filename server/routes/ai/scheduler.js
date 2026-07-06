@@ -1058,13 +1058,19 @@ export function startPendingReconciler() {
 }
 
 export async function reconcilePendingOrders() {
-  const pendingRows = await queryAll(
-    "SELECT id, user_id, signal_id, pending_ticket, pending_valid_until FROM auto_signal_deliveries WHERE pending_state = 'pending'"
+  const deliveryRows = await queryAll(
+    "SELECT id, user_id, signal_id, pending_ticket, pending_valid_until, 'delivery' as src FROM auto_signal_deliveries WHERE pending_state = 'pending'"
   )
-  if (!pendingRows.length) return
+
+  const signalRows = await queryAll(
+    "SELECT id, user_id, id as signal_id, pending_ticket, pending_valid_until, 'signal' as src FROM ai_signals WHERE pending_state = 'pending'"
+  )
+
+  const allRows = [...deliveryRows, ...signalRows]
+  if (!allRows.length) return
 
   const byUser = {}
-  for (const row of pendingRows) {
+  for (const row of allRows) {
     if (!byUser[row.user_id]) byUser[row.user_id] = []
     byUser[row.user_id].push(row)
   }
@@ -1074,29 +1080,41 @@ export async function reconcilePendingOrders() {
 
     try {
       const [pendingResp, positionsResp] = await Promise.all([
-        mt5Bridge(userId, 'pending_list', {}, { noFallback: true }).catch(() => ({})),
-        mt5Bridge(userId, 'positions', {}, { noFallback: true }).catch(() => ({})),
+        mt5Bridge(userId, 'pending_list', {}, { noFallback: true }),
+        mt5Bridge(userId, 'positions', {}, { noFallback: true }),
       ])
-      const pendingSet = new Set((pendingResp?.orders || pendingResp?.pending_list || []).map(o => String(o.ticket)))
-      const positionSet = new Set((positionsResp?.positions || []).map(p => String(p.ticket)))
+
+      const pendingOrders = pendingResp?.orders ?? pendingResp?.pending_list
+      const positionList = positionsResp?.positions
+      if (!Array.isArray(pendingOrders) || !Array.isArray(positionList)) {
+        console.error(`[PendingReconciler] User ${userId}: invalid bridge response, skip this round`)
+        continue
+      }
+
+      const pendingSet = new Set(pendingOrders.map(o => String(o.ticket)))
+      const positionSet = new Set(positionList.map(p => String(p.ticket)))
 
       for (const row of rows) {
         const ticket = String(row.pending_ticket)
-        if (pendingSet.has(ticket)) continue // still pending
+        if (pendingSet.has(ticket)) continue
 
         if (positionSet.has(ticket)) {
-          // Filled
-          await queryRun(
-            "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
-            [ticket, row.id])
-          await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(() => {})
+          if (row.src === 'delivery') {
+            await queryRun(
+              "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
+              [ticket, row.id])
+            await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(() => {})
+          } else {
+            await queryRun(
+              "UPDATE ai_signals SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
+              [ticket, row.signal_id])
+          }
           await insertAudit(null, userId, 'pending_filled', null,
-            { signal_id: row.signal_id, ticket }, { status: 'filled', ticket }, 'success')
+            { signal_id: row.signal_id, ticket, src: row.src }, { status: 'filled', ticket }, 'success')
           sendToBrowsers(userId, { type: 'pending_filled', ticket, signal_id: row.signal_id })
           continue
         }
 
-        // Not in either set — check expiry
         const nowUtc = Date.now()
         let validUntilUtc = 0
         if (row.pending_valid_until) {
@@ -1105,13 +1123,21 @@ export async function reconcilePendingOrders() {
         }
 
         if (validUntilUtc > 0 && nowUtc > validUntilUtc) {
-          await queryRun("UPDATE auto_signal_deliveries SET pending_state = 'expired' WHERE id = ?", [row.id])
+          if (row.src === 'delivery') {
+            await queryRun("UPDATE auto_signal_deliveries SET pending_state = 'expired' WHERE id = ?", [row.id])
+          } else {
+            await queryRun("UPDATE ai_signals SET pending_state = 'expired' WHERE id = ?", [row.signal_id])
+          }
           await insertAudit(null, userId, 'pending_expired', null,
-            { signal_id: row.signal_id, ticket }, { status: 'expired' }, 'info')
+            { signal_id: row.signal_id, ticket, src: row.src }, { status: 'expired' }, 'info')
         } else {
-          await queryRun("UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE id = ?", [row.id])
+          if (row.src === 'delivery') {
+            await queryRun("UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE id = ?", [row.id])
+          } else {
+            await queryRun("UPDATE ai_signals SET pending_state = 'cancelled' WHERE id = ?", [row.signal_id])
+          }
           await insertAudit(null, userId, 'pending_cancelled', null,
-            { signal_id: row.signal_id, ticket }, { status: 'cancelled' }, 'warning')
+            { signal_id: row.signal_id, ticket, src: row.src }, { status: 'cancelled' }, 'warning')
         }
       }
     } catch (err) {

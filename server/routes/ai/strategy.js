@@ -149,31 +149,22 @@ export async function handleAnalyze(userId, params) {
         return { status: 'success', signal, market }
       }
 
-      const execResult = await (async () => {
-        const isPendingOrder = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
-        if (isPendingOrder) {
-          const pendingTypeMap = {
-            'limit': orderPayload.order_type === 'buy' ? 'buy_limit' : 'sell_limit',
-            'stop': orderPayload.order_type === 'buy' ? 'buy_stop' : 'sell_stop',
-            'stop_limit': orderPayload.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
-          }
-          const pendingType = pendingTypeMap[orderPayload.entry_method] || orderPayload.entry_method
-          let expiration = 0
-          if (orderPayload.pending_valid_until) {
-            const expDate = new Date(orderPayload.pending_valid_until.replace(' ', 'T') + 'Z')
-            if (!isNaN(expDate.getTime())) expiration = Math.floor(expDate.getTime() / 1000) + 10800
-          }
-          if (!expiration) { const nowMt5 = Math.floor(Date.now() / 1000) + 10800; expiration = nowMt5 + 240 * 60 }
-          return mt5Bridge(userId, 'pending', { symbol: orderPayload.symbol, order_type: pendingType, price: orderPayload.limit_price, volume: orderPayload.volume, sl: orderPayload.sl, tp: orderPayload.tp, expiration })
-        }
-        return mt5Bridge(userId, 'open', orderPayload)
-      })()
+      const { bridgeAction, bridgeParams } = buildBridgeOrderCall(orderPayload)
+      const execResult = await mt5Bridge(userId, bridgeAction, bridgeAction === 'pending' ? bridgeParams : orderPayload)
       if (execResult && execResult.status === 'success') {
-        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
-          [beijingNow(), execResult.ticket || null, signal.id])
-        signal.is_executed = true
-        signal.executed_at = beijingNow()
-        signal.trade_ticket = execResult.ticket || null
+        const isPending = bridgeAction === 'pending'
+        const ticket = execResult.order || execResult.ticket || null
+        if (isPending) {
+          await queryRun('UPDATE ai_signals SET pending_ticket = ?, pending_state = ? WHERE id = ?',
+            [String(ticket), 'pending', signal.id])
+          signal.pending_ticket = String(ticket)
+        } else {
+          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
+            [beijingNow(), ticket, signal.id])
+          signal.is_executed = true
+          signal.executed_at = beijingNow()
+          signal.trade_ticket = ticket
+        }
         signal.auto_executed = true
       }
       await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto' }, execResult, execResult?.status || 'error')

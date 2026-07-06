@@ -92,7 +92,7 @@ router.post('/register', async (req, res) => {
       if (!verifyToken) return res.json({ ok: false, error: '请先完成手机验证' })
 
       const tokenRecord = await queryOne(
-        'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+        'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
         [phone.replace(/^\+86/, ''), phone, verifyToken, 'register']
       )
       if (!tokenRecord) return res.json({ ok: false, error: '手机验证已过期，请重新验证' })
@@ -126,7 +126,7 @@ router.post('/register', async (req, res) => {
         if (referrer) await queryRun('INSERT INTO referrals (referrer_id, referred_id, status) VALUES (?, ?, ?)', [referrer.id, result.insertId, 'pending'])
       }
 
-      await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+      await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
       await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
       await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', '已为您赠送 1 个月 Pro 会员体验，尽享全部课程和 AI 全自动交易！'])
 
@@ -215,11 +215,11 @@ router.post('/login', async (req, res) => {
       if (!verifyToken) return res.json({ ok: false, error: '请先完成验证' })
       const tokenRecord = phone
         ? await queryOne(
-            'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+            'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
             [phone.replace(/^\+86/, ''), phone, verifyToken, 'login']
           )
         : await queryOne(
-            'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+            'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
             [email, verifyToken, 'login']
           )
       if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
@@ -237,6 +237,10 @@ router.post('/login', async (req, res) => {
     safeUser.createdAt = user.created_at || ''
     safeUser.authMethod = user.auth_method || 'email'
     safeUser.telegramBinding = getTelegramBinding(user)
+
+    if (method === 'code' && tokenRecord) {
+      await queryRun('UPDATE verification_codes SET token_used = 1 WHERE id = ?', [tokenRecord.id])
+    }
 
     logAudit({ userId: user.id, action: 'login', ip: req.ip, userAgent: req.get('user-agent') })
 
@@ -410,11 +414,11 @@ router.post('/reset-password', async (req, res) => {
     if (verifyToken) {
       const tokenRecord = targetPhone
         ? await queryOne(
-            'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+            'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
             [targetPhone.replace(/^\+86/, ''), targetPhone, verifyToken, 'reset']
           )
         : await queryOne(
-            'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+            'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
             [targetEmail, verifyToken, 'reset']
           )
       if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
@@ -425,7 +429,7 @@ router.post('/reset-password', async (req, res) => {
       } else {
         await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, targetEmail])
       }
-      await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+      await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
       return res.json({ ok: true, message: '密码已重置' })
     }
 
@@ -473,10 +477,11 @@ router.post('/change-password', authMiddleware, async (req, res) => {
       return res.json({ ok: false, error: '请提供原密码或验证码' })
     } else {
       const tokenRecord = await queryOne(
-        'SELECT id FROM verification_codes WHERE (email = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+        'SELECT id FROM verification_codes WHERE (email = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
         [req.user.email, req.user.phone, verifyToken, 'change']
       )
       if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
+      await queryRun('UPDATE verification_codes SET token_used = 1 WHERE id = ?', [tokenRecord.id])
     }
 
     const hash = await bcrypt.hash(newPassword, 10)
@@ -503,13 +508,13 @@ router.post('/change-email', authMiddleware, async (req, res) => {
     if (existing) return res.json({ ok: false, error: '该邮箱已被其他账号使用' })
 
     const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+      'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
       [newEmail, verifyToken, 'change_email']
     )
     if (!tokenRecord) return res.json({ ok: false, error: '邮箱验证码无效或已过期' })
 
     await queryRun("UPDATE users SET email = ?, email_verified = 1, updated_at = NOW() WHERE id = ?", [newEmail, req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
 
     res.json({ ok: true, message: '邮箱已更换' })
   } catch (err) {
@@ -533,13 +538,13 @@ router.post('/change-phone', authMiddleware, async (req, res) => {
     if (existing) return res.json({ ok: false, error: '该手机号已被其他账号使用' })
 
     const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
       [dbPhone, newPhone, verifyToken, 'change_phone']
     )
     if (!tokenRecord) return res.json({ ok: false, error: '手机验证码无效或已过期' })
 
     await queryRun("UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?", [dbPhone, req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
 
     res.json({ ok: true, message: '手机号已更换' })
   } catch (err) {
@@ -634,7 +639,7 @@ router.post('/bind-phone', authMiddleware, async (req, res) => {
     if (!phone || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
 
     const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
       [phone.replace(/^\+86/, ''), phone, verifyToken, 'bind']
     )
     if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
@@ -643,7 +648,7 @@ router.post('/bind-phone', authMiddleware, async (req, res) => {
     if (existing) return res.json({ ok: false, error: '该手机号已被其他账号绑定' })
 
     await queryRun("UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?", [phone.replace(/^\+86/, ''), req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
 
     res.json({ ok: true, message: '手机绑定成功' })
   } catch (err) {
@@ -658,7 +663,7 @@ router.post('/bind-email', authMiddleware, async (req, res) => {
     if (!email || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
 
     const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW()',
+      'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
       [email, verifyToken, 'bind']
     )
     if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
@@ -667,7 +672,7 @@ router.post('/bind-email', authMiddleware, async (req, res) => {
     if (existing) return res.json({ ok: false, error: '该邮箱已被其他账号绑定' })
 
     await queryRun("UPDATE users SET email = ?, email_verified = 1, updated_at = NOW() WHERE id = ?", [email, req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [tokenRecord.id])
+    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
 
     res.json({ ok: true, message: '邮箱绑定成功' })
   } catch (err) {

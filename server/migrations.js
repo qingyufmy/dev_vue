@@ -545,6 +545,38 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '028_ai_signals_pending_state',
+    up: async () => {
+      try {
+        const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = 'pending_state'")
+        if (!existing || existing.length === 0) {
+          await queryRun("ALTER TABLE ai_signals ADD COLUMN pending_state VARCHAR(12) DEFAULT NULL")
+          console.log('[Migrations] 028 added ai_signals.pending_state')
+        }
+      } catch (e) {
+        if (!e.message?.includes('Duplicate column')) {
+          console.error('[Migrations] 028 failed:', e.message)
+        }
+      }
+    }
+  },
+  {
+    id: '029_verification_token_used',
+    up: async () => {
+      try {
+        const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'verification_codes' AND COLUMN_NAME = 'token_used'")
+        if (!existing || existing.length === 0) {
+          await queryRun("ALTER TABLE verification_codes ADD COLUMN token_used TINYINT DEFAULT 0")
+          console.log('[Migrations] 029 added verification_codes.token_used')
+        }
+      } catch (e) {
+        if (!e.message?.includes('Duplicate column')) {
+          console.error('[Migrations] 029 failed:', e.message)
+        }
+      }
+    }
   }
 ]
 
