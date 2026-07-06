@@ -229,7 +229,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
       orderNo,
       orderId,
       crypto_chain,
-      address,
+      crypto_address: address,
       crypto_amount: usdtAmount,
       usd_amount: (finalAmount / 100).toFixed(2),
       expires_at: expiresAt,

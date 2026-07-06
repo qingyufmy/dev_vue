@@ -172,7 +172,7 @@ describe('payment.js — POST /payment', () => {
     expect(json.orderNo).toBeDefined()
     expect(json.orderId).toBeDefined()
     expect(json.crypto_chain).toBe('TRON')
-    expect(json.address).toBe('TTestAddress12345678901234567890')
+    expect(json.crypto_address).toBe('TTestAddress12345678901234567890')
     expect(json.crypto_amount).toBeGreaterThan(0)
     expect(json.expires_at).toBeDefined()
     expect(json.qr_code).toBeDefined()
