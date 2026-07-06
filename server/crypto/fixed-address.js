@@ -38,7 +38,7 @@ export async function generateUniqueAmount(baseAmount, orderId, plan, period) {
   const baseNum = parseFloat(amountStr)
   const intPart = Math.floor(baseNum)
 
-  const whereClause = `crypto_amount IS NOT NULL AND status = 'pending' AND crypto_amount >= ? AND crypto_amount < ?`
+  let whereClause = `crypto_amount IS NOT NULL AND status = 'pending' AND crypto_amount >= ? AND crypto_amount < ?`
   const params = [intPart, intPart + 1]
 
   if (plan && period) {
