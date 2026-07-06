@@ -476,6 +476,75 @@ const migrations = [
         await queryRun("INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?)", ['changelog', 'content', '', '更新日志内容（HTML）'])
       }
     }
+  },
+  {
+    id: '027_add_usdt_payment_fields',
+    up: async () => {
+      // 1. Add crypto columns to orders table
+      const orderCols = [
+        { name: 'crypto_chain', def: "ADD COLUMN crypto_chain VARCHAR(10) DEFAULT NULL" },
+        { name: 'crypto_address', def: "ADD COLUMN crypto_address VARCHAR(100) DEFAULT NULL" },
+        { name: 'crypto_amount', def: "ADD COLUMN crypto_amount DECIMAL(20,8) DEFAULT NULL" },
+        { name: 'crypto_tx_hash', def: "ADD COLUMN crypto_tx_hash VARCHAR(100) DEFAULT NULL" },
+        { name: 'crypto_confirmations', def: "ADD COLUMN crypto_confirmations INT DEFAULT 0" },
+        { name: 'crypto_expires_at', def: "ADD COLUMN crypto_expires_at DATETIME DEFAULT NULL" },
+      ]
+      for (const col of orderCols) {
+        try {
+          const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = ?", [col.name])
+          if (!existing || existing.length === 0) {
+            await queryRun(`ALTER TABLE orders ${col.def}`)
+          }
+        } catch (e) {
+          if (!e.message?.includes('Duplicate column')) {
+            console.error(`[Migrations] 027 orders.${col.name} failed:`, e.message)
+          }
+        }
+      }
+
+      // 2. Create crypto_watch_list table
+      try {
+        await queryRun(`CREATE TABLE IF NOT EXISTS crypto_watch_list (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          order_id VARCHAR(36) NOT NULL,
+          user_id INT NOT NULL,
+          chain VARCHAR(10) NOT NULL,
+          address VARCHAR(100) NOT NULL,
+          expected_amount DECIMAL(20,8) NOT NULL,
+          status VARCHAR(20) DEFAULT 'pending',
+          tx_hash VARCHAR(100) DEFAULT NULL,
+          confirmations INT DEFAULT 0,
+          required_confirmations INT DEFAULT 19,
+          wallet_index INT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          expires_at DATETIME NOT NULL,
+          INDEX idx_watch_status (status),
+          INDEX idx_watch_address (chain, address),
+          INDEX idx_watch_expires (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      } catch (e) {
+        if (!e.message?.includes('Duplicate')) {
+          console.error('[Migrations] 027 crypto_watch_list failed:', e.message)
+        }
+      }
+
+      // 3. Create wallet_keys table
+      try {
+        await queryRun(`CREATE TABLE IF NOT EXISTS wallet_keys (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          chain VARCHAR(10) NOT NULL,
+          address_index INT NOT NULL,
+          address VARCHAR(100) NOT NULL,
+          created_at DATETIME DEFAULT (NOW()),
+          UNIQUE KEY uk_wallet_chain_index (chain, address_index),
+          UNIQUE KEY uk_wallet_chain_address (chain, address)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      } catch (e) {
+        if (!e.message?.includes('Duplicate')) {
+          console.error('[Migrations] 027 wallet_keys failed:', e.message)
+        }
+      }
+    }
   }
 ]
 
