@@ -1,0 +1,107 @@
+import { BaseChainAdapter } from './base.js'
+import { deriveAddress as walletDeriveAddress } from '../wallet.js'
+
+class SolAdapter extends BaseChainAdapter {
+  name = 'SOL'
+  chainId = 'sol'
+
+  _deriveRaw(index) {
+    const address = walletDeriveAddress('SOL', index)
+    return { address, publicKey: '' }
+  }
+
+  getApiBaseUrl() {
+    return 'https://api.mainnet-beta.solana.com'
+  }
+
+  getRequiredConfirmations() {
+    return 32
+  }
+
+  async getTransaction(txHash) {
+    try {
+      const resp = await fetch(this.getApiBaseUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getTransaction',
+          params: [txHash, { encoding: 'jsonParsed' }],
+        }),
+      })
+      if (!resp.ok) return null
+      const data = await resp.json()
+      const result = data.result
+      if (!result || !result.transaction) return null
+
+      const meta = result.meta || {}
+      if (meta.err) return null
+
+      const accounts = result.transaction.message?.accountKeys || []
+      const from = accounts[0] || ''
+      const to = accounts[1] || ''
+      const blockTime = result.blockTime || 0
+
+      return {
+        hash: txHash,
+        from,
+        to,
+        value: 0,
+        blockNumber: blockTime,
+        confirmations: 0,
+        status: 'success',
+      }
+    } catch {
+      return null
+    }
+  }
+
+  async getConfirmations(txHash) {
+    try {
+      const tx = await this.getTransaction(txHash)
+      if (!tx || !tx.blockNumber) return 0
+
+      const slotResp = await fetch(this.getApiBaseUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getSlot',
+        }),
+      })
+      if (!slotResp.ok) return 0
+      const slotData = await slotResp.json()
+      const currentSlot = slotData.result || 0
+
+      const txSlotResp = await fetch(this.getApiBaseUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getTransaction',
+          params: [txHash, { encoding: 'jsonParsed' }],
+        }),
+      })
+      if (!txSlotResp.ok) return 0
+      const txSlotData = await txSlotResp.json()
+      const txSlot = txSlotData.result?.slot || 0
+
+      return Math.max(0, currentSlot - txSlot)
+    } catch {
+      return 0
+    }
+  }
+
+  buildTransferEventFilter(watchedAddresses) {
+    return {
+      chain: 'SOL',
+      topic: 'Transfer',
+      addresses: watchedAddresses,
+    }
+  }
+}
+
+export const solAdapter = new SolAdapter()
