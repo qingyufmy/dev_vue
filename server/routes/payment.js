@@ -24,11 +24,26 @@ async function getPlans() {
     )
     if (rows.length === 0) return DEFAULT_PLANS
 
-    const plans = { ...DEFAULT_PLANS }
+    const plans = JSON.parse(JSON.stringify(DEFAULT_PLANS))
     for (const row of rows) {
-      const [plan, period] = row.key.split('_')
-      if (plans[plan] && period) {
-        plans[plan][period] = parseInt(row.value) || plans[plan][period]
+      const key = row.key
+      const val = parseInt(row.value) || 0
+      if (val <= 0) continue
+
+      if (key.endsWith('_original')) {
+        const parts = key.replace('_original', '').split('_')
+        const planName = parts[0]
+        const period = parts[1]
+        if (plans[planName]) {
+          plans[planName][`${period}_original`] = val
+        }
+      } else {
+        const parts = key.split('_')
+        const planName = parts[0]
+        const period = parts[1]
+        if (plans[planName] && period) {
+          plans[planName][period] = val
+        }
       }
     }
     return plans
@@ -61,6 +76,24 @@ async function getPaymentMode() {
   )
   return row?.value || 'dynamic'
 }
+
+router.get('/plans', async (req, res) => {
+  try {
+    const plans = await getPlans()
+    const result = {}
+    for (const [name, info] of Object.entries(plans)) {
+      if (name === 'free' || name === 'premium') continue
+      result[name] = {
+        name: info.name,
+        month: { current: info.month, original: info.month_original || null },
+        year: { current: info.year, original: info.year_original || null },
+      }
+    }
+    res.json({ ok: true, plans: result })
+  } catch (err) {
+    res.json({ ok: false, error: err.message })
+  }
+})
 
 router.get('/payment/mode', async (req, res) => {
   try {
@@ -217,7 +250,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
       if (!address) {
         return res.json({ ok: false, error: '固定地址未配置，请在管理后台设置' })
       }
-      usdtAmount = await generateUniqueAmount(baseUsdtAmount, orderId)
+      usdtAmount = await generateUniqueAmount(baseUsdtAmount, orderId, plan, periodKey)
       mode = 'fixed'
     } else {
       const index = await getAddressCount(chainKey)

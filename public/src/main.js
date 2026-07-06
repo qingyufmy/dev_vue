@@ -3688,7 +3688,8 @@ function renderAdminConfigSection() {
         <button class="btn btn-ghost btn-xs" id="adminConfigRefresh">刷新</button>
       </div>
       <div class="admin-board-tabs admin-config-subtabs" role="tablist" aria-label="系统配置板块">
-        <button class="admin-board-tab active" type="button" data-config-tab="smtp">发件邮箱</button>
+        <button class="admin-board-tab active" type="button" data-config-tab="plan_prices">套餐配置</button>
+        <button class="admin-board-tab" type="button" data-config-tab="smtp">发件邮箱</button>
         <button class="admin-board-tab" type="button" data-config-tab="qiniu">七牛云存储</button>
         <button class="admin-board-tab" type="button" data-config-tab="toolbox">金融工具箱</button>
         <button class="admin-board-tab" type="button" data-config-tab="market_menu">股票研究菜单</button>
@@ -3735,6 +3736,9 @@ function renderAdminConfigContent() {
   if (!container) return
 
   switch (adminConfigSubTab) {
+    case 'plan_prices':
+      renderPlanPricesConfig(container)
+      break
     case 'smtp':
       renderSmtpConfig(container)
       break
@@ -3757,6 +3761,99 @@ function renderAdminConfigContent() {
       renderCryptoWalletConfig(container)
       break
   }
+}
+
+function renderPlanPricesConfig(container) {
+  const items = adminConfigData.plan_prices || []
+  const getVal = (key) => items.find(i => i.key === key)?.value || ''
+
+  const plans = [
+    { id: 'plus', name: 'Plus', desc: '新视频即时解锁 + 图解 + 测验' },
+    { id: 'pro', name: 'Pro', desc: '全部权限 + AI信号 + 全自动交易' },
+  ]
+  const periods = [
+    { id: 'month', name: '月付' },
+    { id: 'year', name: '年付' },
+  ]
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <h3 style="margin-bottom:16px;">套餐价格配置</h3>
+      <p style="font-size:13px; color:var(--text-3); margin-bottom:20px;">设置各套餐的原价和现价（单位：美分），前端自动计算折扣显示。</p>
+
+      ${plans.map(plan => `
+        <div style="margin-bottom:24px; padding:16px; background:var(--glass-light); border-radius:12px;">
+          <h4 style="margin-bottom:12px;">${plan.name} - ${plan.desc}</h4>
+          ${periods.map(period => `
+            <div style="display:flex; gap:12px; margin-bottom:8px; align-items:center;">
+              <span style="width:50px; font-size:13px;">${period.name}</span>
+              <div style="flex:1;">
+                <label style="font-size:11px; color:var(--text-3);">原价（美分）</label>
+                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="original" value="${escapeHtml(getVal(`${plan.id}_${period.id}_original`))}" placeholder="如 5800 = $58">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px; color:var(--text-3);">现价（美分）</label>
+                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="current" value="${escapeHtml(getVal(`${plan.id}_${period.id}`))}" placeholder="如 5000 = $50">
+              </div>
+              <div class="plan-discount-preview" data-plan="${plan.id}" data-period="${period.id}" style="min-width:60px; text-align:center;"></div>
+            </div>
+          `).join('')}
+        </div>
+      `).join('')}
+
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="savePlanPrices">保存套餐配置</button>
+      </div>
+    </div>
+  `
+
+  function updateDiscountPreviews() {
+    container.querySelectorAll('.plan-discount-preview').forEach(el => {
+      const plan = el.dataset.plan
+      const period = el.dataset.period
+      const original = parseInt(container.querySelector(`[data-plan="${plan}"][data-period="${period}"][data-type="original"]`)?.value) || 0
+      const current = parseInt(container.querySelector(`[data-plan="${plan}"][data-period="${period}"][data-type="current"]`)?.value) || 0
+      if (original > 0 && current > 0 && current < original) {
+        const discount = Math.round((1 - current / original) * 100)
+        el.innerHTML = `<span style="color:var(--accent); font-weight:600;">-${discount}%</span>`
+      } else {
+        el.innerHTML = ''
+      }
+    })
+  }
+
+  container.querySelectorAll('.plan-price-input').forEach(input => {
+    input.addEventListener('input', updateDiscountPreviews)
+  })
+  updateDiscountPreviews()
+
+  document.getElementById('savePlanPrices')?.addEventListener('click', async () => {
+    const items = []
+    container.querySelectorAll('.plan-price-input').forEach(input => {
+      const { plan, period, type } = input.dataset
+      const value = input.value.trim()
+      if (value) {
+        const key = type === 'original' ? `${plan}_${period}_original` : `${plan}_${period}`
+        const label = type === 'original'
+          ? `${plan === 'plus' ? 'Plus' : 'Pro'} ${period === 'month' ? '月付' : '年付'} 原价`
+          : `${plan === 'plus' ? 'Plus' : 'Pro'} ${period === 'month' ? '月付' : '年付'} 现价`
+        items.push({ key, value, label, sort_order: 0 })
+      }
+    })
+
+    if (items.length === 0) {
+      showToast('请至少设置一个价格', 'error')
+      return
+    }
+
+    const res = await api.put('/api/system-config/plan_prices', { items })
+    if (res.ok) {
+      showToast('套餐配置已保存', 'success')
+      loadAdminConfig()
+    } else {
+      showToast(res.error || '保存失败', 'error')
+    }
+  })
 }
 
 function renderSmtpConfig(container) {
