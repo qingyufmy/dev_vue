@@ -9916,8 +9916,9 @@ function setupGlobalEvents() {
       const btn = target.closest('.mem-btn-plus, .mem-btn-pro')
       if (!state.user) { showAuthModal('login_password'); return }
       const plan = btn.dataset.plan
-      const forceYearly = btn.dataset.forceYearly === '1'
-      const period = forceYearly ? 'yearly' : 'monthly'
+      const card = btn.closest('.mem-card')
+      const activeTab = card?.querySelector('.price-tab.active')
+      const period = activeTab?.dataset.period || 'monthly'
       initiateCryptoPayment(plan, period)
       return
     }// Membership price toggle (月付/年付)
