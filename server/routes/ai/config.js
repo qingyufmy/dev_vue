@@ -462,17 +462,17 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   const symBase = sym.replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '')
   // LIKE is a pre-filter to reduce candidate rows; final matching is done by JS JSON.parse below.
   const rows = await queryAll(
-    `SELECT s.user_id, s.symbols, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
+    `SELECT s.user_id, apt.symbols_json, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
             u.plan, u.role
      FROM auto_scheduler s
+     JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
      JOIN users u ON u.id = s.user_id
-     WHERE s.prompt_type_id = ? AND s.enabled = 1 AND u.plan = 'pro'
-       AND (s.symbols LIKE ? OR s.symbols LIKE ?)`,
-    [promptTypeId, `%"${sym}"%`, `%${sym}%`]
+     WHERE s.prompt_type_id = ? AND s.enabled = 1 AND u.plan = 'pro'`,
+    [promptTypeId]
   )
   const filtered = rows.filter(r => {
     let userSymbols = []
-    try { userSymbols = JSON.parse(r.symbols || '[]') } catch {}
+    try { userSymbols = JSON.parse(r.symbols_json || '[]') } catch {}
     return userSymbols.some(s => {
       const sNorm = String(s).toUpperCase().trim()
       return sNorm === sym || sNorm.replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '') === symBase

@@ -103,8 +103,9 @@ export async function rebuildRedisSubscriptions() {
 
     // Query all enabled users from DB
     const rows = await queryAll(`
-      SELECT s.user_id, s.prompt_type_id, s.symbols
+      SELECT s.user_id, s.prompt_type_id, apt.symbols_json
       FROM auto_scheduler s
+      JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
       JOIN users u ON u.id = s.user_id
       WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL AND u.plan = 'pro'
     `)
@@ -115,7 +116,7 @@ export async function rebuildRedisSubscriptions() {
       if (!isBridgeAlive(row.user_id)) continue
 
       let userSymbols = []
-      try { userSymbols = JSON.parse(row.symbols || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse user symbols:', e.message) }
+      try { userSymbols = JSON.parse(row.symbols_json || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse user symbols:', e.message) }
       if (userSymbols.length === 0) continue
 
       const userKey = `${REDIS_USER_PREFIX}${row.user_id}${REDIS_USER_SUFFIX}`
@@ -432,7 +433,7 @@ export async function reconcileAutoSchedulers() {
     const rows = await queryAll(`
       SELECT
         s.prompt_type_id,
-        s.symbols AS user_symbols,
+        apt.symbols_json,
         apt.symbols_json,
         apt.interval_minutes
       FROM auto_scheduler s
