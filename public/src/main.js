@@ -111,7 +111,7 @@ function formatMinorUsd(dollars) {
 
 function planLabel(plan, expiresAt) {
   if (!plan || plan === 'free') return '<span class="admin-badge badge-free">免费</span>'
-  const label = plan === 'pro' ? 'Pro 专业版' : 'Plus 进阶版'
+  const label = plan === 'pro' ? 'Pro' : 'Plus'
   const expStr = expiresAt instanceof Date ? expiresAt.toISOString().substring(0, 10) : String(expiresAt || '').substring(0, 10)
   const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
   if (expired) return `<span class="admin-badge badge-expired">${label} (已过期)</span>`
@@ -5739,14 +5739,20 @@ async function renderMembership() {
   const currentPlan = getEffectivePlan()
   const currentPeriod = currentPlan === 'free' ? null : state.user?.planPeriod || null
 
-  let planPrices = { plus: { month: { current: 5000, original: 10000 }, year: { current: 50000, original: 100000 } }, pro: { month: { current: 10000, original: 20000 }, year: { current: 100000, original: 200000 } } }
+  let planPrices = { plus: { month: { current: 50, original: 100 }, year: { current: 500, original: 1000 } }, pro: { month: { current: 100, original: 200 }, year: { current: 1000, original: 2000 } } }
   try {
     const res = await api.get('/api/plans')
     if (res.ok && res.plans) planPrices = res.plans
   } catch {}
 
   const fmt = (dollars) => '$' + Math.round(dollars)
-  const discount = (orig, cur) => orig > 0 && cur > 0 && cur < orig ? Math.round((1 - cur / orig) * 100) : 0
+  const discountPct = (orig, cur) => orig > 0 && cur > 0 && cur < orig ? Math.round((1 - cur / orig) * 100) : 0
+  const discountLabel = (orig, cur) => {
+    const pct = discountPct(orig, cur)
+    if (pct === 0) return ''
+    const zhe = Math.round(cur / orig * 10)
+    return zhe === 10 ? '' : `${zhe}折`
+  }
 
   const plusM = planPrices.plus?.month || { current: 50, original: 100 }
   const plusY = planPrices.plus?.year || { current: 500, original: 1000 }
@@ -5797,7 +5803,7 @@ async function renderMembership() {
         <div class="mem-card ${currentPlan === 'plus' ? 'mem-current' : ''}">
           <div class="mem-card-header mem-plus">
             <span class="mem-icon">⭐</span>
-            <h3 class="mem-plan-name">Plus 进阶版</h3>
+            <h3 class="mem-plan-name">Plus</h3>
             <p class="mem-plan-desc">系统学习技术分析</p>
           </div>
           <div class="mem-price-section">
@@ -5810,7 +5816,7 @@ async function renderMembership() {
               <span class="mem-price" data-monthly="${plusM.current}" data-yearly="${plusY.current}">${fmt(plusM.current)}</span>
               <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            ${discount(plusM.original, plusM.current) ? `<div class="mem-price-discount">限时 ${discount(plusM.original, plusM.current)} 折</div>` : ''}
+            ${discountLabel(plusM.original, plusM.current) ? `<div class="mem-price-discount">限时 ${discountLabel(plusM.original, plusM.current)}</div>` : ''}
             <div class="mem-price-save" style="display:none">年付立省 ${fmt(plusY.original - plusY.current)}，低至 ${fmt(plusY.current / 12)}/月</div>
           </div>
           <ul class="mem-features">
@@ -5834,7 +5840,7 @@ async function renderMembership() {
         <div class="mem-card ${currentPlan === 'pro' ? 'mem-current' : ''}">
           <div class="mem-card-header mem-pro">
             <span class="mem-icon">💎</span>
-            <h3 class="mem-plan-name">Pro 专业版</h3>
+            <h3 class="mem-plan-name">Pro</h3>
             <p class="mem-plan-desc">深度学习 · 交易进阶</p>
           </div>
           <div class="mem-price-section">
@@ -5847,7 +5853,7 @@ async function renderMembership() {
               <span class="mem-price" data-monthly="${proM.current}" data-yearly="${proY.current}">${fmt(proM.current)}</span>
               <span class="mem-price-unit" data-monthly="/月" data-yearly="/年">/ 月</span>
             </div>
-            ${discount(proM.original, proM.current) ? `<div class="mem-price-discount">限时 ${discount(proM.original, proM.current)} 折</div>` : ''}
+            ${discountLabel(proM.original, proM.current) ? `<div class="mem-price-discount">限时 ${discountLabel(proM.original, proM.current)}</div>` : ''}
             <div class="mem-price-save" style="display:none">年付立省 ${fmt(proY.original - proY.current)}，低至 ${fmt(proY.current / 12)}/月</div>
           </div>
           <ul class="mem-features">
@@ -6035,6 +6041,7 @@ function renderTos() {
 let _selectedCryptoChain = 'TRON'
 let _paymentPollingTimer = null
 let _paymentCountdownTimer = null
+let _isCreatingPayment = false
 
 const CRYPTO_CHAINS = [
   { id: 'TRON', name: 'TRC-20', full: 'Tron', icon: 'T', fee: '~1 USDT', color: '#ff0013', recommended: true, desc: '最常用，费用低' },
@@ -6045,6 +6052,7 @@ const CRYPTO_CHAINS = [
 
 function initiateCryptoPayment(plan, period) {
   if (document.getElementById('cryptoChainModal')) return
+  if (_isCreatingPayment) return
 
   _doInitiateCryptoPayment(plan, period)
 }
@@ -6150,6 +6158,8 @@ async function _doInitiateCryptoPayment(plan, period) {
 }
 
 async function _doCreateCryptoPayment(plan, period) {
+  if (_isCreatingPayment) return
+  _isCreatingPayment = true
   try {
     const res = await api.post('/api/payment', { plan, period, crypto_chain: _selectedCryptoChain })
     if (!res.ok) { showToast(res.error || '创建订单失败', 'error'); return }
@@ -6157,6 +6167,8 @@ async function _doCreateCryptoPayment(plan, period) {
     _showCryptoPaymentPage(res)
   } catch (err) {
     showToast('网络错误，请重试', 'error')
+  } finally {
+    _isCreatingPayment = false
   }
 }
 
@@ -6936,7 +6948,7 @@ function renderProfile() {
                     <div class="sub-plan-info">
                       <span class="sub-plan-icon">⭐</span>
                       <div>
-                        <div class="sub-plan-name">Plus 进阶版</div>
+                        <div class="sub-plan-name">Plus</div>
                         <div class="sub-plan-desc">新视频即时解锁 + 图解 + 测验</div>
                       </div>
                     </div>
@@ -6947,7 +6959,7 @@ function renderProfile() {
                     <div class="sub-plan-info">
                       <span class="sub-plan-icon">💎</span>
                       <div>
-                        <div class="sub-plan-name">Pro 专业版</div>
+                        <div class="sub-plan-name">Pro</div>
                         <div class="sub-plan-desc">全部权限 + AI信号</div>
                       </div>
                     </div>
@@ -7686,7 +7698,7 @@ async function loadBillingHistory(container, page = 1) {
       cancelled: { label: '已取消', cls: 'billing-expired' },
     }
 
-    const planNames = { plus: 'Plus 进阶版', pro: 'Pro 专业版' }
+        const planNames = { plus: 'Plus', pro: 'Pro' }
     const periodNames = { month: '月付', year: '年付', lifetime: '终身' }
 
     const total = data.orders.length
@@ -10224,7 +10236,7 @@ function setupGlobalEvents() {
           return
         }
 
-        const planNames = { plus: 'Plus 进阶版', pro: 'Pro 专业版' }
+    const planNames = { plus: 'Plus', pro: 'Pro' }
         const periodNames = { month: '月付', year: '年付', lifetime: '终身' }
         const ADMIN_ORDER_PAGE = 10
         let adminOrderPage = 1
