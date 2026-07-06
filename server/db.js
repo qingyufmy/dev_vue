@@ -141,6 +141,7 @@ export async function initDB() {
       referral_credit INT DEFAULT 0,
       referred_by VARCHAR(50),
       last_seen_at DATETIME,
+      changelog_seen_version INT DEFAULT 0,
       created_at DATETIME DEFAULT (NOW()),
       updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,

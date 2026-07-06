@@ -461,6 +461,21 @@ const migrations = [
       // Drop trades.dead columns already handled by migration 023, but ensure CREATE TABLE is consistent
       // (description, image_url, pnl removed from CREATE TABLE in db.js)
     }
+  },
+  {
+    id: '026_changelog_system',
+    up: async () => {
+      // Add changelog_seen_version to users table
+      try { await queryRun('ALTER TABLE users ADD COLUMN changelog_seen_version INT DEFAULT 0') } catch (e) {
+        if (!e.message?.includes('Duplicate column')) throw e
+      }
+      // Seed changelog data in system_config
+      const existing = await queryOne("SELECT id FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
+      if (!existing) {
+        await queryRun("INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?)", ['changelog', 'version', '1', '当前版本号'])
+        await queryRun("INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?)", ['changelog', 'content', '', '更新日志内容（HTML）'])
+      }
+    }
   }
 ]
 

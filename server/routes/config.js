@@ -22,6 +22,51 @@ router.get('/system-config-public/:category', async (req, res) => {
   }
 })
 
+// Public: get current changelog version + content
+router.get('/changelog/current', async (req, res) => {
+  try {
+    const versionRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
+    const contentRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'content'")
+    res.json({
+      ok: true,
+      version: parseInt(versionRow?.value || '1', 10),
+      content: contentRow?.value || ''
+    })
+  } catch (err) {
+    console.error('[Config] Changelog error:', err)
+    res.json({ ok: true, version: 1, content: '' })
+  }
+})
+
+// Admin: update changelog
+router.put('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
+  const { version, content } = req.body
+  if (version === undefined || version === null) {
+    return res.json({ ok: false, error: '版本号必填' })
+  }
+  try {
+    const verStr = String(parseInt(version, 10))
+    const existing = await queryOne("SELECT id FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
+    if (existing) {
+      await queryRun("UPDATE system_config SET `value` = ? WHERE category = 'changelog' AND `key` = 'version'", [verStr])
+    } else {
+      await queryRun("INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?)", ['changelog', 'version', verStr, '当前版本号'])
+    }
+    if (content !== undefined) {
+      const existingContent = await queryOne("SELECT id FROM system_config WHERE category = 'changelog' AND `key` = 'content'")
+      if (existingContent) {
+        await queryRun("UPDATE system_config SET `value` = ? WHERE category = 'changelog' AND `key` = 'content'", [content])
+      } else {
+        await queryRun("INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?)", ['changelog', 'content', content, '更新日志内容（HTML）'])
+      }
+    }
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[Config] Update changelog error:', err)
+    res.json({ ok: false, error: '更新失败' })
+  }
+})
+
 // Get all config (grouped by category)
 router.get('/system-config', authMiddleware, adminOnly, async (req, res) => {
   try {

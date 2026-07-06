@@ -711,10 +711,11 @@ async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  const body = (options.body && typeof options.body === 'object') ? JSON.stringify(options.body) : options.body;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
   try {
-    const response = await fetch(path, { ...options, headers, signal: controller.signal });
+    const response = await fetch(path, { ...options, body, headers, signal: controller.signal });
     clearTimeout(timeoutId);
     const text = await response.text();
     let data = {};
@@ -1357,6 +1358,7 @@ async function bootstrap() {
     state.isPlusReadOnly = plan === 'plus' && role !== 'admin';
     applyRoleUI();
     showApp(true);
+    checkChangelog();
     // Connect WebSocket FIRST — all data flows through it (with 10s timeout)
     await new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -4190,6 +4192,37 @@ document.addEventListener("DOMContentLoaded", () => {
   else showApp(false);
 });
 
+// --- Changelog Modal ---
+async function checkChangelog() {
+  console.log('[Changelog] checkChangelog called');
+  try {
+    const current = await api('/api/changelog/current');
+    console.log('[Changelog] current:', current);
+    const status = await api('/api/changelog-status');
+    console.log('[Changelog] status:', status);
+    if (current.ok && status.ok && current.version > (status.seenVersion || 0) && current.content) {
+      document.getElementById('changelogContent').innerHTML = current.content;
+      const modal = document.getElementById('changelogModal');
+      modal.style.display = 'flex';
+      modal.classList.add('active');
+      window._changelogVersion = current.version;
+      console.log('[Changelog] modal shown');
+    } else {
+      console.log('[Changelog] skipped');
+    }
+  } catch (e) { console.error('[Changelog] error:', e); }
+}
+
+function closeChangelogModal() {
+  const modal = document.getElementById('changelogModal');
+  modal.classList.remove('active');
+  setTimeout(() => { modal.style.display = 'none'; }, 300);
+  if (window._changelogVersion) {
+    api('/api/changelog-ack', { method: 'POST', body: { version: window._changelogVersion } }).catch(() => {});
+    window._changelogVersion = null;
+  }
+}
+
 // --- feedback logic ---
 let _feedbackSubmitting = false;
 
@@ -4365,7 +4398,8 @@ async function loadAdminDashboard(force) {
       wsApi('admin_user_list', { page: 1, pageSize: 10 })
     ]);
     if (dashResp.status !== 'success') throw new Error(dashResp.message || '加载失败');
-    renderAdminDashboard(container, dashResp.data, userListResp);
+    await renderAdminDashboard(container, dashResp.data, userListResp);
+    loadChangelogAdmin();
     _adminDashState.loaded = true;
     if (userListResp && userListResp.status === 'success') {
       _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
@@ -4630,6 +4664,22 @@ async function renderAdminDashboard(el, d, userListResp) {
     '</div>',
     '',
     '<div id="userDetailContainer"></div>',
+
+    '<hr class="dash-divider">',
+    '<div class="section-inline">',
+    '  <h3><i data-lucide="bell"></i>更新日志管理</h3>',
+    '</div>',
+    '<div id="changelogAdminSection" style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:20px">',
+    '  <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px">',
+    '    <label style="color:var(--text-muted);font-size:13px;white-space:nowrap">版本号</label>',
+    '    <input type="number" id="clVersionInput" min="1" style="width:80px;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--input-bg);color:var(--text-primary);font-size:14px">',
+    '  </div>',
+    '  <textarea id="clContentInput" rows="8" placeholder="更新日志内容（支持 HTML）&#10;例如：&#10;<b>v2.2.0</b> 更新内容：&#10;<ul><li>新增挂单系统</li><li>需更新桥接软件至 v2.2.0</li></ul>" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;background:var(--input-bg);color:var(--text-primary);font-size:13px;line-height:1.6;resize:vertical;font-family:inherit"></textarea>',
+    '  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">',
+    '    <span id="clSaveStatus" style="font-size:12px;color:var(--text-muted)"></span>',
+    '    <button onclick="saveChangelog()" style="padding:8px 20px;border:none;border-radius:6px;background:var(--gold-primary);color:#1a1a2e;cursor:pointer;font-weight:600;font-size:13px">保存</button>',
+    '  </div>',
+    '</div>',
   ].join('\n');
   initIcons();
 
@@ -4806,6 +4856,41 @@ async function renderAdminDashboard(el, d, userListResp) {
   // Initial render
   if (userListResp && userListResp.status === 'success') {
     renderUserList(userListResp);
+  }
+}
+
+// --- Changelog Admin ---
+async function loadChangelogAdmin() {
+  try {
+    const resp = await api('/api/changelog/current');
+    if (resp.ok) {
+      const verInput = document.getElementById('clVersionInput');
+      const contentInput = document.getElementById('clContentInput');
+      if (verInput) verInput.value = resp.version || 1;
+      if (contentInput) contentInput.value = resp.content || '';
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function saveChangelog() {
+  const verInput = document.getElementById('clVersionInput');
+  const contentInput = document.getElementById('clContentInput');
+  const statusEl = document.getElementById('clSaveStatus');
+  if (!verInput || !contentInput) return;
+  const version = parseInt(verInput.value, 10);
+  if (!version || version < 1) {
+    if (statusEl) { statusEl.textContent = '版本号无效'; statusEl.style.color = '#ef4444'; }
+    return;
+  }
+  try {
+    const resp = await api('/api/admin/changelog', { method: 'PUT', body: { version, content: contentInput.value } });
+    if (resp.ok) {
+      if (statusEl) { statusEl.textContent = '已保存'; statusEl.style.color = '#22c55e'; setTimeout(() => { statusEl.textContent = ''; }, 2000); }
+    } else {
+      if (statusEl) { statusEl.textContent = resp.error || '保存失败'; statusEl.style.color = '#ef4444'; }
+    }
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = '保存失败'; statusEl.style.color = '#ef4444'; }
   }
 }
 

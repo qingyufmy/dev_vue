@@ -273,4 +273,28 @@ router.post('/referrals/track', async (req, res) => {
   } catch (err) { res.json({ ok: false, error: '查询失败' }) }
 })
 
+// Get user's changelog seen version
+router.get('/changelog-status', authMiddleware, async (req, res) => {
+  try {
+    const user = await queryOne('SELECT changelog_seen_version FROM users WHERE id = ?', [req.user.id])
+    res.json({ ok: true, seenVersion: user?.changelog_seen_version || 0 })
+  } catch (err) {
+    res.json({ ok: true, seenVersion: 0 })
+  }
+})
+
+// Ack changelog (mark as seen)
+router.post('/changelog-ack', authMiddleware, async (req, res) => {
+  const { version } = req.body
+  if (version === undefined || version === null) {
+    return res.json({ ok: false, error: '版本号必填' })
+  }
+  try {
+    await queryRun('UPDATE users SET changelog_seen_version = ? WHERE id = ?', [parseInt(version, 10), req.user.id])
+    res.json({ ok: true })
+  } catch (err) {
+    res.json({ ok: false, error: '更新失败' })
+  }
+})
+
 export default router

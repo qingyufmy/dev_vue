@@ -542,16 +542,13 @@ async function handleBrowserCommand(ws, userId, msg) {
       return reply({ status: 'error', message: '升级会员即可使用 AI 推理' })
     }
 
-    // Pro/Plus users without own bridge: block trade operations (config/toggle allowed)
-    const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws.readyState === 1
+    // Block trade operations when bridge is offline or trading is disabled
     const tradeActions = ['open', 'close', 'execute']
-    if (!hasOwnBridge && tradeActions.includes(action)) {
-      return reply({ status: 'error', message: '请先连接您的 MT5 账户' })
-    }
-
-    // Block trade operations when trading is disabled
-    if (tradeActions.includes(action) && hasOwnBridge) {
+    if (tradeActions.includes(action)) {
       const bridge = bridges.get(userId)
+      if (!bridge || bridge.ws.readyState !== 1) {
+        return reply({ status: 'error', message: '请先连接您的 MT5 账户' })
+      }
       if (bridge.tradeEnabled === false) {
         return reply({ status: 'error', message: '交易发送已关闭，请先开启' })
       }
@@ -701,7 +698,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           const key = `quote_symbol_${userId}`
           const existing = await queryOne('SELECT id FROM system_config WHERE `key` = ?', [key])
           if (existing) await queryRun('UPDATE system_config SET `value` = ? WHERE `key` = ?', [symbol, key])
-          else await queryRun('INSERT INTO system_config (`key`, `value`) VALUES (?, ?)', [key, symbol])
+          else await queryRun('INSERT INTO system_config (category, `key`, `value`) VALUES (?, ?, ?)', ['quote_symbol', key, symbol])
         }
         break
       }

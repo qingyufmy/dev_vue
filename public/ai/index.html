@@ -1027,6 +1027,20 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260702a"></script>
+    <script src="/ai/app.js?v=20260706a"></script>
+
+    <!-- Changelog Modal -->
+    <div id="changelogModal" class="modal-overlay" style="display:none">
+      <div class="modal" style="max-width:560px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h2 style="margin:0;font-size:20px">更新日志</h2>
+          <button onclick="closeChangelogModal()" style="background:none;border:none;font-size:24px;cursor:pointer;color:var(--text-muted)">&times;</button>
+        </div>
+        <div id="changelogContent" style="max-height:60vh;overflow-y:auto;line-height:1.7;color:var(--text-secondary);font-size:14px"></div>
+        <div style="margin-top:20px;text-align:right">
+          <button onclick="closeChangelogModal()" style="padding:8px 24px;border:none;border-radius:6px;background:var(--gold-primary);color:#1a1a2e;cursor:pointer;font-weight:600;font-size:14px">我知道了</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
