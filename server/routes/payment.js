@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { queryOne, queryRun, withTransaction } from '../db.js'
-import { authMiddleware } from '../middleware/auth.js'
+import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { deriveAddress, getAddressCount, saveAddress, getRequiredConfirmations } from '../crypto/wallet.js'
 import { adapters } from '../crypto/chains/index.js'
 import { generatePaymentQR } from '../crypto/qr.js'
@@ -265,6 +265,40 @@ router.get('/payment/status/:orderId', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('[Payment] 查询订单失败:', err)
     res.json({ ok: false, error: '查询订单失败' })
+  }
+})
+
+router.get('/admin/crypto/sweep/balances', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { getDerivedAddressesBalance } = await import('../crypto/sweep.js')
+    const balances = await getDerivedAddressesBalance()
+    const mainAddress = await import('../crypto/wallet.js').then(m => m.getMainAddress())
+    res.json({ ok: true, mainAddress, balances })
+  } catch (err) {
+    console.error('[Sweep] 查询余额失败:', err.message)
+    res.json({ ok: false, error: '查询余额失败: ' + err.message })
+  }
+})
+
+router.post('/admin/crypto/sweep', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { sweepAll } = await import('../crypto/sweep.js')
+    const result = await sweepAll()
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    console.error('[Sweep] 归集失败:', err.message)
+    res.json({ ok: false, error: '归集失败: ' + err.message })
+  }
+})
+
+router.post('/admin/crypto/sweep/:index', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { sweepAddress } = await import('../crypto/sweep.js')
+    const result = await sweepAddress(parseInt(req.params.index))
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    console.error('[Sweep] 单地址归集失败:', err.message)
+    res.json({ ok: false, error: '归集失败: ' + err.message })
   }
 })
 

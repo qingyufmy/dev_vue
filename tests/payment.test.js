@@ -12,6 +12,7 @@ vi.mock('../server/db.js', () => ({
 
 vi.mock('../server/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, res, next) => next()),
+  adminOnly: vi.fn((req, res, next) => next()),
 }))
 
 vi.mock('../server/crypto/wallet.js', () => ({

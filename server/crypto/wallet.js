@@ -88,6 +88,15 @@ function deriveChildKey(chain, index) {
   return master.derive(path)
 }
 
+export function derivePrivateKey(chain, index) {
+  const childKey = deriveChildKey(chain, index)
+  return Buffer.from(childKey.privateKey).toString('hex')
+}
+
+export async function getMainAddress() {
+  return deriveAddress('TRON', 0)
+}
+
 function ethAddressFromPrivateKey(privKey) {
   const pubKey = privateToPublic(privKey)
   const addrBytes = publicToAddress(pubKey)

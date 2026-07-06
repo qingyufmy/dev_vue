@@ -4297,7 +4297,91 @@ function renderCryptoWalletConfig(container) {
         </ul>
       </div>
     </div>
+
+    <div class="admin-config-form" style="margin-top:24px; border-top: 1px solid var(--glass-border); padding-top: 24px;">
+      <h3 style="margin-bottom:16px;">💰 资金归集 (TRC-20)</h3>
+      <p style="font-size:13px; color:var(--text-3); margin-bottom:16px;">将所有派生地址的 USDT 归集到主地址。每次转账消耗约 1-2 USDT 的 Energy/Bandwidth。</p>
+      <div id="sweepBalances">
+        <button class="btn btn-sm" id="loadSweepBalances">查询余额</button>
+      </div>
+      <div id="sweepResult" style="margin-top:12px;"></div>
+    </div>
   `
+
+  document.getElementById('loadSweepBalances')?.addEventListener('click', async () => {
+    const el = document.getElementById('sweepBalances')
+    el.innerHTML = '<span style="color:var(--text-3)">查询中...</span>'
+    try {
+      const res = await api.get('/api/admin/crypto/sweep/balances')
+      if (!res.ok) { el.innerHTML = `<span style="color:red">${escapeHtml(res.error)}</span>`; return }
+
+      let html = `<p style="font-size:12px; color:var(--text-3); margin-bottom:8px;">主地址: ${escapeHtml(res.mainAddress)}</p>`
+      html += '<table style="width:100%; font-size:13px; border-collapse:collapse;">'
+      html += '<tr style="border-bottom:1px solid var(--glass-border);"><th style="text-align:left; padding:8px 0;">索引</th><th style="text-align:left; padding:8px 0;">地址</th><th style="text-align:right; padding:8px 0;">USDT</th><th style="text-align:right; padding:8px 0;">TRX</th><th style="text-align:right; padding:8px 0;">操作</th></tr>'
+
+      for (const item of res.balances) {
+        if (item.usdtBalance <= 0 && item.trxBalance <= 0) continue
+        html += `<tr style="border-bottom:1px solid var(--glass-border);">`
+        html += `<td style="padding:8px 0;">${item.index}</td>`
+        html += `<td style="padding:8px 0; font-family:monospace; font-size:11px;">${escapeHtml(item.address.slice(0, 8))}...${escapeHtml(item.address.slice(-6))}</td>`
+        html += `<td style="padding:8px 0; text-align:right;">${item.usdtBalance}</td>`
+        html += `<td style="padding:8px 0; text-align:right;">${item.trxBalance}</td>`
+        html += `<td style="padding:8px 0; text-align:right;">${item.canSweep ? `<button class="btn btn-sm btn-primary sweep-btn" data-index="${item.index}">归集</button>` : '<span style="color:var(--text-3)">-</span>'}</td>`
+        html += '</tr>'
+      }
+      html += '</table>'
+
+      if (res.balances.filter(b => b.canSweep).length > 0) {
+        html += `<button class="btn btn-primary" id="sweepAllBtn" style="margin-top:12px;">一键归集到主地址</button>`
+      }
+
+      el.innerHTML = html
+
+      el.querySelectorAll('.sweep-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true
+          btn.textContent = '处理中...'
+          const idx = btn.dataset.index
+          try {
+            const result = await api.post(`/api/admin/crypto/sweep/${idx}`)
+            const resultEl = document.getElementById('sweepResult')
+            if (result.ok) {
+              resultEl.innerHTML = `<div style="padding:12px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:8px; font-size:13px;">✓ 归集成功<br>TxHash: <code>${escapeHtml(result.txHash)}</code><br>金额: ${result.amount} USDT</div>`
+            } else {
+              resultEl.innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ ${escapeHtml(result.error)}</div>`
+            }
+          } catch (err) {
+            document.getElementById('sweepResult').innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ 网络错误</div>`
+          }
+          document.getElementById('loadSweepBalances')?.click()
+        })
+      })
+
+      document.getElementById('sweepAllBtn')?.addEventListener('click', async () => {
+        if (!confirm('确认将所有地址的 USDT 归集到主地址？')) return
+        const resultEl = document.getElementById('sweepResult')
+        resultEl.innerHTML = '<span style="color:var(--text-3)">归集中，请稍候...</span>'
+        try {
+          const result = await api.post('/api/admin/crypto/sweep')
+          if (result.ok) {
+            let html = `<div style="padding:12px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:8px; font-size:13px;">✓ 归集完成<br>总金额: ${result.totalSwept} USDT<br>`
+            for (const r of result.results) {
+              html += `<div style="margin-top:4px;">地址${r.index}: ${r.success ? `✓ ${r.amount} USDT` : `✗ ${r.error}`}</div>`
+            }
+            html += '</div>'
+            resultEl.innerHTML = html
+          } else {
+            resultEl.innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ ${escapeHtml(result.error)}</div>`
+          }
+        } catch (err) {
+          resultEl.innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ 网络错误</div>`
+        }
+        document.getElementById('loadSweepBalances')?.click()
+      })
+    } catch (err) {
+      el.innerHTML = `<span style="color:red">查询失败</span>`
+    }
+  })
 
   document.getElementById('saveCryptoWallet')?.addEventListener('click', async () => {
     const items = [
