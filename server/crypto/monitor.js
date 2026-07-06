@@ -105,27 +105,32 @@ function calculatePlanExpiry(period) {
 async function checkExpiry() {
   try {
     const now = beijingNow()
-    const expiredRows = await queryAll(
+
+    const expiredWatches = await queryAll(
       `SELECT order_id FROM crypto_watch_list WHERE status IN ('pending', 'confirming') AND expires_at < ?`,
       [now]
     )
 
-    if (expiredRows.length === 0) return
+    if (expiredWatches.length > 0) {
+      const ids = expiredWatches.map(r => r.order_id)
+      const ph = ids.map(() => '?').join(',')
+      await queryRun(`UPDATE crypto_watch_list SET status = 'expired' WHERE order_id IN (${ph})`, ids)
+      await queryRun(`UPDATE orders SET status = 'expired', status_label = '已过期' WHERE order_id IN (${ph}) AND status = 'pending'`, ids)
+      console.log(`[Monitor] Expired ${ids.length} orders via watch_list`)
+    }
 
-    const orderIds = expiredRows.map(r => r.order_id)
-    const placeholders = orderIds.map(() => '?').join(',')
-
-    await queryRun(
-      `UPDATE crypto_watch_list SET status = 'expired' WHERE order_id IN (${placeholders})`,
-      orderIds
+    const expiredOrders = await queryAll(
+      `SELECT order_id FROM orders WHERE status = 'pending' AND crypto_expires_at IS NOT NULL AND crypto_expires_at < ?`,
+      [now]
     )
 
-    await queryRun(
-      `UPDATE orders SET status = 'expired', status_label = '已过期' WHERE order_id IN (${placeholders}) AND status = 'pending'`,
-      orderIds
-    )
-
-    console.log(`[Monitor] Expired ${orderIds.length} orders`)
+    if (expiredOrders.length > 0) {
+      const ids = expiredOrders.map(r => r.order_id)
+      const ph = ids.map(() => '?').join(',')
+      await queryRun(`UPDATE orders SET status = 'expired', status_label = '已过期' WHERE order_id IN (${ph}) AND status = 'pending'`, ids)
+      await queryRun(`UPDATE crypto_watch_list SET status = 'expired' WHERE order_id IN (${ph})`, ids).catch(() => {})
+      console.log(`[Monitor] Expired ${ids.length} orders via orders table`)
+    }
   } catch (err) {
     console.error('[Monitor] Expiry check error:', err.message)
   }
