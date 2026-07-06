@@ -6262,7 +6262,9 @@ function _showCryptoPaymentPage(order) {
     }
   })
 
-  _startPaymentCountdown(30 * 60)
+  const expiresAt = order.expires_at ? new Date(order.expires_at.replace(' ', 'T') + '+08:00') : null
+  const remainingSeconds = expiresAt ? Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000)) : 30 * 60
+  _startPaymentCountdown(remainingSeconds)
   _startPaymentPolling(order.orderId, confs)
 }
 
