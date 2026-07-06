@@ -94,7 +94,7 @@ function calculatePlanExpiry(period) {
   const now = new Date(Date.now() + 8 * 3600_000)
   if (period === 'lifetime') {
     return '2099-12-31 23:59:59'
-  } else if (period === 'yearly') {
+  } else if (period === 'year') {
     now.setFullYear(now.getFullYear() + 1)
   } else {
     now.setMonth(now.getMonth() + 1)

@@ -240,29 +240,31 @@ router.post('/payment', authMiddleware, async (req, res) => {
         }
       })
 
-      try {
-        const referral = await queryOne(
-          "SELECT r.id, r.referrer_id, r.status FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
-          [req.user.id]
-        )
-        if (referral) {
-          const rule = await queryOne(
-            'SELECT rate_bps FROM referral_rules WHERE plan = ? AND period = ? AND enabled = 1',
-            [plan, periodKey]
+      if (finalAmount > 0) {
+        try {
+          const referral = await queryOne(
+            "SELECT r.id, r.referrer_id, r.status FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
+            [req.user.id]
           )
-          const rateBps = rule ? rule.rate_bps : 1000
-          const commissionDollars = finalAmount * rateBps / 10000
-          await queryRun(
-            'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
-            [finalAmount, commissionDollars, planInfo.name, referral.id]
-          )
-          await queryRun(
-            'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
-            [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${finalAmount.toFixed(2)}，返佣 $${commissionDollars.toFixed(2)} 待审核确认`]
-          )
+          if (referral) {
+            const rule = await queryOne(
+              'SELECT rate_bps FROM referral_rules WHERE plan = ? AND period = ? AND enabled = 1',
+              [plan, periodKey]
+            )
+            const rateBps = rule ? rule.rate_bps : 1000
+            const commissionDollars = finalAmount * rateBps / 10000
+            await queryRun(
+              'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
+              [finalAmount, commissionDollars, planInfo.name, referral.id]
+            )
+            await queryRun(
+              'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
+              [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${finalAmount.toFixed(2)}，返佣 $${commissionDollars.toFixed(2)} 待审核确认`]
+            )
+          }
+        } catch (refErr) {
+          console.error('[Payment] Referral commission error:', refErr.message)
         }
-      } catch (refErr) {
-        console.error('[Payment] Referral commission error:', refErr.message)
       }
 
       return res.json({ ok: true, paid_with_credit: true, orderNo })
@@ -271,8 +273,8 @@ router.post('/payment', authMiddleware, async (req, res) => {
     const requiredConfirmations = getRequiredConfirmations(chainKey)
     const rate = await getUsdtUsdRate()
     const baseUsdtAmount = finalAmount / rate
-    const expiresAtMs = Date.now() + 30 * 60 * 1000 + 8 * 3600_000
-    const expiresAt = new Date(expiresAtMs).toISOString().replace('T', ' ').substring(0, 19)
+    const expiresAtDate = new Date(Date.now() + 30 * 60 * 1000 + 8 * 3600_000)
+    const expiresAt = `${expiresAtDate.getUTCFullYear()}-${String(expiresAtDate.getUTCMonth()+1).padStart(2,'0')}-${String(expiresAtDate.getUTCDate()).padStart(2,'0')} ${String(expiresAtDate.getUTCHours()).padStart(2,'0')}:${String(expiresAtDate.getUTCMinutes()).padStart(2,'0')}:${String(expiresAtDate.getUTCSeconds()).padStart(2,'0')}`
 
     const paymentMode = await getPaymentMode()
     let address, usdtAmount, mode

@@ -6290,20 +6290,19 @@ function _startPaymentPolling(orderId, requiredConfs) {
   _paymentPollingTimer = setInterval(async () => {
     try {
       const res = await api.get(`/api/payment/status/${orderId}`)
-      if (res.ok && res.order) {
-        const o = res.order
+      if (res.ok) {
         const confEl = document.getElementById('cryptoConfirmations')
         const statusEl = document.getElementById('cryptoPaymentStatus')
         const dotEl = document.getElementById('cryptoStatusDot')
-        if (confEl) confEl.textContent = o.confirmations || 0
-        if (statusEl) statusEl.textContent = o.status_label || o.status || '等待支付...'
-        if (dotEl) dotEl.className = 'crypto-status-dot ' + (o.status === 'paid' ? 'success' : o.status === 'expired' ? 'error' : 'pending')
-        if (o.status === 'paid') {
+        if (confEl) confEl.textContent = res.confirmations || 0
+        if (statusEl) statusEl.textContent = res.statusLabel || res.status || '等待支付...'
+        if (dotEl) dotEl.className = 'crypto-status-dot ' + (res.status === 'paid' ? 'success' : res.status === 'expired' ? 'error' : 'pending')
+        if (res.status === 'paid') {
           _stopAllPaymentTimers()
           showToast('支付成功！会员已激活', 'success')
           document.getElementById('cryptoPaymentModal')?.remove()
           setTimeout(() => location.reload(), 1500)
-        } else if (o.status === 'expired') {
+        } else if (res.status === 'expired') {
           _stopAllPaymentTimers()
           showToast('订单已过期，请重新下单', 'error')
           document.getElementById('cryptoPaymentModal')?.remove()
