@@ -2,6 +2,10 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { queryOne, queryRun, withTransaction } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { deriveAddress, getAddressCount, saveAddress, getRequiredConfirmations } from '../crypto/wallet.js'
+import { adapters } from '../crypto/chains/index.js'
+import { generatePaymentQR } from '../crypto/qr.js'
+import { addWatchAddress } from '../crypto/monitor.js'
 
 const router = Router()
 
@@ -13,6 +17,17 @@ const PLANS = {
 }
 
 const PERIOD_LABELS = { month: '月付', year: '年付', lifetime: '终身' }
+
+const SUPPORTED_CHAINS = ['ETH', 'BSC', 'TRON', 'SOL']
+
+async function getUsdtUsdRate() {
+  try {
+    const resp = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=USDTUSD')
+    const data = await resp.json()
+    if (data?.price) return parseFloat(data.price)
+  } catch {}
+  return 1.0
+}
 
 router.get('/payment', authMiddleware, async (req, res) => {
   try {
@@ -64,19 +79,21 @@ router.get('/payment', authMiddleware, async (req, res) => {
 })
 
 router.post('/payment', authMiddleware, async (req, res) => {
-  // ⚠️ 支付功能尚未对接真实支付网关，暂时禁用，防止绕过支付免费获取会员
-  return res.status(503).json({ ok: false, error: '支付功能暂时维护中，请联系客服' })
-
-  // eslint-disable-next-line no-unreachable
   try {
-    const { plan, period, use_referral_credit } = req.body
+    const { plan, period, use_referral_credit, crypto_chain } = req.body
     const planInfo = PLANS[plan]
     if (!planInfo) return res.json({ ok: false, error: '未知套餐' })
 
     const periodKey = period === 'yearly' ? 'year' : period
     const amount = planInfo[periodKey] || planInfo.month
 
-    // Calculate credits
+    if (!crypto_chain || !SUPPORTED_CHAINS.includes(crypto_chain)) {
+      return res.json({ ok: false, error: '不支持的支付链' })
+    }
+    if (!adapters[crypto_chain]) {
+      return res.json({ ok: false, error: '支付链适配器未就绪' })
+    }
+
     let credit = 0
     const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
     if (user?.plan && user.plan !== 'free' && user.plan_expires_at) {
@@ -96,25 +113,78 @@ router.post('/payment', authMiddleware, async (req, res) => {
     const orderNo = `WSS${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`
     const orderId = uuidv4()
 
-    // Use transaction for order creation + user update (atomicity)
+    if (finalAmount === 0) {
+      await withTransaction(async (run) => {
+        await run(`
+          INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, paid_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'credit', NOW())
+        `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
+
+        const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
+        await run("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
+
+        if (referralCredit > 0) {
+          await run("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
+        }
+      })
+
+      try {
+        const referral = await queryOne(
+          "SELECT r.id, r.referrer_id, r.status FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
+          [req.user.id]
+        )
+        if (referral) {
+          const rule = await queryOne(
+            'SELECT rate_bps FROM referral_rules WHERE plan = ? AND period = ? AND enabled = 1',
+            [plan, periodKey]
+          )
+          const rateBps = rule ? rule.rate_bps : 1000
+          const commissionCents = Math.round(finalAmount * rateBps / 10000)
+          await queryRun(
+            'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
+            [finalAmount, commissionCents, planInfo.name, referral.id]
+          )
+          await queryRun(
+            'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
+            [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${(finalAmount/100).toFixed(2)}，返佣 $${(commissionCents/100).toFixed(2)} 待审核确认`]
+          )
+        }
+      } catch (refErr) {
+        console.error('[Payment] Referral commission error:', refErr.message)
+      }
+
+      return res.json({ ok: true, paid_with_credit: true, orderNo })
+    }
+
+    const index = await getAddressCount(crypto_chain)
+    const address = deriveAddress(crypto_chain, index)
+    await saveAddress(crypto_chain, index, address)
+    const requiredConfirmations = getRequiredConfirmations(crypto_chain)
+
+    const rate = await getUsdtUsdRate()
+    const usdtAmount = parseFloat((finalAmount / 100 / rate).toFixed(2))
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
+
     await withTransaction(async (run) => {
-      // Create order
       await run(`
-        INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, paid_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'local', NOW())
-      `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
+        INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, crypto_chain, crypto_address, crypto_amount, crypto_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', '待支付', 'crypto', ?, ?, ?, ?)
+      `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, crypto_chain, address, usdtAmount, expiresAt])
 
-      // Update user plan
-      const expiresAt = periodKey === 'lifetime' ? '2099-12-31' : new Date(Date.now() + (periodKey === 'year' ? 365 : 30) * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
-      await run("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
-
-      // Deduct referral credit if used
       if (referralCredit > 0) {
         await run("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
       }
     })
 
-    // Calculate referral commission: find pending referral for this user, update with actual order amount
+    await addWatchAddress({
+      orderId,
+      userId: req.user.id,
+      chain: crypto_chain,
+      address,
+      expectedAmount: usdtAmount,
+      expiresAt,
+    })
+
     try {
       const referral = await queryOne(
         "SELECT r.id, r.referrer_id, r.status FROM referrals r WHERE r.referred_id = ? AND r.status = 'pending' ORDER BY r.created_at DESC LIMIT 1",
@@ -131,25 +201,51 @@ router.post('/payment', authMiddleware, async (req, res) => {
           'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
           [finalAmount, commissionCents, planInfo.name, referral.id]
         )
-        // Notify referrer
         await queryRun(
           'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
           [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${(finalAmount/100).toFixed(2)}，返佣 $${(commissionCents/100).toFixed(2)} 待审核确认`]
         )
       }
     } catch (refErr) {
-      console.error('Referral commission error:', refErr.message)
+      console.error('[Payment] Referral commission error:', refErr.message)
     }
 
-    // If paid fully with credit
-    if (finalAmount === 0 && (credit > 0 || referralCredit > 0)) {
-      return res.json({ ok: true, paid_with_credit: true, orderNo })
+    let qrCode = null
+    try {
+      qrCode = await generatePaymentQR(crypto_chain, address, usdtAmount)
+    } catch (qrErr) {
+      console.error('[Payment] QR generation error:', qrErr.message)
     }
 
-    res.json({ ok: true, orderNo, checkout_url: `/?payment=success` })
+    res.json({
+      ok: true,
+      orderNo,
+      orderId,
+      crypto_chain,
+      address,
+      crypto_amount: usdtAmount,
+      usd_amount: (finalAmount / 100).toFixed(2),
+      expires_at: expiresAt,
+      required_confirmations: requiredConfirmations,
+      qr_code: qrCode,
+    })
   } catch (err) {
-    console.error('Payment error:', err)
+    console.error('[Payment] 创建订单失败:', err)
     res.json({ ok: false, error: '创建订单失败' })
+  }
+})
+
+router.get('/payment/status/:orderId', authMiddleware, async (req, res) => {
+  try {
+    const order = await queryOne(
+      'SELECT order_id, order_no, plan, period, amount, status, status_label, crypto_chain, crypto_address, crypto_amount, crypto_expires_at, paid_at FROM orders WHERE order_id = ? AND user_id = ?',
+      [req.params.orderId, req.user.id]
+    )
+    if (!order) return res.json({ ok: false, error: '订单不存在' })
+    res.json({ ok: true, order })
+  } catch (err) {
+    console.error('[Payment] 查询订单失败:', err)
+    res.json({ ok: false, error: '查询订单失败' })
   }
 })
 

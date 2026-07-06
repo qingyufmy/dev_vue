@@ -1,16 +1,43 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const mockQueryOne = vi.fn()
+const mockQueryRun = vi.fn()
+const mockWithTransaction = vi.fn()
+
 vi.mock('../server/db.js', () => ({
-  queryOne: vi.fn(),
-  queryRun: vi.fn(),
-  withTransaction: vi.fn(),
+  get queryOne() { return mockQueryOne },
+  get queryRun() { return mockQueryRun },
+  get withTransaction() { return mockWithTransaction },
 }))
 
 vi.mock('../server/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, res, next) => next()),
 }))
 
-import { queryOne } from '../server/db.js'
+vi.mock('../server/crypto/wallet.js', () => ({
+  deriveAddress: vi.fn(() => 'TTestAddress12345678901234567890'),
+  getAddressCount: vi.fn(() => 0),
+  saveAddress: vi.fn(),
+  getRequiredConfirmations: vi.fn(() => 19),
+}))
+
+vi.mock('../server/crypto/chains/index.js', () => ({
+  adapters: { ETH: {}, BSC: {}, TRON: {}, SOL: {} },
+}))
+
+vi.mock('../server/crypto/qr.js', () => ({
+  generatePaymentQR: vi.fn(() => Promise.resolve('data:image/png;base64,abc')),
+}))
+
+vi.mock('../server/crypto/monitor.js', () => ({
+  addWatchAddress: vi.fn(() => Promise.resolve(1)),
+}))
+
+const mockFetch = vi.fn(() => Promise.resolve({
+  json: () => Promise.resolve({ price: '1.00' })
+}))
+vi.stubGlobal('fetch', mockFetch)
+
 import paymentRouter from '../server/routes/payment.js'
 
 function callRoute(method, path, body = {}, user = { id: 1 }) {
@@ -22,7 +49,22 @@ function callRoute(method, path, body = {}, user = { id: 1 }) {
       status: (code) => { statusCode = code; return res },
       json: (data) => { jsonData = data; resolve({ json: jsonData, status: statusCode }) },
     }
-    const layer = paymentRouter.stack.find(l => l.route && l.route.path === path && l.route.methods[method])
+    const layer = paymentRouter.stack.find(l => {
+      if (!l.route || !l.route.methods[method]) return false
+      const routePath = l.route.path
+      if (routePath === path) return true
+      const routeParts = routePath.split('/')
+      const pathParts = path.split('/')
+      if (routeParts.length !== pathParts.length) return false
+      for (let i = 0; i < routeParts.length; i++) {
+        if (routeParts[i].startsWith(':')) {
+          req.params[routeParts[i].slice(1)] = pathParts[i]
+        } else if (routeParts[i] !== pathParts[i]) {
+          return false
+        }
+      }
+      return true
+    })
     if (!layer) { resolve({ json: null, status: 404 }); return }
     layer.handle(req, res, (err) => {
       if (err) resolve({ json: { error: err.message }, status: 500 })
@@ -31,7 +73,12 @@ function callRoute(method, path, body = {}, user = { id: 1 }) {
 }
 
 describe('payment.js — GET /payment preview', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    mockQueryOne.mockReset()
+    mockQueryRun.mockReset()
+    mockWithTransaction.mockReset()
+    mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
+  })
 
   it('缺少 preview 参数返回错误', async () => {
     const { json } = await callRoute('get', '/payment', { plan: 'pro', period: 'month' })
@@ -44,7 +91,7 @@ describe('payment.js — GET /payment preview', () => {
   })
 
   it('free 套餐价格为 0', async () => {
-    queryOne.mockResolvedValueOnce({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('get', '/payment', { preview: '1', plan: 'free', period: 'month' })
     expect(json.ok).toBe(true)
     expect(json.fullPrice).toBe('0.00')
@@ -52,7 +99,7 @@ describe('payment.js — GET /payment preview', () => {
   })
 
   it('pro 月付正确计算价格', async () => {
-    queryOne.mockResolvedValueOnce({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('get', '/payment', { preview: '1', plan: 'pro', period: 'month' })
     expect(json.ok).toBe(true)
     expect(json.fullPrice).toBe('100.00')
@@ -60,7 +107,7 @@ describe('payment.js — GET /payment preview', () => {
   })
 
   it('年付正确计算价格', async () => {
-    queryOne.mockResolvedValueOnce({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('get', '/payment', { preview: '1', plan: 'pro', period: 'yearly' })
     expect(json.ok).toBe(true)
     expect(json.fullPrice).toBe('1000.00')
@@ -68,7 +115,7 @@ describe('payment.js — GET /payment preview', () => {
   })
 
   it('使用推荐积分抵扣', async () => {
-    queryOne.mockResolvedValueOnce({ plan: 'free', plan_expires_at: null, referral_credit: 500 })
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 500 })
     const { json } = await callRoute('get', '/payment', {
       preview: '1', plan: 'plus', period: 'month', use_referral_credit: '1'
     })
@@ -78,10 +125,84 @@ describe('payment.js — GET /payment preview', () => {
 })
 
 describe('payment.js — POST /payment', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    mockQueryOne.mockReset()
+    mockQueryRun.mockReset()
+    mockWithTransaction.mockReset()
+    mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
+  })
 
-  it('支付功能暂时禁用返回 503', async () => {
-    const { status } = await callRoute('post', '/payment', { plan: 'pro', period: 'month' })
-    expect(status).toBe(503)
+  it('未知套餐返回错误', async () => {
+    const { json } = await callRoute('post', '/payment', { plan: 'invalid', period: 'month', crypto_chain: 'TRON' })
+    expect(json).toMatchObject({ ok: false, error: '未知套餐' })
+  })
+
+  it('缺少 crypto_chain 返回错误', async () => {
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    const { json } = await callRoute('post', '/payment', { plan: 'pro', period: 'month' })
+    expect(json).toMatchObject({ ok: false, error: '不支持的支付链' })
+  })
+
+  it('不支持的链返回错误', async () => {
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    const { json } = await callRoute('post', '/payment', { plan: 'pro', period: 'month', crypto_chain: 'BTC' })
+    expect(json).toMatchObject({ ok: false, error: '不支持的支付链' })
+  })
+
+  it('全额积分抵扣直接支付成功', async () => {
+    const userObj = { plan: 'free', plan_expires_at: null, referral_credit: 2900 }
+    mockQueryOne.mockImplementation((sql) => {
+      if (sql.includes('referrals')) return Promise.resolve(null)
+      return Promise.resolve(userObj)
+    })
+    const { json } = await callRoute('post', '/payment', {
+      plan: 'plus', period: 'month', crypto_chain: 'TRON', use_referral_credit: 1
+    })
+    expect(json.ok).toBe(true)
+    expect(json.paid_with_credit).toBe(true)
+    expect(json.orderNo).toBeDefined()
+  })
+
+  it('创建加密订单返回支付信息', async () => {
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
+    const { json } = await callRoute('post', '/payment', {
+      plan: 'pro', period: 'month', crypto_chain: 'TRON'
+    })
+    expect(json.ok).toBe(true)
+    expect(json.orderNo).toBeDefined()
+    expect(json.orderId).toBeDefined()
+    expect(json.crypto_chain).toBe('TRON')
+    expect(json.address).toBe('TTestAddress12345678901234567890')
+    expect(json.crypto_amount).toBeGreaterThan(0)
+    expect(json.expires_at).toBeDefined()
+    expect(json.qr_code).toBeDefined()
+  })
+})
+
+describe('payment.js — GET /payment/status/:orderId', () => {
+  beforeEach(() => {
+    mockQueryOne.mockReset()
+    mockQueryRun.mockReset()
+    mockWithTransaction.mockReset()
+    mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
+  })
+
+  it('查询存在的订单', async () => {
+    mockQueryOne.mockResolvedValue({
+      order_id: 'abc-123', order_no: 'WSS123', plan: 'pro', period: 'month',
+      amount: 10000, status: 'pending', status_label: '待支付',
+      crypto_chain: 'TRON', crypto_address: 'TAddr', crypto_amount: 100,
+      crypto_expires_at: '2026-01-01 00:30:00', paid_at: null
+    })
+    const { json } = await callRoute('get', '/payment/status/abc-123', {}, { id: 1 })
+    expect(json.ok).toBe(true)
+    expect(json.order.order_id).toBe('abc-123')
+    expect(json.order.status).toBe('pending')
+  })
+
+  it('订单不存在返回错误', async () => {
+    mockQueryOne.mockResolvedValue(null)
+    const { json } = await callRoute('get', '/payment/status/not-found', {}, { id: 1 })
+    expect(json).toMatchObject({ ok: false, error: '订单不存在' })
   })
 })
