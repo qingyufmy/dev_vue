@@ -5028,9 +5028,8 @@ function _startPaymentPolling(orderId, requiredConfs) {
   _cryptoPayment.pollingTimer = setInterval(async () => {
     try {
       const result = await api(`/api/payment/status/${orderId}`);
-      if (!result.ok || !result.order) return;
-      const order = result.order;
-      if (order.status === 'paid') {
+      if (!result.ok) return;
+      if (result.status === 'paid') {
         _stopPaymentPolling();
         _stopPaymentCountdown();
         const statusEl = $('cryptoPaymentStatus');
@@ -5039,17 +5038,17 @@ function _startPaymentPolling(orderId, requiredConfs) {
         setTimeout(() => { $('cryptoPaymentModal')?.classList.add('hidden'); location.reload(); }, 2000);
         return;
       }
-      if (order.status === 'expired') {
+      if (result.status === 'expired') {
         _stopPaymentPolling();
         _stopPaymentCountdown();
         toast('支付订单已过期', 'warning');
         return;
       }
-      if (order.status === 'confirming' || (order.amount_confirmed && order.amount_confirmed > 0)) {
+      if (result.status === 'confirming') {
         const confirmInfo = $('cryptoPaymentConfirmInfo');
         const confsEl = $('cryptoPaymentConfs');
         if (confirmInfo) confirmInfo.style.display = 'block';
-        if (confsEl) confsEl.textContent = String(order.amount_confirmed || 0);
+        if (confsEl) confsEl.textContent = String(result.confirmations || 0);
         const statusEl = $('cryptoPaymentStatus');
         if (statusEl) statusEl.innerHTML = '<span class="crypto-payment-status-dot confirming"></span><span>已检测到转账，确认中...</span>';
       }
@@ -5080,7 +5079,7 @@ function _cryptoPaymentDone() {
   const orderId = _cryptoPayment.currentOrderId;
   if (!orderId) return;
   api(`/api/payment/status/${orderId}`).then(result => {
-    if (result.ok && result.order?.status === 'paid') {
+    if (result.ok && result.status === 'paid') {
       toast('支付成功！会员已升级', 'success');
       setTimeout(() => location.reload(), 1500);
     } else {

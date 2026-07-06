@@ -144,8 +144,8 @@ describe('getRequiredConfirmations', () => {
     expect(getRequiredConfirmations('ETH')).toBe(12)
   })
 
-  it('returns 12 for BSC', () => {
-    expect(getRequiredConfirmations('BSC')).toBe(12)
+  it('returns 15 for BSC', () => {
+    expect(getRequiredConfirmations('BSC')).toBe(15)
   })
 
   it('returns 19 for TRON', () => {

@@ -7,7 +7,7 @@ import { queryOne, queryRun } from '../db.js'
 
 const CHAIN_CONFIG = {
   ETH:  { path: "m/44'/60'/0'/0/{index}", coinType: 60, confirmations: 12 },
-  BSC:  { path: "m/44'/60'/0'/0/{index}", coinType: 60, confirmations: 12 },
+  BSC:  { path: "m/44'/60'/0'/0/{index}", coinType: 60, confirmations: 15 },
   TRON: { path: "m/44'/195'/0'/0/{index}", coinType: 195, confirmations: 19 },
   SOL:  { path: "m/44'/501'/0'/{index}'", coinType: 501, confirmations: 32 },
 }
