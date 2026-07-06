@@ -6040,7 +6040,6 @@ function renderTos() {
 let _selectedCryptoChain = 'TRON'
 let _paymentPollingTimer = null
 let _paymentCountdownTimer = null
-let _isCreatingPayment = false
 
 const CRYPTO_CHAINS = [
   { id: 'TRON', name: 'TRC-20', full: 'Tron', icon: 'T', fee: '~1 USDT', color: '#ff0013', recommended: true, desc: '最常用，费用低' },
@@ -6051,8 +6050,6 @@ const CRYPTO_CHAINS = [
 
 function initiateCryptoPayment(plan, period) {
   if (document.getElementById('cryptoChainModal')) return
-  if (_isCreatingPayment) return
-  _isCreatingPayment = true
 
   _doInitiateCryptoPayment(plan, period)
 }
@@ -6070,7 +6067,6 @@ async function _doInitiateCryptoPayment(plan, period) {
 
   if (availableChains.length === 0) {
     showToast('支付链未配置，请联系管理员', 'error')
-    _isCreatingPayment = false
     return
   }
 
@@ -6116,7 +6112,7 @@ async function _doInitiateCryptoPayment(plan, period) {
   `
   document.body.appendChild(overlay)
 
-  const closeOverlay = () => { _isCreatingPayment = false; overlay.remove() }
+  const closeOverlay = () => overlay.remove()
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay || e.target.id === 'cryptoChainClose') closeOverlay()
   })
@@ -6161,12 +6157,11 @@ async function _doInitiateCryptoPayment(plan, period) {
 async function _doCreateCryptoPayment(plan, period) {
   try {
     const res = await api.post('/api/payment', { plan, period, crypto_chain: _selectedCryptoChain })
-    if (!res.ok) { showToast(res.error || '创建订单失败', 'error'); _isCreatingPayment = false; return }
-    if (res.paid_with_credit) { showToast('支付成功！', 'success'); _isCreatingPayment = false; return }
+    if (!res.ok) { showToast(res.error || '创建订单失败', 'error'); return }
+    if (res.paid_with_credit) { showToast('支付成功！', 'success'); return }
     _showCryptoPaymentPage(res)
   } catch (err) {
     showToast('网络错误，请重试', 'error')
-    _isCreatingPayment = false
   }
 }
 
