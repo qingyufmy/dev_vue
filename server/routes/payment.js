@@ -119,7 +119,8 @@ router.get('/payment', authMiddleware, async (req, res) => {
     if (!planInfo) return res.json({ ok: false, error: '未知套餐' })
 
     const periodKey = period === 'yearly' ? 'year' : period
-    const amount = planInfo[periodKey] || planInfo.month
+    const priceObj = planInfo[periodKey] || planInfo.month
+    const amount = typeof priceObj === 'object' ? priceObj.current : priceObj
 
     let credit = 0
     const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
@@ -165,7 +166,8 @@ router.post('/payment', authMiddleware, async (req, res) => {
     if (!planInfo) return res.json({ ok: false, error: '未知套餐' })
 
     const periodKey = period === 'yearly' ? 'year' : period
-    const amount = planInfo[periodKey] || planInfo.month
+    const priceObj = planInfo[periodKey] || planInfo.month
+    const amount = typeof priceObj === 'object' ? priceObj.current : priceObj
 
     if (!crypto_chain || !SUPPORTED_CHAINS.includes(crypto_chain)) {
       return res.json({ ok: false, error: '不支持的支付链' })
