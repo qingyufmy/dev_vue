@@ -104,14 +104,14 @@ function sanitizeRichHtml(html) {
   return out
 }
 
-function formatMinorUsd(cents) {
-  const value = Number(cents || 0)
-  return `$${(Math.max(0, value) / 100).toFixed(2)}`
+function formatMinorUsd(dollars) {
+  const value = Number(dollars || 0)
+  return `$${Math.max(0, value).toFixed(2)}`
 }
 
 function planLabel(plan, expiresAt) {
   if (!plan || plan === 'free') return '<span class="admin-badge badge-free">免费</span>'
-  const label = plan === 'pro' ? 'PRO' : 'Plus'
+  const label = plan === 'pro' ? 'Pro 专业版' : 'Plus 进阶版'
   const expStr = expiresAt instanceof Date ? expiresAt.toISOString().substring(0, 10) : String(expiresAt || '').substring(0, 10)
   const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
   if (expired) return `<span class="admin-badge badge-expired">${label} (已过期)</span>`
@@ -5797,7 +5797,7 @@ async function renderMembership() {
         <div class="mem-card ${currentPlan === 'plus' ? 'mem-current' : ''}">
           <div class="mem-card-header mem-plus">
             <span class="mem-icon">⭐</span>
-            <h3 class="mem-plan-name">Plus</h3>
+            <h3 class="mem-plan-name">Plus 进阶版</h3>
             <p class="mem-plan-desc">系统学习技术分析</p>
           </div>
           <div class="mem-price-section">
@@ -5834,7 +5834,7 @@ async function renderMembership() {
         <div class="mem-card ${currentPlan === 'pro' ? 'mem-current' : ''}">
           <div class="mem-card-header mem-pro">
             <span class="mem-icon">💎</span>
-            <h3 class="mem-plan-name">Pro</h3>
+            <h3 class="mem-plan-name">Pro 专业版</h3>
             <p class="mem-plan-desc">深度学习 · 交易进阶</p>
           </div>
           <div class="mem-price-section">
@@ -6936,7 +6936,7 @@ function renderProfile() {
                     <div class="sub-plan-info">
                       <span class="sub-plan-icon">⭐</span>
                       <div>
-                        <div class="sub-plan-name">Plus</div>
+                        <div class="sub-plan-name">Plus 进阶版</div>
                         <div class="sub-plan-desc">新视频即时解锁 + 图解 + 测验</div>
                       </div>
                     </div>
@@ -6947,7 +6947,7 @@ function renderProfile() {
                     <div class="sub-plan-info">
                       <span class="sub-plan-icon">💎</span>
                       <div>
-                        <div class="sub-plan-name">Pro</div>
+                        <div class="sub-plan-name">Pro 专业版</div>
                         <div class="sub-plan-desc">全部权限 + AI信号</div>
                       </div>
                     </div>
@@ -7667,7 +7667,10 @@ function renderProfile() {
 
 }
 
-async function loadBillingHistory(container) {
+const BILLING_PAGE_SIZE = 6
+let _billingPage = 1
+
+async function loadBillingHistory(container, page = 1) {
   try {
     const data = await api.get('/api/orders')
 
@@ -7679,30 +7682,52 @@ async function loadBillingHistory(container) {
     const statusMap = {
       paid: { label: '已完成', cls: 'billing-paid' },
       pending: { label: '待支付', cls: 'billing-pending' },
-      processing: { label: '处理中', cls: 'billing-pending' },
       expired: { label: '已过期', cls: 'billing-expired' },
+      cancelled: { label: '已取消', cls: 'billing-expired' },
     }
 
-    container.innerHTML = data.orders.map(o => {
+    const planNames = { plus: 'Plus 进阶版', pro: 'Pro 专业版' }
+    const periodNames = { month: '月付', year: '年付', lifetime: '终身' }
+
+    const total = data.orders.length
+    const totalPages = Math.ceil(total / BILLING_PAGE_SIZE)
+    _billingPage = Math.max(1, Math.min(page, totalPages))
+    const start = (_billingPage - 1) * BILLING_PAGE_SIZE
+    const pageOrders = data.orders.slice(start, start + BILLING_PAGE_SIZE)
+
+    let html = pageOrders.map(o => {
       const s = statusMap[o.status] || { label: o.status, cls: '' }
       const date = o.paidAt || o.createdAt || ''
       const displayDate = formatDateTime(date)
       const paidAmount = o.amountConfirmed || o.amount
-      const amountDiff = o.amountConfirmed && o.amountConfirmed !== o.amount
-        ? ` <span class="billing-diff">(${formatMinorUsd(o.amount)})</span>` : ''
+      const planLabel = planNames[o.plan] || o.planLabel || o.plan
+      const periodLabel = periodNames[o.period] || o.periodLabel || ''
       const orderIdShort = o.orderId ? o.orderId.substring(0, 8) : ''
       return `
         <div class="billing-row">
           <div class="billing-info">
-            <div class="billing-plan">${o.planLabel} ${o.periodLabel}</div>
+            <div class="billing-plan">${planLabel} ${periodLabel}</div>
             <div class="billing-date">${displayDate}${orderIdShort ? ` · <span class="billing-oid" title="${o.orderId}">#${orderIdShort}</span>` : ''}</div>
           </div>
           <div class="billing-right">
-            <span class="billing-amount">${formatMinorUsd(paidAmount)}${amountDiff}</span>
+            <span class="billing-amount">${formatMinorUsd(paidAmount)}</span>
             <span class="billing-status ${s.cls}">${s.label}</span>
           </div>
         </div>`
     }).join('')
+
+    if (totalPages > 1) {
+      html += `<div class="billing-pagination">
+        <button class="btn btn-sm" ${_billingPage <= 1 ? 'disabled' : ''} onclick="window._billingPrev()">上一页</button>
+        <span>${_billingPage} / ${totalPages}</span>
+        <button class="btn btn-sm" ${_billingPage >= totalPages ? 'disabled' : ''} onclick="window._billingNext()">下一页</button>
+      </div>`
+    }
+
+    container.innerHTML = html
+
+    window._billingPrev = () => loadBillingHistory(container, _billingPage - 1)
+    window._billingNext = () => loadBillingHistory(container, _billingPage + 1)
   } catch (err) {
     console.error('Load billing error:', err)
     container.innerHTML = '<div class="billing-empty">加载失败</div>'
@@ -10198,21 +10223,51 @@ function setupGlobalEvents() {
           modalBody.innerHTML = '<p style="color:var(--text-3);text-align:center;padding:20px;">暂无订单</p>'
           return
         }
-        modalBody.innerHTML = `
-          <table class="admin-table" style="margin:0;">
-            <thead><tr><th>订单号</th><th>方案</th><th>金额</th><th>实付</th><th>状态</th><th>时间</th></tr></thead>
-            <tbody>
-              ${r.orders.map(o => `<tr>
-                <td style="font-size:12px;">${escapeHtml(o.orderId || '-')}</td>
-                <td>${escapeHtml(o.planLabel)} ${escapeHtml(o.periodLabel)}</td>
-                <td>${formatMinorUsd(o.amount)}</td>
-                <td>${o.amountConfirmed ? formatMinorUsd(o.amountConfirmed) : '-'}</td>
-                <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : 'badge-free'}">${escapeHtml(o.statusLabel)}</span></td>
-                <td>${formatDateTime(o.paidAt || o.createdAt) || '-'}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        `
+
+        const planNames = { plus: 'Plus 进阶版', pro: 'Pro 专业版' }
+        const periodNames = { month: '月付', year: '年付', lifetime: '终身' }
+        const ADMIN_ORDER_PAGE = 10
+        let adminOrderPage = 1
+
+        function renderAdminOrders(orders, page) {
+          const total = orders.length
+          const totalPages = Math.ceil(total / ADMIN_ORDER_PAGE)
+          page = Math.max(1, Math.min(page, totalPages))
+          const start = (page - 1) * ADMIN_ORDER_PAGE
+          const pageOrders = orders.slice(start, start + ADMIN_ORDER_PAGE)
+
+          let html = `
+            <table class="admin-table" style="margin:0;">
+              <thead><tr><th>订单号</th><th>套餐</th><th>金额</th><th>状态</th><th>时间</th></tr></thead>
+              <tbody>
+                ${pageOrders.map(o => {
+                  const planLabel = planNames[o.plan] || o.planLabel || o.plan
+                  const periodLabel = periodNames[o.period] || o.periodLabel || ''
+                  return `<tr>
+                    <td style="font-size:12px;">${escapeHtml(o.orderId ? o.orderId.substring(0, 8) + '...' : '-')}</td>
+                    <td>${planLabel} ${periodLabel}</td>
+                    <td>${formatMinorUsd(o.amount)}</td>
+                    <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : o.status === 'pending' ? 'badge-pending' : 'badge-free'}">${escapeHtml(o.statusLabel)}</span></td>
+                    <td>${formatDateTime(o.paidAt || o.createdAt) || '-'}</td>
+                  </tr>`
+                }).join('')}
+              </tbody>
+            </table>`
+
+          if (totalPages > 1) {
+            html += `<div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:13px;">
+              <button class="btn btn-sm" ${page <= 1 ? 'disabled' : ''} onclick="window._adminOrderPrev()">上一页</button>
+              <span>${page} / ${totalPages}</span>
+              <button class="btn btn-sm" ${page >= totalPages ? 'disabled' : ''} onclick="window._adminOrderNext()">下一页</button>
+            </div>`
+          }
+
+          modalBody.innerHTML = html
+          window._adminOrderPrev = () => renderAdminOrders(orders, page - 1)
+          window._adminOrderNext = () => renderAdminOrders(orders, page + 1)
+        }
+
+        renderAdminOrders(r.orders, 1)
       })
       return
     }
