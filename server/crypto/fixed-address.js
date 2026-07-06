@@ -36,16 +36,17 @@ export async function getFixedAddressForChain(chain) {
 export async function generateUniqueAmount(baseAmount, orderId) {
   const amountStr = baseAmount.toFixed(6)
   const baseNum = parseFloat(amountStr)
+  const intPart = Math.floor(baseNum)
 
-  const existing = await queryAll(
-    `SELECT crypto_amount FROM orders WHERE crypto_amount IS NOT NULL AND status = 'pending' AND ABS(crypto_amount - ?) < 0.000001`,
-    [baseNum]
+  const rows = await queryAll(
+    `SELECT crypto_amount FROM orders WHERE crypto_amount IS NOT NULL AND status = 'pending' AND crypto_amount >= ? AND crypto_amount < ?`,
+    [intPart, intPart + 1]
   )
 
   const usedDecimals = new Set()
-  for (const row of existing) {
+  for (const row of rows) {
     const val = parseFloat(row.crypto_amount)
-    const decimal = Math.round((val - baseNum) * 1000000)
+    const decimal = Math.round((val - intPart) * 1000000)
     if (decimal > 0 && decimal < 1000000) {
       usedDecimals.add(decimal)
     }
@@ -60,7 +61,7 @@ export async function generateUniqueAmount(baseAmount, orderId) {
     throw new Error('可用金额已用尽，请稍后重试')
   }
 
-  return parseFloat((baseNum + suffix / 1000000).toFixed(6))
+  return parseFloat((intPart + suffix / 1000000).toFixed(6))
 }
 
 export async function findOrderByAmount(chain, receivedAmount) {

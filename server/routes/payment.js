@@ -10,11 +10,31 @@ import { getFixedAddressForChain, generateUniqueAmount, resetFixedAddressCache }
 
 const router = Router()
 
-const PLANS = {
+const DEFAULT_PLANS = {
   free: { name: '免费版', price: 0, month: 0, year: 0, lifetime: 0 },
   plus: { name: 'Plus', month: 2900, year: 29000, lifetime: 99000 },
   pro: { name: 'Pro', month: 10000, year: 100000, lifetime: 399000 },
   premium: { name: '高级版', month: 2900, year: 29000, lifetime: 99000 },
+}
+
+async function getPlans() {
+  try {
+    const rows = await queryAll(
+      "SELECT `key`, `value` FROM system_config WHERE category = 'plan_prices'"
+    )
+    if (rows.length === 0) return DEFAULT_PLANS
+
+    const plans = { ...DEFAULT_PLANS }
+    for (const row of rows) {
+      const [plan, period] = row.key.split('_')
+      if (plans[plan] && period) {
+        plans[plan][period] = parseInt(row.value) || plans[plan][period]
+      }
+    }
+    return plans
+  } catch {
+    return DEFAULT_PLANS
+  }
 }
 
 const PERIOD_LABELS = { month: '月付', year: '年付', lifetime: '终身' }
@@ -61,13 +81,13 @@ router.get('/payment', authMiddleware, async (req, res) => {
     const { preview, plan, period, use_referral_credit } = req.query
     if (!preview) return res.json({ ok: false, error: '缺少参数' })
 
+    const PLANS = await getPlans()
     const planInfo = PLANS[plan]
     if (!planInfo) return res.json({ ok: false, error: '未知套餐' })
 
     const periodKey = period === 'yearly' ? 'year' : period
     const amount = planInfo[periodKey] || planInfo.month
 
-    // Calculate credit from existing plan
     let credit = 0
     const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
     if (user?.plan && user.plan !== 'free' && user.plan_expires_at) {
@@ -80,7 +100,6 @@ router.get('/payment', authMiddleware, async (req, res) => {
       }
     }
 
-    // Referral credit
     let referralCredit = 0
     if (use_referral_credit === '1') {
       referralCredit = user?.referral_credit || 0
@@ -108,6 +127,7 @@ router.get('/payment', authMiddleware, async (req, res) => {
 router.post('/payment', authMiddleware, async (req, res) => {
   try {
     const { plan, period, use_referral_credit, crypto_chain } = req.body
+    const PLANS = await getPlans()
     const planInfo = PLANS[plan]
     if (!planInfo) return res.json({ ok: false, error: '未知套餐' })
 
