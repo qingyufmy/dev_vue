@@ -5746,12 +5746,11 @@ async function renderMembership() {
   } catch {}
 
   const fmt = (dollars) => '$' + Math.round(dollars)
-  const discountPct = (orig, cur) => orig > 0 && cur > 0 && cur < orig ? Math.round((1 - cur / orig) * 100) : 0
   const discountLabel = (orig, cur) => {
-    const pct = discountPct(orig, cur)
-    if (pct === 0) return ''
-    const zhe = Math.round(cur / orig * 10)
-    return zhe === 10 ? '' : `${zhe}折`
+    if (orig <= 0 || cur <= 0 || cur >= orig) return ''
+    const zhe = cur / orig * 10
+    const zheStr = zhe % 1 === 0 ? zhe.toFixed(0) : zhe.toFixed(1)
+    return zhe === 10 ? '' : `${zheStr}折`
   }
 
   const plusM = planPrices.plus?.month || { current: 50, original: 100 }
