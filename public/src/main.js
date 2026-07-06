@@ -5767,22 +5767,21 @@ function renderTos() {
 }
 
 // ===== USDT Crypto Payment =====
-let _selectedCryptoChain = 'TRC20'
+let _selectedCryptoChain = 'TRON'
 let _paymentPollingTimer = null
-let _cryptoPaymentPlan = ''
-let _cryptoPaymentPeriod = ''
+let _paymentCountdownTimer = null
 
 const CRYPTO_CHAINS = [
-  { id: 'TRC20', name: 'TRC-20', full: 'Tron', icon: 'T', fee: '~1 USDT', color: '#ff0013', recommended: true },
-  { id: 'ERC20', name: 'ERC-20', full: 'Ethereum', icon: 'Ξ', fee: '5-50 USDT', color: '#627eea' },
-  { id: 'BEP20', name: 'BEP-20', full: 'BNB Chain', icon: 'B', fee: '~0.3 USDT', color: '#f0b90b' },
-  { id: 'SPL', name: 'SOL', full: 'Solana', icon: '◎', fee: '~0.001 USDT', color: '#9945ff' },
+  { id: 'TRON', name: 'TRC-20', full: 'Tron', icon: 'T', fee: '~1 USDT', color: '#ff0013', recommended: true, desc: '最常用，费用低' },
+  { id: 'ETH', name: 'ERC-20', full: 'Ethereum', icon: 'Ξ', fee: '5-50 USDT', color: '#627eea', desc: '安全性最高，Gas 费较高' },
+  { id: 'BSC', name: 'BEP-20', full: 'BNB Chain', icon: 'B', fee: '~0.3 USDT', color: '#f0b90b', desc: '费用低，速度快' },
+  { id: 'SOL', name: 'SPL', full: 'Solana', icon: '◎', fee: '~0.001 USDT', color: '#9945ff', desc: '费用极低，速度极快' },
 ]
 
 function initiateCryptoPayment(plan, period) {
-  _selectedCryptoChain = 'TRC20'
-  _cryptoPaymentPlan = plan
-  _cryptoPaymentPeriod = period
+  if (document.getElementById('cryptoChainModal')) return
+
+  _selectedCryptoChain = 'TRON'
 
   const planNames = { plus: 'Plus', pro: 'Pro' }
   const periodNames = { monthly: '月付', yearly: '年付' }
@@ -5792,7 +5791,7 @@ function initiateCryptoPayment(plan, period) {
   overlay.id = 'cryptoChainModal'
   overlay.className = 'modal-overlay active'
   overlay.innerHTML = `
-    <div class="modal-content crypto-chain-dialog">
+    <div class="crypto-chain-dialog">
       <div class="modal-header">
         <h3>USDT 支付</h3>
         <button class="modal-close" id="cryptoChainClose">&times;</button>
@@ -5804,7 +5803,7 @@ function initiateCryptoPayment(plan, period) {
             <div class="chain-icon-wrap" style="background:${c.color}20; color:${c.color}">${c.icon}</div>
             <div class="chain-info">
               <div class="chain-name">${c.name} <span class="chain-full">(${c.full})</span></div>
-              <div class="chain-fee">Gas: ${c.fee}</div>
+              <div class="chain-fee">${c.desc} · Gas ${c.fee}</div>
             </div>
             ${c.recommended ? '<span class="chain-tag">推荐</span>' : ''}
             <div class="chain-radio"></div>
@@ -5818,10 +5817,9 @@ function initiateCryptoPayment(plan, period) {
   `
   document.body.appendChild(overlay)
 
+  const closeOverlay = () => overlay.remove()
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay || e.target.id === 'cryptoChainClose') {
-      overlay.remove()
-    }
+    if (e.target === overlay || e.target.id === 'cryptoChainClose') closeOverlay()
   })
 
   overlay.querySelectorAll('.crypto-chain-card').forEach(card => {
@@ -5835,80 +5833,98 @@ function initiateCryptoPayment(plan, period) {
     })
   })
 
-  overlay.querySelector('#cryptoChainConfirm').addEventListener('click', () => {
-    overlay.remove()
-    doCreateCryptoPayment(_cryptoPaymentPlan, _cryptoPaymentPeriod)
+  const confirmBtn = overlay.querySelector('#cryptoChainConfirm')
+  let confirmed = false
+  confirmBtn.addEventListener('click', () => {
+    if (confirmed) return
+    confirmed = true
+    confirmBtn.disabled = true
+    confirmBtn.textContent = '处理中...'
+    closeOverlay()
+    _doCreateCryptoPayment(plan, period)
   })
+
+  const handleEnter = (e) => {
+    if (e.key === 'Enter' && document.getElementById('cryptoChainModal')) {
+      e.preventDefault()
+      e.stopPropagation()
+      confirmBtn.click()
+    }
+  }
+  document.addEventListener('keydown', handleEnter, true)
+  const origRemove = overlay.remove.bind(overlay)
+  overlay.remove = () => {
+    document.removeEventListener('keydown', handleEnter, true)
+    origRemove()
+  }
 }
 
-async function doCreateCryptoPayment(plan, period) {
+async function _doCreateCryptoPayment(plan, period) {
   try {
-    const res = await api.post('/api/payment', {
-      plan,
-      period,
-      crypto_chain: _selectedCryptoChain,
-    })
-
-    if (!res.ok) {
-      showToast(res.error || '创建订单失败', 'error')
-      return
-    }
-
-    if (res.paid_with_credit) {
-      showToast('支付成功！', 'success')
-      return
-    }
-
-    showCryptoPaymentPage(res)
+    const res = await api.post('/api/payment', { plan, period, crypto_chain: _selectedCryptoChain })
+    if (!res.ok) { showToast(res.error || '创建订单失败', 'error'); return }
+    if (res.paid_with_credit) { showToast('支付成功！', 'success'); return }
+    _showCryptoPaymentPage(res)
   } catch (err) {
     showToast('网络错误，请重试', 'error')
   }
 }
 
-function showCryptoPaymentPage(order) {
-  const chainInfo = CRYPTO_CHAINS.find(c => c.id === order.chain) || CRYPTO_CHAINS[0]
+function _showCryptoPaymentPage(order) {
+  if (document.getElementById('cryptoPaymentModal')) return
+
+  const chain = CRYPTO_CHAINS.find(c => c.id === order.crypto_chain) || CRYPTO_CHAINS[0]
+  const amount = order.crypto_amount || '0'
+  const address = order.crypto_address || ''
+  const confs = order.required_confirmations || 19
+  const label = order.label || 'USDT 支付'
+  const qrSrc = order.qr_code || ''
+
   const overlay = document.createElement('div')
   overlay.id = 'cryptoPaymentModal'
   overlay.className = 'modal-overlay active'
-
   overlay.innerHTML = `
-    <div class="modal-content crypto-payment-dialog">
+    <div class="crypto-payment-dialog">
       <div class="modal-header">
-        <h3>${order.label}</h3>
+        <h3>${escapeHtml(label)}</h3>
         <button class="modal-close" id="cryptoPaymentClose">&times;</button>
       </div>
       <div class="crypto-payment-body">
         <div class="crypto-amount-display">
-          <div class="crypto-amount-usd">${order.amount} USDT</div>
-          <div class="crypto-chain-label" style="background:${chainInfo.color}">
-            <span class="crypto-chain-icon">${chainInfo.icon}</span>
-            ${chainInfo.name}
+          <div class="crypto-amount-usd">${amount} <span class="crypto-amount-unit">USDT</span></div>
+          <div class="crypto-chain-label" style="background:${chain.color}">
+            <span class="crypto-chain-icon">${chain.icon}</span>
+            ${chain.name} (${chain.full})
           </div>
         </div>
         <div class="crypto-qr-section">
           <div class="crypto-qr-wrapper">
-            <img src="${order.qrCode}" alt="QR Code" class="crypto-qr-img" />
+            ${qrSrc ? `<img src="${qrSrc}" alt="QR Code" class="crypto-qr-img" />` : '<div class="crypto-qr-placeholder">QR 码生成中...</div>'}
           </div>
-          <p class="crypto-qr-hint">使用钱包扫描二维码支付</p>
+          <p class="crypto-qr-hint">使用 ${chain.name} 钱包扫描二维码</p>
         </div>
         <div class="crypto-address-section">
           <div class="crypto-address-label">收款地址</div>
           <div class="crypto-address-box">
-            <span class="crypto-address-text" id="cryptoPayAddress">${order.address}</span>
+            <span class="crypto-address-text" id="cryptoPayAddress">${escapeHtml(address)}</span>
             <button class="crypto-copy-btn" id="cryptoCopyBtn">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
               复制
             </button>
           </div>
         </div>
+        <div class="crypto-warning-box">
+          <span class="crypto-warning-icon">⚠️</span>
+          <span>请务必转账 <strong>${amount} USDT</strong> 至上述地址（${chain.name} 网络），金额不匹配可能导致到账延迟</span>
+        </div>
         <div class="crypto-timer-section">
           <div class="crypto-timer-icon">⏱</div>
-          <span>请在 <strong>30 分钟</strong>内完成支付</span>
+          <span>请在 <strong id="cryptoPayCountdown">30:00</strong> 内完成支付</span>
         </div>
         <div class="crypto-status-bar">
-          <div class="crypto-status-dot"></div>
+          <div class="crypto-status-dot" id="cryptoStatusDot"></div>
           <span id="cryptoPaymentStatus">等待支付...</span>
-          <span class="crypto-conf-count">确认数: <strong id="cryptoConfirmations">0</strong>/${order.requiredConfirmations}</span>
+          <span class="crypto-conf-count">确认数: <strong id="cryptoConfirmations">0</strong> / ${confs}</span>
         </div>
       </div>
     </div>
@@ -5917,82 +5933,75 @@ function showCryptoPaymentPage(order) {
 
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay || e.target.id === 'cryptoPaymentClose') {
-      stopCryptoPaymentPolling()
+      _stopAllPaymentTimers()
       overlay.remove()
     }
   })
 
   overlay.querySelector('#cryptoCopyBtn').addEventListener('click', () => {
-    navigator.clipboard.writeText(order.address).then(() => {
+    navigator.clipboard.writeText(address).then(() => {
       const btn = overlay.querySelector('#cryptoCopyBtn')
-      btn.innerHTML = '✓ 已复制'
-      setTimeout(() => {
-        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> 复制'
-      }, 2000)
+      btn.textContent = '✓ 已复制'
+      setTimeout(() => { btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> 复制' }, 2000)
+    }).catch(() => {
+      const el = document.getElementById('cryptoPayAddress')
+      if (el) { const r = document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r) }
+      showToast('地址已选中，请按 Ctrl+C 复制', 'info')
     })
   })
 
-  startCryptoPaymentPolling(order.orderId, order.requiredConfirmations)
+  _startPaymentCountdown(30 * 60)
+  _startPaymentPolling(order.orderId, confs)
 }
 
-function startCryptoPaymentPolling(orderId, requiredConfs) {
-  stopCryptoPaymentPolling()
+function _startPaymentCountdown(totalSeconds) {
+  _stopPaymentCountdown()
+  let remaining = totalSeconds
+  const tick = () => {
+    const el = document.getElementById('cryptoPayCountdown')
+    if (!el) { _stopPaymentCountdown(); return }
+    if (remaining <= 0) { el.textContent = '00:00'; _stopPaymentCountdown(); const s = document.getElementById('cryptoPaymentStatus'); if (s) s.textContent = '订单已过期'; return }
+    const m = Math.floor(remaining / 60), s = remaining % 60
+    el.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    remaining--
+  }
+  tick()
+  _paymentCountdownTimer = setInterval(tick, 1000)
+}
 
+function _stopPaymentCountdown() { if (_paymentCountdownTimer) { clearInterval(_paymentCountdownTimer); _paymentCountdownTimer = null } }
+
+function _startPaymentPolling(orderId, requiredConfs) {
+  _stopPaymentPolling()
   _paymentPollingTimer = setInterval(async () => {
     try {
       const res = await api.get(`/api/payment/status/${orderId}`)
-      if (res.ok) {
+      if (res.ok && res.order) {
+        const o = res.order
         const confEl = document.getElementById('cryptoConfirmations')
         const statusEl = document.getElementById('cryptoPaymentStatus')
-        const dotEl = document.querySelector('.crypto-status-dot')
-        if (confEl) confEl.textContent = res.confirmations
-        if (statusEl) statusEl.textContent = res.statusLabel
-        if (dotEl) dotEl.className = 'crypto-status-dot ' + (res.status === 'paid' ? 'success' : res.status === 'expired' ? 'error' : 'pending')
-
-        if (res.status === 'paid') {
-          stopCryptoPaymentPolling()
+        const dotEl = document.getElementById('cryptoStatusDot')
+        if (confEl) confEl.textContent = o.confirmations || 0
+        if (statusEl) statusEl.textContent = o.status_label || o.status || '等待支付...'
+        if (dotEl) dotEl.className = 'crypto-status-dot ' + (o.status === 'paid' ? 'success' : o.status === 'expired' ? 'error' : 'pending')
+        if (o.status === 'paid') {
+          _stopAllPaymentTimers()
           showToast('支付成功！会员已激活', 'success')
           document.getElementById('cryptoPaymentModal')?.remove()
           setTimeout(() => location.reload(), 1500)
-        } else if (res.status === 'expired') {
-          stopCryptoPaymentPolling()
+        } else if (o.status === 'expired') {
+          _stopAllPaymentTimers()
           showToast('订单已过期，请重新下单', 'error')
           document.getElementById('cryptoPaymentModal')?.remove()
         }
       }
-    } catch (err) {
-      console.error('Payment poll error:', err)
-    }
+    } catch (err) { console.error('[Payment] Poll error:', err) }
   }, 5000)
 }
 
-function stopCryptoPaymentPolling() {
-  if (_paymentPollingTimer) {
-    clearInterval(_paymentPollingTimer)
-    _paymentPollingTimer = null
-  }
-}
-          showToast('支付成功！会员已激活', 'success')
-          closePaymentModal()
-          setTimeout(() => location.reload(), 1500)
-        } else if (res.status === 'expired') {
-          stopCryptoPaymentPolling()
-          showToast('订单已过期，请重新下单', 'error')
-          closePaymentModal()
-        }
-      }
-    } catch (err) {
-      console.error('Payment status poll error:', err)
-    }
-  }, 5000)
-}
+function _stopPaymentPolling() { if (_paymentPollingTimer) { clearInterval(_paymentPollingTimer); _paymentPollingTimer = null } }
 
-function stopCryptoPaymentPolling() {
-  if (_paymentPollingTimer) {
-    clearInterval(_paymentPollingTimer)
-    _paymentPollingTimer = null
-  }
-}
+function _stopAllPaymentTimers() { _stopPaymentPolling(); _stopPaymentCountdown() }
 
 // ===== Tools Page =====
 async function renderTools() {
