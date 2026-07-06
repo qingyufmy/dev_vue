@@ -4194,23 +4194,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // --- Changelog Modal ---
 async function checkChangelog() {
-  console.log('[Changelog] checkChangelog called');
   try {
-    const current = await api('/api/changelog/current');
-    console.log('[Changelog] current:', current);
-    const status = await api('/api/changelog-status');
-    console.log('[Changelog] status:', status);
+    const [current, status] = await Promise.all([
+      api('/api/changelog/current'),
+      api('/api/changelog-status')
+    ]);
     if (current.ok && status.ok && current.version > (status.seenVersion || 0) && current.content) {
       document.getElementById('changelogContent').innerHTML = current.content;
       const modal = document.getElementById('changelogModal');
       modal.style.display = 'flex';
       modal.classList.add('active');
       window._changelogVersion = current.version;
-      console.log('[Changelog] modal shown');
-    } else {
-      console.log('[Changelog] skipped');
     }
-  } catch (e) { console.error('[Changelog] error:', e); }
+  } catch (e) { /* ignore */ }
 }
 
 function closeChangelogModal() {
