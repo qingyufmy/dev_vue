@@ -4252,14 +4252,49 @@ function renderAuthToggleConfig(container) {
 function renderCryptoWalletConfig(container) {
   const items = adminConfigData.crypto_wallet || []
   const getVal = (key) => items.find(i => i.key === key)?.value || ''
+  const currentMode = getVal('payment_mode') || 'dynamic'
 
   container.innerHTML = `
     <div class="admin-config-form">
       <div class="admin-config-row">
-        <label>HD 钱包助记词</label>
-        <input type="password" class="admin-plan-input" id="hdMnemonic" value="${escapeHtml(getVal('hd_mnemonic'))}" placeholder="12个英文单词，用空格分隔">
-        <span class="admin-config-hint">BIP39 助记词，用于派生各链收款地址。修改后需重启服务器生效。</span>
+        <label>支付模式</label>
+        <select class="admin-plan-select" id="paymentMode">
+          <option value="dynamic" ${currentMode === 'dynamic' ? 'selected' : ''}>动态地址（每个订单唯一地址）</option>
+          <option value="fixed" ${currentMode === 'fixed' ? 'selected' : ''}>固定地址（唯一金额匹配）</option>
+        </select>
+        <span class="admin-config-hint">动态地址：自动对账，需归集资金。固定地址：单一地址收款，用金额区分订单。</span>
       </div>
+
+      <div id="fixedAddressSection" style="display:${currentMode === 'fixed' ? 'block' : 'none'}; margin-top:16px; padding:16px; background:var(--glass-light); border-radius:12px;">
+        <h4 style="margin-bottom:12px;">固定收款地址</h4>
+        <div class="admin-config-row">
+          <label>TRC-20 (Tron)</label>
+          <input type="text" class="admin-plan-input" id="fixedTronAddr" value="${escapeHtml(getVal('fixed_tron_address'))}" placeholder="T...">
+        </div>
+        <div class="admin-config-row">
+          <label>ERC-20 (Ethereum)</label>
+          <input type="text" class="admin-plan-input" id="fixedEthAddr" value="${escapeHtml(getVal('fixed_erc20_address'))}" placeholder="0x...">
+        </div>
+        <div class="admin-config-row">
+          <label>BEP-20 (BSC)</label>
+          <input type="text" class="admin-plan-input" id="fixedBscAddr" value="${escapeHtml(getVal('fixed_bep20_address'))}" placeholder="0x...">
+        </div>
+        <div class="admin-config-row">
+          <label>SOL (Solana)</label>
+          <input type="text" class="admin-plan-input" id="fixedSolAddr" value="${escapeHtml(getVal('fixed_sol_address'))}" placeholder="...">
+        </div>
+        <span class="admin-config-hint">用户付款时显示这些地址。系统会生成唯一金额（如 50.000001）来区分不同订单。</span>
+      </div>
+
+      <div style="margin-top:20px; padding-top:20px; border-top:1px solid var(--glass-border);">
+        <h4 style="margin-bottom:12px;">HD 钱包配置（动态地址模式使用）</h4>
+        <div class="admin-config-row">
+          <label>HD 钱包助记词</label>
+          <input type="password" class="admin-plan-input" id="hdMnemonic" value="${escapeHtml(getVal('hd_mnemonic'))}" placeholder="12个英文单词，用空格分隔">
+          <span class="admin-config-hint">BIP39 助记词，用于派生各链收款地址。修改后需重启服务器生效。</span>
+        </div>
+      </div>
+
       <div class="admin-config-row">
         <label>TronGrid API Key</label>
         <input type="text" class="admin-plan-input" id="trongridKey" value="${escapeHtml(getVal('trongrid_api_key'))}" placeholder="用于 TRC-20 链监控">
@@ -4289,11 +4324,9 @@ function renderCryptoWalletConfig(container) {
       <div class="admin-config-info">
         <p><strong>说明：</strong></p>
         <ul>
-          <li>HD 钱包助记词修改后需要重启服务器才能生效</li>
+          <li><strong>动态地址</strong>：每个订单生成唯一地址，自动对账，需定期归集资金</li>
+          <li><strong>固定地址</strong>：所有订单用同一地址，用唯一金额（如 50.000001）区分</li>
           <li>各链 API Key 可在对应平台免费申请</li>
-          <li>TRC-20 (Tron): <a href="https://www.trongrid.io/" target="_blank">trongrid.io</a></li>
-          <li>ERC-20 (Ethereum): <a href="https://etherscan.io/" target="_blank">etherscan.io</a></li>
-          <li>BEP-20 (BSC): <a href="https://bscscan.com/" target="_blank">bscscan.com</a></li>
         </ul>
       </div>
     </div>
@@ -4383,7 +4416,28 @@ function renderCryptoWalletConfig(container) {
     }
   })
 
+  document.getElementById('paymentMode')?.addEventListener('change', (e) => {
+    const section = document.getElementById('fixedAddressSection')
+    if (section) {
+      section.style.display = e.target.value === 'fixed' ? 'block' : 'none'
+    }
+  })
+
   document.getElementById('saveCryptoWallet')?.addEventListener('click', async () => {
+    const mode = document.getElementById('paymentMode').value
+    const fixedAddresses = {}
+    if (mode === 'fixed') {
+      fixedAddresses.tron = document.getElementById('fixedTronAddr')?.value || ''
+      fixedAddresses.eth = document.getElementById('fixedEthAddr')?.value || ''
+      fixedAddresses.bsc = document.getElementById('fixedBscAddr')?.value || ''
+      fixedAddresses.sol = document.getElementById('fixedSolAddr')?.value || ''
+    }
+
+    const modeRes = await api.post('/api/admin/crypto/payment-mode', {
+      mode,
+      fixed_addresses: fixedAddresses,
+    })
+
     const items = [
       { key: 'hd_mnemonic', value: document.getElementById('hdMnemonic').value, label: 'HD 钱包助记词', sort_order: 0 },
       { key: 'trongrid_api_key', value: document.getElementById('trongridKey').value, label: 'TronGrid API Key', sort_order: 1 },
@@ -4393,11 +4447,12 @@ function renderCryptoWalletConfig(container) {
       { key: 'rate_source', value: document.getElementById('rateSource').value, label: 'USDT/USD 汇率源', sort_order: 5 },
     ]
     const res = await api.put('/api/system-config/crypto_wallet', { items })
-    if (res.ok) {
+
+    if (modeRes.ok && res.ok) {
       showToast('收款钱包配置已保存', 'success')
       loadAdminConfig()
     } else {
-      showToast(res.error || '保存失败', 'error')
+      showToast(modeRes.error || res.error || '保存失败', 'error')
     }
   })
 }

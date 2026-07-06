@@ -1,11 +1,12 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
-import { queryOne, queryRun, withTransaction } from '../db.js'
+import { queryOne, queryRun, queryAll, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { deriveAddress, getAddressCount, saveAddress, getRequiredConfirmations } from '../crypto/wallet.js'
 import { adapters } from '../crypto/chains/index.js'
 import { generatePaymentQR } from '../crypto/qr.js'
 import { addWatchAddress } from '../crypto/monitor.js'
+import { getFixedAddressForChain, generateUniqueAmount, resetFixedAddressCache } from '../crypto/fixed-address.js'
 
 const router = Router()
 
@@ -32,6 +33,13 @@ async function getUsdtUsdRate() {
     if (data?.price) return parseFloat(data.price)
   } catch {}
   return 1.0
+}
+
+async function getPaymentMode() {
+  const row = await queryOne(
+    "SELECT value FROM system_config WHERE category = 'crypto_wallet' AND `key` = 'payment_mode'"
+  )
+  return row?.value || 'dynamic'
 }
 
 router.get('/payment', authMiddleware, async (req, res) => {
@@ -162,14 +170,28 @@ router.post('/payment', authMiddleware, async (req, res) => {
       return res.json({ ok: true, paid_with_credit: true, orderNo })
     }
 
-    const index = await getAddressCount(chainKey)
-    const address = deriveAddress(chainKey, index)
-    await saveAddress(chainKey, index, address)
     const requiredConfirmations = getRequiredConfirmations(chainKey)
-
     const rate = await getUsdtUsdRate()
-    const usdtAmount = parseFloat((finalAmount / 100 / rate).toFixed(2))
+    const baseUsdtAmount = finalAmount / 100 / rate
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
+
+    const paymentMode = await getPaymentMode()
+    let address, usdtAmount, mode
+
+    if (paymentMode === 'fixed') {
+      address = await getFixedAddressForChain(chainKey)
+      if (!address) {
+        return res.json({ ok: false, error: '固定地址未配置，请在管理后台设置' })
+      }
+      usdtAmount = await generateUniqueAmount(baseUsdtAmount, orderId)
+      mode = 'fixed'
+    } else {
+      const index = await getAddressCount(chainKey)
+      address = deriveAddress(chainKey, index)
+      await saveAddress(chainKey, index, address)
+      usdtAmount = parseFloat(baseUsdtAmount.toFixed(2))
+      mode = 'dynamic'
+    }
 
     await withTransaction(async (run) => {
       await run(`
@@ -182,14 +204,16 @@ router.post('/payment', authMiddleware, async (req, res) => {
       }
     })
 
-    await addWatchAddress({
-      orderId,
-      userId: req.user.id,
-      chain: chainKey,
-      address,
-      expectedAmount: usdtAmount,
-      expiresAt,
-    })
+    if (mode === 'dynamic') {
+      await addWatchAddress({
+        orderId,
+        userId: req.user.id,
+        chain: chainKey,
+        address,
+        expectedAmount: usdtAmount,
+        expiresAt,
+      })
+    }
 
     try {
       const referral = await queryOne(
@@ -235,6 +259,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
       expires_at: expiresAt,
       required_confirmations: requiredConfirmations,
       qr_code: qrCode,
+      payment_mode: mode,
     })
   } catch (err) {
     console.error('[Payment] 创建订单失败:', err)
@@ -299,6 +324,61 @@ router.post('/admin/crypto/sweep/:index', authMiddleware, adminOnly, async (req,
   } catch (err) {
     console.error('[Sweep] 单地址归集失败:', err.message)
     res.json({ ok: false, error: '归集失败: ' + err.message })
+  }
+})
+
+router.get('/admin/crypto/payment-mode', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const mode = await getPaymentMode()
+    const { getFixedAddress } = await import('../crypto/fixed-address.js')
+    const fixedAddresses = await getFixedAddress()
+    res.json({ ok: true, mode, fixedAddresses })
+  } catch (err) {
+    res.json({ ok: false, error: err.message })
+  }
+})
+
+router.post('/admin/crypto/payment-mode', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { mode, fixed_addresses } = req.body
+    if (!['dynamic', 'fixed'].includes(mode)) {
+      return res.json({ ok: false, error: '无效的支付模式' })
+    }
+
+    await queryRun(
+      `INSERT INTO system_config (category, \`key\`, value, label, sort_order)
+       VALUES ('crypto_wallet', 'payment_mode', ?, '支付模式', 0)
+       ON DUPLICATE KEY UPDATE value = ?`,
+      [mode, mode]
+    )
+
+    if (mode === 'fixed' && fixed_addresses) {
+      const addrMap = {
+        tron: 'fixed_tron_address',
+        eth: 'fixed_erc20_address',
+        bsc: 'fixed_bep20_address',
+        sol: 'fixed_sol_address',
+      }
+      for (const [chain, value] of Object.entries(fixed_addresses)) {
+        const key = addrMap[chain]
+        if (key && value) {
+          await queryRun(
+            `INSERT INTO system_config (category, \`key\`, value, label, sort_order)
+             VALUES ('crypto_wallet', ?, ?, ?, 10)
+             ON DUPLICATE KEY UPDATE value = ?`,
+            [key, value, `${chain.toUpperCase()} 固定收款地址`, value]
+          )
+        }
+      }
+    }
+
+    const { resetFixedAddressCache } = await import('../crypto/fixed-address.js')
+    resetFixedAddressCache()
+
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[PaymentMode] 切换失败:', err.message)
+    res.json({ ok: false, error: '切换失败: ' + err.message })
   }
 })
 
