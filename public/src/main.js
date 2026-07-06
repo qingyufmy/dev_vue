@@ -5560,8 +5560,8 @@ function renderMembership() {
               : currentPlan === 'plus'
                 ? (currentPeriod === 'yearly'
                   ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
-                  : `<button class="btn mem-btn mem-btn-plus" data-plan="plus" data-force-yearly="1">暂关闭</button>`)
-                : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">暂关闭</button>`}
+                   : `<button class="btn mem-btn mem-btn-plus" data-plan="plus" data-force-yearly="1">USDT 支付</button>`)
+                : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">USDT 支付</button>`}
           </div>
         </div>
 
@@ -5593,8 +5593,8 @@ function renderMembership() {
             ${currentPlan === 'pro'
               ? (currentPeriod === 'yearly'
                 ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
-                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro" data-force-yearly="1">暂关闭</button>`)
-              : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">暂关闭</button>`}
+                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro" data-force-yearly="1">USDT 支付</button>`)
+                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">USDT 支付</button>`}
           </div>
         </div>
       </div>
@@ -5764,6 +5764,176 @@ function renderTos() {
       </div>
     </div>
   `
+}
+
+// ===== USDT Crypto Payment =====
+let _selectedCryptoChain = 'TRC20'
+let _paymentPollingTimer = null
+
+const CRYPTO_CHAINS = [
+  { id: 'TRC20', name: 'TRC-20 (Tron)', icon: '⟠', fee: '低 (~1 USDT)', color: '#ff0013' },
+  { id: 'ERC20', name: 'ERC-20 (Ethereum)', icon: '⟠', fee: '高 (5-50 USDT)', color: '#627eea' },
+  { id: 'BEP20', name: 'BEP-20 (BSC)', icon: '⟠', fee: '低 (~0.3 USDT)', color: '#f0b90b' },
+  { id: 'SPL', name: 'SOL (Solana)', icon: '◎', fee: '极低 (~0.001 USDT)', color: '#9945ff' },
+]
+
+function initiateCryptoPayment(plan, period) {
+  _selectedCryptoChain = 'TRC20'
+
+  const html = `
+    <div class="modal-overlay active" id="cryptoChainModal">
+      <div class="modal-content crypto-chain-dialog">
+        <div class="modal-header">
+          <h3>选择支付链</h3>
+          <button class="modal-close" onclick="closeCryptoModal()">&times;</button>
+        </div>
+        <div class="crypto-chain-list">
+          ${CRYPTO_CHAINS.map(c => `
+            <div class="crypto-chain-card ${c.id === _selectedCryptoChain ? 'active' : ''}"
+                 data-chain="${c.id}" onclick="selectCryptoChain('${c.id}')">
+              <span class="chain-icon" style="color:${c.color}">${c.icon}</span>
+              <div class="chain-info">
+                <div class="chain-name">${c.name}</div>
+                <div class="chain-fee">Gas 费: ${c.fee}</div>
+              </div>
+              <span class="chain-check">${c.id === _selectedCryptoChain ? '✓' : ''}</span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="crypto-chain-actions">
+          <button class="btn btn-primary btn-block" onclick="confirmCryptoPayment('${plan}', '${period}')">
+            确认支付
+          </button>
+        </div>
+      </div>
+    </div>
+  `
+  document.body.insertAdjacentHTML('beforeend', html)
+}
+
+function selectCryptoChain(chainId) {
+  _selectedCryptoChain = chainId
+  document.querySelectorAll('.crypto-chain-card').forEach(card => {
+    const isActive = card.dataset.chain === chainId
+    card.classList.toggle('active', isActive)
+    card.querySelector('.chain-check').textContent = isActive ? '✓' : ''
+  })
+}
+
+function closeCryptoModal() {
+  document.getElementById('cryptoChainModal')?.remove()
+}
+
+async function confirmCryptoPayment(plan, period) {
+  closeCryptoModal()
+
+  try {
+    const res = await api.post('/api/payment', {
+      plan,
+      period,
+      crypto_chain: _selectedCryptoChain,
+    })
+
+    if (!res.ok) {
+      showToast(res.error || '创建订单失败', 'error')
+      return
+    }
+
+    if (res.paid_with_credit) {
+      showToast('支付成功！', 'success')
+      return
+    }
+
+    showCryptoPaymentPage(res)
+  } catch (err) {
+    showToast('网络错误，请重试', 'error')
+  }
+}
+
+function showCryptoPaymentPage(order) {
+  const chainInfo = CRYPTO_CHAINS.find(c => c.id === order.chain) || CRYPTO_CHAINS[0]
+
+  const html = `
+    <div class="modal-overlay active" id="cryptoPaymentModal">
+      <div class="modal-content crypto-payment-dialog">
+        <div class="modal-header">
+          <h3>${order.label}</h3>
+          <button class="modal-close" onclick="closePaymentModal()">&times;</button>
+        </div>
+        <div class="crypto-payment-body">
+          <div class="crypto-payment-amount">
+            <span class="amount">${order.amount} USDT</span>
+            <span class="chain-badge" style="background:${chainInfo.color}">${chainInfo.name}</span>
+          </div>
+          <div class="crypto-payment-qr">
+            <img src="${order.qrCode}" alt="QR Code" />
+          </div>
+          <div class="crypto-payment-address">
+            <label>收款地址：</label>
+            <div class="address-row">
+              <input type="text" value="${order.address}" readonly id="cryptoPayAddress" />
+              <button class="btn btn-sm" onclick="copyCryptoAddress()">复制</button>
+            </div>
+          </div>
+          <div class="crypto-payment-info">
+            <p>请在 <strong>30 分钟</strong>内完成支付</p>
+            <p>确认数：<span id="cryptoConfirmations">0</span> / ${order.requiredConfirmations}</p>
+          </div>
+          <div class="crypto-payment-status" id="cryptoPaymentStatus">等待支付...</div>
+        </div>
+      </div>
+    </div>
+  `
+  document.body.insertAdjacentHTML('beforeend', html)
+  startCryptoPaymentPolling(order.orderId, order.requiredConfirmations)
+}
+
+function copyCryptoAddress() {
+  const input = document.getElementById('cryptoPayAddress')
+  if (input) {
+    navigator.clipboard.writeText(input.value).then(() => showToast('地址已复制', 'success'))
+  }
+}
+
+function closePaymentModal() {
+  stopCryptoPaymentPolling()
+  document.getElementById('cryptoPaymentModal')?.remove()
+}
+
+function startCryptoPaymentPolling(orderId, requiredConfs) {
+  stopCryptoPaymentPolling()
+
+  _paymentPollingTimer = setInterval(async () => {
+    try {
+      const res = await api.get(`/api/payment/status/${orderId}`)
+      if (res.ok) {
+        const confEl = document.getElementById('cryptoConfirmations')
+        const statusEl = document.getElementById('cryptoPaymentStatus')
+        if (confEl) confEl.textContent = res.confirmations
+        if (statusEl) statusEl.textContent = res.statusLabel
+
+        if (res.status === 'paid') {
+          stopCryptoPaymentPolling()
+          showToast('支付成功！会员已激活', 'success')
+          closePaymentModal()
+          setTimeout(() => location.reload(), 1500)
+        } else if (res.status === 'expired') {
+          stopCryptoPaymentPolling()
+          showToast('订单已过期，请重新下单', 'error')
+          closePaymentModal()
+        }
+      }
+    } catch (err) {
+      console.error('Payment status poll error:', err)
+    }
+  }, 5000)
+}
+
+function stopCryptoPaymentPolling() {
+  if (_paymentPollingTimer) {
+    clearInterval(_paymentPollingTimer)
+    _paymentPollingTimer = null
+  }
 }
 
 // ===== Tools Page =====
@@ -6397,7 +6567,7 @@ function renderProfile() {
                       </div>
                     </div>
                     <div class="sub-plan-price">$50/月</div>
-                    ${currentPlan === 'plus' ? '<span class="sub-plan-current">当前</span>' : currentPlan === 'pro' ? '' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>暂关闭</button>'}
+                    ${currentPlan === 'plus' ? '<span class="sub-plan-current">当前</span>' : currentPlan === 'pro' ? '' : '<button class="btn btn-sm btn-primary sub-plan-btn" data-plan="plus">USDT 支付</button>'}
                   </div>
                   <div class="sub-plan-row ${currentPlan === 'pro' ? 'sub-plan-active' : ''}" data-plan="pro">
                     <div class="sub-plan-info">
@@ -6408,7 +6578,7 @@ function renderProfile() {
                       </div>
                     </div>
                     <div class="sub-plan-price">$100/月</div>
-                    ${currentPlan === 'pro' ? '<span class="sub-plan-current">当前</span>' : '<button class="btn btn-sm btn-primary sub-plan-btn" disabled>暂关闭</button>'}
+                    ${currentPlan === 'pro' ? '<span class="sub-plan-current">当前</span>' : '<button class="btn btn-sm btn-primary sub-plan-btn" data-plan="pro">USDT 支付</button>'}
                   </div>
                 </div>
               </div>
@@ -6993,9 +7163,13 @@ function renderProfile() {
     goMem.addEventListener('click', () => navigate('membership'))
   }
 
-  // Upgrade buttons (placeholder)
+  // Upgrade buttons (USDT payment)
   mainContent.querySelectorAll('.sub-plan-btn').forEach(btn => {
-    btn.addEventListener('click', () => navigate('membership'))
+    btn.addEventListener('click', () => {
+      if (!state.user) { showAuthModal('login_password'); return }
+      const plan = btn.dataset.plan || 'plus'
+      initiateCryptoPayment(plan, 'monthly')
+    })
   })
 
   // Load billing history
@@ -9670,9 +9844,14 @@ function setupGlobalEvents() {
     if (target.id === 'goUpgrade' || target.id === 'goUpgrade2' || target.id === 'goUpgradeCommunity' || target.id === 'goUpgradeCommunityReplies') { navigate('membership'); return }
     if (target.id === 'goUpgradeVideo') { if (!state.user) { showAuthModal('login_password') } else { navigate('membership') }; return }
 
-    // Membership: subscribe button — currently disabled
+    // Membership: subscribe button — USDT payment
     if (target.closest('.mem-btn-plus, .mem-btn-pro')) {
-      showToast('支付功能暂关闭，请联系管理员开通。', 'info')
+      const btn = target.closest('.mem-btn-plus, .mem-btn-pro')
+      if (!state.user) { showAuthModal('login_password'); return }
+      const plan = btn.dataset.plan
+      const forceYearly = btn.dataset.forceYearly === '1'
+      const period = forceYearly ? 'yearly' : 'monthly'
+      initiateCryptoPayment(plan, period)
       return
     }// Membership price toggle (月付/年付)
     const priceTab = target.closest('.price-tab')
