@@ -66,7 +66,7 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     // Get users with pagination
     const userCount = (await queryOne(`SELECT COUNT(*) as c FROM users u WHERE ${where}`, params)).c
     const users = await queryAll(`
-      SELECT u.id, u.uid, u.email, u.nickname, u.avatar, u.role, u.plan, u.plan_period, u.plan_expires_at,
+      SELECT u.id, u.uid, u.email, u.phone, u.nickname, u.avatar, u.role, u.plan, u.plan_period, u.plan_expires_at,
              u.referral_code, u.referral_credit, u.telegram_id, u.created_at, u.last_seen_at
       FROM users u WHERE ${where} ORDER BY u.created_at DESC LIMIT ? OFFSET ?
     `, [...params, Number(limit), offset])
@@ -159,6 +159,7 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
         id: u.id,
         uid: u.uid || ('WS' + String(u.id).padStart(6, '0')),
         email: u.email,
+        phone: u.phone || '',
         name: u.nickname || u.email.split('@')[0],
         nickname: u.nickname,
         avatar: u.avatar,
@@ -231,7 +232,7 @@ router.post('/admin-users', authMiddleware, adminOnly, async (req, res) => {
 
 router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { id, userId, role, plan, nickname, email, password, avatar, expiresAt } = req.body
+    const { id, userId, role, plan, nickname, email, phone, password, avatar, expiresAt } = req.body
     const uid = id || userId
     if (!uid) return res.json({ ok: false, error: '缺少用户ID' })
 
@@ -243,6 +244,7 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     const updates = []
     const params = []
     if (email) { updates.push('email = ?'); params.push(email) }
+    if (phone !== undefined) { updates.push('phone = ?'); params.push(phone || null) }
     if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
     if (password) {
       if (password.length < 6) return res.json({ ok: false, error: '密码至少需要6位' })

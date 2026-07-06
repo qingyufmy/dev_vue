@@ -3283,7 +3283,7 @@ function renderAdminContent(data) {
             <thead>
               <tr>
                 <th>用户</th>
-                <th>邮箱</th>
+                <th>账号</th>
                 <th>注册时间</th>
                 <th>会员</th>
                 <th>到期日</th>
@@ -3309,7 +3309,7 @@ function renderAdminContent(data) {
         </div>
         <div class="admin-table-wrapper">
           <table class="admin-table">
-            <thead><tr><th>用户</th><th>邮箱</th><th>UID</th><th>会员等级</th><th>到期日</th><th>已付</th><th>操作</th></tr></thead>
+            <thead><tr><th>用户</th><th>账号</th><th>UID</th><th>会员等级</th><th>到期日</th><th>已付</th><th>操作</th></tr></thead>
             <tbody id="adminMemberBody"></tbody>
           </table>
         </div>
@@ -4314,14 +4314,14 @@ let _adminMemberPage = 1
 function renderAdminRow(u) {
   return `<tr>
     <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div><div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div></div></div></td>
-    <td class="admin-email" title="${escapeHtml(u.email)}">${escapeHtml(u.email.length > 22 ? u.email.substring(0, 20) + '..' : u.email)}</td>
+    <td class="admin-email" title="${escapeHtml(u.phone || u.email)}">${escapeHtml((u.phone || u.email).length > 22 ? (u.phone || u.email).substring(0, 20) + '..' : (u.phone || u.email))}</td>
     <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
     <td>${planLabel(u.plan, u.planExpiresAt)}</td>
     <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
     <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
     <td style="font-size:11px;white-space:nowrap;">${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}</td>
     <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
-    <td><div class="admin-actions"><button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button><button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button></div></td>
+    <td><div class="admin-actions"><button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-phone="${escapeHtml(u.phone || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button><button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button></div></td>
   </tr>`
 }
 
@@ -9294,6 +9294,7 @@ function setupGlobalEvents() {
       const userUid = editUserBtn.dataset.uid
       const userName = editUserBtn.dataset.name
       const userEmail = editUserBtn.dataset.email
+      const userPhone = editUserBtn.dataset.phone || ''
       const currentPlan = editUserBtn.dataset.plan || 'free'
       const currentExpires = editUserBtn.dataset.expires || ''
       const currentAvatar = editUserBtn.dataset.avatar || ''
@@ -9312,6 +9313,10 @@ function setupGlobalEvents() {
           <div class="admin-plan-field">
             <label for="editUserEmail">邮箱：</label>
             <input type="email" id="editUserEmail" class="admin-plan-input" value="${escapeHtml(userEmail)}">
+          </div>
+          <div class="admin-plan-field">
+            <label for="editUserPhone">手机号：</label>
+            <input type="text" id="editUserPhone" class="admin-plan-input" value="${escapeHtml(userPhone)}" placeholder="未绑定">
           </div>
           <div class="admin-plan-field">
             <label for="editUserNickname">昵称：</label>
@@ -9363,11 +9368,13 @@ function setupGlobalEvents() {
         try {
           const payload = { userId }
           const email = document.getElementById('editUserEmail').value.trim()
+          const phone = document.getElementById('editUserPhone').value.trim()
           const nickname = document.getElementById('editUserNickname').value.trim()
           const password = document.getElementById('editUserPassword').value
           const plan = document.getElementById('editUserPlan').value
           const expiresAt = document.getElementById('editUserExpires').value
           if (email) payload.email = email
+          payload.phone = phone
           if (nickname) payload.nickname = nickname
           if (password) {
             if (password.length < 6) {
