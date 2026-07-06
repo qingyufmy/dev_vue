@@ -218,7 +218,7 @@ const SCAN_FUNCTIONS = {
       if (tx.to !== address) continue
       if (tx.block_timestamp && tx.block_timestamp < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
-      if (Math.abs(amount - expected) < 0.000001) {
+      if (amount === expected) {
         return { hash: tx.transaction_id, amount }
       }
     }
@@ -239,7 +239,7 @@ const SCAN_FUNCTIONS = {
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
       if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
-      if (Math.abs(amount - expected) < 0.000001) {
+      if (amount === expected) {
         return { hash: tx.hash, amount }
       }
     }
@@ -260,7 +260,7 @@ const SCAN_FUNCTIONS = {
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
       if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
-      if (Math.abs(amount - expected) < 0.000001) {
+      if (amount === expected) {
         return { hash: tx.hash, amount }
       }
     }
@@ -312,7 +312,7 @@ const SCAN_FUNCTIONS = {
       const diff = postAmount - preAmount
 
       const expected = parseFloat(expectedAmount)
-      if (diff > 0 && Math.abs(diff - expected) < 0.000001) {
+      if (diff > 0 && diff === expected) {
         return { hash: sig.signature, amount: diff }
       }
     }
