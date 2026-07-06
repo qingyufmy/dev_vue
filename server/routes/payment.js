@@ -12,9 +12,9 @@ const router = Router()
 
 const DEFAULT_PLANS = {
   free: { name: '免费版', price: 0, month: 0, year: 0, lifetime: 0 },
-  plus: { name: 'Plus', month: 2900, year: 29000, lifetime: 99000 },
-  pro: { name: 'Pro', month: 10000, year: 100000, lifetime: 399000 },
-  premium: { name: '高级版', month: 2900, year: 29000, lifetime: 99000 },
+  plus: { name: 'Plus', month: 29, year: 290, lifetime: 990 },
+  pro: { name: 'Pro', month: 100, year: 1000, lifetime: 3990 },
+  premium: { name: '高级版', month: 29, year: 290, lifetime: 990 },
 }
 
 async function getPlans() {
@@ -147,11 +147,11 @@ router.get('/payment', authMiddleware, async (req, res) => {
       label,
       plan,
       period: periodKey,
-      fullPrice: (amount / 100).toFixed(2),
-      finalAmount: (finalAmount / 100).toFixed(2),
-      credit: (credit / 100).toFixed(2),
+      fullPrice: amount.toFixed(2),
+      finalAmount: finalAmount.toFixed(2),
+      credit: credit.toFixed(2),
       daysRemaining: credit > 0 ? Math.ceil(credit / (PLANS[user?.plan]?.month ? PLANS[user.plan].month / 30 : 1)) : 0,
-      referral_credit_applied_cents: referralCredit,
+      referral_credit_applied: referralCredit,
     })
   } catch (err) {
     res.json({ ok: false, error: '获取支付信息失败' })
@@ -222,14 +222,14 @@ router.post('/payment', authMiddleware, async (req, res) => {
             [plan, periodKey]
           )
           const rateBps = rule ? rule.rate_bps : 1000
-          const commissionCents = Math.round(finalAmount * rateBps / 10000)
+          const commissionDollars = finalAmount * rateBps / 10000
           await queryRun(
             'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
-            [finalAmount, commissionCents, planInfo.name, referral.id]
+            [finalAmount, commissionDollars, planInfo.name, referral.id]
           )
           await queryRun(
             'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
-            [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${(finalAmount/100).toFixed(2)}，返佣 $${(commissionCents/100).toFixed(2)} 待审核确认`]
+            [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${finalAmount.toFixed(2)}，返佣 $${commissionDollars.toFixed(2)} 待审核确认`]
           )
         }
       } catch (refErr) {
@@ -241,7 +241,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
 
     const requiredConfirmations = getRequiredConfirmations(chainKey)
     const rate = await getUsdtUsdRate()
-    const baseUsdtAmount = finalAmount / 100 / rate
+    const baseUsdtAmount = finalAmount / rate
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
 
     const paymentMode = await getPaymentMode()
@@ -295,14 +295,14 @@ router.post('/payment', authMiddleware, async (req, res) => {
           [plan, periodKey]
         )
         const rateBps = rule ? rule.rate_bps : 1000
-        const commissionCents = Math.round(finalAmount * rateBps / 10000)
+        const commissionDollars = finalAmount * rateBps / 10000
         await queryRun(
           'UPDATE referrals SET amount_cents = ?, commission = ?, plan_label = ?, attributed_at = NOW() WHERE id = ?',
-          [finalAmount, commissionCents, planInfo.name, referral.id]
+          [finalAmount, commissionDollars, planInfo.name, referral.id]
         )
         await queryRun(
           'INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)',
-          [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${(finalAmount/100).toFixed(2)}，返佣 $${(commissionCents/100).toFixed(2)} 待审核确认`]
+          [referral.referrer_id, 'system', '💰 返佣到账', `您邀请的用户已付款 $${finalAmount.toFixed(2)}，返佣 $${commissionDollars.toFixed(2)} 待审核确认`]
         )
       }
     } catch (refErr) {
@@ -324,7 +324,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
       crypto_chain,
       crypto_address: address,
       crypto_amount: usdtAmount,
-      usd_amount: (finalAmount / 100).toFixed(2),
+      usd_amount: finalAmount.toFixed(2),
       expires_at: expiresAt,
       required_confirmations: requiredConfirmations,
       qr_code: qrCode,

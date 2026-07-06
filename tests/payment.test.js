@@ -116,12 +116,12 @@ describe('payment.js — GET /payment preview', () => {
   })
 
   it('使用推荐积分抵扣', async () => {
-    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 500 })
+    mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 5 })
     const { json } = await callRoute('get', '/payment', {
       preview: '1', plan: 'plus', period: 'month', use_referral_credit: '1'
     })
     expect(json.ok).toBe(true)
-    expect(json.referral_credit_applied_cents).toBe(500)
+    expect(json.referral_credit_applied).toBe(5)
   })
 })
 

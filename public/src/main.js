@@ -3687,7 +3687,7 @@ async function getPlanPrices() {
     const res = await api.get('/api/plans')
     if (res.ok && res.plans) { _planPricesCache = res.plans; return res.plans }
   } catch {}
-  return { plus: { month: { current: 5000, original: 10000 }, year: { current: 50000, original: 100000 } }, pro: { month: { current: 10000, original: 20000 }, year: { current: 100000, original: 200000 } } }
+  return { plus: { month: { current: 50, original: 100 }, year: { current: 500, original: 1000 } }, pro: { month: { current: 100, original: 200 }, year: { current: 1000, original: 2000 } } }
 }
 
 function renderAdminConfigSection() {
@@ -3798,12 +3798,12 @@ function renderPlanPricesConfig(container) {
             <div style="display:flex; gap:12px; margin-bottom:8px; align-items:center;">
               <span style="width:50px; font-size:13px;">${period.name}</span>
               <div style="flex:1;">
-                <label style="font-size:11px; color:var(--text-3);">原价（美分）</label>
-                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="original" value="${escapeHtml(getVal(`${plan.id}_${period.id}_original`))}" placeholder="如 5800 = $58">
+                <label style="font-size:11px; color:var(--text-3);">原价（美元）</label>
+                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="original" value="${escapeHtml(getVal(`${plan.id}_${period.id}_original`))}" placeholder="如 100">
               </div>
               <div style="flex:1;">
-                <label style="font-size:11px; color:var(--text-3);">现价（美分）</label>
-                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="current" value="${escapeHtml(getVal(`${plan.id}_${period.id}`))}" placeholder="如 5000 = $50">
+                <label style="font-size:11px; color:var(--text-3);">现价（美元）</label>
+                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="current" value="${escapeHtml(getVal(`${plan.id}_${period.id}`))}" placeholder="如 50">
               </div>
               <div class="plan-discount-preview" data-plan="${plan.id}" data-period="${period.id}" style="min-width:60px; text-align:center;"></div>
             </div>
@@ -5745,13 +5745,13 @@ async function renderMembership() {
     if (res.ok && res.plans) planPrices = res.plans
   } catch {}
 
-  const fmt = (cents) => '$' + (cents / 100).toFixed(0)
+  const fmt = (dollars) => '$' + Math.round(dollars)
   const discount = (orig, cur) => orig > 0 && cur > 0 && cur < orig ? Math.round((1 - cur / orig) * 100) : 0
 
-  const plusM = planPrices.plus?.month || { current: 5000, original: 10000 }
-  const plusY = planPrices.plus?.year || { current: 50000, original: 100000 }
-  const proM = planPrices.pro?.month || { current: 10000, original: 20000 }
-  const proY = planPrices.pro?.year || { current: 100000, original: 200000 }
+  const plusM = planPrices.plus?.month || { current: 50, original: 100 }
+  const plusY = planPrices.plus?.year || { current: 500, original: 1000 }
+  const proM = planPrices.pro?.month || { current: 100, original: 200 }
+  const proY = planPrices.pro?.year || { current: 1000, original: 2000 }
 
   mainContent.innerHTML = `
     <div class="membership-page fade-in">
@@ -7541,11 +7541,11 @@ function renderProfile() {
   }
 
   getPlanPrices().then(prices => {
-    const fmt = (cents) => '$' + (cents / 100).toFixed(0) + '/月'
+    const fmt = (dollars) => '$' + Math.round(dollars) + '/月'
     const plusEl = document.querySelector('.sub-plan-price-plus')
     const proEl = document.querySelector('.sub-plan-price-pro')
-    if (plusEl && prices.plus) plusEl.textContent = fmt(prices.plus.month?.current || 5000)
-    if (proEl && prices.pro) proEl.textContent = fmt(prices.pro.month?.current || 10000)
+    if (plusEl && prices.plus) plusEl.textContent = fmt(prices.plus.month?.current || 50)
+    if (proEl && prices.pro) proEl.textContent = fmt(prices.pro.month?.current || 100)
   })
 
   const forumNotificationsEl = document.getElementById('forumNotificationsList')
