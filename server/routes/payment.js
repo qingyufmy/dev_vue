@@ -118,7 +118,7 @@ router.get('/payment', authMiddleware, async (req, res) => {
     const planInfo = PLANS[plan]
     if (!planInfo) return res.json({ ok: false, error: '未知套餐' })
 
-    const periodKey = period === 'yearly' ? 'year' : period
+    const periodKey = period === 'yearly' ? 'year' : period === 'monthly' ? 'month' : period
     const priceObj = planInfo[periodKey] || planInfo.month
     const amount = typeof priceObj === 'object' ? priceObj.current : priceObj
 
@@ -165,7 +165,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
     const planInfo = PLANS[plan]
     if (!planInfo) return res.json({ ok: false, error: '未知套餐' })
 
-    const periodKey = period === 'yearly' ? 'year' : period
+    const periodKey = period === 'yearly' ? 'year' : period === 'monthly' ? 'month' : period
     const priceObj = planInfo[periodKey] || planInfo.month
     const amount = typeof priceObj === 'object' ? priceObj.current : priceObj
 
@@ -271,7 +271,8 @@ router.post('/payment', authMiddleware, async (req, res) => {
     const requiredConfirmations = getRequiredConfirmations(chainKey)
     const rate = await getUsdtUsdRate()
     const baseUsdtAmount = finalAmount / rate
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    const expiresAtMs = Date.now() + 30 * 60 * 1000 + 8 * 3600_000
+    const expiresAt = new Date(expiresAtMs).toISOString().replace('T', ' ').substring(0, 19)
 
     const paymentMode = await getPaymentMode()
     let address, usdtAmount, mode
