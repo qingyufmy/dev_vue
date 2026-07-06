@@ -12,10 +12,71 @@ const CHAIN_CONFIG = {
   SOL:  { path: "m/44'/501'/0'/{index}'", coinType: 501, confirmations: 32 },
 }
 
+let _cryptoWalletConfig = null
+let _cachedMnemonic = null
+
+async function loadCryptoWalletConfig() {
+  try {
+    const rows = await queryOne("SELECT `key`, `value` FROM system_config WHERE category = 'crypto_wallet' AND `value` != ''")
+    if (rows) {
+      const config = {}
+      const allRows = await queryOne("SELECT GROUP_CONCAT(CONCAT(`key`, '=', `value`) SEPARATOR '&') as cfg FROM system_config WHERE category = 'crypto_wallet' AND `value` != ''")
+      if (allRows?.cfg) {
+        for (const pair of allRows.cfg.split('&')) {
+          const [k, v] = pair.split('=')
+          if (k && v) config[k] = decodeURIComponent(v)
+        }
+      }
+      _cryptoWalletConfig = config
+      return _cryptoWalletConfig
+    }
+  } catch (err) {
+    console.error('[Wallet] Failed to load crypto_wallet config:', err.message)
+  }
+  return {}
+}
+
+export function resetCryptoWalletConfigCache() {
+  _cryptoWalletConfig = null
+  _cachedMnemonic = null
+}
+
 function getMnemonic() {
-  const m = process.env.HD_WALLET_MNEMONIC
-  if (!m) throw new Error('HD_WALLET_MNEMONIC 环境变量未设置')
-  return m
+  if (_cachedMnemonic) return _cachedMnemonic
+
+  const envMnemonic = process.env.HD_WALLET_MNEMONIC
+  if (envMnemonic) {
+    _cachedMnemonic = envMnemonic
+    return _cachedMnemonic
+  }
+
+  if (_cryptoWalletConfig?.hd_mnemonic) {
+    _cachedMnemonic = _cryptoWalletConfig.hd_mnemonic
+    return _cachedMnemonic
+  }
+
+  throw new Error('HD_WALLET_MNEMONIC 未配置（环境变量或系统配置均未设置）')
+}
+
+export async function initCryptoWallet() {
+  await loadCryptoWalletConfig()
+  try {
+    getMnemonic()
+    console.log('[Wallet] Crypto wallet initialized')
+  } catch (err) {
+    console.warn('[Wallet] Crypto wallet not configured:', err.message)
+  }
+}
+
+export async function getCryptoWalletApiKey(chain) {
+  const config = _cryptoWalletConfig || await loadCryptoWalletConfig()
+  switch (chain) {
+    case 'TRON': return config.trongrid_api_key || process.env.TRONGRID_API_KEY || ''
+    case 'ETH': return config.etherscan_api_key || process.env.ETHERSCAN_API_KEY || ''
+    case 'BSC': return config.bscscan_api_key || process.env.BSCSCAN_API_KEY || ''
+    case 'SOL': return config.solana_rpc_url || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+    default: return ''
+  }
 }
 
 function deriveChildKey(chain, index) {

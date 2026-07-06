@@ -104,6 +104,7 @@ describe('TRON Adapter', () => {
     expect(tx.status).toBe('success')
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('trongrid.io/v1/transactions/abc123'),
+      expect.objectContaining({ headers: expect.any(Object) })
     )
   })
 

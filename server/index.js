@@ -29,6 +29,7 @@ import { initAutoSchedulers } from './routes/ai/index.js'
 import { authMiddleware } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
+import { initCryptoWallet } from './crypto/wallet.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
@@ -370,6 +371,7 @@ initBridgeWS(server)
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })
   try {
+    await initCryptoWallet()
     await startMonitor()
   } catch (err) {
     console.error('[CryptoMonitor] Failed to start:', err.message)

@@ -3694,6 +3694,7 @@ function renderAdminConfigSection() {
         <button class="admin-board-tab" type="button" data-config-tab="market_menu">股票研究菜单</button>
         <button class="admin-board-tab" type="button" data-config-tab="sms">短信服务</button>
         <button class="admin-board-tab" type="button" data-config-tab="auth_toggle">登录注册</button>
+        <button class="admin-board-tab" type="button" data-config-tab="crypto_wallet">收款钱包</button>
       </div>
       <div id="adminConfigContent" class="admin-config-content">
         <div class="loading-spinner">加载中...</div>
@@ -3751,6 +3752,9 @@ function renderAdminConfigContent() {
       break
     case 'auth_toggle':
       renderAuthToggleConfig(container)
+      break
+    case 'crypto_wallet':
+      renderCryptoWalletConfig(container)
       break
   }
 }
@@ -4238,6 +4242,75 @@ function renderAuthToggleConfig(container) {
     const res = await api.put('/api/system-config/auth_toggle', { items })
     if (res.ok) {
       showToast('登录注册配置已保存', 'success')
+      loadAdminConfig()
+    } else {
+      showToast(res.error || '保存失败', 'error')
+    }
+  })
+}
+
+function renderCryptoWalletConfig(container) {
+  const items = adminConfigData.crypto_wallet || []
+  const getVal = (key) => items.find(i => i.key === key)?.value || ''
+
+  container.innerHTML = `
+    <div class="admin-config-form">
+      <div class="admin-config-row">
+        <label>HD 钱包助记词</label>
+        <input type="password" class="admin-plan-input" id="hdMnemonic" value="${escapeHtml(getVal('hd_mnemonic'))}" placeholder="12个英文单词，用空格分隔">
+        <span class="admin-config-hint">BIP39 助记词，用于派生各链收款地址。修改后需重启服务器生效。</span>
+      </div>
+      <div class="admin-config-row">
+        <label>TronGrid API Key</label>
+        <input type="text" class="admin-plan-input" id="trongridKey" value="${escapeHtml(getVal('trongrid_api_key'))}" placeholder="用于 TRC-20 链监控">
+      </div>
+      <div class="admin-config-row">
+        <label>Etherscan API Key</label>
+        <input type="text" class="admin-plan-input" id="etherscanKey" value="${escapeHtml(getVal('etherscan_api_key'))}" placeholder="用于 ERC-20 链监控">
+      </div>
+      <div class="admin-config-row">
+        <label>BSCScan API Key</label>
+        <input type="text" class="admin-plan-input" id="bscscanKey" value="${escapeHtml(getVal('bscscan_api_key'))}" placeholder="用于 BEP-20 链监控">
+      </div>
+      <div class="admin-config-row">
+        <label>Solana RPC URL</label>
+        <input type="text" class="admin-plan-input" id="solanaRpc" value="${escapeHtml(getVal('solana_rpc_url') || 'https://api.mainnet-beta.solana.com')}" placeholder="https://api.mainnet-beta.solana.com">
+      </div>
+      <div class="admin-config-row">
+        <label>USDT/USD 汇率源</label>
+        <select class="admin-plan-select" id="rateSource">
+          <option value="binance" ${getVal('rate_source') === 'binance' ? 'selected' : ''}>Binance (推荐)</option>
+          <option value="fixed" ${getVal('rate_source') === 'fixed' ? 'selected' : ''}>固定 1:1</option>
+        </select>
+      </div>
+      <div class="admin-config-actions">
+        <button class="btn btn-primary" id="saveCryptoWallet">保存配置</button>
+      </div>
+      <div class="admin-config-info">
+        <p><strong>说明：</strong></p>
+        <ul>
+          <li>HD 钱包助记词修改后需要重启服务器才能生效</li>
+          <li>各链 API Key 可在对应平台免费申请</li>
+          <li>TRC-20 (Tron): <a href="https://www.trongrid.io/" target="_blank">trongrid.io</a></li>
+          <li>ERC-20 (Ethereum): <a href="https://etherscan.io/" target="_blank">etherscan.io</a></li>
+          <li>BEP-20 (BSC): <a href="https://bscscan.com/" target="_blank">bscscan.com</a></li>
+        </ul>
+      </div>
+    </div>
+  `
+
+  document.getElementById('saveCryptoWallet')?.addEventListener('click', async () => {
+    const items = [
+      { key: 'hd_mnemonic', value: document.getElementById('hdMnemonic').value, label: 'HD 钱包助记词', sort_order: 0 },
+      { key: 'trongrid_api_key', value: document.getElementById('trongridKey').value, label: 'TronGrid API Key', sort_order: 1 },
+      { key: 'etherscan_api_key', value: document.getElementById('etherscanKey').value, label: 'Etherscan API Key', sort_order: 2 },
+      { key: 'bscscan_api_key', value: document.getElementById('bscscanKey').value, label: 'BSCScan API Key', sort_order: 3 },
+      { key: 'solana_rpc_url', value: document.getElementById('solanaRpc').value, label: 'Solana RPC URL', sort_order: 4 },
+      { key: 'rate_source', value: document.getElementById('rateSource').value, label: 'USDT/USD 汇率源', sort_order: 5 },
+    ]
+    const res = await api.put('/api/system-config/crypto_wallet', { items })
+    if (res.ok) {
+      showToast('收款钱包配置已保存', 'success')
       loadAdminConfig()
     } else {
       showToast(res.error || '保存失败', 'error')

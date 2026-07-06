@@ -1,5 +1,5 @@
 import { BaseChainAdapter } from './base.js'
-import { deriveAddress as walletDeriveAddress } from '../wallet.js'
+import { deriveAddress as walletDeriveAddress, getCryptoWalletApiKey } from '../wallet.js'
 
 class TronAdapter extends BaseChainAdapter {
   name = 'TRON'
@@ -18,10 +18,19 @@ class TronAdapter extends BaseChainAdapter {
     return 19
   }
 
+  async getApiHeaders() {
+    const apiKey = await getCryptoWalletApiKey('TRON')
+    return {
+      'TRON-PRO-API-KEY': apiKey,
+      'Accept': 'application/json'
+    }
+  }
+
   async getTransaction(txHash) {
     try {
       const url = `${this.getApiBaseUrl()}/v1/transactions/${txHash}`
-      const resp = await fetch(url)
+      const headers = await this.getApiHeaders()
+      const resp = await fetch(url, { headers })
       if (!resp.ok) return null
       const data = await resp.json()
       if (!data.ret || data.ret.length === 0) return null
@@ -50,7 +59,8 @@ class TronAdapter extends BaseChainAdapter {
       const tx = await this.getTransaction(txHash)
       if (!tx || !tx.blockNumber) return 0
 
-      const nowResp = await fetch(`${this.getApiBaseUrl()}/wallet/getnowblock`)
+      const headers = await this.getApiHeaders()
+      const nowResp = await fetch(`${this.getApiBaseUrl()}/wallet/getnowblock`, { headers })
       if (!nowResp.ok) return 0
       const nowBlock = await nowResp.json()
       const currentBlock = nowBlock.block_header?.raw_data?.number || 0

@@ -1,5 +1,5 @@
 import { BaseChainAdapter } from './base.js'
-import { deriveAddress as walletDeriveAddress } from '../wallet.js'
+import { deriveAddress as walletDeriveAddress, getCryptoWalletApiKey } from '../wallet.js'
 
 class BscAdapter extends BaseChainAdapter {
   name = 'BSC'
@@ -20,7 +20,7 @@ class BscAdapter extends BaseChainAdapter {
 
   async getTransaction(txHash) {
     try {
-      const apiKey = process.env.BSCSCAN_API_KEY || ''
+      const apiKey = await getCryptoWalletApiKey('BSC')
       const url = `${this.getApiBaseUrl()}/api?module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${apiKey}`
       const resp = await fetch(url)
       if (!resp.ok) return null
@@ -64,7 +64,7 @@ class BscAdapter extends BaseChainAdapter {
       const tx = await this.getTransaction(txHash)
       if (!tx || !tx.blockNumber) return 0
 
-      const apiKey = process.env.BSCSCAN_API_KEY || ''
+      const apiKey = await getCryptoWalletApiKey('BSC')
       const url = `${this.getApiBaseUrl()}/api?module=proxy&action=eth_blockNumber&apikey=${apiKey}`
       const resp = await fetch(url)
       if (!resp.ok) return 0

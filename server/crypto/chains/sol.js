@@ -1,5 +1,5 @@
 import { BaseChainAdapter } from './base.js'
-import { deriveAddress as walletDeriveAddress } from '../wallet.js'
+import { deriveAddress as walletDeriveAddress, getCryptoWalletApiKey } from '../wallet.js'
 
 class SolAdapter extends BaseChainAdapter {
   name = 'SOL'
@@ -18,9 +18,15 @@ class SolAdapter extends BaseChainAdapter {
     return 32
   }
 
+  async getRpcUrl() {
+    const rpcUrl = await getCryptoWalletApiKey('SOL')
+    return rpcUrl || this.getApiBaseUrl()
+  }
+
   async getTransaction(txHash) {
     try {
-      const resp = await fetch(this.getApiBaseUrl(), {
+      const baseUrl = await this.getRpcUrl()
+      const resp = await fetch(baseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -62,7 +68,8 @@ class SolAdapter extends BaseChainAdapter {
       const tx = await this.getTransaction(txHash)
       if (!tx || !tx.blockNumber) return 0
 
-      const slotResp = await fetch(this.getApiBaseUrl(), {
+      const baseUrl = await this.getRpcUrl()
+      const slotResp = await fetch(baseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -75,7 +82,7 @@ class SolAdapter extends BaseChainAdapter {
       const slotData = await slotResp.json()
       const currentSlot = slotData.result || 0
 
-      const txSlotResp = await fetch(this.getApiBaseUrl(), {
+      const txSlotResp = await fetch(baseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
