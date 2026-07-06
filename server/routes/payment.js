@@ -42,6 +42,20 @@ async function getPaymentMode() {
   return row?.value || 'dynamic'
 }
 
+router.get('/payment/mode', async (req, res) => {
+  try {
+    const mode = await getPaymentMode()
+    let fixedAddresses = null
+    if (mode === 'fixed') {
+      const { getFixedAddress } = await import('../crypto/fixed-address.js')
+      fixedAddresses = await getFixedAddress()
+    }
+    res.json({ ok: true, mode, fixedAddresses })
+  } catch (err) {
+    res.json({ ok: true, mode: 'dynamic' })
+  }
+})
+
 router.get('/payment', authMiddleware, async (req, res) => {
   try {
     const { preview, plan, period, use_referral_credit } = req.query

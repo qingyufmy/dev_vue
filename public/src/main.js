@@ -5925,7 +5925,32 @@ const CRYPTO_CHAINS = [
 function initiateCryptoPayment(plan, period) {
   if (document.getElementById('cryptoChainModal')) return
 
-  _selectedCryptoChain = 'TRON'
+  _doInitiateCryptoPayment(plan, period)
+}
+
+async function _doInitiateCryptoPayment(plan, period) {
+  let availableChains = [...CRYPTO_CHAINS]
+
+  try {
+    const res = await api.get('/api/payment/mode')
+    if (res.ok && res.mode === 'fixed' && res.fixedAddresses) {
+      const addrMap = { TRON: res.fixedAddresses.fixed_tron_address, ETH: res.fixedAddresses.fixed_erc20_address, BSC: res.fixedAddresses.fixed_bep20_address, SOL: res.fixedAddresses.fixed_sol_address }
+      availableChains = availableChains.filter(c => addrMap[c.id])
+    }
+  } catch {}
+
+  if (availableChains.length === 0) {
+    showToast('支付链未配置，请联系管理员', 'error')
+    return
+  }
+
+  if (availableChains.length === 1) {
+    _selectedCryptoChain = availableChains[0].id
+    _doCreateCryptoPayment(plan, period)
+    return
+  }
+
+  _selectedCryptoChain = availableChains[0].id
 
   const planNames = { plus: 'Plus', pro: 'Pro' }
   const periodNames = { monthly: '月付', yearly: '年付' }
@@ -5942,7 +5967,7 @@ function initiateCryptoPayment(plan, period) {
       </div>
       <div class="crypto-plan-badge">${planLabel}</div>
       <div class="crypto-chain-list">
-        ${CRYPTO_CHAINS.map(c => `
+        ${availableChains.map(c => `
           <div class="crypto-chain-card ${c.id === _selectedCryptoChain ? 'active' : ''}" data-chain="${c.id}">
             <div class="chain-icon-wrap" style="background:${c.color}20; color:${c.color}">${c.icon}</div>
             <div class="chain-info">
