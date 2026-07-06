@@ -4268,7 +4268,7 @@ function renderCryptoWalletConfig(container) {
         <span class="admin-config-hint">动态地址：自动对账，需归集资金。固定地址：单一地址收款，用金额区分订单。</span>
       </div>
 
-      <div id="fixedAddressSection" style="display:${isFixed ? 'block' : 'none'}; margin-top:16px; padding:16px; background:var(--glass-light); border-radius:12px;">
+      <div id="fixedAddressSection" style="display:${isFixed ? 'block' : 'none'}; background:var(--glass-light); border-radius:12px;">
         <h4 style="margin-bottom:12px;">固定收款地址</h4>
         <div class="admin-config-row">
           <label>TRC-20 (Tron)</label>
