@@ -213,12 +213,12 @@ const SCAN_FUNCTIONS = {
     if (!data.data) return null
 
     const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
+    const expected = parseFloat(expectedAmount)
     for (const tx of data.data) {
       if (tx.to !== address) continue
       if (tx.block_timestamp && tx.block_timestamp < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
-      const expected = parseFloat(expectedAmount)
-      if (Math.abs(amount - expected) / expected <= 0.01) {
+      if (Math.abs(amount - expected) < 0.000001) {
         return { hash: tx.transaction_id, amount }
       }
     }
@@ -234,12 +234,12 @@ const SCAN_FUNCTIONS = {
     if (!data.result) return null
 
     const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
+    const expected = parseFloat(expectedAmount)
     for (const tx of data.result) {
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
       if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
-      const expected = parseFloat(expectedAmount)
-      if (Math.abs(amount - expected) / expected <= 0.01) {
+      if (Math.abs(amount - expected) < 0.000001) {
         return { hash: tx.hash, amount }
       }
     }
@@ -255,12 +255,12 @@ const SCAN_FUNCTIONS = {
     if (!data.result) return null
 
     const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
+    const expected = parseFloat(expectedAmount)
     for (const tx of data.result) {
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
       if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
-      const expected = parseFloat(expectedAmount)
-      if (Math.abs(amount - expected) / expected <= 0.01) {
+      if (Math.abs(amount - expected) < 0.000001) {
         return { hash: tx.hash, amount }
       }
     }
@@ -312,7 +312,7 @@ const SCAN_FUNCTIONS = {
       const diff = postAmount - preAmount
 
       const expected = parseFloat(expectedAmount)
-      if (diff > 0 && Math.abs(diff - expected) / expected <= 0.01) {
+      if (diff > 0 && Math.abs(diff - expected) < 0.000001) {
         return { hash: sig.signature, amount: diff }
       }
     }
