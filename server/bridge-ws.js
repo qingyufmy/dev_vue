@@ -926,20 +926,25 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Old signals subquery
         const oldSessionFilter = (params.direction !== 'close' && params.session_id) ? ' AND session_id = ?' : ''
         const oldSessionParam = (params.direction !== 'close' && params.session_id) ? [params.session_id] : []
-        // Exclude market_data_json (TEXT) from list query for performance
-        const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, created_at, delivery_id, execution_status, market_data_json, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, order_state'
-        const selectColsOld = 's.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, s.created_at, NULL as delivery_id, NULL as execution_status, s.market_data_json, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.order_state'
-        const selectColsDeliv = 's.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, s.created_at, d.id as delivery_id, d.execution_status, s.market_data_json, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, d.pending_ticket, s.order_state'
-        const oldSubquery = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
+        // Lightweight subquery for COUNT (no TEXT columns)
+        const countColsOld = 's.id'
+        const countColsDeliv = 's.id'
+        const countOldSub = `(SELECT ${countColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
+        const countDelivSub = `(SELECT ${countColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
+        // Full subquery for data (exclude market_data_json TEXT for performance)
+        const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, created_at, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, order_state'
+        const selectColsOld = 's.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, s.created_at, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.order_state'
+        const selectColsDeliv = 's.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, s.created_at, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, d.pending_ticket, s.order_state'
+        const dataOldSub = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
+        const dataDelivSub = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const oldParams = [queryUserId, ...oldSessionParam, ...sharedParams]
 
         // Shared signals subquery (delivery overrides user-level execution state)
-        const delivSubquery = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const delivParams = [queryUserId, ...sharedParams]
 
-        // Run COUNT and data query in parallel
-        const countSql = `SELECT COUNT(*) as total FROM (${oldSubquery} UNION ALL ${delivSubquery}) t`
-        const dataSql = `SELECT ${selectCols} FROM (${oldSubquery} UNION ALL ${delivSubquery}) t ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
+        // COUNT uses lightweight subquery (no TEXT); data uses full subquery (no market_data_json)
+        const countSql = `SELECT COUNT(*) as total FROM (${countOldSub} UNION ALL ${countDelivSub}) t`
+        const dataSql = `SELECT ${selectCols} FROM (${dataOldSub} UNION ALL ${dataDelivSub}) t ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
         const [countRow, allRows] = await Promise.all([
           queryOne(countSql, [...oldParams, ...delivParams]),
           queryAll(dataSql, [...oldParams, ...delivParams, limit + 1, offset])
@@ -955,8 +960,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (item.delivery_id) {
             item.source = 'auto_shared'
           }
-          try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
-          delete item.market_data_json
+          try { item.market_data = JSON.parse(item.market_data_json || '{}') } catch { item.market_data = {} }
           delete item.delivery_id
           item.is_executed = !!item.is_executed
           ai.attachSignalTiming(item)
