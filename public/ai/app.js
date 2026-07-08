@@ -2523,10 +2523,13 @@ function openPromptTypeModal(ptId) {
     document.getElementById('adminPtActive').checked = true;
   }
   modal.style.display = 'flex';
+  requestAnimationFrame(() => modal.classList.add('active'));
 }
 
 function closePromptTypeModal() {
-  document.getElementById('promptTypeModal').style.display = 'none';
+  const modal = document.getElementById('promptTypeModal');
+  modal.classList.remove('active');
+  setTimeout(() => { modal.style.display = 'none'; }, 250);
 }
 
 function initAutoSymbolsSelector() {
