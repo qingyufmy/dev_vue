@@ -46,6 +46,18 @@ router.get('/changelog/current', async (req, res) => {
   }
 })
 
+// Admin: get changelog
+router.get('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const versionRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
+    const contentRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'content'")
+    res.json({ ok: true, version: parseInt(versionRow?.value || '1', 10), content: contentRow?.value || '' })
+  } catch (err) {
+    console.error('[Config] Get changelog error:', err)
+    res.json({ ok: false, error: '读取失败' })
+  }
+})
+
 // Admin: update changelog
 router.put('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
   const { version, content } = req.body
