@@ -743,6 +743,28 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '039_add_ai_signals_pending_cols',
+    up: async () => {
+      const cols = [
+        { name: 'limit_price', def: "DOUBLE DEFAULT NULL" },
+        { name: 'pending_valid_until', def: "DATETIME DEFAULT NULL" },
+        { name: 'order_state', def: "VARCHAR(12) DEFAULT NULL" },
+      ]
+      for (const col of cols) {
+        try {
+          await queryRun(`ALTER TABLE ai_signals ADD COLUMN ${col.name} ${col.def}`)
+          console.log(`[Migrations] 039 added ${col.name} to ai_signals`)
+        } catch (e) {
+          if (e.message?.includes('Duplicate column')) {
+            console.log(`[Migrations] 039 ${col.name} already exists`)
+          } else {
+            console.error(`[Migrations] 039 ${col.name} failed:`, e.message)
+          }
+        }
+      }
+    }
   }
 ]
 
