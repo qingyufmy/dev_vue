@@ -155,7 +155,7 @@ export async function handleAnalyze(userId, params) {
         const isPending = bridgeAction === 'pending'
         const ticket = execResult.order || execResult.ticket || null
         if (isPending) {
-          await queryRun('UPDATE ai_signals SET pending_ticket = ?, pending_state = ? WHERE id = ?',
+          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ?, pending_state = ? WHERE id = ?',
             [String(ticket), 'pending', signal.id])
           signal.pending_ticket = String(ticket)
         } else {

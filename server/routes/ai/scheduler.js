@@ -976,8 +976,8 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
            pending_ticket = ?, pending_state = 'pending', pending_valid_until = ?,
            execution_result = ? WHERE signal_id = ? AND user_id = ?`,
           [String(ticket), signal.pending_valid_until || null, JSON.stringify(execResult), signalId, userId])
-        // Sync pending_ticket to ai_signals
-        await queryRun('UPDATE ai_signals SET pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(() => {})
+        // Sync to ai_signals
+        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(() => {})
         l(`auto-executed pending: ticket=${ticket}, volume=${order.volume}`)
       } else {
         await queryRun(
