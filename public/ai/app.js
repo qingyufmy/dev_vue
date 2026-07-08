@@ -4907,7 +4907,7 @@ async function saveChangelog() {
     return;
   }
   try {
-    const resp = await api('/api/admin/changelog', { method: 'PUT', body: { version, content: contentInput.value } });
+    const resp = await api('/api/admin/changelog', { method: 'POST', body: { version, content: contentInput.value } });
     if (resp.ok) {
       if (statusEl) { statusEl.textContent = '已保存'; statusEl.style.color = '#22c55e'; setTimeout(() => { statusEl.textContent = ''; }, 2000); }
     } else {

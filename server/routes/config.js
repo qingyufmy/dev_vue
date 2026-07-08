@@ -59,7 +59,7 @@ router.get('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
 })
 
 // Admin: update changelog
-router.put('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
+router.post('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
   const { version, content } = req.body
   if (version === undefined || version === null) {
     return res.json({ ok: false, error: '版本号必填' })
