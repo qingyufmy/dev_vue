@@ -713,6 +713,36 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '037_add_ai_signals_entry_method',
+    up: async () => {
+      try {
+        await queryRun("ALTER TABLE ai_signals ADD COLUMN entry_method VARCHAR(8) DEFAULT 'market' AFTER ai_model")
+        console.log('[Migrations] 037 added entry_method to ai_signals')
+      } catch (e) {
+        if (e.message?.includes('Duplicate column')) {
+          console.log('[Migrations] 037 entry_method already exists')
+        } else {
+          console.error('[Migrations] 037 failed:', e.message)
+        }
+      }
+    }
+  },
+  {
+    id: '038_add_ai_signals_pending_ticket',
+    up: async () => {
+      try {
+        await queryRun("ALTER TABLE ai_signals ADD COLUMN pending_ticket VARCHAR(32) DEFAULT NULL AFTER trade_ticket")
+        console.log('[Migrations] 038 added pending_ticket to ai_signals')
+      } catch (e) {
+        if (e.message?.includes('Duplicate column')) {
+          console.log('[Migrations] 038 pending_ticket already exists')
+        } else {
+          console.error('[Migrations] 038 failed:', e.message)
+        }
+      }
+    }
   }
 ]
 

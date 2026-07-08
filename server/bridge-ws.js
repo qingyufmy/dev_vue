@@ -542,7 +542,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         const connected = !!(bridge && bridge.ws.readyState === 1)
         const alive = connected && (Date.now() - bridge.lastSeen < 20000)
-        const tradeEnabled = usingFallback ? (bridge.tradeEnabled !== false) : (alive && (bridge.tradeEnabled !== false))
+        const tradeEnabled = bridge ? (usingFallback ? (bridge.tradeEnabled !== false) : (alive && (bridge.tradeEnabled !== false))) : false
         result = {
           status: 'success',
           gateway: {
