@@ -1,5 +1,6 @@
 import mysql from 'mysql2/promise'
 import bcrypt from 'bcryptjs'
+import { MYSQL_POOL_SIZE } from './config.js'
 /** Get current Beijing time as 'YYYY-MM-DD HH:MM:SS' for MySQL DATETIME */
 export function beijingNow() {
   const d = new Date(Date.now() + 8 * 3600_000)
@@ -26,7 +27,7 @@ function getDBConfig() {
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
       waitForConnections: true,
-      connectionLimit: 10,
+      connectionLimit: MYSQL_POOL_SIZE,
       queueLimit: 0,
       charset: 'utf8mb4',
       dateStrings: true,

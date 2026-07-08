@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken'
 import { queryOne, queryRun } from '../db.js'
-import { JWT_SECRET } from '../config.js'
+import { JWT_SECRET, JWT_EXPIRY } from '../config.js'
 
 export function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization
@@ -57,5 +57,5 @@ export function adminOnly(req, res, next) {
 }
 
 export function generateToken(userId) {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' })
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRY })
 }

@@ -12,6 +12,7 @@ vi.mock('../server/db.js', () => ({
 vi.mock('../server/config.js', () => ({
   JWT_SECRET: 'test-secret',
   DEFAULT_API_BASE_URL: 'https://api.deepseek.com',
+  ADMIN_CACHE_TTL_MS: 300000,
 }))
 
 vi.mock('../server/redis.js', () => ({

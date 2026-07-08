@@ -5,6 +5,7 @@ const JWT_SECRET = 'test-secret-key-for-testing-only'
 
 vi.mock('../../server/config.js', () => ({
   JWT_SECRET: 'test-secret-key-for-testing-only',
+  JWT_EXPIRY: '7d',
 }))
 
 vi.mock('../../server/db.js', () => ({

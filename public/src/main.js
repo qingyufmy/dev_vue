@@ -4393,47 +4393,14 @@ function renderCryptoWalletConfig(container) {
         <span class="admin-config-hint">用户付款时显示这些地址。系统会生成唯一金额（如 50.000001）来区分不同订单。</span>
       </div>
 
-      <div id="hdWalletSection" style="display:${isDynamic ? 'block' : 'none'}; margin-top:20px; padding-top:20px; border-top:1px solid var(--glass-border);">
-        <h4 style="margin-bottom:12px;">HD 钱包配置（动态地址模式使用）</h4>
-        <div class="admin-config-row">
-          <label>HD 钱包助记词</label>
-          <input type="password" class="admin-plan-input" id="hdMnemonic" value="${escapeHtml(getVal('hd_mnemonic'))}" placeholder="12个英文单词，用空格分隔">
-          <span class="admin-config-hint">BIP39 助记词，用于派生各链收款地址。修改后需重启服务器生效。</span>
-        </div>
-      </div>
-
-      <div class="admin-config-row">
-        <label>TronGrid API Key</label>
-        <input type="text" class="admin-plan-input" id="trongridKey" value="${escapeHtml(getVal('trongrid_api_key'))}" placeholder="用于 TRC-20 链监控">
-      </div>
-      <div class="admin-config-row">
-        <label>Etherscan API Key</label>
-        <input type="text" class="admin-plan-input" id="etherscanKey" value="${escapeHtml(getVal('etherscan_api_key'))}" placeholder="用于 ERC-20 链监控">
-      </div>
-      <div class="admin-config-row">
-        <label>BSCScan API Key</label>
-        <input type="text" class="admin-plan-input" id="bscscanKey" value="${escapeHtml(getVal('bscscan_api_key'))}" placeholder="用于 BEP-20 链监控">
-      </div>
-      <div class="admin-config-row">
-        <label>Solana RPC URL</label>
-        <input type="text" class="admin-plan-input" id="solanaRpc" value="${escapeHtml(getVal('solana_rpc_url') || 'https://api.mainnet-beta.solana.com')}" placeholder="https://api.mainnet-beta.solana.com">
-      </div>
-      <div class="admin-config-row">
-        <label>USDT/USD 汇率源</label>
-        <select class="admin-plan-select" id="rateSource">
-          <option value="binance" ${getVal('rate_source') === 'binance' ? 'selected' : ''}>Binance (推荐)</option>
-          <option value="fixed" ${getVal('rate_source') === 'fixed' ? 'selected' : ''}>固定 1:1</option>
-        </select>
-      </div>
       <div class="admin-config-actions">
         <button class="btn btn-primary" id="saveCryptoWallet">保存配置</button>
       </div>
       <div class="admin-config-info">
         <p><strong>说明：</strong></p>
         <ul>
-          <li><strong>动态地址</strong>：每个订单生成唯一地址，自动对账，需定期归集资金</li>
+          <li><strong>动态地址</strong>：每个订单生成唯一地址，自动对账，需定期归集资金。助记词和 API Key 在服务器 .env 中配置</li>
           <li><strong>固定地址</strong>：所有订单用同一地址，用唯一金额（如 50.000001）区分</li>
-          <li>各链 API Key 可在对应平台免费申请</li>
         </ul>
       </div>
     </div>
@@ -4528,7 +4495,6 @@ function renderCryptoWalletConfig(container) {
     const isFixed = mode === 'fixed'
 
     document.getElementById('fixedAddressSection').style.display = isFixed ? 'block' : 'none'
-    document.getElementById('hdWalletSection').style.display = isFixed ? 'none' : 'block'
     document.getElementById('sweepSection').style.display = isFixed ? 'none' : 'block'
   })
 
@@ -4548,12 +4514,7 @@ function renderCryptoWalletConfig(container) {
     })
 
     const items = [
-      { key: 'hd_mnemonic', value: document.getElementById('hdMnemonic').value, label: 'HD 钱包助记词', sort_order: 0 },
-      { key: 'trongrid_api_key', value: document.getElementById('trongridKey').value, label: 'TronGrid API Key', sort_order: 1 },
-      { key: 'etherscan_api_key', value: document.getElementById('etherscanKey').value, label: 'Etherscan API Key', sort_order: 2 },
-      { key: 'bscscan_api_key', value: document.getElementById('bscscanKey').value, label: 'BSCScan API Key', sort_order: 3 },
-      { key: 'solana_rpc_url', value: document.getElementById('solanaRpc').value, label: 'Solana RPC URL', sort_order: 4 },
-      { key: 'rate_source', value: document.getElementById('rateSource').value, label: 'USDT/USD 汇率源', sort_order: 5 },
+      { key: 'payment_mode', value: mode, label: '支付模式', sort_order: 0 },
     ]
     const res = await api.put('/api/system-config/crypto_wallet', { items })
 

@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit'
 import multer from 'multer'
 import jwt from 'jsonwebtoken'
 import http from 'http'
-import { JWT_SECRET } from './config.js'
+import { JWT_SECRET, PORT, MAX_UPLOAD_SIZE, JSON_BODY_LIMIT, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
@@ -33,7 +33,6 @@ import { startMonitor } from './crypto/monitor.js'
 import { initCryptoWallet } from './crypto/wallet.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const PORT = process.env.PORT || 3000
 
 // .env is loaded by server/config.js via dotenv — no manual parsing needed
 
@@ -41,7 +40,7 @@ const PORT = process.env.PORT || 3000
 const uploadDir = process.env.UPLOAD_DIR || './uploads'
 if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
 
-const upload = multer({ dest: join(__dirname, uploadDir), limits: { fileSize: 10 * 1024 * 1024 } })
+const upload = multer({ dest: join(__dirname, uploadDir), limits: { fileSize: MAX_UPLOAD_SIZE } })
 
 const app = express()
 app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避免 IP 欺骗
@@ -60,7 +59,7 @@ app.use(cors({
   credentials: true,
   maxAge: 86400
 }))
-app.use(express.json({ limit: '10mb' }))
+app.use(express.json({ limit: JSON_BODY_LIMIT }))
 app.use(express.urlencoded({ extended: true }))
 
 // Security headers
@@ -75,22 +74,22 @@ app.use((req, res, next) => {
 
 // Rate limiting — prevent brute force and DoS
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // per IP
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: API_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: '请求过于频繁，请稍后再试' }
 })
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20, // stricter for login/register
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: '操作过于频繁，请稍后再试' }
 })
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10, // content creation: 10 req/min per IP
+  max: WRITE_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: '发布过于频繁，请稍后再试' }

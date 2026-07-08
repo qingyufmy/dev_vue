@@ -1,7 +1,8 @@
 import svgCaptcha from 'svg-captcha'
+import { CAPTCHA_TTL_MS } from './config.js'
 
 const captchaStore = new Map()
-const CAPTCHA_TTL = 5 * 60 * 1000
+const CAPTCHA_TTL = CAPTCHA_TTL_MS
 
 setInterval(() => {
   const now = Date.now()

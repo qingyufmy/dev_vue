@@ -1,7 +1,7 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from './db.js'
-import { DEFAULT_API_BASE_URL } from './config.js'
+import { DEFAULT_API_BASE_URL, ADMIN_CACHE_TTL_MS } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 import { utcToMt5Time } from './routes/ai/utils.js'
 
@@ -13,7 +13,7 @@ const browsers = new Map()      // userId -> Set<ws>
 const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
 let adminUserId = null          // cached admin userId for fallback
 let adminUserIdLastCheck = 0
-const ADMIN_CACHE_TTL = 300000 // 5 minutes
+const ADMIN_CACHE_TTL = ADMIN_CACHE_TTL_MS
 const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 污染状态)
 
 let cmdCounter = 0
