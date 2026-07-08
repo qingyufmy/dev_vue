@@ -1416,6 +1416,19 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'pending_list': {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         if (!hasOwnBridge) {
+          // In observation mode, fall back to admin's bridge
+          const adminId = await getAdminUserId()
+          if (adminId && bridges.has(adminId) && bridges.get(adminId).ws?.readyState === 1) {
+            try {
+              const symbol = params.symbol ? params.symbol : null
+              const listResult = await ai.mt5Bridge(adminId, 'pending_list', { symbol })
+              result = listResult
+            } catch (e) {
+              console.error('[BridgeWS] pending_list (admin fallback) error:', e.message)
+              result = { status: 'error', message: '获取挂单列表失败' }
+            }
+            break
+          }
           result = { status: 'error', message: '请先连接 MT5 桥接' }
           break
         }
