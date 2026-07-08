@@ -1,11 +1,5 @@
 import QRCode from 'qrcode'
-
-const USDT_CONTRACTS = {
-  TRON: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
-  ETH: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-  BSC: '0x55d398326f99059fF775485246999027B3197955',
-  SOL: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-}
+import { USDT_CONTRACTS } from './constants.js'
 
 const CHAIN_IDS = {
   ETH: 1,

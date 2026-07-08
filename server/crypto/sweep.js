@@ -1,22 +1,11 @@
 import { queryAll, queryOne, queryRun, beijingNow } from '../db.js'
-import { deriveAddress, derivePrivateKey, getAddressCount, getMainAddress } from './wallet.js'
-import { getCryptoWalletApiKey } from './wallet.js'
+import { deriveAddress, derivePrivateKey, getAddressCount, getMainAddress, loadTronWeb, getCryptoWalletApiKey } from './wallet.js'
+import { USDT_CONTRACTS } from './constants.js'
 
-const USDT_TRC20 = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'
 const TRONGRID_API = 'https://api.trongrid.io'
 
-let _TronWeb = null
-
-async function getTronWeb() {
-  if (!_TronWeb) {
-    const mod = await import('tronweb')
-    _TronWeb = mod.TronWeb
-  }
-  return _TronWeb
-}
-
 async function getTronWebInstance() {
-  const TronWeb = await getTronWeb()
+  const TronWeb = await loadTronWeb()
   return new TronWeb({
     fullHost: TRONGRID_API,
     headers: { 'TRON-PRO-API-KEY': await getCryptoWalletApiKey('TRON') }
@@ -30,7 +19,7 @@ export async function getDerivedAddressesBalance() {
   for (let i = 0; i < count; i++) {
     const address = deriveAddress('TRON', i)
     try {
-      const resp = await fetch(`${TRONGRID_API}/v1/accounts/${address}/trc20?contract_address=${USDT_TRC20}&limit=1`, {
+      const resp = await fetch(`${TRONGRID_API}/v1/accounts/${address}/trc20?contract_address=${USDT_CONTRACTS.TRON}&limit=1`, {
         headers: { 'TRON-PRO-API-KEY': await getCryptoWalletApiKey('TRON') }
       })
       const data = await resp.json()
@@ -42,7 +31,7 @@ export async function getDerivedAddressesBalance() {
 
       let usdtBalance = 0
       if (data.data && data.data.length > 0) {
-        const latest = data.data.find(t => t.to === address && t.token_address === USDT_TRC20.toLowerCase())
+        const latest = data.data.find(t => t.to === address && t.token_address === USDT_CONTRACTS.TRON.toLowerCase())
         if (latest) {
           usdtBalance = parseInt(latest.value) / 1e6
         }
@@ -80,7 +69,7 @@ export async function sweepAddress(fromIndex) {
   const tronWeb = await getTronWebInstance()
   tronWeb.setAddress(fromAddress)
 
-  const contract = await tronWeb.contract().at(USDT_TRC20)
+  const contract = await tronWeb.contract().at(USDT_CONTRACTS.TRON)
 
   const balance = await contract.methods.balanceOf(fromAddress).call()
   const balanceNum = parseInt(balance.toString()) / 1e6

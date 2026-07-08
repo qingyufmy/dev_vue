@@ -1,19 +1,9 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from './db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from './db.js'
 import { DEFAULT_API_BASE_URL } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
-
-function toMt5Time(str) {
-  // Beijing time (UTC+8) → MT5 broker time (UTC+3): subtract 5 hours
-  if (!str) return null
-  try {
-    const d = new Date(str.replace(' ', 'T'))
-    d.setHours(d.getHours() - 5)
-    const pad = n => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  } catch { return str }
-}
+import { utcToMt5Time } from './routes/ai/utils.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -465,7 +455,6 @@ async function _initBridge(ws, userId, user) {
           pending.resolve(msg.result)
         }
       }
-    } else {
     }
   })
 
@@ -805,25 +794,21 @@ async function handleBrowserCommand(ws, userId, msg) {
           await run('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, sid])
           await run(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
             temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-            max_position_size, selected_take_profit, model_sharing_enabled, auto_config_override,
-            auto_symbols, auto_interval_minutes, system_prompt, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            max_position_size, selected_take_profit, model_sharing_enabled, system_prompt, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON DUPLICATE KEY UPDATE
               api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
               api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
               max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
               enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
               max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
-              model_sharing_enabled = VALUES(model_sharing_enabled), auto_config_override = VALUES(auto_config_override),
-              auto_symbols = VALUES(auto_symbols), auto_interval_minutes = VALUES(auto_interval_minutes),
+              model_sharing_enabled = VALUES(model_sharing_enabled),
               system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
               is_active = 1, updated_at = VALUES(updated_at)`,
             [userId, sid, cfg.api_provider || 'deepseek', cfg.api_key || null,
               cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
               cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
               cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
-              cfg.auto_config_override ? 1 : 0,
-              cfg.auto_symbols || null, cfg.auto_interval_minutes || null,
               cfg.system_prompt || null, now, now])
         })
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
@@ -865,7 +850,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         if (row) {
           const now = Date.now()
-          const createdAt = new Date(row.created_at).getTime()
+          const createdAt = parseBeijing(row.created_at)?.getTime() ?? 0
           const ttl = (row.ttl_seconds || 3600) * 1000
           row.is_stale = (now - createdAt) > ttl
           row.age_seconds = Math.floor((now - createdAt) / 1000)
@@ -1249,7 +1234,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (user2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         const existing = await ai.getGlobalAutoConfig()
         const newCfg = {
-          symbols: existing?.symbols || 'XAUUSD',
           interval_minutes: existing?.interval_minutes || 5,
           api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
@@ -1257,7 +1241,6 @@ async function handleBrowserCommand(ws, userId, msg) {
           api_base_url: params.api_base_url ?? existing?.api_base_url ?? DEFAULT_API_BASE_URL,
           temperature: params.temperature ?? existing?.temperature ?? 0.3,
           max_tokens: params.max_tokens ?? existing?.max_tokens ?? 2000,
-          system_prompt: existing?.system_prompt || null,
           risk_level: params.risk_level ?? existing?.risk_level ?? 'medium',
           max_position_size: params.max_position_size ?? existing?.max_position_size ?? 0.05,
           selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
@@ -1313,7 +1296,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
         const logs = ownRows.map(row => {
           const item = { ...row }
-          item.created_at_mt5 = toMt5Time(item.created_at)
+          item.created_at_mt5 = utcToMt5Time(item.created_at)
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
           try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
           delete item.request_json
@@ -1335,7 +1318,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               ticket = exec.order || exec.ticket || exec.position
             }
             if (ticket) ticketMap[String(ticket)] = row.id
-          } catch {}
+          } catch (e) { console.warn('[BridgeWS] Failed to parse execution_result:', e.message) }
         }
         // New shared signals via deliveries
         const delivRows = await queryAll(
@@ -1352,7 +1335,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               ticket = exec.order || exec.ticket || exec.position
             }
             if (ticket) ticketMap[String(ticket)] = row.signal_id
-          } catch {}
+          } catch (e) { console.warn('[BridgeWS] Failed to parse delivery execution_result:', e.message) }
         }
         result = { status: 'success', tickets: ticketMap }
         break
@@ -1550,7 +1533,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               try {
                 const exec = JSON.parse(s.execution_result || '{}')
                 ticket = exec.order || exec.ticket || exec.position
-              } catch {}
+              } catch (e) { console.warn('[BridgeWS] Failed to parse signal execution_result:', e.message) }
             }
             if (ticket) {
               const tk = String(ticket)

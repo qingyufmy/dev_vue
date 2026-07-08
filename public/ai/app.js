@@ -274,6 +274,14 @@ const parseDate = (v) => {
   try { return fmtUtc(new Date(v.replace(" ", "T"))); } catch { return null; }
 };
 
+function utcToBeijing(utcStr) {
+  if (!utcStr) return null;
+  const d = new Date(utcStr.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return utcStr;
+  const p = (x) => String(x).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p((d.getUTCHours() + 8) % 24)}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
 function compactTimeParts(value) {
   const full = formatTime(value);
   if (full === "--") return { time: "--", badge: "" };
@@ -1325,9 +1333,10 @@ async function bootstrap() {
       window.location.href = "/";
       return;
     }
-    state.user = await api("/aurum-api/auth/me");
+    const profileRes = await api("/api/profile");
+    state.user = profileRes.user;
     // Check if plan expired (backend also downgrades, but show specific message here)
-    const expiresAt = state.user?.plan_expires_at;
+    const expiresAt = state.user?.planExpiresAt;
     if (expiresAt && new Date(expiresAt) <= new Date()) {
       // Plan expired — show expired overlay instead of generic upgrade
       document.getElementById('proOverlay')?.classList.remove('hidden');
@@ -1498,8 +1507,8 @@ function initBridgeModal() {
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
   $("downloadExe")?.addEventListener("click", async () => {
-    let url = "https://qiniu.acadfx.com/AURUM_Bridge_v2.2.0.exe";
-    let version = "v2.2.0";
+    let url = "https://qiniu.acadfx.com/AURUM_Bridge_v2.2.1.exe";
+    let version = "v2.2.1";
     try {
       const resp = await fetch("/api/bridge/version");
       const data = await resp.json();
@@ -2287,7 +2296,7 @@ async function loadAutoConfig() {
     document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
     document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
-    document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enable_auto_trade);
+    document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enabled);
 
     // Admin: global config
     if (isAdmin && data.admin) {
@@ -2701,7 +2710,7 @@ function renderPendingSignalInfo(signal, market) {
   if (em === 'stop_limit' && signal.stop_limit_price) rows += `<div><span>限价</span><strong>${escapeHtml(priceDisplay(signal.stop_limit_price))}</strong></div>`
   if (em === 'stop_limit' && Number.isFinite(Number(market.latest_price))) rows += `<div><span>当前市价</span><strong>${escapeHtml(priceDisplay(market.latest_price))}</strong></div>`
   if (signal.pending_valid_until) {
-    const validDate = parseDate(signal.pending_valid_until)
+    const validDate = utcToBeijing(signal.pending_valid_until)
     if (validDate) rows += `<div><span>有效期至</span><strong>${escapeHtml(validDate)}</strong></div>`
   }
   return `<div class="signal-pending-info">${rows}</div>`
@@ -3946,7 +3955,7 @@ function auditRowClass(status) {
 
 function auditActionType(action) {
   const s = String(action || "");
-  if (s.startsWith("ai_") || s.startsWith("smart_close")) return "ai";
+  if (s.startsWith("ai_")) return "ai";
   return "manual";
 }
 

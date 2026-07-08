@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { initDB, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
+import { BILIBILI_HEADERS } from './utils.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
 import commentRoutes from './routes/comments.js'
@@ -65,6 +66,10 @@ app.use(express.urlencoded({ extended: true }))
 // Security headers
 app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.hdslb.com https://i0.hdslb.com https://i1.hdslb.com https://i2.hdslb.com; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'")
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.removeHeader('X-Powered-By')
   next()
 })
 
@@ -138,7 +143,7 @@ app.get('/api/bilibili-proxy', (req, res) => {
     if (tried >= nodes.length) { responded = true; return res.status(502).end() }
     const url = nodes[tried++]
     const proxyReq = https.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' },
+      headers: BILIBILI_HEADERS,
       timeout: 8000
     }, (proxyRes) => {
       if (proxyRes.statusCode !== 200) return tryNext()
@@ -362,6 +367,7 @@ initBridgeWS(server)
   await initDB()
   await runMigrations()
   await initAutoSchedulers()
+  console.log(`[TZ] server=${Intl.DateTimeFormat().resolvedOptions().timeZone} db_session=+08:00 parse=explicit(+08:00)`)
   server.listen(PORT, () => {
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
   })

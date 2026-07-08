@@ -4,10 +4,6 @@ import { queryAll, queryRun } from './db.js'
 
 let cachedConfig = null
 
-export function resetSmsConfig() {
-  cachedConfig = null
-}
-
 export async function loadSmsConfig() {
   if (cachedConfig) return cachedConfig
 
@@ -30,6 +26,10 @@ export async function loadSmsConfig() {
       register: map.template_code_register || '',
       reset: map.template_code_reset || '',
       bind: map.template_code_bind || '',
+      change: map.template_code_reset || '',
+      change_password: map.template_code_reset || '',
+      change_phone: map.template_code_bind || '',
+      change_email: map.template_code_reset || '',
     },
   }
 
@@ -85,12 +85,12 @@ export async function sendVerificationSms(phone, purpose = 'login') {
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000)
     .toISOString().replace('T', ' ').substring(0, 19)
 
+  await sendSms(phone, templateCode, { code })
+
   await queryRun(
     'INSERT INTO verification_codes (phone, code, purpose, expires_at) VALUES (?, ?, ?, ?)',
     [phone, code, purpose, expiresAt]
   )
-
-  await sendSms(phone, templateCode, { code })
 
   return { code, expiresAt }
 }

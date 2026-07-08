@@ -1,7 +1,8 @@
-import { queryOne, queryRun, queryAll, beijingNow } from '../db.js'
+import { queryOne, queryRun, queryAll, beijingNow, parseBeijing } from '../db.js'
 import { adapters, getAdapter } from './chains/index.js'
 import { getCryptoWalletApiKey } from './wallet.js'
 import { calculatePlanExpiry, processReferralCommission } from '../utils.js'
+import { USDT_CONTRACTS } from './constants.js'
 
 const CONFIRM_POLL_MS = 15_000
 const EXPIRY_POLL_MS = 30_000
@@ -42,11 +43,12 @@ async function checkConfirmations() {
         const adapter = getAdapter(row.chain)
         const confirmations = await adapter.getConfirmations(row.tx_hash)
 
-        if (confirmations >= row.required_confirmations) {
-          await queryRun(
-            `UPDATE crypto_watch_list SET confirmations = ?, status = 'confirmed' WHERE id = ?`,
+          if (confirmations >= row.required_confirmations) {
+          const r = await queryRun(
+            `UPDATE crypto_watch_list SET confirmations = ?, status = 'confirmed' WHERE id = ? AND status = 'confirming'`,
             [confirmations, row.id]
           )
+          if (!r.changes) continue
           await activateMembership(row.order_id, row.user_id)
         } else {
           await queryRun(
@@ -68,12 +70,23 @@ async function activateMembership(orderId, userId) {
   if (!order) return
 
   const now = beijingNow()
-  await queryRun(
-    `UPDATE orders SET status = 'paid', status_label = '已完成', paid_at = ? WHERE order_id = ?`,
+  const r = await queryRun(
+    `UPDATE orders SET status = 'paid', status_label = '已完成', paid_at = ? WHERE order_id = ? AND status != 'paid'`,
     [now, orderId]
   )
+  if (!r.changes) {
+    console.log(`[Monitor] Order ${orderId} already paid — skip duplicate activation`)
+    return
+  }
 
-  const expiresAt = calculatePlanExpiry(order.period)
+  // 叠加模式：从未过期的到期日往后延，未过期则从当前时间算
+  const user = await queryOne('SELECT plan_expires_at FROM users WHERE id = ?', [userId])
+  let baseDate = null
+  if (user?.plan_expires_at) {
+    const currentExpiry = new Date(user.plan_expires_at + 'T23:59:59+08:00')
+    if (currentExpiry > new Date()) baseDate = currentExpiry
+  }
+  const expiresAt = calculatePlanExpiry(order.period, baseDate)
   await queryRun(
     `UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = ? WHERE id = ?`,
     [order.plan, order.period, expiresAt, now, userId]
@@ -131,6 +144,14 @@ async function fallbackPoll() {
   try {
     for (const chainName of Object.keys(adapters)) {
       const now = beijingNow()
+
+      // 一次性取已占用的 hash 集合，防止同一笔转账被多个 watch 行认领
+      const usedRows = await queryAll(
+        `SELECT tx_hash FROM crypto_watch_list WHERE chain = ? AND tx_hash IS NOT NULL`,
+        [chainName]
+      )
+      const usedHashes = new Set(usedRows.map(r => r.tx_hash))
+
       const rows = await queryAll(
         `SELECT w.id, w.chain, w.address, w.expected_amount, w.status, w.order_id, w.user_id, o.created_at
          FROM crypto_watch_list w
@@ -147,13 +168,31 @@ async function fallbackPoll() {
 
       for (const row of rows) {
         try {
-          const tx = await scanFn(adapter, row.address, row.expected_amount, row.created_at)
+          const tx = await scanFn(adapter, row.address, row.expected_amount, row.created_at, usedHashes)
           if (tx) {
-            console.log(`[Monitor] Detected ${chainName} payment: ${tx.hash} (${tx.amount} USDT) for address ${row.address}`)
-            await queryRun(
-              `UPDATE crypto_watch_list SET tx_hash = ?, status = 'confirming', confirmations = 0 WHERE id = ?`,
-              [tx.hash, row.id]
+            // 双保险：UPDATE 前再查一次，防止并发竞态
+            const conflict = await queryOne(
+              `SELECT id FROM crypto_watch_list WHERE tx_hash = ? LIMIT 1`,
+              [tx.hash]
             )
+            if (conflict) {
+              console.warn(`[Monitor] crypto_tx_conflict: order=${row.order_id} hash=${tx.hash} already claimed by watch ${conflict.id}`)
+              continue
+            }
+
+            console.log(`[Monitor] Detected ${chainName} payment: ${tx.hash} (${tx.amount} USDT) for address ${row.address}`)
+            try {
+              await queryRun(
+                `UPDATE crypto_watch_list SET tx_hash = ?, status = 'confirming', confirmations = 0 WHERE id = ?`,
+                [tx.hash, row.id]
+              )
+            } catch (dupErr) {
+              if (dupErr.code === 'ER_DUP_ENTRY') {
+                console.warn(`[Monitor] crypto_tx_conflict (dup key): order=${row.order_id} hash=${tx.hash}`)
+                continue
+              }
+              throw dupErr
+            }
           }
         } catch (err) {
           console.error(`[Monitor] Scan error for ${chainName} ${row.address}:`, err.message)
@@ -166,9 +205,10 @@ async function fallbackPoll() {
 }
 
 const SCAN_FUNCTIONS = {
-  TRON: async (adapter, address, expectedAmount, createdAt) => {
+  TRON: async (adapter, address, expectedAmount, createdAt, excludeHashes) => {
     const apiKey = await getCryptoWalletApiKey('TRON')
-    const url = `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20?limit=20&contract_address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`
+    const baseUrl = adapter.getApiBaseUrl()
+    const url = `${baseUrl}/v1/accounts/${address}/transactions/trc20?limit=20&contract_address=${USDT_CONTRACTS.TRON}`
     const resp = await fetch(url, {
       headers: { 'TRON-PRO-API-KEY': apiKey, 'Accept': 'application/json' }
     })
@@ -176,9 +216,11 @@ const SCAN_FUNCTIONS = {
     const data = await resp.json()
     if (!data.data) return null
 
-    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
+    const createdMs = parseBeijing(createdAt)?.getTime() ?? 0
+    if (!createdMs) { console.error(`[Monitor] TRON: failed to parse createdAt: ${createdAt}`); return null }
     const expected = parseFloat(expectedAmount)
     for (const tx of data.data) {
+      if (excludeHashes?.has(tx.transaction_id)) continue
       if (tx.to !== address) continue
       if (tx.block_timestamp && tx.block_timestamp < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
@@ -189,17 +231,20 @@ const SCAN_FUNCTIONS = {
     return null
   },
 
-  ETH: async (adapter, address, expectedAmount, createdAt) => {
+  ETH: async (adapter, address, expectedAmount, createdAt, excludeHashes) => {
     const apiKey = await getCryptoWalletApiKey('ETH')
-    const url = `https://api.etherscan.io/api?module=account&action=tokentx&address=${address}&contractaddress=0xdAC17F958D2ee523a2206206994597C13D831ec7&sort=desc&page=1&offset=20&apikey=${apiKey}`
+    const baseUrl = adapter.getApiBaseUrl()
+    const url = `${baseUrl}/api?module=account&action=tokentx&address=${address}&contractaddress=${USDT_CONTRACTS.ETH}&sort=desc&page=1&offset=20&apikey=${apiKey}`
     const resp = await fetch(url)
     if (!resp.ok) return null
     const data = await resp.json()
     if (!data.result) return null
 
-    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
+    const createdMs = parseBeijing(createdAt)?.getTime() ?? 0
+    if (!createdMs) { console.error(`[Monitor] ETH: failed to parse createdAt: ${createdAt}`); return null }
     const expected = parseFloat(expectedAmount)
     for (const tx of data.result) {
+      if (excludeHashes?.has(tx.hash)) continue
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
       if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
@@ -210,31 +255,10 @@ const SCAN_FUNCTIONS = {
     return null
   },
 
-  BSC: async (adapter, address, expectedAmount, createdAt) => {
-    const apiKey = await getCryptoWalletApiKey('BSC')
-    const url = `https://api.bscscan.com/api?module=account&action=tokentx&address=${address}&contractaddress=0x55d398326f99059fF775485246999027B3197955&sort=desc&page=1&offset=20&apikey=${apiKey}`
-    const resp = await fetch(url)
-    if (!resp.ok) return null
-    const data = await resp.json()
-    if (!data.result) return null
-
-    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
-    const expected = parseFloat(expectedAmount)
-    for (const tx of data.result) {
-      if (tx.to.toLowerCase() !== address.toLowerCase()) continue
-      if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
-      const amount = parseInt(tx.value) / 1e6
-      if (amount === expected) {
-        return { hash: tx.hash, amount }
-      }
-    }
-    return null
-  },
-
-  SOL: async (adapter, address, expectedAmount, createdAt) => {
-    const USDT_SPL = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
-    const rpcUrl = await getCryptoWalletApiKey('SOL') || 'https://api.mainnet-beta.solana.com'
-    const createdMs = new Date(createdAt).getTime() - 8 * 3600_000
+  SOL: async (adapter, address, expectedAmount, createdAt, excludeHashes) => {
+    const rpcUrl = await adapter.getRpcUrl()
+    const createdMs = parseBeijing(createdAt)?.getTime() ?? 0
+    if (!createdMs) { console.error(`[Monitor] SOL: failed to parse createdAt: ${createdAt}`); return null }
     const resp = await fetch(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -250,6 +274,7 @@ const SCAN_FUNCTIONS = {
 
     for (const sig of data.result.value) {
       if (sig.err) continue
+      if (excludeHashes?.has(sig.signature)) continue
       if (sig.blockTime && sig.blockTime * 1000 < createdMs) continue
       const txResp = await fetch(rpcUrl, {
         method: 'POST',
@@ -268,8 +293,8 @@ const SCAN_FUNCTIONS = {
       const preTokens = tx.meta.preTokenBalances || []
       const postTokens = tx.meta.postTokenBalances || []
 
-      const preUsdt = preTokens.find(t => t.mint === USDT_SPL && t.owner === address)
-      const postUsdt = postTokens.find(t => t.mint === USDT_SPL && t.owner === address)
+      const preUsdt = preTokens.find(t => t.mint === USDT_CONTRACTS.SOL && t.owner === address)
+      const postUsdt = postTokens.find(t => t.mint === USDT_CONTRACTS.SOL && t.owner === address)
 
       const preAmount = preUsdt ? parseFloat(preUsdt.uiTokenAmount.uiAmountString || '0') : 0
       const postAmount = postUsdt ? parseFloat(postUsdt.uiTokenAmount.uiAmountString || '0') : 0

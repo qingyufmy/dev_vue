@@ -1,6 +1,6 @@
 import { queryOne, queryRun } from './db.js'
 
-const BILIBILI_HEADERS = { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
+export const BILIBILI_HEADERS = { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/' }
 
 export async function fetchBilibiliVideo(bvid) {
   const resp = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
@@ -17,16 +17,16 @@ export async function fetchBilibiliVideo(bvid) {
   }
 }
 
-export function calculatePlanExpiry(period) {
-  const now = new Date(Date.now() + 8 * 3600_000)
+export function calculatePlanExpiry(period, fromDate) {
+  const base = fromDate ? new Date(fromDate) : new Date(Date.now() + 8 * 3600_000)
   if (period === 'lifetime') {
     return '2099-12-31 23:59:59'
   } else if (period === 'year') {
-    now.setFullYear(now.getFullYear() + 1)
+    base.setFullYear(base.getFullYear() + 1)
   } else {
-    now.setMonth(now.getMonth() + 1)
+    base.setMonth(base.getMonth() + 1)
   }
-  return now.toISOString().replace('T', ' ').substring(0, 19)
+  return base.toISOString().replace('T', ' ').substring(0, 19)
 }
 
 export async function processReferralCommission(userId, amount, plan, planLabel, period) {

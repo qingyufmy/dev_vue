@@ -601,7 +601,7 @@ const state = {
   videoAccessMap: {},    // { episodeId: access_level } — universal access control
   adminRefreshTimer: null, // admin page auto-refresh timer
   authMode: 'login_password',
-  authRegType: 'email',
+  authRegType: 'phone',
   authPrefillEmail: '',
   authRedirectAfterLogin: null,
   referralInviteCode: '',
@@ -833,7 +833,7 @@ function getTelegramBindingHint(binding) {
 }
 
 function getPlanExpiresAt(user = state.user) {
-  const raw = user?.planExpiresAt || user?.plan_expires_at || ''
+  const raw = user?.planExpiresAt || ''
   // mysql2 may return Date objects; extract YYYY-MM-DD portion
   if (raw && typeof raw === 'string' && raw.length >= 10) return raw.substring(0, 10)
   if (raw instanceof Date) return raw.toISOString().substring(0, 10)
@@ -1374,8 +1374,7 @@ function startWatchTimer() {
     const ep = state.currentEpisode
     if (!ep || !state.user) return
     // Bilibili uses episode duration
-    const nativeDuration = 0
-    const duration = nativeDuration || getEpisodeDuration()
+    const duration = getEpisodeDuration()
     if (duration > 0) {
       const entry = progress.update(ep.id, accumulatedTime, duration)
       updateProgressUI(entry, duration)
@@ -1910,19 +1909,17 @@ function renderEpisodeCard(ep) {
   const hasCover = ep.cover || hasPaidVideo
   const completed = state.user && progress.isCompleted(ep.id)
   const quizPassed = state.user && progress.isQuizPassed(ep.id)
-  const locked = state.user && !progress.isUnlocked(ep.id)
   const percent = state.user ? progress.getPercent(ep.id) : 0
   const accessBadge = getAccessBadge(ep.id)
 
   return `
-    <div class="episode-card ${completed ? 'completed' : ''} ${locked ? 'locked' : ''}" data-episode-id="${ep.id}">
+    <div class="episode-card ${completed ? 'completed' : ''}" data-episode-id="${ep.id}">
       <div class="card-thumbnail">
         <div class="card-thumbnail-bg" style="${getCardBackground(ep)}">
           ${!hasCover && ep.number ? `
             <span class="ep-label">EP</span>
             <span class="ep-number">${String(ep.number).padStart(2, '0')}</span>
           ` : ''}
-          ${locked ? '<div class="card-lock-overlay"><span class="lock-icon">🔒</span></div>' : ''}
         </div>
         ${(ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)) && ep.duration ? `<span class="card-duration">${ep.duration}</span>` : ''}
         ${ep.number ? `<span class="card-ep-badge">EP.${String(ep.number).padStart(2, '0')}</span>` : ''}
@@ -5789,7 +5786,7 @@ async function renderMembership() {
             <li class="mem-feat disabled"><span class="mem-x">✗</span>新视频即时解锁</li>
             <li class="mem-feat disabled"><span class="mem-x">✗</span>知识图解 & 框架</li>
             <li class="mem-feat disabled"><span class="mem-x">✗</span>课后测验 + 解析</li>
-            <li class="mem-feat disabled"><span class="mem-x">✗</span>专属街家军身份标识</li>
+
           </ul>
           <div class="mem-action">
             ${currentPlan === 'free'
@@ -5830,7 +5827,7 @@ async function renderMembership() {
               : currentPlan === 'plus'
                 ? (currentPeriod === 'yearly'
                   ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
-                   : `<button class="btn mem-btn mem-btn-plus" data-plan="plus" data-force-yearly="1">USDT 支付</button>`)
+                   : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">续费</button>`)
                 : `<button class="btn mem-btn mem-btn-plus" data-plan="plus">USDT 支付</button>`}
           </div>
         </div>
@@ -5863,7 +5860,7 @@ async function renderMembership() {
             ${currentPlan === 'pro'
               ? (currentPeriod === 'yearly'
                 ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
-                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro" data-force-yearly="1">USDT 支付</button>`)
+                : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">续费</button>`)
                 : `<button class="btn mem-btn mem-btn-pro" data-plan="pro">USDT 支付</button>`}
           </div>
         </div>
@@ -5887,7 +5884,6 @@ async function renderMembership() {
             <tr><td>新视频即时解锁</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>知识图解 & 框架</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>课后测验 + 解析</td><td>✗</td><td>✓</td><td>✓</td></tr>
-            <tr><td>专属街家军标识</td><td>✗</td><td>✓</td><td>✓</td></tr>
             <tr><td>AI全自动交易</td><td>✗</td><td>✗</td><td>✓</td></tr>
             <tr><td>月付价格</td><td>免费</td><td>${fmt(plusM.current)}/月</td><td>${fmt(proM.current)}/月</td></tr>
           </tbody>
@@ -5963,7 +5959,7 @@ function renderTos() {
         <p class="tos-update">最后更新日期：2026年4月12日</p>
 
         <div class="tos-content">
-          <p>欢迎使用 wall-street-skill.com（以下简称"本网站"）。本网站由华尔街没有名字（<a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a>，以下简称"量见"）运营。在注册、访问或使用本网站之前，请仔细阅读以下条款。注册即表示您已阅读、理解并同意受本协议约束。</p>
+          <p>欢迎使用 cnfxtrade.com（以下简称"本网站"）。本网站由道诚科技（以下简称"量见"）运营。在注册、访问或使用本网站之前，请仔细阅读以下条款。注册即表示您已阅读、理解并同意受本协议约束。</p>
 
           <h2>一、服务内容</h2>
           <ol>
@@ -6029,7 +6025,7 @@ function renderTos() {
 
           <h2>十、联系方式</h2>
           <p>如对本协议有任何疑问，请通过以下方式联系我们：</p>
-          <p>X (Twitter)：<a href="https://x.com/WallStreet0Name" target="_blank">@WallStreet0Name</a></p>
+          <p>微信：Jin-DaoCheng</p>
         </div>
       </div>
     </div>
@@ -8208,7 +8204,7 @@ async function handleSendCode() {
 
       try {
         const payload = { purpose: meta.codePurpose, captchaId, captchaAnswer: captchaCode }
-        if (isPhone) {
+        if (isPhone || phone) {
           payload.phone = phone
         } else {
           payload.email = email
@@ -8304,14 +8300,13 @@ async function handleCodeVerify(code) {
   }
 
   if (!code || code.length !== 6) return
-  if (isPhone && !phone) return
-  if (!isPhone && !email) return
+  if (!isPhone && !phone && !email) return
 
   if (codeStatus) { codeStatus.textContent = '...'; codeStatus.className = 'code-status' }
 
   try {
     const payload = { code, purpose: meta.codePurpose }
-    if (isPhone) {
+    if (isPhone || phone) {
       payload.phone = phone
     } else {
       payload.email = email
@@ -8322,7 +8317,7 @@ async function handleCodeVerify(code) {
       state._emailVerified = true
       state._verifyToken = res.token
       if (codeStatus) { codeStatus.textContent = '✓'; codeStatus.className = 'code-status code-status-ok' }
-      if (codeHint) { codeHint.textContent = isPhone ? '手机验证成功' : '邮箱验证成功'; codeHint.className = 'form-hint form-hint-ok' }
+      if (codeHint) { codeHint.textContent = (isPhone || phone) ? '手机验证成功' : '邮箱验证成功'; codeHint.className = 'form-hint form-hint-ok' }
     } else {
       state._emailVerified = false
       state._verifyToken = null
@@ -8401,8 +8396,8 @@ function showAuthModal(mode, options = {}) {
       ` : ''}
       ${meta.codePurpose === 'register' && emailEnabled && phoneEnabled ? `
         <div class="auth-reg-tabs">
-          <button type="button" class="auth-reg-tab ${state.authRegType !== 'phone' ? 'active' : ''}" data-reg-type="email">邮箱注册</button>
           <button type="button" class="auth-reg-tab ${state.authRegType === 'phone' ? 'active' : ''}" data-reg-type="phone">手机号注册</button>
+          <button type="button" class="auth-reg-tab ${state.authRegType !== 'phone' ? 'active' : ''}" data-reg-type="email">邮箱注册</button>
         </div>
       ` : ''}
       ${state.authRegType === 'phone' && meta.codePurpose === 'register' && phoneEnabled ? `

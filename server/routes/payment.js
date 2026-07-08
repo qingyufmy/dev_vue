@@ -115,24 +115,14 @@ router.get('/payment', authMiddleware, async (req, res) => {
     const priceObj = planInfo[periodKey] || planInfo.month
     const amount = typeof priceObj === 'object' ? priceObj.current : priceObj
 
-    let credit = 0
     const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
-    if (user?.plan && user.plan !== 'free' && user.plan_expires_at) {
-      const expiresAt = new Date(user.plan_expires_at + 'T23:59:59+08:00')
-      const now = new Date()
-      if (expiresAt > now) {
-        const daysRemaining = Math.ceil((expiresAt - now) / 86400000)
-        const dailyRate = PLANS[user.plan]?.month ? PLANS[user.plan].month / 30 : 0
-        credit = Math.round(dailyRate * daysRemaining)
-      }
-    }
 
     let referralCredit = 0
     if (use_referral_credit === '1') {
       referralCredit = user?.referral_credit || 0
     }
 
-    const finalAmount = Math.max(0, amount - credit - referralCredit)
+    const finalAmount = Math.max(0, amount - referralCredit)
     const label = `${planInfo.name} ${PERIOD_LABELS[periodKey] || PERIOD_LABELS.month}`
 
     res.json({
@@ -142,8 +132,6 @@ router.get('/payment', authMiddleware, async (req, res) => {
       period: periodKey,
       fullPrice: amount.toFixed(2),
       finalAmount: finalAmount.toFixed(2),
-      credit: credit.toFixed(2),
-      daysRemaining: credit > 0 ? Math.ceil(credit / (PLANS[user?.plan]?.month ? PLANS[user.plan].month / 30 : 1)) : 0,
       referral_credit_applied: referralCredit,
     })
   } catch (err) {
@@ -170,22 +158,14 @@ router.post('/payment', authMiddleware, async (req, res) => {
       return res.json({ ok: false, error: '支付链适配器未就绪' })
     }
 
-    let credit = 0
     const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
-    if (user?.plan && user.plan !== 'free' && user.plan_expires_at) {
-      const expiresAt = new Date(user.plan_expires_at + 'T23:59:59+08:00')
-      if (expiresAt > new Date()) {
-        const daysRemaining = Math.ceil((expiresAt - new Date()) / 86400000)
-        credit = Math.round((PLANS[user.plan]?.month || 0) / 30 * daysRemaining)
-      }
-    }
 
     let referralCredit = 0
     if (use_referral_credit && user.referral_credit > 0) {
       referralCredit = user.referral_credit
     }
 
-    const finalAmount = Math.max(0, amount - credit - referralCredit)
+    const finalAmount = Math.max(0, amount - referralCredit)
 
     const existingOrder = await queryOne(
       `SELECT order_id, order_no, crypto_address, crypto_amount, crypto_expires_at, crypto_chain
@@ -225,7 +205,8 @@ router.post('/payment', authMiddleware, async (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', '已完成', 'credit', NOW())
         `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount])
 
-        const expiresAt = calculatePlanExpiry(periodKey)
+        const baseDate = user?.plan_expires_at && new Date(user.plan_expires_at + 'T23:59:59+08:00') > new Date() ? new Date(user.plan_expires_at + 'T23:59:59+08:00') : null
+        const expiresAt = calculatePlanExpiry(periodKey, baseDate)
         await run("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
 
         if (referralCredit > 0) {
@@ -441,12 +422,12 @@ router.post('/admin/crypto/payment-mode', authMiddleware, adminOnly, async (req,
       }
       for (const [chain, value] of Object.entries(fixed_addresses)) {
         const key = addrMap[chain]
-        if (key && value) {
+        if (key) {
           await queryRun(
             `INSERT INTO system_config (category, \`key\`, value, label, sort_order)
              VALUES ('crypto_wallet', ?, ?, ?, 10)
              ON DUPLICATE KEY UPDATE value = ?`,
-            [key, value, `${chain.toUpperCase()} 固定收款地址`, value]
+            [key, value || '', `${chain.toUpperCase()} 固定收款地址`, value || '']
           )
         }
       }

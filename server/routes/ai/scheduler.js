@@ -434,7 +434,6 @@ export async function reconcileAutoSchedulers() {
       SELECT
         s.prompt_type_id,
         apt.symbols_json,
-        apt.symbols_json,
         apt.interval_minutes
       FROM auto_scheduler s
       JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
@@ -449,11 +448,8 @@ export async function reconcileAutoSchedulers() {
     const neededKeyMeta = {}
 
     for (const row of rows) {
-      let userSymbols = parsePromptSymbols(row.user_symbols || '[]')
-      let strategySymbols = parsePromptSymbols(row.symbols_json || '[]')
-      // Intersect user selection with strategy support (normalize suffixes for matching)
-      const validSymbols = userSymbols.filter(s => strategySymbols.some(ss => ss === s || normalizeSymbolForScheduler(ss) === normalizeSymbolForScheduler(s)))
-      for (const sym of validSymbols) {
+      const symbols = parsePromptSymbols(row.symbols_json || '[]')
+      for (const sym of symbols) {
         const k = buildSchedulerKey(row.prompt_type_id, sym)
         neededKeys.add(k)
         neededKeyMeta[k] = { promptTypeId: row.prompt_type_id, symbol: sym, intervalMinutes: row.interval_minutes || 5 }
@@ -1217,8 +1213,7 @@ export async function runSmartCloseCycle(userId) {
   if (remaining.length === 0) return
 
   try {
-    const aiResults = await runSmartClose(userId, closeCfg, account, remaining)
-    if (aiResults.length > 0) {}
+    await runSmartClose(userId, closeCfg, account, remaining)
   } catch (e) {
     console.error(`[SmartClose] User ${userId} AI cycle error:`, e.message)
   }

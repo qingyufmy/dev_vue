@@ -36,11 +36,6 @@ async function loadCryptoWalletConfig() {
   return {}
 }
 
-export function resetCryptoWalletConfigCache() {
-  _cryptoWalletConfig = null
-  _cachedMnemonic = null
-}
-
 function getMnemonic() {
   if (_cachedMnemonic) return _cachedMnemonic
 
@@ -50,12 +45,7 @@ function getMnemonic() {
     return _cachedMnemonic
   }
 
-  if (_cryptoWalletConfig?.hd_mnemonic) {
-    _cachedMnemonic = _cryptoWalletConfig.hd_mnemonic
-    return _cachedMnemonic
-  }
-
-  throw new Error('HD_WALLET_MNEMONIC 未配置（环境变量或系统配置均未设置）')
+  throw new Error('HD_WALLET_MNEMONIC 未配置（仅支持环境变量，勿存数据库）')
 }
 
 export async function initCryptoWallet() {
@@ -104,7 +94,7 @@ function ethAddressFromPrivateKey(privKey) {
 }
 
 let _TronWeb = null
-async function loadTronWeb() {
+export async function loadTronWeb() {
   if (!_TronWeb) {
     const mod = await import('tronweb')
     _TronWeb = mod.TronWeb
@@ -168,10 +158,6 @@ export function deriveAddress(chain, index) {
     default:
       throw new Error(`不支持的链: ${chain}`)
   }
-}
-
-export async function ensureTronWebLoaded() {
-  await loadTronWeb()
 }
 
 export function validateAddress(chain, address) {

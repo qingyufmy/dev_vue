@@ -107,8 +107,8 @@ router.get('/bilibili-info/:bvid', async (req, res) => {
         ok: true,
         cover: bi.cover,
         duration: bi.duration,
-        title: d.title || '',
-        durationFormatted: d.duration ? formatDurationSeconds(d.duration) : ''
+        title: bi.title || '',
+        durationFormatted: bi.duration ? formatDurationSeconds(bi.duration) : ''
       })
     } else {
       res.json({ ok: false, error: '获取B站信息失败' })

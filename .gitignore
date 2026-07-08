@@ -43,3 +43,7 @@ uploads/
 *.key
 *.bak
 *.tmp
+.DS_Store
+Thumbs.db
+*.pid
+public/ai/__pycache__/

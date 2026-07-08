@@ -6,34 +6,33 @@ const router = Router()
 
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
-    const user = await queryOne(`
-      SELECT id, uid, email, nickname, avatar, role, plan, plan_period, plan_expires_at,
-             referral_code, referral_credit, telegram_id, telegram_username, telegram_name,
-             telegram_chat_id, telegram_group_status, telegram_bot_started_at,
-             telegram_joined_at, telegram_last_invite_sent_at, created_at, last_seen_at,
-             phone, phone_verified, email_verified, auth_method
+    const row = await queryOne(`
+      SELECT id, uid, email, phone, nickname, avatar, role, plan, plan_period, plan_expires_at,
+             phone_verified, email_verified, auth_method,
+             telegram_id, telegram_username, telegram_name
       FROM users WHERE id = ?
     `, [req.user.id])
 
-    user.name = user.nickname
-    user.isAdmin = user.role === 'admin'
-    user.phoneVerified = !!user.phone_verified
-    user.emailVerified = !!user.email_verified
-    user.authMethod = user.auth_method || 'email'
-    user.telegramBinding = user.telegram_id || user.telegram_username ? {
-      username: user.telegram_username || '',
-      name: user.telegram_name || '',
-      groupStatus: user.telegram_group_status || '',
-      botStartedAt: user.telegram_bot_started_at || '',
-      joinedAt: user.telegram_joined_at || '',
-      lastInviteSentAt: user.telegram_last_invite_sent_at || '',
-    } : null
-
-    // camelCase aliases for frontend
-    user.planExpiresAt = user.plan_expires_at || ''
-    user.planPeriod = user.plan_period || ''
-    user.createdAt = user.created_at || ''
-    user.lastSeenAt = user.last_seen_at || ''
+    const user = {
+      id: row.id,
+      uid: row.uid,
+      email: row.email,
+      phone: row.phone,
+      name: row.nickname,
+      avatar: row.avatar,
+      role: row.role,
+      isAdmin: row.role === 'admin',
+      plan: row.plan,
+      planPeriod: row.plan_period || '',
+      planExpiresAt: row.plan_expires_at || '',
+      phoneVerified: !!row.phone_verified,
+      emailVerified: !!row.email_verified,
+      authMethod: row.auth_method || 'email',
+      telegramBinding: row.telegram_id || row.telegram_username ? {
+        username: row.telegram_username || '',
+        name: row.telegram_name || '',
+      } : null,
+    }
 
     res.json({ ok: true, user })
   } catch (err) {
@@ -83,8 +82,8 @@ router.get('/notifications', authMiddleware, async (req, res) => {
   try {
     const { limit = 20 } = req.query
     const notifications = await queryAll(`
-      SELECT n.*, u.nickname as actor_name, u.avatar as actor_avatar
-      FROM notifications n LEFT JOIN users u ON n.actor_id = u.id
+      SELECT n.*
+      FROM notifications n
       WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT ?
     `, [req.user.id, Number(limit)])
 
@@ -99,14 +98,12 @@ router.get('/notifications', authMiddleware, async (req, res) => {
         type: n.type,
         title: n.title,
         message: n.message,
-        postId: n.post_id,
         isRead: !!n.is_read,
-        meta: typeof n.meta === 'string' ? JSON.parse(n.meta || '{}') : n.meta,
-        actor: n.actor_id ? { name: n.actor_name, avatar: n.actor_avatar } : null,
         createdAt: n.created_at,
       }))
     })
   } catch (err) {
+    console.error('[notifications]', err.message)
     res.json({ ok: false, error: '获取通知失败' })
   }
 })

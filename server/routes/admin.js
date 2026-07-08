@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import multer from 'multer'
-import { join, dirname, extname } from 'path'
+import { join, dirname, extname, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
@@ -245,7 +245,7 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     const updates = []
     const params = []
     if (email) { updates.push('email = ?'); params.push(email) }
-    if (phone !== undefined) { updates.push('phone = ?'); params.push(phone || null) }
+    if (phone !== undefined) { updates.push('phone = ?'); params.push(phone ? phone.replace(/^\+86/, '') : null) }
     if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
     if (password) {
       if (password.length < 6) return res.json({ ok: false, error: '密码至少需要6位' })
@@ -554,7 +554,7 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
     for (const file of files) {
       const origName = file.originalname
       const relPath = file.originalname // ep{episodeId}/filename or just filename
-      const baseName = relPath.replace(/^[^/]+\//, '') // Remove folder prefix
+      const baseName = basename(relPath) // Sanitize: strip all path components
 
       try {
         // === QUIZ JSON ===

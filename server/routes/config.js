@@ -1,11 +1,19 @@
 import { Router } from 'express'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
+import { resetFixedAddressCache } from '../crypto/fixed-address.js'
 
 const router = Router()
 
 // 仅允许这些公开类别，敏感类别（smtp、qiniu、ai_provider 等）不可通过此接口访问
 const PUBLIC_CATEGORIES = new Set(['toolbox', 'market_menu', 'announcements', 'features', 'auth_toggle'])
+
+const SENSITIVE_KEY_RE = /mnemonic|private_key|secret|password|access_key/i
+function redactItems(items) {
+  return items.map(it => SENSITIVE_KEY_RE.test(it.key)
+    ? { ...it, value: it.value ? '***REDACTED***' : it.value }
+    : it)
+}
 
 // Public: get config by category (for toolbox and market menu)
 router.get('/system-config-public/:category', async (req, res) => {
@@ -76,6 +84,10 @@ router.get('/system-config', authMiddleware, adminOnly, async (req, res) => {
       if (!grouped[r.category]) grouped[r.category] = []
       grouped[r.category].push(r)
     }
+    // 对每个类别脱敏敏感字段
+    for (const cat of Object.keys(grouped)) {
+      grouped[cat] = redactItems(grouped[cat])
+    }
     res.json({ ok: true, config: grouped })
   } catch (err) {
     console.error('[Config] Load config error:', err)
@@ -87,7 +99,7 @@ router.get('/system-config', authMiddleware, adminOnly, async (req, res) => {
 router.get('/system-config/:category', authMiddleware, adminOnly, async (req, res) => {
   try {
     const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [req.params.category])
-    res.json({ ok: true, items: rows })
+    res.json({ ok: true, items: redactItems(rows) })
   } catch (err) {
     console.error('[Config] Load category error:', err)
     res.json({ ok: false, error: '加载配置失败' })
@@ -99,6 +111,7 @@ router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { category, key, value, label, sort_order } = req.body
     if (!category || !key) return res.json({ ok: false, error: 'category 和 key 必填' })
+    if (value === '***REDACTED***') return res.json({ ok: false, error: '敏感字段不可通过此方式更新' })
 
     const existing = await queryOne('SELECT id FROM system_config WHERE category = ? AND `key` = ?', [category, key])
     if (existing) {
@@ -108,6 +121,7 @@ router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
       await queryRun('INSERT INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
         [category, key, value || '', label || '', sort_order || 0])
     }
+    if (category === 'crypto_wallet') resetFixedAddressCache()
     res.json({ ok: true, id: existing?.id, action: existing ? 'updated' : 'created' })
   } catch (err) {
     console.error('[Config] Save config error:', err)
@@ -124,12 +138,14 @@ router.put('/system-config/:category', authMiddleware, adminOnly, async (req, re
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
+      if (item.value === '***REDACTED***') continue
       await queryRun(`
         INSERT INTO system_config (category, \`key\`, \`value\`, label, sort_order)
         VALUES (?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), label = VALUES(label), sort_order = VALUES(sort_order), updated_at = NOW()
       `, [category, item.key, item.value || '', item.label || '', item.sort_order ?? i])
     }
+    if (category === 'crypto_wallet') resetFixedAddressCache()
     res.json({ ok: true, count: items.length })
   } catch (err) {
     console.error('[Config] Batch update error:', err)
@@ -143,8 +159,7 @@ router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) 
     // Get category before delete to invalidate cache
     const item = await queryOne('SELECT category FROM system_config WHERE id = ?', [req.params.id])
     await queryRun('DELETE FROM system_config WHERE id = ?', [req.params.id])
-    if (item) {
-    }
+    if (item?.category === 'crypto_wallet') resetFixedAddressCache()
     res.json({ ok: true })
   } catch (err) {
     console.error('[Config] Delete config error:', err)
@@ -156,6 +171,7 @@ router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) 
 router.delete('/system-config/category/:category', authMiddleware, adminOnly, async (req, res) => {
   try {
     await queryRun('DELETE FROM system_config WHERE category = ?', [req.params.category])
+    if (req.params.category === 'crypto_wallet') resetFixedAddressCache()
     res.json({ ok: true })
   } catch (err) {
     console.error('[Config] Delete category error:', err)

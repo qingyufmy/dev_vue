@@ -40,10 +40,6 @@ vi.mock('../../server/routes/ai/llm.js', () => ({
 vi.mock('../../server/routes/ai/config.js', () => ({
   getAutoConfig: vi.fn(() => ({ enabled: true, symbols: 'XAUUSD' })),
   getGlobalAutoConfig: vi.fn(() => ({ symbols: 'XAUUSD', interval_minutes: 5 })),
-  getAutoInferenceConfig: vi.fn(() => ({
-    api_key_encrypted: 'test-key', api_provider: 'deepseek',
-    model_name: 'deepseek-chat', _source: 'auto',
-  })),
   upsertAutoConfig: vi.fn(),
   getCloseConfig: vi.fn(() => ({ enabled: false })),
   saveCloseConfig: vi.fn(),

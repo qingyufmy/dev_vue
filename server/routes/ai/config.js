@@ -164,15 +164,23 @@ export async function getAnalyzeApiKey(userId, sessionId) {
 
 export async function getAutoConfig(db, userId) {
   const row = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
-  if (!row) return null
-  if (row.symbols) {
-    try {
-      row.selected_symbols = JSON.parse(row.symbols)
-    } catch {
-      row.selected_symbols = row.symbols.split(',').map(s => s.trim()).filter(Boolean)
+  if (!row) {
+    const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
+    return {
+      user_id: userId,
+      enabled: 0,
+      prompt_type_id: firstPt?.id || null,
+      risk_level: 'medium',
+      max_position_size: 0.05,
+      selected_take_profit: 2,
+      enable_auto_trade: 1,
+      selected_symbols: [],
     }
-  } else {
-    row.selected_symbols = []
+  }
+  row.selected_symbols = []
+  if (!row.prompt_type_id) {
+    const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
+    if (firstPt) row.prompt_type_id = firstPt.id
   }
   return row
 }
@@ -185,64 +193,20 @@ export async function saveGlobalAutoConfig(cfg) {
   const now = beijingNow()
   await queryRun(`
     UPDATE global_auto_config SET
-      symbols = ?, interval_minutes = ?,
+      interval_minutes = ?,
       api_provider = ?, model_name = ?, api_key_encrypted = ?, api_base_url = ?,
-      temperature = ?, max_tokens = ?, system_prompt = ?,
+      temperature = ?, max_tokens = ?,
       risk_level = ?, max_position_size = ?, selected_take_profit = ?,
       enable_auto_trade = ?,
       updated_at = ?
     WHERE id = 1
   `, [
-    cfg.symbols || 'XAUUSD', cfg.interval_minutes || 5,
+    cfg.interval_minutes || 5,
     cfg.api_provider || null, cfg.model_name || null, cfg.api_key_encrypted || null, cfg.api_base_url || null,
-    cfg.temperature ?? null, cfg.max_tokens ?? null, cfg.system_prompt || null,
+    cfg.temperature ?? null, cfg.max_tokens ?? null,
     cfg.risk_level || null, cfg.max_position_size ?? null, cfg.selected_take_profit ?? null,
     cfg.enable_auto_trade ? 1 : 0, now
   ])
-}
-
-export async function getAutoInferenceConfig(userId) {
-  if (userId) {
-    const userConfig = await queryOne(
-      "SELECT * FROM ai_configs WHERE user_id = ? AND session_id = 'default' AND is_active = 1 AND auto_config_override = 1 ORDER BY updated_at DESC LIMIT 1",
-      [userId]
-    )
-    if (userConfig && userConfig.api_key_encrypted) {
-      return {
-        api_provider: userConfig.api_provider || 'deepseek',
-        model_name: userConfig.model_name || 'deepseek-chat',
-        api_key_encrypted: userConfig.api_key_encrypted,
-        api_base_url: userConfig.api_base_url || DEFAULT_API_BASE_URL,
-        temperature: userConfig.temperature ?? 0.7,
-        max_tokens: userConfig.max_tokens ?? 2000,
-        risk_level: userConfig.risk_level || 'medium',
-        max_position_size: userConfig.max_position_size ?? 0.05,
-        selected_take_profit: userConfig.selected_take_profit ?? 1,
-        system_prompt: userConfig.system_prompt || '',
-        enable_auto_trade: !!userConfig.enable_auto_trade,
-        auto_symbols: userConfig.auto_symbols || null,
-        auto_interval_minutes: userConfig.auto_interval_minutes ?? null,
-        _source: 'user_override'
-      }
-    }
-  }
-
-  const globalCfg = await getGlobalAutoConfig()
-  if (!globalCfg) return null
-  return {
-    api_provider: globalCfg.api_provider || 'deepseek',
-    model_name: globalCfg.model_name || 'deepseek-chat',
-    api_key_encrypted: globalCfg.api_key_encrypted,
-    api_base_url: globalCfg.api_base_url || DEFAULT_API_BASE_URL,
-    temperature: globalCfg.temperature ?? 0.3,
-    max_tokens: globalCfg.max_tokens ?? 2000,
-    risk_level: globalCfg.risk_level || 'medium',
-    max_position_size: globalCfg.max_position_size ?? 0.05,
-    selected_take_profit: globalCfg.selected_take_profit ?? 2,
-    system_prompt: globalCfg.system_prompt || '',
-    enable_auto_trade: !!globalCfg.enable_auto_trade,
-    _source: 'auto'
-  }
 }
 
 export async function getExecuteRiskConfig(userId, signal) {
@@ -350,9 +314,25 @@ export async function disableAutoPromptType(adminUserId, promptTypeId) {
 // === User Auto Config (user-facing settings) ===
 
 export async function getUserAutoConfig(userId) {
-  const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  let scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
+  if (!scheduler) {
+    const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
+    scheduler = {
+      user_id: userId,
+      enabled: 0,
+      prompt_type_id: firstPt?.id || null,
+      risk_level: 'medium',
+      max_position_size: 0.05,
+      selected_take_profit: 2,
+      enable_auto_trade: 1,
+      symbols: '[]',
+    }
+  } else if (!scheduler.prompt_type_id) {
+    const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
+    if (firstPt) scheduler.prompt_type_id = firstPt.id
+  }
   let pausedReason = ''
-  if (scheduler?.enabled) {
+  if (scheduler.enabled) {
     if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
     else {
       const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
@@ -385,24 +365,28 @@ export async function saveUserAutoConfig(userId, payload) {
   // Validate selected_symbols if provided
   let selectedSymbols = null
   if (payload.selected_symbols !== undefined) {
-    if (!Array.isArray(payload.selected_symbols) || payload.selected_symbols.length === 0) {
-      throw new Error('selected_symbols 必须是非空数组')
+    if (!Array.isArray(payload.selected_symbols)) {
+      throw new Error('selected_symbols 必须是数组')
     }
-    const normalized = [...new Set(payload.selected_symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
-    if (normalized.length === 0) throw new Error('selected_symbols 不能为空')
+    if (payload.selected_symbols.length === 0) {
+      selectedSymbols = []
+    } else {
+      const normalized = [...new Set(payload.selected_symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
+      if (normalized.length === 0) throw new Error('selected_symbols 不能为空')
 
-    const promptTypeId = payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null)
-    if (promptTypeId) {
-      const pt = await getAutoPromptTypeById(promptTypeId)
-      if (pt) {
-        const strategySymbols = parsePromptSymbols(pt.symbols_json || '[]')
-        const invalid = normalized.filter(s => !strategySymbols.includes(s))
-        if (invalid.length > 0) {
-          throw new Error(`品种 ${invalid.join(', ')} 不在策略支持列表中`)
+      const promptTypeId = payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null)
+      if (promptTypeId) {
+        const pt = await getAutoPromptTypeById(promptTypeId)
+        if (pt) {
+          const strategySymbols = parsePromptSymbols(pt.symbols_json || '[]')
+          const invalid = normalized.filter(s => !strategySymbols.includes(s))
+          if (invalid.length > 0) {
+            throw new Error(`品种 ${invalid.join(', ')} 不在策略支持列表中`)
+          }
         }
       }
+      selectedSymbols = normalized
     }
-    selectedSymbols = normalized
   }
 
   const next = {
@@ -653,7 +637,8 @@ export async function executeOrderCore(userId, config, request, action, options 
         details: err.details,
       }
     } else {
-      result = { status: 'error', message: err.message }
+      console.error('[ExecuteOrder] Unexpected error:', err.message)
+      result = { status: 'error', message: '订单执行异常，请重试' }
     }
   }
 

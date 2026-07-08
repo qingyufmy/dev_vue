@@ -1,5 +1,7 @@
 // ai/utils.js — 纯函数工具层，无外部依赖
 
+import { parseBeijing } from '../../db.js'
+
 export const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
 export const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
@@ -40,12 +42,14 @@ export function compactRates(rates) {
   }))
 }
 
+const pad = n => String(n).padStart(2, '0')
+
 export function utcToMt5Time(str) {
   if (!str) return null
   try {
-    const d = new Date(str.replace(' ', 'T'))
+    const d = parseBeijing(str)
+    if (!d) return str
     d.setHours(d.getHours() - 5)
-    const pad = n => String(n).padStart(2, '0')
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   } catch { return str }
 }
@@ -57,8 +61,8 @@ export function signalTtlSeconds(timeframe) {
 
 export function signalAgeSeconds(createdAt) {
   try {
-    const created = new Date(createdAt.replace(' ', 'T'))
-    if (isNaN(created.getTime())) return 999999
+    const created = parseBeijing(createdAt)
+    if (!created) return 999999
     return Math.max((Date.now() - created.getTime()) / 1000, 0)
   } catch { return 999999 }
 }
@@ -69,7 +73,7 @@ export function attachSignalTiming(signal) {
   signal.ttl_seconds = ttl
   signal.age_seconds = Math.round(age * 10) / 10
   signal.expires_at = signal.created_at
-    ? (() => { const d = new Date(signal.created_at.replace(' ', 'T')); d.setSeconds(d.getSeconds() + ttl); const pad = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
+    ? (() => { const d = parseBeijing(signal.created_at); if (!d) return null; d.setSeconds(d.getSeconds() + ttl); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
     : null
   signal.is_stale = age > ttl
   signal.created_at_mt5 = utcToMt5Time(signal.created_at)

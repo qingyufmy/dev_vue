@@ -9,6 +9,11 @@ vi.mock('../../server/db.js', () => ({
   queryRun: (...args) => mockQueryRun(...args),
   queryAll: (...args) => mockQueryAll(...args),
   beijingNow: vi.fn(() => '2026-07-02 12:00:00'),
+  parseBeijing: vi.fn((s) => {
+    if (!s) return null
+    const d = new Date(String(s).replace(' ', 'T') + '+08:00')
+    return isNaN(d.getTime()) ? null : d
+  }),
 }))
 
 const mockAdapter = {

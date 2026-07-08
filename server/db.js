@@ -6,6 +6,14 @@ export function beijingNow() {
   return d.toISOString().replace('T', ' ').substring(0, 19)
 }
 
+/** Parse a beijingNow() string ('YYYY-MM-DD HH:mm:ss') into a Date, independent of server TZ */
+export function parseBeijing(str) {
+  if (!str) return null
+  if (str instanceof Date) return str
+  const d = new Date(String(str).replace(' ', 'T') + '+08:00')
+  return isNaN(d.getTime()) ? null : d
+}
+
 
 let pool
 let _dbConfig = null
@@ -22,6 +30,7 @@ function getDBConfig() {
       queueLimit: 0,
       charset: 'utf8mb4',
       dateStrings: true,
+      timezone: '+08:00',
       connectTimeout: 60000,
     }
   }
@@ -40,6 +49,11 @@ export function getDB() {
       if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNREFUSED') {
         console.error('[DB] Connection lost — pool will auto-reconnect on next query')
       }
+    })
+
+    // Fix DB session timezone to Beijing time for NOW() comparisons
+    pool.on('connection', (conn) => {
+      conn.query("SET time_zone = '+08:00'")
     })
 
     // Keepalive: ping every 30 minutes to prevent idle timeout
@@ -121,7 +135,7 @@ export async function initDB() {
     `CREATE TABLE IF NOT EXISTS users (
       id INT AUTO_INCREMENT PRIMARY KEY,
       uid VARCHAR(32) UNIQUE,
-      email VARCHAR(255) UNIQUE NOT NULL,
+      email VARCHAR(255) DEFAULT NULL,
       password VARCHAR(255) NOT NULL,
       nickname VARCHAR(100) DEFAULT '',
       avatar VARCHAR(500) DEFAULT '',
@@ -351,19 +365,6 @@ export async function initDB() {
       created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    `CREATE TABLE IF NOT EXISTS user_notices (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      user_id INT NOT NULL,
-      notice_id VARCHAR(100) DEFAULT '',
-      type VARCHAR(50) DEFAULT '',
-      title VARCHAR(500) DEFAULT '',
-      body VARCHAR(5000) DEFAULT '',
-      link VARCHAR(500) DEFAULT '',
-      source VARCHAR(100) DEFAULT '',
-      \`read\` TINYINT DEFAULT 0,
-      created_at DATETIME DEFAULT (NOW())
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-
     `CREATE TABLE IF NOT EXISTS video_streams (
       id INT AUTO_INCREMENT PRIMARY KEY,
       episode_id INT NOT NULL,
@@ -480,8 +481,8 @@ export async function initDB() {
 
     `CREATE TABLE IF NOT EXISTS user_bridge_settings (
       user_id INT PRIMARY KEY,
-      trade_send_enabled TINYINT NOT NULL DEFAULT 0,
-      auto_reasoning_enabled TINYINT NOT NULL DEFAULT 0,
+      trade_send_enabled TINYINT NOT NULL DEFAULT 1,
+      auto_reasoning_enabled TINYINT NOT NULL DEFAULT 1,
       updated_at DATETIME NOT NULL DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -559,16 +560,6 @@ export async function initDB() {
       detail VARCHAR(5000) DEFAULT '',
       ip VARCHAR(50) DEFAULT '',
       user_agent VARCHAR(500) DEFAULT '',
-      created_at DATETIME DEFAULT (NOW())
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-
-    `CREATE TABLE IF NOT EXISTS broadcast_messages (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      type VARCHAR(50) NOT NULL,
-      user_id INT,
-      nickname VARCHAR(100) DEFAULT '',
-      group_name VARCHAR(100) DEFAULT '',
-      message TEXT NOT NULL,
       created_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -659,8 +650,10 @@ export async function initDB() {
 }
 
 async function seedData(p) {
-  const hash = await bcrypt.hash('admin123', 10)
-  const demoHash = await bcrypt.hash('demo123', 10)
+  const adminPass = process.env.SEED_ADMIN_PASSWORD || 'admin123'
+  const demoPass = process.env.SEED_DEMO_PASSWORD || 'demo123'
+  const hash = await bcrypt.hash(adminPass, 10)
+  const demoHash = await bcrypt.hash(demoPass, 10)
 
   await p.query(`INSERT INTO users (email, password, nickname, role, plan, plan_expires_at, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ['admin@wallstreetskill.com', hash, '量见', 'admin', 'pro', '2027-12-31', 'ADMIN001'])

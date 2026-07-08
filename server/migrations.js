@@ -303,19 +303,18 @@ const migrations = [
         const existing = await queryAll('SELECT COUNT(*) as c FROM ai_signal_schema')
         if ((existing[0]?.c || 0) === 0) {
           const defaultSchema = JSON.stringify({
-            signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit",
-            confidence: "0.00-1.00",
-            recommended_volume: "0.01-0.05手",
-            entry_method: "market | limit | stop | stop_limit",
-            limit_price: "挂单价(数字或null)",
-            stop_limit_price: "止损限价(仅stop_limit,数字或null)",
-            pending_valid_minutes: "1-1440,默认240",
-            stop_loss_price: "止损价",
-            take_profit_1_price: "止盈1",
-            take_profit_2_price: "止盈2",
-            take_profit_3_price: "止盈3",
-            analysis: "简要分析",
-            reasoning: "详细推理过程"
+            signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold",
+            confidence: "0.00-1.00，动态估算，禁止固定值。按趋势强度、位置结构、波动噪音、风险状态综合评估。BUY/SELL弱优势0.52-0.62，中等0.63-0.74，强共振>0.75。HOLD时0.55-0.68，明确回避风险可>0.70。hold时也不得为0",
+            recommended_volume: "0.01-0.05手，不得超过0.05。根据风险等级调整：low=0.01-0.02, medium=0.02-0.03, high=0.03-0.05。hold时返回0",
+            limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
+            stop_limit_price: "止损触发价，仅buy_stop_limit/sell_stop_limit时需要。触发后按limit_price成交。通常设在关键支撑/阻力突破位，limit_price设在突破后合理入场位",
+            pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
+            stop_loss_price: "数字，buy/sell/挂单必须给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价。距离参考：1-2倍ATR(14)。止损过近容易被噪音扫损，过远风险回报比不划算",
+            take_profit_1_price: "止盈-保守(第一目标位)，数字，buy/sell/挂单必须给出，hold可为null。买单止盈须高于入场价，卖单止盈须低于入场价。建议设在最近的支撑/阻力位，R:R至少1:1",
+            take_profit_2_price: "止盈-标准(第二目标位)，数字，buy/sell/挂单必须给出，hold可为null。距离应大于tp1，R:R建议1:1.5-1:2",
+            take_profit_3_price: "止盈-激进(第三目标位)，数字，可选。距离应大于tp2，R:R建议1:2-1:3。仅在趋势明确且有延续依据时提供",
+            analysis: "中文，按以下顺序：1.当前趋势方向和强度 2.关键支撑/阻力位 3.当前价与均线关系 4.波动率状态 5.潜在催化剂或风险事件",
+            reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望）"
           }, null, 2)
           await queryRun('INSERT INTO ai_signal_schema (name, schema_json, is_active) VALUES (?, ?, 1)', ['default', defaultSchema])
         }
@@ -595,6 +594,60 @@ const migrations = [
     }
   },
   {
+    id: '032_fix_users_email_nullable',
+    up: async () => {
+      try {
+        await queryRun("ALTER TABLE users MODIFY COLUMN email VARCHAR(255) DEFAULT NULL")
+        console.log('[Migrations] 032 changed users.email to DEFAULT NULL')
+      } catch (e) {
+        if (!e.message?.includes('Duplicate')) {
+          console.error('[Migrations] 032 failed:', e.message)
+        }
+      }
+    }
+  },
+  {
+    id: '033_normalize_phone_numbers',
+    up: async () => {
+      try {
+        await queryRun("UPDATE users SET phone = TRIM(LEADING '+86' FROM phone) WHERE phone LIKE '+86%'")
+        await queryRun("UPDATE verification_codes SET phone = TRIM(LEADING '+86' FROM phone) WHERE phone LIKE '+86%'")
+        console.log('[Migrations] 033 normalized all phone numbers (stripped +86 prefix)')
+      } catch (e) {
+        console.error('[Migrations] 033 failed:', e.message)
+      }
+    }
+  },
+  {
+    id: '034_unique_phone_index',
+    up: async () => {
+      try {
+        await queryRun(`
+          UPDATE users u1
+          INNER JOIN (
+            SELECT phone, MAX(id) AS keep_id
+            FROM users
+            WHERE phone IS NOT NULL AND phone != ''
+            GROUP BY phone
+            HAVING COUNT(*) > 1
+          ) dup ON u1.phone = dup.phone AND u1.id != dup.keep_id
+          SET u1.phone = NULL
+        `)
+        console.log('[Migrations] 034 cleaned duplicate phone numbers')
+        await queryRun('CREATE UNIQUE INDEX idx_users_phone ON users(phone)')
+        console.log('[Migrations] 034 added unique index on users.phone')
+      } catch (e) {
+        if (e.message?.includes('Duplicate')) {
+          console.error('[Migrations] 034 duplicate phones remain, skipping index')
+        } else if (e.message?.includes('Duplicate key name')) {
+          console.log('[Migrations] 034 unique index already exists')
+        } else {
+          console.error('[Migrations] 034 failed:', e.message)
+        }
+      }
+    }
+  },
+  {
     id: '031_cleanup_dead_columns',
     up: async () => {
       const drops = [
@@ -610,6 +663,53 @@ const migrations = [
           if (!e.message?.includes("doesn't exist") && !e.message?.includes("Can't DROP")) {
             console.error(`[Migrations] 031 drop failed:`, e.message)
           }
+        }
+      }
+    }
+  },
+  {
+    id: '035_default_bridge_settings',
+    up: async () => {
+      try {
+        await queryRun("UPDATE user_bridge_settings SET trade_send_enabled = 1 WHERE trade_send_enabled = 0")
+        await queryRun("UPDATE user_bridge_settings SET auto_reasoning_enabled = 1 WHERE auto_reasoning_enabled = 0")
+        await queryRun("UPDATE auto_scheduler SET enable_auto_trade = 1 WHERE enable_auto_trade = 0")
+        console.log('[Migrations] 035 set default bridge/scheduler settings to enabled')
+      } catch (e) {
+        console.error('[Migrations] 035 failed:', e.message)
+      }
+    }
+  },
+  {
+    id: '036_crypto_tx_unique',
+    up: async () => {
+      try {
+        // 清理重复 tx_hash：保留 id 最小的行，其余置 NULL 并回退为 pending
+        await queryRun(`
+          UPDATE crypto_watch_list SET tx_hash = NULL, status = 'pending'
+          WHERE id NOT IN (
+            SELECT * FROM (
+              SELECT MIN(id) FROM crypto_watch_list WHERE tx_hash IS NOT NULL GROUP BY tx_hash
+            ) t
+          ) AND tx_hash IS NOT NULL
+        `)
+        await queryRun('CREATE UNIQUE INDEX idx_watch_tx_hash ON crypto_watch_list(tx_hash)')
+        console.log('[Migrations] 036 added UNIQUE index on crypto_watch_list.tx_hash')
+      } catch (e) {
+        if (e.message?.includes('Duplicate') || e.message?.includes('Duplicate entry')) {
+          console.warn('[Migrations] 036 index may already exist:', e.message)
+        } else {
+          console.error('[Migrations] 036 failed:', e.message)
+        }
+      }
+      try {
+        await queryRun('CREATE UNIQUE INDEX idx_orders_crypto_tx_hash ON orders(crypto_tx_hash)')
+        console.log('[Migrations] 036 added UNIQUE index on orders.crypto_tx_hash')
+      } catch (e) {
+        if (e.message?.includes('Duplicate') || e.message?.includes('Duplicate entry')) {
+          console.warn('[Migrations] 036 orders index may already exist:', e.message)
+        } else {
+          console.error('[Migrations] 036 orders index failed:', e.message)
         }
       }
     }
