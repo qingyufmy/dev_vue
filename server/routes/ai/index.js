@@ -23,11 +23,11 @@ const BRIDGE_VERSION = readFileSync(join(__dirname, '../../../VERSION'), 'utf-8'
 router.get('/bridge/version', (req, res) => {
   res.json({
     version: BRIDGE_VERSION,
-    build_date: '2026-07-08',
+    build_date: new Date().toISOString().slice(0, 10),
     changelog: `${BRIDGE_VERSION}: 安装包+配置目录+接口统一`,
     updater_url: `https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_${BRIDGE_VERSION}.exe`,
     full_url: `https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_${BRIDGE_VERSION}.exe`,
-    file_size: 61145088,
+    file_size: 0,
     md5: ''
   })
 })

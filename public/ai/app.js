@@ -1510,13 +1510,13 @@ function initBridgeModal() {
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
   $("downloadExe")?.addEventListener("click", async () => {
-    let url = "https://qiniu.acadfx.com/AURUM_Bridge_v2.2.1.exe";
-    let version = "v2.2.1";
+    let url = `https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_${window._bridgeVersion || 'latest'}.exe`;
+    let version = window._bridgeVersion || 'latest';
     try {
       const resp = await fetch("/api/bridge/version");
       const data = await resp.json();
-      if (data.download_url) url = data.download_url;
-      if (data.version) version = "v" + data.version;
+      if (data.full_url || data.updater_url) url = data.full_url || data.updater_url;
+      if (data.version) { version = "v" + data.version; window._bridgeVersion = data.version; }
     } catch {}
     const a = document.createElement("a");
     a.href = url; a.download = url.split("/").pop(); a.click();
