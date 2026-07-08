@@ -47,7 +47,7 @@ router.get('/changelog/current', async (req, res) => {
 })
 
 // Admin: get changelog
-router.get('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
+router.get('/admin/release-notes', authMiddleware, adminOnly, async (req, res) => {
   try {
     const versionRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
     const contentRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'content'")
@@ -59,7 +59,7 @@ router.get('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
 })
 
 // Admin: update changelog
-router.post('/admin/changelog', authMiddleware, adminOnly, async (req, res) => {
+router.post('/admin/release-notes', authMiddleware, adminOnly, async (req, res) => {
   const { version, content } = req.body
   if (version === undefined || version === null) {
     return res.json({ ok: false, error: '版本号必填' })
