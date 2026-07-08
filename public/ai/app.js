@@ -282,6 +282,14 @@ function utcToBeijing(utcStr) {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p((d.getUTCHours() + 8) % 24)}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
 }
 
+function utcToMt5(utcStr) {
+  if (!utcStr) return null;
+  const d = new Date(utcStr.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return utcStr;
+  const p = (x) => String(x).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p((d.getUTCHours() + 3) % 24)}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
 function compactTimeParts(value) {
   const full = formatTime(value);
   if (full === "--") return { time: "--", badge: "" };
@@ -2710,7 +2718,7 @@ function renderPendingSignalInfo(signal, market) {
   if (em === 'stop_limit' && signal.stop_limit_price) rows += `<div><span>限价</span><strong>${escapeHtml(priceDisplay(signal.stop_limit_price))}</strong></div>`
   if (em === 'stop_limit' && Number.isFinite(Number(market.latest_price))) rows += `<div><span>当前市价</span><strong>${escapeHtml(priceDisplay(market.latest_price))}</strong></div>`
   if (signal.pending_valid_until) {
-    const validDate = utcToBeijing(signal.pending_valid_until)
+    const validDate = utcToMt5(signal.pending_valid_until)
     if (validDate) rows += `<div><span>有效期至</span><strong>${escapeHtml(validDate)}</strong></div>`
   }
   return `<div class="signal-pending-info">${rows}</div>`
