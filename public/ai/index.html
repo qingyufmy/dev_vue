@@ -25,7 +25,7 @@
     </script>
     <title>AI交易实验室</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/ai/styles.css?v=20260709b" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260709c" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -947,8 +947,8 @@
       </div>
     </div>
 
-    <script src="lucide.js?v=20260709b"></script>
-    <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260709b"></script>
+    <script src="lucide.js?v=20260709c"></script>
+    <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260709c"></script>
     <script>
     // Lazy-load Chart.js on first use
     let _chartJsLoaded = false;
@@ -956,14 +956,14 @@
       if (_chartJsLoaded) return Promise.resolve();
       return new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = '/ai/js/chart.umd.min.js?v=20260709b';
+        s.src = '/ai/js/chart.umd.min.js?v=20260709c';
         s.onload = () => { _chartJsLoaded = true; resolve(); };
         s.onerror = reject;
         document.head.appendChild(s);
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260709b"></script>
+    <script src="/ai/app.js?v=20260709c"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

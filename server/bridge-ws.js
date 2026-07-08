@@ -1308,8 +1308,11 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'signal_tickets': {
         const ticketMap = {}
+        // In observation mode (no own bridge), use admin's signals
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const sigUserId = hasOwnBridge ? userId : (adminUserId || userId)
         // Old signals
-        const oldRows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND (source = \'manual\' OR source IS NULL) ORDER BY id DESC LIMIT 200', [userId])
+        const oldRows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND (source = \'manual\' OR source IS NULL) ORDER BY id DESC LIMIT 200', [sigUserId])
         for (const row of oldRows) {
           try {
             let ticket = row.trade_ticket
@@ -1326,7 +1329,7 @@ async function handleBrowserCommand(ws, userId, msg) {
            FROM auto_signal_deliveries d
            WHERE d.user_id = ? AND d.is_executed = 1
            ORDER BY d.id DESC LIMIT 200`,
-          [userId])
+          [sigUserId])
         for (const row of delivRows) {
           try {
             let ticket = row.trade_ticket
@@ -1446,8 +1449,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (!ticket) return reply({ status: 'error', message: 'ticket required' })
         try {
           const signal = await queryOne(
-            'SELECT id, signal_type, entry_method, limit_price, stop_limit_price, pending_valid_until, order_state, pending_ticket, symbol, timeframe, created_at, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, is_executed, executed_at FROM ai_signals WHERE pending_ticket = ? AND (user_id = ? OR user_id = 0)',
-            [String(ticket), userId]
+            `SELECT id, signal_type, entry_method, limit_price, stop_limit_price, pending_valid_until, order_state, pending_ticket, symbol, timeframe, created_at, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, is_executed, executed_at
+             FROM ai_signals
+             WHERE (pending_ticket = ? OR trade_ticket = ?) AND (user_id = ? OR user_id = 0)
+             ORDER BY id DESC LIMIT 1`,
+            [String(ticket), String(ticket), userId]
           )
           if (signal) {
             try { signal.market_data = JSON.parse(signal.market_data_json || '{}') } catch { signal.market_data = {} }
