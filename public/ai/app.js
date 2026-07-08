@@ -2304,7 +2304,7 @@ async function loadAutoConfig() {
     document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
     document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
-    document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enabled);
+    document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enable_auto_trade);
 
     // Admin: global config
     if (isAdmin && data.admin) {
