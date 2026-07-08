@@ -276,12 +276,20 @@ async function _initBridge(ws, userId, user) {
   } catch (e) {
     console.error(`[BridgeWS] Failed to read user_bridge_settings for user ${userId}:`, e.message)
   }
+  // Read auto_scheduler.enabled as the source of truth (must match auto_status endpoint)
+  let schedulerAutoEnabled = false
+  try {
+    const schedRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
+    if (_bridgeInitGen.get(userId) !== gen) return
+    schedulerAutoEnabled = !!(schedRow?.enabled)
+  } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
+
   // Admin defaults to tradeEnabled=true if no DB record exists, but respects explicit DB value of 0
   // Non-admin: use DB value as-is (defaults to false when no row)
   const isAdmin = userId === (adminUserId || -1)
   const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
   const replacedOld = !!existing
-  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: dbAutoReasoningEnabled, lastPong: Date.now(), lastTradeMode: -1, _pingInterval: null, _connectTime: Date.now() }
+  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: schedulerAutoEnabled, lastPong: Date.now(), lastTradeMode: -1, _pingInterval: null, _connectTime: Date.now() }
   bridges.set(userId, bridgeEntry)
   ws._userId = userId
   console.log(`[BridgeWS] bridge connected user=${userId} role=${user?.role || 'unknown'} plan=${user?.plan || 'unknown'} replacedOld=${replacedOld}`)
@@ -295,46 +303,25 @@ async function _initBridge(ws, userId, user) {
     )
   } catch (e) { console.error(`[BridgeWS] Failed to persist connect status user=${userId}:`, e.message) }
 
-  // Notify browsers with current trade/auto state
-  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: dbAutoReasoningEnabled, trade_mode: -1 })
+  // Notify browsers with current trade/auto state — use auto_scheduler.enabled as single source of truth
+  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: schedulerAutoEnabled, trade_mode: -1 })
 
-  // Restore auto-reasoning — require BOTH user_bridge_settings AND auto_scheduler.enabled
-  const shouldRestoreAuto = dbAutoReasoningEnabled
-  let schedulerEnabled = false
-  try {
-    const schedulerRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
-    if (_bridgeInitGen.get(userId) !== gen) return
-    schedulerEnabled = !!(schedulerRow?.enabled)
-  } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
-  console.log(`[BridgeWS] _initBridge user ${userId}: dbAutoReason=${dbAutoReasoningEnabled} schedulerEnabled=${schedulerEnabled} hasDbRow=${hasDbRow}`)
-  if (shouldRestoreAuto && schedulerEnabled) {
+  // Restore auto-reasoning — use auto_scheduler.enabled as source of truth
+  console.log(`[BridgeWS] _initBridge user ${userId}: autoScheduler=${schedulerAutoEnabled} hasDbRow=${hasDbRow}`)
+  if (schedulerAutoEnabled) {
     try {
       const ai = await import('./routes/ai/index.js')
       if (_bridgeInitGen.get(userId) !== gen) return
-      // Do NOT re-enable if user explicitly disabled — only restore runtime subscription
-      if (schedulerEnabled) {
-        if (!shouldRestoreAuto) {
-          try {
-            await queryRun(
-              'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, 1) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = NOW()',
-              [userId]
-            )
-            const current = bridges.get(userId)
-            if (current && current.ws === ws) current.autoReasoningEnabled = true
-          } catch (e) { console.error('[BridgeWS] Failed to sync user_bridge_settings:', e.message) }
-        }
-        if (_bridgeInitGen.get(userId) !== gen) return
-        ai.stopAutoScheduler(userId)
-        await ai.startAutoScheduler(userId)
-        // Sync Redis subscription
-        const restoredCfg = await ai.getAutoConfig(null, userId)
-        if (restoredCfg?.enabled) {
-          await ai.syncUserRedisSubscription(userId, restoredCfg.prompt_type_id, restoredCfg.selected_symbols || [], true)
-          await ai.reconcileAutoSchedulers()
-        }
-        console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
-        sendToBrowsers(userId, { type: 'auto_state', enabled: true, runtime_subscribed: true, reason: 'bridge_connected' })
+      ai.stopAutoScheduler(userId)
+      await ai.startAutoScheduler(userId)
+      // Sync Redis subscription
+      const restoredCfg = await ai.getAutoConfig(null, userId)
+      if (restoredCfg?.enabled) {
+        await ai.syncUserRedisSubscription(userId, restoredCfg.prompt_type_id, restoredCfg.selected_symbols || [], true)
+        await ai.reconcileAutoSchedulers()
       }
+      console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
+      sendToBrowsers(userId, { type: 'auto_state', enabled: true, runtime_subscribed: true, reason: 'bridge_connected' })
     } catch (e) {
       console.error(`[BridgeWS] Failed to restore auto-reasoning for user ${userId}:`, e.message)
     }
