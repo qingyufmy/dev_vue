@@ -750,7 +750,7 @@ function wsApi(action, params = {}) {
     if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
     const cmdId = `ws_${++_wsCmdId}`;
     // analyze/auto-inference may take 60-120s
-    const timeout = params._timeout || (action === 'analyze' ? 120000 : 10000);
+    const timeout = params._timeout || (action === 'analyze' ? 120000 : action === 'signals' || action === 'signal-pending-info' ? 30000 : 10000);
     delete params._timeout;
     const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, timeout);
     _wsPending.set(cmdId, { resolve, reject, timer });

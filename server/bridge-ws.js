@@ -937,14 +937,14 @@ async function handleBrowserCommand(ws, userId, msg) {
         const delivSubquery = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const delivParams = [queryUserId, ...sharedParams]
 
-        // Count total
+        // Run COUNT and data query in parallel
         const countSql = `SELECT COUNT(*) as total FROM (${oldSubquery} UNION ALL ${delivSubquery}) t`
-        const countRow = await queryOne(countSql, [...oldParams, ...delivParams])
-        const totalCount = countRow?.total || 0
-
-        // Fetch page
         const dataSql = `SELECT ${selectCols} FROM (${oldSubquery} UNION ALL ${delivSubquery}) t ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
-        const allRows = await queryAll(dataSql, [...oldParams, ...delivParams, limit + 1, offset])
+        const [countRow, allRows] = await Promise.all([
+          queryOne(countSql, [...oldParams, ...delivParams]),
+          queryAll(dataSql, [...oldParams, ...delivParams, limit + 1, offset])
+        ])
+        const totalCount = countRow?.total || 0
         const hasMore = allRows.length > limit
         const sliced = allRows.slice(0, limit)
 
