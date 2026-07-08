@@ -3208,9 +3208,10 @@ async function navigateToSignalByTicket(ticket) {
   try {
     const data = await wsApi("signal_by_ticket", { ticket });
     if (data.status === "success" && data.signal) {
-      setTab("signals");
       const signal = data.signal;
-      renderSignal(signal);
+      state.selectedSignal = signal;
+      setTab("ai-analyze");
+      renderSignal(signal, null);
       highlightActiveAnalysis(signal.id);
       toast(`已定位信号 #${signal.id}`, "success");
     } else {
