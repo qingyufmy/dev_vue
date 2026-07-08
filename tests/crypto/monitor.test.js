@@ -8,6 +8,7 @@ vi.mock('../../server/db.js', () => ({
   queryOne: (...args) => mockQueryOne(...args),
   queryRun: (...args) => mockQueryRun(...args),
   queryAll: (...args) => mockQueryAll(...args),
+  withTransaction: async (fn) => fn(mockQueryRun),
   beijingNow: vi.fn(() => '2026-07-02 12:00:00'),
   parseBeijing: vi.fn((s) => {
     if (!s) return null

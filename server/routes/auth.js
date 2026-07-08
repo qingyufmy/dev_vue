@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { v4 as uuidv4 } from 'uuid'
+import crypto from 'crypto'
 import { queryOne, queryAll, queryRun, logAudit } from '../db.js'
 import { generateToken, authMiddleware } from '../middleware/auth.js'
 import nodemailer from 'nodemailer'
@@ -94,7 +95,7 @@ function generateReferralCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   let code = ''
   for (let i = 0; i < 10; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)]
+    code += chars[crypto.randomInt(chars.length)]
   }
   return code
 }
@@ -382,7 +383,7 @@ router.post('/send-code', async (req, res) => {
       if (existing) return res.json({ ok: false, error: '该邮箱已注册' })
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000))
+      const code = String(crypto.randomInt(100000, 999999))
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
 
     await queryRun('INSERT INTO verification_codes (email, code, purpose, expires_at) VALUES (?, ?, ?, ?)', [targetEmail, code, purpose || 'login', expiresAt])
@@ -631,7 +632,7 @@ router.post('/send-bind-code', authMiddleware, async (req, res) => {
       const existing = await queryOne('SELECT id FROM users WHERE email = ? AND id != ?', [email, req.user.id])
       if (existing) return res.json({ ok: false, error: '该邮箱已被其他账号绑定' })
 
-      const code = String(Math.floor(100000 + Math.random() * 900000))
+    const code = String(crypto.randomInt(100000, 999999))
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000 + 8 * 3600_000).toISOString().replace('T', ' ').substring(0, 19)
       await queryRun('INSERT INTO verification_codes (email, code, purpose, expires_at) VALUES (?, ?, ?, ?)', [email, code, 'bind', expiresAt])
 

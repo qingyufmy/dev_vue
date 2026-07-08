@@ -360,9 +360,9 @@ router.post('/post-replies', authMiddleware, async (req, res) => {
     const postAuthor = await queryOne('SELECT user_id FROM posts WHERE id = ?', [postId])
     if (postAuthor && postAuthor.user_id !== req.user.id) {
       await queryRun(`
-        INSERT INTO notifications (user_id, actor_id, type, title, message, post_id, meta)
-        VALUES (?, ?, 'reply', '你的帖子有了新回复', ?, ?, ?)
-      `, [postAuthor.user_id, req.user.id, `${req.user.nickname || '匿名用户'}回复了你的帖子`, postId, JSON.stringify({ excerpt: (content || '').substring(0, 100) })])
+        INSERT INTO notifications (user_id, type, title, message, link)
+        VALUES (?, 'reply', '你的帖子有了新回复', ?, ?)
+      `, [postAuthor.user_id, `${req.user.nickname || '匿名用户'}回复了你的帖子`, `/posts#${postId}`])
     }
 
     // Create notification for quoted reply author
@@ -370,9 +370,9 @@ router.post('/post-replies', authMiddleware, async (req, res) => {
       const quotedReply = await queryOne('SELECT user_id FROM post_replies WHERE id = ?', [quoteReplyId])
       if (quotedReply && quotedReply.user_id !== req.user.id && quotedReply.user_id !== postAuthor?.user_id) {
         await queryRun(`
-          INSERT INTO notifications (user_id, actor_id, type, title, message, post_id, meta)
-          VALUES (?, ?, 'reply_quote', '有人引用了你的回复', ?, ?, ?)
-        `, [quotedReply.user_id, req.user.id, `${req.user.nickname || '匿名用户'}引用了你的回复`, postId, JSON.stringify({ excerpt: (content || '').substring(0, 100) })])
+          INSERT INTO notifications (user_id, type, title, message, link)
+          VALUES (?, 'reply_quote', '有人引用了你的回复', ?, ?)
+        `, [quotedReply.user_id, `${req.user.nickname || '匿名用户'}引用了你的回复`, `/posts#${postId}`])
       }
     }
 

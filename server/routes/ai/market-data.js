@@ -427,6 +427,9 @@ export async function executeViaBridge(userId, action, params, timeoutMs = 10000
 }
 
 export function calculateMarketData(symbol, timeframe, rates, account, positions, options = {}) {
+  if (!rates || rates.length === 0) {
+    return { symbol, timeframe, latest_price: 0, strategy_score: { trend_strength: 0, data_confidence: 0.1 }, error: 'no_rates' }
+  }
   const closes = rates.map(r => parseFloat(r.close))
   const highs = rates.map(r => parseFloat(r.high))
   const lows = rates.map(r => parseFloat(r.low))

@@ -161,7 +161,7 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
         uid: u.uid || ('WS' + String(u.id).padStart(6, '0')),
         email: u.email,
         phone: u.phone || '',
-        name: u.nickname || u.email.split('@')[0],
+        name: u.nickname || (u.email || '').split('@')[0] || 'Unknown',
         nickname: u.nickname,
         avatar: u.avatar,
         role: u.role,
@@ -253,7 +253,14 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
       updates.push('password = ?'); params.push(pwHash)
     }
     if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar) }
-    if (role) { updates.push('role = ?'); params.push(role) }
+    if (role) {
+      if (role !== 'admin' && role !== 'user') return res.json({ ok: false, error: '无效的角色' })
+      if (role !== 'admin') {
+        const adminCount = await queryOne('SELECT COUNT(*) as cnt FROM users WHERE role = ?', ['admin'])
+        if (adminCount && adminCount.cnt <= 1) return res.json({ ok: false, error: '不能降级最后一个管理员' })
+      }
+      updates.push('role = ?'); params.push(role)
+    }
     if (plan) {
       updates.push('plan = ?'); params.push(plan)
       if (plan === 'free') {
@@ -301,6 +308,10 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
       await run('DELETE FROM user_bridge_settings WHERE user_id = ?', [userId])
       await run('DELETE FROM close_config WHERE user_id = ?', [userId])
       await run('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
+      await run('DELETE FROM crypto_watch_list WHERE user_id = ?', [userId])
+      await run('DELETE FROM auto_signal_deliveries WHERE user_id = ?', [userId])
+      await run('DELETE FROM bridge_connection_status WHERE user_id = ?', [userId])
+      await run('DELETE FROM close_signal_tickets WHERE user_id = ?', [userId])
       await run('DELETE FROM users WHERE id = ?', [userId])
     })
     res.json({ ok: true })
@@ -496,13 +507,15 @@ router.delete('/admin-course-items', authMiddleware, adminOnly, async (req, res)
     const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episode])
     if (!course) return res.json({ ok: false, error: '课程不存在' })
 
-    // Delete related data
-    await queryRun('DELETE FROM quiz_questions WHERE episode_id = ?', [episode])
-    await queryRun('DELETE FROM course_resources WHERE episode_id = ?', [episode])
-    await queryRun('DELETE FROM video_streams WHERE episode_id = ?', [episode])
-    await queryRun('DELETE FROM progress WHERE episode_id = ?', [episode])
-    await queryRun('DELETE FROM comments WHERE episode_id = ?', [episode])
-    await queryRun('DELETE FROM courses WHERE episode_id = ?', [episode])
+    // Delete related data in transaction
+    await withTransaction(async (run) => {
+      await run('DELETE FROM quiz_questions WHERE episode_id = ?', [episode])
+      await run('DELETE FROM course_resources WHERE episode_id = ?', [episode])
+      await run('DELETE FROM video_streams WHERE episode_id = ?', [episode])
+      await run('DELETE FROM progress WHERE episode_id = ?', [episode])
+      await run('DELETE FROM comments WHERE episode_id = ?', [episode])
+      await run('DELETE FROM courses WHERE episode_id = ?', [episode])
+    })
 
     res.json({ ok: true, message: '课程已删除' })
   } catch (err) {

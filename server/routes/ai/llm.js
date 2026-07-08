@@ -84,7 +84,7 @@ export async function maybeAiSignal(db, config, market) {
     try {
       const schema = await queryOne('SELECT schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
       if (schema?.schema_json) { outputFormat = schema.schema_json; schemaSource = 'database' }
-    } catch {}
+    } catch (e) { console.warn('[LLM] Failed to load output schema from DB, using default:', e.message) }
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
     console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
@@ -164,7 +164,7 @@ export function normalizeAiSignal(parsed, config, market) {
   if (entryMethod === 'limit' || entryMethod === 'stop' || entryMethod === 'stop_limit') {
     if (!limitPrice || !Number.isFinite(limitPrice) || limitPrice <= 0) {
       console.log(`[LLM] Missing/invalid limit_price for ${entryMethod}, rejecting signal (not falling back to market)`)
-      return { signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_minutes: 0, pending_valid_until: null }
+      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_minutes: 0, pending_valid_until: null, recommended_volume: 0 }
     }
   }
 
@@ -196,7 +196,8 @@ export function normalizeAiSignal(parsed, config, market) {
   const rawVolume = parseFloat(parsed.recommended_volume || 0)
   const recommendedVolume = signalType === 'hold' ? 0 : round2(Math.max(0.01, Math.min(rawVolume, maxPosition)))
 
-  let rawConfidence = parseFloat(parsed.confidence || 0)
+  let rawConfidence = parseFloat(parsed.confidence)
+  if (!Number.isFinite(rawConfidence)) rawConfidence = 0
   if (rawConfidence > 1) rawConfidence /= 100
 
   const score = market.strategy_score || {}
@@ -218,6 +219,10 @@ export function normalizeAiSignal(parsed, config, market) {
     signalType = 'hold'
     parsed.signal_type = 'hold'
     parsed.recommended_volume = 0
+    parsed.entry_method = 'observe'
+    parsed.limit_price = null
+    parsed.stop_limit_price = null
+    parsed.pending_valid_until = null
     return parsed
   }
 
@@ -245,6 +250,11 @@ export function normalizeAiSignal(parsed, config, market) {
         parsed.take_profit_3_price = isBuySide
           ? round2(anchorPrice + atr * risk.tp3AtrMult) : round2(anchorPrice - atr * risk.tp3AtrMult)
       }
+    }
+    // Reject if SL or TP1 are missing (ATR unavailable and LLM didn't provide them)
+    if (!parsed.stop_loss_price || !parsed.take_profit_1_price) {
+      console.log(`[LLM] Missing SL/TP for ${signalType} (atr=${atr}), rejecting`)
+      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_until: null, recommended_volume: 0 }
     }
   }
 

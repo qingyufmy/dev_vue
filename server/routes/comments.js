@@ -65,9 +65,10 @@ router.post('/comments', authMiddleware, async (req, res) => {
       return res.json({ ok: false, error: '评论内容不能为空' })
     }
 
+    const sanitized = text.trim().replace(/<[^>]*>/g, '')
     const result = await queryRun(`
       INSERT INTO comments (episode_id, user_id, text, parent_id) VALUES (?, ?, ?, ?)
-    `, [episodeId, req.user.id, text.trim(), parentId || null])
+    `, [episodeId, req.user.id, sanitized, parentId || null])
 
     // Update reply count if it's a reply
     if (parentId) {
@@ -122,11 +123,11 @@ router.post('/comments-like', authMiddleware, async (req, res) => {
     const existing = await queryOne('SELECT id FROM comment_likes WHERE user_id = ? AND comment_id = ?', [req.user.id, commentId])
 
     if (existing) {
-      await queryRun('DELETE FROM comment_likes WHERE id = ?', [existing.id])
+      await queryRun('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?', [req.user.id, commentId])
       await queryRun('UPDATE comments SET likes = GREATEST(0, likes - 1) WHERE id = ?', [commentId])
       res.json({ ok: true, liked: false })
     } else {
-      await queryRun('INSERT INTO comment_likes (user_id, comment_id) VALUES (?, ?)', [req.user.id, commentId])
+      await queryRun('INSERT IGNORE INTO comment_likes (user_id, comment_id) VALUES (?, ?)', [req.user.id, commentId])
       await queryRun('UPDATE comments SET likes = likes + 1 WHERE id = ?', [commentId])
       res.json({ ok: true, liked: true })
     }

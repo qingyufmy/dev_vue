@@ -305,20 +305,36 @@ router.post('/payment', authMiddleware, async (req, res) => {
 router.post('/payment/cancel/:orderId', authMiddleware, async (req, res) => {
   try {
     const order = await queryOne(
-      'SELECT order_id, status FROM orders WHERE order_id = ? AND user_id = ?',
+      'SELECT order_id, status, amount FROM orders WHERE order_id = ? AND user_id = ?',
       [req.params.orderId, req.user.id]
     )
     if (!order) return res.json({ ok: false, error: '订单不存在' })
     if (order.status !== 'pending') return res.json({ ok: false, error: '订单无法取消' })
 
-    await queryRun(
-      `UPDATE orders SET status = 'cancelled', status_label = '已取消' WHERE order_id = ?`,
+    // Atomically cancel with status guard to prevent race with confirmation
+    const r = await queryRun(
+      `UPDATE orders SET status = 'cancelled', status_label = '已取消' WHERE order_id = ? AND status = 'pending'`,
       [req.params.orderId]
     )
+    if (!r.changes) return res.json({ ok: false, error: '订单状态已变更，无法取消' })
+
     await queryRun(
       `UPDATE crypto_watch_list SET status = 'cancelled' WHERE order_id = ?`,
       [req.params.orderId]
     )
+
+    // Restore referral credit if used during order creation
+    const usedCredit = await queryOne(
+      `SELECT amount_confirmed, amount FROM orders WHERE order_id = ?`,
+      [req.params.orderId]
+    )
+    if (usedCredit && usedCredit.amount > usedCredit.amount_confirmed) {
+      const creditUsed = usedCredit.amount - usedCredit.amount_confirmed
+      await queryRun(
+        `UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?`,
+        [creditUsed, req.user.id]
+      )
+    }
 
     res.json({ ok: true })
   } catch (err) {

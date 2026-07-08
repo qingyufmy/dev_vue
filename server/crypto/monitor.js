@@ -1,4 +1,4 @@
-import { queryOne, queryRun, queryAll, beijingNow, parseBeijing } from '../db.js'
+import { queryOne, queryRun, queryAll, withTransaction, beijingNow, parseBeijing } from '../db.js'
 import { adapters, getAdapter } from './chains/index.js'
 import { getCryptoWalletApiKey } from './wallet.js'
 import { calculatePlanExpiry, processReferralCommission } from '../utils.js'
@@ -70,32 +70,38 @@ async function activateMembership(orderId, userId) {
   if (!order) return
 
   const now = beijingNow()
-  const r = await queryRun(
-    `UPDATE orders SET status = 'paid', status_label = '已完成', paid_at = ? WHERE order_id = ? AND status != 'paid'`,
-    [now, orderId]
-  )
-  if (!r.changes) {
+
+  // Wrap order update + user plan update in transaction to prevent crash between them
+  const activated = await withTransaction(async (run) => {
+    const r = await run(
+      `UPDATE orders SET status = 'paid', status_label = '已完成', paid_at = ? WHERE order_id = ? AND status != 'paid'`,
+      [now, orderId]
+    )
+    if (!r.changes) return false
+
+    const user = await queryOne('SELECT plan_expires_at FROM users WHERE id = ?', [userId])
+    let baseDate = null
+    if (user?.plan_expires_at) {
+      const currentExpiry = new Date(user.plan_expires_at + 'T23:59:59+08:00')
+      if (currentExpiry > new Date()) baseDate = currentExpiry
+    }
+    const expiresAt = calculatePlanExpiry(order.period, baseDate)
+    await run(
+      `UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = ? WHERE id = ?`,
+      [order.plan, order.period, expiresAt, now, userId]
+    )
+    return expiresAt
+  })
+
+  if (!activated) {
     console.log(`[Monitor] Order ${orderId} already paid — skip duplicate activation`)
     return
   }
 
-  // 叠加模式：从未过期的到期日往后延，未过期则从当前时间算
-  const user = await queryOne('SELECT plan_expires_at FROM users WHERE id = ?', [userId])
-  let baseDate = null
-  if (user?.plan_expires_at) {
-    const currentExpiry = new Date(user.plan_expires_at + 'T23:59:59+08:00')
-    if (currentExpiry > new Date()) baseDate = currentExpiry
-  }
-  const expiresAt = calculatePlanExpiry(order.period, baseDate)
-  await queryRun(
-    `UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = ? WHERE id = ?`,
-    [order.plan, order.period, expiresAt, now, userId]
-  )
-
   try {
     await queryRun(
       `INSERT INTO notifications (user_id, type, title, message) VALUES (?, 'system', '支付成功', ?)`,
-      [userId, `您已成功开通 ${order.plan_label || order.plan} 会员，有效期至 ${expiresAt}`]
+      [userId, `您已成功开通 ${order.plan_label || order.plan} 会员，有效期至 ${activated}`]
     )
   } catch (e) {
     console.error('[Monitor] Notification error:', e.message)
@@ -103,7 +109,7 @@ async function activateMembership(orderId, userId) {
 
   await processReferralCommission(userId, order.amount, order.plan, order.plan_label, order.period)
 
-  console.log(`[Monitor] Membership activated: user ${userId} -> ${order.plan} (expires ${expiresAt})`)
+  console.log(`[Monitor] Membership activated: user ${userId} -> ${order.plan} (expires ${activated})`)
 }
 
 async function checkExpiry() {
@@ -248,6 +254,30 @@ const SCAN_FUNCTIONS = {
       if (tx.to.toLowerCase() !== address.toLowerCase()) continue
       if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
       const amount = parseInt(tx.value) / 1e6
+      if (amount === expected) {
+        return { hash: tx.hash, amount }
+      }
+    }
+    return null
+  },
+
+  BSC: async (adapter, address, expectedAmount, createdAt, excludeHashes) => {
+    const apiKey = await getCryptoWalletApiKey('BSC')
+    const baseUrl = adapter.getApiBaseUrl()
+    const url = `${baseUrl}/api?module=account&action=tokentx&address=${address}&contractaddress=${USDT_CONTRACTS.BSC}&sort=desc&page=1&offset=20&apikey=${apiKey}`
+    const resp = await fetch(url)
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (!data.result) return null
+
+    const createdMs = parseBeijing(createdAt)?.getTime() ?? 0
+    if (!createdMs) { console.error(`[Monitor] BSC: failed to parse createdAt: ${createdAt}`); return null }
+    const expected = parseFloat(expectedAmount)
+    for (const tx of data.result) {
+      if (excludeHashes?.has(tx.hash)) continue
+      if (tx.to.toLowerCase() !== address.toLowerCase()) continue
+      if (tx.timeStamp && parseInt(tx.timeStamp) * 1000 < createdMs) continue
+      const amount = parseInt(tx.value) / 1e18
       if (amount === expected) {
         return { hash: tx.hash, amount }
       }

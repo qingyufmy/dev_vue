@@ -183,7 +183,10 @@ function createSymbolSelector(inputId, options, opts = {}) {
     const opt = e.target.closest(".sym-option");
     if (opt) selectSymbol(opt.dataset.symbol);
   });
-  document.addEventListener("click", (e) => { if (!wrapper.contains(e.target)) close(); });
+  if (!wrapper._docClickHandler) {
+    wrapper._docClickHandler = (e) => { if (!wrapper.contains(e.target)) close(); };
+    document.addEventListener("click", wrapper._docClickHandler);
+  }
 
   function updateHighlight() {
     dropdown.querySelectorAll(".sym-option").forEach((el, i) => {
@@ -273,14 +276,6 @@ const parseDate = (v) => {
   if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) return s;
   try { return fmtUtc(new Date(v.replace(" ", "T"))); } catch { return null; }
 };
-
-function utcToBeijing(utcStr) {
-  if (!utcStr) return null;
-  const d = new Date(utcStr.replace(" ", "T") + "Z");
-  if (isNaN(d.getTime())) return utcStr;
-  const p = (x) => String(x).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p((d.getUTCHours() + 8) % 24)}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
-}
 
 function utcToMt5(utcStr) {
   if (!utcStr) return null;
@@ -1534,7 +1529,7 @@ function initBridgeModal() {
 // ============ Trade Mode Badge Click — toggle trade sending ============
 async function handleTradeModeClick() {
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
-  if (!state.isAdmin && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
+  if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   const health = await wsApi("health").catch(() => null);
   const gateway = health?.gateway || {};
   const currentlyEnabled = gateway.live_trading_enabled;
@@ -1562,7 +1557,7 @@ let _autoToggleLock = false;
 async function handleAutoToggle() {
   if (_autoToggleLock) return;
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
-  if (!state.isAdmin && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
+  if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   // Turning OFF requires confirmation
   if (state.autoEnabled && !await showConfirm("关闭自动推理", "确认关闭自动推理？关闭后将停止自动 AI 分析和信号推送。", { confirmText: "关闭", danger: true })) return;
   _autoToggleLock = true;
@@ -1910,7 +1905,7 @@ function switchKlineTimeframe(tf) {
   startKlineRefreshTimer();
 }
 
-function renderPositionRows(positions, withAction) {
+function renderPositionRows(positions = [], withAction) {
   if (!positions.length) {
     return `<tr class="empty-row"><td colspan="${withAction ? 11 : 8}">当前无持仓</td></tr>`;
   }
@@ -2343,10 +2338,13 @@ function renderPromptTypeTable(pts, activePtId) {
   for (const pt of pts) {
     const isActive = pt.id === activePtId;
     const symbols = (pt.symbols || []).join(', ');
-    const descTip = pt.description ? ` title="${pt.description.replace(/"/g, '&quot;')}"` : '';
+    const safeTitle = escapeHtml(pt.title || '未命名');
+    const safeSymbols = escapeHtml(symbols || '-');
+    const safeDesc = escapeHtml(pt.description || '');
+    const descTip = pt.description ? ` title="${safeDesc}"` : '';
     html += `<tr style="border-bottom:1px solid var(--color-border);${isActive ? 'background:var(--color-primary-bg)' : ''}">
-      <td style="padding:8px 12px;font-weight:${isActive ? '600' : '400'}"${descTip}>${pt.title || '未命名'}</td>
-      <td style="padding:8px 12px;color:var(--color-text-secondary)">${symbols || '-'}</td>
+      <td style="padding:8px 12px;font-weight:${isActive ? '600' : '400'}"${descTip}>${safeTitle}</td>
+      <td style="padding:8px 12px;color:var(--color-text-secondary)">${safeSymbols}</td>
       <td style="padding:8px 12px;text-align:center">${pt.interval_minutes || 5}分钟</td>
       <td style="padding:8px 12px;text-align:center"><span style="color:${pt.is_active !== false ? 'var(--color-success)' : 'var(--color-text-muted)'}">${pt.is_active !== false ? '启用' : '禁用'}</span></td>
       <td style="padding:8px 12px;text-align:center"><button class="btn btn-secondary btn-sm" onclick="openPromptTypeModal(${pt.id})">编辑</button></td>
@@ -2398,9 +2396,9 @@ function renderPromptTypeDropdown(pts, selectedId) {
     div.appendChild(titleSpan);
 
     div.onmouseenter = () => {
-      tooltip.innerHTML = `<strong>${pt.title || '未命名'}</strong>` +
-        `<div class="pt-desc-line" style="margin-bottom:4px">品种: ${(pt.symbols || []).join(', ') || '-'} &nbsp;·&nbsp; 间隔: ${pt.interval_minutes || 5}分钟</div>` +
-        `<div class="pt-desc-line">${pt.description || '无描述'}</div>`;
+      tooltip.innerHTML = `<strong>${escapeHtml(pt.title || '未命名')}</strong>` +
+        `<div class="pt-desc-line" style="margin-bottom:4px">品种: ${escapeHtml((pt.symbols || []).join(', ') || '-')} &nbsp;·&nbsp; 间隔: ${pt.interval_minutes || 5}分钟</div>` +
+        `<div class="pt-desc-line">${escapeHtml(pt.description || '无描述')}</div>`;
       const dr = div.getBoundingClientRect();
       const wr = wrap.getBoundingClientRect();
       tooltip.style.top = (dr.top - wr.top) + 'px';
@@ -2468,7 +2466,7 @@ function renderSymbolsChips(strategySymbols, selectedSymbols) {
   for (const sym of strategySymbols) {
     const chip = document.createElement('span');
     chip.className = 'symbol-chip' + (container._selected.includes(sym) ? ' active' : '');
-    chip.innerHTML = `<span class="chip-check">✓</span>${sym}`;
+    chip.innerHTML = `<span class="chip-check">✓</span>${escapeHtml(sym)}`;
     chip.onclick = () => {
       const idx = container._selected.indexOf(sym);
       if (idx >= 0) {
@@ -3174,14 +3172,11 @@ async function loadPendingOrders() {
 
 function renderPendingOrders(orders) {
   const tbody = $("pendingOrdersBody");
-  const empty = $("pendingEmpty");
   if (!tbody) return;
   if (!orders.length) {
-    tbody.innerHTML = "";
-    if (empty) empty.style.display = "";
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">当前无挂单</td></tr>`;
     return;
   }
-  if (empty) empty.style.display = "none";
   const typeLabels = { buy_limit: "买入限价", sell_limit: "卖出限价", buy_stop: "买入止损", sell_stop: "卖出止损", buy_stop_limit: "买入止损限价", sell_stop_limit: "卖出止损限价" };
   const stateLabels = { pending: "等待中", filled: "已成交", expired: "已过期", cancelled: "已取消", superseded: "已取代" };
   tbody.innerHTML = orders.map((o) => {
@@ -3615,7 +3610,7 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
       <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
       <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="${profitClass(row.profit || 0)}">${row.profit != null && row.entry_price && row.volume ? (row.profit / (row.volume * row.entry_price * 100) * 100).toFixed(2) + '%' : '--'}</td>
+      <td class="${profitClass(row.profit || 0)}">${row.profit != null && row.entry_price && row.volume ? (row.profit / (row.volume * row.entry_price * (row.contract_size || 100)) * 100).toFixed(2) + '%' : '--'}</td>
       <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>  `;
   }).join("") : '<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>';
@@ -3872,7 +3867,7 @@ async function exportHistory() {
       sheetData.push([
         r.ticket || '', r.symbol || '', r.direction || '', r.volume || '',
         r.entry_price ?? '', r.entry_time || '', r.exit_price ?? '', r.close_time || '',
-        r.stop_loss ?? '', r.take_profit ?? '', r.profit ?? '', (r.profit != null && r.entry_price && r.volume ? (r.profit / (r.volume * r.entry_price * 100) * 100).toFixed(2) + '%' : ''), r.comment || '',
+        r.stop_loss ?? '', r.take_profit ?? '', r.profit ?? '', (r.profit != null && r.entry_price && r.volume ? (r.profit / (r.volume * r.entry_price * (r.contract_size || 100)) * 100).toFixed(2) + '%' : ''), r.comment || '',
         r.signal_id || '', r.signal_type || '', r.signal_confidence ?? '', r.signal_volume ?? '',
         r.signal_analysis || '', r.signal_reasoning || '',
         r.signal_stop_loss ?? '', r.signal_tp1 ?? '', r.signal_tp2 ?? '', r.signal_tp3 ?? '',
@@ -4210,6 +4205,20 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // --- Changelog Modal ---
+function sanitizeHtml(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  div.querySelectorAll('script, iframe, object, embed, form, input, textarea, select, svg, math, meta, link, base, button').forEach(el => el.remove());
+  div.querySelectorAll('*').forEach(el => {
+    for (const attr of [...el.attributes]) {
+      if (/^on/i.test(attr.name) || attr.value.trim().toLowerCase().startsWith('javascript:')) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+  return div.innerHTML;
+}
+
 async function checkChangelog() {
   try {
     const [current, status] = await Promise.all([
@@ -4217,7 +4226,7 @@ async function checkChangelog() {
       api('/api/changelog-status')
     ]);
     if (current.ok && status.ok && current.version > (status.seenVersion || 0) && current.content) {
-      document.getElementById('changelogContent').innerHTML = current.content;
+      document.getElementById('changelogContent').innerHTML = sanitizeHtml(current.content);
       const modal = document.getElementById('changelogModal');
       modal.style.display = 'flex';
       modal.classList.add('active');

@@ -229,7 +229,7 @@ describe('comments.js — POST /comments-like', () => {
     const { json } = await callRoute('post', '/comments-like', { commentId: 10 }, { id: 1 })
     expect(json).toMatchObject({ ok: true, liked: true })
     expect(queryRun).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT INTO comment_likes'),
+      expect.stringContaining('INSERT IGNORE INTO comment_likes'),
       [1, 10]
     )
   })
@@ -243,7 +243,7 @@ describe('comments.js — POST /comments-like', () => {
     expect(json).toMatchObject({ ok: true, liked: false })
     expect(queryRun).toHaveBeenCalledWith(
       expect.stringContaining('DELETE FROM comment_likes'),
-      [42]
+      [1, 10]
     )
   })
 

@@ -174,6 +174,10 @@ describe('maybeAiSignal', () => {
               signal_type: 'buy',
               confidence: 0.7,
               recommended_volume: 0.03,
+              stop_loss_price: 1990,
+              take_profit_1_price: 2010,
+              take_profit_2_price: 2020,
+              take_profit_3_price: 2030,
               analysis: 'test analysis',
               reasoning: 'test reasoning'
             })

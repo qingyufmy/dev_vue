@@ -18,6 +18,7 @@ export async function buildStrategyContext(userId, symbol, account, positions, p
       rates = (resp && resp.rates) ? resp.rates : []
     }
     const summary = calculateMarketData(symbol, tf, rates, account, positions, { computeChan: false })
+    if (summary.error) continue
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
     timeframes[tf] = { summary: slimSummary, klines: compactRates(rates) }
   }
@@ -67,7 +68,6 @@ export async function handleAnalyze(userId, params) {
 
   const config = await getAnalyzeApiKey(userId, session_id)
   const prompt = prompt_override || config?.system_prompt || ''
-  const { parseTimeframeTags } = await import('./utils.js')
   const tags = parseTimeframeTags(prompt)
 
   const account = await mt5Bridge(userId, 'account', {})
@@ -99,7 +99,7 @@ export async function handleAnalyze(userId, params) {
     [userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price || null,
       signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
-      marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', (await import('./utils.js')).signalTtlSeconds(timeframe), createdAt,
+      marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt,
       signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null])
 
   signal.id = result.insertId

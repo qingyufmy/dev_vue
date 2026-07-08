@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from './db.js'
 import { DEFAULT_API_BASE_URL, ADMIN_CACHE_TTL_MS } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
+import { autoSchedulerState } from './routes/ai/scheduler.js'
 import { utcToMt5Time } from './routes/ai/utils.js'
 
 import { JWT_SECRET } from './config.js'
@@ -312,7 +313,7 @@ async function _initBridge(ws, userId, user) {
     try {
       const ai = await import('./routes/ai/index.js')
       if (_bridgeInitGen.get(userId) !== gen) return
-      ai.stopAutoScheduler(userId)
+      await ai.stopAutoScheduler(userId)
       await ai.startAutoScheduler(userId)
       // Sync Redis subscription
       const restoredCfg = await ai.getAutoConfig(null, userId)
@@ -1049,6 +1050,14 @@ async function handleBrowserCommand(ws, userId, msg) {
               await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), orderTicket, signal.id])
             }
           }
+        } else {
+          // Update delivery status on failure
+          if (signalSource === 'auto_shared' && delivery) {
+            const status = result.status === 'rejected' ? 'rejected' : 'failed'
+            await queryRun(
+              'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE id = ?',
+              [status, JSON.stringify(result), delivery.id])
+          }
         }
         await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm, source: signalSource }, result, result.status)
         break
@@ -1146,7 +1155,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           max_position_size: userAuto.scheduler?.max_position_size ?? 0.05,
           selected_take_profit: userAuto.scheduler?.selected_take_profit ?? 2,
           enable_auto_trade: !!userAuto.scheduler?.enable_auto_trade,
-          selected_symbols: (() => { try { return JSON.parse(userAuto.scheduler?.symbols || '[]') } catch { return [] } })(),
+          selected_symbols: userAuto.scheduler?.selected_symbols || [],
           running,
           paused_reason: userAuto.pausedReason || '',
         }
@@ -1266,7 +1275,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const symbols = [symbol]
         const enabled = !!params.enabled
         await ai.upsertAutoConfig(null, userId, symbols, enabled)
-        ai.stopAutoScheduler(userId)
+        await ai.stopAutoScheduler(userId)
         if (enabled) await ai.startAutoScheduler(userId)
         // Sync user_bridge_settings so _initBridge can see it on reconnect
         try {
@@ -1506,11 +1515,20 @@ async function handleBrowserCommand(ws, userId, msg) {
           //   1. trade_ticket direct match
           //   2. fallback: execution_result JSON → order/ticket/position
           // Only is_executed=1 signals have a real order ticket binding
+          // Query only signals matching the tickets from MT5 history (not all executed signals)
+          const sigPlaceholders = tickets.map(() => '?').join(',')
           const signalRows = await queryAll(
             `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
                     stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
                     session_id, is_executed, execution_result, created_at, symbol
-             FROM ai_signals WHERE is_executed = 1 ORDER BY created_at DESC`
+             FROM ai_signals WHERE is_executed = 1 AND trade_ticket IN (${sigPlaceholders})
+             UNION
+             SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+                    stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+                    session_id, is_executed, execution_result, created_at, symbol
+             FROM ai_signals WHERE is_executed = 0 AND trade_ticket IN (${sigPlaceholders})
+             LIMIT 5000`,
+            [...tickets, ...tickets]
           )
 
           // Build ticket→signal map using same extraction as signal_tickets handler
@@ -1739,8 +1757,35 @@ async function handleBrowserCommand(ws, userId, msg) {
                     const k = `${db.prompt_type_id}:${sym}`
                     const count = await redis.scard(`auto:scheduler:${k}:subs`)
                     totalSubs += count || 0
+                    // Fallback: if Redis has no subs, check in-memory scheduler state
+                    if (totalSubs === 0 && autoSchedulerState[k]?.subscribers?.size > 0) {
+                      totalSubs = autoSchedulerState[k].subscribers.size
+                    }
                   }
                   db.subscriber_count = totalSubs
+                  // Also add as runtime scheduler if in-memory state exists but Redis missed it
+                  if (totalSubs > 0) {
+                    const firstSym = symbols[0] || ''
+                    const k = `${db.prompt_type_id}:${firstSym}`
+                    const memState = autoSchedulerState[k]
+                    if (memState) {
+                      schedulers.push({
+                        key: k,
+                        prompt_type_id: db.prompt_type_id,
+                        prompt_type_name: db.prompt_type_name || '',
+                        symbol: firstSym,
+                        running: memState.running || false,
+                        in_flight: memState.inFlight || false,
+                        subscriber_count: memState.subscribers?.size || 0,
+                        interval_minutes: memState.intervalMinutes || db.interval_minutes || 5,
+                        last_run_at: memState.lastRunAt || '',
+                        last_error: memState.lastError || '',
+                        wait_reason: memState.waitReason || '',
+                        next_run_in_seconds: memState.nextRunInSeconds || 0,
+                        market_reason: memState.marketState?.reason || '',
+                      })
+                    }
+                  }
                 }
               } catch (e) { console.error('[admin_dashboard] Redis subs count error:', e.message) }
             }

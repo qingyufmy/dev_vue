@@ -13,6 +13,8 @@ router.get('/profile', authMiddleware, async (req, res) => {
       FROM users WHERE id = ?
     `, [req.user.id])
 
+    if (!row) return res.status(404).json({ ok: false, error: '用户不存在' })
+
     const user = {
       id: row.id,
       uid: row.uid,

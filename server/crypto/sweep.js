@@ -86,7 +86,7 @@ export async function sweepAddress(fromIndex) {
   })
 
   await queryRun(
-    `INSERT INTO audit_logs (user_id, action, details) VALUES (?, 'sweep_usdt', ?)`,
+    `INSERT INTO audit_logs (user_id, action, detail) VALUES (?, 'sweep_usdt', ?)`,
     [0, JSON.stringify({ from: fromAddress, to: toAddress, amount: balanceNum, txHash: tx.txid })]
   )
 

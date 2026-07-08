@@ -651,8 +651,12 @@ export async function initDB() {
 }
 
 async function seedData(p) {
-  const adminPass = process.env.SEED_ADMIN_PASSWORD || 'admin123'
-  const demoPass = process.env.SEED_DEMO_PASSWORD || 'demo123'
+  const adminPass = process.env.SEED_ADMIN_PASSWORD
+  const demoPass = process.env.SEED_DEMO_PASSWORD
+  if (!adminPass || !demoPass) {
+    console.error('[Seed] SEED_ADMIN_PASSWORD and SEED_DEMO_PASSWORD must be set in .env for first-time initialization')
+    return
+  }
   const hash = await bcrypt.hash(adminPass, 10)
   const demoHash = await bcrypt.hash(demoPass, 10)
 

@@ -8,7 +8,7 @@ import { mt5Bridge } from './market-data.js'
 // Parse strategy symbols from JSON string: parse, trim, uppercase, deduplicate
 export function parsePromptSymbols(symbolsJson) {
   let arr = []
-  try { arr = JSON.parse(symbolsJson || '[]') } catch {}
+  try { arr = JSON.parse(symbolsJson || '[]') } catch (e) { console.warn('[Config] Failed to parse symbols JSON:', e.message) }
   return [...new Set(arr.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
 }
 
@@ -182,6 +182,11 @@ export async function getAutoConfig(db, userId) {
     const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
     if (firstPt) row.prompt_type_id = firstPt.id
   }
+  // Populate selected_symbols from prompt type (auto_scheduler table has no symbols column)
+  if (row.prompt_type_id) {
+    const pt = await queryOne('SELECT symbols_json FROM auto_prompt_types WHERE id = ?', [row.prompt_type_id])
+    if (pt) row.selected_symbols = parsePromptSymbols(pt.symbols_json || '[]')
+  }
   return row
 }
 
@@ -325,11 +330,16 @@ export async function getUserAutoConfig(userId) {
       max_position_size: 0.05,
       selected_take_profit: 2,
       enable_auto_trade: 1,
-      symbols: '[]',
     }
   } else if (!scheduler.prompt_type_id) {
     const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
     if (firstPt) scheduler.prompt_type_id = firstPt.id
+  }
+  // Populate selected_symbols from prompt type (auto_scheduler.symbols column was dropped)
+  scheduler.selected_symbols = []
+  if (scheduler.prompt_type_id) {
+    const pt = await queryOne('SELECT symbols_json FROM auto_prompt_types WHERE id = ?', [scheduler.prompt_type_id])
+    if (pt) scheduler.selected_symbols = parsePromptSymbols(pt.symbols_json || '[]')
   }
   let pausedReason = ''
   if (scheduler.enabled) {
@@ -456,7 +466,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   )
   const filtered = rows.filter(r => {
     let userSymbols = []
-    try { userSymbols = JSON.parse(r.symbols_json || '[]') } catch {}
+    try { userSymbols = JSON.parse(r.symbols_json || '[]') } catch (e) { console.warn('[Config] Failed to parse user symbols:', e.message) }
     return userSymbols.some(s => {
       const sNorm = String(s).toUpperCase().trim()
       return sNorm === sym || sNorm.replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '') === symBase

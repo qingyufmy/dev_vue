@@ -5,7 +5,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getGlobalAutoConfig, upsertAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, validateTradeRequest, RiskReject, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, buildBridgeOrderCall, executeOrderCore } from './config.js'
+import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, executeOrderCore } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -222,11 +222,13 @@ export async function getUserAutoRuntimeStatus(userId) {
   }
 
   let selectedSymbols = []
-  try { selectedSymbols = JSON.parse(scheduler.symbols || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse scheduler symbols:', e.message) }
   let promptTypeName = ''
   if (scheduler.prompt_type_id) {
     const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
-    if (pt) promptTypeName = pt.title || ''
+    if (pt) {
+      promptTypeName = pt.title || ''
+      try { selectedSymbols = JSON.parse(pt.symbols_json || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse prompt type symbols:', e.message) }
+    }
   }
 
   const redis = getRedis()
@@ -313,10 +315,11 @@ const REDIS_COOLDOWN_PREFIX = 'auto:scheduler:cooldown:'
 
 async function acquireLock(key) {
   const redis = getRedis()
-  if (!redis) return null
+  if (!redis) { console.warn(`[acquireLock] ${key}: Redis unavailable`); return null }
   const token = crypto.randomUUID()
   try {
     const ok = await redis.set(`${REDIS_LOCK_PREFIX}${key}`, token, 'NX', 'PX', 600000)
+    if (!ok) console.warn(`[acquireLock] ${key}: lock already held`)
     return ok ? token : null
   } catch (e) { console.error('[acquireLock]', key, e.message); return null }
 }
@@ -628,6 +631,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.inFlight = true
     st._lockToken = lockToken
     st.stage = 'running'
+    st.lastError = ''
     st.waitReason = ''
 
     let cycleStatus = 'error'
@@ -1072,7 +1076,8 @@ export async function reconcilePendingOrders() {
     byUser[row.user_id].push(row)
   }
 
-  for (const [userId, rows] of Object.entries(byUser)) {
+  for (const [userIdStr, rows] of Object.entries(byUser)) {
+    const userId = Number(userIdStr)
     if (!isBridgeAlive(userId)) continue
 
     try {
@@ -1351,7 +1356,7 @@ async function runSmartClose(userId, closeConfig, account, positions) {
       return []
     }
 
-    if (!Array.isArray(parsed.positions)) return []
+    if (!Array.isArray(parsed.positions) || parsed.positions.length === 0) return []
 
     const avgConfidence = parsed.positions.reduce((s, p) => s + (p.confidence || 0.5), 0) / parsed.positions.length
     const analysisJson = JSON.stringify(parsed.positions)

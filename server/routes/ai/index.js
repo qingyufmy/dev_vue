@@ -52,10 +52,10 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
 
 export { initAutoSchedulers }
 
-export { executeViaBridge, mt5Bridge } from './market-data.js'
+export { mt5Bridge } from './market-data.js'
 export { isBridgeAlive, getAllBridges, getBridgeTradeMode } from '../../bridge-ws.js'
 
-export { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
+export { handleAnalyze } from './strategy.js'
 
 export { maybeAiSignal } from './llm.js'
 
@@ -64,12 +64,12 @@ export { insertAudit, getActiveConfig, getAnalyzeApiKey,
   getGlobalAutoConfig, saveGlobalAutoConfig,
   getExecuteRiskConfig, getAutoPromptTypes, getAutoPromptTypeById,
   saveAutoPromptType, disableAutoPromptType, getUserAutoConfig,
-  saveUserAutoConfig, getUnifiedAutoInferenceConfig, getAutoSubscribers,
-  getDeliveryExecuteRiskConfig, getCloseConfig, saveCloseConfig, getCloseSignalTickets } from './config.js'
+  saveUserAutoConfig, getUnifiedAutoInferenceConfig,
+  getCloseConfig, saveCloseConfig, getCloseSignalTickets } from './config.js'
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,
-  runSmartCloseCycle, syncUserRedisSubscription, rebuildRedisSubscriptions, removeUserRuntimeAutoSubscription,
+  runSmartCloseCycle, syncUserRedisSubscription, removeUserRuntimeAutoSubscription,
   getUserAutoRuntimeStatus } from './scheduler.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,

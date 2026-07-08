@@ -158,13 +158,21 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
 })
 
 // ===== Serve video files with range request support =====
-router.get('/video-file/:filename', authMiddleware, (req, res) => {
+router.get('/video-file/:filename', authMiddleware, async (req, res) => {
   try {
     const filePath = resolve(join(uploadDir, req.params.filename))
     if (!filePath.startsWith(resolve(uploadDir))) {
       return res.status(403).json({ error: '禁止访问' })
     }
     if (!existsSync(filePath)) return res.status(404).json({ error: '视频不存在' })
+
+    if (req.user.role !== 'admin') {
+      const fileName = req.params.filename.replace(/\.[^.]+$/, '')
+      const video = await queryOne('SELECT access_level FROM video_streams WHERE episode_id = ?', [parseInt(fileName.replace('ep', ''))])
+      if (video && video.access_level === 'pro' && req.user.plan !== 'pro') {
+        return res.status(403).json({ error: '需要 Pro 会员权限' })
+      }
+    }
 
     const stat = statSync(filePath)
     const fileSize = stat.size
@@ -220,9 +228,9 @@ router.post('/video-stream', authMiddleware, async (req, res) => {
       `, [bilibiliId || '', localPath || '', qiniuKey || '', accessLevel || 'plus_pro', title || '', duration || 0, episodeId])
     } else {
       await queryRun(`
-        INSERT INTO video_streams (episode_id, bilibili_id, local_path, qiniu_key, video_key, access_level, title, duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [episodeId, bilibiliId || '', localPath || '', qiniuKey || '', `ep${episodeId}`, accessLevel || 'plus_pro', title || '', duration || 0])
+        INSERT INTO video_streams (episode_id, bilibili_id, local_path, qiniu_key, access_level, title, duration)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [episodeId, bilibiliId || '', localPath || '', qiniuKey || '', accessLevel || 'plus_pro', title || '', duration || 0])
     }
 
     // Sync course record: duration (always sync when provided) + auto-fetch bilibili cover
@@ -324,7 +332,7 @@ router.post('/qiniu-callback', authMiddleware, adminOnly, async (req, res) => {
     if (existing) {
       await queryRun("UPDATE video_streams SET qiniu_key = ?, file_size = ? WHERE episode_id = ?", [key.trim(), fileSize, eid])
     } else {
-      await queryRun("INSERT INTO video_streams (episode_id, qiniu_key, video_key, file_size) VALUES (?, ?, ?, ?)", [eid, key.trim(), `ep${eid}`, fileSize])
+      await queryRun("INSERT INTO video_streams (episode_id, qiniu_key, file_size) VALUES (?, ?, ?)", [eid, key.trim(), fileSize])
     }
 
     await queryRun("UPDATE courses SET has_stream_video = 1, updated_at = NOW() WHERE episode_id = ?", [eid])
