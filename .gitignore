@@ -24,6 +24,7 @@ server/stderr.log
 _build/
 build/
 dist/
+dist_inno/
 dist_nuitka/
 
 __pycache__/
