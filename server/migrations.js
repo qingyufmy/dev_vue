@@ -749,6 +749,7 @@ const migrations = [
     up: async () => {
       const cols = [
         { name: 'limit_price', def: "DOUBLE DEFAULT NULL" },
+        { name: 'stop_limit_price', def: "DOUBLE DEFAULT NULL" },
         { name: 'pending_valid_until', def: "DATETIME DEFAULT NULL" },
         { name: 'order_state', def: "VARCHAR(12) DEFAULT NULL" },
       ]
