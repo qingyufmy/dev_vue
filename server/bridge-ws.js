@@ -852,10 +852,15 @@ async function handleBrowserCommand(ws, userId, msg) {
         const signalId = Number(params.signal_id)
         if (!signalId) return reply({ status: 'error', message: 'signal_id required' })
 
+        // In observation mode, delivery is stored under admin's userId
+        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
+        const adminId = await getAdminUserId()
+        const detailUserId = hasOwnBridge ? userId : (adminId || userId)
+
         // Check if user has a delivery for this signal
         const delivery = await queryOne(
-          'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?',
-          [signalId, userId]
+          'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND (user_id = ? OR user_id = ?)',
+          [signalId, userId, detailUserId]
         )
         if (delivery) {
           const row = await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId])
@@ -880,10 +885,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
 
         // Fallback: old signal check
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const adminId = await getAdminUserId()
-        const detailUserId = hasOwnBridge ? userId : (adminId || userId)
-        const row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND user_id = ?', [signalId, detailUserId])
+        const row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND (user_id = ? OR user_id = 0)', [signalId, detailUserId])
         if (row) {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
