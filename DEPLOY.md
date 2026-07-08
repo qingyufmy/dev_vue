@@ -1,6 +1,6 @@
 # AURUM AI Trading System — 宝塔面板部署教程
 
-> 当前版本：v2.2.0 | 最后更新：2026-07-05
+> 当前版本：v2.3.4 | 最后更新：2026-07-11
 
 ## 一、服务器准备
 
@@ -57,6 +57,10 @@ MYSQL_DATABASE=huaerjie_aurum
 # JWT（必填）
 JWT_SECRET=替换为你的密钥（随便写一串长字符）
 
+# 种子密码（首次部署必填，部署完成后可删除）
+SEED_ADMIN_PASSWORD=替换为强密码
+SEED_DEMO_PASSWORD=替换为强密码
+
 # Server
 PORT=3000
 
@@ -67,13 +71,22 @@ PORT=3000
 
 # CORS origins（逗号分隔）
 # CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
+
+# USDT 支付（可选 — 不配置则 USDT 支付不可用）
+# HD_WALLET_MNEMONIC=your twelve word mnemonic phrase here
+# TRONGRID_API_KEY=your_trongrid_api_key
+# ETHERSCAN_API_KEY=your_etherscan_api_key
+# BSCSCAN_API_KEY=your_bscscan_api_key
+# SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
 ```
 
-> **说明**：首次启动会自动建表和种子数据（管理账号 admin@wallstreetskill.com / admin123）
+> **说明**：首次启动会自动建表和种子数据（使用 SEED_ADMIN_PASSWORD / SEED_DEMO_PASSWORD 配置的密码）
 >
 > **⚠️ 内存配置**：启动参数需添加 `--max-old-space-size=256`，避免堆内存耗尽导致频繁重启
 >
 > **⚠️ JWT_SECRET 必填**：未设置会导致服务启动失败（process.exit）
+>
+> **⚠️ 种子密码必填**：未设置 SEED_ADMIN_PASSWORD / SEED_DEMO_PASSWORD 时首次初始化会拒绝，防止生产环境弱密码
 
 ## 五、宝塔配置 Node 项目
 
@@ -244,7 +257,7 @@ npm install --production
 
 ## 数据库迁移版本追踪
 
-系统使用 `schema_migrations` 表追踪已执行的迁移。迁移文件在 `server/migrations.js` 中定义。当前最新迁移：`025_drop_ui_configs_and_dead_columns`。
+系统使用 `schema_migrations` 表追踪已执行的迁移。迁移文件在 `server/migrations.js` 中定义。当前最新迁移：`036_unique_indexes`。
 
 ## 注意事项
 
@@ -256,3 +269,5 @@ npm install --production
 - `.env` 文件包含敏感信息，已在 `.gitignore` 中排除
 - Redis 可选，不配置时所有缓存调用静默返回 null，系统正常运行
 - 桥接软件使用 Nuitka 打包（v2.2.0+），降低杀毒软件误报
+- **USDT 支付**需配置钱包助记词和各链 API Key，详见 `.env.example`
+- **种子密码**首次部署后建议从 `.env` 中移除，防止泄露
