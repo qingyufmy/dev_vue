@@ -1,4 +1,4 @@
-import { queryOne, queryRun, queryAll } from '../db.js'
+import { queryAll } from '../db.js'
 
 let _fixedAddressCache = null
 
@@ -41,11 +41,6 @@ export async function generateUniqueAmount(baseAmount, orderId, plan, period) {
   let whereClause = `crypto_amount IS NOT NULL AND status = 'pending' AND crypto_amount >= ? AND crypto_amount < ?`
   const params = [intPart, intPart + 1]
 
-  if (plan && period) {
-    whereClause += ` AND plan = ? AND period = ?`
-    params.push(plan, period)
-  }
-
   const rows = await queryAll(
     `SELECT crypto_amount FROM orders WHERE ${whereClause}`,
     params
@@ -72,16 +67,4 @@ export async function generateUniqueAmount(baseAmount, orderId, plan, period) {
   return parseFloat((intPart + suffix / 1000000).toFixed(6))
 }
 
-export async function findOrderByAmount(chain, receivedAmount) {
-  const rows = await queryAll(
-    `SELECT order_id, user_id, plan, period, crypto_amount
-     FROM orders
-     WHERE status = 'pending' AND crypto_chain = ?
-       AND ABS(crypto_amount - ?) < 0.000001
-       AND crypto_expires_at > NOW()
-     ORDER BY created_at DESC LIMIT 1`,
-    [chain, receivedAmount]
-  )
 
-  return rows.length > 0 ? rows[0] : null
-}
