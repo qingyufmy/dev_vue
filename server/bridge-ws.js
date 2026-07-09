@@ -1987,7 +1987,7 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000, opti
 
     // Fall back to admin bridge for read operations (unless noFallback)
     if (!options.noFallback) {
-      const readActions = ['account', 'positions', 'rates', 'symbols', 'quote']
+      const readActions = ['account', 'positions', 'rates', 'symbols', 'quote', 'pending_list']
       if ((!bridge || bridge.ws.readyState !== 1) && readActions.includes(action) && adminUserId) {
         bridge = bridges.get(adminUserId)
         usingFallback = true

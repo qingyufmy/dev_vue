@@ -99,7 +99,8 @@ export async function maybeAiSignal(db, config, market) {
       symbol: market.symbol, timeframe: market.timeframe, timestamp: market.timestamp,
       latest_price: market.latest_price, price_change: market.price_change,
       price_change_pct: market.price_change_pct, account: market.account,
-      positions: market.positions, kline_count: market.kline_count,
+      positions: market.positions, pending_orders: market.pending_orders || [],
+      kline_count: market.kline_count,
     }
     if (market.strategy_context) {
       const ctx = { ...market.strategy_context }
