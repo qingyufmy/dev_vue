@@ -1422,8 +1422,6 @@ async function handleBrowserCommand(ws, userId, msg) {
             try {
               const symbol = params.symbol ? params.symbol : null
               const listResult = await ai.mt5Bridge(adminId, 'pending_list', { symbol })
-              const firstOrder = listResult?.orders?.[0]
-              if (firstOrder) console.log(`[BridgeWS] pending_list sample: keys=${Object.keys(firstOrder).join(',')} ticket=${firstOrder.ticket} mt5_ticket=${firstOrder.mt5_ticket} id=${firstOrder.id} order=${firstOrder.order}`)
               result = listResult
             } catch (e) {
               console.error('[BridgeWS] pending_list (admin fallback) error:', e.message)
@@ -1465,14 +1463,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         const ticket = params.ticket
         if (!ticket) return reply({ status: 'error', message: 'ticket required' })
         try {
-          const ticketStr = String(ticket)
-          console.log(`[BridgeWS] signal_by_ticket: ticket=${ticketStr}`)
           const signal = await queryOne(
             `SELECT id, signal_type, entry_method, limit_price, stop_limit_price, pending_valid_until, order_state, pending_ticket, symbol, timeframe, created_at, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, is_executed, executed_at
              FROM ai_signals
              WHERE (pending_ticket = ? OR trade_ticket = ?)
              ORDER BY id DESC LIMIT 1`,
-            [ticketStr, ticketStr]
+            [String(ticket), String(ticket)]
           )
           if (signal) {
             try { signal.market_data = JSON.parse(signal.market_data_json || '{}') } catch { signal.market_data = {} }

@@ -985,7 +985,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
            execution_result = ? WHERE signal_id = ? AND user_id = ?`,
           [String(ticket), signal.pending_valid_until || null, JSON.stringify(execResult), signalId, userId])
         // Sync to ai_signals
-        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(() => {})
+        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(e => l(`sync pending_ticket to ai_signals failed: ${e.message}`))
         l(`auto-executed pending: ticket=${ticket}, volume=${order.volume}`)
       } else {
         await queryRun(
@@ -1109,7 +1109,7 @@ export async function reconcilePendingOrders() {
             await queryRun(
               "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
               [ticket, row.id])
-            await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(() => {})
+            await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(e => l(`sync trade_ticket to ai_signals failed: ${e.message}`))
           } else {
             await queryRun(
               "UPDATE ai_signals SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
