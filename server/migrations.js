@@ -766,21 +766,6 @@ const migrations = [
         }
       }
     }
-  },
-  {
-    id: '040_add_pending_orders_enabled',
-    up: async () => {
-      try {
-        await queryRun("ALTER TABLE global_auto_config ADD COLUMN pending_orders_enabled TINYINT NOT NULL DEFAULT 1 AFTER enable_auto_trade")
-        console.log('[Migrations] 040 added pending_orders_enabled to global_auto_config')
-      } catch (e) {
-        if (e.message?.includes('Duplicate column')) {
-          console.log('[Migrations] 040 pending_orders_enabled already exists')
-        } else {
-          console.error('[Migrations] 040 failed:', e.message)
-        }
-      }
-    }
   }
 ]
 
