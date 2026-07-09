@@ -612,6 +612,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
         sl: p.sl || null, tp: p.tp || null,
       })),
     },
+    pending_orders: options.pending_orders || [],
     account: account ? { balance: account.balance, equity: account.equity } : null,
     chan,
   }

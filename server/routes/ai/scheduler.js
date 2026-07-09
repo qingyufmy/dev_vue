@@ -734,10 +734,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
   try {
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: '获取管理员行情数据...' })
     const t0 = Date.now()
-    const account = await mt5Bridge(adminUserId, 'account', {})
-    const positionsData = await mt5Bridge(adminUserId, 'positions', { symbol })
+    const [account, positionsData, pendingData] = await Promise.all([
+      mt5Bridge(adminUserId, 'account', {}),
+      mt5Bridge(adminUserId, 'positions', { symbol }),
+      mt5Bridge(adminUserId, 'pending_list', { symbol }).catch(() => ({ orders: [] })),
+    ])
     const positions = positionsData.positions || []
-    l(`bridge done (${Date.now()-t0}ms, positions=${positions.length})`)
+    const pendingOrders = pendingData.orders || pendingData.pending_list || []
+    l(`bridge done (${Date.now()-t0}ms, positions=${positions.length}, pending=${pendingOrders.length})`)
 
     const prompt = config.system_prompt || ''
     const tags = parseTimeframeTags(prompt, 'auto')
@@ -753,7 +757,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算技术指标...' })
     const t2 = Date.now()
-    const market = calculateMarketData(symbol, primaryTf, rates, account, positions)
+    const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { pending_orders: pendingOrders })
     market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
     market.primary_timeframe = primaryTf
     const actualUsedTimeframes = Object.keys(market.strategy_context?.timeframes || {})

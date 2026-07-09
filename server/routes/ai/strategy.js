@@ -73,6 +73,8 @@ export async function handleAnalyze(userId, params) {
   const account = await mt5Bridge(userId, 'account', {})
   const positionsData = include_positions ? await mt5Bridge(userId, 'positions', { symbol }) : { positions: [] }
   const positions = positionsData.positions || []
+  const pendingData = await mt5Bridge(userId, 'pending_list', { symbol }).catch(() => ({ orders: [] }))
+  const pendingOrders = pendingData.orders || pendingData.pending_list || []
 
   const primaryTf = tags.length > 0 ? tags[0].tf : timeframe.toUpperCase()
   const primaryCount = tags.length > 0 ? tags[0].count : kline_count
@@ -82,7 +84,7 @@ export async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
-  const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { computeChan: hasUseChanTag })
+  const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { computeChan: hasUseChanTag, pending_orders: pendingOrders })
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
   const signal = await maybeAiSignal(null, config, market)
   market.inference_source = signal._inference_source || 'unknown'
