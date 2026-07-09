@@ -766,6 +766,27 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '040_add_ai_signals_ticket_indexes',
+    up: async () => {
+      const indexes = [
+        'CREATE INDEX idx_ai_signals_pending_ticket ON ai_signals(pending_ticket)',
+        'CREATE INDEX idx_ai_signals_trade_ticket ON ai_signals(trade_ticket)',
+      ]
+      for (const sql of indexes) {
+        try {
+          await queryRun(sql)
+          console.log(`[Migrations] 040 applied: ${sql.match(/idx_\w+/)[0]}`)
+        } catch (e) {
+          if (e.message?.includes('Duplicate key') || e.message?.includes('already exists')) {
+            console.log(`[Migrations] 040 index already exists`)
+          } else {
+            console.error(`[Migrations] 040 failed:`, e.message)
+          }
+        }
+      }
+    }
   }
 ]
 

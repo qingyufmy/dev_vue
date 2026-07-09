@@ -1463,12 +1463,14 @@ async function handleBrowserCommand(ws, userId, msg) {
         const ticket = params.ticket
         if (!ticket) return reply({ status: 'error', message: 'ticket required' })
         try {
+          const sigCols = 'id, signal_type, entry_method, limit_price, stop_limit_price, pending_valid_until, order_state, pending_ticket, symbol, timeframe, created_at, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, is_executed, executed_at'
+          const uidFilter = '(user_id = ? OR user_id = 0)'
           const signal = await queryOne(
-            `SELECT id, signal_type, entry_method, limit_price, stop_limit_price, pending_valid_until, order_state, pending_ticket, symbol, timeframe, created_at, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json, is_executed, executed_at
-             FROM ai_signals
-             WHERE (pending_ticket = ? OR trade_ticket = ?) AND (user_id = ? OR user_id = 0)
-             ORDER BY id DESC LIMIT 1`,
-            [String(ticket), String(ticket), userId]
+            `(SELECT ${sigCols} FROM ai_signals WHERE pending_ticket = ? AND ${uidFilter} ORDER BY id DESC LIMIT 1)
+             UNION ALL
+             (SELECT ${sigCols} FROM ai_signals WHERE trade_ticket = ? AND ${uidFilter} ORDER BY id DESC LIMIT 1)
+             LIMIT 1`,
+            [String(ticket), userId, String(ticket), userId]
           )
           if (signal) {
             try { signal.market_data = JSON.parse(signal.market_data_json || '{}') } catch { signal.market_data = {} }

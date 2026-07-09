@@ -40,10 +40,11 @@
 │  Layer 5: Adaptive Calibration                           │
 │  getAdaptiveWeights(userId, symbol)                      │
 │  动态调整: rawWeight/dataWeight/minConfidence/volumeScale │
+│  normalizeAiSignal 权重归一化（w1+w2=1.0）               │
 ├──────────────────────────────────────────────────────────┤
 │  Layer 4: Learning Injection                             │
-│  buildLearningContext() → 注入 system_prompt 末尾        │
-│  最低5笔才注入, 最多300 tokens                            │
+│  buildLearningContext() → 按表现分层注入                  │
+│  ≥55%完整breakdown(≤300t) / 35-55%简化(≤150t) / <35%压缩(≤80t) │
 ├──────────────────────────────────────────────────────────┤
 │  Layer 3: Performance Aggregation                        │
 │  computePerformanceStats(userId, symbol, lookback=20)    │
@@ -163,19 +164,32 @@ Redis 缓存 5 分钟，key = `perf:{userId}:{symbol}`。
 
 ## [S7] 学习注入
 
-`buildLearningContext(userId, symbol, promptTypeId)` 将性能统计转为自然语言：
+`buildLearningContext(userId, symbol, promptTypeId)` 将性能统计转为自然语言。
 
+### 条件注入（按表现分层）
+
+| 表现区间 | 注入内容 | Token 预算 |
+|---------|---------|-----------|
+| ≥55% 胜率（好） | 完整 breakdown：5 品种详情 + 信号类型统计 + 置信度校准 | ≤300 |
+| 35%-55%（一般） | 简化版：总胜率 + 最佳/最差品种 | ≤150 |
+| <35%（差） | 压缩警告：一句话 + 品种列表 | ≤80 |
+
+**差表现注入示例**：
 ```
-=== 历史表现参考 ===
-最近20笔 XAUUSD 信号：胜率60%，平均盈亏+1.25%，盈亏比1.72
-高置信度(>0.70)信号胜率80%，低置信度(<0.60)信号胜率38%
-buy信号表现好(70%胜率)，sell_limit表现差(40%胜率)
-注意：低置信度时建议更保守，sell_limit类信号需额外确认
+=== 历史表现警告 ===
+最近20笔信号胜率仅25%，盈亏比0.6。建议极度谨慎，优先观察。
+品种: XAUUSD(15%), EURUSD(30%), GBPUSD(28%)
 ```
 
-注入位置：`maybeAiSignal()` 中构建 messages 之前，追加到 system_prompt 末尾。
+**原因**：差表现时注入详细 breakdown 不仅浪费 token，还会锚定 LLM 偏向历史模式（可能本身就是错的）。压缩为一句话更有效。
 
-最小数据要求：不足 5 笔时不注入（避免小样本误导）。
+### 注入位置
+
+`maybeAiSignal()` 中构建 messages 之前，追加到 system_prompt 末尾。
+
+### 最小数据要求
+
+不足 5 笔时不注入（避免小样本误导）。
 
 ## [S8] 自适应校准
 
@@ -189,6 +203,28 @@ buy信号表现好(70%胜率)，sell_limit表现差(40%胜率)
 | volumeMultiplier | 1.0 | 连续亏损→降到0.5，连续盈利→最多1.2 |
 
 权重变化幅度有上下限（防止极端调整）。
+
+### 权重归一化（必须）
+
+`normalizeAiSignal()` 当前硬编码 `0.85 + 0.15 = 1.0`。自适应权重总和可能不等于 1.0（如 `0.70 + 0.25 = 0.95`），导致校准值整体偏移。
+
+**修复方案**：`normalizeAiSignal(parsed, config, market, adaptiveWeights)` 新增可选第 4 参数。内部归一化：
+
+```js
+// adaptiveWeights = { raw: 0.70, data: 0.25 }
+const total = adaptiveWeights.raw + adaptiveWeights.data
+const w1 = adaptiveWeights.raw / total    // 0.70 / 0.95 = 0.737
+const w2 = adaptiveWeights.data / total   // 0.25 / 0.95 = 0.263
+calibrated = rawConfidence * w1 + dataConfidence * w2
+```
+
+`getAdaptiveWeights()` 返回 `{ raw, data }` 归一化前的原始值，由 `normalizeAiSignal` 内部归一化。无历史数据时返回 `null`，走硬编码默认值。
+
+### pending_valid_until 存储格式
+
+`pending_valid_until` 存储为北京时间字符串（`YYYY-MM-DD HH:mm:ss`），无时区标识。`buildBridgeOrderCall` 解析时追加 `'Z'` 后缀视为 UTC。
+
+**注意**：Layer 5 生成 pending_valid_until 时必须遵循同一格式：`new Date(Date.now() + validMinutes * 60000 + 10800)` 转为北京时间字符串（+8h），不加时区后缀。与 `normalizeAiSignal:184` 现有逻辑一致。
 
 ## [S9] Kill Switch
 
@@ -209,11 +245,14 @@ Admin 面板 → 自动推理配置 → 全局模型/API 配置区域 → "最�
 仅 admin 可见（在 `.admin-only-auto-config` 容器内）。
 
 ### 硬中断保护（自动关闭）
+
+**最小样本要求**：所有硬中断条件需至少 20 笔交易才生效。低于 20 笔时仅记录日志，不触发自动关闭（避免小样本随机波动误杀好策略）。
+
 | 条件 | 动作 |
 |------|------|
-| 最近 20 笔胜率 < 30% | 自动关闭 + 通知管理员 |
-| 连续 5 笔亏损 | 自动关闭 + 通知管理员 |
-| LLM 错误率 > 50% | 自动关闭 + 通知管理员 |
+| 最近 20 笔胜率 < 30%（且样本 ≥20） | 自动关闭 + 通知管理员 |
+| 连续 5 笔亏损（且样本 ≥10） | 自动关闭 + 通知管理员 |
+| LLM 错误率 > 50%（最近 10 次调用） | 自动关闭 + 通知管理员 |
 
 ## [S10] 回测引擎（本地统计）
 
