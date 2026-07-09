@@ -94,9 +94,9 @@ describe('normalizeAiSignal', () => {
     selected_take_profit: 1
   }
 
-  it('buy 信号正常处理', () => {
+  it('buy 信号正常处理', async () => {
     const parsed = { signal_type: 'buy', confidence: 0.7, recommended_volume: 0.03 }
-    const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
+    const result = await normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('buy')
     expect(result.confidence).toBeGreaterThan(0)
     expect(result.recommended_volume).toBeGreaterThan(0)
@@ -104,35 +104,35 @@ describe('normalizeAiSignal', () => {
     expect(result.take_profit_1_price).toBeTruthy()
   })
 
-  it('hold 信号 volume 设为 0', () => {
+  it('hold 信号 volume 设为 0', async () => {
     const parsed = { signal_type: 'hold', confidence: 0.6, recommended_volume: 0.03 }
-    const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
+    const result = await normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('hold')
     expect(result.recommended_volume).toBe(0)
   })
 
-  it('置信度低于阈值降级为 hold', () => {
+  it('置信度低于阈值降级为 hold', async () => {
     const parsed = { signal_type: 'buy', confidence: 0.2, recommended_volume: 0.03 }
-    const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
+    const result = await normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('hold')
   })
 
-  it('high 风险级别降低置信度阈值', () => {
+  it('high 风险级别降低置信度阈值', async () => {
     const highRiskConfig = { ...baseConfig, risk_level: 'high' }
     const parsed = { signal_type: 'buy', confidence: 0.3, recommended_volume: 0.03 }
-    const result = normalizeAiSignal(parsed, highRiskConfig, baseMarket)
+    const result = await normalizeAiSignal(parsed, highRiskConfig, baseMarket)
     expect(result.signal_type).toBe('buy')
   })
 
-  it('volume 不超过 max_position_size', () => {
+  it('volume 不超过 max_position_size', async () => {
     const parsed = { signal_type: 'buy', confidence: 0.8, recommended_volume: 0.1 }
-    const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
+    const result = await normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.recommended_volume).toBeLessThanOrEqual(0.05 * 1.0) // medium risk multiplier
   })
 
-  it('未知 signal_type 降级为 hold', () => {
+  it('未知 signal_type 降级为 hold', async () => {
     const parsed = { signal_type: 'unknown', confidence: 0.8, recommended_volume: 0.03 }
-    const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
+    const result = await normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('hold')
   })
 })
@@ -262,8 +262,8 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
   const market = { latest_price: 4000, atr_14: 10, strategy_score: {} }
   const config = { risk_level: 'medium', max_position_size: 0.05 }
 
-  it('buy_limit: SL below limitPrice, TP above limitPrice', () => {
-    const result = normalizeAiSignal({
+  it('buy_limit: SL below limitPrice, TP above limitPrice', async () => {
+    const result = await normalizeAiSignal({
       signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980
     }, config, market)
     expect(result.stop_loss_price).toBeLessThan(3980)
@@ -272,8 +272,8 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     expect(result.take_profit_1_price).toBe(3995)
   })
 
-  it('sell_stop: SL above limitPrice, TP below limitPrice', () => {
-    const result = normalizeAiSignal({
+  it('sell_stop: SL above limitPrice, TP below limitPrice', async () => {
+    const result = await normalizeAiSignal({
       signal_type: 'sell_stop', confidence: 0.8, limit_price: 3990
     }, config, market)
     expect(result.stop_loss_price).toBeGreaterThan(3990)
@@ -282,16 +282,16 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     expect(result.take_profit_1_price).toBe(3975)
   })
 
-  it('buy (market): SL/TP anchored to latest_price', () => {
-    const result = normalizeAiSignal({
+  it('buy (market): SL/TP anchored to latest_price', async () => {
+    const result = await normalizeAiSignal({
       signal_type: 'buy', confidence: 0.8
     }, config, market)
     expect(result.stop_loss_price).toBe(3985)
     expect(result.take_profit_1_price).toBe(4015)
   })
 
-  it('model-provided SL/TP not overwritten', () => {
-    const result = normalizeAiSignal({
+  it('model-provided SL/TP not overwritten', async () => {
+    const result = await normalizeAiSignal({
       signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980,
       stop_loss_price: 3970, take_profit_1_price: 4000
     }, config, market)

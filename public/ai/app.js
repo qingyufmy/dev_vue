@@ -2310,6 +2310,7 @@ async function loadAutoConfig() {
       document.getElementById('autoTemperature').value = gc.temperature ?? 0.3;
       document.getElementById('autoMaxTokens').value = gc.max_tokens ?? 2000;
       document.getElementById('autoApiKey').placeholder = gc.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
+      document.getElementById('autoPendingOrdersEnabled').checked = gc.pending_orders_enabled !== false && gc.pending_orders_enabled !== 0;
       applyAutoProviderPreset(gc.api_provider || 'deepseek');
 
       // Prompt type table
@@ -2572,6 +2573,7 @@ async function saveAutoConfig() {
         max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
         selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
         enable_auto_trade: document.getElementById('autoEnableAutoTrade').checked,
+        pending_orders_enabled: document.getElementById('autoPendingOrdersEnabled').checked,
       };
       if (apiKey) globalPayload.api_key = apiKey;
       await wsApi('admin_save_auto_global_config', globalPayload);

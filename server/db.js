@@ -546,6 +546,7 @@ export async function initDB() {
       max_position_size DOUBLE DEFAULT 0.05,
       selected_take_profit INT DEFAULT 2,
       enable_auto_trade TINYINT NOT NULL DEFAULT 1,
+      pending_orders_enabled TINYINT NOT NULL DEFAULT 1,
       updated_at DATETIME NOT NULL DEFAULT (NOW()),
       CONSTRAINT chk_singleton CHECK (id = 1)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,

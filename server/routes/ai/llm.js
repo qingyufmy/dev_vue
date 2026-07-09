@@ -2,6 +2,7 @@
 
 import { queryOne } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
+import { getGlobalAutoConfig } from './config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
@@ -136,16 +137,26 @@ export async function maybeAiSignal(db, config, market) {
       throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
     }
     parsed._inference_source = 'ai'
-    return normalizeAiSignal(parsed, config, market)
+    return await normalizeAiSignal(parsed, config, market)
   } catch (exc) {
     return aiFailureHold(market, exc.message)
   }
 }
 
-export function normalizeAiSignal(parsed, config, market) {
+export async function normalizeAiSignal(parsed, config, market) {
   let signalType = String(parsed.signal_type || 'hold').toLowerCase()
   const validTypes = ['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
   if (!validTypes.includes(signalType)) signalType = 'hold'
+
+  // Global pending orders switch — downgrade to hold if disabled
+  const pendingTypes = ['buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
+  if (pendingTypes.includes(signalType)) {
+    const gc = await getGlobalAutoConfig()
+    if (gc && gc.pending_orders_enabled === 0) {
+      console.log(`[LLM] Pending orders disabled globally, downgrading ${signalType} → hold`)
+      return { ...parsed, signal_type: 'hold', confidence: parsed.confidence || 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_minutes: 0, pending_valid_until: null, recommended_volume: 0 }
+    }
+  }
 
   // signal_type → entry_method + order_type auto mapping
   const typeEntryMap = {
