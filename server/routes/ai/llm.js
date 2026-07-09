@@ -21,7 +21,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望）"
 }, null, 2)
 
-export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, timeout = 45000 }) {
+export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, timeout = 120000 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
