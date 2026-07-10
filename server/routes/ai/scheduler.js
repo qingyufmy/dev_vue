@@ -951,7 +951,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
         ['skipped', signalId, userId])
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'auto_trade_disabled' },
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'auto_trade_disabled' },
         { status: 'skipped' }, 'info')
       return
     }
@@ -962,7 +962,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
         ['skipped', signalId, userId])
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'bridge_offline' },
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'bridge_offline' },
         { status: 'skipped' }, 'info')
       return
     }
@@ -974,7 +974,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
         ['skipped', signalId, userId])
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'trade_send_disabled' },
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'trade_send_disabled' },
         { status: 'skipped' }, 'info')
       return
     }
@@ -1027,7 +1027,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
         ['skipped', signalId, userId])
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'pending_limit_reached', pending_count: remainingPendingCount },
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_limit_reached', pending_count: remainingPendingCount },
         { status: 'skipped' }, 'info')
       return
     }
@@ -1054,7 +1054,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         l(`auto-executed: ticket=${ticket}, volume=${order.volume}`)
       }
       await insertAudit(null, userId, 'ai_auto_execute', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, ticket, volume: order.volume, is_pending: isPending },
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, ticket, volume: order.volume, is_pending: isPending },
         { status: 'success', ticket, volume: order.volume }, 'success')
     } else {
       const status = execResult.status === 'rejected' ? 'rejected' : 'failed'
@@ -1063,7 +1063,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         [status, JSON.stringify(execResult), signalId, userId])
       l(`auto-execute ${status}: ${execResult.message || execResult.status}`)
       await insertAudit(null, userId, status === 'rejected' ? 'ai_auto_execute_rejected' : 'ai_auto_execute', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, error: execResult.message },
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: execResult.message },
         execResult, status === 'rejected' ? 'warning' : 'error')
     }
   } catch (err) {
@@ -1072,7 +1072,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       `UPDATE auto_signal_deliveries SET execution_status = 'failed', execution_result = ? WHERE signal_id = ? AND user_id = ?`,
       [JSON.stringify({ error: err.message }), signalId, userId]).catch(() => {})
     await insertAudit(null, userId, 'ai_auto_execute', symbol,
-      { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, error: err.message },
+      { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: err.message },
       { status: 'error', message: err.message }, 'error')
   }
 }
