@@ -290,12 +290,20 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     expect(result.take_profit_1_price).toBe(4015)
   })
 
-  it('model-provided SL/TP not overwritten', () => {
+  it('model-provided SL/TP not overwritten when distance sufficient', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980,
+      stop_loss_price: 3955, take_profit_1_price: 4020
+    }, config, market)
+    expect(result.stop_loss_price).toBe(3955)
+    expect(result.take_profit_1_price).toBe(4020)
+  })
+  it('model-provided SL too tight overridden by ATR minimum', () => {
     const result = normalizeAiSignal({
       signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980,
       stop_loss_price: 3970, take_profit_1_price: 4000
     }, config, market)
-    expect(result.stop_loss_price).toBe(3970)
-    expect(result.take_profit_1_price).toBe(4000)
+    // ATR=10, slAtrMult=1.5 → min distance=15, AI SL distance=10 < 15 → overridden to 3980-15=3965
+    expect(result.stop_loss_price).toBe(3965)
   })
 })
