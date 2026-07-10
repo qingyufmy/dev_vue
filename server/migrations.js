@@ -814,6 +814,23 @@ const migrations = [
         console.error('[Migrations] 041 error:', e.message)
       }
     }
+  },
+  {
+    id: '042_fix_sl_description_in_schema',
+    up: async () => {
+      try {
+        const row = await queryOne('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
+        if (!row) { console.log('[Migrations] 042 no active schema found, skip'); return }
+        const schema = JSON.parse(row.schema_json)
+        const correctSl = '数字，buy/sell/挂单必须给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价。最小距离由风险等级决定：low=2倍ATR(14), medium=1.5倍, high=1倍，过近会被系统自动修正。建议设在关键支撑/阻力位外侧，给足波动空间'
+        if (schema.stop_loss_price === correctSl) { console.log('[Migrations] 042 stop_loss_price already correct'); return }
+        schema.stop_loss_price = correctSl
+        await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
+        console.log('[Migrations] 042 fixed stop_loss_price description in ai_signal_schema')
+      } catch (e) {
+        console.error('[Migrations] 042 error:', e.message)
+      }
+    }
   }
 ]
 
