@@ -892,6 +892,23 @@ const migrations = [
         console.error('[Migrations] 045 error:', e.message)
       }
     }
+  },
+  {
+    id: '046_update_sl_description_m15',
+    up: async () => {
+      try {
+        const row = await queryOne('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
+        if (!row) { console.log('[Migrations] 046 no active schema found, skip'); return }
+        const schema = JSON.parse(row.schema_json)
+        const newSl = '数字，buy/sell/挂单必须给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价。最小距离由风险等级决定：low=2倍ATR(14), medium=1.5倍, high=1倍，过近会被系统自动修正。止损位必须参考M15 K线的关键支撑/阻力位（support_resistance.s1/s2/r1/r2），设在M15级别关键位外侧，给足波动空间'
+        if (schema.stop_loss_price === newSl) { console.log('[Migrations] 046 stop_loss_price already up to date'); return }
+        schema.stop_loss_price = newSl
+        await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
+        console.log('[Migrations] 046 updated stop_loss_price to reference M15 support/resistance')
+      } catch (e) {
+        console.error('[Migrations] 046 error:', e.message)
+      }
+    }
   }
 ]
 

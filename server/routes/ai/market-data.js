@@ -4,6 +4,19 @@ import { beijingNow } from '../../db.js'
 import { sendBridgeCommand } from '../../bridge-ws.js'
 import { round2, round3, round5, clamp, compactRates } from './utils.js'
 
+export function computeAtr14(rates) {
+  if (!Array.isArray(rates) || rates.length < 2) return 0
+  const highs = rates.map(r => r.high || r[2] || 0)
+  const lows = rates.map(r => r.low || r[3] || 0)
+  const closes = rates.map(r => r.close || r[4] || 0)
+  const trueRanges = []
+  for (let i = 1; i < rates.length; i++) {
+    trueRanges.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])))
+  }
+  const atrWindow = trueRanges.length >= 14 ? trueRanges.slice(-14) : trueRanges
+  return atrWindow.length > 0 ? atrWindow.reduce((a, b) => a + b, 0) / atrWindow.length : 0
+}
+
 const _bridgeLocks = {}
 
 // === Chan Theory Constants ===

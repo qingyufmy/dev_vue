@@ -3,7 +3,7 @@
 import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
-import { mt5Bridge, calculateMarketData } from './market-data.js'
+import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, executeOrderCore } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
@@ -760,6 +760,17 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
     const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { pending_orders: pendingOrders })
     market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
     market.primary_timeframe = primaryTf
+
+    // M15 ATR for SL minimum distance validation (more stable than M5 ATR)
+    try {
+      if (primaryTf !== 'M15') {
+        const m15Resp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: 'M15', count: 50 })
+        const m15Rates = m15Resp?.rates || []
+        if (m15Rates.length >= 15) market.atr_14_m15 = round2(computeAtr14(m15Rates))
+      } else {
+        market.atr_14_m15 = market.atr_14
+      }
+    } catch (e) { l(`M15 ATR fallback: ${e.message}`) }
     const actualUsedTimeframes = Object.keys(market.strategy_context?.timeframes || {})
     market.requested_timeframes = usedTimeframes
     market.used_timeframes = actualUsedTimeframes
