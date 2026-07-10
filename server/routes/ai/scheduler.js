@@ -990,6 +990,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
 
     // Supersede: cancel ALL same-symbol pending orders before placing new one
     const SUPERSEDE_SAME_SYMBOL = true
+    let remainingPendingCount = 0
     if (SUPERSEDE_SAME_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
       try {
         const pendingList = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
@@ -1004,9 +1005,10 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
               l(`superseded old pending: ticket=${po.ticket} (${po.pending_type})`)
               await insertAudit(null, userId, 'pending_superseded', symbol,
                 { signal_id: signalId, ticket: po.ticket, pending_type: po.pending_type },
-                { status: 'superseded' }, 'info')
+                { status: 'superseded', ticket: po.ticket }, 'info')
             } catch (cancelErr) {
               l(`supersede cancel failed: ticket=${po.ticket}: ${cancelErr.message}`)
+              remainingPendingCount++
               await insertAudit(null, userId, 'pending_supersede_failed', symbol,
                 { signal_id: signalId, ticket: po.ticket, error: cancelErr.message },
                 { status: 'error', message: cancelErr.message }, 'warning')
@@ -1020,23 +1022,14 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
 
     // Hard limit: skip if too many pending orders remain after supersede
     const MAX_PENDING_PER_SYMBOL = 2
-    if (order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
-      try {
-        const checkList = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
-        const checkOrders = checkList?.orders || checkList?.pending_list || []
-        const symbolPending = checkOrders.filter(po => po.symbol === symbol)
-        if (symbolPending.length >= MAX_PENDING_PER_SYMBOL) {
-          l(`skipped: ${symbolPending.length} pending orders already exist (max=${MAX_PENDING_PER_SYMBOL})`)
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-            ['skipped', signalId, userId])
-          await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
-            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'pending_limit_reached', pending_count: symbolPending.length },
-            { status: 'skipped' }, 'info')
-          return
-        }
-      } catch (e) {
-        l(`pending count check failed: ${e.message}`)
-      }
+    if (remainingPendingCount >= MAX_PENDING_PER_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
+      l(`skipped: ${remainingPendingCount} pending orders still exist after supersede (max=${MAX_PENDING_PER_SYMBOL})`)
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['skipped', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'pending_limit_reached', pending_count: remainingPendingCount },
+        { status: 'skipped' }, 'info')
+      return
     }
 
     const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', { noFallback: true })
