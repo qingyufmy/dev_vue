@@ -4332,16 +4332,61 @@ function renderAuthToggleConfig(container) {
           <option value="false" ${getVal('phone_enabled') === 'false' ? 'selected' : ''}>关闭</option>
         </select>
       </div>
+
+      <div class="admin-config-divider">注册赠送会员</div>
+
+      <div class="admin-config-row">
+        <label>注册赠送会员</label>
+        <select class="admin-plan-select" id="authGiftEnabled">
+          <option value="true" ${getVal('gift_enabled') !== 'false' ? 'selected' : ''}>开启</option>
+          <option value="false" ${getVal('gift_enabled') === 'false' ? 'selected' : ''}>关闭</option>
+        </select>
+      </div>
+      <div class="admin-config-row" id="giftPlanRow">
+        <label>赠送套餐类型</label>
+        <select class="admin-plan-select" id="authGiftPlan">
+          <option value="free" ${getVal('gift_plan') === 'free' ? 'selected' : ''}>免费版</option>
+          <option value="plus" ${getVal('gift_plan') === 'plus' ? 'selected' : ''}>Plus</option>
+          <option value="pro" ${getVal('gift_plan') !== 'free' && getVal('gift_plan') !== 'plus' ? 'selected' : ''}>Pro</option>
+        </select>
+      </div>
+      <div class="admin-config-row" id="giftDurationRow">
+        <label>赠送时长</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" class="form-input" id="authGiftDuration" value="${getVal('gift_duration') || '30'}" min="1" max="3650" style="width:80px">
+          <select class="admin-plan-select" id="authGiftDurationUnit">
+            <option value="days" ${getVal('gift_duration_unit') !== 'months' ? 'selected' : ''}>天</option>
+            <option value="months" ${getVal('gift_duration_unit') === 'months' ? 'selected' : ''}>月</option>
+          </select>
+        </div>
+      </div>
+
       <div class="admin-config-actions">
         <button class="btn btn-primary" id="saveAuthToggle">保存配置</button>
       </div>
     </div>
   `
 
+  // Toggle gift fields visibility
+  const giftEnabled = document.getElementById('authGiftEnabled')
+  const giftPlanRow = document.getElementById('giftPlanRow')
+  const giftDurationRow = document.getElementById('giftDurationRow')
+  function updateGiftFields() {
+    const disabled = giftEnabled?.value === 'false'
+    if (giftPlanRow) giftPlanRow.style.opacity = disabled ? '0.4' : '1'
+    if (giftDurationRow) giftDurationRow.style.opacity = disabled ? '0.4' : '1'
+  }
+  giftEnabled?.addEventListener('change', updateGiftFields)
+  updateGiftFields()
+
   document.getElementById('saveAuthToggle')?.addEventListener('click', async () => {
     const items = [
       { key: 'email_enabled', value: document.getElementById('authEmailEnabled').value, label: '邮箱注册登录', sort_order: 0 },
       { key: 'phone_enabled', value: document.getElementById('authPhoneEnabled').value, label: '手机号注册登录', sort_order: 1 },
+      { key: 'gift_enabled', value: document.getElementById('authGiftEnabled').value, label: '注册赠送会员', sort_order: 2 },
+      { key: 'gift_plan', value: document.getElementById('authGiftPlan').value, label: '赠送套餐类型', sort_order: 3 },
+      { key: 'gift_duration', value: document.getElementById('authGiftDuration').value || '30', label: '赠送时长', sort_order: 4 },
+      { key: 'gift_duration_unit', value: document.getElementById('authGiftDurationUnit').value, label: '赠送时长单位', sort_order: 5 },
     ]
     const res = await api.put('/api/system-config/auth_toggle', { items })
     if (res.ok) {
@@ -6670,7 +6715,7 @@ function renderProfile() {
                 </div>
                 <div class="profile-info-item">
                   <span class="profile-info-label">当前方案</span>
-                  <span class="profile-info-value">${planNames[currentPlan] || '体验版'}</span>
+                  <span class="profile-info-value">${planNames[currentPlan] || '体验版'}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</span>
                 </div>
                 <div class="profile-info-item">
                   <span class="profile-info-label">Telegram 绑定</span>
@@ -6873,7 +6918,7 @@ function renderProfile() {
               <div class="settings-card sub-current-card">
                 <div class="sub-current-header">
                   <div>
-                    <div class="sub-current-plan">${planNames[currentPlan] || '体验版'}</div>
+                    <div class="sub-current-plan">${planNames[currentPlan] || '体验版'}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</div>
                     <div class="sub-current-desc">${currentPlan === 'free' ? '公开视频 + 语录' : currentPlan === 'plus' ? '新视频即时解锁 + 图解 + 测验' : '全部权限 + AI信号'}</div>
                     ${state.user?.planExpiresAt ? `<div class="sub-expires">到期时间：${formatDateTime(state.user.planExpiresAt)}</div>` : ''}
                   </div>

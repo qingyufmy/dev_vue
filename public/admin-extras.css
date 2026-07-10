@@ -305,6 +305,17 @@
   border-top: 1px solid var(--glass-border);
 }
 
+.admin-config-divider {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3, #999);
+  text-align: center;
+  padding: 12px 0 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--glass-border);
+  letter-spacing: 1px;
+}
+
 .admin-config-test-result {
   font-size: 14px;
   padding: 8px 0;

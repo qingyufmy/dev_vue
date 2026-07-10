@@ -860,6 +860,21 @@ const migrations = [
         console.error('[Migrations] 043 error:', e.message)
       }
     }
+  },
+  {
+    id: '044_add_plan_source',
+    up: async () => {
+      try {
+        await queryRun('ALTER TABLE users ADD COLUMN plan_source VARCHAR(20) DEFAULT NULL')
+        console.log('[Migrations] 044 added plan_source to users')
+      } catch (e) {
+        if (e.message?.includes('Duplicate column')) {
+          console.log('[Migrations] 044 plan_source already exists')
+        } else {
+          console.error('[Migrations] 044 error:', e.message)
+        }
+      }
+    }
   }
 ]
 

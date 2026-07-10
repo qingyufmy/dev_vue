@@ -7,7 +7,7 @@ const router = Router()
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const row = await queryOne(`
-      SELECT id, uid, email, phone, nickname, avatar, role, plan, plan_period, plan_expires_at,
+      SELECT id, uid, email, phone, nickname, avatar, role, plan, plan_period, plan_expires_at, plan_source,
              phone_verified, email_verified, auth_method,
              telegram_id, telegram_username, telegram_name
       FROM users WHERE id = ?
@@ -27,6 +27,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
       plan: row.plan,
       planPeriod: row.plan_period || '',
       planExpiresAt: row.plan_expires_at || '',
+      planSource: row.plan_source || null,
       phoneVerified: !!row.phone_verified,
       emailVerified: !!row.email_verified,
       authMethod: row.auth_method || 'email',

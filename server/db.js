@@ -144,6 +144,7 @@ export async function initDB() {
       plan VARCHAR(20) DEFAULT 'free',
       plan_period VARCHAR(20) DEFAULT '',
       plan_expires_at DATETIME,
+      plan_source VARCHAR(20) DEFAULT NULL,
       telegram_id VARCHAR(100),
       telegram_username VARCHAR(100),
       telegram_name VARCHAR(100),
@@ -741,6 +742,10 @@ async function seedData(p) {
   const authToggles = [
     ['auth_toggle', 'email_enabled', 'true', '邮箱注册登录', 0],
     ['auth_toggle', 'phone_enabled', 'true', '手机号注册登录', 1],
+    ['auth_toggle', 'gift_enabled', 'true', '注册赠送会员', 2],
+    ['auth_toggle', 'gift_plan', 'pro', '赠送套餐类型', 3],
+    ['auth_toggle', 'gift_duration', '30', '赠送时长', 4],
+    ['auth_toggle', 'gift_duration_unit', 'days', '赠送时长单位', 5],
   ]
   for (const [cat, key, val, label, order] of authToggles) {
     await p.query("INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)", [cat, key, val, label, order])

@@ -87,7 +87,7 @@ async function activateMembership(orderId, userId) {
     }
     const expiresAt = calculatePlanExpiry(order.period, baseDate)
     await run(
-      `UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, plan_source = 'paid', updated_at = ? WHERE id = ?`,
       [order.plan, order.period, expiresAt, now, userId]
     )
     return expiresAt

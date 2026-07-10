@@ -207,7 +207,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
 
         const baseDate = user?.plan_expires_at && new Date(user.plan_expires_at + 'T23:59:59+08:00') > new Date() ? new Date(user.plan_expires_at + 'T23:59:59+08:00') : null
         const expiresAt = calculatePlanExpiry(periodKey, baseDate)
-        await run("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
+        await run("UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, plan_source = 'paid', updated_at = NOW() WHERE id = ?", [plan, periodKey, expiresAt, req.user.id])
 
         if (referralCredit > 0) {
           await run("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])

@@ -409,6 +409,19 @@ button { cursor: pointer; font-family: inherit; }
 .header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .auth-buttons { display: flex; gap: 8px; }
 
+.plan-gift-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 4px;
+  background: var(--accent-light, rgba(47,93,84,0.1));
+  color: var(--accent, #2F5D54);
+  vertical-align: middle;
+  line-height: 1.4;
+}
+
 .btn-theme-toggle {
   min-width: 88px;
   justify-content: center;

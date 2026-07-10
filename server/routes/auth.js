@@ -15,6 +15,22 @@ function normalizePhone(p) {
   return p.replace(/^\+86/, '')
 }
 
+const planLabelMap = { free: '免费版', plus: 'Plus', pro: 'Pro' }
+const planDescMap = { free: '公开视频和语录', plus: '新视频即时解锁、图解、测验和 AI 交易观摩', pro: '全部课程和 AI 全自动交易' }
+
+async function getGiftConfig() {
+  const rows = await queryAll(
+    "SELECT `key`, value FROM system_config WHERE category = 'auth_toggle' AND `key` IN ('gift_enabled','gift_plan','gift_duration','gift_duration_unit')"
+  )
+  const map = Object.fromEntries(rows.map(r => [r.key, r.value]))
+  const enabled = map.gift_enabled !== 'false'
+  const VALID_PLANS = ['free', 'plus', 'pro']
+  const plan = VALID_PLANS.includes(map.gift_plan) ? map.gift_plan : 'pro'
+  const duration = Math.min(3650, Math.max(1, parseInt(map.gift_duration) || 30))
+  const unit = map.gift_duration_unit === 'months' ? 'MONTH' : 'DAY'
+  return { enabled, plan, duration, unit, unitLabel: unit === 'MONTH' ? '个月' : '天' }
+}
+
 async function getAuthToggles() {
   const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'auth_toggle'")
   const map = {}
@@ -127,6 +143,9 @@ router.post('/register', async (req, res) => {
     const { email, phone: rawPhone, password, nickname, referral, referralCode, verifyToken, authMethod } = req.body
     const phone = normalizePhone(rawPhone)
     const method = authMethod || (phone ? 'phone' : 'email')
+    const gift = await getGiftConfig()
+    const regPlan = gift.enabled ? gift.plan : 'free'
+    const regPlanSource = gift.enabled ? 'gift' : null
 
     // Check auth toggles
     try {
@@ -167,15 +186,16 @@ router.post('/register', async (req, res) => {
       }
 
       const result = await queryRun(`
-        INSERT INTO users (phone, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, auth_method, phone_verified)
-        VALUES (?, ?, ?, ?, ?, ?, 'pro', DATE_ADD(NOW(), INTERVAL 1 MONTH), 'phone', 1)
-      `, [phone, hash, nickname || '手机用户', code, referredBy, 'WS' + String(Date.now()).slice(-6)])
+        INSERT INTO users (phone, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, plan_source, auth_method, phone_verified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ${gift.enabled ? `DATE_ADD(NOW(), INTERVAL ${gift.duration} ${gift.unit})` : 'NULL'}, ?, 'phone', 1)
+      `, [phone, hash, nickname || '手机用户', code, referredBy, 'WS' + String(Date.now()).slice(-6), regPlan, regPlanSource])
 
       const token = generateToken(result.insertId)
-      const user = await queryOne('SELECT id, uid, phone, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
+      const user = await queryOne('SELECT id, uid, phone, nickname, avatar, role, plan, plan_source, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
       user.name = user.nickname
       user.authMethod = 'phone'
       user.planExpiresAt = user.plan_expires_at || ''
+      user.planSource = user.plan_source || null
 
       if (referredBy) {
         const referrer = await queryOne('SELECT id FROM users WHERE referral_code = ?', [referredBy])
@@ -184,7 +204,9 @@ router.post('/register', async (req, res) => {
 
       await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
       await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
-      await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', '已为您赠送 1 个月 Pro 会员体验，尽享全部课程和 AI 全自动交易！'])
+      if (gift.enabled && regPlan !== 'free') {
+        await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', `已为您赠送 ${gift.duration}${gift.unitLabel} ${planLabelMap[regPlan] || regPlan} 体验，尽享${planDescMap[regPlan] || '全部课程'}！`])
+      }
 
       logAudit({ userId: result.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
       return res.json({ ok: true, token, user })
@@ -209,15 +231,16 @@ router.post('/register', async (req, res) => {
     }
 
     const result = await queryRun(`
-      INSERT INTO users (email, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, auth_method, email_verified)
-      VALUES (?, ?, ?, ?, ?, ?, 'pro', DATE_ADD(NOW(), INTERVAL 1 MONTH), 'email', 1)
-    `, [email, hash, nickname || email.split('@')[0], code, referredBy, 'WS' + String(Date.now()).slice(-6)])
+      INSERT INTO users (email, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, plan_source, auth_method, email_verified)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ${gift.enabled ? `DATE_ADD(NOW(), INTERVAL ${gift.duration} ${gift.unit})` : 'NULL'}, ?, 'email', 1)
+    `, [email, hash, nickname || email.split('@')[0], code, referredBy, 'WS' + String(Date.now()).slice(-6), regPlan, regPlanSource])
 
     const token = generateToken(result.insertId)
-    const user = await queryOne('SELECT id, uid, email, nickname, avatar, role, plan, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
+    const user = await queryOne('SELECT id, uid, email, nickname, avatar, role, plan, plan_source, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
     user.name = user.nickname
     user.authMethod = 'email'
     user.planExpiresAt = user.plan_expires_at || ''
+    user.planSource = user.plan_source || null
 
     if (referredBy) {
       const referrer = await queryOne('SELECT id FROM users WHERE referral_code = ?', [referredBy])
@@ -225,7 +248,9 @@ router.post('/register', async (req, res) => {
     }
 
     await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
-    await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', '已为您赠送 1 个月 Pro 会员体验，尽享全部课程和 AI 全自动交易！'])
+    if (gift.enabled && regPlan !== 'free') {
+      await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', `已为您赠送 ${gift.duration}${gift.unitLabel} ${planLabelMap[regPlan] || regPlan} 体验，尽享${planDescMap[regPlan] || '全部课程'}！`])
+    }
 
     logAudit({ userId: result.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
 
@@ -292,6 +317,7 @@ router.post('/login', async (req, res) => {
     safeUser.isAdmin = user.role === 'admin'
     safeUser.planExpiresAt = user.plan_expires_at || ''
     safeUser.planPeriod = user.plan_period || ''
+    safeUser.planSource = user.plan_source || null
     safeUser.createdAt = user.created_at || ''
     safeUser.authMethod = user.auth_method || 'email'
     safeUser.telegramBinding = getTelegramBinding(user)

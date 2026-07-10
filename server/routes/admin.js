@@ -222,7 +222,13 @@ router.post('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     if (plan && !VALID_PLANS.includes(plan)) return res.json({ ok: false, error: '无效的套餐类型' })
     if (role && !VALID_ROLES.includes(role)) return res.json({ ok: false, error: '无效的角色' })
 
-    if (plan) await queryRun('UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?', [plan, userId])
+    if (plan) {
+      if (plan === 'free') {
+        await queryRun('UPDATE users SET plan = ?, plan_source = NULL, updated_at = NOW() WHERE id = ?', [plan, userId])
+      } else {
+        await queryRun('UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?', [plan, userId])
+      }
+    }
     if (expiresAt !== undefined) await queryRun('UPDATE users SET plan_expires_at = ?, updated_at = NOW() WHERE id = ?', [expiresAt, userId])
     if (role) await queryRun('UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?', [role, userId])
     if (nickname) await queryRun('UPDATE users SET nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, userId])
@@ -265,6 +271,7 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
       updates.push('plan = ?'); params.push(plan)
       if (plan === 'free') {
         updates.push('plan_expires_at = NULL')
+        updates.push('plan_source = NULL')
       } else if (expiresAt) {
         updates.push('plan_expires_at = ?'); params.push(expiresAt)
       }
