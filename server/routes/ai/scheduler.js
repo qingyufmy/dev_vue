@@ -846,6 +846,52 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
       })
     }
 
+    // 7.5 AI cancel_pending: cancel matching pending orders for all subscribers
+    if (Array.isArray(signal.cancel_pending) && signal.cancel_pending.length > 0) {
+      l(`cancel_pending: ${signal.cancel_pending.length} condition(s)`)
+      for (const uid of onlineSubscribers) {
+        if (!isBridgeAlive(uid)) continue
+        try {
+          const pendingResp = await mt5Bridge(uid, 'pending_list', { symbol }, { noFallback: true })
+          const pendingOrders = pendingResp?.orders || pendingResp?.pending_list || []
+          if (!pendingOrders.length) continue
+          for (const cond of signal.cancel_pending) {
+            if (!cond.symbol) continue
+            const toCancel = pendingOrders.filter(po => {
+              if (po.symbol !== cond.symbol) return false
+              if (cond.cancel_all) return true
+              if (cond.pending_type && po.pending_type !== cond.pending_type) return false
+              const price = parseFloat(po.price)
+              if (cond.max_price != null && !(po.pending_type || '').startsWith('buy')) return false
+              if (cond.max_price != null && price > parseFloat(cond.max_price)) return false
+              if (cond.min_price != null && !(po.pending_type || '').startsWith('sell')) return false
+              if (cond.min_price != null && price < parseFloat(cond.min_price)) return false
+              return true
+            })
+            for (const po of toCancel) {
+              try {
+                await mt5Bridge(uid, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
+                await queryRun(
+                  "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
+                  [String(po.ticket), uid]).catch(() => {})
+                l(`cancel_pending: user=${uid} ticket=${po.ticket} (${po.pending_type} @ ${po.price})`)
+                await insertAudit(null, uid, 'ai_cancel_pending', symbol,
+                  { signal_id: signalId, ticket: po.ticket, pending_type: po.pending_type, price: po.price, reason: cond.reason },
+                  { status: 'cancelled', ticket: po.ticket }, 'success')
+              } catch (cancelErr) {
+                l(`cancel_pending failed: user=${uid} ticket=${po.ticket}: ${cancelErr.message}`)
+                await insertAudit(null, uid, 'ai_cancel_pending_failed', symbol,
+                  { signal_id: signalId, ticket: po.ticket, error: cancelErr.message },
+                  { status: 'error', message: cancelErr.message }, 'warning')
+              }
+            }
+          }
+        } catch (e) {
+          l(`cancel_pending bridge error: user=${uid}: ${e.message}`)
+        }
+      }
+    }
+
     // 8. Auto-trade for eligible subscribers (limited concurrency)
     if (signal.signal_type !== 'hold' && aiSource === 'ai' && !signal.is_stale) {
       // Single JOIN query instead of N+1 per subscriber
