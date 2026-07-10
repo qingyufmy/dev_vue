@@ -101,6 +101,8 @@ export async function maybeAiSignal(db, config, market) {
       price_change_pct: market.price_change_pct, account: market.account,
       positions: market.positions, pending_orders: market.pending_orders || [],
       kline_count: market.kline_count,
+      risk_level: (config || {}).risk_level || 'medium',
+      max_position_size: parseFloat((config || {}).max_position_size || 0.05),
     }
     if (market.strategy_context) {
       const ctx = { ...market.strategy_context }
