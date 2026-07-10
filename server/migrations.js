@@ -831,6 +831,35 @@ const migrations = [
         console.error('[Migrations] 042 error:', e.message)
       }
     }
+  },
+  {
+    id: '043_add_pending_management_to_schema',
+    up: async () => {
+      try {
+        const row = await queryOne('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
+        if (!row) { console.log('[Migrations] 043 no active schema found, skip'); return }
+        const schema = JSON.parse(row.schema_json)
+        let changed = false
+        // Update signal_type: add pending management rule
+        if (schema.signal_type && !schema.signal_type.includes('挂单管理')) {
+          schema.signal_type += '。挂单管理：同品种同方向最多保留1笔挂单，如果market_data_json.pending_orders中已有同品种同方向挂单且价格合理则返回hold不挂新单，仅在现有挂单价格明显不合理时才用cancel_pending取消旧单挂新单'
+          changed = true
+        }
+        // Update reasoning: add item 5
+        if (schema.reasoning && !schema.reasoning.includes('挂单管理')) {
+          schema.reasoning += ' 5.挂单管理：检查现有挂单状态，是否需要取消、是否已有同方向挂单'
+          changed = true
+        }
+        if (changed) {
+          await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
+          console.log('[Migrations] 043 added pending management rules to ai_signal_schema')
+        } else {
+          console.log('[Migrations] 043 pending management rules already exist')
+        }
+      } catch (e) {
+        console.error('[Migrations] 043 error:', e.message)
+      }
+    }
   }
 ]
 

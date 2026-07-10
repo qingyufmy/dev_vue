@@ -988,15 +988,14 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
     }
 
-    // Supersede: cancel same-direction pending orders before placing new one
-    const SUPERSEDE_SAME_DIRECTION = true
-    if (SUPERSEDE_SAME_DIRECTION && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
+    // Supersede: cancel ALL same-symbol pending orders before placing new one
+    const SUPERSEDE_SAME_SYMBOL = true
+    if (SUPERSEDE_SAME_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
       try {
-        const side = (order.order_type || 'buy').startsWith('buy') ? 'buy' : 'sell'
         const pendingList = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
         const pendingOrders = pendingList?.orders || pendingList?.pending_list || []
         for (const po of pendingOrders) {
-          if (po.symbol === symbol && po.pending_type && po.pending_type.startsWith(side)) {
+          if (po.symbol === symbol) {
             try {
               await mt5Bridge(userId, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
               await queryRun(
@@ -1016,6 +1015,27 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         }
       } catch (listErr) {
         l(`supersede pending_list failed: ${listErr.message}`)
+      }
+    }
+
+    // Hard limit: skip if too many pending orders remain after supersede
+    const MAX_PENDING_PER_SYMBOL = 2
+    if (order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
+      try {
+        const checkList = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
+        const checkOrders = checkList?.orders || checkList?.pending_list || []
+        const symbolPending = checkOrders.filter(po => po.symbol === symbol)
+        if (symbolPending.length >= MAX_PENDING_PER_SYMBOL) {
+          l(`skipped: ${symbolPending.length} pending orders already exist (max=${MAX_PENDING_PER_SYMBOL})`)
+          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+            ['skipped', signalId, userId])
+          await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id, reason: 'pending_limit_reached', pending_count: symbolPending.length },
+            { status: 'skipped' }, 'info')
+          return
+        }
+      } catch (e) {
+        l(`pending count check failed: ${e.message}`)
       }
     }
 
