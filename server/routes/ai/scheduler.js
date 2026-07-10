@@ -882,7 +882,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
             })
             for (const po of toCancel) {
               try {
-                await mt5Bridge(uid, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
+                const cancelResult = await mt5Bridge(uid, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
+                if (cancelResult?.status === 'error') {
+                  l(`cancel_pending failed (MT5 error): user=${uid} ticket=${po.ticket}: ${cancelResult.message}`)
+                  await insertAudit(null, uid, 'ai_cancel_pending_failed', symbol,
+                    { signal_id: signalId, ticket: po.ticket, error: cancelResult.message },
+                    { status: 'error', message: cancelResult.message }, 'warning')
+                  continue
+                }
                 await queryRun(
                   "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
                   [String(po.ticket), uid]).catch(() => {})
@@ -1000,17 +1007,30 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
     }
 
-    // Supersede: cancel ALL same-symbol pending orders before placing new one
+    // Supersede: cancel same-symbol SAME-DIRECTION pending orders before placing new one
     const SUPERSEDE_SAME_SYMBOL = true
     let remainingPendingCount = 0
+    const newOrderDirection = order.order_type || 'buy'
     if (SUPERSEDE_SAME_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
       try {
         const pendingList = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
         const pendingOrders = pendingList?.orders || pendingList?.pending_list || []
         for (const po of pendingOrders) {
           if (po.symbol === symbol) {
+            const poType = String(po.pending_type || '').toLowerCase()
+            const poIsBuy = poType.startsWith('buy')
+            const newIsBuy = newOrderDirection === 'buy'
+            if (poIsBuy !== newIsBuy) continue // skip opposite direction
             try {
-              await mt5Bridge(userId, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
+              const cancelResult = await mt5Bridge(userId, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
+              if (cancelResult?.status === 'error') {
+                l(`supersede cancel failed (MT5 error): ticket=${po.ticket}: ${cancelResult.message}`)
+                remainingPendingCount++
+                await insertAudit(null, userId, 'pending_supersede_failed', symbol,
+                  { signal_id: signalId, ticket: po.ticket, error: cancelResult.message },
+                  { status: 'error', message: cancelResult.message }, 'warning')
+                continue
+              }
               await queryRun(
                 "UPDATE auto_signal_deliveries SET pending_state = 'superseded' WHERE pending_ticket = ? AND user_id = ?",
                 [String(po.ticket), userId])

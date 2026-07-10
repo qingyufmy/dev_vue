@@ -52,6 +52,7 @@ export function buildBridgeOrderCall(request) {
       symbol: request.symbol,
       order_type: pendingType,
       price: request.limit_price,
+      stoplimit_price: entryMethod === 'stop_limit' ? (request.stop_limit_price || request.limit_price) : undefined,
       volume: request.volume,
       sl: request.sl,
       tp: request.tp,
@@ -523,6 +524,19 @@ export function validateTradeRequest(config, account, positions, request) {
 
   const equity = parseFloat(account.equity || 0)
   if (equity <= 0) throw new RiskReject('invalid_account_equity', { equity: account.equity })
+
+  // Pending order price direction validation
+  const entryMethod = request.entry_method || 'market'
+  if (entryMethod !== 'market' && entryMethod !== 'observe' && request.source === 'ai') {
+    const lp = parseFloat(request.limit_price || 0)
+    const ref = parseFloat(request.reference_price || 0)
+    if (lp > 0 && ref > 0) {
+      if (entryMethod === 'limit' && orderType === 'buy' && lp >= ref) throw new RiskReject('buy_limit_price_too_high', { limit_price: lp, reference: ref })
+      if (entryMethod === 'limit' && orderType === 'sell' && lp <= ref) throw new RiskReject('sell_limit_price_too_low', { limit_price: lp, reference: ref })
+      if (entryMethod === 'stop' && orderType === 'buy' && lp <= ref) throw new RiskReject('buy_stop_price_too_low', { limit_price: lp, reference: ref })
+      if (entryMethod === 'stop' && orderType === 'sell' && lp >= ref) throw new RiskReject('sell_stop_price_too_high', { limit_price: lp, reference: ref })
+    }
+  }
 
   return { symbol, order_type: orderType, volume, max_position_size: maxPosition, account_equity: equity }
 }

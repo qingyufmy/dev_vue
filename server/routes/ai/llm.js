@@ -192,7 +192,7 @@ export function normalizeAiSignal(parsed, config, market) {
   }
 
   // Pending validity — UTC time string (no timezone suffix), consistent with reconcilePendingOrders parsing
-  let pendingValidMinutes = parseInt(parsed.pending_valid_minutes) || 240
+  let pendingValidMinutes = Math.min(Math.max(parseInt(parsed.pending_valid_minutes) || 240, 1), 1440)
   const pendingValidUntil = entryMethod !== 'market' && entryMethod !== 'observe'
     ? new Date(Date.now() + pendingValidMinutes * 60000).toISOString().replace('T', ' ').substring(0, 19)
     : null
@@ -256,6 +256,13 @@ export function normalizeAiSignal(parsed, config, market) {
           parsed.stop_loss_price = isBuySide
             ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
         }
+        // SL direction check: buy SL must be below entry, sell SL must be above entry
+        const slOk = isBuySide ? parsed.stop_loss_price < anchorPrice : parsed.stop_loss_price > anchorPrice
+        if (!slOk) {
+          console.log(`[LLM] SL direction wrong: ${parsed.stop_loss_price} for ${signalType} at ${anchorPrice}, overriding`)
+          parsed.stop_loss_price = isBuySide
+            ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
+        }
       } else {
         parsed.stop_loss_price = isBuySide
           ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
@@ -271,6 +278,30 @@ export function normalizeAiSignal(parsed, config, market) {
       if (!parsed.take_profit_3_price) {
         parsed.take_profit_3_price = isBuySide
           ? round2(anchorPrice + atr * risk.tp3AtrMult) : round2(anchorPrice - atr * risk.tp3AtrMult)
+      }
+      // TP direction check: buy TP must be above entry, sell TP must be below entry
+      for (const tpKey of ['take_profit_1_price', 'take_profit_2_price', 'take_profit_3_price']) {
+        if (parsed[tpKey]) {
+          const tpOk = isBuySide ? parsed[tpKey] > anchorPrice : parsed[tpKey] < anchorPrice
+          if (!tpOk) {
+            console.log(`[LLM] ${tpKey} direction wrong: ${parsed[tpKey]} for ${signalType} at ${anchorPrice}, clearing`)
+            parsed[tpKey] = null
+          }
+        }
+      }
+      // TP ordering: for buy, TP1 < TP2 < TP3; for sell, TP1 > TP2 > TP3
+      if (parsed.take_profit_1_price && parsed.take_profit_2_price) {
+        if (isBuySide ? parsed.take_profit_2_price <= parsed.take_profit_1_price : parsed.take_profit_2_price >= parsed.take_profit_1_price) {
+          console.log(`[LLM] TP2 not beyond TP1 for ${signalType}, clearing TP2/TP3`)
+          parsed.take_profit_2_price = null
+          parsed.take_profit_3_price = null
+        }
+      }
+      if (parsed.take_profit_2_price && parsed.take_profit_3_price) {
+        if (isBuySide ? parsed.take_profit_3_price <= parsed.take_profit_2_price : parsed.take_profit_3_price >= parsed.take_profit_2_price) {
+          console.log(`[LLM] TP3 not beyond TP2 for ${signalType}, clearing TP3`)
+          parsed.take_profit_3_price = null
+        }
       }
     }
     // Reject if SL or TP1 are missing (ATR unavailable and LLM didn't provide them)
