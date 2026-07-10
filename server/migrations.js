@@ -875,6 +875,23 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '045_update_cancel_pending_description',
+    up: async () => {
+      try {
+        const row = await queryOne('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
+        if (!row) { console.log('[Migrations] 045 no active schema found, skip'); return }
+        const schema = JSON.parse(row.schema_json)
+        const newDesc = '必须字段（条件触发）。需要取消现有挂单时，此字段必须输出对应的取消条件数组，不能为空。不需要取消时返回空数组 []。每个元素：symbol(必填)品种, pending_type(可选)挂单类型如buy_limit/sell_limit/buy_stop/sell_stop, max_price(可选)取消此价格以下的挂单(限买单), min_price(可选)取消此价格以上的挂单(限卖单), cancel_all(可选bool)取消该品种所有挂单, reason(必填)取消原因。示例：需要取消XAUUSD上价格不合理的买单时：[{"symbol":"XAUUSD","pending_type":"buy_limit","max_price":4110,"reason":"价格偏离过远，成交概率极低"}]；不需要取消时：[]'
+        if (schema.cancel_pending === newDesc) { console.log('[Migrations] 045 cancel_pending description already up to date'); return }
+        schema.cancel_pending = newDesc
+        await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
+        console.log('[Migrations] 045 updated cancel_pending description in ai_signal_schema')
+      } catch (e) {
+        console.error('[Migrations] 045 error:', e.message)
+      }
+    }
   }
 ]
 
