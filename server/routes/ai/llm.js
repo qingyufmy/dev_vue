@@ -148,6 +148,8 @@ export async function maybeAiSignal(db, config, market) {
     }
     console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
     if (DEBUG_LLM_PAYLOAD) console.log(JSON.stringify(aiPayload, null, 2).substring(0, 3000))
+    const thinkingEnabled = config.thinking_enabled !== false
+    console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',

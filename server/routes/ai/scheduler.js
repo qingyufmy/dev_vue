@@ -779,7 +779,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型推理中...' })
     const t3 = Date.now()
-    l(`calling AI (model=${config.model_name})...`)
+    l(`calling AI (model=${config.model_name}, thinking=${config.thinking_enabled !== false}, effort=${config.reasoning_effort || 'max'})...`)
     const signal = await maybeAiSignal(null, config, market)
     market.inference_source = signal._inference_source || 'unknown'
     const aiSource = signal._inference_source
