@@ -401,22 +401,23 @@ export async function saveUserAutoConfig(userId, payload) {
     max_position_size: payload.max_position_size !== undefined ? Number(payload.max_position_size) : (existing?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
     selected_take_profit: payload.selected_take_profit !== undefined ? Number(payload.selected_take_profit) : (existing?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT),
     enable_auto_trade: payload.enable_auto_trade !== undefined ? (payload.enable_auto_trade ? 1 : 0) : (existing?.enable_auto_trade ?? 1),
-    symbols: selectedSymbols !== null ? JSON.stringify(selectedSymbols) : (existing?.symbols || '[]'),
+    selected_symbols_json: selectedSymbols !== null ? JSON.stringify(selectedSymbols) : (existing?.selected_symbols_json ?? null),
   }
   // INSERT enabled=0 is correct: first save means user hasn't toggled auto yet.
   // ON DUPLICATE KEY UPDATE preserves existing enabled value.
   await queryRun(
-    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, created_at, updated_at)
-     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, selected_symbols_json, created_at, updated_at)
+     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        prompt_type_id = VALUES(prompt_type_id),
        risk_level = VALUES(risk_level),
        max_position_size = VALUES(max_position_size),
        selected_take_profit = VALUES(selected_take_profit),
        enable_auto_trade = VALUES(enable_auto_trade),
+       selected_symbols_json = VALUES(selected_symbols_json),
        updated_at = VALUES(updated_at)`,
     [userId, next.prompt_type_id, next.risk_level, next.max_position_size, next.selected_take_profit,
-     next.enable_auto_trade, now, now]
+     next.enable_auto_trade, next.selected_symbols_json, now, now]
   )
 }
 
@@ -451,9 +452,10 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
 export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck = null) {
   const sym = String(symbol).toUpperCase().trim()
   const symBase = stripBrokerSuffix(sym)
-  // LIKE is a pre-filter to reduce candidate rows; final matching is done by JS JSON.parse below.
+  // Read user's selected_symbols_json (Fix 4): NULL means use strategy all symbols
   const rows = await queryAll(
-    `SELECT s.user_id, apt.symbols_json, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
+    `SELECT s.user_id, s.selected_symbols_json, apt.symbols_json as strategy_symbols_json,
+            s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
             u.plan, u.role
      FROM auto_scheduler s
      JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
@@ -462,9 +464,22 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
     [promptTypeId]
   )
   const filtered = rows.filter(r => {
+    // Determine user's effective symbols: selected_symbols_json ∩ strategy symbols
     let userSymbols = []
-    try { userSymbols = JSON.parse(r.symbols_json || '[]') } catch (e) { console.warn('[Config] Failed to parse user symbols:', e.message) }
-    return userSymbols.some(s => {
+    try {
+      if (r.selected_symbols_json) {
+        userSymbols = JSON.parse(r.selected_symbols_json)
+      } else {
+        // NULL = old user, fall back to strategy all symbols
+        userSymbols = JSON.parse(r.strategy_symbols_json || '[]')
+      }
+    } catch (e) { console.warn('[Config] Failed to parse user symbols:', e.message) }
+    // Intersection with strategy symbols
+    let strategySymbols = []
+    try { strategySymbols = JSON.parse(r.strategy_symbols_json || '[]') } catch (e) {}
+    const effectiveSymbols = userSymbols.filter(s => strategySymbols.includes(s))
+    if (effectiveSymbols.length === 0) return false
+    return effectiveSymbols.some(s => {
       const sNorm = String(s).toUpperCase().trim()
       return sNorm === sym || stripBrokerSuffix(sNorm) === symBase
     })

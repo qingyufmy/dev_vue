@@ -512,6 +512,7 @@ export async function initDB() {
       max_position_size DOUBLE NOT NULL DEFAULT 0.05,
       selected_take_profit INT NOT NULL DEFAULT 2,
       enable_auto_trade TINYINT NOT NULL DEFAULT 1,
+      selected_symbols_json TEXT DEFAULT NULL,
       last_run_at DATETIME,
       created_at DATETIME NOT NULL DEFAULT (NOW()),
       updated_at DATETIME NOT NULL DEFAULT (NOW())
@@ -528,7 +529,11 @@ export async function initDB() {
       is_executed TINYINT NOT NULL DEFAULT 0,
       executed_at DATETIME DEFAULT NULL,
       trade_ticket VARCHAR(100) DEFAULT NULL,
+      pending_ticket VARCHAR(100) DEFAULT NULL,
+      pending_state VARCHAR(30) DEFAULT NULL,
+      pending_valid_until VARCHAR(30) DEFAULT NULL,
       execution_result TEXT,
+      execution_claimed_at DATETIME DEFAULT NULL,
       created_at DATETIME NOT NULL DEFAULT (NOW()),
       updated_at DATETIME NOT NULL DEFAULT (NOW()),
       UNIQUE KEY uq_auto_signal_delivery (signal_id, user_id)

@@ -16,6 +16,39 @@ import crypto from 'crypto'
 export const autoSchedulerState = {}
 export const closeSchedulerState = {}
 
+// === Permission gate: can user execute auto trades (cancel/submit) ===
+async function isUserEligibleForAutoExecution(userId) {
+  if (!isBridgeAlive(userId)) return false
+  if (!isTradeEnabled(userId)) return false
+  const scheduler = await queryOne('SELECT enabled, enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
+  if (!scheduler || !scheduler.enabled || !scheduler.enable_auto_trade) return false
+  const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
+  if (!user || user.plan !== 'pro') return false
+  const ubSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
+  if (!ubSettings || !ubSettings.trade_send_enabled) return false
+  return true
+}
+
+// === Normalize cancel condition (Fix 1) ===
+function normalizeCancelCondition(cond, expectedSymbol) {
+  if (!cond) return null
+  const normalized = {}
+  // symbol must match current cycle symbol (broker suffix normalized)
+  const condSymbol = String(cond.symbol || '').toUpperCase().trim()
+  if (!condSymbol || stripBrokerSuffix(condSymbol) !== stripBrokerSuffix(expectedSymbol)) return null
+  normalized.symbol = expectedSymbol
+  if (cond.cancel_all) { normalized.cancel_all = true }
+  else {
+    const validTypes = ['buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
+    if (cond.pending_type && validTypes.includes(cond.pending_type)) normalized.pending_type = cond.pending_type
+    if (cond.max_price != null) { const p = parseFloat(cond.max_price); if (Number.isFinite(p)) normalized.max_price = p }
+    if (cond.min_price != null) { const p = parseFloat(cond.min_price); if (Number.isFinite(p)) normalized.min_price = p }
+    if (!normalized.pending_type && normalized.max_price == null && normalized.min_price == null && !normalized.cancel_all) return null
+  }
+  normalized.reason = String(cond.reason || 'AI cancel')
+  return normalized
+}
+
 function normalizeSymbolForScheduler(sym) {
   return stripBrokerSuffix(sym)
 }
@@ -311,13 +344,18 @@ export async function getUserAutoRuntimeStatus(userId) {
 // === Redis Lock Helpers ===
 const REDIS_LOCK_PREFIX = 'auto:scheduler:lock:'
 const REDIS_COOLDOWN_PREFIX = 'auto:scheduler:cooldown:'
+const LOCK_TTL_MS = 600000 // 10 minutes
+const LOCK_RENEW_INTERVAL_MS = 200000 // renew every ~3.3 min (1/3 of TTL)
+
+// Lua script for atomic compare-and-delete release
+const RELEASE_LUA = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`
 
 async function acquireLock(key) {
   const redis = getRedis()
   if (!redis) { console.warn(`[acquireLock] ${key}: Redis unavailable`); return null }
   const token = crypto.randomUUID()
   try {
-    const ok = await redis.set(`${REDIS_LOCK_PREFIX}${key}`, token, 'NX', 'PX', 600000)
+    const ok = await redis.set(`${REDIS_LOCK_PREFIX}${key}`, token, 'NX', 'PX', LOCK_TTL_MS)
     if (!ok) console.warn(`[acquireLock] ${key}: lock already held`)
     return ok ? token : null
   } catch (e) { console.error('[acquireLock]', key, e.message); return null }
@@ -327,9 +365,19 @@ async function releaseLock(key, token) {
   const redis = getRedis()
   if (!redis || !token) return
   try {
-    const current = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
-    if (current === token) await redis.del(`${REDIS_LOCK_PREFIX}${key}`)
+    await redis.eval(RELEASE_LUA, 1, `${REDIS_LOCK_PREFIX}${key}`, token)
   } catch (e) { console.error('[releaseLock]', key, e.message) }
+}
+
+async function renewLock(key, token) {
+  const redis = getRedis()
+  if (!redis || !token) return false
+  try {
+    const result = await redis.eval(
+      `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end`,
+      1, `${REDIS_LOCK_PREFIX}${key}`, token, LOCK_TTL_MS)
+    return result === 1
+  } catch (e) { console.error('[renewLock]', key, e.message); return false }
 }
 
 async function setCooldown(key, intervalSeconds) {
@@ -436,6 +484,7 @@ export async function reconcileAutoSchedulers() {
     const rows = await queryAll(`
       SELECT
         s.prompt_type_id,
+        s.selected_symbols_json,
         apt.symbols_json,
         apt.interval_minutes
       FROM auto_scheduler s
@@ -451,8 +500,18 @@ export async function reconcileAutoSchedulers() {
     const neededKeyMeta = {}
 
     for (const row of rows) {
-      const symbols = parsePromptSymbols(row.symbols_json || '[]')
-      for (const sym of symbols) {
+      // Fix 4: use user's selected_symbols_json ∩ strategy symbols
+      let userSymbols = []
+      try {
+        if (row.selected_symbols_json) {
+          userSymbols = JSON.parse(row.selected_symbols_json)
+        } else {
+          userSymbols = parsePromptSymbols(row.symbols_json || '[]')
+        }
+      } catch (e) { userSymbols = parsePromptSymbols(row.symbols_json || '[]') }
+      const strategySymbols = parsePromptSymbols(row.symbols_json || '[]')
+      const effectiveSymbols = userSymbols.filter(s => strategySymbols.includes(s))
+      for (const sym of effectiveSymbols) {
         const k = buildSchedulerKey(row.prompt_type_id, sym)
         neededKeys.add(k)
         neededKeyMeta[k] = { promptTypeId: row.prompt_type_id, symbol: sym, intervalMinutes: row.interval_minutes || 5 }
@@ -606,7 +665,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       return
     }
 
-    // Check cooldown TTL — skip if still active
+    // Check cooldown TTL — skip if still active (Fix 5: fail-closed on error)
     try {
       const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
       if (ttl > 0) {
@@ -616,7 +675,13 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         autoSchedulerState[key].timer = setTimeout(tick, Math.min(ttl * 1000, tickIntervalMs))
         return
       }
-    } catch (e) { console.warn('[Scheduler] Redis TTL check failed:', e.message) }
+    } catch (e) {
+      console.warn('[Scheduler] Redis TTL check failed, failing closed:', e.message)
+      st.waitReason = 'redis_error'
+      st.lastError = 'cooldown_check_failed'
+      autoSchedulerState[key].timer = setTimeout(tick, 15000)
+      return
+    }
 
     if (st.inFlight) {
       autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
@@ -634,9 +699,23 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.lastError = ''
     st.waitReason = ''
 
+    // Start lock renewal timer (Fix 5)
+    let lockRenewTimer = null
+    let lockLost = false
+    lockRenewTimer = setInterval(async () => {
+      if (!st._lockToken || st._lockToken !== lockToken) { clearInterval(lockRenewTimer); return }
+      const renewed = await renewLock(key, lockToken)
+      if (!renewed) {
+        lockLost = true
+        console.error(`[UnifiedScheduler] ${key}: lock renewal failed — lock lost`)
+        clearInterval(lockRenewTimer)
+      }
+    }, LOCK_RENEW_INTERVAL_MS)
+
     let cycleStatus = 'error'
     let cycleReason = 'exception'
     try {
+      if (lockLost) { cycleReason = 'lock_lost'; throw new Error('lock lost during renewal') }
       const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol)
       if (cycleResult?.status === 'success') {
         st.lastError = ''
@@ -667,6 +746,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.nextRunInSeconds = Math.round(delay / 1000)
       await setCooldown(key, Math.round(delay / 1000))
     } finally {
+      // Stop lock renewal timer
+      if (lockRenewTimer) clearInterval(lockRenewTimer)
       // Release lock BEFORE clearing inFlight to prevent TOCTOU race
       if (st._lockToken) {
         await releaseLock(key, st._lockToken)
@@ -680,9 +761,18 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     // Broadcast progress done
     broadcastAutoProgressDone(promptTypeId, symbol, cycleStatus, cycleReason, st)
 
+    // Cooldown failure → don't schedule next tick quickly (Fix 5)
     if (autoSchedulerState[key]?.running) {
-      const delay = cycleStatus === 'success' ? tickIntervalMs : retryDelayMs(cycleReason)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      const cooldownOk = await setCooldown(key, cycleStatus === 'success' ? st.intervalMinutes * 60 : Math.round(retryDelayMs(cycleReason) / 1000))
+      if (!cooldownOk) {
+        // Cooldown failed — show Redis issue, wait longer
+        st.waitReason = 'cooldown_write_failed'
+        st.lastError = 'cooldown_write_failed'
+        autoSchedulerState[key].timer = setTimeout(tick, 30000) // retry in 30s
+      } else {
+        const delay = cycleStatus === 'success' ? tickIntervalMs : retryDelayMs(cycleReason)
+        autoSchedulerState[key].timer = setTimeout(tick, delay)
+      }
     }
   }
 
@@ -857,56 +947,79 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
       })
     }
 
-    // 7.5 AI cancel_pending: cancel matching pending orders for all subscribers
+    // 7.5 AI cancel_pending: cancel matching pending orders for eligible subscribers only
     if (Array.isArray(signal.cancel_pending) && signal.cancel_pending.length > 0) {
-      l(`cancel_pending: ${signal.cancel_pending.length} condition(s)`)
-      for (const uid of onlineSubscribers) {
-        if (!isBridgeAlive(uid)) continue
-        try {
-          const pendingResp = await mt5Bridge(uid, 'pending_list', { symbol }, { noFallback: true })
-          const pendingOrders = pendingResp?.orders || pendingResp?.pending_list || []
-          if (!pendingOrders.length) continue
-          for (const cond of signal.cancel_pending) {
-            if (!cond.symbol) continue
-            const condSymbol = cond.symbol.toUpperCase()
-            const toCancel = pendingOrders.filter(po => {
-              if (String(po.symbol || '').toUpperCase() !== condSymbol) return false
-              if (cond.cancel_all) return true
-              if (cond.pending_type && po.pending_type !== cond.pending_type) return false
-              const price = parseFloat(po.price)
-              if (cond.max_price != null && !(po.pending_type || '').startsWith('buy')) return false
-              if (cond.max_price != null && price > parseFloat(cond.max_price)) return false
-              if (cond.min_price != null && !(po.pending_type || '').startsWith('sell')) return false
-              if (cond.min_price != null && price < parseFloat(cond.min_price)) return false
-              return true
-            })
-            for (const po of toCancel) {
+      // Normalize conditions and filter to valid ones
+      const validConds = []
+      for (const cond of signal.cancel_pending) {
+        const nc = normalizeCancelCondition(cond, symbol)
+        if (nc) validConds.push(nc)
+        else {
+          l(`cancel_pending: ignored invalid condition: ${JSON.stringify(cond)}`)
+          await insertAudit(null, 0, 'cancel_pending_invalid', symbol,
+            { signal_id: signalId, condition: cond }, { status: 'ignored', reason: 'invalid_condition' }, 'info')
+        }
+      }
+      if (validConds.length > 0) {
+        l(`cancel_pending: ${validConds.length} valid condition(s)`)
+        for (const uid of onlineSubscribers) {
+          // Permission gate: must be eligible for auto execution
+          const eligible = await isUserEligibleForAutoExecution(uid)
+          if (!eligible) {
+            l(`cancel_pending: skipped user=${uid} (not eligible for auto execution)`)
+            continue
+          }
+          try {
+            const pendingResp = await mt5Bridge(uid, 'pending_list', { symbol }, { noFallback: true })
+            const pendingOrders = pendingResp?.orders || pendingResp?.pending_list || []
+            if (!Array.isArray(pendingOrders) || !pendingOrders.length) continue
+            // Collect tickets to cancel (deduplicate by userId+ticket)
+            const ticketsToCancel = new Map() // ticket -> condition
+            for (const cond of validConds) {
+              for (const po of pendingOrders) {
+                if (String(po.symbol || '').toUpperCase() !== String(cond.symbol || '').toUpperCase()) continue
+                if (cond.cancel_all) { ticketsToCancel.set(String(po.ticket), cond); continue }
+                if (cond.pending_type && po.pending_type !== cond.pending_type) continue
+                const price = parseFloat(po.price)
+                if (cond.max_price != null && !(po.pending_type || '').startsWith('buy')) continue
+                if (cond.max_price != null && price > cond.max_price) continue
+                if (cond.min_price != null && !(po.pending_type || '').startsWith('sell')) continue
+                if (cond.min_price != null && price < cond.min_price) continue
+                ticketsToCancel.set(String(po.ticket), cond)
+              }
+            }
+            for (const [ticket, cond] of ticketsToCancel) {
+              // Re-check bridge and trade state before each cancel
+              if (!isBridgeAlive(uid) || !isTradeEnabled(uid)) {
+                l(`cancel_pending: skipped ticket=${ticket} (bridge/trade state changed)`)
+                continue
+              }
               try {
-                const cancelResult = await mt5Bridge(uid, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
-                if (cancelResult?.status === 'error') {
-                  l(`cancel_pending failed (MT5 error): user=${uid} ticket=${po.ticket}: ${cancelResult.message}`)
+                const cancelResult = await mt5Bridge(uid, 'cancel_pending', { ticket }, { noFallback: true })
+                if (cancelResult?.status !== 'success') {
+                  l(`cancel_pending failed (MT5): user=${uid} ticket=${ticket}: ${cancelResult?.message || 'unknown'}`)
                   await insertAudit(null, uid, 'ai_cancel_pending_failed', symbol,
-                    { signal_id: signalId, ticket: po.ticket, error: cancelResult.message },
-                    { status: 'error', message: cancelResult.message }, 'warning')
+                    { signal_id: signalId, prompt_type_id: promptTypeId, ticket, error: cancelResult?.message },
+                    { status: 'error', message: cancelResult?.message }, 'warning')
                   continue
                 }
                 await queryRun(
                   "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
-                  [String(po.ticket), uid]).catch(() => {})
-                l(`cancel_pending: user=${uid} ticket=${po.ticket} (${po.pending_type} @ ${po.price})`)
+                  [ticket, uid]).catch(() => {})
+                l(`cancel_pending: user=${uid} ticket=${ticket}`)
                 await insertAudit(null, uid, 'ai_cancel_pending', symbol,
-                  { signal_id: signalId, ticket: po.ticket, pending_type: po.pending_type, price: po.price, reason: cond.reason },
-                  { status: 'cancelled', ticket: po.ticket }, 'success')
+                  { signal_id: signalId, prompt_type_id: promptTypeId, ticket, reason: cond.reason },
+                  { status: 'cancelled', ticket }, 'success')
               } catch (cancelErr) {
-                l(`cancel_pending failed: user=${uid} ticket=${po.ticket}: ${cancelErr.message}`)
+                l(`cancel_pending exception: user=${uid} ticket=${ticket}: ${cancelErr.message}`)
                 await insertAudit(null, uid, 'ai_cancel_pending_failed', symbol,
-                  { signal_id: signalId, ticket: po.ticket, error: cancelErr.message },
+                  { signal_id: signalId, prompt_type_id: promptTypeId, ticket, error: cancelErr.message },
                   { status: 'error', message: cancelErr.message }, 'warning')
               }
             }
+          } catch (e) {
+            l(`cancel_pending bridge error: user=${uid}: ${e.message}`)
           }
-        } catch (e) {
-          l(`cancel_pending bridge error: user=${uid}: ${e.message}`)
         }
       }
     }
@@ -964,6 +1077,16 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
 async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt) {
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
   try {
+    // Atomic delivery claiming: only one executor can proceed (Fix 3)
+    const claimed = await queryRun(
+      `UPDATE auto_signal_deliveries SET execution_status = 'executing', execution_claimed_at = NOW()
+       WHERE signal_id = ? AND user_id = ? AND execution_status = 'not_attempted'`,
+      [signalId, userId])
+    if (claimed.affectedRows !== 1) {
+      l('skipped: already claimed or terminal state')
+      return
+    }
+
     const riskConfig = await getDeliveryExecuteRiskConfig(userId)
     if (!riskConfig?.enable_auto_trade) {
       l('skipped: enable_auto_trade=false')
@@ -1005,6 +1128,94 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       const originalVolume = order.volume
       order.volume = round2(userMaxVolume)
       l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
+    }
+
+    // TP validation: selected TP must exist and have correct direction (Fix 2)
+    const isBuyOrder = order.order_type === 'buy'
+    const entryRef = order.limit_price || market.latest_price || 0
+    if (entryRef > 0) {
+      // Check SL direction
+      if (order.sl != null) {
+        const sl = parseFloat(order.sl)
+        const slOk = isBuyOrder ? sl < entryRef : sl > entryRef
+        if (!slOk || !Number.isFinite(sl) || sl <= 0) {
+          l(`rejected: invalid_stop_loss_direction sl=${order.sl} for ${order.order_type} at ${entryRef}`)
+          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+            ['rejected', signalId, userId])
+          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_stop_loss_direction', sl: order.sl, entry: entryRef },
+            { status: 'rejected', message: 'invalid_stop_loss_direction' }, 'warning')
+          return
+        }
+      }
+      // Check selected TP exists and has correct direction
+      const tpKey = `tp`
+      const tpVal = order[tpKey] != null ? parseFloat(order[tpKey]) : null
+      if (tpVal == null || !Number.isFinite(tpVal) || tpVal <= 0) {
+        l(`rejected: selected_take_profit_missing tp=${order[tpKey]} selected=${riskConfig.selected_take_profit}`)
+        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+          ['rejected', signalId, userId])
+        await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+          { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'selected_take_profit_missing', tp: order[tpKey], selected: riskConfig.selected_take_profit },
+          { status: 'rejected', message: 'selected_take_profit_missing' }, 'warning')
+        return
+      }
+      const tpOk = isBuyOrder ? tpVal > entryRef : tpVal < entryRef
+      if (!tpOk) {
+        l(`rejected: invalid_take_profit_direction tp=${tpVal} for ${order.order_type} at ${entryRef}`)
+        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+          ['rejected', signalId, userId])
+        await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+          { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_take_profit_direction', tp: tpVal, entry: entryRef },
+          { status: 'rejected', message: 'invalid_take_profit_direction' }, 'warning')
+        return
+      }
+    }
+
+    // Cumulative position limit check (Fix 3)
+    if (order.order_type && order.order_type !== 'observe') {
+      try {
+        const positionsResp = await mt5Bridge(userId, 'positions', { symbol }, { noFallback: true })
+        const positionList = positionsResp?.positions
+        if (!Array.isArray(positionList)) {
+          l('rejected: positions response invalid')
+          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+            ['rejected', signalId, userId])
+          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'positions_invalid' },
+            { status: 'rejected', message: 'positions_invalid' }, 'warning')
+          return
+        }
+        const symBase = stripBrokerSuffix(symbol)
+        let totalVolume = 0
+        for (const pos of positionList) {
+          if (stripBrokerSuffix(String(pos.symbol || '')) === symBase) {
+            totalVolume += Math.abs(parseFloat(pos.volume) || 0)
+          }
+        }
+        const orderVolume = parseFloat(order.volume) || 0
+        if (!Number.isFinite(totalVolume) || !Number.isFinite(orderVolume)) {
+          l('rejected: non-numeric volume')
+          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+            ['rejected', signalId, userId])
+          return
+        }
+        const maxVol = parseFloat(riskConfig.max_position_size || DEFAULT_MAX_POSITION_SIZE)
+        if (totalVolume + orderVolume > maxVol) {
+          l(`rejected: cumulative position ${totalVolume} + ${orderVolume} > max ${maxVol}`)
+          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+            ['rejected', signalId, userId])
+          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'cumulative_position_exceeded', total_volume: totalVolume, order_volume: orderVolume, max: maxVol },
+            { status: 'rejected', message: 'cumulative_position_exceeded' }, 'warning')
+          return
+        }
+      } catch (posErr) {
+        l(`rejected: position check failed: ${posErr.message}`)
+        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+          ['rejected', signalId, userId])
+        return
+      }
     }
 
     // Supersede: cancel same-symbol SAME-DIRECTION pending orders before placing new one
@@ -1076,7 +1287,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
            execution_result = ? WHERE signal_id = ? AND user_id = ?`,
           [String(ticket), signal.pending_valid_until || null, JSON.stringify(execResult), signalId, userId])
         // Sync to ai_signals
-        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(e => l(`sync pending_ticket to ai_signals failed: ${e.message}`))
+        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(e => console.warn(`[PendingReconciler] sync pending_ticket failed: ${e.message}`))
         l(`auto-executed pending: ticket=${ticket}, volume=${order.volume}`)
       } else {
         await queryRun(
@@ -1200,7 +1411,7 @@ export async function reconcilePendingOrders() {
             await queryRun(
               "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
               [ticket, row.id])
-            await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(e => l(`sync trade_ticket to ai_signals failed: ${e.message}`))
+            await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(e => console.warn(`[PendingReconciler] sync trade_ticket failed: ${e.message}`))
           } else {
             await queryRun(
               "UPDATE ai_signals SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",

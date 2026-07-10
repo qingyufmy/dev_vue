@@ -1049,12 +1049,23 @@ async function handleBrowserCommand(ws, userId, msg) {
           const isPending = signal.entry_method && signal.entry_method !== 'market' && signal.entry_method !== 'observe'
           const orderTicket = result.order || result.ticket || null
           if (signalSource === 'auto_shared' && delivery) {
-            await queryRun(
-              'UPDATE auto_signal_deliveries SET execution_status = ?, is_executed = 1, executed_at = NOW(), trade_ticket = ?, execution_result = ? WHERE id = ?',
-              ['success', orderTicket, JSON.stringify(result), delivery.id])
+            if (isPending) {
+              // Fix 6: pending orders write pending_ticket/pending_state, not trade_ticket
+              await queryRun(
+                `UPDATE auto_signal_deliveries SET execution_status = 'success',
+                 pending_ticket = ?, pending_state = 'pending', pending_valid_until = ?,
+                 execution_result = ? WHERE id = ?`,
+                [String(orderTicket), signal.pending_valid_until || null, JSON.stringify(result), delivery.id])
+            } else {
+              await queryRun(
+                'UPDATE auto_signal_deliveries SET execution_status = ?, is_executed = 1, executed_at = NOW(), trade_ticket = ?, execution_result = ? WHERE id = ?',
+                ['success', orderTicket, JSON.stringify(result), delivery.id])
+            }
           } else {
             if (isPending) {
-              await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, pending_ticket = ?, order_state = ? WHERE id = ?', [beijingNow(), String(orderTicket), 'pending', signal.id])
+              // Fix 6: use pending_state instead of order_state, keep is_executed=0 for pending
+              await queryRun('UPDATE ai_signals SET pending_ticket = ?, pending_state = ?, pending_valid_until = ? WHERE id = ?',
+                [String(orderTicket), 'pending', signal.pending_valid_until || null, signal.id])
             } else {
               await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), orderTicket, signal.id])
             }

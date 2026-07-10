@@ -934,6 +934,27 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '048_delivery_claiming_and_symbols',
+    up: async () => {
+      // Add execution_claimed_at and execution_claimed_by for idempotent delivery claiming
+      try {
+        await queryRun('ALTER TABLE auto_signal_deliveries ADD COLUMN execution_claimed_at DATETIME DEFAULT NULL')
+        console.log('[Migrations] 048 added execution_claimed_at to auto_signal_deliveries')
+      } catch (e) {
+        if (e.message?.includes('Duplicate column')) console.log('[Migrations] 048 execution_claimed_at already exists')
+        else console.error('[Migrations] 048 error:', e.message)
+      }
+      // Add selected_symbols_json for user-level symbol persistence
+      try {
+        await queryRun('ALTER TABLE auto_scheduler ADD COLUMN selected_symbols_json TEXT DEFAULT NULL')
+        console.log('[Migrations] 048 added selected_symbols_json to auto_scheduler')
+      } catch (e) {
+        if (e.message?.includes('Duplicate column')) console.log('[Migrations] 048 selected_symbols_json already exists')
+        else console.error('[Migrations] 048 error:', e.message)
+      }
+    }
   }
 ]
 
