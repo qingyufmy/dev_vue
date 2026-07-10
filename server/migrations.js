@@ -796,10 +796,14 @@ const migrations = [
         if (!row) { console.log('[Migrations] 041 no active schema found, skip'); return }
         const schema = JSON.parse(row.schema_json)
         if (schema.cancel_pending) { console.log('[Migrations] 041 cancel_pending already exists'); return }
-        // Insert cancel_pending before analysis
+        // Insert cancel_pending before analysis + fix stop_loss_price description
         const newSchema = {}
         for (const [k, v] of Object.entries(schema)) {
-          newSchema[k] = v
+          if (k === 'stop_loss_price') {
+            newSchema[k] = '数字，buy/sell/挂单必须给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价。最小距离由风险等级决定：low=2倍ATR(14), medium=1.5倍, high=1倍，过近会被系统自动修正。建议设在关键支撑/阻力位外侧，给足波动空间'
+          } else {
+            newSchema[k] = v
+          }
           if (k === 'take_profit_3_price') {
             newSchema.cancel_pending = '可选数组，不填或空数组=不取消。每个元素指定取消条件：symbol(必填)品种, pending_type(可选)挂单类型如buy_limit, max_price(可选)取消此价格以下的挂单(限买单), min_price(可选)取消此价格以上的挂单(限卖单), cancel_all(可选bool)取消该品种所有挂单。reason(必填)取消原因。示例：[{"symbol":"XAUUSD","pending_type":"buy_limit","max_price":4110,"reason":"价格偏离过远"}]'
           }
