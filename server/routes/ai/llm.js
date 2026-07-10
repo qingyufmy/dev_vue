@@ -240,7 +240,7 @@ export function normalizeAiSignal(parsed, config, market) {
       if (parsed.stop_loss_price) {
         const aiSlDist = Math.abs(parsed.stop_loss_price - anchorPrice)
         if (aiSlDist < atrSlDistance) {
-          console.log(`[LLM] AI SL too tight: ${aiSlDist.toFixed(2)} < ${atrSlDistance.toFixed(2)} (1x ATR), overriding`)
+          console.log(`[LLM] AI SL too tight: ${aiSlDist.toFixed(2)} < ${atrSlDistance.toFixed(2)} (${risk.slAtrMult}x ATR), overriding`)
           parsed.stop_loss_price = isBuySide
             ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
         }
