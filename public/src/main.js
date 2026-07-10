@@ -9387,7 +9387,58 @@ function setupGlobalEvents() {
     if (!isOpen) positionMarketMenu()
     setMarketMenuOpen(!isOpen)
     userDropdown.classList.remove('active')
+    closeAIMenu()
   }
+
+  // ===== AI dropdown menu =====
+  const aiToggle = $('#navAIToggle')
+  const aiMenu = $('#aiDropdownMenu')
+
+  function setAIMenuOpen(isOpen) {
+    if (!aiToggle || !aiMenu) return
+    aiToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false')
+    aiMenu.classList.toggle('active', isOpen)
+    aiMenu.setAttribute('aria-hidden', isOpen ? 'false' : 'true')
+  }
+
+  function closeAIMenu() {
+    setAIMenuOpen(false)
+  }
+
+  function positionAIMenu() {
+    if (!aiToggle || !aiMenu) return
+    const headerRect = document.querySelector('.header')?.getBoundingClientRect()
+    const toggleRect = aiToggle.getBoundingClientRect()
+    const menuWidth = 260
+    const left = toggleRect.left + (toggleRect.width / 2) - (menuWidth / 2)
+    const top = Math.round((headerRect?.bottom || toggleRect.bottom) + 8)
+    aiMenu.style.setProperty('--ai-menu-top', `${top}px`)
+    aiMenu.style.setProperty('--ai-menu-left', `${Math.round(left)}px`)
+    aiMenu.style.setProperty('--ai-menu-right', 'auto')
+  }
+
+  function toggleAIMenu() {
+    if (!aiToggle || !aiMenu) return
+    const isOpen = aiToggle.getAttribute('aria-expanded') === 'true'
+    if (!isOpen) positionAIMenu()
+    setAIMenuOpen(!isOpen)
+    userDropdown.classList.remove('active')
+    closeMarketMenu()
+  }
+
+  aiToggle?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    toggleAIMenu()
+  })
+
+  // Handle AI lab link click with auth check
+  aiMenu?.querySelector('.header-ai-dropdown-item:not(.header-ai-dropdown-disabled)')?.addEventListener('click', (e) => {
+    e.preventDefault()
+    closeAIMenu()
+    if (!requireLogin()) return
+    syncAuthCookieFromStorage()
+    window.open('/ai', '_blank')
+  })
 
   function bindProtectedMarketNav(selector, targetPath) {
     $(selector)?.addEventListener('click', (e) => {
@@ -9416,12 +9467,6 @@ function setupGlobalEvents() {
     navigate('community')
   })
   $('#navMembership').addEventListener('click', () => navigate('membership'))
-  $('#navAI').addEventListener('click', (e) => {
-    e.preventDefault()
-    if (!requireLogin()) return
-    syncAuthCookieFromStorage()
-    window.open('/ai', '_blank')
-  })
 
   $('#loginBtn').addEventListener('click', () => showAuthModal('login_password'))
   $('#registerBtn').addEventListener('click', () => showAuthModal('register'))
@@ -9432,6 +9477,7 @@ function setupGlobalEvents() {
     e.stopPropagation()
     userDropdown.classList.toggle('active')
     closeMarketMenu()
+    closeAIMenu()
   })
 
   document.addEventListener('click', (e) => {
@@ -9440,6 +9486,9 @@ function setupGlobalEvents() {
     }
     if (marketMenu && marketToggle && !marketMenu.contains(e.target) && !marketToggle.contains(e.target)) {
       closeMarketMenu()
+    }
+    if (aiMenu && aiToggle && !aiMenu.contains(e.target) && !aiToggle.contains(e.target)) {
+      closeAIMenu()
     }
   })
   document.addEventListener('keydown', (e) => {

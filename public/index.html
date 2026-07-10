@@ -24,7 +24,7 @@
   
   
   <link rel="stylesheet" href="/src/quill.snow.css?v=20260702a">
-  <link rel="stylesheet" href="/src/style.css?v=20260707b">
+  <link rel="stylesheet" href="/src/style.css?v=20260714a">
   <link rel="stylesheet" href="/admin-extras.css?v=20260707b">
 </head>
 <body>
@@ -47,16 +47,18 @@
             <span class="logo-subtitle">道诚出品</span>
           </div>
           <nav class="header-nav">
+            <button class="header-nav-item header-nav-menu-trigger" id="navAIToggle" type="button" aria-label="AI交易菜单" aria-haspopup="true" aria-expanded="false" aria-controls="aiDropdownMenu" data-short-label="AI交易">
+              <span class="header-nav-label">AI 交易</span> <svg class="header-nav-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
             <a class="header-nav-item" id="navTools" aria-label="金融工具箱" data-short-label="工具"><span class="header-nav-label">金融工具箱</span></a>
             <a class="header-nav-item" id="navCommunity" aria-label="社区" data-short-label="社区"><span class="header-nav-label">社区</span></a>
             <a class="header-nav-item" id="navMembership" aria-label="会员" data-short-label="会员"><span class="header-nav-label">会员</span></a>
             <button class="header-nav-item header-nav-menu-trigger" id="navMarketToggle" type="button" aria-label="打开股票市场研究菜单" aria-haspopup="true" aria-expanded="false" aria-controls="marketResearchMenu" data-short-label="股票研究" style="display:none">
-              <span class="header-nav-label">股票市场研究</span> <span class="header-nav-caret" aria-hidden="true">▾</span>
+              <span class="header-nav-label">股票市场研究</span> <svg class="header-nav-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
             </button>
           </nav>
         </div>
         <div class="header-right">
-          <a class="header-ai-link" id="navAI" href="/ai" target="_blank" aria-label="AI 交易">AI 交易</a>
           <button class="btn btn-ghost btn-theme-toggle" id="themeToggle" type="button" aria-label="切换深色模式">
             <span class="theme-toggle-icon" id="headerThemeIcon">🌙</span>
             <span class="theme-toggle-label" id="headerThemeLabel">深色</span>
@@ -92,6 +94,22 @@
       </div>
       <div class="header-market-panel" id="marketResearchMenu" role="menu" aria-label="股票市场研究菜单" aria-hidden="true">
         <!-- Dynamic menu items loaded from system config -->
+      </div>
+      <div class="header-ai-dropdown" id="aiDropdownMenu" role="menu" aria-label="AI交易菜单" aria-hidden="true">
+        <a class="header-ai-dropdown-item" href="/ai" target="_blank" role="menuitem">
+          <span class="header-ai-dropdown-icon">🤖</span>
+          <span class="header-ai-dropdown-text">
+            <span class="header-ai-dropdown-title">AI 交易实验室</span>
+            <span class="header-ai-dropdown-desc">智能信号推理与自动交易</span>
+          </span>
+        </a>
+        <div class="header-ai-dropdown-item header-ai-dropdown-disabled" role="menuitem" aria-disabled="true">
+          <span class="header-ai-dropdown-icon">⚡</span>
+          <span class="header-ai-dropdown-text">
+            <span class="header-ai-dropdown-title">AI EA 实验室</span>
+            <span class="header-ai-dropdown-desc">开发中，敬请期待</span>
+          </span>
+        </div>
       </div>
     </header>
 
