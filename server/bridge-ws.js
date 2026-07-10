@@ -5,6 +5,7 @@ import { DEFAULT_API_BASE_URL, ADMIN_CACHE_TTL_MS } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 import { autoSchedulerState } from './routes/ai/scheduler.js'
 import { utcToMt5Time } from './routes/ai/utils.js'
+import { DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from './routes/ai/config.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -762,8 +763,8 @@ async function handleBrowserCommand(ws, userId, msg) {
                 api_provider: sharedRow.api_provider,
                 model_name: sharedRow.model_name,
                 enable_auto_trade: userScheduler ? !!userScheduler.enable_auto_trade : true,
-                max_position_size: userScheduler?.max_position_size ?? 0.05,
-                selected_take_profit: userScheduler?.selected_take_profit ?? 1,
+                max_position_size: userScheduler?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
+                selected_take_profit: userScheduler?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
                 risk_level: userScheduler?.risk_level || 'medium',
               }
             }
@@ -794,9 +795,9 @@ async function handleBrowserCommand(ws, userId, msg) {
               system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
               is_active = 1, updated_at = VALUES(updated_at)`,
             [userId, sid, cfg.api_provider || 'deepseek', cfg.api_key || null,
-              cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || 2000,
+              cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || DEFAULT_MAX_TOKENS,
               cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-              cfg.max_position_size || 0.05, cfg.selected_take_profit || 1, cfg.model_sharing_enabled ? 1 : 0,
+              cfg.max_position_size || DEFAULT_MAX_POSITION_SIZE, cfg.selected_take_profit || DEFAULT_SELECTED_TAKE_PROFIT, cfg.model_sharing_enabled ? 1 : 0,
               cfg.system_prompt || null, now, now])
         })
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
@@ -1158,7 +1159,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           enabled: !!userAuto.scheduler?.enabled,
           prompt_type_id: userAuto.scheduler?.prompt_type_id || null,
           risk_level: userAuto.scheduler?.risk_level || 'medium',
-          max_position_size: userAuto.scheduler?.max_position_size ?? 0.05,
+          max_position_size: userAuto.scheduler?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
           selected_take_profit: userAuto.scheduler?.selected_take_profit ?? 2,
           enable_auto_trade: !!userAuto.scheduler?.enable_auto_trade,
           selected_symbols: userAuto.scheduler?.selected_symbols || [],
@@ -1189,10 +1190,10 @@ async function handleBrowserCommand(ws, userId, msg) {
                 model_name: globalCfg?.model_name || 'deepseek-chat',
                 has_api_key: !!globalCfg?.api_key_encrypted,
                 api_base_url: globalCfg?.api_base_url || DEFAULT_API_BASE_URL,
-                temperature: globalCfg?.temperature ?? 0.3,
-                max_tokens: globalCfg?.max_tokens ?? 2000,
+                temperature: globalCfg?.temperature ?? DEFAULT_TEMPERATURE,
+                max_tokens: globalCfg?.max_tokens ?? DEFAULT_MAX_TOKENS,
                 risk_level: globalCfg?.risk_level || 'medium',
-                max_position_size: globalCfg?.max_position_size ?? 0.05,
+                max_position_size: globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
                 selected_take_profit: globalCfg?.selected_take_profit ?? 2,
               },
               scheduler_states: schedulerStates,
@@ -1241,10 +1242,10 @@ async function handleBrowserCommand(ws, userId, msg) {
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
           api_key_encrypted: params.api_key || existing?.api_key_encrypted || null,
           api_base_url: params.api_base_url ?? existing?.api_base_url ?? DEFAULT_API_BASE_URL,
-          temperature: params.temperature ?? existing?.temperature ?? 0.3,
-          max_tokens: params.max_tokens ?? existing?.max_tokens ?? 2000,
+          temperature: params.temperature ?? existing?.temperature ?? DEFAULT_TEMPERATURE,
+          max_tokens: params.max_tokens ?? existing?.max_tokens ?? DEFAULT_MAX_TOKENS,
           risk_level: params.risk_level ?? existing?.risk_level ?? 'medium',
-          max_position_size: params.max_position_size ?? existing?.max_position_size ?? 0.05,
+          max_position_size: params.max_position_size ?? existing?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
           selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
           enable_auto_trade: params.enable_auto_trade ?? existing?.enable_auto_trade ?? 0,
         }

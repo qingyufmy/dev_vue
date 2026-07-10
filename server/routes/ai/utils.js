@@ -6,6 +6,11 @@ export const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return str
 
 export const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
 
+const BROKER_SUFFIX_RE = /\.(s|c|pro|std|z|ecn|m)$/i
+export function stripBrokerSuffix(sym) {
+  return String(sym || '').replace(BROKER_SUFFIX_RE, '').toUpperCase()
+}
+
 const MTF_TAG_RE = /\{\{MTF:([A-Z]\d+):(\d+)\}\}/g
 const ATF_TAG_RE = /\{\{ATF:([A-Z]\d+):(\d+)\}\}/g
 const CTF_TAG_RE = /\{\{CTF:([A-Z]\d+):(\d+)\}\}/g

@@ -2,10 +2,10 @@
 
 import { queryRun, beijingNow } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
-import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates } from './utils.js'
+import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore } from './config.js'
+import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
 
 export async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
   const timeframes = {}
@@ -131,20 +131,19 @@ export async function handleAnalyze(userId, params) {
     try {
       const riskCfg = {
         enable_auto_trade: true,
-        selected_take_profit: config.selected_take_profit ?? 1,
-        max_position_size: config.max_position_size ?? 0.05,
+        selected_take_profit: config.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+        max_position_size: config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
       }
       const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
 
-      // Get account and positions for risk validation
-      const accountResult = await mt5Bridge(userId, 'account', {})
-      const positionsResult = await mt5Bridge(userId, 'positions', {})
-      const account = accountResult
-      const positions = positionsResult.positions || []
+      // Get account and positions for risk validation (fresh fetch)
+      const freshAccount = await mt5Bridge(userId, 'account', {})
+      const freshPositionsResult = await mt5Bridge(userId, 'positions', {})
+      const freshPositions = freshPositionsResult.positions || []
 
       // Run risk validation before executing
       try {
-        validateTradeRequest(riskCfg, account, positions, orderPayload)
+        validateTradeRequest(riskCfg, freshAccount, freshPositions, orderPayload)
       } catch (e) {
         console.log(`[Analyze] Auto-execute blocked by risk: ${e.message}`)
         await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', risk_block: e.message }, { status: 'rejected', message: e.message }, 'rejected')

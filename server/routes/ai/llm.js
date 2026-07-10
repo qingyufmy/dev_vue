@@ -3,8 +3,13 @@
 import { queryOne } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
+import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
+
+let _schemaCache = null
+let _schemaCacheTs = 0
+const SCHEMA_CACHE_TTL = 300_000 // 5 minutes
 
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold。挂单管理：同品种同方向最多保留1笔挂单，如果market_data_json.pending_orders中已有同品种同方向挂单且价格合理则返回hold不挂新单，仅在现有挂单价格明显不合理时才用cancel_pending取消旧单挂新单",
@@ -79,12 +84,16 @@ export async function maybeAiSignal(db, config, market) {
   try {
     const prompt = stripTimeframeTags(config.system_prompt || DEFAULT_PROMPT)
 
-    // Load output schema from DB
+    // Load output schema from DB (cached 5 min)
     let outputFormat = ''
     let schemaSource = 'default'
     try {
-      const schema = await queryOne('SELECT schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
-      if (schema?.schema_json) { outputFormat = schema.schema_json; schemaSource = 'database' }
+      if (_schemaCache && Date.now() - _schemaCacheTs < SCHEMA_CACHE_TTL) {
+        outputFormat = _schemaCache; schemaSource = 'cache'
+      } else {
+        const schema = await queryOne('SELECT schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
+        if (schema?.schema_json) { outputFormat = schema.schema_json; schemaSource = 'database'; _schemaCache = outputFormat; _schemaCacheTs = Date.now() }
+      }
     } catch (e) { console.warn('[LLM] Failed to load output schema from DB, using default:', e.message) }
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
     console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
@@ -103,7 +112,7 @@ export async function maybeAiSignal(db, config, market) {
       positions: market.positions, pending_orders: market.pending_orders || [],
       kline_count: market.kline_count,
       risk_level: (config || {}).risk_level || 'medium',
-      max_position_size: parseFloat((config || {}).max_position_size || 0.05),
+      max_position_size: parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE),
     }
     if (market.strategy_context) {
       const ctx = { ...market.strategy_context }
@@ -182,7 +191,7 @@ export function normalizeAiSignal(parsed, config, market) {
     stopLimitPrice = null
   }
 
-  // Pending validity
+  // Pending validity — UTC time string (no timezone suffix), consistent with reconcilePendingOrders parsing
   let pendingValidMinutes = parseInt(parsed.pending_valid_minutes) || 240
   const pendingValidUntil = entryMethod !== 'market' && entryMethod !== 'observe'
     ? new Date(Date.now() + pendingValidMinutes * 60000).toISOString().replace('T', ' ').substring(0, 19)
@@ -196,7 +205,7 @@ export function normalizeAiSignal(parsed, config, market) {
   }
   const risk = RISK_TABLE[riskLevel] || RISK_TABLE.medium
 
-  const maxPosition = parseFloat((config || {}).max_position_size || 0.05) * risk.volumeMultiplier
+  const maxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE) * risk.volumeMultiplier
   const rawVolume = parseFloat(parsed.recommended_volume || 0)
   const recommendedVolume = signalType === 'hold' ? 0 : round2(Math.max(0.01, Math.min(rawVolume, maxPosition)))
 

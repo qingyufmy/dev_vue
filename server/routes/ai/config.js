@@ -1,9 +1,14 @@
 // ai/config.js — 配置管理 + 风控 + 审计
 
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
-import { round2, round3 } from './utils.js'
+import { round2, round3, stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge } from './market-data.js'
+
+export const DEFAULT_MAX_POSITION_SIZE = 0.05
+export const DEFAULT_SELECTED_TAKE_PROFIT = 2
+export const DEFAULT_TEMPERATURE = 0.3
+export const DEFAULT_MAX_TOKENS = 2000
 
 // Parse strategy symbols from JSON string: parse, trim, uppercase, deduplicate
 export function parsePromptSymbols(symbolsJson) {
@@ -138,7 +143,7 @@ export async function getAnalyzeApiKey(userId, sessionId) {
         model_name: adminConfig.model_name || 'deepseek-chat',
         api_base_url: adminConfig.api_base_url || null,
         temperature: adminConfig.temperature ?? 0.7,
-        max_tokens: adminConfig.max_tokens ?? 2000,
+        max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
         _model_shared: true,
       }
     }
@@ -148,11 +153,11 @@ export async function getAnalyzeApiKey(userId, sessionId) {
       model_name: adminConfig.model_name || 'deepseek-chat',
       api_base_url: adminConfig.api_base_url || null,
       temperature: adminConfig.temperature ?? 0.7,
-      max_tokens: adminConfig.max_tokens ?? 2000,
+      max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
       system_prompt: 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.',
       enable_auto_trade: false,
-      max_position_size: 0.05,
-      selected_take_profit: 1,
+      max_position_size: DEFAULT_MAX_POSITION_SIZE,
+      selected_take_profit: DEFAULT_SELECTED_TAKE_PROFIT,
       risk_level: 'medium',
       _model_shared: true,
     }
@@ -171,8 +176,8 @@ export async function getAutoConfig(db, userId) {
       enabled: 0,
       prompt_type_id: firstPt?.id || null,
       risk_level: 'medium',
-      max_position_size: 0.05,
-      selected_take_profit: 2,
+      max_position_size: DEFAULT_MAX_POSITION_SIZE,
+      selected_take_profit: DEFAULT_SELECTED_TAKE_PROFIT,
       enable_auto_trade: 1,
       selected_symbols: [],
     }
@@ -217,21 +222,7 @@ export async function saveGlobalAutoConfig(cfg) {
 export async function getExecuteRiskConfig(userId, signal) {
   const isAuto = (signal.config_id === 0 && signal.source !== 'auto_shared')
   if (isAuto || signal.source === 'auto_shared') {
-    const userScheduler = await queryOne('SELECT risk_level, max_position_size, selected_take_profit, enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
-    if (userScheduler) {
-      return {
-        enable_auto_trade: !!userScheduler.enable_auto_trade,
-        selected_take_profit: userScheduler.selected_take_profit ?? 1,
-        max_position_size: userScheduler.max_position_size ?? 0.05,
-      }
-    }
-    const globalCfg = await getGlobalAutoConfig()
-    if (!globalCfg) return null
-    return {
-      enable_auto_trade: !!globalCfg.enable_auto_trade,
-      selected_take_profit: globalCfg.selected_take_profit ?? 2,
-      max_position_size: globalCfg.max_position_size ?? 0.05,
-    }
+    return getDeliveryExecuteRiskConfig(userId)
   }
 
   const sessionId = signal.session_id || 'default'
@@ -242,8 +233,8 @@ export async function getExecuteRiskConfig(userId, signal) {
   if (!manualCfg) return null
   return {
     enable_auto_trade: !!manualCfg.enable_auto_trade,
-    selected_take_profit: manualCfg.selected_take_profit ?? 1,
-    max_position_size: manualCfg.max_position_size ?? 0.05,
+    selected_take_profit: manualCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+    max_position_size: manualCfg.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
   }
 }
 
@@ -327,8 +318,8 @@ export async function getUserAutoConfig(userId) {
       enabled: 0,
       prompt_type_id: firstPt?.id || null,
       risk_level: 'medium',
-      max_position_size: 0.05,
-      selected_take_profit: 2,
+      max_position_size: DEFAULT_MAX_POSITION_SIZE,
+      selected_take_profit: DEFAULT_SELECTED_TAKE_PROFIT,
       enable_auto_trade: 1,
     }
   } else if (!scheduler.prompt_type_id) {
@@ -402,8 +393,8 @@ export async function saveUserAutoConfig(userId, payload) {
   const next = {
     prompt_type_id: payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null),
     risk_level: payload.risk_level !== undefined ? payload.risk_level : (existing?.risk_level ?? 'medium'),
-    max_position_size: payload.max_position_size !== undefined ? Number(payload.max_position_size) : (existing?.max_position_size ?? 0.05),
-    selected_take_profit: payload.selected_take_profit !== undefined ? Number(payload.selected_take_profit) : (existing?.selected_take_profit ?? 2),
+    max_position_size: payload.max_position_size !== undefined ? Number(payload.max_position_size) : (existing?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
+    selected_take_profit: payload.selected_take_profit !== undefined ? Number(payload.selected_take_profit) : (existing?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT),
     enable_auto_trade: payload.enable_auto_trade !== undefined ? (payload.enable_auto_trade ? 1 : 0) : (existing?.enable_auto_trade ?? 1),
     symbols: selectedSymbols !== null ? JSON.stringify(selectedSymbols) : (existing?.symbols || '[]'),
   }
@@ -436,12 +427,12 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
     model_name: globalCfg.model_name || 'deepseek-chat',
     api_key_encrypted: globalCfg.api_key_encrypted,
     api_base_url: globalCfg.api_base_url || DEFAULT_API_BASE_URL,
-    temperature: globalCfg.temperature ?? 0.3,
-    max_tokens: globalCfg.max_tokens ?? 2000,
+    temperature: globalCfg.temperature ?? DEFAULT_TEMPERATURE,
+    max_tokens: globalCfg.max_tokens ?? DEFAULT_MAX_TOKENS,
     system_prompt: pt.system_prompt || '',
     risk_level: globalCfg.risk_level || 'medium',
-    max_position_size: globalCfg.max_position_size ?? 0.05,
-    selected_take_profit: globalCfg.selected_take_profit ?? 2,
+    max_position_size: globalCfg.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
+    selected_take_profit: globalCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
     enable_auto_trade: !!globalCfg.enable_auto_trade,
     _source: 'unified',
     prompt_type_id: promptTypeId,
@@ -452,8 +443,7 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
 
 export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck = null) {
   const sym = String(symbol).toUpperCase().trim()
-  // Strip broker suffixes for matching: XAUUSD.s -> XAUUSD
-  const symBase = sym.replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '')
+  const symBase = stripBrokerSuffix(sym)
   // LIKE is a pre-filter to reduce candidate rows; final matching is done by JS JSON.parse below.
   const rows = await queryAll(
     `SELECT s.user_id, apt.symbols_json, s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
@@ -469,7 +459,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
     try { userSymbols = JSON.parse(r.symbols_json || '[]') } catch (e) { console.warn('[Config] Failed to parse user symbols:', e.message) }
     return userSymbols.some(s => {
       const sNorm = String(s).toUpperCase().trim()
-      return sNorm === sym || sNorm.replace(/\.?(S|C|PRO|STD|Z|ECN|M)$/i, '') === symBase
+      return sNorm === sym || stripBrokerSuffix(sNorm) === symBase
     })
   })
   // Filter by bridge alive if check function provided
@@ -486,16 +476,16 @@ export async function getDeliveryExecuteRiskConfig(userId) {
   if (scheduler) {
     return {
       enable_auto_trade: !!scheduler.enable_auto_trade,
-      selected_take_profit: scheduler.selected_take_profit ?? 1,
-      max_position_size: scheduler.max_position_size ?? 0.05,
+      selected_take_profit: scheduler.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+      max_position_size: scheduler.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
     }
   }
   const globalCfg = await getGlobalAutoConfig()
   if (!globalCfg) return null
   return {
     enable_auto_trade: !!globalCfg.enable_auto_trade,
-    selected_take_profit: globalCfg.selected_take_profit ?? 2,
-    max_position_size: globalCfg.max_position_size ?? 0.05,
+    selected_take_profit: globalCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+    max_position_size: globalCfg.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
   }
 }
 
@@ -503,7 +493,7 @@ export function validateTradeRequest(config, account, positions, request) {
   const symbol = String(request.symbol || '').toUpperCase()
   const orderType = String(request.order_type || '').toLowerCase()
   const volume = parseFloat(request.volume || 0)
-  const maxPosition = parseFloat((config || {}).max_position_size || 0.05)
+  const maxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE)
 
   if (!symbol) throw new RiskReject('missing_symbol')
   if (request.source === 'ai' && String(request.signal_type || '').toLowerCase() === 'hold') {
@@ -592,7 +582,7 @@ export async function saveCloseConfig(userId, cfg) {
     rule_reverse_signal = VALUES(rule_reverse_signal), updated_at = VALUES(updated_at)`,
     [userId, cfg.enabled ? 1 : 0, cfg.check_interval_seconds || 60, cfg.model_name || 'deepseek-chat',
       cfg.api_provider || 'deepseek', cfg.api_base_url || DEFAULT_API_BASE_URL, keyEnc,
-      cfg.temperature ?? 0.3, cfg.max_tokens || 4000,
+      cfg.temperature ?? DEFAULT_TEMPERATURE, cfg.max_tokens ?? DEFAULT_MAX_TOKENS,
       cfg.system_prompt || null, cfg.rule_soft_sl ?? null, cfg.rule_soft_tp ?? null,
       cfg.rule_timeout_minutes ?? null, cfg.rule_max_loss_pct ?? null, cfg.rule_reverse_signal ? 1 : 0, now])
   return await getCloseConfig(userId)

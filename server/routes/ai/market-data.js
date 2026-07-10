@@ -17,7 +17,7 @@ export function computeAtr14(rates) {
   return atrWindow.length > 0 ? atrWindow.reduce((a, b) => a + b, 0) / atrWindow.length : 0
 }
 
-const _bridgeLocks = {}
+const _bridgeLocks = new Map()
 
 // === Chan Theory Constants ===
 const MIN_BARS_PER_BI = 5
@@ -408,7 +408,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCenters, detectDivergence, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
-  const prev = _bridgeLocks[userId] || Promise.resolve()
+  const prev = _bridgeLocks.get(userId) || Promise.resolve()
   const current = prev.then(async () => {
     let result = await executeViaBridge(userId, action, params, undefined, options)
     if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
@@ -430,8 +430,8 @@ export async function mt5Bridge(userId, action, params = {}, options = {}) {
     }
     return result
   }).catch(e => ({ status: 'error', message: e.message }))
-    .finally(() => { if (_bridgeLocks[userId] === current) delete _bridgeLocks[userId] })
-  _bridgeLocks[userId] = current
+    .finally(() => { if (_bridgeLocks.get(userId) === current) _bridgeLocks.delete(userId) })
+  _bridgeLocks.set(userId, current)
   return current
 }
 
@@ -493,12 +493,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const bbWidth = bbUpper - bbLower
   const bbPosition = bbWidth > 0 ? (latest - bbLower) / bbWidth : 0.5
 
-  const trueRanges = []
-  for (let i = 1; i < n; i++) {
-    trueRanges.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])))
-  }
-  const atrWindow = trueRanges.length >= 14 ? trueRanges.slice(-14) : trueRanges
-  const atr14 = atrWindow.length > 0 ? atrWindow.reduce((a, b) => a + b, 0) / atrWindow.length : 0
+  const atr14 = computeAtr14(rates)
 
   const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
   const recentLows = lows.length >= 20 ? lows.slice(-20) : lows
