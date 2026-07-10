@@ -909,6 +909,31 @@ const migrations = [
         console.error('[Migrations] 046 error:', e.message)
       }
     }
+  },
+  {
+    id: '047_add_thinking_mode',
+    up: async () => {
+      try {
+        await queryRun('ALTER TABLE global_auto_config ADD COLUMN thinking_enabled TINYINT(1) NOT NULL DEFAULT 1')
+        console.log('[Migrations] 047 added thinking_enabled to global_auto_config')
+      } catch (e) {
+        if (e.message?.includes('Duplicate column')) {
+          console.log('[Migrations] 047 thinking_enabled already exists')
+        } else {
+          console.error('[Migrations] 047 error:', e.message)
+        }
+      }
+      try {
+        await queryRun("ALTER TABLE global_auto_config ADD COLUMN reasoning_effort VARCHAR(10) NOT NULL DEFAULT 'max'")
+        console.log('[Migrations] 047 added reasoning_effort to global_auto_config')
+      } catch (e) {
+        if (e.message?.includes('Duplicate column')) {
+          console.log('[Migrations] 047 reasoning_effort already exists')
+        } else {
+          console.error('[Migrations] 047 error:', e.message)
+        }
+      }
+    }
   }
 ]
 

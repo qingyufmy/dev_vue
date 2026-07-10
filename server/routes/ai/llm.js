@@ -27,11 +27,19 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：检查现有挂单状态，是否需要取消、是否已有同方向挂单"
 }, null, 2)
 
-export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, timeout = 120000 }) {
+export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, timeout = 120000 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
-  const body = { model, temperature, max_tokens: maxTokens, messages }
+  const body = { model, messages }
+  // DeepSeek thinking mode: temperature/top_p ignored when enabled
+  if (thinkingEnabled) {
+    body.thinking = { type: 'enabled' }
+    body.reasoning_effort = reasoningEffort || 'max'
+  } else {
+    body.temperature = temperature
+    body.max_tokens = maxTokens
+  }
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -52,7 +60,14 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
       { role: 'assistant', content: content.substring(0, 6000) },
       { role: 'user', content: `上一次输出不是合法 JSON，解析错误为：${exc.message}。请只返回修正后的一个 JSON 对象，不要 Markdown，不要解释。` },
     ]
-    const repairBody = { model, temperature: 0, max_tokens: maxTokens, messages: repairMessages }
+    const repairBody = { model, messages: repairMessages }
+    if (thinkingEnabled) {
+      repairBody.thinking = { type: 'enabled' }
+      repairBody.reasoning_effort = reasoningEffort || 'max'
+    } else {
+      repairBody.temperature = 0
+      repairBody.max_tokens = maxTokens
+    }
     const repairResp = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -138,6 +153,8 @@ export async function maybeAiSignal(db, config, market) {
       model: config.model_name || 'deepseek-chat',
       temperature: parseFloat(config.temperature || 0.7),
       maxTokens: parseInt(config.max_tokens || 2000),
+      thinkingEnabled: config.thinking_enabled !== false,
+      reasoningEffort: config.reasoning_effort || 'max',
       messages: [
         { role: 'system', content: cleanPrompt },
         { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(aiPayload) },

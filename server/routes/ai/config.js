@@ -209,6 +209,7 @@ export async function saveGlobalAutoConfig(cfg) {
       temperature = ?, max_tokens = ?,
       risk_level = ?, max_position_size = ?, selected_take_profit = ?,
       enable_auto_trade = ?,
+      thinking_enabled = ?, reasoning_effort = ?,
       updated_at = ?
     WHERE id = 1
   `, [
@@ -216,7 +217,10 @@ export async function saveGlobalAutoConfig(cfg) {
     cfg.api_provider || null, cfg.model_name || null, cfg.api_key_encrypted || null, cfg.api_base_url || null,
     cfg.temperature ?? null, cfg.max_tokens ?? null,
     cfg.risk_level || null, cfg.max_position_size ?? null, cfg.selected_take_profit ?? null,
-    cfg.enable_auto_trade ? 1 : 0, now
+    cfg.enable_auto_trade ? 1 : 0,
+    cfg.thinking_enabled !== undefined ? (cfg.thinking_enabled ? 1 : 0) : 1,
+    cfg.reasoning_effort || 'max',
+    now
   ])
 }
 
@@ -435,6 +439,8 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
     max_position_size: globalCfg.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
     selected_take_profit: globalCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
     enable_auto_trade: !!globalCfg.enable_auto_trade,
+    thinking_enabled: globalCfg.thinking_enabled !== 0,
+    reasoning_effort: globalCfg.reasoning_effort || 'max',
     _source: 'unified',
     prompt_type_id: promptTypeId,
   }

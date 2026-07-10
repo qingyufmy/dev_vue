@@ -1404,17 +1404,27 @@ async function runSmartClose(userId, closeConfig, account, positions) {
     maxTokens = Math.min(maxTokens * 2, 8000)
   }
 
+  // Read global thinking config
+  const globalCfg = await getGlobalAutoConfig()
+  const thinkingEnabled = globalCfg?.thinking_enabled !== 0
+  const reasoningEffort = globalCfg?.reasoning_effort || 'max'
+
   try {
+    const body = { model, messages: [
+      { role: 'system', content: stripTimeframeTags(prompt) },
+      { role: 'user', content: JSON.stringify(contextPayload) },
+    ] }
+    if (thinkingEnabled) {
+      body.thinking = { type: 'enabled' }
+      body.reasoning_effort = reasoningEffort
+    } else {
+      body.temperature = temperature
+      body.max_tokens = maxTokens
+    }
     const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model, temperature, max_tokens: maxTokens,
-        messages: [
-          { role: 'system', content: stripTimeframeTags(prompt) },
-          { role: 'user', content: JSON.stringify(contextPayload) },
-        ],
-      }),
+      body: JSON.stringify(body),
     })
     const data = await resp.json()
     let content = data.choices?.[0]?.message?.content || ''

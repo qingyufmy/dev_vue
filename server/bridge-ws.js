@@ -1250,6 +1250,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           max_position_size: params.max_position_size ?? existing?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
           selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
           enable_auto_trade: params.enable_auto_trade ?? existing?.enable_auto_trade ?? 0,
+          thinking_enabled: params.thinking_enabled ?? existing?.thinking_enabled ?? 1,
+          reasoning_effort: params.reasoning_effort ?? existing?.reasoning_effort ?? 'max',
         }
         await ai.saveGlobalAutoConfig(newCfg)
         await ai.reconcileAutoSchedulers()
