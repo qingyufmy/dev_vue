@@ -156,14 +156,14 @@ export async function maybeAiSignal(db, config, market) {
     }
     console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
     if (DEBUG_LLM_PAYLOAD) console.log(JSON.stringify(aiPayload, null, 2).substring(0, 3000))
-    const thinkingEnabled = config.thinking_enabled !== false
+    const thinkingEnabled = config.thinking_enabled !== 0 && config.thinking_enabled !== false
     console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
       temperature: parseFloat(config.temperature || 0.7),
       maxTokens: parseInt(config.max_tokens || 2000),
-      thinkingEnabled: config.thinking_enabled !== false,
+      thinkingEnabled: config.thinking_enabled !== 0 && config.thinking_enabled !== false,
       reasoningEffort: config.reasoning_effort || 'max',
       messages: [
         { role: 'system', content: cleanPrompt },
@@ -283,13 +283,6 @@ export function normalizeAiSignal(parsed, config, market) {
           parsed.stop_loss_price = isBuySide
             ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
         }
-        // SL direction check: buy SL must be below entry, sell SL must be above entry
-        const slOk = isBuySide ? parsed.stop_loss_price < anchorPrice : parsed.stop_loss_price > anchorPrice
-        if (!slOk) {
-          console.log(`[LLM] SL direction wrong: ${parsed.stop_loss_price} for ${signalType} at ${anchorPrice}, overriding`)
-          parsed.stop_loss_price = isBuySide
-            ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
-        }
       } else {
         parsed.stop_loss_price = isBuySide
           ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
@@ -306,11 +299,24 @@ export function normalizeAiSignal(parsed, config, market) {
         parsed.take_profit_3_price = isBuySide
           ? round2(anchorPrice + atr * risk.tp3AtrMult) : round2(anchorPrice - atr * risk.tp3AtrMult)
       }
-      // TP direction check: buy TP must be above entry, sell TP must be below entry
+    }
+    // Direction validation: always runs when anchorPrice is valid (ATR-independent)
+    if (anchorPrice > 0) {
+      // SL direction: buy SL must be below entry, sell SL must be above entry
+      if (parsed.stop_loss_price != null) {
+        const sl = parseFloat(parsed.stop_loss_price)
+        const slOk = isBuySide ? sl < anchorPrice : sl > anchorPrice
+        if (!slOk || !Number.isFinite(sl) || sl <= 0) {
+          console.log(`[LLM] SL direction wrong: ${parsed.stop_loss_price} for ${signalType} at ${anchorPrice}, rejecting`)
+          parsed.stop_loss_price = null
+        }
+      }
+      // TP direction: buy TP must be above entry, sell TP must be below entry
       for (const tpKey of ['take_profit_1_price', 'take_profit_2_price', 'take_profit_3_price']) {
-        if (parsed[tpKey]) {
-          const tpOk = isBuySide ? parsed[tpKey] > anchorPrice : parsed[tpKey] < anchorPrice
-          if (!tpOk) {
+        if (parsed[tpKey] != null) {
+          const tp = parseFloat(parsed[tpKey])
+          const tpOk = isBuySide ? tp > anchorPrice : tp < anchorPrice
+          if (!tpOk || !Number.isFinite(tp) || tp <= 0) {
             console.log(`[LLM] ${tpKey} direction wrong: ${parsed[tpKey]} for ${signalType} at ${anchorPrice}, clearing`)
             parsed[tpKey] = null
           }
@@ -331,7 +337,7 @@ export function normalizeAiSignal(parsed, config, market) {
         }
       }
     }
-    // Reject if SL or TP1 are missing (ATR unavailable and LLM didn't provide them)
+    // Reject if SL or TP1 are missing
     if (!parsed.stop_loss_price || !parsed.take_profit_1_price) {
       console.log(`[LLM] Missing SL/TP for ${signalType} (atr=${atr}), rejecting`)
       return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_until: null, recommended_volume: 0 }

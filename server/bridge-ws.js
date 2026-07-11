@@ -1009,7 +1009,11 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, result.status)
           break
         }
-        const marketData = JSON.parse(signal.market_data_json || '{}')
+        let marketData
+        try { marketData = JSON.parse(signal.market_data_json || '{}') } catch (e) {
+          console.warn(`[Execute] Failed to parse market_data_json for signal ${params.signal_id}:`, e.message)
+          marketData = {}
+        }
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
         const isPendingOrder = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
         if (isPendingOrder) {
