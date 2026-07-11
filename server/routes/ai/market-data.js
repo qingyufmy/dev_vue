@@ -452,10 +452,13 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
 // === Chan Theory: Assembly ===
 function computeChan(rates, timeframe, macdHist, options = {}) {
   const warnings = []
+  const requestedHistoryCount = Number(options.requestedHistoryCount) || rates?.length || 0
+  const historySufficient = Array.isArray(rates) && rates.length >= requestedHistoryCount
+  if (!historySufficient) warnings.push('history_bars_below_requested')
   const closedRates = Array.isArray(rates) ? rates.slice(0, -1) : []
   const closedMacdHist = Array.isArray(macdHist) ? macdHist.slice(0, closedRates.length) : []
   if (closedRates.length < MIN_KLINES_FOR_CHAN) {
-    return { status: 'insufficient_klines', reliability: 'low', raw_bar_count: rates?.length || 0, processed_bar_count: 0, fractal_count: 0, bi_count: 0, segment_count: 0, center_count: 0, warnings: ['raw_bars_too_few'] }
+    return { status: 'insufficient_klines', reliability: 'low', requested_history_count: requestedHistoryCount, received_history_count: rates?.length || 0, history_sufficient: historySufficient, raw_bar_count: rates?.length || 0, processed_bar_count: 0, fractal_count: 0, bi_count: 0, segment_count: 0, center_count: 0, warnings: [...warnings, 'raw_bars_too_few'] }
   }
   const bars = normalizeBarsForChan(closedRates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
@@ -465,10 +468,9 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
   if (confirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
-    return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
+    return { status: 'insufficient_bis', reliability: 'low', requested_history_count: requestedHistoryCount, received_history_count: rates.length, history_sufficient: historySufficient, raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
   }
   const { segments, candidate, resynced } = buildSegments(confirmedBis, { trustedStart: false })
-  if (resynced) warnings.push('segment_window_resynced')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
   const centers = buildCenters(validSegs)
@@ -499,23 +501,13 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers)
   if (divergence.type !== 'none') {
     // ok
-  } else if (divergence.reason === 'insufficient_valid_segments') {
-    warnings.push('divergence_skipped_no_valid_segment')
-  } else if (divergence.reason === 'no_valid_center') {
-    warnings.push('divergence_skipped_no_valid_center')
-  } else if (divergence.reason === 'not_after_center') {
-    warnings.push('divergence_skipped_not_after_center')
-  } else if (divergence.reason === 'no_entry_segment') {
-    warnings.push('divergence_skipped_no_entry_segment')
-  } else if (divergence.reason === 'no_price_extreme_break') {
-    warnings.push('divergence_skipped_no_price_extreme_break')
   } else if (divergence.reason === 'invalid_macd_area' || divergence.reason === 'no_macd_data') {
     warnings.push('divergence_skipped_invalid_macd')
   }
 
   let reliability = 'low'
-  if (validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
-  else if (validSegs.length > 0) reliability = 'medium'
+  if (historySufficient && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
+  else if (historySufficient && validSegs.length > 0) reliability = 'medium'
 
   let status = 'ok'
   if (validSegs.length === 0 && confirmedBis.length >= 3) status = 'unreliable_segments'
@@ -525,6 +517,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
   return {
     status, reliability,
+    requested_history_count: requestedHistoryCount,
+    received_history_count: rates.length,
+    history_sufficient: historySufficient,
+    window_resynced: resynced,
     raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
     fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
@@ -700,7 +696,12 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const shortPositions = positions.filter(p => p.type === 'sell')
   const totalProfit = positions.reduce((sum, p) => sum + parseFloat(p.profit || 0), 0)
 
-  const chan = options.computeChan ? computeChan(rates, timeframe, macdSeries.histSeries) : undefined
+  const chanRates = options.chanRates || rates
+  const chanCloses = chanRates === rates ? closes : chanRates.map(r => parseFloat(r.close))
+  const chanMacdSeries = chanRates === rates ? macdSeries : calculateMacdSeries(chanCloses)
+  const chan = options.computeChan
+    ? computeChan(chanRates, timeframe, chanMacdSeries.histSeries, { requestedHistoryCount: options.requestedChanHistoryCount })
+    : undefined
 
   return {
     symbol, timeframe,

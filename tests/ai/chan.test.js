@@ -575,8 +575,17 @@ describe('computeChan', () => {
     const rates = makeRates(300)
     const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries)
     expect(result.closed_bar_count).toBe(299)
-    expect(result.warnings).toContain('segment_window_resynced')
+    expect(result.window_resynced).toBe(true)
+    expect(result.warnings).not.toContain('segment_window_resynced')
     expect(result.segment_count).toBeGreaterThan(0)
+  })
+
+  it('请求历史不足时明确降级并报告数量', () => {
+    const rates = makeRates(120)
+    const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries, { requestedHistoryCount: 300 })
+    expect(result).toMatchObject({ requested_history_count: 300, received_history_count: 120, history_sufficient: false })
+    expect(result.warnings).toContain('history_bars_below_requested')
+    expect(result.reliability).toBe('low')
   })
 
   it('segment_count不等于bi_count', () => {

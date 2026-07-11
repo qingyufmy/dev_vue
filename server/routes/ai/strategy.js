@@ -2,7 +2,7 @@
 
 import { queryRun, beijingNow } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
-import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
+import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
@@ -48,9 +48,27 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
       rates = (resp && resp.rates) ? resp.rates : []
     }
     if (rates.length === 0) continue
-    const summary = calculateMarketData(symbol, tf, rates, account, positions, { computeChan: hasUseChanTag })
+    let visibleRates = rates.slice(-count)
+    let summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
+      computeChan: hasUseChanTag,
+      chanRates: rates,
+      requestedChanHistoryCount: historyCount,
+    })
+    if (hasUseChanTag && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || summary.chan?.segment_count === 0)) {
+      const retry = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
+      const retryRates = retry?.rates || []
+      if (retryRates.length > rates.length) {
+        rates = retryRates
+        visibleRates = rates.slice(-count)
+        summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
+          computeChan: true,
+          chanRates: rates,
+          requestedChanHistoryCount: CHAN_MAX_HISTORY_COUNT,
+        })
+      }
+    }
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
-    timeframes[tf] = { summary: slimSummary, klines: compactRates(rates.slice(-count)) }
+    timeframes[tf] = { summary: slimSummary, klines: compactRates(visibleRates) }
   }
   return {
     strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
@@ -86,8 +104,9 @@ export async function handleAnalyze(userId, params) {
   const rates = ratesResp.rates || []
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
-  const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { computeChan: hasUseChanTag, pending_orders: pendingOrders })
+  const market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
+  if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
   const signal = await maybeAiSignal(null, config, market)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source

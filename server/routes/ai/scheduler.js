@@ -7,7 +7,7 @@ import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
-import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix } from './utils.js'
+import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix, CHAN_HISTORY_COUNT } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
 import crypto from 'crypto'
 
@@ -1020,8 +1020,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     const primaryTf = tags.length > 0 ? tags[0].tf : 'M5'
     const usedTimeframes = tags.length > 0 ? tags.map(t => t.tf) : ['M5']
     const primaryCount = tags.length > 0 ? tags[0].count : 100
+    const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
+    const primaryHistoryCount = hasUseChanTag ? Math.max(primaryCount, CHAN_HISTORY_COUNT) : primaryCount
     const t1 = Date.now()
-    const ratesResp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
+    const ratesResp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
     if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return { status: 'blocked', reason: 'rates_failed' } }
     const rates = ratesResp.rates || []
     if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return { status: 'blocked', reason: 'rates_empty' } }
@@ -1029,8 +1031,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算技术指标...' })
     const t2 = Date.now()
-    const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { pending_orders: pendingOrders })
+    const market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
     market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
+    if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
     market.primary_timeframe = primaryTf
 
     // M15 ATR for SL minimum distance validation (more stable than M5 ATR)

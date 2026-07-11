@@ -44,6 +44,23 @@ describe('calculateMarketData', () => {
     expect(result.atr_14).toBeGreaterThanOrEqual(0)
   })
 
+  it('扩展缠论历史不会改变普通指标窗口', () => {
+    const history = generateRates(300)
+    const visible = history.slice(-80)
+    const baseline = calculateMarketData('XAUUSD', 'H1', visible, baseAccount, basePositions)
+    const withChan = calculateMarketData('XAUUSD', 'H1', visible, baseAccount, basePositions, {
+      computeChan: true,
+      chanRates: history,
+      requestedChanHistoryCount: 300,
+    })
+    expect(withChan.kline_count).toBe(80)
+    expect(withChan.price_change).toBe(baseline.price_change)
+    expect(withChan.price_change_pct).toBe(baseline.price_change_pct)
+    expect(withChan.avg_volatility).toBe(baseline.avg_volatility)
+    expect(withChan.volume).toEqual(baseline.volume)
+    expect(withChan.chan.received_history_count).toBe(300)
+  })
+
   it('计算 MACD', () => {
     const rates = generateRates(50)
     const result = calculateMarketData('XAUUSD', 'M5', rates, baseAccount, basePositions)
