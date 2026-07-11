@@ -40,13 +40,50 @@ function normalizeCancelCondition(cond, expectedSymbol) {
   if (cond.cancel_all) { normalized.cancel_all = true }
   else {
     const validTypes = ['buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
-    if (cond.pending_type && validTypes.includes(cond.pending_type)) normalized.pending_type = cond.pending_type
+    const pendingType = String(cond.pending_type || '').toLowerCase()
+    if (pendingType && validTypes.includes(pendingType)) normalized.pending_type = pendingType
     if (cond.max_price != null) { const p = parseFloat(cond.max_price); if (Number.isFinite(p)) normalized.max_price = p }
     if (cond.min_price != null) { const p = parseFloat(cond.min_price); if (Number.isFinite(p)) normalized.min_price = p }
     if (!normalized.pending_type && normalized.max_price == null && normalized.min_price == null && !normalized.cancel_all) return null
   }
   normalized.reason = String(cond.reason || 'AI cancel')
   return normalized
+}
+
+function calculateRecoverySeconds(deadlineMs, nowMs = Date.now()) {
+  if (!Number.isFinite(deadlineMs)) return 0
+  return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))
+}
+
+function matchPendingCancelCondition(order, condition) {
+  if (stripBrokerSuffix(String(order?.symbol || '')) !== stripBrokerSuffix(String(condition?.symbol || ''))) {
+    return { matched: false, reason: 'symbol_mismatch' }
+  }
+  const ticket = String(order?.ticket ?? '').trim()
+  if (!ticket) return { matched: false, reason: 'invalid_pending_ticket' }
+  if (condition.cancel_all) return { matched: true, ticket }
+
+  const pendingType = String(order?.pending_type || '').toLowerCase()
+  if (condition.pending_type && pendingType !== condition.pending_type) {
+    return { matched: false, reason: 'pending_type_mismatch' }
+  }
+  const hasPriceCondition = condition.max_price != null || condition.min_price != null
+  const price = Number.parseFloat(order?.price)
+  if (hasPriceCondition && (!Number.isFinite(price) || price <= 0)) {
+    return { matched: false, reason: 'invalid_pending_price', ticket }
+  }
+  if (condition.max_price != null && (!pendingType.startsWith('buy') || price > condition.max_price)) {
+    return { matched: false, reason: 'max_price_mismatch', ticket }
+  }
+  if (condition.min_price != null && (!pendingType.startsWith('sell') || price < condition.min_price)) {
+    return { matched: false, reason: 'min_price_mismatch', ticket }
+  }
+  return { matched: true, ticket }
+}
+
+function countPendingForSymbol(orders, symbol) {
+  const normalizedSymbol = stripBrokerSuffix(symbol)
+  return orders.filter(order => stripBrokerSuffix(String(order?.symbol || '')) === normalizedSymbol).length
 }
 
 function normalizeSymbolForScheduler(sym) {
@@ -390,6 +427,30 @@ async function renewLock(key, token) {
   } catch (e) { console.error('[renewLock]', key, e.message); return false }
 }
 
+function createLockGuard(key, token) {
+  const guard = { key, token, lost: false, renewTimer: null }
+  guard.isOwned = async () => {
+    if (guard.lost) return false
+    const redis = getRedis()
+    if (!redis) return false
+    try {
+      return await redis.get(`${REDIS_LOCK_PREFIX}${key}`) === token
+    } catch (e) {
+      console.error('[lockGuard] isOwned check failed:', e.message)
+      return false
+    }
+  }
+  guard.assertOwned = async (phase) => {
+    if (guard.lost || !(await guard.isOwned())) {
+      guard.lost = true
+      console.error(`[LockGuard] ${key}: lock lost at phase ${phase}`)
+      return false
+    }
+    return true
+  }
+  return guard
+}
+
 async function setCooldown(key, intervalSeconds) {
   const redis = getRedis()
   if (!redis) return false
@@ -710,26 +771,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.waitReason = ''
 
     // Lock guard: structured lock context passed to cycle (Fix 1: closure, not arrow+this)
-    const lockGuard = {
-      key, token: lockToken, lost: false, renewTimer: null,
-    }
-    lockGuard.isOwned = async () => {
-      if (lockGuard.lost) return false
-      const redis = getRedis()
-      if (!redis) return false
-      try {
-        const val = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
-        return val === lockToken
-      } catch (e) { console.error('[lockGuard] isOwned check failed:', e.message); return false }
-    }
-    lockGuard.assertOwned = async (phase) => {
-      if (lockGuard.lost || !(await lockGuard.isOwned())) {
-        lockGuard.lost = true
-        console.error(`[LockGuard] ${key}: lock lost at phase ${phase}`)
-        return false
-      }
-      return true
-    }
+    const lockGuard = createLockGuard(key, lockToken)
     lockGuard.renewTimer = setInterval(async () => {
       if (lockGuard.lost || lockGuard.token !== lockToken) { clearInterval(lockGuard.renewTimer); return }
       const renewed = await renewLock(key, lockToken)
@@ -775,6 +817,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       if (!finalized) {
         st.waitReason = 'finalize_failed'
         st.lastError = 'finalize_failed'
+        st._recoveryDeadlineMs = Date.now() + cooldownSecs * 1000
       }
       st._lockToken = null
       st._lockGuard = null
@@ -789,57 +832,84 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     // Schedule next tick (Fix 1+3: finalize failure → recovery, not blind retry)
     if (autoSchedulerState[key]?.running) {
       if (st.waitReason === 'finalize_failed') {
-        // Recovery: separate timer, does NOT call tick directly
+        const recoveryState = st
+        const isCurrent = () => autoSchedulerState[key] === recoveryState && recoveryState.running
+        const scheduleRecovery = (fn, delayMs) => {
+          if (isCurrent()) recoveryState._recoveryTimer = setTimeout(fn, delayMs)
+        }
+        const resumeNormalTick = async () => {
+          if (!isCurrent()) return
+          recoveryState._recoveryTimer = null
+          recoveryState._recoveryDeadlineMs = null
+          recoveryState.waitReason = ''
+          recoveryState.lastError = ''
+          recoveryState.nextRunInSeconds = 0
+          await updateSchedulerRedisState(key, recoveryState)
+          if (isCurrent()) recoveryState.timer = setTimeout(tick, 0)
+        }
+        // Recovery polls Redis state only. It resumes normal tick after the
+        // original cooldown deadline instead of extending that deadline.
         const _recoveryFn = async () => {
-          if (!autoSchedulerState[key]?.running) return
+          if (!isCurrent()) return
           const redis = getRedis()
           if (!redis || !isRedisAvailable()) {
-            st._recoveryTimer = setTimeout(_recoveryFn, 15000)
+            scheduleRecovery(_recoveryFn, 15000)
             return
           }
           try {
             const lockVal = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
+            if (!isCurrent()) return
             if (lockVal && lockVal !== lockToken) {
-              // Another instance holds lock → wait and re-check
               const ttl = await redis.ttl(`${REDIS_LOCK_PREFIX}${key}`)
-              st.nextRunInSeconds = ttl > 0 ? ttl : st.intervalMinutes * 60
-              await updateSchedulerRedisState(key, st)
-              st._recoveryTimer = setTimeout(_recoveryFn, 15000)
+              if (!isCurrent()) return
+              recoveryState.nextRunInSeconds = ttl > 0 ? ttl : 15
+              await updateSchedulerRedisState(key, recoveryState)
+              scheduleRecovery(_recoveryFn, 15000)
               return
             }
             const cooldownTtl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+            if (!isCurrent()) return
             if (cooldownTtl > 0) {
-              st.nextRunInSeconds = cooldownTtl
-              await updateSchedulerRedisState(key, st)
-              st._recoveryTimer = setTimeout(_recoveryFn, Math.min(cooldownTtl * 1000, 30000))
+              recoveryState.waitReason = 'cooldown_recovered'
+              recoveryState.nextRunInSeconds = cooldownTtl
+              await updateSchedulerRedisState(key, recoveryState)
+              scheduleRecovery(_recoveryFn, Math.min(cooldownTtl * 1000, 30000))
               return
             }
-            // No cooldown — compute conservative wait
-            let lastRunMs = Date.now()
-            if (st.lastRunAt) {
-              const parsed = new Date(st.lastRunAt).getTime()
-              if (Number.isFinite(parsed)) lastRunMs = parsed
+
+            const remainingSeconds = calculateRecoverySeconds(recoveryState._recoveryDeadlineMs)
+            if (remainingSeconds > 0) {
+              const wrote = await redis.set(`${REDIS_COOLDOWN_PREFIX}${key}`, '1', 'EX', remainingSeconds, 'NX')
+              if (!isCurrent()) return
+              if (!wrote) {
+                const racedTtl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+                if (!isCurrent()) return
+                if (racedTtl <= 0) throw new Error('cooldown recovery write was not confirmed')
+              }
+              recoveryState.waitReason = 'cooldown_recovered'
+              recoveryState.nextRunInSeconds = remainingSeconds
+              await updateSchedulerRedisState(key, recoveryState)
+              scheduleRecovery(_recoveryFn, Math.min(remainingSeconds * 1000, 30000))
+              return
             }
-            const elapsed = Date.now() - lastRunMs
-            const intervalMs = st.intervalMinutes * 60 * 1000
-            const remaining = Math.max(intervalMs - elapsed, 30000)
-            // Write cooldown directly (lock is gone, no token check needed)
-            try {
-              await redis.set(`${REDIS_COOLDOWN_PREFIX}${key}`, '1', 'EX', Math.ceil(remaining / 1000), 'NX')
-              st.waitReason = 'cooldown_recovered'
-              st.nextRunInSeconds = Math.ceil(remaining / 1000)
-              await updateSchedulerRedisState(key, st)
-              st._recoveryTimer = setTimeout(_recoveryFn, Math.min(remaining, 30000))
-            } catch (writeErr) {
-              console.error(`[UnifiedScheduler] ${key} recovery cooldown write failed:`, writeErr.message)
-              st._recoveryTimer = setTimeout(_recoveryFn, 15000)
+
+            // The original cooldown has elapsed. Remove only our stale lock,
+            // then return to the normal lock-acquiring tick.
+            if (lockVal === lockToken) {
+              const released = await finalizeLock(key, lockToken, 0)
+              if (!isCurrent()) return
+              if (!released) {
+                scheduleRecovery(_recoveryFn, 15000)
+                return
+              }
             }
+            await resumeNormalTick()
           } catch (e) {
             console.error(`[UnifiedScheduler] ${key} recovery check error:`, e.message)
-            st._recoveryTimer = setTimeout(_recoveryFn, 15000)
+            scheduleRecovery(_recoveryFn, 15000)
           }
         }
-        st._recoveryTimer = setTimeout(_recoveryFn, 10000)
+        scheduleRecovery(_recoveryFn, 10000)
       } else {
         const delay = cycleStatus === 'success' ? tickIntervalMs : retryDelayMs(cycleReason)
         autoSchedulerState[key].timer = setTimeout(tick, delay)
@@ -1067,31 +1137,22 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
             const ticketsToCancel = new Map() // ticket -> condition
             for (const cond of validConds) {
               for (const po of pendingOrders) {
-                if (stripBrokerSuffix(String(po.symbol || '')) !== stripBrokerSuffix(String(cond.symbol || ''))) continue
-                if (cond.cancel_all) { ticketsToCancel.set(String(po.ticket), cond); continue }
-                // Fix 2: pending_type case-insensitive comparison
-                if (cond.pending_type && String(po.pending_type || '').toLowerCase() !== cond.pending_type) continue
-                // Fix 2: price validation — must be finite and positive when price conditions exist
-                const price = parseFloat(po.price)
-                const hasPriceCond = cond.max_price != null || cond.min_price != null
-                if (hasPriceCond && (!Number.isFinite(price) || price <= 0)) {
+                const match = matchPendingCancelCondition(po, cond)
+                if (match.reason === 'invalid_pending_price') {
                   l(`cancel_pending: skipped ticket=${po.ticket} (invalid_pending_price: ${po.price})`)
                   await insertAudit(null, uid, 'cancel_pending_invalid_price', symbol,
                     { signal_id: signalId, ticket: po.ticket, price: po.price },
                     { status: 'skipped', reason: 'invalid_pending_price' }, 'info')
                   continue
                 }
-                if (cond.max_price != null && !(po.pending_type || '').toLowerCase().startsWith('buy')) continue
-                if (cond.max_price != null && price > cond.max_price) continue
-                if (cond.min_price != null && !(po.pending_type || '').toLowerCase().startsWith('sell')) continue
-                if (cond.min_price != null && price < cond.min_price) continue
-                // Fix 2: ticket validation
-                const ticket = String(po.ticket || '').trim()
-                if (!ticket) {
-                  l(`cancel_pending: skipped entry with empty ticket`)
+                if (match.reason === 'invalid_pending_ticket') {
+                  l('cancel_pending: skipped entry with empty ticket')
+                  await insertAudit(null, uid, 'cancel_pending_invalid_ticket', symbol,
+                    { signal_id: signalId, ticket: po.ticket },
+                    { status: 'skipped', reason: 'invalid_pending_ticket' }, 'info')
                   continue
                 }
-                ticketsToCancel.set(ticket, cond)
+                if (match.matched) ticketsToCancel.set(match.ticket, cond)
               }
             }
             for (const [ticket, cond] of ticketsToCancel) {
@@ -1191,6 +1252,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
 // === Delivery execution for a single subscriber ===
 async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt, lockGuard) {
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
+  const setTerminalStatus = (status, reason, details = {}) => queryRun(
+    'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
+    [status, JSON.stringify({ reason, ...details }), signalId, userId])
   try {
     // Lock check before claiming (Fix 2)
     if (lockGuard && !(await lockGuard.assertOwned('delivery_claim'))) {
@@ -1392,6 +1456,14 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           const poIsBuy = poType.startsWith('buy')
           const newIsBuy = newOrderDirection === 'buy'
           if (poIsBuy !== newIsBuy) continue // skip opposite direction
+          if (lockGuard && !(await lockGuard.assertOwned('supersede_cancel'))) {
+            l(`skipped: lock lost before supersede cancel ticket=${po.ticket}`)
+            await setTerminalStatus('skipped', 'lock_lost_before_supersede_cancel', { ticket: po.ticket })
+            await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+              { signal_id: signalId, prompt_type_id: promptTypeId, ticket: po.ticket, reason: 'lock_lost_before_supersede_cancel' },
+              { status: 'skipped', reason: 'lock_lost_before_supersede_cancel' }, 'warning')
+            return
+          }
           try {
             const cancelResult = await mt5Bridge(userId, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
             if (cancelResult?.status !== 'success') {
@@ -1417,6 +1489,14 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         }
         // Fix 3: re-query pending_list to get real remaining count (all directions)
         try {
+          if (lockGuard && !(await lockGuard.assertOwned('pending_confirm'))) {
+            l('skipped: lock lost before pending_list confirmation')
+            await setTerminalStatus('skipped', 'lock_lost_before_pending_confirm')
+            await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+              { signal_id: signalId, prompt_type_id: promptTypeId, reason: 'lock_lost_before_pending_confirm' },
+              { status: 'skipped', reason: 'lock_lost_before_pending_confirm' }, 'warning')
+            return
+          }
           const confirmResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
           if (!confirmResp || confirmResp.status === 'error' || !Array.isArray(confirmResp?.orders || confirmResp?.pending_list)) {
             l('rejected: pending_list confirm unavailable')
@@ -1428,7 +1508,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
             return
           }
           const confirmOrders = confirmResp.orders || confirmResp.pending_list || []
-          remainingPendingCount = confirmOrders.filter(po => stripBrokerSuffix(String(po.symbol || '')) === stripBrokerSuffix(symbol)).length
+          remainingPendingCount = countPendingForSymbol(confirmOrders, symbol)
         } catch (confirmErr) {
           l(`rejected: pending_list confirm failed: ${confirmErr.message}`)
           await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
@@ -1441,8 +1521,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       } catch (listErr) {
         l(`supersede pending_list failed: ${listErr.message}`)
         // Fix 6: pending_list exception = fail-closed
-        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-          ['rejected', signalId, userId])
+        await setTerminalStatus('rejected', 'pending_list_unavailable', { error: listErr.message })
         await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
           { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_list_unavailable', error: listErr.message },
           { status: 'rejected', message: 'pending_list_unavailable' }, 'warning')
@@ -1465,8 +1544,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     // Final lock check before sending MT5 order (Fix 2)
     if (lockGuard && !(await lockGuard.assertOwned('order_send'))) {
       l('skipped: lock lost before order send')
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['skipped', signalId, userId]).catch(() => {})
+      await setTerminalStatus('skipped', 'lock_lost_before_send').catch(() => {})
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'lock_lost_before_send' },
         { status: 'skipped', reason: 'lock_lost_before_send' }, 'warning')
@@ -1962,4 +2040,8 @@ async function executeOrder(userId, config, request, action, options = {}) {
 export const __schedulerTest = {
   normalizeCancelCondition,
   isUserEligibleForAutoExecution,
+  calculateRecoverySeconds,
+  matchPendingCancelCondition,
+  countPendingForSymbol,
+  createLockGuard,
 }

@@ -83,37 +83,87 @@ vi.mock('../../server/redis.js', () => ({
 import * as db from '../../server/db.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
+import * as redisModule from '../../server/redis.js'
+import { __schedulerTest } from '../../server/routes/ai/scheduler.js'
 
 describe('Lock Guard (Fix 1+2)', () => {
-  it('lockGuard assertOwned uses closure, not this', async () => {
-    // The lockGuard is created inside startUnifiedScheduler's tick function.
-    // We test the exported helper functions that use it.
-    const mod = await import('../../server/routes/ai/scheduler.js')
-    // Verify the module loads without TypeError (arrow function this bug)
-    expect(typeof mod.reconcilePendingOrders).toBe('function')
-    expect(typeof mod.isAutoSchedulerRunning).toBe('function')
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns true while Redis contains its token', async () => {
+    const get = vi.fn().mockResolvedValue('token-a')
+    redisModule.getRedis.mockReturnValue({ get })
+    const guard = __schedulerTest.createLockGuard('1:XAUUSD', 'token-a')
+    expect(await guard.assertOwned('test')).toBe(true)
+    expect(guard.lost).toBe(false)
   })
 
-  it('normalizeCancelCondition is exported via __schedulerTest', async () => {
-    const mod = await import('../../server/routes/ai/scheduler.js')
-    // Check if test exports exist
-    if (mod.__schedulerTest) {
-      expect(typeof mod.__schedulerTest.normalizeCancelCondition).toBe('function')
-    }
+  it('marks itself lost on mismatch and does not read Redis again', async () => {
+    const get = vi.fn().mockResolvedValue('token-b')
+    redisModule.getRedis.mockReturnValue({ get })
+    const guard = __schedulerTest.createLockGuard('1:XAUUSD', 'token-a')
+    expect(await guard.assertOwned('first')).toBe(false)
+    expect(await guard.assertOwned('second')).toBe(false)
+    expect(guard.lost).toBe(true)
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed when Redis throws', async () => {
+    redisModule.getRedis.mockReturnValue({ get: vi.fn().mockRejectedValue(new Error('redis down')) })
+    const guard = __schedulerTest.createLockGuard('1:XAUUSD', 'token-a')
+    expect(await guard.assertOwned('test')).toBe(false)
+    expect(guard.lost).toBe(true)
   })
 })
 
 describe('cancel_pending broker suffix (Fix 4)', () => {
-  it('normalizeCancelCondition matches XAUUSD against XAUUSD.s via stripBrokerSuffix', async () => {
-    const mod = await import('../../server/routes/ai/scheduler.js')
-    if (mod.__schedulerTest) {
-      const nc = mod.__schedulerTest.normalizeCancelCondition(
-        { symbol: 'XAUUSD', cancel_all: true, reason: 'test' },
-        'XAUUSD'
-      )
-      expect(nc).toBeTruthy()
-      expect(nc.symbol).toBe('XAUUSD')
-    }
+  it('normalizes condition type and broker suffix', () => {
+    expect(__schedulerTest.normalizeCancelCondition(
+      { symbol: 'XAUUSD.s', pending_type: 'BUY_LIMIT' }, 'XAUUSD'
+    )).toMatchObject({ symbol: 'XAUUSD', pending_type: 'buy_limit' })
+  })
+
+  it('validates ticket before cancel_all', () => {
+    expect(__schedulerTest.matchPendingCancelCondition(
+      { symbol: 'XAUUSD.s', ticket: null },
+      { symbol: 'XAUUSD', cancel_all: true }
+    )).toEqual({ matched: false, reason: 'invalid_pending_ticket' })
+  })
+
+  it.each([null, '', 'abc', 0, -1, Infinity])('rejects invalid price %s for a price condition', (price) => {
+    const result = __schedulerTest.matchPendingCancelCondition(
+      { symbol: 'XAUUSD.s', ticket: 10, pending_type: 'BUY_LIMIT', price },
+      { symbol: 'XAUUSD', pending_type: 'buy_limit', max_price: 2000 })
+    expect(result).toMatchObject({ matched: false, reason: 'invalid_pending_price' })
+  })
+
+  it('matches type case-insensitively with a valid price', () => {
+    expect(__schedulerTest.matchPendingCancelCondition(
+      { symbol: 'XAUUSD.c', ticket: 10, pending_type: 'BUY_LIMIT', price: 1999 },
+      { symbol: 'XAUUSD', pending_type: 'buy_limit', max_price: 2000 }
+    )).toEqual({ matched: true, ticket: '10' })
+  })
+
+  it('counts both directions for the same base symbol', () => {
+    expect(__schedulerTest.countPendingForSymbol([
+      { symbol: 'XAUUSD.s', pending_type: 'buy_limit' },
+      { symbol: 'XAUUSD.c', pending_type: 'sell_limit' },
+      { symbol: 'EURUSD', pending_type: 'buy_limit' },
+    ], 'XAUUSD')).toBe(2)
+  })
+})
+
+describe('finalize recovery deadline', () => {
+  it('returns remaining whole seconds before the fixed deadline', () => {
+    expect(__schedulerTest.calculateRecoverySeconds(160_001, 100_000)).toBe(61)
+  })
+
+  it('returns zero at and after the fixed deadline', () => {
+    expect(__schedulerTest.calculateRecoverySeconds(100_000, 100_000)).toBe(0)
+    expect(__schedulerTest.calculateRecoverySeconds(100_000, 130_000)).toBe(0)
+  })
+
+  it('does not invent another cooldown for an invalid deadline', () => {
+    expect(__schedulerTest.calculateRecoverySeconds(Number.NaN, 100_000)).toBe(0)
   })
 })
 
