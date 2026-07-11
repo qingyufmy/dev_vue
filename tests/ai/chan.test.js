@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 
-const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCenters, detectDivergence, computeChan } = __chanTest
+const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, computeChan } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -142,6 +142,17 @@ describe('buildBis', () => {
 })
 
 describe('buildSegments', () => {
+  it('特征序列先处理包含关系再判断分型', () => {
+    const elements = [
+      { high: 120, low: 100, end_price: 100, high_source_index: 1, low_source_index: 1, source_end_index: 1 },
+      { high: 118, low: 102, end_price: 102, high_source_index: 3, low_source_index: 3, source_end_index: 3 },
+      { high: 130, low: 110, end_price: 110, high_source_index: 5, low_source_index: 5, source_end_index: 5 },
+    ]
+    const normalized = normalizeFeatureSequence(elements)
+    expect(normalized).toHaveLength(2)
+    expect(normalized[0]).toMatchObject({ high: 120, low: 102, source_end_index: 3 })
+  })
+
   it('不足3笔时segments为空', () => {
     const bis = [{ id: 1, dir: 'up', start_price: 100, end_price: 110 }]
     const { segments } = buildSegments(bis)
@@ -208,7 +219,34 @@ describe('buildSegments', () => {
     })
   })
 
+  it('无缺口特征序列顶分型确认上涨线段', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
+      makeBi(3, 'up', 110, 130), makeBi(4, 'down', 130, 115),
+      makeBi(5, 'up', 115, 125), makeBi(6, 'down', 125, 105),
+    ]
+    const { segments } = buildSegments(bis)
+    expect(segments).toHaveLength(1)
+    expect(segments[0]).toMatchObject({ dir: 'up', start_price: 100, end_price: 130, confirmation: 'feature_fractal' })
+    expect(segments[0].bi_ids).toEqual([1, 2, 3])
+  })
+
+  it('有缺口特征序列等待反向三笔破坏后确认', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
+      makeBi(3, 'up', 110, 140), makeBi(4, 'down', 140, 130),
+      makeBi(5, 'up', 130, 135), makeBi(6, 'down', 135, 100),
+    ]
+    const { segments } = buildSegments(bis)
+    expect(segments).toHaveLength(1)
+    expect(segments[0].confirmation).toBe('gap_reverse_confirmed')
+    expect(segments[0].bi_ids).toEqual([1, 2, 3])
+  })
+
   it('多组交替笔序列始终满足线段结构不变量', () => {
+    let totalSegments = 0
     for (let seed = 1; seed <= 50; seed++) {
       let state = seed
       const random = () => {
@@ -225,6 +263,7 @@ describe('buildSegments', () => {
         price = end
       }
       const { segments } = buildSegments(bis)
+      totalSegments += segments.length
       const used = new Set()
       segments.forEach((segment, index) => {
         expect(segment.bi_ids.length % 2).toBe(1)
@@ -237,6 +276,7 @@ describe('buildSegments', () => {
         })
       })
     }
+    expect(totalSegments).toBeGreaterThan(0)
   })
 })
 
@@ -265,6 +305,27 @@ describe('buildCenters', () => {
     const centers = buildCenters(segments)
     expect(centers[0].status).toBe('closed')
     expect(centers[0].segment_ids).toEqual([1, 2, 3, 4])
+  })
+
+  it('延伸只更新波动范围，不收缩前三段确定的核心区间', () => {
+    const segments = [
+      { id: 1, start_price: 100, end_price: 120, low: 100, high: 120 },
+      { id: 2, start_price: 120, end_price: 105, low: 105, high: 120 },
+      { id: 3, start_price: 105, end_price: 118, low: 105, high: 118 },
+      { id: 4, start_price: 118, end_price: 110, low: 110, high: 118 },
+    ]
+    const centers = buildCenters(segments)
+    expect(centers[0]).toMatchObject({ zl: 105, zh: 118, status: 'extended' })
+  })
+
+  it('中枢使用线段完整high/low而非只看起止价格', () => {
+    const segments = [
+      { id: 1, start_price: 100, end_price: 110, low: 90, high: 130 },
+      { id: 2, start_price: 125, end_price: 115, low: 105, high: 125 },
+      { id: 3, start_price: 108, end_price: 118, low: 108, high: 128 },
+    ]
+    const centers = buildCenters(segments)
+    expect(centers[0]).toMatchObject({ zl: 108, zh: 125 })
   })
 })
 
@@ -335,6 +396,18 @@ describe('detectDivergence', () => {
     const macd = [5, 5, 5, 3, 3, 3]
     const centers = [{ status: 'confirmed', start_segment_id: 10, end_segment_id: 10 }]
     const result = detectDivergence(segs, bis, macd, centers)
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('not_after_center')
+  })
+
+  it('不会跨过额外线段把远端同向段当作中枢直接离开段', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 120, low: 90 },
+      { id: 5, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 95 },
+      { id: 7, dir: 'up', bi_ids: [7, 8, 9], weak: false, high: 140, low: 100 },
+    ]
+    const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
+    const result = detectDivergence(segs, bis, Array(12).fill(1), [{ start_segment_id: 2, end_segment_id: 4 }])
     expect(result.type).toBe('none')
     expect(result.reason).toBe('not_after_center')
   })
