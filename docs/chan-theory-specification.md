@@ -4,7 +4,9 @@
 
 本系统在 `server/routes/ai/market-data.js` 中实现了**保守版缠论结构计算**，用于为 AI 模型提供真实的价格结构数据（分型→笔→线段→中枢→背驰），替代模型自行从 K 线推测结构。
 
-> **重要说明**：本实现是简化保守版，不是完整严格缠论。未覆盖的规则包括：特征序列判线段破坏、缺口处理、多义性处理、背驰力度法（仅用面积法）、中枢级别递归。
+> **重要说明**：本实现是保守结构计算器。已覆盖标准特征序列、线段两种破坏情况和缺口后的第二特征序列；尚未覆盖中枢级别递归、完整走势类型递归和严格趋势背驰，只输出中枢离开段的力度衰减候选。
+
+提示词包含 `{{USE_CHAN}}` 时，每个相关周期至少获取 300 根历史 K 线用于结构计算，但发送给模型的原始 K 线仍按 `MTF/ATF` 标签数量截取。结构计算排除最后一根尚未收盘的 K 线。
 
 ## 算法流程
 
@@ -95,7 +97,9 @@ HIST[i]  = DIF[i] - DEA[i]
    - 底→顶：`end_price > start_price`
    - 顶→底：`end_price < start_price`
 4. 不满足则跳过，计入 `invalidCount`
-5. 最后一笔标记 `confirmed: false`
+5. 由两个已确认分型构成的笔标记为 `confirmed: true`
+6. 未收盘 K 线不参与分型和正式笔构造
+7. 最后一个确认分型到当前未收盘 K 线的实时变化单独输出为 `developing_bi`，不进入线段、中枢或背驰
 
 ### 输出
 
@@ -114,19 +118,20 @@ HIST[i]  = DIF[i] - DEA[i]
 
 ## 5. 线段构造 (`buildSegments`)
 
-### 规则（保守简化版）
+### 规则
 
 1. 有效线段至少 3 笔（`MIN_BIS_PER_SEGMENT`）
-2. 不足 3 笔作为 `candidate_segment`，不进入 `segments`
-3. 线段破坏条件：
-   - 上升段：反向笔跌破段内最低低点
-   - 下降段：反向笔突破段内最高高点
-4. 每个线段记录 `high`/`low`（段内极值）
+2. 上涨线段使用向下笔构造标准特征序列，只识别顶分型；下跌线段对称处理，只识别底分型
+3. 特征序列先按方向处理包含关系，并按可确认前缀逐步寻找端点，确认后不允许后续元素跨端点重新合并
+4. 第一、第二特征元素无缺口时，特征序列分型直接确认线段端点
+5. 存在缺口时，从候选端点开始建立第二特征序列；只有出现相反分型才确认，原趋势先创新极值则候选失效
+6. 滚动窗口首个可检测端点仅用于重同步，不输出截断首段；后续不足确认条件的笔保留为 `candidate_segment`
+7. 每个线段记录完整 `high`/`low` 和组成笔 ID
 
 ### 输出
 
 ```js
-{ segments: [...], candidate: { dir, bi_ids, start_price, end_price } | null }
+{ segments: [...], candidate: { dir, bi_ids, start_price, end_price } | null, resynced: boolean }
 ```
 
 ---
@@ -135,11 +140,11 @@ HIST[i]  = DIF[i] - DEA[i]
 
 ### 规则
 
-1. 连续三笔区间重叠形成中枢：
+1. 连续三条已确认线段的完整区间重叠形成当前实现中的线段级中枢：
    - `ZL = max(lo1, lo2, lo3)`
    - `ZH = min(hi1, hi2, hi3)`
    - 若 `ZL < ZH` 则成立
-2. 延伸：后续笔区间与中枢重叠时取**交集**（不扩大）
+2. 延伸：后续线段区间与中枢重叠时保持初始核心区间不变，并更新波动区间
 3. 关闭：重叠区间为空时标记 `closed`
 
 ### 中枢状态
@@ -158,12 +163,13 @@ HIST[i]  = DIF[i] - DEA[i]
 
 1. 有效线段 ≥ 2
 2. 有效中枢 ≥ 1
-3. 最新有效线段的笔 ID 大于最近中枢的 `end_bi_id`（中枢后）
+3. 最新有效线段必须是中枢的直接离开段
+4. 必须存在与离开段同方向的中枢直接进入段
 
 ### 判断流程
 
 1. 取最新有效线段方向 `current.dir`
-2. 找同方向的前一个线段 `prev`
+2. 找同一中枢的同方向直接进入段 `prev`
 3. 按方向过滤 MACD histogram：
    - 上行段：只统计正 histogram（红柱）
    - 下行段：只统计负 histogram（绿柱）
@@ -177,7 +183,9 @@ HIST[i]  = DIF[i] - DEA[i]
 ```js
 {
   type: 'top' | 'bottom' | 'none',
-  strength: 'strong' | 'weak' | 'none',
+  category: 'center_departure',
+  trend_confirmed: false,
+  strength: 'candidate' | 'none',
   reason: string,
   area_cur, area_prev,
   price_extreme_cur, price_extreme_prev
@@ -275,11 +283,11 @@ DEBUG_LLM_PAYLOAD=1  # 打印 AI payload 截断
 |--------|--------|----------|
 | normalizeBarsForChan | 5 | 过滤、包含处理、idx 连续、raw_idx |
 | detectFractals | 8 | 标准/非标准顶底分型、相等点、去重 |
-| buildBis | 5 | 笔数、方向交替、价格校验、未确认笔 |
-| buildSegments | 3 | 最小笔数、聚合、弱段 |
-| buildCenters | 1 | 交集中枢 |
-| detectDivergence | 8 | 无中枢/无创新/不在中枢后/顶背驰/底背驰/面积阈值 |
-| computeChan | 4 | 字段完整性、segment≠bis、MACD 一致性 |
+| buildBis | 多组 | 笔数、方向交替、价格校验、确认笔 |
+| buildSegments | 多组 | 标准特征序列、两种破坏情况、缺口、重同步和结构不变量 |
+| buildCenters | 多组 | 核心区间、延伸、关闭和完整波动区间 |
+| detectDivergence | 多组 | 真实三线段中枢、直接进出段、价格极值和 MACD 面积 |
+| computeChan | 多组 | 未收盘柱隔离、300 根历史重同步、字段和告警 |
 | calculateMacdSeries | 2 | 长度对齐、空数组 |
 | early return warnings | 1 | 多 warning 同时保留 |
 

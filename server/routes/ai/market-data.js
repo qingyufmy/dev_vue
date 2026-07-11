@@ -154,7 +154,6 @@ function buildBis(fractals, bars) {
     const dir = s.type === 'bottom' ? 'up' : 'down'
     if (dir === 'up' && e.price <= s.price) { invalidCount++; continue }
     if (dir === 'down' && e.price >= s.price) { invalidCount++; continue }
-    const isLast = i === pivots.length - 1
     bis.push({
       id: bis.length + 1, dir,
       start_idx: s.idx, end_idx: e.idx,
@@ -162,7 +161,7 @@ function buildBis(fractals, bars) {
       raw_end_idx: Math.max(s.raw_end_idx ?? s.raw_idx, e.raw_end_idx ?? e.raw_idx),
       start_price: s.price, end_price: e.price,
       high: Math.max(s.high, e.high), low: Math.min(s.low, e.low),
-      confirmed: !isLast,
+      confirmed: true,
     })
   }
   if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}, invalid=${invalidCount}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
@@ -231,6 +230,24 @@ function findFeatureFractals(rawFeatures, segmentDirection) {
   return fractals
 }
 
+// Evaluate each standard-sequence prefix as it becomes confirmable. Once a
+// fractal confirms an endpoint, later elements belong to the next segment and
+// must not be merged back across that boundary.
+function findFeatureFractalCandidates(rawFeatures, segmentDirection) {
+  const candidates = []
+  const seen = new Set()
+  for (let length = 3; length <= rawFeatures.length; length++) {
+    for (const fractal of findFeatureFractals(rawFeatures.slice(0, length), segmentDirection)) {
+      const endpointIndex = segmentDirection === 'up' ? fractal.cur.high_source_index : fractal.cur.low_source_index
+      const key = `${fractal.prev.source_start_index}:${endpointIndex}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidates.push(fractal)
+    }
+  }
+  return candidates
+}
+
 function makeFeature(bi, index) {
   return {
     source_start_index: index,
@@ -271,7 +288,7 @@ function findSegmentEndpoint(bis, startIndex, segmentDirection) {
     if (bi.dir !== featureDirection) break
     rawFeatures.push(makeFeature(bi, i))
   }
-  for (const { prev, cur, features } of findFeatureFractals(rawFeatures, segmentDirection)) {
+  for (const { prev, cur, features } of findFeatureFractalCandidates(rawFeatures, segmentDirection)) {
     const endpointIndex = segmentDirection === 'up' ? cur.high_source_index : cur.low_source_index
     const strokeCount = endpointIndex - startIndex
     if (strokeCount < MIN_BIS_PER_SEGMENT || strokeCount % 2 === 0) continue
@@ -423,11 +440,11 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
 
   if (cur.dir === 'up') {
     if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'top', category: 'center_departure', trend_confirmed: false, strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'top', category: 'center_departure', trend_confirmed: false, strength: 'candidate', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
     return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
   } else {
     if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'bottom', category: 'center_departure', trend_confirmed: false, strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'bottom', category: 'center_departure', trend_confirmed: false, strength: 'candidate', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
     return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
   }
 }
@@ -435,10 +452,12 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
 // === Chan Theory: Assembly ===
 function computeChan(rates, timeframe, macdHist, options = {}) {
   const warnings = []
-  if (!rates || rates.length < MIN_KLINES_FOR_CHAN) {
+  const closedRates = Array.isArray(rates) ? rates.slice(0, -1) : []
+  const closedMacdHist = Array.isArray(macdHist) ? macdHist.slice(0, closedRates.length) : []
+  if (closedRates.length < MIN_KLINES_FOR_CHAN) {
     return { status: 'insufficient_klines', reliability: 'low', raw_bar_count: rates?.length || 0, processed_bar_count: 0, fractal_count: 0, bi_count: 0, segment_count: 0, center_count: 0, warnings: ['raw_bars_too_few'] }
   }
-  const bars = normalizeBarsForChan(rates)
+  const bars = normalizeBarsForChan(closedRates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
   const fractals = options.fractalsForTest || detectFractals(bars)
   const { bis: allBis, invalidCount } = buildBis(fractals, bars)
@@ -446,7 +465,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
   if (confirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
-    return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
+    return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
   }
   const { segments, candidate, resynced } = buildSegments(confirmedBis, { trustedStart: false })
   if (resynced) warnings.push('segment_window_resynced')
@@ -459,13 +478,25 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
   const lastBi = allBis[allBis.length - 1]
   const latest = parseFloat(rates[rates.length - 1].close)
+  const liveRate = rates[rates.length - 1]
+  const lastFractal = fractals[fractals.length - 1]
+  let developingBi = null
+  if (lastFractal && liveRate) {
+    const liveHigh = Number(liveRate.high)
+    const liveLow = Number(liveRate.low)
+    if (lastFractal.type === 'bottom' && Number.isFinite(liveHigh) && liveHigh > lastFractal.price) {
+      developingBi = { dir: 'up', start_price: round5(lastFractal.price), end_price: round5(liveHigh), confirmed: false }
+    } else if (lastFractal.type === 'top' && Number.isFinite(liveLow) && liveLow < lastFractal.price) {
+      developingBi = { dir: 'down', start_price: round5(lastFractal.price), end_price: round5(liveLow), confirmed: false }
+    }
+  }
   let priceVsCenter = 'none'
   if (activeCenter) {
     if (latest > activeCenter.zh) priceVsCenter = 'above'
     else if (latest < activeCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
   }
-  const divergence = detectDivergence(validSegs, allBis, macdHist, centers)
+  const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers)
   if (divergence.type !== 'none') {
     // ok
   } else if (divergence.reason === 'insufficient_valid_segments') {
@@ -494,9 +525,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
   return {
     status, reliability,
-    raw_bar_count: rates.length, processed_bar_count: bars.length,
+    raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
     fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+    developing_bi: developingBi,
     recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
     current_segment: lastSeg ? { id: lastSeg.id, dir: lastSeg.dir, start_price: round5(lastSeg.start_price), end_price: round5(lastSeg.end_price), broken: lastSeg.broken } : null,
     candidate_segment: candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price) } : null,

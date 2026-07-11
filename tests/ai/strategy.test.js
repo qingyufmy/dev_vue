@@ -60,4 +60,15 @@ describe('buildStrategyContextFromTags', () => {
     )
     expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1' }))
   })
+
+  it('缠论使用扩展历史但模型K线保持标签数量', async () => {
+    const rates = Array.from({ length: 300 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates })
+    const result = await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
+    )
+    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 300 }))
+    expect(result.timeframes.H1.klines).toHaveLength(80)
+    expect(result.timeframes.H1.klines[0].time).toBe('t220')
+  })
 })

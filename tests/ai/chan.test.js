@@ -96,13 +96,13 @@ describe('buildBis', () => {
     expect(bis.length).toBeLessThanOrEqual(fractals.length - 1)
   })
 
-  it('最后一笔可以是未确认', () => {
+  it('由两个已确认分型构成的最后一笔也是确认笔', () => {
     const rates = makeRates(50)
     const bars = normalizeBarsForChan(rates)
     const fractals = detectFractals(bars)
     const { bis } = buildBis(fractals, bars)
     if (bis.length > 0) {
-      expect(bis[bis.length - 1].confirmed).toBe(false)
+      expect(bis[bis.length - 1].confirmed).toBe(true)
     }
   })
 
@@ -520,6 +520,23 @@ describe('detectDivergence', () => {
     expect(result.area_prev).toBe(20)
     expect(result.area_cur).toBe(8)
   })
+
+  it('使用buildCenters生成的真实三线段中枢检测离开段力度衰减', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 121, start_price: 121, end_price: 125 },
+      { id: 2, dir: 'down', bi_ids: [4, 5, 6], weak: false, high: 120, low: 100, start_price: 120, end_price: 100 },
+      { id: 3, dir: 'up', bi_ids: [7, 8, 9], weak: false, high: 118, low: 105, start_price: 105, end_price: 118 },
+      { id: 4, dir: 'down', bi_ids: [10, 11, 12], weak: false, high: 122, low: 108, start_price: 122, end_price: 108 },
+      { id: 5, dir: 'up', bi_ids: [13, 14, 15], weak: false, high: 130, low: 119, start_price: 119, end_price: 130 },
+    ]
+    const centers = buildCenters(segs)
+    expect(centers).toHaveLength(1)
+    expect(centers[0]).toMatchObject({ start_segment_id: 2, end_segment_id: 4, segment_ids: [2, 3, 4], status: 'closed' })
+    const bis = Array.from({ length: 15 }, (_, i) => ({ id: i + 1, raw_start_idx: i, raw_end_idx: i }))
+    const hist = [...Array(3).fill(5), ...Array(9).fill(2), ...Array(3).fill(1)]
+    const result = detectDivergence(segs, bis, hist, centers)
+    expect(result).toMatchObject({ type: 'top', category: 'center_departure', trend_confirmed: false, strength: 'candidate' })
+  })
 })
 
 describe('computeChan', () => {
@@ -536,8 +553,30 @@ describe('computeChan', () => {
     expect(result.status).toBeDefined()
     expect(result.reliability).toBeDefined()
     expect(result.raw_bar_count).toBe(50)
+    expect(result.closed_bar_count).toBe(49)
     expect(result.warnings).toBeDefined()
     expect(Array.isArray(result.warnings)).toBe(true)
+  })
+
+  it('当前未收盘K线变化不影响确认结构', () => {
+    const rates = makeRates(120)
+    const changed = rates.map(rate => ({ ...rate }))
+    changed[changed.length - 1] = { ...changed[changed.length - 1], high: 9999, low: 1, close: 8000 }
+    const first = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries)
+    const second = computeChan(changed, 'M5', calculateMacdSeries(changed.map(r => Number(r.close))).histSeries)
+    expect(second.fractal_count).toBe(first.fractal_count)
+    expect(second.bi_count).toBe(first.bi_count)
+    expect(second.segment_count).toBe(first.segment_count)
+    expect(second.center_count).toBe(first.center_count)
+    expect(second.developing_bi).not.toEqual(first.developing_bi)
+  })
+
+  it('扩展历史在首段重同步后仍能输出后续完整线段', () => {
+    const rates = makeRates(300)
+    const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries)
+    expect(result.closed_bar_count).toBe(299)
+    expect(result.warnings).toContain('segment_window_resynced')
+    expect(result.segment_count).toBeGreaterThan(0)
   })
 
   it('segment_count不等于bi_count', () => {
@@ -648,13 +687,13 @@ describe('detectFractals strict', () => {
 
 describe('early return warnings preserved', () => {
   it('computeChan同时保留invalid_bi和insufficient_bis warnings', () => {
-    const rates = makeRates(30)
+    const rates = makeRates(31)
     const fractalsForTest = [
       { idx: 0, raw_start_idx: 0, raw_end_idx: 0, type: 'bottom', price: 100, high: 100, low: 100, time: 't0' },
       { idx: 5, raw_start_idx: 5, raw_end_idx: 5, type: 'top', price: 90, high: 90, low: 90, time: 't5' },
       { idx: 10, raw_start_idx: 10, raw_end_idx: 10, type: 'bottom', price: 85, high: 85, low: 85, time: 't10' },
     ]
-    const hist = Array(30).fill(0)
+    const hist = Array(31).fill(0)
     const result = computeChan(rates, 'M5', hist, { fractalsForTest })
     expect(result.warnings).toContain('invalid_bi_price_direction')
     expect(result.warnings).toContain('insufficient_confirmed_bis')

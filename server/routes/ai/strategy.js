@@ -2,7 +2,7 @@
 
 import { queryRun, beijingNow } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
-import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
+import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
@@ -39,17 +39,18 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
   const timeframes = {}
   for (const { tf, count } of tags) {
+    const historyCount = hasUseChanTag ? Math.max(count, CHAN_HISTORY_COUNT) : count
     let rates
-    if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= count) {
+    if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
       rates = fallbackRates
     } else {
-      const resp = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count })
+      const resp = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count: historyCount })
       rates = (resp && resp.rates) ? resp.rates : []
     }
     if (rates.length === 0) continue
     const summary = calculateMarketData(symbol, tf, rates, account, positions, { computeChan: hasUseChanTag })
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
-    timeframes[tf] = { summary: slimSummary, klines: compactRates(rates) }
+    timeframes[tf] = { summary: slimSummary, klines: compactRates(rates.slice(-count)) }
   }
   return {
     strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
@@ -78,12 +79,13 @@ export async function handleAnalyze(userId, params) {
 
   const primaryTf = tags.length > 0 ? tags[0].tf : timeframe.toUpperCase()
   const primaryCount = tags.length > 0 ? tags[0].count : kline_count
-  const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryCount })
+  const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
+  const primaryHistoryCount = hasUseChanTag ? Math.max(primaryCount, CHAN_HISTORY_COUNT) : primaryCount
+  const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
   if (!ratesResp || ratesResp.status === 'error') return { status: 'error', message: 'Failed to get rates' }
   const rates = ratesResp.rates || []
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
-  const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
   const market = calculateMarketData(symbol, primaryTf, rates, account, positions, { computeChan: hasUseChanTag, pending_orders: pendingOrders })
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
   const signal = await maybeAiSignal(null, config, market)
