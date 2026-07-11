@@ -279,3 +279,25 @@ describe('Delivery claiming (Fix 3)', () => {
     expect(!result || result.changes !== 1).toBe(true)
   })
 })
+
+describe('automatic inference bridge snapshot', () => {
+  const validAccount = { status: 'success', balance: 10000, equity: 10020 }
+  const validPositions = { status: 'success', positions: [] }
+  const validPending = { status: 'success', orders: [] }
+
+  it('accepts a complete snapshot', () => {
+    expect(__schedulerTest.validateInferenceBridgeSnapshot(validAccount, validPositions, validPending)).toMatchObject({
+      ok: true, positions: [], pendingOrders: [],
+    })
+  })
+
+  it.each([
+    [{ status: 'error' }, validPositions, validPending, 'account_failed'],
+    [validAccount, { status: 'error' }, validPending, 'positions_failed'],
+    [validAccount, validPositions, { status: 'error' }, 'pending_list_failed'],
+    [validAccount, { status: 'success' }, validPending, 'positions_failed'],
+    [validAccount, validPositions, { status: 'success' }, 'pending_list_failed'],
+  ])('fails closed for an invalid bridge component', (account, positions, pending, reason) => {
+    expect(__schedulerTest.validateInferenceBridgeSnapshot(account, positions, pending)).toEqual({ ok: false, reason })
+  })
+})

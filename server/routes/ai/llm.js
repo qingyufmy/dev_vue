@@ -91,10 +91,18 @@ export async function maybeAiSignal(db, config, market) {
   const baseUrl = config.api_base_url
   if (!apiKey) return aiFailureHold(market, 'empty_ai_key')
 
-  let url
-  if (provider === 'deepseek') url = (baseUrl || DEFAULT_API_BASE_URL) + '/chat/completions'
-  else if (provider === 'gpt') url = (baseUrl || 'https://api.openai.com') + '/v1/chat/completions'
-  else return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
+  const compatibleProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao'])
+  if (!compatibleProviders.has(provider)) return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
+  const providerDefaults = {
+    deepseek: DEFAULT_API_BASE_URL,
+    gpt: 'https://api.openai.com/v1',
+    kimi: 'https://api.moonshot.cn/v1',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+    doubao: 'https://ark.cn-beijing.volces.com/api/v3',
+  }
+  const normalizedBaseUrl = String(baseUrl || providerDefaults[provider]).replace(/\/+$/, '')
+  const url = `${normalizedBaseUrl}/chat/completions`
 
   try {
     const prompt = stripTimeframeTags(config.system_prompt || DEFAULT_PROMPT)

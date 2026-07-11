@@ -220,6 +220,10 @@ export async function getGlobalAutoConfig() {
 
 export async function saveGlobalAutoConfig(cfg) {
   const now = beijingNow()
+  const supportedProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao'])
+  if (cfg.api_provider && !supportedProviders.has(cfg.api_provider)) {
+    throw new Error(`unsupported_ai_provider:${cfg.api_provider}`)
+  }
   await queryRun(`
     UPDATE global_auto_config SET
       interval_minutes = ?,

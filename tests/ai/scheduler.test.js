@@ -186,6 +186,7 @@ describe('reconcilePendingOrders', () => {
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
+      if (action === 'history') return Promise.resolve({ status: 'success', orders: [] })
       return Promise.resolve({})
     })
 
@@ -212,7 +213,7 @@ describe('reconcilePendingOrders', () => {
     await reconcilePendingOrders()
 
     const cancelledCall = db.queryRun.mock.calls.find(c => c[0].includes("'cancelled'"))
-    expect(cancelledCall).toBeTruthy()
+    expect(cancelledCall).toBeUndefined()
   })
 
   it('桥接离线时跳过该用户', async () => {
@@ -245,7 +246,7 @@ describe('reconcilePendingOrders', () => {
     await reconcilePendingOrders()
 
     const cancelledCall = db.queryRun.mock.calls.find(c => c[0].includes("'cancelled'"))
-    expect(cancelledCall).toBeTruthy()
+    expect(cancelledCall).toBeUndefined()
   })
 
   it('多用户并行处理', async () => {
@@ -259,6 +260,7 @@ describe('reconcilePendingOrders', () => {
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
+      if (action === 'history') return Promise.resolve({ status: 'success', orders: [] })
       return Promise.resolve({})
     })
 
@@ -266,5 +268,24 @@ describe('reconcilePendingOrders', () => {
 
     const expiredCalls = db.queryRun.mock.calls.filter(c => c[0].includes("'expired'"))
     expect(expiredCalls.length).toBe(2)
+  })
+
+  it('cancels an MT5 pending order after its configured validity expires', async () => {
+    db.queryAll
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 9, user_id: 10, signal_id: 900, pending_ticket: '5009', pending_valid_until: '2020-01-01 00:00:00', src: 'delivery' }])
+      .mockResolvedValueOnce([])
+    marketData.mt5Bridge.mockImplementation((_uid, action) => {
+      if (action === 'pending_list') return Promise.resolve({ orders: [{ ticket: 5009 }] })
+      if (action === 'positions') return Promise.resolve({ positions: [] })
+      if (action === 'history') return Promise.resolve({ status: 'success', orders: [] })
+      if (action === 'cancel_pending') return Promise.resolve({ status: 'success', ticket: 5009 })
+      return Promise.resolve({ status: 'error' })
+    })
+
+    await reconcilePendingOrders()
+
+    expect(marketData.mt5Bridge).toHaveBeenCalledWith(10, 'cancel_pending', { ticket: '5009' }, { noFallback: true })
+    expect(db.queryRun.mock.calls.some(c => c[0].includes("pending_state = 'expired'"))).toBe(true)
   })
 })

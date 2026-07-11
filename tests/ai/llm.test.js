@@ -80,6 +80,26 @@ describe('requestJsonObject', () => {
   })
 })
 
+describe('OpenAI-compatible provider URL', () => {
+  it('appends chat/completions without duplicating the configured version path', async () => {
+    vi.clearAllMocks()
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', confidence: 0.7, recommended_volume: 0,
+        analysis: 'test', reasoning: 'test', cancel_pending: [],
+      }) } }] }),
+    })
+
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'key', api_provider: 'qwen', model_name: 'qwen-plus',
+      api_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/',
+    }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
+
+    expect(mockFetch.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
+  })
+})
+
 describe('normalizeAiSignal', () => {
   const baseMarket = {
     latest_price: 2000,

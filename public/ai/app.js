@@ -1212,7 +1212,16 @@ function handleHeartbeat(msg) {
 function handleDisconnect(msg) {
   setBadge("gatewayMode", "未连接-请启动桥接脚本", "neutral");
   setBadge("tradeMode", "请先启动桥接", "neutral");
-  setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
+  // Bridge connectivity pauses the runtime subscription but does not change
+  // the persisted automatic-inference switch.
+  if (state.autoRuntime) {
+    state.autoRuntime.enabled = !!state.autoEnabled;
+    state.autoRuntime.in_flight = false;
+    state.autoRuntime.paused_reason = state.autoEnabled ? 'user_bridge_offline' : 'disabled';
+    renderAutoAnalyzeBadge(state.autoRuntime);
+  } else {
+    renderAutoAnalyzeBadge({ enabled: !!state.autoEnabled, paused_reason: state.autoEnabled ? 'user_bridge_offline' : 'disabled' });
+  }
   state._lastGatewayLive = false;
   updateMarketStatus(-1);
 }
@@ -2105,8 +2114,6 @@ const PROVIDER_PRESETS = {
   qwen:     { models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   zhipu:    { models: ['glm-4-flash', 'glm-4-air', 'glm-4', 'glm-4v'], url: 'https://open.bigmodel.cn/api/paas/v4' },
   doubao:   { models: ['doubao-1.5-pro-32k', 'doubao-1.5-lite-32k', 'doubao-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
-  claude:   { models: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'], url: 'https://api.anthropic.com/v1' },
-  gemini:   { models: ['gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-1.5-pro'], url: 'https://generativelanguage.googleapis.com/v1beta' },
 };
 
 function applyProviderPreset(provider) {

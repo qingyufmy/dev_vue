@@ -1117,13 +1117,16 @@ async function handleBrowserCommand(ws, userId, msg) {
             let symbols = []
             try { symbols = JSON.parse(firstPt.symbols_json || '[]') } catch (e) { console.warn('[BridgeWS] Failed to parse prompt type symbols_json:', e.message) }
             await ai.saveUserAutoConfig(userId, { prompt_type_id: firstPt.id, selected_symbols: symbols })
-          } else if (!userCfg.selected_symbols || userCfg.selected_symbols.length === 0) {
+          } else if (userCfg.selected_symbols_json == null) {
             const ptRow = await ai.getAutoPromptTypeById(userCfg.prompt_type_id)
             if (ptRow) {
               let symbols = []
               try { symbols = JSON.parse(ptRow.symbols_json || '[]') } catch (e) { console.warn('[BridgeWS] Failed to parse prompt type symbols_json:', e.message) }
               await ai.saveUserAutoConfig(userId, { prompt_type_id: userCfg.prompt_type_id, selected_symbols: symbols })
             }
+          } else if (!userCfg.selected_symbols || userCfg.selected_symbols.length === 0) {
+            result = { status: 'error', message: '请先在自动推理配置中至少选择一个品种' }
+            break
           }
         }
 

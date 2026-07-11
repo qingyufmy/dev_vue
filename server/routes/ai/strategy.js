@@ -98,15 +98,15 @@ export async function handleAnalyze(userId, params) {
     market_data_json, token_count, ai_model, ttl_seconds, created_at,
     entry_method, limit_price, stop_limit_price, pending_valid_until)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [userId, session_id, symbol, timeframe, signal.signal_type, signal.confidence, signal.recommended_volume,
+    [userId, session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
       signal.analysis, signal.reasoning, signal.stop_loss_price || null,
       signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
-      marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(timeframe), createdAt,
+      marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
       signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null])
 
   signal.id = result.insertId
   signal.symbol = symbol
-  signal.timeframe = timeframe.toUpperCase()
+  signal.timeframe = primaryTf
   signal.created_at = createdAt
   signal.market_data = market
   signal.is_executed = false
