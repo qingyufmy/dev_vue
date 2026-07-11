@@ -1572,12 +1572,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         let signalMap = {}
 
         if (tickets.length > 0) {
-          // Use the EXACT same matching logic as signal_tickets handler (line 1009):
-          //   1. trade_ticket direct match
-          //   2. fallback: execution_result JSON → order/ticket/position
-          // Only is_executed=1 signals have a real order ticket binding
-          // Query only signals matching the tickets from MT5 history (not all executed signals)
+          // Match tickets against BOTH ai_signals and auto_signal_deliveries
+          // (auto-reasoning pending fills only store ticket in deliveries, not in ai_signals root)
           const sigPlaceholders = tickets.map(() => '?').join(',')
+
+          // 1. Direct trade_ticket match in ai_signals
           const signalRows = await queryAll(
             `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
                     stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
@@ -1608,18 +1607,49 @@ async function handleBrowserCommand(ws, userId, msg) {
             }
           }
 
-          // Also match signals WITH trade_ticket but NOT is_executed=1
-          // (auto-reasoning assigns trade_ticket before execution)
+          // 2. Match via auto_signal_deliveries (auto-reasoning pending fills)
           const unmatchedTickets = tickets.filter(tk => !signalMap[tk])
           if (unmatchedTickets.length > 0) {
             const placeholders = unmatchedTickets.map(() => '?').join(',')
+            // Get delivery records with their signal details
+            const deliveryRows = await queryAll(
+              `SELECT d.trade_ticket, d.signal_id, d.execution_result,
+                      s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning,
+                      s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price,
+                      s.session_id, s.is_executed, s.created_at, s.symbol
+               FROM auto_signal_deliveries d
+               LEFT JOIN ai_signals s ON s.id = d.signal_id
+               WHERE d.trade_ticket IN (${placeholders})`,
+              unmatchedTickets
+            )
+            for (const r of deliveryRows) {
+              const tk = String(r.trade_ticket)
+              if (!tk || !r.signal_type) continue
+              if (!signalMap[tk]) signalMap[tk] = []
+              signalMap[tk].push({
+                id: r.signal_id, type: r.signal_type, confidence: r.confidence,
+                volume: r.recommended_volume, analysis: r.analysis, reasoning: r.reasoning,
+                stop_loss: r.stop_loss_price, tp1: r.take_profit_1_price,
+                tp2: r.take_profit_2_price, tp3: r.take_profit_3_price,
+                session: r.session_id || 'default',
+                executed: !!r.is_executed, exec_result: r.execution_result,
+                created_at: r.created_at, symbol: r.symbol,
+              })
+            }
+          }
+
+          // 3. Also match signals WITH trade_ticket but NOT is_executed=1
+          // (auto-reasoning assigns trade_ticket before execution)
+          const unmatchedTickets2 = tickets.filter(tk => !signalMap[tk])
+          if (unmatchedTickets2.length > 0) {
+            const placeholders = unmatchedTickets2.map(() => '?').join(',')
             const taggedRows = await queryAll(
               `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
                       stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
                       session_id, is_executed, execution_result, created_at, symbol
                FROM ai_signals WHERE trade_ticket IN (${placeholders}) AND is_executed != 1
                ORDER BY created_at DESC`,
-              unmatchedTickets
+              unmatchedTickets2
             )
             for (const s of taggedRows) {
               const tk = String(s.trade_ticket)
