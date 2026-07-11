@@ -22,8 +22,10 @@ async function isUserEligibleForAutoExecution(userId) {
   if (!isTradeEnabled(userId)) return false
   const scheduler = await queryOne('SELECT enabled, enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
   if (!scheduler || !scheduler.enabled || !scheduler.enable_auto_trade) return false
-  const user = await queryOne('SELECT plan, role FROM users WHERE id = ?', [userId])
-  if (!user || (user.role !== 'admin' && user.plan !== 'pro')) return false
+  const user = await queryOne(`SELECT role,
+    (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
+    FROM users WHERE id = ?`, [userId])
+  if (!user?.has_pro_access) return false
   const ubSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
   if (!ubSettings || !ubSettings.trade_send_enabled) return false
   return true
@@ -202,7 +204,8 @@ export async function rebuildRedisSubscriptions() {
       FROM auto_scheduler s
       JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
       JOIN users u ON u.id = s.user_id
-       WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL AND (u.role = 'admin' OR u.plan = 'pro')
+       WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL
+         AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))
     `)
 
     let onlineCount = 0
@@ -567,7 +570,8 @@ export async function reconcileAutoSchedulers() {
     const unassigned = await queryAll(`
       SELECT s.user_id FROM auto_scheduler s
       JOIN users u ON u.id = s.user_id
-      WHERE s.enabled = 1 AND s.prompt_type_id IS NULL AND (u.role = 'admin' OR u.plan = 'pro')
+      WHERE s.enabled = 1 AND s.prompt_type_id IS NULL
+        AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))
     `)
     if (unassigned.length > 0) {
       const allPt = await getAutoPromptTypes()
@@ -594,7 +598,7 @@ export async function reconcileAutoSchedulers() {
       WHERE s.enabled = 1
         AND apt.is_active = 1
         AND apt.deleted_at IS NULL
-        AND (u.role = 'admin' OR u.plan = 'pro')
+        AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))
     `)
 
     const neededKeys = new Set()
@@ -1254,7 +1258,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
           LEFT JOIN user_bridge_settings ubs ON ubs.user_id = s.user_id
           WHERE s.user_id IN (${placeholders})
             AND s.enabled = 1 AND s.enable_auto_trade = 1
-            AND (u.role = 'admin' OR u.plan = 'pro')
+            AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))
             AND COALESCE(ubs.trade_send_enabled, 0) = 1
         `, onlineUserIds)
         const eligibleSet = new Set(eligibleRows.map(r => r.user_id))

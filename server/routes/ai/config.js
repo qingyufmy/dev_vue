@@ -482,7 +482,8 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
      FROM auto_scheduler s
      JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
      JOIN users u ON u.id = s.user_id
-     WHERE s.prompt_type_id = ? AND s.enabled = 1 AND (u.role = 'admin' OR u.plan = 'pro')`,
+     WHERE s.prompt_type_id = ? AND s.enabled = 1
+       AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))`,
     [promptTypeId]
   )
   const filtered = rows.filter(r => {

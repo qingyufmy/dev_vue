@@ -82,9 +82,10 @@ setInterval(() => {
 
 async function getAdminUserId() {
   const now = Date.now()
-  if (adminUserId && (now - adminUserIdLastCheck) < ADMIN_CACHE_TTL) return adminUserId
+  if ((now - adminUserIdLastCheck) < ADMIN_CACHE_TTL) return adminUserId
   const row = await queryOne('SELECT id FROM users WHERE role = ? LIMIT 1', ['admin'])
   adminUserId = row?.id || null
+  adminUserIdLastCheck = now
   return adminUserId
 }
 
@@ -199,18 +200,18 @@ function handleBridge(ws, url) {
   ws.on('message', queueMsg)
 
   // Check user plan — only Pro allowed (async, blocks bridge setup)
-  queryOne('SELECT plan, plan_expires_at, role FROM users WHERE id = ?', [userId]).then(async user => {
+  queryOne(`SELECT plan, plan_expires_at, role,
+    (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
+    FROM users WHERE id = ?`, [userId]).then(async user => {
     ws.off('message', queueMsg) // 移除缓存监听器
     if (!user) { ws.close(4002, 'User not found'); return }
-    if (user.role !== 'admin') {
+    if (!user.has_pro_access) {
       const now = new Date()
       const expired = user.plan_expires_at && new Date(user.plan_expires_at) < now
-      if (user.plan === 'free' || user.plan === 'plus' || expired) {
-        const reason = expired ? '会员已过期，请续费后重试' : `当前会员等级(${user.plan})不可使用桥接，请升级Pro会员`
-        console.log(`[BridgeWS] User ${userId} rejected: ${reason}`)
-        ws.close(4003, reason)
-        return
-      }
+      const reason = expired ? '会员已过期，请续费后重试' : `当前会员等级(${user.plan})不可使用桥接，请升级Pro会员`
+      console.log(`[BridgeWS] User ${userId} rejected: ${reason}`)
+      ws.close(4003, reason)
+      return
     }
     await _initBridge(ws, userId, user)
     // 重放缓存消息
@@ -555,8 +556,10 @@ async function handleBrowserCommand(ws, userId, msg) {
 
   try {
     const ai = await import('./routes/ai/index.js')
-    const user = await queryOne('SELECT plan, role FROM users WHERE id = ?', [userId])
-    const isPro = user?.role === 'admin' || user?.plan === 'pro'
+    const user = await queryOne(`SELECT plan, role,
+      (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
+      FROM users WHERE id = ?`, [userId])
+    const isPro = !!user?.has_pro_access
     const hasAccess = isPro || user?.plan === 'plus'
     if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
 

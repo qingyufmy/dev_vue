@@ -234,6 +234,23 @@ describe('stale executing conditional UPDATE (Fix 7)', () => {
   })
 })
 
+describe('expired Pro entitlement', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('uses the database-computed active Pro entitlement for auto execution', async () => {
+    db.queryOne
+      .mockResolvedValueOnce({ enabled: 1, enable_auto_trade: 1 })
+      .mockResolvedValueOnce({ role: 'user', has_pro_access: 0 })
+
+    const { __schedulerTest } = await import('../../server/routes/ai/scheduler.js')
+    const eligible = await __schedulerTest.isUserEligibleForAutoExecution(10)
+
+    expect(eligible).toBe(false)
+    expect(db.queryOne.mock.calls[1][0]).toContain('plan_expires_at')
+    expect(db.queryOne.mock.calls[1][0]).toContain('has_pro_access')
+  })
+})
+
 describe('SL/TP strict validation (Fix 5)', () => {
   it('quote failure rejects delivery', async () => {
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
