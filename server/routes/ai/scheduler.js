@@ -369,14 +369,6 @@ async function acquireLock(key) {
   } catch (e) { console.error('[acquireLock]', key, e.message); return null }
 }
 
-async function releaseLock(key, token) {
-  const redis = getRedis()
-  if (!redis || !token) return
-  try {
-    await redis.eval(RELEASE_LUA, 1, `${REDIS_LOCK_PREFIX}${key}`, token)
-  } catch (e) { console.error('[releaseLock]', key, e.message) }
-}
-
 // Atomic finalize: verify token → set cooldown → delete lock in one Lua eval
 async function finalizeLock(key, token, cooldownSeconds) {
   const redis = getRedis()
@@ -717,26 +709,26 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.lastError = ''
     st.waitReason = ''
 
-    // Lock guard: structured lock context passed to cycle (Fix 2)
+    // Lock guard: structured lock context passed to cycle (Fix 1: closure, not arrow+this)
     const lockGuard = {
       key, token: lockToken, lost: false, renewTimer: null,
-      isOwned: async () => {
-        if (this.lost) return false
-        const redis = getRedis()
-        if (!redis) return false
-        try {
-          const val = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
-          return val === lockToken
-        } catch (e) { console.error('[lockGuard] isOwned check failed:', e.message); return false }
-      },
-      assertOwned: async (phase) => {
-        if (this.lost || !(await this.isOwned())) {
-          this.lost = true
-          console.error(`[LockGuard] ${key}: lock lost at phase ${phase}`)
-          return false
-        }
-        return true
+    }
+    lockGuard.isOwned = async () => {
+      if (lockGuard.lost) return false
+      const redis = getRedis()
+      if (!redis) return false
+      try {
+        const val = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
+        return val === lockToken
+      } catch (e) { console.error('[lockGuard] isOwned check failed:', e.message); return false }
+    }
+    lockGuard.assertOwned = async (phase) => {
+      if (lockGuard.lost || !(await lockGuard.isOwned())) {
+        lockGuard.lost = true
+        console.error(`[LockGuard] ${key}: lock lost at phase ${phase}`)
+        return false
       }
+      return true
     }
     lockGuard.renewTimer = setInterval(async () => {
       if (lockGuard.lost || lockGuard.token !== lockToken) { clearInterval(lockGuard.renewTimer); return }
@@ -794,10 +786,47 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     // Broadcast progress done
     broadcastAutoProgressDone(promptTypeId, symbol, cycleStatus, cycleReason, st)
 
-    // Schedule next tick (only if finalize succeeded and not cooldown_failed)
+    // Schedule next tick (Fix 3: finalize failure → recovery, not blind retry)
     if (autoSchedulerState[key]?.running) {
       if (st.waitReason === 'finalize_failed') {
-        autoSchedulerState[key].timer = setTimeout(tick, 30000)
+        // Recovery check: wait for Redis, check cooldown/lock state, compute remaining wait
+        autoSchedulerState[key].timer = setTimeout(async () => {
+          if (!autoSchedulerState[key]?.running) return
+          const redis = getRedis()
+          if (!redis || !isRedisAvailable()) {
+            // Redis still unavailable → keep waiting
+            autoSchedulerState[key].timer = setTimeout(tick, 30000)
+            return
+          }
+          try {
+            // Check if lock still exists (another instance may hold it)
+            const lockVal = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
+            if (lockVal && lockVal !== lockToken) {
+              // Another instance holds the lock → just wait for cooldown
+              const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+              const waitMs = ttl > 0 ? ttl * 1000 : st.intervalMinutes * 60 * 1000
+              autoSchedulerState[key].timer = setTimeout(tick, Math.min(waitMs, 60000))
+              return
+            }
+            // Lock gone or ours → check cooldown
+            const cooldownTtl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+            if (cooldownTtl > 0) {
+              autoSchedulerState[key].timer = setTimeout(tick, Math.min(cooldownTtl * 1000, 60000))
+            } else {
+              // No cooldown → compute conservative wait from lastRunAt
+              const lastRun = st.lastRunAt ? new Date(st.lastRunAt).getTime() : Date.now()
+              const elapsed = Date.now() - lastRun
+              const intervalMs = st.intervalMinutes * 60 * 1000
+              const remaining = Math.max(intervalMs - elapsed, 30000)
+              // Write cooldown for remaining time
+              await finalizeLock(key, lockToken, Math.ceil(remaining / 1000)).catch(() => {})
+              autoSchedulerState[key].timer = setTimeout(tick, Math.min(remaining, 60000))
+            }
+          } catch (e) {
+            console.error(`[UnifiedScheduler] ${key} recovery check error:`, e.message)
+            autoSchedulerState[key].timer = setTimeout(tick, 30000)
+          }
+        }, 10000) // initial 10s wait before recovery check
       } else {
         const delay = cycleStatus === 'success' ? tickIntervalMs : retryDelayMs(cycleReason)
         autoSchedulerState[key].timer = setTimeout(tick, delay)
@@ -1011,6 +1040,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
             l(`cancel_pending: skipped user=${uid} (not eligible for auto execution)`)
             continue
           }
+          // Lock check per user (Fix 2)
+          if (lockGuard && !(await lockGuard.assertOwned('cancel_user'))) {
+            l(`cancel_pending: skipped user=${uid} (lock lost)`)
+            break
+          }
           try {
             const pendingResp = await mt5Bridge(uid, 'pending_list', { symbol }, { noFallback: true })
             const pendingOrders = pendingResp?.orders || pendingResp?.pending_list || []
@@ -1019,7 +1053,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
             const ticketsToCancel = new Map() // ticket -> condition
             for (const cond of validConds) {
               for (const po of pendingOrders) {
-                if (String(po.symbol || '').toUpperCase() !== String(cond.symbol || '').toUpperCase()) continue
+                if (stripBrokerSuffix(String(po.symbol || '')) !== stripBrokerSuffix(String(cond.symbol || ''))) continue
                 if (cond.cancel_all) { ticketsToCancel.set(String(po.ticket), cond); continue }
                 if (cond.pending_type && po.pending_type !== cond.pending_type) continue
                 const price = parseFloat(po.price)
@@ -1035,6 +1069,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
               if (!isBridgeAlive(uid) || !isTradeEnabled(uid)) {
                 l(`cancel_pending: skipped ticket=${ticket} (bridge/trade state changed)`)
                 continue
+              }
+              // Lock check per ticket (Fix 2)
+              if (lockGuard && !(await lockGuard.assertOwned('cancel_ticket'))) {
+                l(`cancel_pending: stopped at ticket=${ticket} (lock lost)`)
+                break
               }
               try {
                 const cancelResult = await mt5Bridge(uid, 'cancel_pending', { ticket }, { noFallback: true })
@@ -1096,7 +1135,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       for (let i = 0; i < eligibleSubs.length; i += CONCURRENCY) {
         const batch = eligibleSubs.slice(i, i + CONCURRENCY)
         await Promise.allSettled(batch.map(uid =>
-          executeDelivery(uid, signalId, signal, config, market, promptTypeId, symbol, createdAt)
+          executeDelivery(uid, signalId, signal, config, market, promptTypeId, symbol, createdAt, lockGuard)
         ))
       }
     }
@@ -1120,9 +1159,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
 }
 
 // === Delivery execution for a single subscriber ===
-async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt) {
+async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt, lockGuard) {
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
   try {
+    // Lock check before claiming (Fix 2)
+    if (lockGuard && !(await lockGuard.assertOwned('delivery_claim'))) {
+      l('skipped: lock lost before claim')
+      return
+    }
     // Atomic delivery claiming: only one executor can proceed (Fix 3)
     const claimed = await queryRun(
       `UPDATE auto_signal_deliveries SET execution_status = 'executing', execution_claimed_at = NOW()
@@ -1176,56 +1220,75 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
     }
 
-    // TP validation: selected TP must exist and have correct direction (Fix 2+7)
+    // TP/SL validation: strict fail-closed (Fix 5)
     const isBuyOrder = order.order_type === 'buy'
-    // Fix 7: use user's own quote for market orders, not admin's price
+    // Get user's own quote — fail-closed if unavailable
     let entryRef = order.limit_price || 0
     if (!entryRef && order.order_type) {
       try {
         const quoteResp = await mt5Bridge(userId, 'quote', { symbol }, { noFallback: true })
         if (quoteResp && quoteResp.status !== 'error') {
-          entryRef = isBuyOrder ? (parseFloat(quoteResp.ask) || 0) : (parseFloat(quoteResp.bid) || 0)
+          const ask = parseFloat(quoteResp.ask)
+          const bid = parseFloat(quoteResp.bid)
+          if (Number.isFinite(ask) && ask > 0 && Number.isFinite(bid) && bid > 0) {
+            entryRef = isBuyOrder ? ask : bid
+          }
         }
       } catch (e) { l(`quote fetch failed: ${e.message}`) }
     }
-    if (!entryRef) entryRef = market.latest_price || 0
-    if (entryRef > 0) {
-      // Check SL direction
-      if (order.sl != null) {
-        const sl = parseFloat(order.sl)
-        const slOk = isBuyOrder ? sl < entryRef : sl > entryRef
-        if (!slOk || !Number.isFinite(sl) || sl <= 0) {
-          l(`rejected: invalid_stop_loss_direction sl=${order.sl} for ${order.order_type} at ${entryRef}`)
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-            ['rejected', signalId, userId])
-          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
-            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_stop_loss_direction', sl: order.sl, entry: entryRef },
-            { status: 'rejected', message: 'invalid_stop_loss_direction' }, 'warning')
-          return
-        }
-      }
-      // Check selected TP exists and has correct direction
-      const tpKey = `tp`
-      const tpVal = order[tpKey] != null ? parseFloat(order[tpKey]) : null
-      if (tpVal == null || !Number.isFinite(tpVal) || tpVal <= 0) {
-        l(`rejected: selected_take_profit_missing tp=${order[tpKey]} selected=${riskConfig.selected_take_profit}`)
-        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-          ['rejected', signalId, userId])
-        await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
-          { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'selected_take_profit_missing', tp: order[tpKey], selected: riskConfig.selected_take_profit },
-          { status: 'rejected', message: 'selected_take_profit_missing' }, 'warning')
-        return
-      }
-      const tpOk = isBuyOrder ? tpVal > entryRef : tpVal < entryRef
-      if (!tpOk) {
-        l(`rejected: invalid_take_profit_direction tp=${tpVal} for ${order.order_type} at ${entryRef}`)
-        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-          ['rejected', signalId, userId])
-        await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
-          { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_take_profit_direction', tp: tpVal, entry: entryRef },
-          { status: 'rejected', message: 'invalid_take_profit_direction' }, 'warning')
-        return
-      }
+    // Strict: entryRef must be valid
+    if (!entryRef || !Number.isFinite(entryRef) || entryRef <= 0) {
+      l('rejected: user_quote_unavailable — no valid entry reference')
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['rejected', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'user_quote_unavailable' },
+        { status: 'rejected', message: 'user_quote_unavailable' }, 'warning')
+      return
+    }
+    // SL must exist and be valid
+    const slVal = order.sl != null ? parseFloat(order.sl) : null
+    if (slVal == null || !Number.isFinite(slVal) || slVal <= 0) {
+      l(`rejected: stop_loss_missing sl=${order.sl}`)
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['rejected', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'stop_loss_missing', sl: order.sl },
+        { status: 'rejected', message: 'stop_loss_missing' }, 'warning')
+      return
+    }
+    // SL direction
+    const slOk = isBuyOrder ? slVal < entryRef : slVal > entryRef
+    if (!slOk) {
+      l(`rejected: invalid_stop_loss_direction sl=${slVal} for ${order.order_type} at ${entryRef}`)
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['rejected', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_stop_loss_direction', sl: slVal, entry: entryRef },
+        { status: 'rejected', message: 'invalid_stop_loss_direction' }, 'warning')
+      return
+    }
+    // Selected TP must exist and be valid
+    const tpVal = order.tp != null ? parseFloat(order.tp) : null
+    if (tpVal == null || !Number.isFinite(tpVal) || tpVal <= 0) {
+      l(`rejected: selected_take_profit_missing tp=${order.tp} selected=${riskConfig.selected_take_profit}`)
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['rejected', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'selected_take_profit_missing', tp: order.tp, selected: riskConfig.selected_take_profit },
+        { status: 'rejected', message: 'selected_take_profit_missing' }, 'warning')
+      return
+    }
+    // TP direction
+    const tpOk = isBuyOrder ? tpVal > entryRef : tpVal < entryRef
+    if (!tpOk) {
+      l(`rejected: invalid_take_profit_direction tp=${tpVal} for ${order.order_type} at ${entryRef}`)
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['rejected', signalId, userId])
+      await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_take_profit_direction', tp: tpVal, entry: entryRef },
+        { status: 'rejected', message: 'invalid_take_profit_direction' }, 'warning')
+      return
     }
 
     // Cumulative position limit check (Fix 3)
@@ -1325,6 +1388,13 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         }
       } catch (listErr) {
         l(`supersede pending_list failed: ${listErr.message}`)
+        // Fix 6: pending_list exception = fail-closed
+        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+          ['rejected', signalId, userId])
+        await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+          { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_list_unavailable', error: listErr.message },
+          { status: 'rejected', message: 'pending_list_unavailable' }, 'warning')
+        return
       }
     }
 
@@ -1340,6 +1410,16 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
+    // Final lock check before sending MT5 order (Fix 2)
+    if (lockGuard && !(await lockGuard.assertOwned('order_send'))) {
+      l('skipped: lock lost before order send')
+      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+        ['skipped', signalId, userId]).catch(() => {})
+      await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'lock_lost_before_send' },
+        { status: 'skipped', reason: 'lock_lost_before_send' }, 'warning')
+      return
+    }
     const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', { noFallback: true })
 
     if (execResult.status === 'success') {
@@ -1429,19 +1509,23 @@ export function startPendingReconciler() {
 }
 
 export async function reconcilePendingOrders() {
-  // Fix 8: handle stale executing deliveries (stuck > 5 min → uncertain)
+  // Fix 7+8: handle stale executing deliveries (stuck > 5 min → uncertain, conditional UPDATE)
   try {
     const staleRows = await queryAll(
       "SELECT id, user_id, signal_id, execution_claimed_at FROM auto_signal_deliveries WHERE execution_status = 'executing' AND execution_claimed_at IS NOT NULL AND execution_claimed_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)"
     )
     for (const row of staleRows) {
-      await queryRun(
-        "UPDATE auto_signal_deliveries SET execution_status = 'uncertain', execution_result = ? WHERE id = ?",
-        [JSON.stringify({ reason: 'stale_executing_timeout', claimed_at: row.execution_claimed_at }), row.id])
-      await insertAudit(null, row.user_id, 'delivery_stale_executing', null,
-        { signal_id: row.signal_id, delivery_id: row.id, claimed_at: row.execution_claimed_at },
-        { status: 'uncertain', reason: 'stale_executing_timeout' }, 'warning')
-      console.warn(`[PendingReconciler] Delivery ${row.id} user=${row.user_id} stuck in executing > 5min → uncertain`)
+      const updateResult = await queryRun(
+        `UPDATE auto_signal_deliveries SET execution_status = 'uncertain', execution_result = ?
+         WHERE id = ? AND execution_status = 'executing' AND execution_claimed_at = ?`,
+        [JSON.stringify({ reason: 'stale_executing_timeout', claimed_at: row.execution_claimed_at }), row.id, row.execution_claimed_at])
+      if (updateResult && updateResult.changes === 1) {
+        await insertAudit(null, row.user_id, 'delivery_stale_executing', null,
+          { signal_id: row.signal_id, delivery_id: row.id, claimed_at: row.execution_claimed_at },
+          { status: 'uncertain', reason: 'stale_executing_timeout' }, 'warning')
+        console.warn(`[PendingReconciler] Delivery ${row.id} user=${row.user_id} stuck in executing > 5min → uncertain`)
+      }
+      // changes=0 means status was already updated by normal flow, silently skip
     }
   } catch (e) { console.error('[PendingReconciler] stale executing check error:', e.message) }
 
@@ -1821,3 +1905,9 @@ async function executeOrder(userId, config, request, action, options = {}) {
 }
 
 // getActiveConfig is now imported from config.js directly
+
+// Test-only exports (not for production use)
+export const __schedulerTest = {
+  normalizeCancelCondition,
+  isUserEligibleForAutoExecution,
+}
