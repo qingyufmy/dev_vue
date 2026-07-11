@@ -5,7 +5,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
+import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -135,7 +135,7 @@ export async function rebuildRedisSubscriptions() {
 
     // Query all enabled users from DB
     const rows = await queryAll(`
-      SELECT s.user_id, s.prompt_type_id, apt.symbols_json
+      SELECT s.user_id, s.prompt_type_id, s.selected_symbols_json, apt.symbols_json as strategy_symbols_json
       FROM auto_scheduler s
       JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
       JOIN users u ON u.id = s.user_id
@@ -147,8 +147,7 @@ export async function rebuildRedisSubscriptions() {
       // Only add to runtime subs if bridge is online
       if (!isBridgeAlive(row.user_id)) continue
 
-      let userSymbols = []
-      try { userSymbols = JSON.parse(row.symbols_json || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse user symbols:', e.message) }
+      const userSymbols = resolveEffectiveSymbols(row.selected_symbols_json, row.strategy_symbols_json)
       if (userSymbols.length === 0) continue
 
       const userKey = `${REDIS_USER_PREFIX}${row.user_id}${REDIS_USER_SUFFIX}`
@@ -259,7 +258,7 @@ export async function getUserAutoRuntimeStatus(userId) {
     const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
     if (pt) {
       promptTypeName = pt.title || ''
-      try { selectedSymbols = JSON.parse(pt.symbols_json || '[]') } catch (e) { console.warn('[Scheduler] Failed to parse prompt type symbols:', e.message) }
+      selectedSymbols = resolveEffectiveSymbols(scheduler.selected_symbols_json, pt.symbols_json || '[]')
     }
   }
 
@@ -347,8 +346,17 @@ const REDIS_COOLDOWN_PREFIX = 'auto:scheduler:cooldown:'
 const LOCK_TTL_MS = 600000 // 10 minutes
 const LOCK_RENEW_INTERVAL_MS = 200000 // renew every ~3.3 min (1/3 of TTL)
 
-// Lua script for atomic compare-and-delete release
-const RELEASE_LUA = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`
+// Lua script for atomic finalize: verify token → set cooldown → delete lock
+const FINALIZE_LUA = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  if ARGV[3] == "1" then
+    redis.call("set", KEYS[2], "1", "EX", ARGV[2])
+  end
+  return redis.call("del", KEYS[1])
+else
+  return 0
+end
+`
 
 async function acquireLock(key) {
   const redis = getRedis()
@@ -367,6 +375,16 @@ async function releaseLock(key, token) {
   try {
     await redis.eval(RELEASE_LUA, 1, `${REDIS_LOCK_PREFIX}${key}`, token)
   } catch (e) { console.error('[releaseLock]', key, e.message) }
+}
+
+// Atomic finalize: verify token → set cooldown → delete lock in one Lua eval
+async function finalizeLock(key, token, cooldownSeconds) {
+  const redis = getRedis()
+  if (!redis || !token) return false
+  try {
+    const result = await redis.eval(FINALIZE_LUA, 2, `${REDIS_LOCK_PREFIX}${key}`, `${REDIS_COOLDOWN_PREFIX}${key}`, token, String(cooldownSeconds || 0), cooldownSeconds ? '1' : '0')
+    return result > 0
+  } catch (e) { console.error('[finalizeLock]', key, e.message); return false }
 }
 
 async function renewLock(key, token) {
@@ -699,60 +717,75 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.lastError = ''
     st.waitReason = ''
 
-    // Start lock renewal timer (Fix 5)
-    let lockRenewTimer = null
-    let lockLost = false
-    lockRenewTimer = setInterval(async () => {
-      if (!st._lockToken || st._lockToken !== lockToken) { clearInterval(lockRenewTimer); return }
+    // Lock guard: structured lock context passed to cycle (Fix 2)
+    const lockGuard = {
+      key, token: lockToken, lost: false, renewTimer: null,
+      isOwned: async () => {
+        if (this.lost) return false
+        const redis = getRedis()
+        if (!redis) return false
+        try {
+          const val = await redis.get(`${REDIS_LOCK_PREFIX}${key}`)
+          return val === lockToken
+        } catch (e) { console.error('[lockGuard] isOwned check failed:', e.message); return false }
+      },
+      assertOwned: async (phase) => {
+        if (this.lost || !(await this.isOwned())) {
+          this.lost = true
+          console.error(`[LockGuard] ${key}: lock lost at phase ${phase}`)
+          return false
+        }
+        return true
+      }
+    }
+    lockGuard.renewTimer = setInterval(async () => {
+      if (lockGuard.lost || lockGuard.token !== lockToken) { clearInterval(lockGuard.renewTimer); return }
       const renewed = await renewLock(key, lockToken)
       if (!renewed) {
-        lockLost = true
-        console.error(`[UnifiedScheduler] ${key}: lock renewal failed — lock lost`)
-        clearInterval(lockRenewTimer)
+        lockGuard.lost = true
+        console.error(`[LockGuard] ${key}: lock renewal failed — lock lost`)
+        clearInterval(lockGuard.renewTimer)
       }
     }, LOCK_RENEW_INTERVAL_MS)
+    st._lockGuard = lockGuard
 
     let cycleStatus = 'error'
     let cycleReason = 'exception'
     try {
-      if (lockLost) { cycleReason = 'lock_lost'; throw new Error('lock lost during renewal') }
-      const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol)
+      if (lockGuard.lost) { cycleReason = 'lock_lost'; throw new Error('lock lost during renewal') }
+      const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol, lockGuard)
       if (cycleResult?.status === 'success') {
         st.lastError = ''
         st.lastRunAt = cycleResult.createdAt
         st.lastSignalId = cycleResult.signalId
         st.subscriberCount = cycleResult.subscriberCount
         cycleStatus = 'success'
-        await setCooldown(key, st.intervalMinutes * 60)
-        st.nextRunInSeconds = st.intervalMinutes * 60
       } else if (cycleResult?.status === 'blocked') {
         st.lastError = cycleResult.reason
         cycleStatus = 'blocked'
         cycleReason = cycleResult.reason
-        const delay = retryDelayMs(cycleReason)
-        st.nextRunInSeconds = Math.round(delay / 1000)
-        await setCooldown(key, Math.round(delay / 1000))
       } else {
         cycleReason = cycleResult?.reason || 'unknown'
-        const delay = retryDelayMs(cycleReason)
-        st.nextRunInSeconds = Math.round(delay / 1000)
-        await setCooldown(key, Math.round(delay / 1000))
       }
     } catch (e) {
       console.error(`[UnifiedScheduler] ${key} cycle error:`, e.message)
       st.lastError = 'exception'
       cycleReason = 'exception'
-      const delay = retryDelayMs('exception')
-      st.nextRunInSeconds = Math.round(delay / 1000)
-      await setCooldown(key, Math.round(delay / 1000))
     } finally {
       // Stop lock renewal timer
-      if (lockRenewTimer) clearInterval(lockRenewTimer)
-      // Release lock BEFORE clearing inFlight to prevent TOCTOU race
-      if (st._lockToken) {
-        await releaseLock(key, st._lockToken)
-        st._lockToken = null
+      if (lockGuard.renewTimer) clearInterval(lockGuard.renewTimer)
+      // Atomic finalize: cooldown + release lock in one Lua eval
+      const cooldownSecs = cycleStatus === 'success' ? st.intervalMinutes * 60
+        : cycleStatus === 'blocked' ? Math.round(retryDelayMs(cycleReason) / 1000)
+        : Math.round(retryDelayMs(cycleReason) / 1000)
+      st.nextRunInSeconds = cooldownSecs
+      const finalized = await finalizeLock(key, lockToken, cooldownSecs)
+      if (!finalized) {
+        st.waitReason = 'finalize_failed'
+        st.lastError = 'finalize_failed'
       }
+      st._lockToken = null
+      st._lockGuard = null
       st.inFlight = false
       st.stage = 'idle'
       await updateSchedulerRedisState(key, st)
@@ -761,14 +794,10 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     // Broadcast progress done
     broadcastAutoProgressDone(promptTypeId, symbol, cycleStatus, cycleReason, st)
 
-    // Cooldown failure → don't schedule next tick quickly (Fix 5)
+    // Schedule next tick (only if finalize succeeded and not cooldown_failed)
     if (autoSchedulerState[key]?.running) {
-      const cooldownOk = await setCooldown(key, cycleStatus === 'success' ? st.intervalMinutes * 60 : Math.round(retryDelayMs(cycleReason) / 1000))
-      if (!cooldownOk) {
-        // Cooldown failed — show Redis issue, wait longer
-        st.waitReason = 'cooldown_write_failed'
-        st.lastError = 'cooldown_write_failed'
-        autoSchedulerState[key].timer = setTimeout(tick, 30000) // retry in 30s
+      if (st.waitReason === 'finalize_failed') {
+        autoSchedulerState[key].timer = setTimeout(tick, 30000)
       } else {
         const delay = cycleStatus === 'success' ? tickIntervalMs : retryDelayMs(cycleReason)
         autoSchedulerState[key].timer = setTimeout(tick, delay)
@@ -783,6 +812,7 @@ async function stopUnifiedScheduler(promptTypeId, symbol) {
   const key = buildSchedulerKey(promptTypeId, symbol)
   const state = autoSchedulerState[key]
   if (state?.timer) clearTimeout(state.timer)
+  if (state?._lockGuard?.renewTimer) clearInterval(state._lockGuard.renewTimer)
   if (autoSchedulerState[key]) autoSchedulerState[key].running = false
   delete autoSchedulerState[key]
   console.log(`[UnifiedScheduler] Stopped ${key}`)
@@ -790,7 +820,7 @@ async function stopUnifiedScheduler(promptTypeId, symbol) {
 }
 
 // === Unified Auto Cycle: shared signal generation ===
-async function runUnifiedAutoCycle(promptTypeId, symbol) {
+async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   const key = buildSchedulerKey(promptTypeId, symbol)
   const ts = () => new Date().toISOString()
   const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}: ${msg}`)
@@ -876,7 +906,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
     delete signal._inference_source
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
 
-    // 4. Write shared signal to ai_signals
+    // 4. Write shared signal to ai_signals (lock check before irreversible write)
+    if (lockGuard && !(await lockGuard.assertOwned('signal_write'))) {
+      l('BLOCKED: lock lost before signal write')
+      return { status: 'error', reason: 'lock_lost' }
+    }
     const createdAt = beijingNow()
     const marketJson = JSON.stringify(market)
     const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
@@ -917,7 +951,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
       if (isBridgeAlive(uid)) onlineSubscribers.add(uid)
     }
 
-    // 6. Batch write deliveries + notify online subscribers only
+    // 6. Batch write deliveries + notify online subscribers only (lock check)
+    if (lockGuard && !(await lockGuard.assertOwned('delivery_write'))) {
+      l('BLOCKED: lock lost before delivery write')
+      return { status: 'error', reason: 'lock_lost' }
+    }
     const deliveryValues = []
     const deliveryParams = []
     for (const uid of onlineSubscribers) {
@@ -947,7 +985,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
       })
     }
 
-    // 7.5 AI cancel_pending: cancel matching pending orders for eligible subscribers only
+    // 7.5 AI cancel_pending: cancel matching pending orders for eligible subscribers only (lock check)
+    if (lockGuard && !(await lockGuard.assertOwned('cancel_pending'))) {
+      l('BLOCKED: lock lost before cancel_pending')
+      return { status: 'error', reason: 'lock_lost' }
+    }
     if (Array.isArray(signal.cancel_pending) && signal.cancel_pending.length > 0) {
       // Normalize conditions and filter to valid ones
       const validConds = []
@@ -1024,7 +1066,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol) {
       }
     }
 
-    // 8. Auto-trade for eligible subscribers (limited concurrency)
+    // 8. Auto-trade for eligible subscribers (limited concurrency) (lock check)
+    if (lockGuard && !(await lockGuard.assertOwned('auto_trade'))) {
+      l('BLOCKED: lock lost before auto-trade')
+      return { status: 'error', reason: 'lock_lost' }
+    }
     if (signal.signal_type !== 'hold' && aiSource === 'ai' && !signal.is_stale) {
       // Single JOIN query instead of N+1 per subscriber
       const onlineUserIds = [...onlineSubscribers]
@@ -1082,7 +1128,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       `UPDATE auto_signal_deliveries SET execution_status = 'executing', execution_claimed_at = NOW()
        WHERE signal_id = ? AND user_id = ? AND execution_status = 'not_attempted'`,
       [signalId, userId])
-    if (claimed.affectedRows !== 1) {
+    if (!claimed || claimed.changes !== 1) {
       l('skipped: already claimed or terminal state')
       return
     }
@@ -1130,9 +1176,19 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
     }
 
-    // TP validation: selected TP must exist and have correct direction (Fix 2)
+    // TP validation: selected TP must exist and have correct direction (Fix 2+7)
     const isBuyOrder = order.order_type === 'buy'
-    const entryRef = order.limit_price || market.latest_price || 0
+    // Fix 7: use user's own quote for market orders, not admin's price
+    let entryRef = order.limit_price || 0
+    if (!entryRef && order.order_type) {
+      try {
+        const quoteResp = await mt5Bridge(userId, 'quote', { symbol }, { noFallback: true })
+        if (quoteResp && quoteResp.status !== 'error') {
+          entryRef = isBuyOrder ? (parseFloat(quoteResp.ask) || 0) : (parseFloat(quoteResp.bid) || 0)
+        }
+      } catch (e) { l(`quote fetch failed: ${e.message}`) }
+    }
+    if (!entryRef) entryRef = market.latest_price || 0
     if (entryRef > 0) {
       // Check SL direction
       if (order.sl != null) {
@@ -1225,37 +1281,46 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     if (SUPERSEDE_SAME_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
       try {
         const pendingList = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
-        const pendingOrders = pendingList?.orders || pendingList?.pending_list || []
+        // Fix 4: pending_list failure = fail-closed
+        if (!pendingList || pendingList.status === 'error' || !Array.isArray(pendingList?.orders || pendingList?.pending_list)) {
+          l('rejected: pending_list_unavailable')
+          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
+            ['rejected', signalId, userId])
+          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_list_unavailable' },
+            { status: 'rejected', message: 'pending_list_unavailable' }, 'warning')
+          return
+        }
+        const pendingOrders = pendingList.orders || pendingList.pending_list || []
         for (const po of pendingOrders) {
-          if (po.symbol === symbol) {
-            const poType = String(po.pending_type || '').toLowerCase()
-            const poIsBuy = poType.startsWith('buy')
-            const newIsBuy = newOrderDirection === 'buy'
-            if (poIsBuy !== newIsBuy) continue // skip opposite direction
-            try {
-              const cancelResult = await mt5Bridge(userId, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
-              if (cancelResult?.status === 'error') {
-                l(`supersede cancel failed (MT5 error): ticket=${po.ticket}: ${cancelResult.message}`)
-                remainingPendingCount++
-                await insertAudit(null, userId, 'pending_supersede_failed', symbol,
-                  { signal_id: signalId, ticket: po.ticket, error: cancelResult.message },
-                  { status: 'error', message: cancelResult.message }, 'warning')
-                continue
-              }
-              await queryRun(
-                "UPDATE auto_signal_deliveries SET pending_state = 'superseded' WHERE pending_ticket = ? AND user_id = ?",
-                [String(po.ticket), userId])
-              l(`superseded old pending: ticket=${po.ticket} (${po.pending_type})`)
-              await insertAudit(null, userId, 'pending_superseded', symbol,
-                { signal_id: signalId, ticket: po.ticket, pending_type: po.pending_type },
-                { status: 'superseded', ticket: po.ticket }, 'info')
-            } catch (cancelErr) {
-              l(`supersede cancel failed: ticket=${po.ticket}: ${cancelErr.message}`)
+          if (stripBrokerSuffix(String(po.symbol || '')) !== stripBrokerSuffix(symbol)) continue
+          const poType = String(po.pending_type || '').toLowerCase()
+          const poIsBuy = poType.startsWith('buy')
+          const newIsBuy = newOrderDirection === 'buy'
+          if (poIsBuy !== newIsBuy) continue // skip opposite direction
+          try {
+            const cancelResult = await mt5Bridge(userId, 'cancel_pending', { ticket: po.ticket }, { noFallback: true })
+            if (cancelResult?.status !== 'success') {
+              l(`supersede cancel failed: ticket=${po.ticket}: ${cancelResult?.message || 'unknown'}`)
               remainingPendingCount++
               await insertAudit(null, userId, 'pending_supersede_failed', symbol,
-                { signal_id: signalId, ticket: po.ticket, error: cancelErr.message },
-                { status: 'error', message: cancelErr.message }, 'warning')
+                { signal_id: signalId, ticket: po.ticket, error: cancelResult?.message },
+                { status: 'error', message: cancelResult?.message }, 'warning')
+              continue
             }
+            await queryRun(
+              "UPDATE auto_signal_deliveries SET pending_state = 'superseded' WHERE pending_ticket = ? AND user_id = ?",
+              [String(po.ticket), userId])
+            l(`superseded old pending: ticket=${po.ticket} (${po.pending_type})`)
+            await insertAudit(null, userId, 'pending_superseded', symbol,
+              { signal_id: signalId, ticket: po.ticket, pending_type: po.pending_type },
+              { status: 'superseded', ticket: po.ticket }, 'info')
+          } catch (cancelErr) {
+            l(`supersede cancel failed: ticket=${po.ticket}: ${cancelErr.message}`)
+            remainingPendingCount++
+            await insertAudit(null, userId, 'pending_supersede_failed', symbol,
+              { signal_id: signalId, ticket: po.ticket, error: cancelErr.message },
+              { status: 'error', message: cancelErr.message }, 'warning')
           }
         }
       } catch (listErr) {
@@ -1286,8 +1351,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
            pending_ticket = ?, pending_state = 'pending', pending_valid_until = ?,
            execution_result = ? WHERE signal_id = ? AND user_id = ?`,
           [String(ticket), signal.pending_valid_until || null, JSON.stringify(execResult), signalId, userId])
-        // Sync to ai_signals
-        await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ? WHERE id = ?', [String(ticket), signalId]).catch(e => console.warn(`[PendingReconciler] sync pending_ticket failed: ${e.message}`))
+        // Fix 6: shared signals — do NOT write user ticket to ai_signals root
         l(`auto-executed pending: ticket=${ticket}, volume=${order.volume}`)
       } else {
         await queryRun(
@@ -1365,6 +1429,22 @@ export function startPendingReconciler() {
 }
 
 export async function reconcilePendingOrders() {
+  // Fix 8: handle stale executing deliveries (stuck > 5 min → uncertain)
+  try {
+    const staleRows = await queryAll(
+      "SELECT id, user_id, signal_id, execution_claimed_at FROM auto_signal_deliveries WHERE execution_status = 'executing' AND execution_claimed_at IS NOT NULL AND execution_claimed_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)"
+    )
+    for (const row of staleRows) {
+      await queryRun(
+        "UPDATE auto_signal_deliveries SET execution_status = 'uncertain', execution_result = ? WHERE id = ?",
+        [JSON.stringify({ reason: 'stale_executing_timeout', claimed_at: row.execution_claimed_at }), row.id])
+      await insertAudit(null, row.user_id, 'delivery_stale_executing', null,
+        { signal_id: row.signal_id, delivery_id: row.id, claimed_at: row.execution_claimed_at },
+        { status: 'uncertain', reason: 'stale_executing_timeout' }, 'warning')
+      console.warn(`[PendingReconciler] Delivery ${row.id} user=${row.user_id} stuck in executing > 5min → uncertain`)
+    }
+  } catch (e) { console.error('[PendingReconciler] stale executing check error:', e.message) }
+
   const deliveryRows = await queryAll(
     "SELECT id, user_id, signal_id, pending_ticket, pending_valid_until, 'delivery' as src FROM auto_signal_deliveries WHERE pending_state = 'pending'"
   )
@@ -1411,7 +1491,7 @@ export async function reconcilePendingOrders() {
             await queryRun(
               "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
               [ticket, row.id])
-            await queryRun('UPDATE ai_signals SET is_executed = 1, trade_ticket = ? WHERE pending_ticket = ?', [ticket, ticket]).catch(e => console.warn(`[PendingReconciler] sync trade_ticket failed: ${e.message}`))
+            // Fix 6: do NOT sync user ticket to shared root ai_signals
           } else {
             await queryRun(
               "UPDATE ai_signals SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",

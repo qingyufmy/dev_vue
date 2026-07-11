@@ -139,9 +139,13 @@ describe('reconcilePendingOrders', () => {
   })
 
   it('still pending — ticket 在 pending_list 中，不改变状态', async () => {
-    db.queryAll.mockResolvedValue([
-      { id: 1, user_id: 10, signal_id: 100, pending_ticket: '5001', pending_valid_until: '2026-12-31 23:59:59' },
-    ])
+    // First call: stale executing check (empty), Second call: delivery rows
+    db.queryAll
+      .mockResolvedValueOnce([])  // stale executing check
+      .mockResolvedValueOnce([
+        { id: 1, user_id: 10, signal_id: 100, pending_ticket: '5001', pending_valid_until: '2026-12-31 23:59:59' },
+      ])
+      .mockResolvedValueOnce([])  // signal rows
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [{ ticket: 5001 }] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
@@ -154,10 +158,11 @@ describe('reconcilePendingOrders', () => {
 
   it('filled — ticket 不在 pending_list 但在 positions 中', async () => {
     db.queryAll
+      .mockResolvedValueOnce([])  // stale executing check
       .mockResolvedValueOnce([
         { id: 2, user_id: 10, signal_id: 200, pending_ticket: '5002', pending_valid_until: '2026-12-31 23:59:59', src: 'delivery' },
       ])
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])  // signal rows
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [{ ticket: 5002 }] })
@@ -172,9 +177,11 @@ describe('reconcilePendingOrders', () => {
 
   it('expired — ticket 不在任一集合中，且已过有效期', async () => {
     db.queryAll
+      .mockResolvedValueOnce([])  // stale executing check
       .mockResolvedValueOnce([
         { id: 3, user_id: 10, signal_id: 300, pending_ticket: '5003', pending_valid_until: '2020-01-01 00:00:00', src: 'delivery' },
       ])
+      .mockResolvedValueOnce([])  // signal rows
       .mockResolvedValueOnce([])
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
@@ -191,10 +198,11 @@ describe('reconcilePendingOrders', () => {
   it('cancelled — ticket 不在任一集合中，且未过有效期', async () => {
     const futureDate = new Date(Date.now() + 86400000).toISOString().replace('T', ' ').slice(0, 19)
     db.queryAll
+      .mockResolvedValueOnce([])  // stale executing check
       .mockResolvedValueOnce([
         { id: 4, user_id: 10, signal_id: 400, pending_ticket: '5004', pending_valid_until: futureDate, src: 'delivery' },
       ])
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])  // signal rows
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
@@ -210,10 +218,11 @@ describe('reconcilePendingOrders', () => {
   it('桥接离线时跳过该用户', async () => {
     bridgeWs.isBridgeAlive.mockReturnValue(false)
     db.queryAll
+      .mockResolvedValueOnce([])  // stale executing check
       .mockResolvedValueOnce([
         { id: 5, user_id: 20, signal_id: 500, pending_ticket: '5005', pending_valid_until: '2026-12-31 23:59:59', src: 'delivery' },
       ])
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])  // signal rows
 
     await reconcilePendingOrders()
     expect(marketData.mt5Bridge).not.toHaveBeenCalled()
@@ -222,10 +231,11 @@ describe('reconcilePendingOrders', () => {
 
   it('pending_valid_until 为 null 时按 cancelled 处理（未过期分支）', async () => {
     db.queryAll
+      .mockResolvedValueOnce([])  // stale executing check
       .mockResolvedValueOnce([
         { id: 6, user_id: 10, signal_id: 600, pending_ticket: '5006', pending_valid_until: null, src: 'delivery' },
       ])
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])  // signal rows
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
@@ -240,11 +250,12 @@ describe('reconcilePendingOrders', () => {
 
   it('多用户并行处理', async () => {
     db.queryAll
+      .mockResolvedValueOnce([])  // stale executing check
       .mockResolvedValueOnce([
         { id: 7, user_id: 10, signal_id: 700, pending_ticket: '5007', pending_valid_until: '2020-01-01 00:00:00', src: 'delivery' },
         { id: 8, user_id: 20, signal_id: 800, pending_ticket: '5008', pending_valid_until: '2020-01-01 00:00:00', src: 'delivery' },
       ])
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])  // signal rows
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [] })

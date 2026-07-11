@@ -17,6 +17,24 @@ export function parsePromptSymbols(symbolsJson) {
   return [...new Set(arr.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
 }
 
+// Resolve user's effective symbols: selected ∩ strategy (Fix 3)
+// NULL = old user, fallback to strategy all; [] = explicitly empty; damaged JSON = empty
+export function resolveEffectiveSymbols(selectedSymbolsJson, strategySymbolsJson) {
+  let strategySymbols = []
+  try { strategySymbols = JSON.parse(strategySymbolsJson || '[]') } catch (e) { console.warn('[Config] Failed to parse strategy symbols:', e.message) }
+  strategySymbols = [...new Set(strategySymbols.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
+  if (selectedSymbolsJson == null) return strategySymbols // NULL = fallback all
+  let userSymbols
+  try { userSymbols = JSON.parse(selectedSymbolsJson) } catch (e) {
+    console.warn('[Config] Damaged selected_symbols_json, failing closed to empty')
+    return []
+  }
+  if (!Array.isArray(userSymbols)) return []
+  userSymbols = [...new Set(userSymbols.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
+  if (userSymbols.length === 0) return [] // explicit empty = no symbols
+  return userSymbols.filter(s => strategySymbols.includes(s))
+}
+
 export class RiskReject extends Error {
   constructor(reason, details = {}) {
     super(reason)
@@ -188,10 +206,10 @@ export async function getAutoConfig(db, userId) {
     const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
     if (firstPt) row.prompt_type_id = firstPt.id
   }
-  // Populate selected_symbols from prompt type (auto_scheduler table has no symbols column)
+  // Populate selected_symbols using resolveEffectiveSymbols (Fix 3)
   if (row.prompt_type_id) {
     const pt = await queryOne('SELECT symbols_json FROM auto_prompt_types WHERE id = ?', [row.prompt_type_id])
-    if (pt) row.selected_symbols = parsePromptSymbols(pt.symbols_json || '[]')
+    row.selected_symbols = resolveEffectiveSymbols(row.selected_symbols_json, pt?.symbols_json || '[]')
   }
   return row
 }
@@ -331,11 +349,11 @@ export async function getUserAutoConfig(userId) {
     const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
     if (firstPt) scheduler.prompt_type_id = firstPt.id
   }
-  // Populate selected_symbols from prompt type (auto_scheduler.symbols column was dropped)
+  // Populate selected_symbols using resolveEffectiveSymbols (Fix 3)
   scheduler.selected_symbols = []
   if (scheduler.prompt_type_id) {
     const pt = await queryOne('SELECT symbols_json FROM auto_prompt_types WHERE id = ?', [scheduler.prompt_type_id])
-    if (pt) scheduler.selected_symbols = parsePromptSymbols(pt.symbols_json || '[]')
+    scheduler.selected_symbols = resolveEffectiveSymbols(scheduler.selected_symbols_json, pt?.symbols_json || '[]')
   }
   let pausedReason = ''
   if (scheduler.enabled) {

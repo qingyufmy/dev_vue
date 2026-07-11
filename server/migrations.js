@@ -944,7 +944,7 @@ const migrations = [
         console.log('[Migrations] 048 added execution_claimed_at to auto_signal_deliveries')
       } catch (e) {
         if (e.message?.includes('Duplicate column')) console.log('[Migrations] 048 execution_claimed_at already exists')
-        else console.error('[Migrations] 048 error:', e.message)
+        else throw e // Fix 9: non-duplicate errors must throw
       }
       // Add selected_symbols_json for user-level symbol persistence
       try {
@@ -952,8 +952,27 @@ const migrations = [
         console.log('[Migrations] 048 added selected_symbols_json to auto_scheduler')
       } catch (e) {
         if (e.message?.includes('Duplicate column')) console.log('[Migrations] 048 selected_symbols_json already exists')
-        else console.error('[Migrations] 048 error:', e.message)
+        else throw e // Fix 9: non-duplicate errors must throw
       }
+    }
+  },
+  {
+    id: '049_repair_048_fields',
+    up: async () => {
+      // Fix 9: repair migration — verify 048 fields exist, create if missing
+      const checkCol = async (table, col) => {
+        const rows = await queryAll(`SELECT COUNT(*) as cnt FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = '${col}'`)
+        return rows[0]?.cnt > 0
+      }
+      if (!await checkCol('auto_signal_deliveries', 'execution_claimed_at')) {
+        await queryRun('ALTER TABLE auto_signal_deliveries ADD COLUMN execution_claimed_at DATETIME DEFAULT NULL')
+        console.log('[Migrations] 049 repaired: added execution_claimed_at')
+      }
+      if (!await checkCol('auto_scheduler', 'selected_symbols_json')) {
+        await queryRun('ALTER TABLE auto_scheduler ADD COLUMN selected_symbols_json TEXT DEFAULT NULL')
+        console.log('[Migrations] 049 repaired: added selected_symbols_json')
+      }
+      console.log('[Migrations] 049 repair check complete')
     }
   }
 ]
