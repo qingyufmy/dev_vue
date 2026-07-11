@@ -31,6 +31,7 @@ import { authMiddleware } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
 import { initCryptoWallet } from './crypto/wallet.js'
+import { startHoldSignalCleanup } from './jobs/hold-signal-cleanup.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -366,6 +367,7 @@ initBridgeWS(server)
   await initDB()
   await runMigrations()
   await initAutoSchedulers()
+  startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   console.log(`[TZ] server=${Intl.DateTimeFormat().resolvedOptions().timeZone} db_session=+08:00 parse=explicit(+08:00)`)
   server.listen(PORT, () => {
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)

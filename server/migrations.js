@@ -974,6 +974,21 @@ const migrations = [
       }
       console.log('[Migrations] 049 repair check complete')
     }
+  },
+  {
+    id: '050_hold_signal_cleanup_index',
+    up: async () => {
+      try {
+        await queryRun('CREATE INDEX idx_ai_signals_hold_cleanup ON ai_signals(signal_type, created_at, id)')
+        console.log('[Migrations] 050 added hold signal cleanup index')
+      } catch (e) {
+        if (e.message?.includes('Duplicate key name')) {
+          console.log('[Migrations] 050 hold signal cleanup index already exists')
+        } else {
+          throw e
+        }
+      }
+    }
   }
 ]
 
