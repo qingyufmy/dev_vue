@@ -211,19 +211,21 @@ describe('Migration 049 repair (Fix 9 from previous round)', () => {
 describe('Delivery claiming (Fix 3)', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  it('changes=1 allows execution to proceed', () => {
+  it('changes=1 allows execution to proceed', async () => {
     db.queryRun.mockResolvedValue({ changes: 1 })
-    // Verify the mock contract
-    expect(db.queryRun('test').then(r => r.changes)).resolves.toBe(1)
+    const result = await db.queryRun('test')
+    expect(result.changes).toBe(1)
   })
 
-  it('changes=0 means already claimed', () => {
+  it('changes=0 means already claimed', async () => {
     db.queryRun.mockResolvedValue({ changes: 0 })
-    expect(db.queryRun('test').then(r => r.changes)).resolves.toBe(0)
+    const result = await db.queryRun('test')
+    expect(result.changes).toBe(0)
   })
 
-  it('null result means failure', () => {
+  it('null result means failure', async () => {
     db.queryRun.mockResolvedValue(null)
-    expect(db.queryRun('test').then(r => !r || r.changes !== 1)).resolves.toBe(true)
+    const result = await db.queryRun('test')
+    expect(!result || result.changes !== 1).toBe(true)
   })
 })
