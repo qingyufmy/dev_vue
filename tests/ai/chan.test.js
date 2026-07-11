@@ -232,17 +232,69 @@ describe('buildSegments', () => {
     expect(segments[0].bi_ids).toEqual([1, 2, 3])
   })
 
-  it('有缺口特征序列等待反向三笔破坏后确认', () => {
+  it('有缺口特征序列等待第二特征序列分型后确认', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
+      makeBi(3, 'up', 110, 140), makeBi(4, 'down', 140, 130),
+      makeBi(5, 'up', 130, 135), makeBi(6, 'down', 135, 100),
+      makeBi(7, 'up', 100, 120), makeBi(8, 'down', 120, 110),
+      makeBi(9, 'up', 110, 125),
+    ]
+    const { segments } = buildSegments(bis)
+    expect(segments).toHaveLength(1)
+    expect(segments[0].confirmation).toBe('gap_reverse_confirmed')
+    expect(segments[0].bi_ids).toEqual([1, 2, 3])
+  })
+
+  it('缺口后只有价格破坏但无第二特征序列分型时不确认', () => {
     const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
     const bis = [
       makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
       makeBi(3, 'up', 110, 140), makeBi(4, 'down', 140, 130),
       makeBi(5, 'up', 130, 135), makeBi(6, 'down', 135, 100),
     ]
+    expect(buildSegments(bis).segments).toHaveLength(0)
+  })
+
+  it('等待第二特征序列时原上涨方向创新高会使候选失效', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
+      makeBi(3, 'up', 110, 140), makeBi(4, 'down', 140, 130),
+      makeBi(5, 'up', 130, 145), makeBi(6, 'down', 145, 100),
+      makeBi(7, 'up', 100, 120), makeBi(8, 'down', 120, 110),
+      makeBi(9, 'up', 110, 125),
+    ]
+    expect(buildSegments(bis).segments).toHaveLength(0)
+  })
+
+  it('无缺口特征序列底分型对称确认下跌线段', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'down', 140, 120), makeBi(2, 'up', 120, 130),
+      makeBi(3, 'down', 130, 110), makeBi(4, 'up', 110, 125),
+      makeBi(5, 'down', 125, 115), makeBi(6, 'up', 115, 135),
+    ]
     const { segments } = buildSegments(bis)
     expect(segments).toHaveLength(1)
-    expect(segments[0].confirmation).toBe('gap_reverse_confirmed')
+    expect(segments[0]).toMatchObject({ dir: 'down', start_price: 140, end_price: 110, confirmation: 'feature_fractal' })
     expect(segments[0].bi_ids).toEqual([1, 2, 3])
+  })
+
+  it('滚动窗口首段仅用于重同步，不输出截断线段', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
+      makeBi(3, 'up', 110, 130), makeBi(4, 'down', 130, 115),
+      makeBi(5, 'up', 115, 125), makeBi(6, 'down', 125, 105),
+      makeBi(7, 'up', 105, 120), makeBi(8, 'down', 120, 110),
+      makeBi(9, 'up', 110, 128), makeBi(10, 'down', 128, 100),
+    ]
+    const result = buildSegments(bis, { trustedStart: false })
+    expect(result.resynced).toBe(true)
+    expect(result.segments).toHaveLength(1)
+    expect(result.segments[0]).toMatchObject({ dir: 'down', start_bi_id: 4, end_bi_id: 6 })
   })
 
   it('多组交替笔序列始终满足线段结构不变量', () => {
@@ -425,6 +477,8 @@ describe('detectDivergence', () => {
     const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('top')
+    expect(result.category).toBe('center_departure')
+    expect(result.trend_confirmed).toBe(false)
     expect(result.reason).toBe('macd_area_divergence')
     expect(result.price_extreme_cur).toBe(130)
     expect(result.price_extreme_prev).toBe(125)
@@ -446,6 +500,8 @@ describe('detectDivergence', () => {
     const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('bottom')
+    expect(result.category).toBe('center_departure')
+    expect(result.trend_confirmed).toBe(false)
     expect(result.reason).toBe('macd_area_divergence')
     expect(result.price_extreme_cur).toBe(85)
     expect(result.price_extreme_prev).toBe(90)

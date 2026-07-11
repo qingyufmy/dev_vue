@@ -216,15 +216,49 @@ function normalizeFeatureSequence(elements) {
   return merged
 }
 
-function reverseSegmentConfirmed(bis, endpointIndex, oldDirection) {
+function findFeatureFractals(rawFeatures, segmentDirection) {
+  const features = normalizeFeatureSequence(rawFeatures)
+  const fractals = []
+  for (let i = 1; i + 1 < features.length; i++) {
+    const prev = features[i - 1]
+    const cur = features[i]
+    const next = features[i + 1]
+    const matched = segmentDirection === 'up'
+      ? cur.high > prev.high && cur.high > next.high && cur.low > prev.low && cur.low > next.low
+      : cur.low < prev.low && cur.low < next.low && cur.high < prev.high && cur.high < next.high
+    if (matched) fractals.push({ prev, cur, next, features })
+  }
+  return fractals
+}
+
+function makeFeature(bi, index) {
+  return {
+    source_start_index: index,
+    source_end_index: index,
+    high_source_index: index,
+    low_source_index: index,
+    high: bi.high,
+    low: bi.low,
+    start_price: bi.start_price,
+    end_price: bi.end_price,
+  }
+}
+
+// In the gap case, the first feature fractal is only a candidate. The segment
+// ends there after the new reverse segment's standard feature sequence forms
+// its own opposite fractal. A new old-direction extreme invalidates it first.
+function confirmGapEndpoint(bis, endpointIndex, oldDirection) {
+  const endpointBi = bis[endpointIndex]
+  if (!endpointBi) return false
   const reverseDirection = oldDirection === 'up' ? 'down' : 'up'
-  const first = bis[endpointIndex]
-  if (!first || first.dir !== reverseDirection) return false
-  for (let i = endpointIndex + 2; i < bis.length; i += 2) {
-    const sameDirectionBi = bis[i]
-    if (!sameDirectionBi || sameDirectionBi.dir !== reverseDirection) continue
-    if (reverseDirection === 'down' && sameDirectionBi.end_price < first.end_price) return true
-    if (reverseDirection === 'up' && sameDirectionBi.end_price > first.end_price) return true
+  const secondFeatures = []
+  for (let i = endpointIndex + 1; i < bis.length; i += 2) {
+    const bi = bis[i]
+    if (!bi || bi.dir !== oldDirection) break
+    if (oldDirection === 'up' && bi.high > endpointBi.high) return false
+    if (oldDirection === 'down' && bi.low < endpointBi.low) return false
+    secondFeatures.push(makeFeature(bi, i))
+    if (findFeatureFractals(secondFeatures, reverseDirection).length > 0) return true
   }
   return false
 }
@@ -235,45 +269,38 @@ function findSegmentEndpoint(bis, startIndex, segmentDirection) {
   for (let i = startIndex + 1; i < bis.length; i += 2) {
     const bi = bis[i]
     if (bi.dir !== featureDirection) break
-    rawFeatures.push({
-      source_start_index: i,
-      source_end_index: i,
-      high_source_index: i,
-      low_source_index: i,
-      high: bi.high,
-      low: bi.low,
-      start_price: bi.start_price,
-      end_price: bi.end_price,
-    })
+    rawFeatures.push(makeFeature(bi, i))
   }
-  const features = normalizeFeatureSequence(rawFeatures)
-  for (let i = 1; i + 1 < features.length; i++) {
-    const prev = features[i - 1]
-    const cur = features[i]
-    const next = features[i + 1]
-    const targetFractal = segmentDirection === 'up'
-      ? cur.high > prev.high && cur.high > next.high && cur.low > prev.low && cur.low > next.low
-      : cur.low < prev.low && cur.low < next.low && cur.high < prev.high && cur.high < next.high
-    if (!targetFractal) continue
+  for (const { prev, cur, features } of findFeatureFractals(rawFeatures, segmentDirection)) {
     const endpointIndex = segmentDirection === 'up' ? cur.high_source_index : cur.low_source_index
     const strokeCount = endpointIndex - startIndex
     if (strokeCount < MIN_BIS_PER_SEGMENT || strokeCount % 2 === 0) continue
     const hasGap = !rangesOverlap(prev, cur)
-    if (hasGap && !reverseSegmentConfirmed(bis, endpointIndex, segmentDirection)) continue
+    if (hasGap && !confirmGapEndpoint(bis, endpointIndex, segmentDirection)) continue
     return { endpointIndex, hasGap, feature_count: features.length }
   }
   return null
 }
 
 // === Chan Theory: Segment Construction from characteristic sequences ===
-function buildSegments(confirmedBis) {
-  if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null }
+function buildSegments(confirmedBis, options = {}) {
+  if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null, resynced: false }
+  const trustedStart = options.trustedStart !== false
   const segments = []
   let startIndex = 0
+  let resynced = false
   while (startIndex + MIN_BIS_PER_SEGMENT <= confirmedBis.length) {
     const dir = confirmedBis[startIndex].dir
     const endpoint = findSegmentEndpoint(confirmedBis, startIndex, dir)
     if (!endpoint) break
+    if (!trustedStart && !resynced && segments.length === 0) {
+      // A rolling rates window normally starts in the middle of an older
+      // segment. Use its first detectable endpoint only as the structure
+      // anchor; emitting the truncated prefix would repaint history.
+      startIndex = endpoint.endpointIndex
+      resynced = true
+      continue
+    }
     const segBis = confirmedBis.slice(startIndex, endpoint.endpointIndex)
     const startPrice = segBis[0].start_price
     const endPrice = segBis[segBis.length - 1].end_price
@@ -304,7 +331,7 @@ function buildSegments(confirmedBis) {
   } : null
 
   if (DEBUG_CHAN) console.log(`[Chan] Segments(${segments.length}): ${segments.map(s => `#${s.id}(${s.dir}) bis=${s.bi_ids.length}`).join(' | ')}`)
-  return { segments, candidate }
+  return { segments, candidate, resynced }
 }
 
 // === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
@@ -396,11 +423,11 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
 
   if (cur.dir === 'up') {
     if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'top', category: 'center_departure', trend_confirmed: false, strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
     return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
   } else {
     if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'bottom', category: 'center_departure', trend_confirmed: false, strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
     return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
   }
 }
@@ -421,7 +448,8 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     warnings.push('insufficient_confirmed_bis')
     return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
   }
-  const { segments, candidate } = buildSegments(confirmedBis)
+  const { segments, candidate, resynced } = buildSegments(confirmedBis, { trustedStart: false })
+  if (resynced) warnings.push('segment_window_resynced')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
   const centers = buildCenters(validSegs)
@@ -476,6 +504,8 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       id: activeCenter.id,
       zl: round5(activeCenter.zl),
       zh: round5(activeCenter.zh),
+      source_timeframe: timeframe,
+      structure_level: 'segment',
       level: timeframe,
       status: activeCenter.status,
       start_segment_id: activeCenter.start_segment_id,
@@ -483,10 +513,12 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     } : null,
     active_center: activeCenter ? {
       id: activeCenter.id, zl: round5(activeCenter.zl), zh: round5(activeCenter.zh), status: activeCenter.status,
+      source_timeframe: timeframe, structure_level: 'segment',
       start_segment_id: activeCenter.start_segment_id, end_segment_id: activeCenter.end_segment_id,
     } : null,
     latest_center: latestCenter ? {
       id: latestCenter.id, zl: round5(latestCenter.zl), zh: round5(latestCenter.zh), status: latestCenter.status,
+      source_timeframe: timeframe, structure_level: 'segment',
       start_segment_id: latestCenter.start_segment_id, end_segment_id: latestCenter.end_segment_id,
     } : null,
     price_vs_center: priceVsCenter,
