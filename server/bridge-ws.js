@@ -1638,22 +1638,46 @@ async function handleBrowserCommand(ws, userId, msg) {
             }
           }
 
-          // 3. Also match signals WITH trade_ticket but NOT is_executed=1
-          // (auto-reasoning assigns trade_ticket before execution)
+          // 3. Also match signals WITH trade_ticket OR pending_ticket but NOT is_executed=1
+          // (pending orders placed but reconciler hasn't matched ticket yet)
           const unmatchedTickets2 = tickets.filter(tk => !signalMap[tk])
           if (unmatchedTickets2.length > 0) {
             const placeholders = unmatchedTickets2.map(() => '?').join(',')
             const taggedRows = await queryAll(
-              `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+              `SELECT id, trade_ticket, pending_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
                       stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
                       session_id, is_executed, execution_result, created_at, symbol
-               FROM ai_signals WHERE trade_ticket IN (${placeholders}) AND is_executed != 1
+               FROM ai_signals WHERE (trade_ticket IN (${placeholders}) OR pending_ticket IN (${placeholders}))
+               AND is_executed != 1
                ORDER BY created_at DESC`,
-              unmatchedTickets2
+              [...unmatchedTickets2, ...unmatchedTickets2]
             )
             for (const s of taggedRows) {
-              const tk = String(s.trade_ticket)
-              if (!signalMap[tk]) signalMap[tk] = []
+              let tk = String(s.trade_ticket || '')
+              if (!tk || signalMap[tk]) tk = String(s.pending_ticket || '')
+              if (!tk || signalMap[tk]) continue
+              signalMap[tk] = signalMap[tk] || []
+              signalMap[tk].push(flattenSignal(s))
+            }
+          }
+
+          // 4. Final fallback: match is_executed=1 signals by pending_ticket
+          // (pending order was filled, reconciler set is_executed=1 but trade_ticket stayed null)
+          const stillUnmatched = tickets.filter(tk => !signalMap[tk])
+          if (stillUnmatched.length > 0) {
+            const ph = stillUnmatched.map(() => '?').join(',')
+            const filledRows = await queryAll(
+              `SELECT id, trade_ticket, pending_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+                      stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+                      session_id, is_executed, execution_result, created_at, symbol
+               FROM ai_signals WHERE pending_ticket IN (${ph}) AND is_executed = 1
+               ORDER BY created_at DESC`,
+              stillUnmatched
+            )
+            for (const s of filledRows) {
+              const tk = String(s.pending_ticket || '')
+              if (!tk || signalMap[tk]) continue
+              signalMap[tk] = signalMap[tk] || []
               signalMap[tk].push(flattenSignal(s))
             }
           }
