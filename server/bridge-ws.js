@@ -20,6 +20,56 @@ const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 
 
 let cmdCounter = 0
 let wss = null
+
+const TRADE_REF_KEYS = new Set([
+  'ticket', 'order', 'order_id', 'order_ticket', 'position', 'position_id',
+  'position_ticket', 'deal', 'deal_id', 'deal_ticket', 'trade_ticket', 'pending_ticket'
+])
+
+function addTradeRef(refs, value) {
+  if (value === null || value === undefined || value === '') return
+  const normalized = String(value).trim()
+  if (normalized && normalized !== '0') refs.add(normalized)
+}
+
+function collectTradeRefsFromValue(value, refs, depth = 0) {
+  if (!value || depth > 4) return
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return
+    try { collectTradeRefsFromValue(JSON.parse(trimmed), refs, depth + 1) } catch {}
+    return
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectTradeRefsFromValue(item, refs, depth + 1)
+    return
+  }
+  if (typeof value !== 'object') return
+  for (const [key, item] of Object.entries(value)) {
+    if (TRADE_REF_KEYS.has(key.toLowerCase())) addTradeRef(refs, item)
+    if (item && typeof item === 'object') collectTradeRefsFromValue(item, refs, depth + 1)
+  }
+}
+
+export function collectTradeRefs(record) {
+  const refs = new Set()
+  collectTradeRefsFromValue(record, refs)
+  if (record?.execution_result) collectTradeRefsFromValue(record.execution_result, refs)
+  return [...refs]
+}
+
+export function buildSignalRefIndex(rows, toSignal = row => row) {
+  const index = new Map()
+  for (const row of rows || []) {
+    const signal = toSignal(row)
+    for (const ref of collectTradeRefs(row)) {
+      if (!index.has(ref)) index.set(ref, [])
+      const bucket = index.get(ref)
+      if (!bucket.some(item => String(item.id) === String(signal.id))) bucket.push(signal)
+    }
+  }
+  return index
+}
 const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
 
 // 每 10 分钟清理超过 30 秒未使用的广播节流条目
@@ -1567,126 +1617,53 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (params.profit_filter === 'loss') orders = orders.filter(o => _op(o) < 0)
         orders.sort((a, b) => _od(b).localeCompare(_od(a)))
 
-        // Collect all tickets from orders
-        const tickets = orders.map(o => String(o.ticket || o.order || '')).filter(Boolean)
-        let signalMap = {}
-
-        if (tickets.length > 0) {
-          // Match tickets against BOTH ai_signals and auto_signal_deliveries
-          // (auto-reasoning pending fills only store ticket in deliveries, not in ai_signals root)
-          const sigPlaceholders = tickets.map(() => '?').join(',')
-
-          // 1. Direct trade_ticket match in ai_signals
-          const signalRows = await queryAll(
-            `SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
-                    stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
-                    session_id, is_executed, execution_result, created_at, symbol
-             FROM ai_signals WHERE is_executed = 1 AND trade_ticket IN (${sigPlaceholders})
-             UNION
-             SELECT id, trade_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
-                    stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
-                    session_id, is_executed, execution_result, created_at, symbol
-             FROM ai_signals WHERE is_executed = 0 AND trade_ticket IN (${sigPlaceholders})
-             LIMIT 5000`,
-            [...tickets, ...tickets]
-          )
-
-          // Build ticket→signal map using same extraction as signal_tickets handler
-          for (const s of signalRows) {
-            let ticket = s.trade_ticket
-            if (!ticket) {
-              try {
-                const exec = JSON.parse(s.execution_result || '{}')
-                ticket = exec.order || exec.ticket || exec.position
-              } catch (e) { console.warn('[BridgeWS] Failed to parse signal execution_result:', e.message) }
-            }
-            if (ticket) {
-              const tk = String(ticket)
-              if (!signalMap[tk]) signalMap[tk] = []
-              signalMap[tk].push(flattenSignal(s))
-            }
+        const signalRows = await queryAll(
+          `SELECT id, trade_ticket, pending_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
+                  stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+                  session_id, is_executed, execution_result, created_at, symbol
+           FROM ai_signals
+           WHERE user_id = ?
+           ORDER BY created_at DESC LIMIT 5000`,
+          [expUserId]
+        )
+        const deliveryRows = await queryAll(
+          `SELECT d.trade_ticket, d.pending_ticket, d.signal_id, d.execution_result,
+                  d.is_executed AS delivery_is_executed,
+                  s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning,
+                  s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price,
+                  s.session_id, s.created_at, s.symbol
+           FROM auto_signal_deliveries d
+           JOIN ai_signals s ON s.id = d.signal_id
+           WHERE d.user_id = ?
+           ORDER BY s.created_at DESC LIMIT 5000`,
+          [expUserId]
+        )
+        const signalIndex = buildSignalRefIndex(signalRows, flattenSignal)
+        const deliveryIndex = buildSignalRefIndex(deliveryRows, r => ({
+          id: r.signal_id, type: r.signal_type, confidence: r.confidence,
+          volume: r.recommended_volume, analysis: r.analysis, reasoning: r.reasoning,
+          stop_loss: r.stop_loss_price, tp1: r.take_profit_1_price,
+          tp2: r.take_profit_2_price, tp3: r.take_profit_3_price,
+          session: r.session_id || 'default', executed: !!r.delivery_is_executed,
+          exec_result: r.execution_result, created_at: r.created_at, symbol: r.symbol,
+        }))
+        for (const [ref, signals] of deliveryIndex) {
+          const existing = signalIndex.get(ref) || []
+          for (const signal of signals) {
+            if (!existing.some(item => String(item.id) === String(signal.id))) existing.push(signal)
           }
-
-          // 2. Match via auto_signal_deliveries (auto-reasoning pending fills)
-          const unmatchedTickets = tickets.filter(tk => !signalMap[tk])
-          if (unmatchedTickets.length > 0) {
-            const placeholders = unmatchedTickets.map(() => '?').join(',')
-            // Get delivery records with their signal details
-            const deliveryRows = await queryAll(
-              `SELECT d.trade_ticket, d.signal_id, d.execution_result,
-                      s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning,
-                      s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price,
-                      s.session_id, s.is_executed, s.created_at, s.symbol
-               FROM auto_signal_deliveries d
-               LEFT JOIN ai_signals s ON s.id = d.signal_id
-               WHERE d.trade_ticket IN (${placeholders})`,
-              unmatchedTickets
-            )
-            for (const r of deliveryRows) {
-              const tk = String(r.trade_ticket)
-              if (!tk || !r.signal_type) continue
-              if (!signalMap[tk]) signalMap[tk] = []
-              signalMap[tk].push({
-                id: r.signal_id, type: r.signal_type, confidence: r.confidence,
-                volume: r.recommended_volume, analysis: r.analysis, reasoning: r.reasoning,
-                stop_loss: r.stop_loss_price, tp1: r.take_profit_1_price,
-                tp2: r.take_profit_2_price, tp3: r.take_profit_3_price,
-                session: r.session_id || 'default',
-                executed: !!r.is_executed, exec_result: r.execution_result,
-                created_at: r.created_at, symbol: r.symbol,
-              })
-            }
-          }
-
-          // 3. Also match signals WITH trade_ticket OR pending_ticket but NOT is_executed=1
-          // (pending orders placed but reconciler hasn't matched ticket yet)
-          const unmatchedTickets2 = tickets.filter(tk => !signalMap[tk])
-          if (unmatchedTickets2.length > 0) {
-            const placeholders = unmatchedTickets2.map(() => '?').join(',')
-            const taggedRows = await queryAll(
-              `SELECT id, trade_ticket, pending_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
-                      stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
-                      session_id, is_executed, execution_result, created_at, symbol
-               FROM ai_signals WHERE (trade_ticket IN (${placeholders}) OR pending_ticket IN (${placeholders}))
-               AND is_executed != 1
-               ORDER BY created_at DESC`,
-              [...unmatchedTickets2, ...unmatchedTickets2]
-            )
-            for (const s of taggedRows) {
-              let tk = String(s.trade_ticket || '')
-              if (!tk || signalMap[tk]) tk = String(s.pending_ticket || '')
-              if (!tk || signalMap[tk]) continue
-              signalMap[tk] = signalMap[tk] || []
-              signalMap[tk].push(flattenSignal(s))
-            }
-          }
-
-          // 4. Final fallback: match is_executed=1 signals by pending_ticket
-          // (pending order was filled, reconciler set is_executed=1 but trade_ticket stayed null)
-          const stillUnmatched = tickets.filter(tk => !signalMap[tk])
-          if (stillUnmatched.length > 0) {
-            const ph = stillUnmatched.map(() => '?').join(',')
-            const filledRows = await queryAll(
-              `SELECT id, trade_ticket, pending_ticket, signal_type, confidence, recommended_volume, analysis, reasoning,
-                      stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
-                      session_id, is_executed, execution_result, created_at, symbol
-               FROM ai_signals WHERE pending_ticket IN (${ph}) AND is_executed = 1
-               ORDER BY created_at DESC`,
-              stillUnmatched
-            )
-            for (const s of filledRows) {
-              const tk = String(s.pending_ticket || '')
-              if (!tk || signalMap[tk]) continue
-              signalMap[tk] = signalMap[tk] || []
-              signalMap[tk].push(flattenSignal(s))
-            }
-          }
+          signalIndex.set(ref, existing)
         }
 
         // Build export rows: one order + reasoning = one row
         const exportRows = orders.map(o => {
           const tk = String(o.ticket || o.order || '')
-          const signals = signalMap[tk] || []
+          const signals = []
+          for (const ref of collectTradeRefs(o)) {
+            for (const signal of signalIndex.get(ref) || []) {
+              if (!signals.some(item => String(item.id) === String(signal.id))) signals.push(signal)
+            }
+          }
           const mainSignal = signals.find(s => s.session === 'default') || signals[0] || {}
           return {
             // Order fields

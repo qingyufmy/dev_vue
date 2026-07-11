@@ -56,6 +56,8 @@ import {
   getAllBridges,
   getBridgeDiagnostics,
   sendToBrowsers,
+  collectTradeRefs,
+  buildSignalRefIndex,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -94,6 +96,36 @@ describe('bridge-ws.js — exported API shape', () => {
 
   it('sendToBrowsers is exported as function', () => {
     expect(typeof sendToBrowsers).toBe('function')
+  })
+})
+
+describe('history export signal association', () => {
+  it('collects order, position and deal references from MT5 history', () => {
+    expect(collectTradeRefs({
+      ticket: 1001,
+      order: 1001,
+      position_id: 2002,
+      deal_ticket: 3003,
+    })).toEqual(expect.arrayContaining(['1001', '2002', '3003']))
+  })
+
+  it('collects references nested in JSON execution results', () => {
+    expect(collectTradeRefs({
+      trade_ticket: null,
+      execution_result: JSON.stringify({ result: { order: 1001, deal: 3003, position: 2002 } }),
+    })).toEqual(expect.arrayContaining(['1001', '2002', '3003']))
+  })
+
+  it('indexes one inference signal under every known trade reference', () => {
+    const index = buildSignalRefIndex([{
+      id: 9,
+      pending_ticket: '1001',
+      execution_result: JSON.stringify({ position_id: '2002', deal_ticket: '3003' }),
+      analysis: 'inference result',
+    }])
+    expect(index.get('1001')?.[0].analysis).toBe('inference result')
+    expect(index.get('2002')?.[0].id).toBe(9)
+    expect(index.get('3003')?.[0].id).toBe(9)
   })
 })
 
