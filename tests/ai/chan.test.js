@@ -44,6 +44,17 @@ describe('normalizeBarsForChan', () => {
       expect(typeof b.high).toBe('number')
     })
   })
+
+  it('开头连续包含时使用后续首个明确走势确定合并方向', () => {
+    const rates = [
+      { time: 't0', open: 105, high: 120, low: 90, close: 100 },
+      { time: 't1', open: 104, high: 118, low: 92, close: 98 },
+      { time: 't2', open: 100, high: 115, low: 85, close: 90 },
+    ]
+    const bars = normalizeBarsForChan(rates)
+    expect(bars[0].high).toBe(118)
+    expect(bars[0].low).toBe(90)
+  })
 })
 
 describe('detectFractals', () => {
@@ -160,6 +171,73 @@ describe('buildSegments', () => {
       expect(segments.length).toBeLessThan(confirmed.length)
     }
   })
+
+  it('正式线段方向、价格、笔数和首尾笔保持一致', () => {
+    const rates = makeRates(160)
+    const bars = normalizeBarsForChan(rates)
+    const fractals = detectFractals(bars)
+    const { bis } = buildBis(fractals, bars)
+    const confirmed = bis.filter(b => b.confirmed !== false)
+    const { segments } = buildSegments(confirmed)
+    const used = new Set()
+    segments.forEach((segment, index) => {
+      expect(segment.bi_ids.length).toBeGreaterThanOrEqual(3)
+      expect(segment.bi_ids.length % 2).toBe(1)
+      expect(segment.dir === 'up' ? segment.end_price > segment.start_price : segment.end_price < segment.start_price).toBe(true)
+      if (index > 0) expect(segment.dir).not.toBe(segments[index - 1].dir)
+      const segmentBis = segment.bi_ids.map(id => confirmed.find(b => b.id === id))
+      expect(segmentBis[0].dir).toBe(segment.dir)
+      expect(segmentBis[segmentBis.length - 1].dir).toBe(segment.dir)
+      segment.bi_ids.forEach(id => {
+        expect(used.has(id)).toBe(false)
+        used.add(id)
+      })
+    })
+  })
+
+  it('不会把破坏上涨结构的反向笔并入上涨线段', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
+      makeBi(3, 'up', 110, 130), makeBi(4, 'down', 130, 90),
+    ]
+    const { segments } = buildSegments(bis)
+    segments.forEach(segment => {
+      expect(segment.dir === 'up' ? segment.end_price > segment.start_price : segment.end_price < segment.start_price).toBe(true)
+      expect(segment.bi_ids.length % 2).toBe(1)
+    })
+  })
+
+  it('多组交替笔序列始终满足线段结构不变量', () => {
+    for (let seed = 1; seed <= 50; seed++) {
+      let state = seed
+      const random = () => {
+        state = (state * 1664525 + 1013904223) >>> 0
+        return state / 0x100000000
+      }
+      let price = 100
+      const bis = []
+      for (let i = 0; i < 40; i++) {
+        const dir = i % 2 === 0 ? 'up' : 'down'
+        const distance = 3 + random() * 15
+        const end = dir === 'up' ? price + distance : price - distance
+        bis.push({ id: i + 1, dir, start_price: price, end_price: end, high: Math.max(price, end), low: Math.min(price, end) })
+        price = end
+      }
+      const { segments } = buildSegments(bis)
+      const used = new Set()
+      segments.forEach((segment, index) => {
+        expect(segment.bi_ids.length % 2).toBe(1)
+        expect(segment.bi_ids.length).toBeGreaterThanOrEqual(3)
+        expect(segment.dir === 'up' ? segment.end_price > segment.start_price : segment.end_price < segment.start_price).toBe(true)
+        if (index > 0) expect(segment.dir).not.toBe(segments[index - 1].dir)
+        segment.bi_ids.forEach(id => {
+          expect(used.has(id)).toBe(false)
+          used.add(id)
+        })
+      })
+    }
+  })
 })
 
 describe('buildCenters', () => {
@@ -174,6 +252,19 @@ describe('buildCenters', () => {
       expect(centers[0].zl).toBeGreaterThanOrEqual(105)
       expect(centers[0].zh).toBeLessThanOrEqual(118)
     }
+  })
+
+  it('线段完全离开中枢后将中枢关闭', () => {
+    const segments = [
+      { id: 1, start_price: 100, end_price: 120 },
+      { id: 2, start_price: 120, end_price: 105 },
+      { id: 3, start_price: 105, end_price: 118 },
+      { id: 4, start_price: 118, end_price: 80 },
+      { id: 5, start_price: 80, end_price: 90 },
+    ]
+    const centers = buildCenters(segments)
+    expect(centers[0].status).toBe('closed')
+    expect(centers[0].segment_ids).toEqual([1, 2, 3, 4])
   })
 })
 
@@ -211,7 +302,7 @@ describe('detectDivergence', () => {
     ]
     const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
     const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
-    const centers = [{ status: 'confirmed', end_bi_id: 6 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('none')
     expect(result.reason).toBe('no_price_extreme_break')
@@ -229,7 +320,7 @@ describe('detectDivergence', () => {
       { id: 10, raw_start_idx: 6, raw_end_idx: 7 }, { id: 11, raw_start_idx: 8, raw_end_idx: 9 }, { id: 12, raw_start_idx: 10, raw_end_idx: 11 },
     ]
     const macd = [-5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5]
-    const centers = [{ status: 'confirmed', end_bi_id: 6 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('none')
     expect(result.reason).toBe('no_price_extreme_break')
@@ -242,7 +333,7 @@ describe('detectDivergence', () => {
     ]
     const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
     const macd = [5, 5, 5, 3, 3, 3]
-    const centers = [{ status: 'confirmed', end_bi_id: 10 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 10, end_segment_id: 10 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('none')
     expect(result.reason).toBe('not_after_center')
@@ -258,7 +349,7 @@ describe('detectDivergence', () => {
     const bis = segs.flatMap(s => s.bi_ids.map(id => ({ id, raw_start_idx: id - 1, raw_end_idx: id - 1 })))
     // seg2 area=15, seg4 area=3 → divergence
     const macd = [5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 1]
-    const centers = [{ status: 'confirmed', end_bi_id: 9 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('top')
     expect(result.reason).toBe('macd_area_divergence')
@@ -279,12 +370,26 @@ describe('detectDivergence', () => {
     ]
     // seg2 area=15, seg4 area=3 → divergence (negative for down)
     const macd = [-5, -5, -5, -5, -5, -5, -5, -5, -5, -1, -1, -1]
-    const centers = [{ status: 'confirmed', end_bi_id: 9 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
     expect(result.type).toBe('bottom')
     expect(result.reason).toBe('macd_area_divergence')
     expect(result.price_extreme_cur).toBe(85)
     expect(result.price_extreme_prev).toBe(90)
+  })
+
+  it('MACD面积不会重复累计相邻笔共享的原始K线索引', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 120, low: 90 },
+      { id: 5, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 95 },
+    ]
+    const bis = [
+      { id: 1, raw_start_idx: 0, raw_end_idx: 1 }, { id: 2, raw_start_idx: 1, raw_end_idx: 2 }, { id: 3, raw_start_idx: 2, raw_end_idx: 3 },
+      { id: 4, raw_start_idx: 4, raw_end_idx: 5 }, { id: 5, raw_start_idx: 5, raw_end_idx: 6 }, { id: 6, raw_start_idx: 6, raw_end_idx: 7 },
+    ]
+    const result = detectDivergence(segs, bis, [5, 5, 5, 5, 2, 2, 2, 2], [{ start_segment_id: 2, end_segment_id: 4 }])
+    expect(result.area_prev).toBe(20)
+    expect(result.area_cur).toBe(8)
   })
 })
 
@@ -493,12 +598,12 @@ describe('divergence min area ratio', () => {
   it('areaCur=99 areaPrev=100不判背驰', () => {
     const segs = [
       { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },
-      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 100 },
+      { id: 5, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 100 },
     ]
     const bis = []
     for (let i = 1; i <= 6; i++) bis.push({ id: i, raw_start_idx: i + 40, raw_end_idx: i + 40 })
     const hist = Array(80).fill(5)
-    const centers = [{ status: 'confirmed', end_bi_id: 3 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 2, end_segment_id: 4 }]
     const result = detectDivergence(segs, bis, hist, centers)
     expect(result.type).toBe('none')
     expect(result.reason).toBe('macd_area_not_shrunk_enough')
@@ -507,12 +612,12 @@ describe('divergence min area ratio', () => {
   it('areaCur=0不判强背驰', () => {
     const segs = [
       { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },
-      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 135, low: 100 },
+      { id: 5, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 135, low: 100 },
     ]
     const bis = []
     for (let i = 1; i <= 6; i++) bis.push({ id: i, raw_start_idx: i + 40, raw_end_idx: i + 40 })
     const hist = Array(80).fill(0)
-    const centers = [{ status: 'confirmed', end_bi_id: 3 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 2, end_segment_id: 4 }]
     const result = detectDivergence(segs, bis, hist, centers)
     expect(result.type).toBe('none')
     expect(result.reason).toBe('invalid_macd_area')
@@ -533,7 +638,7 @@ describe('divergence equal area no divergence', () => {
       bis.push({ id: i, raw_start_idx: raw, raw_end_idx: raw })
     }
     const hist = Array(80).fill(5)
-    const centers = [{ status: 'confirmed', end_bi_id: 9 }]
+    const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, hist, centers)
     expect(result.type).toBe('none')
     expect(result.reason).toBe('macd_area_not_shrunk_enough')

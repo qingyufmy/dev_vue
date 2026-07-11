@@ -71,6 +71,15 @@ function normalizeBarsForChan(rates) {
 
   const merged = [bars[0]]
   let direction = 0
+  function inferInitialDirection(reference, fromIndex) {
+    for (let j = fromIndex; j < bars.length; j++) {
+      const probe = bars[j]
+      if (probe.high > reference.high && probe.low > reference.low) return 1
+      if (probe.high < reference.high && probe.low < reference.low) return -1
+    }
+    const last = bars[bars.length - 1]
+    return last.close >= reference.close ? 1 : -1
+  }
   for (let i = 1; i < bars.length; i++) {
     const prev = merged[merged.length - 1]
     const cur = bars[i]
@@ -78,11 +87,7 @@ function normalizeBarsForChan(rates) {
     const curContainsPrev = cur.high >= prev.high && cur.low <= prev.low
     if (prevContainsCur || curContainsPrev) {
       if (direction === 0) {
-        if (i + 1 < bars.length) {
-          const next = bars[i + 1]
-          direction = next.high > prev.high ? 1 : -1
-        }
-        if (direction === 0) direction = 1
+        direction = inferInitialDirection(prev, i + 1)
       }
       if (direction > 0) {
         merged[merged.length - 1] = { ...prev, high: Math.max(prev.high, cur.high), low: Math.max(prev.low, cur.low), raw_end_idx: cur.raw_end_idx }
@@ -164,79 +169,73 @@ function buildBis(fractals, bars) {
   return { bis, invalidCount }
 }
 
-// === Chan Theory: Segment Construction (conservative) ===
+// === Chan Theory: Segment Construction (conservative endpoint fractals) ===
 function buildSegments(confirmedBis) {
   if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null }
-  const segments = []
-  let segStart = 0
+  const pivots = [{
+    index: 0,
+    type: confirmedBis[0].dir === 'up' ? 'bottom' : 'top',
+    price: confirmedBis[0].start_price,
+  }]
+  for (let i = 1; i < confirmedBis.length; i++) {
+    pivots.push({
+      index: i,
+      type: confirmedBis[i - 1].dir === 'up' ? 'top' : 'bottom',
+      price: confirmedBis[i - 1].end_price,
+    })
+  }
+  pivots.push({
+    index: confirmedBis.length,
+    type: confirmedBis[confirmedBis.length - 1].dir === 'up' ? 'top' : 'bottom',
+    price: confirmedBis[confirmedBis.length - 1].end_price,
+  })
 
-  while (segStart < confirmedBis.length - 2) {
-    const first = confirmedBis[segStart]
-    const segDir = first.dir
-    let segEnd = segStart + 2
-    let broken = false
-
-    if (segDir === 'up') {
-      let extreme = confirmedBis[segStart].end_price
-      let lastLow = Math.min(confirmedBis[segStart].start_price, confirmedBis[segStart].end_price)
-      for (let i = segStart + 1; i < confirmedBis.length; i++) {
-        const bi = confirmedBis[i]
-        if (bi.dir === 'up') {
-          if (bi.end_price > extreme) extreme = bi.end_price
-        } else {
-          if (bi.end_price < lastLow) {
-            if (i - segStart >= MIN_BIS_PER_SEGMENT) {
-              segEnd = i
-              broken = true
-            }
-            break
-          }
-          lastLow = Math.min(lastLow, bi.end_price)
-        }
-        segEnd = i
-      }
-    } else {
-      let extreme = confirmedBis[segStart].end_price
-      let lastHigh = Math.max(confirmedBis[segStart].start_price, confirmedBis[segStart].end_price)
-      for (let i = segStart + 1; i < confirmedBis.length; i++) {
-        const bi = confirmedBis[i]
-        if (bi.dir === 'down') {
-          if (bi.end_price < extreme) extreme = bi.end_price
-        } else {
-          if (bi.end_price > lastHigh) {
-            if (i - segStart >= MIN_BIS_PER_SEGMENT) {
-              segEnd = i
-              broken = true
-            }
-            break
-          }
-          lastHigh = Math.max(lastHigh, bi.end_price)
-        }
-        segEnd = i
-      }
-    }
-
-    const biIds = confirmedBis.slice(segStart, segEnd + 1).map(b => b.id)
-    if (biIds.length >= MIN_BIS_PER_SEGMENT) {
-      const segBis = confirmedBis.slice(segStart, segEnd + 1)
-      const seg = {
-        id: segments.length + 1, dir: segDir,
-        start_price: confirmedBis[segStart].start_price,
-        end_price: confirmedBis[segEnd].end_price,
-        high: Math.max(...segBis.map(b => b.high)),
-        low: Math.min(...segBis.map(b => b.low)),
-        bi_ids: biIds, broken, weak: false,
-      }
-      segments.push(seg)
-      // Next segment starts from the last bi of current segment
-      segStart = segEnd
-    } else {
-      segStart++
-    }
+  // A segment endpoint is confirmed only after two further strokes reveal a
+  // strict extremum among pivots of the same type.
+  const endpointCandidates = []
+  for (let i = 2; i + 2 < pivots.length; i++) {
+    const p = pivots[i]
+    if (p.type === 'top' && p.price > pivots[i - 2].price && p.price > pivots[i + 2].price) endpointCandidates.push(p)
+    if (p.type === 'bottom' && p.price < pivots[i - 2].price && p.price < pivots[i + 2].price) endpointCandidates.push(p)
   }
 
-  // Candidate segment from remaining tail
-  const tailBis = confirmedBis.slice(segStart)
+  const endpoints = [pivots[0]]
+  for (const point of endpointCandidates) {
+    const last = endpoints[endpoints.length - 1]
+    if (point.type === last.type) {
+      const moreExtreme = point.type === 'top' ? point.price > last.price : point.price < last.price
+      if (moreExtreme) endpoints[endpoints.length - 1] = point
+      continue
+    }
+    const strokeCount = point.index - last.index
+    if (strokeCount >= MIN_BIS_PER_SEGMENT && strokeCount % 2 === 1) endpoints.push(point)
+  }
+
+  const segments = []
+  for (let i = 1; i < endpoints.length; i++) {
+    const start = endpoints[i - 1]
+    const end = endpoints[i]
+    const segBis = confirmedBis.slice(start.index, end.index)
+    if (segBis.length < MIN_BIS_PER_SEGMENT || segBis.length % 2 === 0) continue
+    const dir = end.price > start.price ? 'up' : 'down'
+    if (dir !== segBis[0].dir || segBis[segBis.length - 1].dir !== dir) continue
+    segments.push({
+      id: segments.length + 1,
+      dir,
+      start_price: start.price,
+      end_price: end.price,
+      high: Math.max(...segBis.map(b => b.high)),
+      low: Math.min(...segBis.map(b => b.low)),
+      bi_ids: segBis.map(b => b.id),
+      start_bi_id: segBis[0].id,
+      end_bi_id: segBis[segBis.length - 1].id,
+      broken: true,
+      weak: false,
+    })
+  }
+
+  const tailStart = endpoints[endpoints.length - 1]?.index || 0
+  const tailBis = confirmedBis.slice(tailStart)
   const candidate = tailBis.length > 0 ? {
     dir: tailBis[0].dir,
     bi_ids: tailBis.map(b => b.id),
@@ -248,33 +247,46 @@ function buildSegments(confirmedBis) {
   return { segments, candidate }
 }
 
-// === Chan Theory: Center (Zhongshu) Detection ===
-function buildCenters(confirmedBis) {
-  if (confirmedBis.length < 3) return []
+// === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
+function buildCenters(components) {
+  if (components.length < 3) return []
   const centers = []
-  for (let i = 0; i + 2 < confirmedBis.length; i++) {
-    const ranges = [confirmedBis[i], confirmedBis[i + 1], confirmedBis[i + 2]].map(b => [Math.min(b.start_price, b.end_price), Math.max(b.start_price, b.end_price)])
+  let i = 0
+  while (i + 2 < components.length) {
+    const initial = components.slice(i, i + 3)
+    const ranges = initial.map(item => [Math.min(item.start_price, item.end_price), Math.max(item.start_price, item.end_price)])
     const zl = Math.max(ranges[0][0], ranges[1][0], ranges[2][0])
     const zh = Math.min(ranges[0][1], ranges[1][1], ranges[2][1])
-    if (zl < zh) {
-      const existing = centers[centers.length - 1]
-      if (existing && existing.status !== 'closed') {
-        const nextZl = Math.max(existing.zl, zl)
-        const nextZh = Math.min(existing.zh, zh)
-        if (nextZl < nextZh) {
-          existing.zl = nextZl
-          existing.zh = nextZh
-          existing.bi_ids.push(confirmedBis[i + 2].id)
-          existing.end_bi_id = confirmedBis[i + 2].id
-          existing.status = 'extended'
-        } else {
-          existing.status = 'closed'
-          centers.push({ id: centers.length + 1, zl, zh, start_bi_id: confirmedBis[i].id, end_bi_id: confirmedBis[i + 2].id, bi_ids: [confirmedBis[i].id, confirmedBis[i + 1].id, confirmedBis[i + 2].id], level: '', status: 'confirmed' })
-        }
-      } else {
-        centers.push({ id: centers.length + 1, zl, zh, start_bi_id: confirmedBis[i].id, end_bi_id: confirmedBis[i + 2].id, bi_ids: [confirmedBis[i].id, confirmedBis[i + 1].id, confirmedBis[i + 2].id], level: '', status: 'confirmed' })
-      }
+    if (!(zl < zh)) { i++; continue }
+
+    const center = {
+      id: centers.length + 1,
+      zl,
+      zh,
+      start_segment_id: initial[0].id,
+      end_segment_id: initial[2].id,
+      segment_ids: initial.map(item => item.id),
+      level: '',
+      status: 'confirmed',
     }
+    let j = i + 3
+    while (j < components.length) {
+      const item = components[j]
+      const low = Math.min(item.start_price, item.end_price)
+      const high = Math.max(item.start_price, item.end_price)
+      const nextZl = Math.max(center.zl, low)
+      const nextZh = Math.min(center.zh, high)
+      if (!(nextZl < nextZh)) break
+      center.zl = nextZl
+      center.zh = nextZh
+      center.segment_ids.push(item.id)
+      center.end_segment_id = item.id
+      center.status = 'extended'
+      j++
+    }
+    if (j < components.length) center.status = 'closed'
+    centers.push(center)
+    i = j < components.length ? j : components.length
   }
   return centers
 }
@@ -284,18 +296,17 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
   if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return { type: 'none', strength: 'none', reason: 'no_macd_data', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_valid_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
-  const validCenters = centers.filter(c => c.status !== 'closed')
-  if (validCenters.length === 0) return { type: 'none', strength: 'none', reason: 'no_valid_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
-
-  const lastCenter = validCenters[validCenters.length - 1]
-  const lastCenterEndBiId = lastCenter.end_bi_id || 0
+  if (centers.length === 0) return { type: 'none', strength: 'none', reason: 'no_valid_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
 
   function calcArea(biIds, dir) {
     let area = 0
+    const seenIndexes = new Set()
     for (const bid of biIds) {
       const bi = bis.find(b => b.id === bid)
       if (!bi) continue
       for (let j = bi.raw_start_idx; j <= bi.raw_end_idx && j < macdHist.length; j++) {
+        if (seenIndexes.has(j)) continue
+        seenIndexes.add(j)
         const v = macdHist[j] || 0
         if (dir === 'up' && v > 0) area += v
         else if (dir === 'down' && v < 0) area += Math.abs(v)
@@ -304,19 +315,18 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
     return area
   }
 
-  function isAfterCenter(seg) {
-    return seg.bi_ids.some(id => id > lastCenterEndBiId)
-  }
-
-  // Use latest segment direction
+  // Compare the latest departure segment with the same-direction segment that
+  // entered the same center. This prevents unrelated historical segments from
+  // being paired solely because their direction matches.
   const current = validSegs[validSegs.length - 1]
-  const sameDir = validSegs.filter(s => s.dir === current.dir)
-  if (sameDir.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_same_direction_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const eligibleCenters = centers.filter(c => current.id > (c.end_segment_id || 0))
+  if (eligibleCenters.length === 0) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const lastCenter = eligibleCenters[eligibleCenters.length - 1]
+  const previousCandidates = validSegs.filter(s => s.dir === current.dir && s.id < lastCenter.start_segment_id)
+  if (previousCandidates.length === 0) return { type: 'none', strength: 'none', reason: 'no_entry_segment', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
 
-  const prev = sameDir[sameDir.length - 2]
-  const cur = sameDir[sameDir.length - 1]
-
-  if (!isAfterCenter(cur)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const prev = previousCandidates[previousCandidates.length - 1]
+  const cur = current
 
   const areaPrev = calcArea(prev.bi_ids, cur.dir)
   const areaCur = calcArea(cur.bi_ids, cur.dir)
@@ -353,10 +363,9 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const { segments, candidate } = buildSegments(confirmedBis)
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
-  const centers = buildCenters(confirmedBis)
-  const validCenters = centers.filter(c => c.status !== 'closed')
-  if (validCenters.length === 0) warnings.push('no_valid_center')
-  const lastCenter = validCenters.length > 0 ? validCenters[validCenters.length - 1] : null
+  const centers = buildCenters(validSegs)
+  if (centers.length === 0) warnings.push('no_valid_center')
+  const lastCenter = centers.length > 0 ? centers[centers.length - 1] : null
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
   const lastBi = allBis[allBis.length - 1]
   const latest = parseFloat(rates[rates.length - 1].close)
@@ -366,7 +375,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     else if (latest < lastCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
   }
-  const divergence = detectDivergence(validSegs, allBis, macdHist, validCenters)
+  const divergence = detectDivergence(validSegs, allBis, macdHist, centers)
   if (divergence.type !== 'none') {
     // ok
   } else if (divergence.reason === 'insufficient_valid_segments') {
@@ -375,29 +384,39 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     warnings.push('divergence_skipped_no_valid_center')
   } else if (divergence.reason === 'not_after_center') {
     warnings.push('divergence_skipped_not_after_center')
+  } else if (divergence.reason === 'no_entry_segment') {
+    warnings.push('divergence_skipped_no_entry_segment')
   } else if (divergence.reason === 'no_price_extreme_break') {
     warnings.push('divergence_skipped_no_price_extreme_break')
   }
 
   let reliability = 'low'
-  if (validSegs.length > 0 && validCenters.length > 0) reliability = 'high'
-  else if (confirmedBis.length > 0 && validSegs.length > 0) reliability = 'medium'
+  if (validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
+  else if (validSegs.length > 0) reliability = 'medium'
 
   let status = 'ok'
   if (validSegs.length === 0 && confirmedBis.length >= 3) status = 'unreliable_segments'
-  else if (validSegs.length > 0 && validCenters.length === 0) status = 'partial'
+  else if (validSegs.length > 0 && centers.length === 0) status = 'partial'
   else if (warnings.length > 0) status = 'partial'
 
-  console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${validCenters.length} warnings=${warnings.join(',') || 'none'}`)
+  console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
   return {
     status, reliability,
     raw_bar_count: rates.length, processed_bar_count: bars.length,
-    fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: validCenters.length,
+    fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
     recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
     current_segment: lastSeg ? { id: lastSeg.id, dir: lastSeg.dir, start_price: round5(lastSeg.start_price), end_price: round5(lastSeg.end_price), broken: lastSeg.broken } : null,
     candidate_segment: candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price) } : null,
-    current_center: lastCenter ? { id: lastCenter.id, zl: round5(lastCenter.zl), zh: round5(lastCenter.zh), level: timeframe, status: lastCenter.status } : null,
+    current_center: lastCenter ? {
+      id: lastCenter.id,
+      zl: round5(lastCenter.zl),
+      zh: round5(lastCenter.zh),
+      level: timeframe,
+      status: lastCenter.status,
+      start_segment_id: lastCenter.start_segment_id,
+      end_segment_id: lastCenter.end_segment_id,
+    } : null,
     price_vs_center: priceVsCenter,
     divergence,
     warnings,
