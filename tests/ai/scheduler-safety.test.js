@@ -5,6 +5,7 @@ vi.mock('../../server/db.js', () => ({
   queryOne: vi.fn(),
   queryAll: vi.fn(),
   queryRun: vi.fn(() => Promise.resolve({ changes: 0, insertId: 0 })),
+  withTransaction: vi.fn(),
   beijingNow: vi.fn(() => '2026-07-15 12:00:00'),
 }))
 
@@ -299,5 +300,25 @@ describe('automatic inference bridge snapshot', () => {
     [validAccount, validPositions, { status: 'success' }, 'pending_list_failed'],
   ])('fails closed for an invalid bridge component', (account, positions, pending, reason) => {
     expect(__schedulerTest.validateInferenceBridgeSnapshot(account, positions, pending)).toEqual({ ok: false, reason })
+  })
+})
+
+describe('pending history fill evidence', () => {
+  it.each([
+    { ticket: 1, status: 'cancelled', volume: 1 },
+    { ticket: 2, state: 'expired', volume: 1 },
+    { ticket: 3, status: 'rejected', volume: 1 },
+    { ticket: 4 },
+  ])('does not treat non-filled history as a fill', order => {
+    expect(__schedulerTest.isFilledHistoryOrder(order)).toBe(false)
+  })
+
+  it.each([
+    { ticket: 5, status: 'filled' },
+    { ticket: 6, deal_ticket: 1006 },
+    { ticket: 7, position_id: 2007 },
+    { ticket: 8, volume: 0.1, close_time: '2026-07-11 10:00:00' },
+  ])('accepts explicit fill evidence', order => {
+    expect(__schedulerTest.isFilledHistoryOrder(order)).toBe(true)
   })
 })

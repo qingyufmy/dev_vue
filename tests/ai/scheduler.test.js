@@ -5,6 +5,7 @@ vi.mock('../../server/db.js', () => ({
   queryOne: vi.fn(),
   queryAll: vi.fn(),
   queryRun: vi.fn(),
+  withTransaction: vi.fn(),
   beijingNow: vi.fn(() => '2026-06-26 12:00:00'),
 }))
 

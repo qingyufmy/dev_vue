@@ -1,6 +1,6 @@
 // ai/scheduler.js — 统一自动调度 + 智能平仓
 
-import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
+import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
@@ -22,8 +22,8 @@ async function isUserEligibleForAutoExecution(userId) {
   if (!isTradeEnabled(userId)) return false
   const scheduler = await queryOne('SELECT enabled, enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
   if (!scheduler || !scheduler.enabled || !scheduler.enable_auto_trade) return false
-  const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
-  if (!user || user.plan !== 'pro') return false
+  const user = await queryOne('SELECT plan, role FROM users WHERE id = ?', [userId])
+  if (!user || (user.role !== 'admin' && user.plan !== 'pro')) return false
   const ubSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
   if (!ubSettings || !ubSettings.trade_send_enabled) return false
   return true
@@ -84,6 +84,16 @@ function matchPendingCancelCondition(order, condition) {
 function countPendingForSymbol(orders, symbol) {
   const normalizedSymbol = stripBrokerSuffix(symbol)
   return orders.filter(order => stripBrokerSuffix(String(order?.symbol || '')) === normalizedSymbol).length
+}
+
+function isFilledHistoryOrder(order) {
+  if (!order || typeof order !== 'object') return false
+  const state = String(order.state ?? order.status ?? order.order_state ?? '').toLowerCase()
+  if (/(cancel|reject|expire|delete)/.test(state)) return false
+  if (/(fill|filled|closed|close|executed|complete)/.test(state)) return true
+  if (order.deal != null || order.deal_ticket != null || order.position_id != null) return true
+  const volume = Number(order.volume ?? order.volume_initial ?? 0)
+  return volume > 0 && (order.close_time != null || order.profit != null)
 }
 
 function validateInferenceBridgeSnapshot(account, positionsData, pendingData) {
@@ -192,7 +202,7 @@ export async function rebuildRedisSubscriptions() {
       FROM auto_scheduler s
       JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
       JOIN users u ON u.id = s.user_id
-      WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL AND u.plan = 'pro'
+       WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL AND (u.role = 'admin' OR u.plan = 'pro')
     `)
 
     let onlineCount = 0
@@ -490,6 +500,7 @@ function retryDelayMs(reason) {
     case 'account_failed':
     case 'positions_failed':
     case 'pending_list_failed':
+    case 'ai_failed':
     case 'exception':
       return 20000
     case 'no_api_key':
@@ -556,7 +567,7 @@ export async function reconcileAutoSchedulers() {
     const unassigned = await queryAll(`
       SELECT s.user_id FROM auto_scheduler s
       JOIN users u ON u.id = s.user_id
-      WHERE s.enabled = 1 AND s.prompt_type_id IS NULL AND u.plan = 'pro'
+      WHERE s.enabled = 1 AND s.prompt_type_id IS NULL AND (u.role = 'admin' OR u.plan = 'pro')
     `)
     if (unassigned.length > 0) {
       const allPt = await getAutoPromptTypes()
@@ -583,7 +594,7 @@ export async function reconcileAutoSchedulers() {
       WHERE s.enabled = 1
         AND apt.is_active = 1
         AND apt.deleted_at IS NULL
-        AND u.plan = 'pro'
+        AND (u.role = 'admin' OR u.plan = 'pro')
     `)
 
     const neededKeys = new Set()
@@ -1042,8 +1053,24 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     const aiSource = signal._inference_source
     delete signal._inference_source
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
+    if (aiSource === 'ai_error_hold') {
+      l(`BLOCKED: AI inference failed (${signal.reasoning || 'unknown error'})`)
+      await insertAudit(null, adminUserId, 'ai_auto_scan', symbol,
+        { trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf },
+        { status: 'error', reason: 'ai_failed', message: signal.reasoning || '' }, 'error')
+      return { status: 'blocked', reason: 'ai_failed' }
+    }
 
-    // 4. Write shared signal to ai_signals (lock check before irreversible write)
+    // Freeze the subscriber set before atomically writing the shared signal
+    // and all per-user deliveries.
+    const st = autoSchedulerState[key]
+    const allSubscribers = st?.subscribers || new Set()
+    const onlineSubscribers = new Set()
+    for (const uid of allSubscribers) {
+      if (isBridgeAlive(uid)) onlineSubscribers.add(uid)
+    }
+
+    // 4. Write shared signal and deliveries in one transaction.
     if (lockGuard && !(await lockGuard.assertOwned('signal_write'))) {
       l('BLOCKED: lock lost before signal write')
       return { status: 'error', reason: 'lock_lost' }
@@ -1051,21 +1078,37 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     const createdAt = beijingNow()
     const marketJson = JSON.stringify(market)
     const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
-    const result = await queryRun(`
-      INSERT INTO ai_signals(user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
-        recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
-        take_profit_2_price, take_profit_3_price, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at,
-        entry_method, limit_price, stop_limit_price, pending_valid_until)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-    `, [
-      0, 0, promptTypeId, 'auto_shared', 'auto_shared', symbol, primaryTf,
-      signal.signal_type, signal.confidence, signal.recommended_volume,
-      signal.analysis, signal.reasoning, signal.stop_loss_price,
-      signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
-      marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
-      signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null
-    ])
-    const signalId = result.insertId
+    const signalId = await withTransaction(async run => {
+      const [signalResult] = await run(`
+        INSERT INTO ai_signals(user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
+          recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
+          take_profit_2_price, take_profit_3_price, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at,
+          entry_method, limit_price, stop_limit_price, pending_valid_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+      `, [
+        0, 0, promptTypeId, 'auto_shared', 'auto_shared', symbol, primaryTf,
+        signal.signal_type, signal.confidence, signal.recommended_volume,
+        signal.analysis, signal.reasoning, signal.stop_loss_price,
+        signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
+        marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
+        signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null
+      ])
+      const insertedSignalId = signalResult.insertId
+      const deliveryValues = []
+      const deliveryParams = []
+      for (const uid of onlineSubscribers) {
+        deliveryValues.push('(?, ?, ?, ?, ?, ?, ?, ?)')
+        deliveryParams.push(insertedSignalId, uid, promptTypeId, symbol, 'delivered', 'not_attempted', 0, createdAt)
+      }
+      if (deliveryValues.length > 0) {
+        await run(
+          `INSERT INTO auto_signal_deliveries (signal_id, user_id, prompt_type_id, symbol, delivery_status, execution_status, is_executed, created_at)
+           VALUES ${deliveryValues.join(',')}`,
+          deliveryParams
+        )
+      }
+      return insertedSignalId
+    })
     signal.id = signalId
     signal.symbol = symbol
     signal.timeframe = primaryTf
@@ -1079,33 +1122,6 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     signal.ai_model = config.model_name || 'deepseek-chat'
     attachSignalTiming(signal)
     l(`shared signal #${signalId} saved`)
-
-    // 5. Filter subscribers by bridge alive
-    const st = autoSchedulerState[key]
-    const allSubscribers = st?.subscribers || new Set()
-    const onlineSubscribers = new Set()
-    for (const uid of allSubscribers) {
-      if (isBridgeAlive(uid)) onlineSubscribers.add(uid)
-    }
-
-    // 6. Batch write deliveries + notify online subscribers only (lock check)
-    if (lockGuard && !(await lockGuard.assertOwned('delivery_write'))) {
-      l('BLOCKED: lock lost before delivery write')
-      return { status: 'error', reason: 'lock_lost' }
-    }
-    const deliveryValues = []
-    const deliveryParams = []
-    for (const uid of onlineSubscribers) {
-      deliveryValues.push('(?, ?, ?, ?, ?, ?, ?, ?)')
-      deliveryParams.push(signalId, uid, promptTypeId, symbol, 'delivered', 'not_attempted', 0, createdAt)
-    }
-    if (deliveryValues.length > 0) {
-      await queryRun(
-        `INSERT IGNORE INTO auto_signal_deliveries (signal_id, user_id, prompt_type_id, symbol, delivery_status, execution_status, is_executed, created_at)
-         VALUES ${deliveryValues.join(',')}`,
-        deliveryParams
-      )
-    }
 
     // 7. Notify online subscribers
     for (const uid of onlineSubscribers) {
@@ -1238,7 +1254,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
           LEFT JOIN user_bridge_settings ubs ON ubs.user_id = s.user_id
           WHERE s.user_id IN (${placeholders})
             AND s.enabled = 1 AND s.enable_auto_trade = 1
-            AND u.plan = 'pro'
+            AND (u.role = 'admin' OR u.plan = 'pro')
             AND COALESCE(ubs.trade_send_enabled, 0) = 1
         `, onlineUserIds)
         const eligibleSet = new Set(eligibleRows.map(r => r.user_id))
@@ -1729,7 +1745,9 @@ export async function reconcilePendingOrders() {
       const getHistorySet = async () => {
         if (historySet !== undefined) return historySet
         const historyResp = await mt5Bridge(userId, 'history', { page: 1, page_size: 200 }, { noFallback: true })
-        historyOrders = historyResp?.status === 'success' && Array.isArray(historyResp.orders) ? historyResp.orders : null
+        historyOrders = historyResp?.status === 'success' && Array.isArray(historyResp.orders)
+          ? historyResp.orders.filter(isFilledHistoryOrder)
+          : null
         historySet = historyOrders ? collectRefs(historyOrders) : null
         return historySet
       }
@@ -2099,6 +2117,7 @@ export const __schedulerTest = {
   calculateRecoverySeconds,
   matchPendingCancelCondition,
   countPendingForSymbol,
+  isFilledHistoryOrder,
   validateInferenceBridgeSnapshot,
   createLockGuard,
 }

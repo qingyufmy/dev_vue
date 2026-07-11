@@ -97,6 +97,10 @@ describe('OpenAI-compatible provider URL', () => {
     }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
 
     expect(mockFetch.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
+    const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(requestBody).not.toHaveProperty('thinking')
+    expect(requestBody).not.toHaveProperty('reasoning_effort')
+    expect(requestBody).toHaveProperty('max_tokens')
   })
 })
 
