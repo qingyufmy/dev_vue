@@ -42,6 +42,17 @@ describe('calculateMarketData', () => {
     expect(result.rsi_14).toBeGreaterThanOrEqual(0)
     expect(result.rsi_14).toBeLessThanOrEqual(100)
     expect(result.atr_14).toBeGreaterThanOrEqual(0)
+    expect(result.atr_14_closed).toBeGreaterThanOrEqual(0)
+  })
+
+  it('已收盘ATR不受最后一根实时K线变化影响', () => {
+    const rates = generateRates(50)
+    const changed = rates.map(rate => ({ ...rate }))
+    changed[changed.length - 1] = { ...changed[changed.length - 1], high: '9999', low: '1', close: '5000' }
+    const baseline = calculateMarketData('XAUUSD', 'H1', rates, baseAccount, basePositions)
+    const liveChanged = calculateMarketData('XAUUSD', 'H1', changed, baseAccount, basePositions)
+    expect(liveChanged.atr_14_closed).toBe(baseline.atr_14_closed)
+    expect(liveChanged.atr_14).not.toBe(baseline.atr_14)
   })
 
   it('扩展缠论历史不会改变普通指标窗口', () => {

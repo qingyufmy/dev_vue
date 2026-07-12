@@ -238,9 +238,11 @@ export function normalizeAiSignal(parsed, config, market) {
   }
   const risk = RISK_TABLE[riskLevel] || RISK_TABLE.medium
 
-  const maxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE) * risk.volumeMultiplier
+  const configuredMaxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE)
+  const maxPosition = configuredMaxPosition * Math.min(risk.volumeMultiplier, 1)
   const rawVolume = parseFloat(parsed.recommended_volume || 0)
-  let recommendedVolume = signalType === 'hold' ? 0 : round2(Math.max(0.01, Math.min(rawVolume, maxPosition)))
+  const boundedVolume = Math.max(0.01, Math.min(Number.isFinite(rawVolume) ? rawVolume : 0.01, maxPosition))
+  let recommendedVolume = signalType === 'hold' ? 0 : Math.floor(boundedVolume * 100 + 1e-9) / 100
 
   let rawConfidence = parseFloat(parsed.confidence)
   if (!Number.isFinite(rawConfidence)) rawConfidence = 0
@@ -278,7 +280,11 @@ export function normalizeAiSignal(parsed, config, market) {
   if (signalType !== 'hold') {
     const isBuySide = signalType.startsWith('buy')
     const anchorPrice = (entryMethod !== 'market' && entryMethod !== 'observe' && limitPrice) ? limitPrice : (market.latest_price || 0)
-    const atr = Number(market.atr_anchor) || Number(market.atr_14) || 0
+    const atr = Number(market.atr_anchor) || 0
+    if (!(atr > 0)) {
+      console.log(`[LLM] Closed hourly ATR unavailable for ${signalType}, holding`)
+      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type: 'atr_anchor_unavailable_hold' } }
+    }
     if (atr > 0 && anchorPrice > 0) {
       const fallbackSlDistance = atr * risk.slAtrMult
       if (!parsed.stop_loss_price) {

@@ -6,7 +6,34 @@
 
 > **重要说明**：本实现是保守结构计算器。已覆盖标准特征序列、线段两种破坏情况和缺口后的第二特征序列；尚未覆盖中枢级别递归和完整走势类型递归。背驰仅比较同一中枢的直接进入段与直接离开段，并要求价格先创新高或新低。
 
+## 代码位置与调用链
+
+| 位置 | 职责 |
+|------|------|
+| `server/routes/ai/market-data.js` | 指标计算、包含处理、分型、笔、线段、中枢、背驰及统一结果组装 |
+| `server/routes/ai/utils.js` | `{{USE_CHAN}}`、周期标签解析、300/500 根历史常量及 K 线压缩 |
+| `server/routes/ai/strategy.js` | 根据提示词周期构建策略上下文，按需补取缠论历史 |
+| `server/routes/ai/scheduler.js` | 自动推理周期调用策略上下文并把缠论结果交给模型 |
+| `server/routes/ai/llm.js` | 仅在提示词包含 `{{USE_CHAN}}` 时保留 payload 中的 `chan` 字段 |
+| `tests/ai/chan.test.js` | 缠论结构单元测试和结构不变量测试 |
+| `tests/ai/market-data.test.js` | 普通指标窗口与缠论扩展历史隔离测试 |
+
+完整调用链：
+
+```text
+提示词周期标签
+  -> buildStrategyContextFromTags
+  -> 获取可见 K 线与缠论历史 K 线
+  -> calculateMarketData
+  -> computeChan
+  -> strategy_context.timeframes[周期].summary.chan
+  -> maybeAiSignal
+  -> 有 {{USE_CHAN}} 时发送给模型，否则剥离 chan
+```
+
 提示词包含 `{{USE_CHAN}}` 时，每个相关周期先获取 300 根历史 K 线用于结构计算；重同步后仍无完整线段时，仅对该周期补取到 500 根。发送给模型的原始 K 线仍按 `MTF/ATF` 标签数量截取，普通指标也只使用该截取窗口。结构计算排除最后一根尚未收盘的 K 线。
+
+手动推理和自动推理共用 `buildStrategyContextFromTags`，因此历史数量、补取条件、结构计算和降级口径一致。300/500 根只用于缠论结构，不会把模型要求的 80/50/100/60 根可见 K 线扩大到 300/500 根。
 
 `window_resynced` 是正常锚点元数据，不作为 warning。若桥接实际返回数量小于请求数量，则输出 `history_bars_below_requested`，并通过 `requested_history_count`、`received_history_count` 和 `history_sufficient` 说明降级原因。
 
@@ -193,9 +220,10 @@ HIST[i]  = DIF[i] - DEA[i]
   type: 'top' | 'bottom' | 'none',
   category: 'center_departure',
   trend_confirmed: false,
-  strength: 'candidate' | 'none',
+  strength: 'strong' | 'weak' | 'none',
   reason: string,
   area_cur, area_prev,
+  peak_cur, peak_prev,
   price_extreme_cur, price_extreme_prev
 }
 ```
@@ -207,8 +235,8 @@ HIST[i]  = DIF[i] - DEA[i]
 | `no_macd_data` | 无 MACD 数据 |
 | `insufficient_valid_segments` | 有效线段不足 2 |
 | `no_valid_center` | 无有效中枢 |
-| `insufficient_same_direction_segments` | 同方向线段不足 2 |
 | `not_after_center` | 不在中枢后 |
+| `no_entry_segment` | 找不到该中枢的直接进入段，或方向不一致 |
 | `no_price_extreme_break` | 未创新高/新低 |
 | `macd_warmup_overlap` | 比较线段覆盖前 40 根 MACD 暖机区 |
 | `invalid_macd_area` | MACD 面积为 0 |
@@ -243,6 +271,8 @@ HIST[i]  = DIF[i] - DEA[i]
 }
 ```
 
+无论状态是完整、K 线不足还是笔不足，上述结构字段都始终存在。不可用对象返回 `null`，列表返回空数组，`price_vs_center` 返回 `none`，`divergence` 返回 `type: none` 并携带降级原因。调用方不需要根据状态猜测字段是否存在。
+
 ### status 规则
 
 | status | 条件 |
@@ -261,9 +291,36 @@ HIST[i]  = DIF[i] - DEA[i]
 | `medium` | 有效线段，无中枢 |
 | `low` | 仅笔或候选段 |
 
+### warnings 语义
+
+| warning | 含义 |
+|---------|------|
+| `history_bars_below_requested` | 桥接返回数量少于请求数量 |
+| `raw_bars_too_few` | 排除未收盘柱后不足 30 根 |
+| `processed_bars_too_few` | 包含处理后有效柱过少 |
+| `invalid_bi_price_direction` | 检测到不满足价格方向的候选笔 |
+| `insufficient_confirmed_bis` | 已确认笔不足 3 笔 |
+| `segments_not_confirmed` | 尚未形成可确认线段 |
+| `no_valid_center` | 已有线段但尚未形成有效中枢 |
+| `divergence_skipped_invalid_macd` | MACD 数据或面积无效，无法判定背驰 |
+
+正常的“没有背驰”、不在中枢离开段、未创新高低和力度未缩减不会降低结构可靠性。
+
+## 9. 数据边界与不变量
+
+1. 最后一根 K 线视为未收盘柱，不进入正式分型、笔、线段、中枢和背驰。
+2. 未收盘柱只可用于 `developing_bi`，其变化不得重绘已确认结构。
+3. 普通指标只使用提示词指定的可见窗口；扩展到 300/500 根的历史只用于缠论。
+4. 分型必须顶底交替；笔必须方向交替且满足最少处理后 K 线间隔。
+5. 正式线段至少包含 3 笔，滚动窗口截断的首段不会输出。
+6. 中枢必须由至少 3 条确认线段的正宽度重叠形成，单点接触不算重叠。
+7. 背驰只比较同一中枢的直接进入段与直接离开段，不跨中枢配对。
+8. MACD 比较区间不得覆盖前 40 根暖机柱，相邻笔共享的原始索引只累计一次。
+9. 所有降级状态保持固定输出字段，不使用字段缺失表达不可用。
+
 ---
 
-## 9. 调试开关
+## 10. 调试开关
 
 环境变量控制详细日志：
 
@@ -280,11 +337,29 @@ DEBUG_LLM_PAYLOAD=1  # 打印 AI payload 截断
 
 ---
 
-## 10. AI 输入集成
+## 11. AI 输入集成
 
 - 提示词包含 `{{USE_CHAN}}` 时，chan 数据注入 AI payload
 - 不包含时，自动剥离 chan 字段
 - `chan.status !== 'ok'` 时，payload 保留 status/warnings/reliability 让模型知道结构不可信
+
+模型应按以下顺序使用结构数据：
+
+1. 先看 `status`、`reliability` 和 `warnings`。
+2. 再看 `current_segment`、`candidate_segment` 和中枢位置。
+3. 背驰只有 `type` 为 `top` 或 `bottom` 时才成立；`strong` 和 `weak` 表示力度证据数量，不代表交易指令。
+4. `developing_bi` 仅为实时观察信息，不能当作确认笔或确认线段。
+
+## 12. 当前能力边界
+
+当前实现没有覆盖：
+
+- 中枢级别递归和高级别中枢自动合成。
+- 完整走势类型、走势必完美及同级别分解的全部递归定义。
+- 买卖点的一、二、三类完整自动判定。
+- 跨周期缠论结构的自动级别映射。
+
+因此本模块输出的是供 AI 参考的保守结构事实，不直接产生买卖指令。交易方向、止损、止盈和仓位仍由推理及后端风险规则共同决定。
 
 ---
 
@@ -302,4 +377,4 @@ DEBUG_LLM_PAYLOAD=1  # 打印 AI payload 截断
 | calculateMacdSeries | 2 | 长度对齐、空数组 |
 | early return warnings | 1 | 多 warning 同时保留 |
 
-共 36 个缠论相关测试，124 个全量测试。
+测试数量会随功能持续增长，以实际执行 `vitest run` 的结果为准，不在本文维护固定数量。

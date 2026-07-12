@@ -7,12 +7,12 @@ import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
 
-const ATR_ANCHOR_PRIORITY = ['H1', 'H4', 'M15']
+const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 
 export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) {
   const timeframes = market.strategy_context?.timeframes || {}
   for (const tf of ATR_ANCHOR_PRIORITY) {
-    const atr = Number(timeframes[tf]?.summary?.atr_14)
+    const atr = Number(timeframes[tf]?.summary?.atr_14_closed)
     if (atr > 0) {
       market.atr_anchor = atr
       market.atr_anchor_tf = tf
@@ -23,7 +23,8 @@ export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) 
   try {
     const response = await mt5Bridge(userId, 'rates', { symbol, timeframe: 'H1', count: 50 })
     const rates = response?.rates || []
-    const atr = rates.length >= 15 ? computeAtr14(rates) : 0
+    const closedRates = rates.length > 1 ? rates.slice(0, -1) : []
+    const atr = closedRates.length >= 15 ? computeAtr14(closedRates) : 0
     if (atr > 0) {
       market.atr_anchor = atr
       market.atr_anchor_tf = 'H1'
@@ -33,9 +34,9 @@ export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) 
     console.warn(`[ATR Anchor] H1 fetch failed for ${symbol}: ${error.message}`)
   }
 
-  market.atr_anchor = Number(market.atr_14) || 0
-  market.atr_anchor_tf = String(primaryTimeframe || market.timeframe || '').toUpperCase()
-  console.warn(`[ATR Anchor] ${symbol} fell back to ${market.atr_anchor_tf || 'primary'} ATR`)
+  market.atr_anchor = 0
+  market.atr_anchor_tf = null
+  console.warn(`[ATR Anchor] No closed hourly ATR available for ${symbol}`)
   return market
 }
 

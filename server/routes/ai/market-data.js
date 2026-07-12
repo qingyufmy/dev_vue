@@ -519,6 +519,45 @@ function summarizeCenter(center, timeframe) {
   }
 }
 
+function emptyDivergence(reason = 'structure_unavailable') {
+  return {
+    type: 'none', strength: 'none', reason,
+    area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0,
+    price_extreme_cur: 0, price_extreme_prev: 0,
+  }
+}
+
+function emptyChanResult(overrides = {}) {
+  return {
+    status: 'insufficient_klines',
+    reliability: 'low',
+    requested_history_count: 0,
+    received_history_count: 0,
+    history_sufficient: false,
+    window_resynced: false,
+    raw_bar_count: 0,
+    closed_bar_count: 0,
+    processed_bar_count: 0,
+    fractal_count: 0,
+    bi_count: 0,
+    segment_count: 0,
+    center_count: 0,
+    current_bi: null,
+    developing_bi: null,
+    recent_bis: [],
+    current_segment: null,
+    prev_segment: null,
+    candidate_segment: null,
+    current_center: null,
+    active_center: null,
+    latest_center: null,
+    price_vs_center: 'none',
+    divergence: emptyDivergence(),
+    warnings: [],
+    ...overrides,
+  }
+}
+
 // === Chan Theory: Assembly ===
 function computeChan(rates, timeframe, macdHist, options = {}) {
   const warnings = []
@@ -528,7 +567,16 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const closedRates = Array.isArray(rates) ? rates.slice(0, -1) : []
   const closedMacdHist = Array.isArray(macdHist) ? macdHist.slice(0, closedRates.length) : []
   if (closedRates.length < MIN_KLINES_FOR_CHAN) {
-    return { status: 'insufficient_klines', reliability: 'low', requested_history_count: requestedHistoryCount, received_history_count: rates?.length || 0, history_sufficient: historySufficient, raw_bar_count: rates?.length || 0, processed_bar_count: 0, fractal_count: 0, bi_count: 0, segment_count: 0, center_count: 0, warnings: [...warnings, 'raw_bars_too_few'] }
+    return emptyChanResult({
+      status: 'insufficient_klines',
+      requested_history_count: requestedHistoryCount,
+      received_history_count: rates?.length || 0,
+      history_sufficient: historySufficient,
+      raw_bar_count: rates?.length || 0,
+      closed_bar_count: closedRates.length,
+      divergence: emptyDivergence('insufficient_klines'),
+      warnings: [...warnings, 'raw_bars_too_few'],
+    })
   }
   const bars = normalizeBarsForChan(closedRates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
@@ -538,7 +586,22 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
   if (confirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
-    return { status: 'insufficient_bis', reliability: 'low', requested_history_count: requestedHistoryCount, received_history_count: rates.length, history_sufficient: historySufficient, raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
+    const lastBi = allBis[allBis.length - 1]
+    return emptyChanResult({
+      status: 'insufficient_bis',
+      requested_history_count: requestedHistoryCount,
+      received_history_count: rates.length,
+      history_sufficient: historySufficient,
+      raw_bar_count: rates.length,
+      closed_bar_count: closedRates.length,
+      processed_bar_count: bars.length,
+      fractal_count: fractals.length,
+      bi_count: allBis.length,
+      current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+      recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
+      divergence: emptyDivergence('insufficient_bis'),
+      warnings,
+    })
   }
   const { segments, candidate, resynced } = buildSegments(confirmedBis, { trustedStart: false })
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
@@ -609,7 +672,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
@@ -698,6 +761,8 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const bbPosition = bbWidth > 0 ? (latest - bbLower) / bbWidth : 0.5
 
   const atr14 = computeAtr14(rates)
+  const closedRates = rates.length > 1 ? rates.slice(0, -1) : []
+  const atr14Closed = computeAtr14(closedRates)
 
   const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
   const recentLows = lows.length >= 20 ? lows.slice(-20) : lows
@@ -790,6 +855,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
       position: round3(bbPosition),
     },
     atr_14: round5(atr14),
+    atr_14_closed: round5(atr14Closed),
     support_resistance: {
       pivot: round5(pivot), r1: round5(r1), r2: round5(r2), s1: round5(s1), s2: round5(s2),
       recent_high: round5(recentHigh), recent_low: round5(recentLow),

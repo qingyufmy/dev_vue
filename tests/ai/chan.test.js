@@ -598,6 +598,16 @@ describe('computeChan', () => {
     const rates = makeRates(5)
     const result = computeChan(rates, 'M5', [])
     expect(result.status).toBe('insufficient_klines')
+    expect(result).toMatchObject({
+      current_bi: null,
+      recent_bis: [],
+      current_segment: null,
+      current_center: null,
+      active_center: null,
+      latest_center: null,
+      price_vs_center: 'none',
+      divergence: { type: 'none', reason: 'insufficient_klines' },
+    })
   })
 
   it('返回结构包含必要字段', () => {

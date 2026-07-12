@@ -91,8 +91,8 @@ describe('buildStrategyContextFromTags', () => {
 describe('attachAtrAnchor', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('按H1、H4、M15优先级复用策略上下文', async () => {
-    const market = { atr_14: 3, strategy_context: { timeframes: { M15: { summary: { atr_14: 6 } }, H1: { summary: { atr_14: 15 } } } } }
+  it('按H1、H4优先级复用已收盘ATR', async () => {
+    const market = { atr_14: 3, strategy_context: { timeframes: { H4: { summary: { atr_14_closed: 20 } }, H1: { summary: { atr_14: 99, atr_14_closed: 15 } } } } }
     await attachAtrAnchor(1, 'XAUUSD', market, 'M5')
     expect(market).toMatchObject({ atr_anchor: 15, atr_anchor_tf: 'H1' })
     expect(mockMt5Bridge).not.toHaveBeenCalled()
@@ -104,5 +104,12 @@ describe('attachAtrAnchor', () => {
     await attachAtrAnchor(1, 'XAUUSD', market, 'M5')
     expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', { symbol: 'XAUUSD', timeframe: 'H1', count: 50 })
     expect(market).toMatchObject({ atr_anchor: 12, atr_anchor_tf: 'H1' })
+  })
+
+  it('不会退回短周期ATR', async () => {
+    mockMt5Bridge.mockResolvedValue({ rates: [] })
+    const market = { atr_14: 3, strategy_context: { timeframes: { M5: { summary: { atr_14_closed: 3 } }, M15: { summary: { atr_14_closed: 6 } } } } }
+    await attachAtrAnchor(1, 'XAUUSD', market, 'M5')
+    expect(market).toMatchObject({ atr_anchor: 0, atr_anchor_tf: null })
   })
 })

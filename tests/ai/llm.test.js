@@ -107,6 +107,8 @@ describe('OpenAI-compatible provider URL', () => {
 describe('normalizeAiSignal', () => {
   const baseMarket = {
     latest_price: 2000,
+    atr_anchor: 10,
+    atr_anchor_tf: 'H1',
     atr_14: 10,
     volatility_pct: 0.3,
     strategy_score: { data_confidence: 0.7, trend_strength: 0.5 }
@@ -220,7 +222,8 @@ describe('maybeAiSignal', () => {
     const market = {
       symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01',
       latest_price: 2000, price_change: 10, price_change_pct: 0.5,
-      account: { balance: 10000 }, positions: [], kline_count: 100
+      account: { balance: 10000 }, positions: [], kline_count: 100,
+      atr_anchor: 10, atr_anchor_tf: 'H1'
     }
 
     const result = await maybeAiSignal(null, config, market)
@@ -284,7 +287,7 @@ describe('maybeAiSignal', () => {
 })
 
 describe('normalizeAiSignal - SL/TP fallback', () => {
-  const market = { latest_price: 4000, atr_14: 10, strategy_score: {} }
+  const market = { latest_price: 4000, atr_anchor: 10, atr_anchor_tf: 'H1', atr_14: 10, strategy_score: {} }
   const config = { risk_level: 'medium', max_position_size: 0.05 }
 
   it('buy_limit: SL below limitPrice, TP above limitPrice', () => {
@@ -350,5 +353,24 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
   it('放宽后所需手数低于0.01时降级为观望', () => {
     const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3996, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
     expect(result).toMatchObject({ signal_type: 'hold', recommended_volume: 0, normalization_info: { type: 'sl_widen_min_lot_hold' } })
+  })
+
+  it('小时级ATR不可用时失败关闭', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03,
+      stop_loss_price: 3990, take_profit_1_price: 4020,
+    }, config, { ...market, atr_anchor: 0 })
+    expect(result).toMatchObject({
+      signal_type: 'hold', recommended_volume: 0,
+      normalization_info: { type: 'atr_anchor_unavailable_hold' },
+    })
+  })
+
+  it('高风险等级不会突破用户最大手数', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.08,
+      stop_loss_price: 3990, take_profit_1_price: 4020,
+    }, { risk_level: 'high', max_position_size: 0.05 }, market)
+    expect(result.recommended_volume).toBe(0.05)
   })
 })
