@@ -3,10 +3,10 @@
 import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
-import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
+import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
-import { buildStrategyContextFromTags } from './strategy.js'
+import { attachAtrAnchor, buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix, CHAN_HISTORY_COUNT } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
 import crypto from 'crypto'
@@ -1035,17 +1035,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
     if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
     market.primary_timeframe = primaryTf
-
-    // M15 ATR for SL minimum distance validation (more stable than M5 ATR)
-    try {
-      if (primaryTf !== 'M15') {
-        const m15Resp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: 'M15', count: 50 })
-        const m15Rates = m15Resp?.rates || []
-        if (m15Rates.length >= 15) market.atr_14_m15 = round2(computeAtr14(m15Rates))
-      } else {
-        market.atr_14_m15 = market.atr_14
-      }
-    } catch (e) { l(`M15 ATR fallback: ${e.message}`) }
+    await attachAtrAnchor(adminUserId, symbol, market, primaryTf)
     const actualUsedTimeframes = Object.keys(market.strategy_context?.timeframes || {})
     market.requested_timeframes = usedTimeframes
     market.used_timeframes = actualUsedTimeframes
@@ -1602,24 +1592,25 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     if (execResult.status === 'success') {
       const ticket = execResult.order || execResult.ticket || null
       const isPending = order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe'
+      const executionResult = JSON.stringify({ ...execResult, tp_tier_requested: order.tp_tier_requested, tp_tier_used: order.tp_tier_used, normalization_info: order.normalization_info })
       if (isPending) {
         await queryRun(
           `UPDATE auto_signal_deliveries SET execution_status = 'success',
            pending_ticket = ?, pending_state = 'pending', pending_valid_until = ?,
            execution_result = ? WHERE signal_id = ? AND user_id = ?`,
-          [String(ticket), signal.pending_valid_until || null, JSON.stringify(execResult), signalId, userId])
+          [String(ticket), signal.pending_valid_until || null, executionResult, signalId, userId])
         // Fix 6: shared signals — do NOT write user ticket to ai_signals root
         l(`auto-executed pending: ticket=${ticket}, volume=${order.volume}`)
       } else {
         await queryRun(
           `UPDATE auto_signal_deliveries SET execution_status = 'success', is_executed = 1, executed_at = NOW(),
            trade_ticket = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
-          [ticket, JSON.stringify(execResult), signalId, userId])
+          [ticket, executionResult, signalId, userId])
         l(`auto-executed: ticket=${ticket}, volume=${order.volume}`)
       }
       await insertAudit(null, userId, 'ai_auto_execute', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, ticket, volume: order.volume, is_pending: isPending },
-        { status: 'success', ticket, volume: order.volume }, 'success')
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, ticket, volume: order.volume, is_pending: isPending, tp_tier_requested: order.tp_tier_requested, tp_tier_used: order.tp_tier_used, normalization_info: order.normalization_info },
+        { status: 'success', ticket, volume: order.volume, tp_tier_used: order.tp_tier_used }, 'success')
     } else {
       const status = execResult.status === 'rejected' ? 'rejected' : 'failed'
       await queryRun(

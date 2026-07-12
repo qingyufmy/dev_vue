@@ -137,6 +137,26 @@ describe('signalOrderPayload', () => {
 
     const result = signalOrderPayload(signal, config, market, false)
     expect(result.tp).toBe(1980) // take_profit_2_price
+    expect(result.tp_tier_requested).toBe(2)
+    expect(result.tp_tier_used).toBe(2)
+  })
+
+  it('默认TP2缺失时回退到更近的TP1', () => {
+    const signal = { symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2010 }
+    const result = signalOrderPayload(signal, {}, { latest_price: 2000 }, true)
+    expect(result).toMatchObject({ tp: 2010, tp_tier_requested: 2, tp_tier_used: 1 })
+  })
+
+  it('TP3缺失时按3到2到1回退', () => {
+    const signal = { symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2010, take_profit_2_price: 2020 }
+    const result = signalOrderPayload(signal, { selected_take_profit: 3 }, { latest_price: 2000 }, true)
+    expect(result).toMatchObject({ tp: 2020, tp_tier_requested: 3, tp_tier_used: 2 })
+  })
+
+  it('选择TP1时缺失不会改用更远目标', () => {
+    const signal = { symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.02, stop_loss_price: 1990, take_profit_2_price: 2020 }
+    const result = signalOrderPayload(signal, { selected_take_profit: 1 }, { latest_price: 2000 }, true)
+    expect(result).toMatchObject({ tp: null, tp_tier_requested: 1, tp_tier_used: null })
   })
 })
 
@@ -178,7 +198,16 @@ describe('buildBridgeOrderCall', () => {
   it('market 请求 → bridgeAction open', () => {
     const result = buildBridgeOrderCall({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.01 })
     expect(result.bridgeAction).toBe('open')
-    expect(result.bridgeParams).toBe(result.bridgeParams)
+    expect(result.bridgeParams).toEqual({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.01 })
+  })
+
+  it('market request strips audit-only normalization metadata', () => {
+    const result = buildBridgeOrderCall({
+      symbol: 'XAUUSD', order_type: 'buy', volume: 0.01,
+      tp_tier_requested: 2, tp_tier_used: 1,
+      normalization_info: { sl_clamped: true },
+    })
+    expect(result.bridgeParams).toEqual({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.01 })
   })
 
   it('limit 请求 → bridgeAction pending, order_type buy_limit', () => {

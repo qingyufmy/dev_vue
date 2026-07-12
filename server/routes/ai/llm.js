@@ -6,6 +6,8 @@ import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureH
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
+const SL_CLAMP = { K_MIN: 1.0, K_MAX: 3.0 }
+const TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
 
 let _schemaCache = null
 let _schemaCacheTs = 0
@@ -134,6 +136,8 @@ export async function maybeAiSignal(db, config, market) {
       price_change_pct: market.price_change_pct, account: market.account,
       positions: market.positions, pending_orders: market.pending_orders || [],
       kline_count: market.kline_count,
+      atr_anchor: market.atr_anchor,
+      atr_anchor_tf: market.atr_anchor_tf,
       risk_level: (config || {}).risk_level || 'medium',
       max_position_size: parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE),
     }
@@ -228,15 +232,15 @@ export function normalizeAiSignal(parsed, config, market) {
 
   const riskLevel = (config || {}).risk_level || 'medium'
   const RISK_TABLE = {
-    low:    { minConfidence: 0.60, volumeMultiplier: 0.5, slAtrMult: 2.0, tp1AtrMult: 1.5, tp2AtrMult: 2.5, tp3AtrMult: 4.0 },
-    medium: { minConfidence: 0.40, volumeMultiplier: 1.0, slAtrMult: 1.5, tp1AtrMult: 1.5, tp2AtrMult: 2.5, tp3AtrMult: 4.0 },
-    high:   { minConfidence: 0.25, volumeMultiplier: 1.5, slAtrMult: 1.0, tp1AtrMult: 1.0, tp2AtrMult: 2.0, tp3AtrMult: 3.0 },
+    low:    { minConfidence: 0.60, volumeMultiplier: 0.5, slAtrMult: 2.0 },
+    medium: { minConfidence: 0.40, volumeMultiplier: 1.0, slAtrMult: 1.5 },
+    high:   { minConfidence: 0.25, volumeMultiplier: 1.5, slAtrMult: 1.2 },
   }
   const risk = RISK_TABLE[riskLevel] || RISK_TABLE.medium
 
   const maxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE) * risk.volumeMultiplier
   const rawVolume = parseFloat(parsed.recommended_volume || 0)
-  const recommendedVolume = signalType === 'hold' ? 0 : round2(Math.max(0.01, Math.min(rawVolume, maxPosition)))
+  let recommendedVolume = signalType === 'hold' ? 0 : round2(Math.max(0.01, Math.min(rawVolume, maxPosition)))
 
   let rawConfidence = parseFloat(parsed.confidence)
   if (!Number.isFinite(rawConfidence)) rawConfidence = 0
@@ -274,32 +278,45 @@ export function normalizeAiSignal(parsed, config, market) {
   if (signalType !== 'hold') {
     const isBuySide = signalType.startsWith('buy')
     const anchorPrice = (entryMethod !== 'market' && entryMethod !== 'observe' && limitPrice) ? limitPrice : (market.latest_price || 0)
-    const atr = market.atr_14_m15 || market.atr_14 || 0
+    const atr = Number(market.atr_anchor) || Number(market.atr_14) || 0
     if (atr > 0 && anchorPrice > 0) {
-      const atrSlDistance = atr * risk.slAtrMult
-      // SL minimum distance: enforce at least slAtrMult * ATR
-      if (parsed.stop_loss_price) {
-        const aiSlDist = Math.abs(parsed.stop_loss_price - anchorPrice)
-        if (aiSlDist < atrSlDistance) {
-          console.log(`[LLM] AI SL too tight: ${aiSlDist.toFixed(2)} < ${atrSlDistance.toFixed(2)} (${risk.slAtrMult}x ATR), overriding`)
-          parsed.stop_loss_price = isBuySide
-            ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
-        }
-      } else {
+      const fallbackSlDistance = atr * risk.slAtrMult
+      if (!parsed.stop_loss_price) {
         parsed.stop_loss_price = isBuySide
-          ? round2(anchorPrice - atrSlDistance) : round2(anchorPrice + atrSlDistance)
+          ? round2(anchorPrice - fallbackSlDistance) : round2(anchorPrice + fallbackSlDistance)
       }
+
+      const originalSlDistance = Math.abs(Number(parsed.stop_loss_price) - anchorPrice)
+      const minSlDistance = atr * SL_CLAMP.K_MIN
+      const maxSlDistance = atr * SL_CLAMP.K_MAX
+      if (Number.isFinite(originalSlDistance) && originalSlDistance < minSlDistance) {
+        const adjustedVolume = Math.floor((recommendedVolume * originalSlDistance / minSlDistance) * 100 + 1e-9) / 100
+        if (adjustedVolume < 0.01) {
+          console.log(`[LLM] SL widening would require volume below 0.01: dist=${originalSlDistance.toFixed(2)} min=${minSlDistance.toFixed(2)}, holding`)
+          return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type: 'sl_widen_min_lot_hold', from: round2(originalSlDistance), to: round2(minSlDistance) } }
+        }
+        parsed.stop_loss_price = isBuySide
+          ? round2(anchorPrice - minSlDistance) : round2(anchorPrice + minSlDistance)
+        recommendedVolume = adjustedVolume
+        parsed.normalization_info = { type: 'sl_widened', from: round2(originalSlDistance), to: round2(minSlDistance), volume: recommendedVolume }
+        console.log(`[LLM] SL widened: ${originalSlDistance.toFixed(2)} -> ${minSlDistance.toFixed(2)}, volume=${recommendedVolume}`)
+      } else if (Number.isFinite(originalSlDistance) && originalSlDistance > maxSlDistance) {
+        console.log(`[LLM] SL too far: ${originalSlDistance.toFixed(2)} > ${maxSlDistance.toFixed(2)}, holding`)
+        return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type: 'sl_too_far_hold', distance: round2(originalSlDistance), max: round2(maxSlDistance) } }
+      }
+
+      const finalSlDistance = Math.abs(Number(parsed.stop_loss_price) - anchorPrice)
       if (!parsed.take_profit_1_price) {
         parsed.take_profit_1_price = isBuySide
-          ? round2(anchorPrice + atr * risk.tp1AtrMult) : round2(anchorPrice - atr * risk.tp1AtrMult)
+          ? round2(anchorPrice + finalSlDistance * TP_FROM_SL.tp1) : round2(anchorPrice - finalSlDistance * TP_FROM_SL.tp1)
       }
       if (!parsed.take_profit_2_price) {
         parsed.take_profit_2_price = isBuySide
-          ? round2(anchorPrice + atr * risk.tp2AtrMult) : round2(anchorPrice - atr * risk.tp2AtrMult)
+          ? round2(anchorPrice + finalSlDistance * TP_FROM_SL.tp2) : round2(anchorPrice - finalSlDistance * TP_FROM_SL.tp2)
       }
       if (!parsed.take_profit_3_price) {
         parsed.take_profit_3_price = isBuySide
-          ? round2(anchorPrice + atr * risk.tp3AtrMult) : round2(anchorPrice - atr * risk.tp3AtrMult)
+          ? round2(anchorPrice + finalSlDistance * TP_FROM_SL.tp3) : round2(anchorPrice - finalSlDistance * TP_FROM_SL.tp3)
       }
     }
     // Direction validation: always runs when anchorPrice is valid (ATR-independent)
@@ -348,6 +365,7 @@ export function normalizeAiSignal(parsed, config, market) {
 
   // Attach pending order fields
   parsed.entry_method = entryMethod
+  parsed.recommended_volume = recommendedVolume
   parsed.limit_price = limitPrice
   parsed.stop_limit_price = stopLimitPrice
   parsed.pending_valid_until = pendingValidUntil

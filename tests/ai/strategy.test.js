@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { buildStrategyContextFromTags } from '../../server/routes/ai/strategy.js'
+import { attachAtrAnchor, buildStrategyContextFromTags } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
   mt5Bridge: (...args) => mockMt5Bridge(...args),
+  computeAtr14: vi.fn(() => 12),
   calculateMarketData: vi.fn((symbol, timeframe, rates, _account, _positions, options = {}) => ({
     symbol, timeframe,
     latest_price: 2000, price_change: 10, price_change_pct: 0.5,
@@ -84,5 +85,24 @@ describe('buildStrategyContextFromTags', () => {
     expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
     expect(result.timeframes.H1.klines[0].time).toBe('b420')
+  })
+})
+
+describe('attachAtrAnchor', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('按H1、H4、M15优先级复用策略上下文', async () => {
+    const market = { atr_14: 3, strategy_context: { timeframes: { M15: { summary: { atr_14: 6 } }, H1: { summary: { atr_14: 15 } } } } }
+    await attachAtrAnchor(1, 'XAUUSD', market, 'M5')
+    expect(market).toMatchObject({ atr_anchor: 15, atr_anchor_tf: 'H1' })
+    expect(mockMt5Bridge).not.toHaveBeenCalled()
+  })
+
+  it('上下文没有锚点周期时主动获取H1', async () => {
+    mockMt5Bridge.mockResolvedValue({ rates: Array(50).fill({ high: 10, low: 5, close: 8 }) })
+    const market = { atr_14: 3, strategy_context: { timeframes: { M5: { summary: { atr_14: 3 } } } } }
+    await attachAtrAnchor(1, 'XAUUSD', market, 'M5')
+    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', { symbol: 'XAUUSD', timeframe: 'H1', count: 50 })
+    expect(market).toMatchObject({ atr_anchor: 12, atr_anchor_tf: 'H1' })
   })
 })

@@ -3,9 +3,41 @@
 import { queryRun, beijingNow } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
-import { mt5Bridge, calculateMarketData } from './market-data.js'
+import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
+
+const ATR_ANCHOR_PRIORITY = ['H1', 'H4', 'M15']
+
+export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) {
+  const timeframes = market.strategy_context?.timeframes || {}
+  for (const tf of ATR_ANCHOR_PRIORITY) {
+    const atr = Number(timeframes[tf]?.summary?.atr_14)
+    if (atr > 0) {
+      market.atr_anchor = atr
+      market.atr_anchor_tf = tf
+      return market
+    }
+  }
+
+  try {
+    const response = await mt5Bridge(userId, 'rates', { symbol, timeframe: 'H1', count: 50 })
+    const rates = response?.rates || []
+    const atr = rates.length >= 15 ? computeAtr14(rates) : 0
+    if (atr > 0) {
+      market.atr_anchor = atr
+      market.atr_anchor_tf = 'H1'
+      return market
+    }
+  } catch (error) {
+    console.warn(`[ATR Anchor] H1 fetch failed for ${symbol}: ${error.message}`)
+  }
+
+  market.atr_anchor = Number(market.atr_14) || 0
+  market.atr_anchor_tf = String(primaryTimeframe || market.timeframe || '').toUpperCase()
+  console.warn(`[ATR Anchor] ${symbol} fell back to ${market.atr_anchor_tf || 'primary'} ATR`)
+  return market
+}
 
 export async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
   const timeframes = {}
@@ -107,6 +139,7 @@ export async function handleAnalyze(userId, params) {
   const market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
   if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
+  await attachAtrAnchor(userId, symbol, market, primaryTf)
   const signal = await maybeAiSignal(null, config, market)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
@@ -172,7 +205,7 @@ export async function handleAnalyze(userId, params) {
       }
 
       const { bridgeAction, bridgeParams } = buildBridgeOrderCall(orderPayload)
-      const execResult = await mt5Bridge(userId, bridgeAction, bridgeAction === 'pending' ? bridgeParams : orderPayload)
+      const execResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
       if (execResult && execResult.status === 'success') {
         const isPending = bridgeAction === 'pending'
         const ticket = execResult.order || execResult.ticket || null
@@ -189,7 +222,7 @@ export async function handleAnalyze(userId, params) {
         }
         signal.auto_executed = true
       }
-      await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto' }, execResult, execResult?.status || 'error')
+      await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', tp_tier_requested: orderPayload.tp_tier_requested, tp_tier_used: orderPayload.tp_tier_used, normalization_info: orderPayload.normalization_info }, execResult, execResult?.status || 'error')
     } catch (e) {
       console.error('[Analyze] Auto-execute failed:', e.message)
     }
