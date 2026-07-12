@@ -1,328 +1,526 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="referrer" content="no-referrer">
-  <title>使用指南 - AI交易实验室</title>
-  <link rel="icon" href="/favicon.ico" sizes="any">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e5e7eb; display: flex; height: 100vh; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
+<title>使用手册 - 量见交易与AI技术教育平台</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;700&family=Noto+Sans+Mono&display=swap" rel="stylesheet">
+<style>
+/* ============ 品牌设计系统（源自 V1.1 源文件） ============ */
+:root{
+  --navy:#16233E; --navy2:#1F3055; --ink:#232A35;
+  --gold:#C9A24B; --gold-d:#A8843A; --gold-l:#F3E9D2;
+  --bg:#F6F8FB; --line:#DDE3EC; --muted:#6B7686;
+  --red:#B4552D; --red-l:#FBEFE8; --green:#2E6E4E;
+  --sidebar-w:260px;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{ font-family:'Noto Sans SC','Noto Sans CJK SC',sans-serif; font-size:14px; line-height:1.75; color:var(--ink); background:var(--bg); display:flex; height:100vh; overflow:hidden;}
 
-    /* Left Nav */
-    .nav { width: 240px; background: #1a1d28; border-right: 1px solid rgba(255,255,255,0.06); padding: 24px 0; overflow-y: auto; flex-shrink: 0; }
-    .nav-header { padding: 0 20px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); }
-    .nav-header h1 { font-size: 16px; color: #d4af37; margin-bottom: 4px; }
-    .nav-header p { font-size: 11px; color: #6b7280; }
-    .nav-group { padding: 12px 0; }
-    .nav-group-title { padding: 0 20px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-    .nav-item { display: block; padding: 8px 20px; color: #9ca3af; text-decoration: none !important; font-size: 13px; cursor: pointer; transition: all 0.15s; border-left: 3px solid transparent; }
-    .nav-item:hover { color: #e5e7eb; background: rgba(255,255,255,0.03); }
-    .nav-item.active { color: #d4af37; border-left-color: #d4af37; background: rgba(212,175,55,0.05); }
-    .nav-back { display: block; padding: 12px 20px; color: #6b7280; text-decoration: none; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.06); margin-top: auto; }
-    .nav-back:hover { color: #d4af37; }
+/* ============ 左侧导航 ============ */
+.sidebar{ width:var(--sidebar-w); min-width:var(--sidebar-w); background:#fff; border-right:1px solid var(--line); display:flex; flex-direction:column; height:100vh; position:sticky; top:0; z-index:10; }
+.sidebar-header{ padding:20px 20px 16px; border-bottom:1px solid var(--line); flex-shrink:0; }
+.sidebar-header h1{ font-family:'Noto Serif SC',serif; font-size:17px; color:var(--navy); font-weight:700; letter-spacing:1.5px; margin-bottom:3px; }
+.sidebar-header p{ font-size:11px; color:var(--muted); letter-spacing:0.5px; }
+.sidebar-scroll{ flex:1; overflow-y:auto; padding:6px 0; }
+.sidebar-scroll::-webkit-scrollbar{ width:4px; }
+.sidebar-scroll::-webkit-scrollbar-thumb{ background:var(--line); border-radius:2px; }
+.nav-group{ padding:4px 0; }
+.nav-group-title{ padding:8px 20px 4px; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+.nav-item{ display:block; padding:7px 20px 7px 22px; color:var(--ink); text-decoration:none !important; font-size:13px; cursor:pointer; transition:all 0.15s; border-left:3px solid transparent; line-height:1.5; }
+.nav-item:hover{ background:var(--bg); color:var(--gold-d); }
+.nav-item.active{ color:var(--gold-d); border-left-color:var(--gold); background:var(--gold-l); font-weight:600; }
+.nav-item.sub{ padding-left:34px; font-size:12.5px; color:var(--muted); }
+.nav-item.sub:hover{ color:var(--gold-d); }
+.sidebar-footer{ padding:12px 20px; border-top:1px solid var(--line); flex-shrink:0; }
+.sidebar-footer a{ font-size:12px; color:var(--muted); text-decoration:none; transition:color 0.15s; }
+.sidebar-footer a:hover{ color:var(--gold-d); }
 
-    /* Main Content */
-    .main { flex: 1; overflow-y: auto; padding: 32px 48px; scroll-behavior: smooth; }
-    .main h1 { font-size: 28px; color: #d4af37; margin-bottom: 8px; }
-    .main h2 { font-size: 20px; color: #d4af37; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 2px solid rgba(212,175,55,0.3); }
-    .main h3 { font-size: 16px; color: #f3f4f6; margin: 20px 0 10px; }
-    .main p { margin: 8px 0; line-height: 1.8; color: #d1d5db; }
-    .main ul, .main ol { margin: 8px 0; padding-left: 24px; }
-    .main li { margin: 4px 0; line-height: 1.7; color: #d1d5db; }
-    .main strong { color: #f3f4f6; }
-    .main blockquote { border-left: 3px solid #d4af37; padding: 10px 16px; margin: 12px 0; background: rgba(212,175,55,0.05); border-radius: 0 6px 6px 0; color: #9ca3af; }
-    .main code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; font-family: monospace; }
+/* ============ 主内容区 ============ */
+.main{ flex:1; overflow-y:auto; padding:36px 52px 60px; scroll-behavior:smooth; }
+.main::-webkit-scrollbar{ width:6px; }
+.main::-webkit-scrollbar-thumb{ background:var(--line); border-radius:3px; }
 
-    /* Tables */
-    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
-    th { text-align: left; padding: 10px 12px; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.08); color: #9ca3af; font-weight: 600; }
-    td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #d1d5db; }
-    tr:hover td { background: rgba(255,255,255,0.02); }
+/* ============ 封面区（简化版） ============ */
+.cover-bar{ background:var(--navy); color:#fff; padding:28px 32px; border-radius:4px; margin-bottom:28px; position:relative; overflow:hidden; }
+.cover-bar::before{ content:''; position:absolute; top:0; left:0; width:6px; height:100%; background:linear-gradient(180deg,var(--gold),#8A6C2B); }
+.cover-bar .brand{ font-family:'Noto Serif SC',serif; font-size:20px; font-weight:700; letter-spacing:4px; }
+.cover-bar .brand small{ font-size:11px; letter-spacing:2px; color:var(--gold); font-weight:400; margin-left:6px; }
+.cover-bar .rule{ width:40px; height:2px; background:var(--gold); margin:10px 0 8px; }
+.cover-bar h1{ font-family:'Noto Serif SC',serif; font-size:18px; font-weight:700; letter-spacing:1px; line-height:1.5; }
+.cover-bar .sub{ font-size:12px; color:#C7D0E0; margin-top:4px; letter-spacing:0.5px; }
+.cover-bar .tagline{ position:absolute; top:28px; right:32px; font-family:'Noto Serif SC',serif; font-size:13px; letter-spacing:3px; color:var(--gold); }
+.cover-bar .meta{ margin-top:12px; font-size:11.5px; color:#AEB9CC; line-height:2; }
+.cover-bar .meta b{ color:#E8ECF4; font-weight:500; }
 
-    /* Badges */
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
-    .badge-green { background: rgba(34,197,94,0.15); color: #22c55e; }
-    .badge-red { background: rgba(239,68,68,0.15); color: #ef4444; }
-    .badge-yellow { background: rgba(245,158,11,0.15); color: #f59e0b; }
-    .badge-gray { background: rgba(107,114,128,0.15); color: #9ca3af; }
+/* ============ 章节标题 ============ */
+h2.ch{ display:flex; align-items:center; gap:12px; margin:0 0 20px; }
+h2.ch .num{ font-family:'Noto Serif SC',serif; font-size:20px; font-weight:700; color:#fff; background:var(--navy); width:36px; height:36px; border-radius:3px; text-align:center; line-height:36px; flex:0 0 auto; }
+h2.ch .tt{ font-family:'Noto Serif SC',serif; font-size:17px; font-weight:700; color:var(--navy); letter-spacing:1px; border-bottom:2px solid var(--gold); padding-bottom:6px; flex:1; }
+h3{ font-size:14.5px; color:var(--navy); margin:20px 0 8px; padding-left:10px; border-left:3px solid var(--gold); letter-spacing:0.5px; }
+h4{ font-size:13px; color:var(--navy2); margin:14px 0 6px; }
 
-    /* Steps */
-    .step { display: flex; gap: 16px; margin: 16px 0; }
-    .step-num { width: 32px; height: 32px; background: #d4af37; color: #0f1117; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; flex-shrink: 0; }
-    .step-content { flex: 1; }
-    .step-content h4 { font-size: 15px; color: #f3f4f6; margin-bottom: 6px; }
-    .step-content p { margin: 4px 0; }
+/* ============ 段落与列表 ============ */
+p{ margin:0 0 8px; text-align:justify; }
+ul,ol{ margin:0 0 10px 18px; }
+li{ margin-bottom:4px; text-align:justify; }
+b,strong{ color:var(--navy); font-weight:700; }
+.gold{ color:var(--gold-d); font-weight:700; }
+code{ font-family:'Noto Sans Mono','Noto Sans SC',monospace; background:#EEF1F6; border-radius:3px; padding:1px 5px; font-size:12.5px; color:var(--navy2); }
 
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
-  </style>
+/* ============ 提示框 ============ */
+.box{ border-radius:4px; padding:10px 14px; margin:10px 0; font-size:13px; }
+.box .bt{ font-weight:700; display:block; margin-bottom:3px; letter-spacing:0.5px; }
+.box.warn{ background:var(--red-l); border-left:3px solid var(--red); }
+.box.warn .bt{ color:var(--red); }
+.box.tip{ background:var(--gold-l); border-left:3px solid var(--gold); }
+.box.tip .bt{ color:var(--gold-d); }
+.box.law{ background:#EDF1F7; border-left:3px solid var(--navy); }
+.box.law .bt{ color:var(--navy); }
+
+/* ============ 表格 ============ */
+table{ width:100%; border-collapse:collapse; margin:10px 0 14px; font-size:13px; }
+th{ background:var(--navy); color:#fff; font-weight:500; padding:8px 10px; text-align:left; letter-spacing:0.5px; font-size:12.5px; }
+td{ padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr:nth-child(even) td{ background:#F4F6FA; }
+.c{ text-align:center; }
+
+/* ============ 步骤卡 ============ */
+.step{ display:flex; gap:12px; margin-bottom:10px; }
+.step .sn{ flex:0 0 28px; height:28px; background:var(--gold); color:var(--navy); font-weight:700; font-size:13px; text-align:center; line-height:28px; border-radius:50%; margin-top:1px; }
+.step .sc{ flex:1; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:8px 12px; }
+.step .sc b{ display:block; margin-bottom:2px; }
+
+/* ============ 版本记录 ============ */
+.changelog td:first-child{ white-space:nowrap; color:var(--gold-d); font-weight:700; }
+
+/* ============ 结尾 ============ */
+.endmark{ text-align:center; margin-top:28px; color:var(--muted); font-family:'Noto Serif SC',serif; letter-spacing:3px; font-size:13px; }
+.endmark::before,.endmark::after{ content:" — "; color:var(--gold); }
+.endmark::after{ content:" —"; }
+
+/* ============ 手动滚动条 ============ */
+::-webkit-scrollbar{ width:5px; }
+::-webkit-scrollbar-track{ background:transparent; }
+::-webkit-scrollbar-thumb{ background:var(--line); border-radius:3px; }
+
+/* ============ 移动端 ============ */
+@media(max-width:768px){
+  .sidebar{ display:none; }
+  .main{ padding:16px; }
+  .cover-bar .tagline{ display:none; }
+}
+</style>
 </head>
 <body>
-  <!-- Left Navigation -->
-  <nav class="nav">
-    <div class="nav-header">
-      <h1>📖 使用指南</h1>
-      <p>AI交易实验室 v2.0.2</p>
-    </div>
 
-    <div class="nav-group">
-      <div class="nav-group-title">快速开始</div>
-      <a class="nav-item active" href="#intro">这是什么</a>
-      <a class="nav-item" href="#quickstart">3分钟上手</a>
-      <a class="nav-item" href="#interface">界面说明</a>
-    </div>
-
-    <div class="nav-group">
-      <div class="nav-group-title">新手操作</div>
-      <a class="nav-item" href="#auto-reasoning">开启自动推理</a>
-      <a class="nav-item" href="#view-signals">查看信号</a>
-      <a class="nav-item" href="#execute-signal">执行信号</a>
-      <a class="nav-item" href="#manual-trade">手动交易</a>
-      <a class="nav-item" href="#close-position">平仓操作</a>
-    </div>
-
-    <div class="nav-group">
-      <div class="nav-group-title">进阶操作</div>
-      <a class="nav-item" href="#model-config">模型配置</a>
-      <a class="nav-item" href="#system-prompt">系统提示词</a>
-      <a class="nav-item" href="#auto-config">自动推理参数</a>
-      <a class="nav-item" href="#risk-config">风控参数</a>
-      <a class="nav-item" href="#manual-reasoning">手动推理</a>
-    </div>
-
-    <div class="nav-group">
-      <div class="nav-group-title">参考</div>
-      <a class="nav-item" href="#market-status">市场状态</a>
-      <a class="nav-item" href="#permissions">会员权限</a>
-      <a class="nav-item" href="#history">历史记录</a>
-      <a class="nav-item" href="#notes">注意事项</a>
-      <a class="nav-item" href="#faq">常见问题</a>
-    </div>
-
-    <a class="nav-back" href="/ai/">← 返回AI交易实验室</a>
-  </nav>
-
-  <!-- Main Content -->
-  <div class="main">
-
-    <h1 id="intro">AI 交易实验室 · 使用指南</h1>
-    <blockquote>v2.0.2 | 2026年6月</blockquote>
-    <p>本系统通过 AI 自动分析黄金市场行情，生成交易信号并可一键执行到 MT5 账户。</p>
-
-    <h2 id="quickstart">3分钟上手</h2>
-
-    <div class="step">
-      <div class="step-num">1</div>
-      <div class="step-content">
-        <h4>登录系统</h4>
-        <p>打开浏览器访问系统地址，输入账号密码登录。</p>
-        <blockquote>⚠️ AI交易实验室为 <strong>Pro 会员</strong> 专属功能。免费用户会看到升级提示。</blockquote>
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-num">2</div>
-      <div class="step-content">
-        <h4>连接 MT5 Bridge</h4>
-        <p>Bridge 是连接 MT5 交易终端和服务器的桥梁程序。</p>
-        <ul>
-          <li>点击左上角「桥接状态」徽章</li>
-          <li>点击「下载桥接软件」</li>
-          <li>运行 AURUM_Bridge.exe</li>
-          <li>输入 MT5 账号信息，点击「登录并连接」</li>
-        </ul>
-        <p>连接成功后状态栏显示 <span class="badge badge-green">✅ MT5桥接-已连接</span></p>
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-num">3</div>
-      <div class="step-content">
-        <h4>开启自动推理</h4>
-        <p>点击顶部「自动推理」徽章，开启自动推理功能。</p>
-        <p>开启后系统会每隔 5 分钟自动分析市场，生成交易信号。</p>
-      </div>
-    </div>
-
-    <h2 id="interface">界面说明</h2>
-
-    <h3>顶部状态栏</h3>
-    <table>
-      <tr><th>状态</th><th>含义</th></tr>
-      <tr><td>桥接状态</td><td>Bridge 是否在线</td></tr>
-      <tr><td>交易发送</td><td>是否允许下单（关闭时 AI 只分析不下单）</td></tr>
-      <tr><td>自动推理</td><td>是否自动循环分析</td></tr>
-      <tr><td>市场状态</td><td>交易中 / 休市 / 检测中</td></tr>
-    </table>
-
-    <h3>左侧导航</h3>
-    <table>
-      <tr><th>页面</th><th>用途</th></tr>
-      <tr><td>概览</td><td>实时行情、持仓列表、快捷交易</td></tr>
-      <tr><td>AI推理</td><td>手动触发 AI 分析</td></tr>
-      <tr><td>交易</td><td>查看和管理持仓</td></tr>
-      <tr><td>历史</td><td>交易历史和盈亏曲线</td></tr>
-      <tr><td>配置</td><td>模型和自动推理参数</td></tr>
-      <tr><td>审计</td><td>所有操作记录</td></tr>
-    </table>
-
-    <!-- ==================== 新手操作 ==================== -->
-
-    <h2 id="auto-reasoning">开启自动推理</h2>
-    <blockquote>💡 新手只需 3 步即可开始使用系统</blockquote>
-    <p><strong>你只需要做一件事：点击顶部「自动推理」状态栏，开启自动推理。</strong></p>
-    <p>开启后，系统会：</p>
-    <ul>
-      <li>每隔 5 分钟自动分析市场</li>
-      <li>生成交易信号（做多/做空/观望）</li>
-      <li>信号显示在概览页的「AI 信号」卡片中</li>
-    </ul>
-
-    <h2 id="view-signals">查看信号</h2>
-    <p>信号卡片包含以下信息：</p>
-    <table>
-      <tr><th>项目</th><th>说明</th></tr>
-      <tr><td>方向</td><td><span class="badge badge-green">BUY</span> 做多 / <span class="badge badge-red">SELL</span> 做空 / <span class="badge badge-yellow">HOLD</span> 观望</td></tr>
-      <tr><td>置信度</td><td>AI 的把握程度（越高越可靠）</td></tr>
-      <tr><td>止损/止盈</td><td>建议的价格位置</td></tr>
-      <tr><td>有效期</td><td>过期后不可执行</td></tr>
-    </table>
-
-    <h2 id="execute-signal">执行信号</h2>
-    <p>信号有两种执行方式：</p>
-    <ul>
-      <li><strong>手动执行</strong>：默认方式，需要手动点击「执行信号」确认</li>
-      <li><strong>自动执行</strong>：在「配置」→「模型设置」中打开「自动执行信号」开关后，信号会自动下单</li>
-    </ul>
-    <p>手动执行步骤：</p>
-    <ol>
-      <li>点击信号卡片查看详情</li>
-      <li>确认止损止盈价格</li>
-      <li>点击「执行信号」</li>
-      <li>确认弹窗中检查参数</li>
-      <li>点击「确认执行」</li>
-    </ol>
-    <blockquote>⚠️ HOLD（观望）信号不可执行，系统会自动跳过。</blockquote>
-
-    <h2 id="manual-trade">手动交易</h2>
-    <ol>
-      <li>选择品种</li>
-      <li>选择方向：买入（做多）/ 卖出（做空）</li>
-      <li>输入手数</li>
-      <li>点击「发送订单」→ 确认</li>
-    </ol>
-
-    <h2 id="close-position">平仓操作</h2>
-    <p>在持仓列表中，点击对应持仓的「平仓」按钮即可关闭。</p>
-
-    <!-- ==================== 进阶操作 ==================== -->
-
-    <h2 id="model-config">模型配置</h2>
-    <p>进入「配置」→「模型设置」，可以配置 AI 分析所使用的模型。</p>
-    <table>
-      <tr><th>参数</th><th>说明</th><th>推荐值</th></tr>
-      <tr><td>API 服务商</td><td>DeepSeek / GPT / Kimi / Qwen 等</td><td>DeepSeek</td></tr>
-      <tr><td>API Key</td><td>对应服务商的密钥</td><td>-</td></tr>
-      <tr><td>模型名称</td><td>如 deepseek-chat</td><td>deepseek-chat</td></tr>
-      <tr><td>Temperature</td><td>输出随机性 0-1</td><td>0.3-0.7</td></tr>
-      <tr><td>Max Tokens</td><td>最大输出长度</td><td>2000</td></tr>
-    </table>
-    <blockquote>💡 管理员开启模型共享后，无需配置 API Key 也能使用。</blockquote>
-
-    <h2 id="system-prompt">系统提示词</h2>
-    <p>在「配置」→「模型设置」中，可以修改系统提示词来定制 AI 的分析行为。</p>
-    <p>提示词中可使用时间框架标签：</p>
-    <table>
-      <tr><th>标签</th><th>用途</th><th>示例</th></tr>
-      <tr><td><code>{{MTF:M5:100}}</code></td><td>手动推理时获取 M5 周期 100 根K线</td><td>放提示词开头</td></tr>
-      <tr><td><code>{{ATF:H1:80}}</code></td><td>自动推理时获取 H1 周期 80 根K线</td><td>放提示词开头</td></tr>
-    </table>
-
-    <h2 id="auto-config">自动推理参数</h2>
-    <p>进入「配置」→「手动推理」，打开「应用当前配置给自动推理」开关：</p>
-    <table>
-      <tr><th>参数</th><th>说明</th><th>默认值</th></tr>
-      <tr><td>分析品种</td><td>交易品种</td><td>XAUUSD</td></tr>
-      <tr><td>分析间隔</td><td>多久分析一次</td><td>5 分钟</td></tr>
-      <tr><td>自动执行</td><td>信号是否自动下单</td><td>关闭</td></tr>
-    </table>
-
-    <h2 id="risk-config">风控参数</h2>
-    <p>在「配置」→「模型设置」中调整：</p>
-    <table>
-      <tr><th>参数</th><th>说明</th><th>推荐值</th></tr>
-      <tr><td>风险级别</td><td>low/medium/high</td><td>medium</td></tr>
-      <tr><td>最大手数</td><td>单笔最大交易量</td><td>0.05</td></tr>
-      <tr><td>止盈档位</td><td>选择 TP1/TP2/TP3</td><td>TP1</td></tr>
-    </table>
-
-    <h2 id="manual-reasoning">手动推理</h2>
-    <ol>
-      <li>进入「AI推理」页面</li>
-      <li>选择品种和分析周期（M5/M15/H1/H4）</li>
-      <li>点击「生成信号」</li>
-      <li>等待 10-30 秒</li>
-    </ol>
-
-    <!-- ==================== 参考 ==================== -->
-
-    <h2 id="market-status">市场状态</h2>
-    <table>
-      <tr><th>状态</th><th>颜色</th><th>含义</th></tr>
-      <tr><td>交易中</td><td><span class="badge badge-green">🟢</span></td><td>市场开放，可交易</td></tr>
-      <tr><td>休市</td><td><span class="badge badge-gray">⚪</span></td><td>市场收盘，自动推理暂停</td></tr>
-      <tr><td>检测中</td><td><span class="badge badge-yellow">🟡</span></td><td>正在检测市场状态</td></tr>
-    </table>
-
-    <h2 id="permissions">会员权限</h2>
-    <table>
-      <tr><th>会员</th><th>功能</th></tr>
-      <tr><td>免费用户</td><td>无法使用 AI 交易</td></tr>
-      <tr><td>Plus</td><td>观摩模式（只看不操作）</td></tr>
-      <tr><td>Pro</td><td>完整功能</td></tr>
-    </table>
-
-    <h2 id="history">历史记录</h2>
-    <p><strong>交易历史</strong>：显示所有已完成的交易，支持按时间、方向、盈亏筛选。</p>
-    <p><strong>盈亏曲线</strong>：每日盈亏柱状图、累计盈亏折线、回撤曲线、胜率/盈亏比/最大回撤。</p>
-    <p><strong>信号历史</strong>：显示所有 AI 生成的信号，支持按方向、时间框架筛选。</p>
-
-    <h2 id="notes">注意事项</h2>
-    <ul>
-      <li><strong>Bridge 必须在运行 MT5 的电脑上运行</strong></li>
-      <li><strong>市场休市时</strong>（周末），自动推理自动暂停</li>
-      <li><strong>所有交易操作</strong>都会记录审计日志</li>
-      <li><strong>AI 分析仅供参考</strong>，交易风险自行承担</li>
-      <li><strong>一个账号只能连接一个 Bridge</strong></li>
-    </ul>
-
-    <h2 id="faq">常见问题</h2>
-    <p><strong>Q: Bridge 连接失败？</strong><br>A: 确认 MT5 已登录 → 检查网络 → 确认 Pro 权限 → 检查防火墙</p>
-    <p><strong>Q: 自动推理没运行？</strong><br>A: 检查 Bridge 状态 → 检查市场是否休市 → 检查 API Key → 检查开关</p>
-    <p><strong>Q: 信号没执行？</strong><br>A: 检查自动执行开关 → 检查交易发送 → 检查保证金 → 检查是否过期</p>
-    <p><strong>Q: Plus 用户能做什么？</strong><br>A: 只能观摩，不能交易。升级 Pro 解锁全部功能。</p>
-    <blockquote>📞 有问题请使用「需求反馈」提交</blockquote>
-
+<!-- ================= 左侧导航 ================= -->
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1>量见</h1>
+    <p>使用手册 V1.1</p>
   </div>
+  <div class="sidebar-scroll">
+    <div class="nav-group">
+      <div class="nav-group-title">概述</div>
+      <a class="nav-item active" href="#ch1">文档概述与版本记录</a>
+      <a class="nav-item" href="#ch2">平台定位与服务边界</a>
+      <a class="nav-item" href="#ch3">访问环境与设备兼容</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">账号与会员</div>
+      <a class="nav-item" href="#ch4">账号注册与数据边界</a>
+      <a class="nav-item" href="#ch5">会员体系与订阅支付</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">功能指南</div>
+      <a class="nav-item" href="#ch6">核心功能分区</a>
+      <a class="nav-item sub" href="#ch6-1">AI 交易</a>
+      <a class="nav-item sub" href="#ch6-2">金融工具箱</a>
+      <a class="nav-item sub" href="#ch6-3">社区与课程</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">AI 实验室</div>
+      <a class="nav-item" href="#ch7">进阶操作指南</a>
+      <a class="nav-item sub" href="#ch7-1">模型与推理配置</a>
+      <a class="nav-item sub" href="#ch7-2">手动推理与执行</a>
+      <a class="nav-item sub" href="#ch7-3">挂单与订单类型</a>
+      <a class="nav-item sub" href="#ch7-4">止损保护与复盘</a>
+      <a class="nav-item sub" href="#ch7-5">风控审计</a>
+      <a class="nav-item sub" href="#ch7-6">常见问题</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">规范与合规</div>
+      <a class="nav-item" href="#ch8">学习进度与回看</a>
+      <a class="nav-item" href="#ch9">平台合规规范</a>
+      <a class="nav-item" href="#ch10">金融风险披露</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">支持</div>
+      <a class="nav-item" href="#ch11">常见问题排查</a>
+      <a class="nav-item" href="#ch12">客服与反馈渠道</a>
+      <a class="nav-item" href="#ch13">最终免责声明</a>
+    </div>
+  </div>
+  <div class="sidebar-footer">
+    <a href="/ai/">← 返回AI交易实验室</a>
+  </div>
+</nav>
 
-  <script>
-    // Active nav highlight
-    const navItems = document.querySelectorAll('.nav-item');
-    const sections = document.querySelectorAll('[id]');
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          navItems.forEach(item => item.classList.remove('active'));
-          const activeNav = document.querySelector(`.nav-item[href="#${entry.target.id}"]`);
-          if (activeNav) activeNav.classList.add('active');
+<!-- ================= 主内容 ================= -->
+<div class="main">
+
+<!-- 封面条 -->
+<div class="cover-bar">
+  <div class="brand">量见<small>LIANGJIAN · 道诚出品</small></div>
+  <div class="rule"></div>
+  <h1>交易与 AI 技术教育平台使用手册</h1>
+  <div class="sub">平台功能操作 · 学习规范 · AI 交易实验室指南 · 合规与风险披露</div>
+  <div class="tagline">循道而量，以诚相见</div>
+  <div class="meta">
+    <b>文档版本</b>　V1.1（基于 V1.0 全面修订）　|　<b>更新日期</b>　2026 年 07 月 14 日<br>
+    <b>官网地址</b>　https://www.cnfxtrade.com　|　<b>适用对象</b>　平台新老学员 · 金融交易技术学习者 · AI 量化分析爱好者
+  </div>
+</div>
+
+<!-- ================= 第 1 章 ================= -->
+<h2 class="ch" id="ch1"><span class="num">1</span><span class="tt">文档概述与版本修订记录</span></h2>
+
+<h3>1.1　文档说明</h3>
+<p>本文档为「量见交易与 AI 技术教育平台」官方用户使用手册，用于指导所有注册用户、金融技术学习者正确访问网站、使用全部学习功能与工具模块，统一学习规范、明确平台服务属性与市场风险边界，为用户提供标准、清晰、合规的平台操作指引。</p>
+
+<h3>1.2　版本与更新信息</h3>
+<table class="changelog">
+<tr><th style="width:80px">版本</th><th style="width:120px">日期</th><th>主要变更</th></tr>
+<tr><td>V1.1</td><td>2026-07-14</td><td>修正章节编号；修正数据边界表述（4.3）；修正自动推理频率描述；新增「会员体系与订阅支付」章节；新增「AI 交易实验室进阶操作」专章；全流程补充模拟账户引导与风险前置提示。</td></tr>
+<tr><td>V1.0</td><td>2026-07-11</td><td>首个正式版本。</td></tr>
+</table>
+
+<h3>1.3　阅读须知</h3>
+<p>本手册仅解释平台功能操作、学习规则与工具使用方法，<b>不提供任何投资指导、行情预判、收益承诺</b>。平台所有内容均为金融技术教学、量化思维科普、交易能力训练，不构成任何投资建议。</p>
+<div class="box tip"><span class="bt">快速阅读路径</span>新用户建议按「第 2 章 → 第 4 章 → 第 5 章 → 第 6.1 节」顺序阅读；使用 AI 交易实验室的 Pro 会员，请完整阅读<b>第 7 章进阶操作指南</b>与<b>第 10 章风险披露</b>。</div>
+
+<!-- ================= 第 2 章 ================= -->
+<h2 class="ch" id="ch2"><span class="num">2</span><span class="tt">平台定位与服务边界（核心合规说明）</span></h2>
+
+<h3>2.1　平台核心定位</h3>
+<p>量见是专注于<b>交易底层逻辑、技术分析体系、AI 量化应用</b>的专业金融技术教育平台。平台秉持「量化市场之道，诚待天下之人」的理念，主打<span class="gold">技术平权</span>——将原本仅属于专业机构圈层的分析方法、交易体系、AI 决策模型，通俗化、体系化开放给每一位普通学习者，帮助用户摆脱主观交易误区，建立独立、客观、可落地的市场判断能力。</p>
+<p>平台教学覆盖黄金、白银、欧美股指、纳斯达克、原油、加密货币等主流交易品种，以 AI 交易工具实训、实战案例教学、交易思维沉淀为核心内容。</p>
+
+<h3>2.2　平台核心优势</h3>
+<ul>
+<li><b>技术平权</b>：打破行业信息差，专业圈层的分析技术、模型逻辑、研判方法全面对普通用户开放；</li>
+<li><b>执行效率赋能</b>：教学 AI 如何替代人工完成繁琐复盘、行情筛选、数据统计等工作，规避人工低效与情绪化问题；</li>
+<li><b>数据决策辅助</b>：依托数据模型与 AI 分析逻辑辅助交易思考，让用户将判断权牢牢掌握在自己手中；</li>
+<li><b>过程全透明</b>：AI 每条信号的完整推理过程、系统每次执行或拦截的原因，全部可查、可验证、可质疑。</li>
+</ul>
+
+<h3>2.3　平台服务准则</h3>
+<div class="box law"><span class="bt">三条准则（平台运营红线）</span>
+<b>讲方法，不讲内幕</b>——仅传授原理、技术、模型与策略，无内幕消息、无捷径套路；<br>
+<b>讲风险，不讲稳赚</b>——如实披露市场不确定性，不承诺保本、不承诺收益；<br>
+<b>讲技术，不带单不荐股</b>——纯教育属性，不荐股、不带单、不导流开户、不干预用户交易。</div>
+
+<h3>2.4　服务边界声明</h3>
+<p>平台所有视频课程、文字干货、案例复盘、AI 模型解析、工具数据内容，仅为学习研究参考，<b>不构成任何投资建议</b>。用户所有交易行为及盈亏结果，由用户本人独立承担，平台不承担任何连带责任。</p>
+
+<!-- ================= 第 3 章 ================= -->
+<h2 class="ch" id="ch3"><span class="num">3</span><span class="tt">访问环境与设备兼容说明</span></h2>
+<h3>3.1　支持访问设备</h3>
+<ul>
+<li><b>电脑端</b>：Windows、Mac 全系统适配，功能完整、播放稳定；</li>
+<li><b>移动端</b>：手机、平板浏览器自适应访问，支持随时随地学习；</li>
+<li><b>MT5 桥接客户端</b>：仅支持 Windows 系统，需与 MT5 终端安装在<b>同一台电脑</b>运行（详见第 7 章）。</li>
+</ul>
+<h3>3.2　支持浏览器</h3>
+<p>推荐使用 Chrome、Edge、360 极速、Firefox 最新版本浏览器，可有效避免视频加载异常、页面排版错乱、功能按钮失效等问题。</p>
+<h3>3.3　网络要求</h3>
+<p>视频课程、高清案例复盘、AI 功能加载需保证网络带宽 ≥ 4Mbps，低网速环境易出现卡顿、加载缓慢、播放中断等问题。</p>
+
+<!-- ================= 第 4 章 ================= -->
+<h2 class="ch" id="ch4"><span class="num">4</span><span class="tt">账号注册、登录与数据边界</span></h2>
+
+<h3>4.1　账号注册流程（新用户必看）</h3>
+<p>平台基础课程全部免费开放，核心视频课程、案例教学、AI 功能需注册登录后解锁。平台注册全程免费，仅用于区分学习权限，注册环节<b>无任何开户、资金绑定、交易扣费</b>。</p>
+<div class="step"><div class="sn">1</div><div class="sc"><b>进入注册入口</b>打开官网 https://www.cnfxtrade.com，点击右上角「注册」按钮，唤起注册弹窗并选择「注册新账号」。</div></div>
+<div class="step"><div class="sn">2</div><div class="sc"><b>填写注册信息</b>按页面提示填写有效手机号 / 邮箱，按要求设置专属登录密码，完成基础信息录入。</div></div>
+<div class="step"><div class="sn">3</div><div class="sc"><b>完成短信验证</b>获取并填写验证码，完成账号确权校验。</div></div>
+<div class="step"><div class="sn">4</div><div class="sc"><b>注册成功自动登录</b>验证通过即完成注册，系统自动登录并解锁全站免费课程观看权限。</div></div>
+
+<h3>4.2　账号基础规则</h3>
+<ul>
+<li>一个手机号仅可注册一个账号，支持电脑、移动端多设备同时登录；</li>
+<li>密码遗忘可通过登录弹窗「找回密码」功能，依托预留手机号 / 邮箱重置；</li>
+<li>为保障账号安全，验证码及登录凭证均为一次性使用，请勿泄露给任何人。</li>
+</ul>
+
+<h3>4.3　数据边界（V1.1 修订：如实说明）</h3>
+<div class="box law"><span class="bt">平台存储什么、不存储什么</span>
+<b>不托管</b>：平台不托管用户资金，不留存用户 MT5 交易账号与密码——交易账号凭证仅保存于用户本地运行的桥接客户端，交易指令由用户本机直连 MT5 执行；<br>
+<b>会留存</b>：为提供信号复核、交易历史与复盘统计功能，平台会留存用户的 <b>AI 信号记录、交易历史、审计日志</b>等学习数据，仅用于该用户本人的功能展示与复盘，不作他用；<br>
+<b>模型密钥</b>：用户自行配置的 AI 模型 API Key 仅用于该用户的推理调用。</div>
+<p>V1.0 版本中「平台不收集用户交易数据」的表述不够准确，V1.1 起以本节为准——<b>诚实的边界，才是可信的边界。</b></p>
+
+<!-- ================= 第 5 章 ================= -->
+<h2 class="ch" id="ch5"><span class="num">5</span><span class="tt">会员体系与订阅支付</span></h2>
+
+<h3>5.1　会员权益分级</h3>
+<table>
+<tr><th style="width:100px">等级</th><th>课程与内容</th><th>AI 交易实验室</th></tr>
+<tr><td class="c"><b>免费用户</b></td><td>五大免费入门课程体系、最近更新专区、量见语录、社区</td><td class="c">无访问权限</td></tr>
+<tr><td class="c"><b>Plus 会员</b></td><td>免费内容 + 核心视频课程、案例教学</td><td class="c">观摩模式（可看分析 / 信号 / 报表，不可执行）</td></tr>
+<tr><td class="c"><b>Pro 会员</b></td><td>全部内容</td><td class="c">全功能（桥接绑定、自动推理、信号执行、模型配置、风控参数、完整复盘）</td></tr>
+</table>
+
+<h3>5.2　订阅与支付方式</h3>
+<p>在「设置和账单 / 会员」页选择套餐与订阅周期后创建订单。平台支持 <b>USDT 加密货币支付</b>（TRC20 等主流链路），流程如下：</p>
+<div class="step"><div class="sn">1</div><div class="sc"><b>创建订单</b>选择套餐与周期，系统生成收款地址与<b>专属转账金额</b>（含小数位）。</div></div>
+<div class="step"><div class="sn">2</div><div class="sc"><b>精确转账</b>使用你的钱包向该地址转账——<b>金额必须与订单显示完全一致，分毫不差</b>。</div></div>
+<div class="step"><div class="sn">3</div><div class="sc"><b>链上确认</b>转账后等待区块确认（通常数分钟），系统自动匹配订单并开通会员，无需人工干预。</div></div>
+
+<div class="box warn"><span class="bt">为什么金额必须分毫不差</span>订单金额的<b>小数位是订单识别码</b>，系统依靠精确金额自动匹配你的付款。多付、少付、分多笔转账均无法自动识别；若发生此类情况，请保留转账哈希（TxID）并通过客服渠道提交人工核对。转账前请再次核对<b>链路类型与地址</b>，错链转账无法找回。</div>
+
+<h3>5.3　推荐返佣</h3>
+<p>通过你的专属推荐链接注册并完成付费的用户，将按平台规则计入你的推荐佣金，具体比例与结算方式以会员页公示为准。<b>严禁以「荐股、带单、收益承诺」等违规话术进行推广</b>，违规推广将取消佣金资格并可能封禁账号（见第 9 章）。</p>
+
+<h3>5.4　订阅注意事项</h3>
+<ul>
+<li>会员有效期自开通时刻起算；到期后功能自动回落至对应等级；</li>
+<li>数字资产价格波动与链上手续费由用户自行承担；</li>
+<li>会员服务为虚拟内容服务，开通后不支持无理由退款，请在购买前充分了解功能范围（可先以免费 / Plus 观摩模式体验）。</li>
+</ul>
+
+<!-- ================= 第 6 章 ================= -->
+<h2 class="ch" id="ch6"><span class="num">6</span><span class="tt">核心功能分区使用指南</span></h2>
+
+<h3 id="ch6-1">6.1　AI 交易</h3>
+<p>AI 交易分为两部分：<b>AI 交易实验室</b>与 <b>AI EA 实验室</b>。AI EA 实验室目前处于开发阶段，暂未上线。</p>
+<p>AI 交易实验室为平台高阶核心功能：依托 AI 大模型自动解析黄金等主流品种行情，智能生成标准化交易信号，支持对接 MT5 终端实现信号预览与订单执行，主打 <b>AI 自动化分析、去情绪化决策、数据量化风控</b>，让普通用户学习专业机构的量化交易逻辑。</p>
+
+<h4>6.1.1　新手快速上手流程（Pro 会员）</h4>
+<div class="box tip"><span class="bt">学习期黄金法则：模拟先行 · 手动先行</span>强烈建议首次使用连接 <b>MT5 模拟账户</b>，并按「先手动推理复核 → 熟悉后再考虑自动执行」的顺序进阶。直接在真实账户上开启自动执行，不是学习，是冒险。</div>
+<div class="step"><div class="sn">1</div><div class="sc"><b>登录系统</b>进入 AI 交易实验室页面，使用 Pro 认证账号登录。</div></div>
+<div class="step"><div class="sn">2</div><div class="sc"><b>连接 MT5 Bridge</b>点击左上角「观摩模式-请连接您的 MT5」，在弹出页面下载 AURUM_Bridge.exe 桥接客户端，在安装 MT5 的电脑运行并登录，页面显示「MT5 桥接-已连接」即绑定成功（单账号仅支持单设备桥接）。<b>建议使用模拟账户。</b></div></div>
+<div class="step"><div class="sn">3</div><div class="sc"><b>手动推理体验</b>在「AI 推理」页选择品种与周期，生成第一条信号，完整阅读其分析与推理内容，对照 K 线验证。</div></div>
+<div class="step"><div class="sn">4</div><div class="sc"><b>（进阶）开启自动推理</b>打开顶部自动推理开关。系统按你设定的<b>循环间隔</b>（可配置，单位分钟）基于 M5 周期数据自动扫描并生成信号，休市时段自动暂停。是否自动执行由「自动执行信号」开关单独控制。</div></div>
+
+<h4>6.1.2　界面功能分区</h4>
+<p><b>顶部状态栏</b>：桥接状态、交易发送、自动推理、市场状态（交易中 / 休市 / 检测中）四大全局控制。<br>
+<b>左侧导航栏</b>：概览（实时行情 + 持仓）、AI 推理（手动周期分析）、交易（持仓管理）、历史（交易 / 信号 / 盈亏记录）、配置（模型 / 风控 / 参数设置）、审计（全操作日志）。</p>
+
+<h4>6.1.3　AI 信号卡片</h4>
+<p>信号卡片包含交易方向（BUY / SELL / HOLD）、置信度、止损与三档止盈价位、建议手数、信号有效期。<b>HOLD 观望信号不可执行</b>；过期信号需等待新一轮推理。支持手动执行（默认）与自动执行（可开启）两种模式。完整操作细节见<b>第 7 章</b>。</p>
+
+<h3 id="ch6-2">6.2　金融工具箱</h3>
+<p>工具箱整合行情分析、市场情绪两类实操工具，分为情绪分析、看盘工具两大板块，辅助日常交易研判。</p>
+<h4>6.2.1　情绪分析：量见晴雨表</h4>
+<p>统计各品种散户多空持仓比例，属于<b>反向参考指标</b>——散户情绪走向极端时，行情出现反转的概率相对上升（示例：某品种多头占比超过 80%，提示多头情绪过热）。数据实时更新，点击「查看更多」可浏览全部品种；底部「查看详情」可查看历史情绪曲线，复盘情绪与行情的对应关系。</p>
+<div class="box warn"><span class="bt">使用边界</span>晴雨表仅作辅助参考，<b>不可单独作为开仓依据</b>；极端（&gt;80%）多 / 空头占比时参考价值最高。任何情绪数据都不构成行情预判。</div>
+<h4>6.2.2　看盘工具：TradingView</h4>
+<p>专业看盘软件，覆盖黄金、原油、美股等全品类行情，自带全套技术指标、画线工具、多图布局，新手老手通用。点击卡片「注册 / 访问」跳转页面，注册登录即可免费使用基础看盘功能。</p>
+
+<h3 id="ch6-3">6.3　平台社区功能</h3>
+<ul>
+<li><b>学习答疑互动</b>：交流课程心得、复盘思路、技术难点，互相答疑、共同进步；</li>
+<li><b>干货内容沉淀</b>：沉淀优质学习笔记、交易认知与复盘总结，丰富个人学习体系；</li>
+<li><b>正向学习氛围</b>：严禁荐股、带单、收益炒作，专注交易技术与量化思维学习；</li>
+<li><b>官方资讯同步</b>：实时同步课程更新、功能升级、平台活动等官方通知。</li>
+</ul>
+
+<h3>6.4　五大免费入门课程体系（持续更新）</h3>
+<table>
+<tr><th style="width:100px">课程体系</th><th>内容说明</th></tr>
+<tr><td class="c"><b>案例教学</b></td><td>以每日真实盘面为素材，以《道诚六点半》EP 系列课程为核心，实时讲解黄金、白银、股指、原油、加密货币等多品种走势，拆解实战交易逻辑，培养落地式分析思维。</td></tr>
+<tr><td class="c"><b>技术指标</b></td><td>零基础科普主流技术指标底层原理、适用场景、参数逻辑与信号甄别方法，纠正指标滥用、错用误区。</td></tr>
+<tr><td class="c"><b>形态分析</b></td><td>系统讲解 K 线基础形态、组合形态、持续 / 反转形态、突破与假突破识别，重点教学拥挤突破、关键位置甄别等实战技巧。</td></tr>
+<tr><td class="c"><b>交易策略</b></td><td>传授可复用、高落地性的交易思维与策略规则：行情等待逻辑、风控体系、进出场规则、错误交易终止机制。</td></tr>
+<tr><td class="c"><b>技术模型</b></td><td>讲解专业圈层通用的量化统计模型、盘面分析模型底层逻辑，打通人工分析与量化分析壁垒，为 AI 量化学习奠定基础。</td></tr>
+</table>
+
+<h3>6.5　最近更新专区</h3>
+<p>官网首页独立设置「最近更新」专区，实时展示平台最新上新课程，标注「最新、昨天、3 天前、1 周前」时效标签，用户可快速定位全新案例教学与早盘解读内容，高效跟进最新学习进度。</p>
+
+<h3>6.6　量见语录专栏</h3>
+<p>平台专属交易思维干货板块，收录实战沉淀的交易认知、风控准则、市场规律与交易心法，主打纠正交易者主观误区、建立客观理性、敬畏市场的交易思维。核心语录涵盖：市场不确定性认知、突破行情风控、亏损接纳机制、错误交易终止逻辑等，可搭配课程同步学习，沉淀个人专属交易准则。</p>
+
+<!-- ================= 第 7 章 ================= -->
+<h2 class="ch" id="ch7"><span class="num">7</span><span class="tt">AI 交易实验室 · 进阶操作指南</span></h2>
+<p>本章面向 Pro 会员，覆盖实验室从模型配置到风控审计的完整操作链路。<b>所有 AI 信号、推理与演示内容仅供学习参考，不构成投资建议。</b></p>
+
+<h3 id="ch7-1">7.1　模型与推理配置</h3>
+<p>实验室不内置模型额度——你使用<b>自己的 AI 模型 API Key</b>，数据与成本自主可控（管理员开启模型共享时，未配置用户可使用共享模型）。支持 DeepSeek、GPT、Kimi、Qwen、Zhipu、DouBao 等主流大模型切换。</p>
+<table>
+<tr><th style="width:140px">配置项</th><th>说明与建议</th></tr>
+<tr><td><b>推理温度</b>（Temperature）</td><td>数值越低输出越稳定。技术分析需要一致性，<b>建议 0.2–0.3</b>；高温会导致同样行情给出不同结论。</td></tr>
+<tr><td><b>最大输出</b>（Max Tokens）</td><td>控制推理输出长度，建议 1200–2500。</td></tr>
+<tr><td><b>风险等级</b></td><td>低 / 中 / 高，影响建议手数与止损止盈的兜底幅度。<b>学习期固定「低风险」。</b></td></tr>
+<tr><td><b>单次最大手数</b></td><td>硬性上限，超出的信号会被系统拦截。模拟学习期建议 0.01–0.05 手。</td></tr>
+<tr><td><b>默认止盈方案</b></td><td>TP1 保守 / TP2 标准 / TP3 激进——决定订单实际挂载的止盈档位。<b>建议 TP1</b>（目标更近、兑现率更高）。</td></tr>
+<tr><td><b>系统提示词</b></td><td>发送给 AI 模型的角色设定与分析规则，可使用平台模板或自定义（见 7.2）。</td></tr>
+</table>
+
+<h3 id="ch7-2">7.2　数据周期标签（提示词进阶）</h3>
+<p>手动推理时，你选择的周期与 K 线数量会自动注入为 <code>{{MTF:M15:100}}</code> 形式的标签；如需额外周期数据，可在提示词中手动添加，格式：<code>{{MTF:周期:数量}}</code>。</p>
+<div class="box tip"><span class="bt">周期排序经验</span>把<b>小时级周期（H1 / H4）放在标签最前面</b>。排在首位的周期是「主周期」，是系统止损标尺等参考基准的来源——若以 M5 等小周期打头，止损参考会被压缩到市场噪音级别，极易被正常波动扫损。</div>
+
+<h3>7.3　手动推理：生成与复核</h3>
+<div class="step"><div class="sn">1</div><div class="sc"><b>生成信号</b>在「信号生成」区选择品种、周期（M1–D1）、K 线数量，点击生成，等待模型返回（界面显示耗时）。</div></div>
+<div class="step"><div class="sn">2</div><div class="sc"><b>阅读推理</b>查看信号方向、置信度、止损与 TP1/TP2/TP3，重点精读<b>分析（analysis）与推理（reasoning）</b>——逐条对照 K 线，验证模型描述的结构是否真实存在。这是实验室最核心的学习动作。</div></div>
+<div class="step"><div class="sn">3</div><div class="sc"><b>复核执行</b>认可后点击「复核执行」，经确认弹窗发送至 MT5；不认可则作为教学案例记录。信号有<b>有效期</b>，过期不可执行。</div></div>
+
+<h3 id="ch7-3">7.4　订单类型与挂单规则</h3>
+<p>「手动交易」面板支持四种订单类型（挂单会真实提交到 MT5）；AI 信号若为限价 / 止损类型，复核执行时会按对应挂单方式发送，而非市价：</p>
+<table>
+<tr><th style="width:100px">类型</th><th style="width:200px">含义</th><th>价格要求</th></tr>
+<tr><td class="c"><b>市价</b></td><td>立即按当前价成交</td><td>—</td></tr>
+<tr><td class="c"><b>限价</b></td><td>等价格<b>回调</b>到挂单价成交</td><td>买入限价 &lt; 现价；卖出限价 &gt; 现价</td></tr>
+<tr><td class="c"><b>止损</b></td><td>价格<b>突破</b>触发价后追单</td><td>买入止损 &gt; 现价；卖出止损 &lt; 现价</td></tr>
+<tr><td class="c"><b>止损限价</b></td><td>突破触发后按限价成交</td><td>需同时填写触发价与限价</td></tr>
+</table>
+<ul>
+<li><b>有效期（分钟）</b>：挂单到期自动撤销，可在「挂单管理」查看剩余时间或手动撤销；</li>
+<li>止盈 / 止损价可留空，但<b>强烈建议每单都设置止损</b>；</li>
+<li>系统对同品种同方向的旧挂单会<b>自动撤销后再处理新信号</b>，避免挂单堆积。</li>
+</ul>
+
+<h3 id="ch7-4">7.5　止损保护机制（系统行为说明）</h3>
+<div class="box law"><span class="bt">为什么我的止损被系统调整了</span>为避免止损距离过近、被市场正常波动「噪音扫损」，系统对止损设有<b>保护性最小距离</b>（以小时级波动幅度为标尺）：当信号止损过近时，系统会将其放宽至下限，同时<b>等比缩小手数</b>以保持单笔风险金额不变；止损距离过远的信号则会被转为观望。所有调整均记录在风控审计中，可随时查证。</div>
+
+<h3>7.6　持仓、挂单与复盘统计</h3>
+<ul>
+<li><b>持仓管理</b>：查看在场订单的 SL / TP / 浮盈，支持平仓与修改；</li>
+<li><b>挂单管理</b>：查看未成交挂单的价格、有效期与状态（成交 / 到期 / 撤销自动更新）；</li>
+<li><b>交易信号</b>：全部历史信号，可按方向 / 周期筛选，含每条的止损与三档目标；</li>
+<li><b>交易历史</b>：已平仓记录与统计（总交易、胜率、盈亏比、最大回撤），支持筛选与<b>导出</b>——建议每周导出复盘，对照信号推理找差距。</li>
+</ul>
+
+<h3 id="ch7-5">7.7　风控审计：每一单为什么被执行或拒绝</h3>
+<p>「管理 → 审计」提供全操作<b>中文追踪</b>：每一次 AI 或手动动作的结果（成功 / 已跳过 / 风控拒绝 / 错误 / 需要确认）与原因均有记录。<b>读审计，是理解这套系统最快的方法。</b></p>
+<table>
+<tr><th style="width:140px">常见中文结果</th><th>含义与处理</th></tr>
+<tr><td>信号已过期</td><td>超出有效期，等待新一轮推理，属正常保护。</td></tr>
+<tr><td>手数超出配置上限</td><td>调低手数，或检查「单次最大手数」设置。</td></tr>
+<tr><td>价格滑点超限</td><td>信号生成到执行之间价格变动过大，系统放弃执行，属保护机制。</td></tr>
+<tr><td>观望信号不执行</td><td>HOLD 信号本就不下单，正常。</td></tr>
+<tr><td>桥接离线</td><td>检查本机桥接客户端与 MT5 终端运行状态。</td></tr>
+</table>
+
+<h3 id="ch7-6">7.8　实验室常见问题</h3>
+<ul>
+<li><b>信号很久不更新？</b>检查自动推理开关、模型 API Key 有效性与额度、桥接在线状态；手动生成一次查看报错信息。</li>
+<li><b>挂单一直不成交？</b>限价单需价格回调触及；到有效期自动撤销属正常。</li>
+<li><b>换模型 / 换提示词会影响历史吗？</b>不会，历史记录不变，新配置只影响之后的推理。</li>
+<li><b>忘了关自动执行？</b>在「自动推理配置」中关闭「自动执行信号」；在场订单需在持仓管理中另行处理。</li>
+<li><b>模型 / 网络异常时会乱下单吗？</b>不会——异常时系统自动降级为观望（HOLD），宁可不做，不做错。</li>
+</ul>
+
+<!-- ================= 第 8 章 ================= -->
+<h2 class="ch" id="ch8"><span class="num">8</span><span class="tt">学习进度与内容回看规则</span></h2>
+<ul>
+<li>平台所有已上线课程、案例、语录均<b>永久保留</b>，无观看时效限制；</li>
+<li>登录账号后可无限次回放、暂停、拖拽进度条，适配碎片化学习；</li>
+<li>用户可自由搭配免费课程、每日新课、语录干货、工具实训，搭建个人学习体系。</li>
+</ul>
+
+<!-- ================= 第 9 章 ================= -->
+<h2 class="ch" id="ch9"><span class="num">9</span><span class="tt">平台合规使用规范</span></h2>
+<h3>9.1　用户行为规范</h3>
+<ul>
+<li>所有平台内容仅限<b>个人学习、研究</b>使用，禁止录屏、搬运、剪辑、二次传播与商用；</li>
+<li>禁止利用平台内容开展荐股、带单、收费教学、引流变现等违规行为；</li>
+<li>禁止使用外挂、脚本恶意刷取权限、遍历平台内容；</li>
+<li>严禁冒用平台名义发布不实信息。违规账号将被限制访问或封禁。</li>
+</ul>
+<h3>9.2　内容使用规范</h3>
+<p>平台所有行情解读、案例复盘、AI 信号、模型解析内容，仅用于训练分析能力、学习市场逻辑，<b>不可直接作为实盘交易依据</b>，禁止机械套用历史规律预判未来行情。</p>
+
+<!-- ================= 第 10 章 ================= -->
+<h2 class="ch" id="ch10"><span class="num">10</span><span class="tt">金融风险专属披露（必读）</span></h2>
+<div class="box warn"><span class="bt">请逐条阅读并确认理解</span>
+· 金融市场具备高波动、高风险、不确定性特征，<b>不存在绝对稳定、百分百盈利的交易策略</b>；<br>
+· 普通行情淘汰认知不足的交易者，极端行情淘汰主观自负、无视风险的交易者；<br>
+· 市场最大常态为「未来始终存在意外」，无绝对确定的行情；<br>
+· AI 模型可能出错，可能在特定行情下持续给出亏损信号——任何历史表现、回测与演示结果，均不代表未来收益；<br>
+· 接受亏损、敬畏市场、终止重复错误、严格风控，是交易成熟的核心；<br>
+· 平台仅提升用户分析能力，无法规避市场固有风险，<b>所有交易决策与风险由用户自行承担</b>。</div>
+<div class="box tip"><span class="bt">平台建议的安全学习路径</span>模拟账户先行 → 手动复核信号 → 小手数验证 → 每单设置止损 → 定期导出复盘 → 再评估是否使用自动执行。跳过任何一步，都在用真金白银替学习买单。</div>
+
+<!-- ================= 第 11 章 ================= -->
+<h2 class="ch" id="ch11"><span class="num">11</span><span class="tt">常见问题故障排查</span></h2>
+<table>
+<tr><th style="width:120px">问题类型</th><th style="width:200px">常见现象</th><th>解决方案</th></tr>
+<tr><td><b>视频播放异常</b></td><td>登录后无法播放、卡顿、黑屏、加载失败</td><td>刷新页面、清除浏览器缓存、关闭广告拦截插件、更换主流浏览器、检查网络带宽。</td></tr>
+<tr><td><b>账号权限异常</b></td><td>登录后无观看权限、账号失效</td><td>重新登录激活权限，确认账号注册完成，会员用户核对会员有效期。</td></tr>
+<tr><td><b>页面加载异常</b></td><td>排版错乱、内容加载不全、按钮失效</td><td>升级浏览器至最新版本、切换设备、解除网络拦截。</td></tr>
+<tr><td><b>AI 功能异常</b></td><td>桥接失败、无自动信号、无法执行订单</td><td>核对 Pro 权限、MT5 登录状态、桥接程序运行状态、网络防火墙、功能开关配置；进一步排查见 7.7 / 7.8 节。</td></tr>
+<tr><td><b>支付未到账</b></td><td>USDT 已转账但会员未开通</td><td>核对转账金额是否与订单<b>完全一致</b>、链路是否正确；保留 TxID 通过客服提交人工核对。</td></tr>
+</table>
+
+<!-- ================= 第 12 章 ================= -->
+<h2 class="ch" id="ch12"><span class="num">12</span><span class="tt">客服与问题反馈渠道</span></h2>
+<ul>
+<li><b>咨询范围</b>：功能使用、课程权限、AI 工具故障、页面异常、支付核对、学习问题咨询；</li>
+<li><b>反馈方式一</b>：官网首页在线客服入口提交问题，可附带截图辅助快速排查；</li>
+<li><b>反馈方式二</b>：AI 交易实验室页内「需求反馈」表单——支持功能建议 / Bug 反馈 / 交易需求 / 课程建议等分类提交，并可在「我的提交记录」中跟踪处理进度；</li>
+<li><b>服务时效</b>：常规问题快速响应，系统功能故障优先跟进修复并反馈。</li>
+</ul>
+
+<!-- ================= 第 13 章 ================= -->
+<h2 class="ch" id="ch13"><span class="num">13</span><span class="tt">最终免责声明</span></h2>
+<p>量见交易与 AI 技术教育平台始终坚持<b>「教育为本、风险前置」</b>的运营原则。全站所有内容仅为金融技术教学与交易思维科普，不构成任何证券、期货、外汇、数字资产的投资建议与交易邀约。平台不提供荐股、带单、代客理财服务，不从事外汇保证金业务，也不为任何境外交易平台引流或代理开户。</p>
+<p>用户所有交易行为、决策判断及盈亏结果，均由用户本人独立承担，平台不承担任何法律与经济连带责任。</p>
+<div class="endmark">循道而量 · 以诚相见</div>
+<p style="text-align:center; color:var(--muted); font-size:12px; margin-top:8px;">© 2026 道诚 · 量见　保留所有权利</p>
+
+</div>
+
+<script>
+// 左侧导航高亮
+const navItems = document.querySelectorAll('.nav-item');
+const sections = [];
+navItems.forEach(item => {
+  const id = item.getAttribute('href')?.slice(1);
+  if (id) {
+    const el = document.getElementById(id);
+    if (el) sections.push({ el, item });
+  }
+});
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navItems.forEach(i => i.classList.remove('active'));
+      const match = sections.find(s => s.el === entry.target);
+      if (match) match.item.classList.add('active');
+      // 滚动导航栏使当前项可见
+      const sidebar = document.querySelector('.sidebar-scroll');
+      if (sidebar && match) {
+        const itemTop = match.item.offsetTop;
+        const itemBottom = itemTop + match.item.offsetHeight;
+        const scrollTop = sidebar.scrollTop;
+        const viewHeight = sidebar.clientHeight;
+        if (itemTop < scrollTop + 40 || itemBottom > scrollTop + viewHeight - 40) {
+          match.item.scrollIntoView({ block: 'center', behavior: 'smooth' });
         }
-      });
-    }, { rootMargin: '-20% 0px -70% 0px' });
-    sections.forEach(section => observer.observe(section));
-  </script>
+      }
+    }
+  });
+}, { rootMargin: '-10% 0px -80% 0px' });
+sections.forEach(s => observer.observe(s.el));
+
+// 点击平滑滚动
+navItems.forEach(item => {
+  item.addEventListener('click', (e) => {
+    const id = item.getAttribute('href')?.slice(1);
+    const el = document.getElementById(id);
+    if (el) {
+      e.preventDefault();
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+});
+</script>
 </body>
 </html>
