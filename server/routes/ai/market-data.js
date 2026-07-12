@@ -22,10 +22,11 @@ const _bridgeLocks = new Map()
 // === Chan Theory Constants ===
 const MIN_BARS_PER_BI = 5
 const MIN_BIS_PER_SEGMENT = 3
-const FEED_LAST_N_BIS = 3
+const FEED_LAST_N_BIS = 6
 const ENABLE_DIVERGENCE = true
 const MIN_KLINES_FOR_CHAN = 30
 const DIVERGENCE_MIN_AREA_RATIO = 0.85
+const MACD_WARMUP_BARS = 40
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
 // === MACD Series Calculation ===
@@ -333,6 +334,7 @@ function buildSegments(confirmedBis, options = {}) {
       start_bi_id: segBis[0].id,
       end_bi_id: segBis[segBis.length - 1].id,
       broken: true,
+      ended_reason: 'broken',
       weak: false,
       confirmation: endpoint.hasGap ? 'gap_reverse_confirmed' : 'feature_fractal',
     })
@@ -377,13 +379,17 @@ function buildCenters(components) {
       fluctuation_high: Math.max(...ranges.map(range => range[1])),
       level: '',
       status: 'confirmed',
+      closed_by_segment_id: null,
     }
     let j = i + 3
     while (j < components.length) {
       const item = components[j]
       const low = Number.isFinite(item.low) ? item.low : Math.min(item.start_price, item.end_price)
       const high = Number.isFinite(item.high) ? item.high : Math.max(item.start_price, item.end_price)
-      if (Math.max(center.zl, low) >= Math.min(center.zh, high)) break
+      if (Math.max(center.zl, low) >= Math.min(center.zh, high)) {
+        center.closed_by_segment_id = item.id
+        break
+      }
       center.fluctuation_low = Math.min(center.fluctuation_low, low)
       center.fluctuation_high = Math.max(center.fluctuation_high, high)
       center.segment_ids.push(item.id)
@@ -400,13 +406,15 @@ function buildCenters(components) {
 
 // === Chan Theory: Divergence Detection (conservative) ===
 function detectDivergence(segments, bis, macdHist, centers = []) {
-  if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return { type: 'none', strength: 'none', reason: 'no_macd_data', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const emptyResult = reason => ({ type: 'none', strength: 'none', reason, area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 })
+  if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return emptyResult('no_macd_data')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
-  if (validSegs.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_valid_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
-  if (centers.length === 0) return { type: 'none', strength: 'none', reason: 'no_valid_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  if (validSegs.length < 2) return emptyResult('insufficient_valid_segments')
+  if (centers.length === 0) return emptyResult('no_valid_center')
 
-  function calcArea(biIds, dir) {
+  function calcMacdStats(biIds, dir) {
     let area = 0
+    let peak = 0
     const seenIndexes = new Set()
     for (const bid of biIds) {
       const bi = bis.find(b => b.id === bid)
@@ -415,11 +423,17 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
         if (seenIndexes.has(j)) continue
         seenIndexes.add(j)
         const v = macdHist[j] || 0
-        if (dir === 'up' && v > 0) area += v
-        else if (dir === 'down' && v < 0) area += Math.abs(v)
+        if (dir === 'up' && v > 0) {
+          area += v
+          peak = Math.max(peak, v)
+        } else if (dir === 'down' && v < 0) {
+          const magnitude = Math.abs(v)
+          area += magnitude
+          peak = Math.max(peak, magnitude)
+        }
       }
     }
-    return area
+    return { area, peak }
   }
 
   // Compare the latest departure segment with the same-direction segment that
@@ -427,25 +441,81 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
   // being paired solely because their direction matches.
   const current = validSegs[validSegs.length - 1]
   const eligibleCenters = centers.filter(c => current.id === (c.end_segment_id || 0) + 1)
-  if (eligibleCenters.length === 0) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  if (eligibleCenters.length === 0) return emptyResult('not_after_center')
   const lastCenter = eligibleCenters[eligibleCenters.length - 1]
   const prev = validSegs.find(s => s.id === lastCenter.start_segment_id - 1)
-  if (!prev || prev.dir !== current.dir) return { type: 'none', strength: 'none', reason: 'no_entry_segment', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  if (!prev || prev.dir !== current.dir) return emptyResult('no_entry_segment')
   const cur = current
 
-  const areaPrev = calcArea(prev.bi_ids, cur.dir)
-  const areaCur = calcArea(cur.bi_ids, cur.dir)
+  const comparisonBis = [...prev.bi_ids, ...cur.bi_ids]
+    .map(id => bis.find(b => b.id === id))
+    .filter(Boolean)
+  if (comparisonBis.some(b => Number(b.raw_start_idx) < MACD_WARMUP_BARS)) {
+    return emptyResult('macd_warmup_overlap')
+  }
 
-  if (areaCur === 0 || areaPrev === 0) return { type: 'none', strength: 'none', reason: 'invalid_macd_area', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: 0, price_extreme_prev: 0 }
+  const prevMacd = calcMacdStats(prev.bi_ids, cur.dir)
+  const curMacd = calcMacdStats(cur.bi_ids, cur.dir)
+  const areaPrev = prevMacd.area
+  const areaCur = curMacd.area
+  const peakPrev = prevMacd.peak
+  const peakCur = curMacd.peak
+
+  if (areaCur === 0 || areaPrev === 0) return { type: 'none', strength: 'none', reason: 'invalid_macd_area', area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev), price_extreme_cur: 0, price_extreme_prev: 0 }
+
+  const areaDiverged = areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO
+  const heightDiverged = peakCur < peakPrev
+  const strength = areaDiverged && heightDiverged ? 'strong' : 'weak'
+  const reason = areaDiverged && heightDiverged
+    ? 'macd_area_and_height_divergence'
+    : areaDiverged
+      ? 'macd_area_divergence_only'
+      : heightDiverged
+        ? 'macd_height_divergence_only'
+        : 'macd_no_divergence'
+  const macdFields = { area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev) }
 
   if (cur.dir === 'up') {
-    if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'top', category: 'center_departure', trend_confirmed: false, strength: 'candidate', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (areaDiverged || heightDiverged) return { type: 'top', category: 'center_departure', trend_confirmed: false, strength, reason, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    return { type: 'none', strength: 'none', reason, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
   } else {
-    if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'bottom', category: 'center_departure', trend_confirmed: false, strength: 'candidate', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (areaDiverged || heightDiverged) return { type: 'bottom', category: 'center_departure', trend_confirmed: false, strength, reason, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    return { type: 'none', strength: 'none', reason, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+  }
+}
+
+function summarizeSegment(segment) {
+  if (!segment) return null
+  return {
+    id: segment.id,
+    dir: segment.dir,
+    start_price: round5(segment.start_price),
+    end_price: round5(segment.end_price),
+    high: round5(segment.high),
+    low: round5(segment.low),
+    bi_count: segment.bi_ids.length,
+    ended_reason: segment.ended_reason,
+    broken: segment.broken,
+  }
+}
+
+function summarizeCenter(center, timeframe) {
+  if (!center) return null
+  return {
+    id: center.id,
+    zl: round5(center.zl),
+    zh: round5(center.zh),
+    gg: round5(center.fluctuation_high),
+    dd: round5(center.fluctuation_low),
+    status: center.status,
+    source_timeframe: timeframe,
+    structure_level: 'segment',
+    level: timeframe,
+    start_segment_id: center.start_segment_id,
+    end_segment_id: center.end_segment_id,
+    closed_by_segment_id: center.closed_by_segment_id,
   }
 }
 
@@ -493,9 +563,9 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     }
   }
   let priceVsCenter = 'none'
-  if (activeCenter) {
-    if (latest > activeCenter.zh) priceVsCenter = 'above'
-    else if (latest < activeCenter.zl) priceVsCenter = 'below'
+  if (latestCenter) {
+    if (latest > latestCenter.zh) priceVsCenter = 'above'
+    else if (latest < latestCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
   }
   const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers)
@@ -526,29 +596,12 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
     developing_bi: developingBi,
     recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
-    current_segment: lastSeg ? { id: lastSeg.id, dir: lastSeg.dir, start_price: round5(lastSeg.start_price), end_price: round5(lastSeg.end_price), broken: lastSeg.broken } : null,
+    current_segment: summarizeSegment(lastSeg),
+    prev_segment: summarizeSegment(validSegs[validSegs.length - 2]),
     candidate_segment: candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price) } : null,
-    current_center: activeCenter ? {
-      id: activeCenter.id,
-      zl: round5(activeCenter.zl),
-      zh: round5(activeCenter.zh),
-      source_timeframe: timeframe,
-      structure_level: 'segment',
-      level: timeframe,
-      status: activeCenter.status,
-      start_segment_id: activeCenter.start_segment_id,
-      end_segment_id: activeCenter.end_segment_id,
-    } : null,
-    active_center: activeCenter ? {
-      id: activeCenter.id, zl: round5(activeCenter.zl), zh: round5(activeCenter.zh), status: activeCenter.status,
-      source_timeframe: timeframe, structure_level: 'segment',
-      start_segment_id: activeCenter.start_segment_id, end_segment_id: activeCenter.end_segment_id,
-    } : null,
-    latest_center: latestCenter ? {
-      id: latestCenter.id, zl: round5(latestCenter.zl), zh: round5(latestCenter.zh), status: latestCenter.status,
-      source_timeframe: timeframe, structure_level: 'segment',
-      start_segment_id: latestCenter.start_segment_id, end_segment_id: latestCenter.end_segment_id,
-    } : null,
+    current_center: summarizeCenter(latestCenter, timeframe),
+    active_center: summarizeCenter(activeCenter, timeframe),
+    latest_center: summarizeCenter(latestCenter, timeframe),
     price_vs_center: priceVsCenter,
     divergence,
     warnings,
@@ -556,7 +609,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()

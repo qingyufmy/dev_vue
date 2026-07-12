@@ -4,7 +4,7 @@
 
 本系统在 `server/routes/ai/market-data.js` 中实现了**保守版缠论结构计算**，用于为 AI 模型提供真实的价格结构数据（分型→笔→线段→中枢→背驰），替代模型自行从 K 线推测结构。
 
-> **重要说明**：本实现是保守结构计算器。已覆盖标准特征序列、线段两种破坏情况和缺口后的第二特征序列；尚未覆盖中枢级别递归、完整走势类型递归和严格趋势背驰，只输出中枢离开段的力度衰减候选。
+> **重要说明**：本实现是保守结构计算器。已覆盖标准特征序列、线段两种破坏情况和缺口后的第二特征序列；尚未覆盖中枢级别递归和完整走势类型递归。背驰仅比较同一中枢的直接进入段与直接离开段，并要求价格先创新高或新低。
 
 提示词包含 `{{USE_CHAN}}` 时，每个相关周期先获取 300 根历史 K 线用于结构计算；重同步后仍无完整线段时，仅对该周期补取到 500 根。发送给模型的原始 K 线仍按 `MTF/ATF` 标签数量截取，普通指标也只使用该截取窗口。结构计算排除最后一根尚未收盘的 K 线。
 
@@ -23,9 +23,10 @@
 ```js
 MIN_BARS_PER_BI = 5          // 成笔最少处理后 K 线数
 MIN_BIS_PER_SEGMENT = 3      // 有效线段最少笔数
-FEED_LAST_N_BIS = 3          // 发送给模型的最近笔数
+FEED_LAST_N_BIS = 6          // 发送给模型的最近笔数
 MIN_KLINES_FOR_CHAN = 30     // K 线不足时返回 insufficient
 DIVERGENCE_MIN_AREA_RATIO = 0.85  // 背驰最小面积差异阈值（85%）
+MACD_WARMUP_BARS = 40        // 背驰比较不得覆盖 MACD 暖机区
 ENABLE_DIVERGENCE = true     // 是否启用背驰判断
 ```
 
@@ -148,8 +149,10 @@ HIST[i]  = DIF[i] - DEA[i]
    - `ZL = max(lo1, lo2, lo3)`
    - `ZH = min(hi1, hi2, hi3)`
    - 若 `ZL < ZH` 则成立
-2. 延伸：后续线段区间与中枢重叠时保持初始核心区间不变，并更新波动区间
-3. 关闭：重叠区间为空时标记 `closed`
+2. 延伸：后续线段区间与中枢存在正宽度重叠时，保持初始核心区间不变，并更新波动区间 `GG/DD`
+3. 关闭：重叠区间为空或仅单点接触时标记 `closed`，并记录 `closed_by_segment_id`
+4. `current_center` 始终指向最后一个中枢，包括已关闭中枢；`active_center` 仅指向尚未关闭的中枢
+5. `price_vs_center` 始终相对最后一个中枢的固定 `[ZL,ZH]` 判断，只有完全没有中枢时才为 `none`
 
 ### 中枢状态
 
@@ -174,10 +177,11 @@ HIST[i]  = DIF[i] - DEA[i]
 
 1. 取最新有效线段方向 `current.dir`
 2. 找同一中枢的同方向直接进入段 `prev`
-3. 按方向过滤 MACD histogram：
+3. 任一比较线段起始位置落在前 40 根 MACD 暖机区时停止判定
+4. 按方向过滤 MACD histogram，同时计算面积与同色柱峰值：
    - 上行段：只统计正 histogram（红柱）
    - 下行段：只统计负 histogram（绿柱）
-4. 创新高/新低检查：
+5. 创新高/新低检查：
    - 上行：`cur.high > prev.high`
    - 下行：`cur.low < prev.low`
 5. 面积缩小检查：`areaCur <= areaPrev × 0.85`
@@ -206,9 +210,12 @@ HIST[i]  = DIF[i] - DEA[i]
 | `insufficient_same_direction_segments` | 同方向线段不足 2 |
 | `not_after_center` | 不在中枢后 |
 | `no_price_extreme_break` | 未创新高/新低 |
+| `macd_warmup_overlap` | 比较线段覆盖前 40 根 MACD 暖机区 |
 | `invalid_macd_area` | MACD 面积为 0 |
-| `macd_area_divergence` | 面积缩小触发背驰 |
-| `macd_area_not_shrunk_enough` | 面积缩小不足 15% |
+| `macd_area_and_height_divergence` | 面积与柱峰同时缩小，强背驰 |
+| `macd_area_divergence_only` | 仅面积缩小，弱背驰 |
+| `macd_height_divergence_only` | 仅柱峰缩小，弱背驰 |
+| `macd_no_divergence` | 面积与柱峰均未满足 |
 
 ---
 
@@ -228,9 +235,9 @@ HIST[i]  = DIF[i] - DEA[i]
   reliability: 'high' | 'medium' | 'low',
   raw_bar_count, processed_bar_count,
   fractal_count, bi_count, segment_count, center_count,
-  current_bi, recent_bis,
-  current_segment, candidate_segment,
-  current_center, price_vs_center,
+  current_bi, recent_bis, developing_bi,
+  current_segment, prev_segment, candidate_segment,
+  current_center, active_center, latest_center, price_vs_center,
   divergence,
   warnings: string[]
 }
