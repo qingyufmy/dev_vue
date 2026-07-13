@@ -2806,14 +2806,21 @@ class MainWindow(QMainWindow):
         self._update_timer.start(30 * 60 * 1000)
 
     def _auto_check_update(self):
-        """静默检查更新，有新版本时在主页显示提示条"""
+        """静默检查更新，有新版本时根据是否有保存密码决定行为"""
         cfg = load_config()
         server = cfg.get("server_url", DEFAULT_SERVER)
         status_code, data = http_get_json(f"{server.rstrip('/')}/api/bridge/version", timeout=8)
         if status_code == 200 and data.get("version"):
             remote_ver = data["version"]
             if self.settings_page._version_newer(remote_ver, APP_VERSION):
-                if not self._pending_update_data:
+                has_saved_password = bool(cfg.get("saved_password"))
+                if has_saved_password:
+                    # 有保存密码：直接自动更新
+                    self.bridge_page._log(f"发现新版本 {remote_ver}，开始自动更新...")
+                    self.settings_page._pending_update = data
+                    self.settings_page._do_update()
+                elif not self._pending_update_data:
+                    # 无保存密码：只显示提示，需手动更新
                     self._pending_update_data = data
                     self.bridge_page._log(f"发现新版本 {remote_ver}，请前往设置页更新")
                     self.bridge_page.lbl_update_hint.setText(f"新版本 {remote_ver} 可用 — 点此前往更新")
