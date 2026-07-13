@@ -1934,8 +1934,8 @@ class LoginPage(QWidget):
         cfg = load_config()
         self.input_server.setText(cfg.get("server_url", DEFAULT_SERVER))
         self.input_email.setText(cfg.get("email", ""))
-        self.chk_remember.setChecked(cfg.get("remember", False))
-        self.chk_auto_login.setChecked(cfg.get("auto_login", False))
+        self.chk_remember.setChecked(cfg.get("remember", True))
+        self.chk_auto_login.setChecked(cfg.get("auto_login", True))
         if cfg.get("remember") and cfg.get("saved_password"):
             self.input_password.setText(decrypt_password(cfg["saved_password"]))
 
@@ -2612,11 +2612,10 @@ class SettingsPage(QWidget):
         self.progress_bar.setValue(0)
         QApplication.processEvents()
 
-        # Save to user's Downloads folder
-        downloads_dir = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Downloads")
-        os.makedirs(downloads_dir, exist_ok=True)
+        # Save to temp directory
+        temp_dir = os.environ.get("TEMP", os.environ.get("TMP", os.path.expanduser("~")))
         filename = f"AURUM_Bridge_Setup_{remote_ver}.exe"
-        dest_path = os.path.join(downloads_dir, filename)
+        dest_path = os.path.join(temp_dir, filename)
 
         try:
             import urllib.request
@@ -2647,16 +2646,39 @@ class SettingsPage(QWidget):
             return
 
         self.progress_bar.setValue(100)
-        self.lbl_update_status.setText("下载完成，正在启动安装包...")
+        self.lbl_update_status.setText("下载完成，正在准备安装...")
         self.lbl_update_status.setProperty("success", True)
         self.lbl_update_status.style().polish(self.lbl_update_status)
         QApplication.processEvents()
 
-        # Launch installer then exit
-        import subprocess
+        # Save bridge_was_running state for post-update auto-start
+        cfg = load_config()
+        cfg["bridge_was_running"] = (self.bridge_page._worker and self.bridge_page._worker.isRunning())
+        save_config(cfg)
+
+        # Generate .bat helper script for silent install + relaunch
+        import subprocess, tempfile
+        current_pid = os.getpid()
+        install_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else ""
+        bat_content = f"""@echo off
+REM Auto-update helper: wait for old process, silent install, relaunch, cleanup
+timeout /t 2 /nobreak >nul
+taskkill /PID {current_pid} /F >nul 2>&1
+timeout /t 1 /nobreak >nul
+"{dest_path}" /SILENT /DIR="{install_dir}" /NORESTART
+start "" "{install_dir}\\{os.path.basename(sys.executable)}"
+del "%TEMP%\\{filename}" >nul 2>&1
+del "%~f0" >nul 2>&1
+"""
+        bat_path = os.path.join(temp_dir, "aurum_update_helper.bat")
+        with open(bat_path, "w", encoding="utf-8") as f:
+            f.write(bat_content)
+
+        # Launch .bat detached then exit
         subprocess.Popen(
-            [dest_path],
+            ["cmd", "/c", bat_path],
             shell=False,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
         )
         QTimer.singleShot(500, lambda: os._exit(0))
 
@@ -2730,7 +2752,28 @@ class MainWindow(QMainWindow):
                 self._on_login_success(email, token)
                 return
 
-        # Token 无效，回到登录页手动输入密码
+        # Token 无效，尝试用保存的密码重新登录
+        saved_pwd = cfg.get("saved_password", "")
+        if saved_pwd:
+            password = decrypt_password(saved_pwd)
+            if password:
+                self.login_page.lbl_status.setText("Token 已过期，使用密码重新登录...")
+                self.login_page.lbl_status.setProperty("muted", True)
+                self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+                QApplication.processEvents()
+
+                is_phone = email.isdigit() and 7 <= len(email) <= 15
+                payload = {"phone": email, "password": password} if is_phone else {"email": email, "password": password}
+                status_code, data = http_post_json(f"{server.rstrip('/')}/api/login", payload, timeout=10)
+                if status_code == 200 and data.get("token"):
+                    new_token = data["token"]
+                    cfg["token"] = new_token
+                    cfg["plan"] = data.get("user", {}).get("plan", "free")
+                    save_config(cfg)
+                    self._on_login_success(email, new_token)
+                    return
+
+        # 无法自动登录，回到登录页
         self.login_page.lbl_status.setText("登录已过期，请重新登录")
         self.login_page.lbl_status.setProperty("warning", True)
         self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
@@ -2749,6 +2792,15 @@ class MainWindow(QMainWindow):
             self.bridge_page.lbl_update_hint.setVisible(False)
         except Exception:
             pass
+
+        # After update: auto-start bridge if it was running before
+        cfg = load_config()
+        if cfg.get("bridge_was_running"):
+            cfg["bridge_was_running"] = False
+            save_config(cfg)
+            self.bridge_page._log("检测到更新前桥接正在运行，自动启动桥接...")
+            QTimer.singleShot(1000, self.bridge_page._toggle_bridge)
+
         # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
         QTimer.singleShot(3000, self._auto_check_update)
         self._update_timer.start(30 * 60 * 1000)
