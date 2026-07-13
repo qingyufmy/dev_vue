@@ -71,6 +71,22 @@ export function buildSignalRefIndex(rows, toSignal = row => row) {
   }
   return index
 }
+
+export function buildAdminGlobalAutoConfig(globalCfg) {
+  return {
+    api_provider: globalCfg?.api_provider || 'deepseek',
+    model_name: globalCfg?.model_name || 'deepseek-chat',
+    has_api_key: !!globalCfg?.api_key_encrypted,
+    api_base_url: globalCfg?.api_base_url || DEFAULT_API_BASE_URL,
+    temperature: globalCfg?.temperature ?? DEFAULT_TEMPERATURE,
+    max_tokens: globalCfg?.max_tokens ?? DEFAULT_MAX_TOKENS,
+    risk_level: globalCfg?.risk_level || 'medium',
+    max_position_size: globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
+    selected_take_profit: globalCfg?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+    thinking_enabled: Number(globalCfg?.thinking_enabled ?? 1) === 0 ? 0 : 1,
+    reasoning_effort: globalCfg?.reasoning_effort || 'max',
+  }
+}
 const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
 
 // 每 10 分钟清理超过 30 秒未使用的广播节流条目
@@ -1278,17 +1294,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               interval_minutes: pt.interval_minutes, is_active: !!pt.is_active, sort_order: pt.sort_order,
             })),
             admin: {
-              global_config: {
-                api_provider: globalCfg?.api_provider || 'deepseek',
-                model_name: globalCfg?.model_name || 'deepseek-chat',
-                has_api_key: !!globalCfg?.api_key_encrypted,
-                api_base_url: globalCfg?.api_base_url || DEFAULT_API_BASE_URL,
-                temperature: globalCfg?.temperature ?? DEFAULT_TEMPERATURE,
-                max_tokens: globalCfg?.max_tokens ?? DEFAULT_MAX_TOKENS,
-                risk_level: globalCfg?.risk_level || 'medium',
-                max_position_size: globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-                selected_take_profit: globalCfg?.selected_take_profit ?? 2,
-              },
+              global_config: buildAdminGlobalAutoConfig(globalCfg),
               scheduler_states: schedulerStates,
             },
           }
