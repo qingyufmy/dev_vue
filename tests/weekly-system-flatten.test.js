@@ -29,15 +29,24 @@ beforeEach(() => {
 })
 
 describe('weekly Beijing risk window', () => {
-  it('locks from Saturday 04:00 through Monday 07:59 Beijing', async () => {
+  it('only locks from Saturday 04:00 through 04:59 Beijing', async () => {
     const { isWeeklyFlattenWindow, isWeeklyFlattenPrimaryWindow } = await import('../server/jobs/weekly-risk-window.js')
 
     expect(isWeeklyFlattenWindow(new Date('2026-07-17T19:59:00.000Z'))).toBe(false)
     expect(isWeeklyFlattenWindow(new Date('2026-07-17T20:00:00.000Z'))).toBe(true)
     expect(isWeeklyFlattenPrimaryWindow(new Date('2026-07-17T20:30:00.000Z'))).toBe(true)
     expect(isWeeklyFlattenPrimaryWindow(new Date('2026-07-17T21:00:00.000Z'))).toBe(false)
-    expect(isWeeklyFlattenWindow(new Date('2026-07-19T23:59:00.000Z'))).toBe(true)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-18T20:00:00.000Z'))).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-19T23:59:00.000Z'))).toBe(false)
     expect(isWeeklyFlattenWindow(new Date('2026-07-20T00:00:00.000Z'))).toBe(false)
+  })
+
+  it('calculates the next Saturday 04:00 Beijing start', async () => {
+    const { currentWeeklyFlattenEnd, nextWeeklyFlattenStart } = await import('../server/jobs/weekly-risk-window.js')
+
+    expect(nextWeeklyFlattenStart(new Date('2026-07-17T19:00:00.000Z')).toISOString()).toBe('2026-07-17T20:00:00.000Z')
+    expect(nextWeeklyFlattenStart(new Date('2026-07-17T21:00:00.000Z')).toISOString()).toBe('2026-07-24T20:00:00.000Z')
+    expect(currentWeeklyFlattenEnd(new Date('2026-07-17T20:30:00.000Z')).toISOString()).toBe('2026-07-17T21:00:00.000Z')
   })
 
   it('uses the Saturday Beijing date as the cycle id', async () => {
@@ -86,7 +95,7 @@ describe('weekly system flatten execution', () => {
       })
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
 
     expect(result.status).toBe('completed')
     expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
@@ -105,54 +114,50 @@ describe('weekly system flatten execution', () => {
     })
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
 
     expect(result.status).toBe('unsupported_netting')
     expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual(['system_trade_inventory'])
     expect(mockRedis.set).not.toHaveBeenCalledWith(expect.stringContaining(':completed'), expect.anything(), 'EX', expect.anything())
   })
 
-  it('re-verifies a completed user during the primary window', async () => {
+  it('does not re-check a user after the cycle is completed', async () => {
     mockRedis.get.mockResolvedValue('done')
-    mockSendBridgeCommand.mockResolvedValue({
-      status: 'success', account: { login: 1, server: 'demo', is_hedging: true },
-      pending_orders: [], positions: [],
-    })
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
 
     expect(result.status).toBe('already_completed')
-    expect(result.verified).toBe(true)
-    expect(mockSendBridgeCommand).toHaveBeenCalledWith(7, 'system_trade_inventory', {}, 15000, { noFallback: true })
+    expect(mockSendBridgeCommand).not.toHaveBeenCalled()
   })
 
-  it('clears the completion marker and closes a late-arriving position', async () => {
-    mockRedis.get.mockResolvedValue('done')
+  it('stops sending MT5 commands when the 05:00 deadline is reached', async () => {
+    const endedAt = new Date('2026-07-17T21:00:00.000Z')
+    const clock = vi.fn()
+      .mockReturnValueOnce(runAt)
+      .mockReturnValue(endedAt)
     mockSendBridgeCommand
       .mockResolvedValueOnce({
         status: 'success', account: { login: 1, server: 'demo', is_hedging: true },
-        pending_orders: [], positions: [{ ticket: 33, symbol: 'XAUUSD', volume: 0.01 }],
+        pending_orders: [{ ticket: 11, symbol: 'XAUUSD' }],
+        positions: [{ ticket: 33, symbol: 'XAUUSD', volume: 0.01 }],
       })
-      .mockResolvedValueOnce({ status: 'success', ticket: 33 })
-      .mockResolvedValueOnce({
-        status: 'success', account: { login: 1, server: 'demo', is_hedging: true },
-        pending_orders: [], positions: [],
-      })
+      .mockResolvedValueOnce({ status: 'success', ticket: 11 })
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, clock)
 
-    expect(result.status).toBe('completed')
-    expect(mockRedis.del).toHaveBeenCalledWith('risk:weekly_flatten:2026-07-18:user:7:completed')
-    expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toContain('close_system_position')
+    expect(result.status).toBe('window_ended')
+    expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
+      'system_trade_inventory', 'cancel_system_pending',
+    ])
   })
 
   it('contains Redis completion-check failures without sending MT5 commands', async () => {
     mockRedis.get.mockRejectedValueOnce(new Error('redis down'))
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
 
     expect(result.status).toBe('redis_unavailable')
     expect(result.error).toBe('redis down')

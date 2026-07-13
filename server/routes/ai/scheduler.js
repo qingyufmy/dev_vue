@@ -9,6 +9,7 @@ import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, sign
 import { attachAtrAnchor, buildStrategyContextFromTags } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix, CHAN_HISTORY_COUNT } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
+import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
 
 // === Unified Scheduler State ===
@@ -369,7 +370,8 @@ export async function getUserAutoRuntimeStatus(userId) {
 
   // Determine paused reason — only real errors/blockers, not normal cooldown
   let pausedReason = ''
-  if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
+  if (isWeeklyFlattenWindow()) pausedReason = 'weekly_flatten_window'
+  else if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
   else if (selectedSymbols.length === 0) pausedReason = 'no_symbols'
   else if (activeKeys.length === 0) {
     const userBridgeAlive = isBridgeAlive(userId)
@@ -497,6 +499,7 @@ function retryDelayMs(reason) {
     case 'market_unknown_no_tick':
     case 'market_unknown':
     case 'redis_unavailable':
+    case 'weekly_flatten_window':
       return 5000
     case 'rates_failed':
     case 'rates_empty':
@@ -681,6 +684,16 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
   const tick = async () => {
     const st = autoSchedulerState[key]
     if (!st?.running) return
+
+    if (isWeeklyFlattenWindow()) {
+      const delay = Math.max(1000, currentWeeklyFlattenEnd().getTime() - Date.now())
+      st.lastError = null
+      st.waitReason = 'weekly_flatten_window'
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      return
+    }
 
     // Refresh subscribers
     try {
@@ -972,6 +985,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   const ts = () => new Date().toISOString()
   const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}: ${msg}`)
 
+  if (isWeeklyFlattenWindow()) return { status: 'blocked', reason: 'weekly_flatten_window' }
+
   l('>>> cycle start')
   broadcastAutoProgress(promptTypeId, symbol, { stage: 'config', label: '检查配置...' })
 
@@ -1058,6 +1073,13 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       return { status: 'blocked', reason: 'ai_failed' }
     }
 
+    // An inference started before 04:00 must not persist, broadcast or execute
+    // after the weekly flatten window begins.
+    if (isWeeklyFlattenWindow()) {
+      l('BLOCKED: weekly flatten window began during inference')
+      return { status: 'blocked', reason: 'weekly_flatten_window' }
+    }
+
     // Freeze the subscriber set before atomically writing the shared signal
     // and all per-user deliveries.
     const st = autoSchedulerState[key]
@@ -1119,6 +1141,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     signal.ai_model = config.model_name || 'deepseek-chat'
     attachSignalTiming(signal)
     l(`shared signal #${signalId} saved`)
+
+    if (isWeeklyFlattenWindow()) {
+      l('BLOCKED: weekly flatten window began before signal delivery')
+      return { status: 'blocked', reason: 'weekly_flatten_window' }
+    }
 
     // 7. Notify online subscribers
     for (const uid of onlineSubscribers) {
@@ -1293,6 +1320,10 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
     [status, JSON.stringify({ reason, ...details }), signalId, userId])
   try {
+    if (isWeeklyFlattenWindow()) {
+      await setTerminalStatus('skipped', 'weekly_flatten_window')
+      return
+    }
     // Lock check before claiming (Fix 2)
     if (lockGuard && !(await lockGuard.assertOwned('delivery_claim'))) {
       l('skipped: lock lost before claim')
@@ -1533,6 +1564,11 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     }
 
     // Final lock check before sending MT5 order (Fix 2)
+    if (isWeeklyFlattenWindow()) {
+      l('skipped: weekly flatten window began before order send')
+      await setTerminalStatus('skipped', 'weekly_flatten_window').catch(() => {})
+      return
+    }
     if (lockGuard && !(await lockGuard.assertOwned('order_send'))) {
       l('skipped: lock lost before order send')
       await setTerminalStatus('skipped', 'lock_lost_before_send').catch(() => {})

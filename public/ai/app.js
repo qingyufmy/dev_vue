@@ -369,6 +369,7 @@ const AUTO_REASON_LABELS = {
   market_unknown_no_tick: '等待行情数据',
   market_stale_tick: '行情停滞',
   redis_unavailable: '缓存服务未连接',
+  weekly_flatten_window: '周末清仓处理中',
   redis_lock_failed: '调度锁获取失败',
   redis_cooldown_active: '等待下一轮调度',
   no_api_key: '未配置接口密钥',
@@ -445,6 +446,10 @@ function renderAutoAnalyzeBadge(s) {
     label = '自动推理关闭';
     type = 'neutral';
     title = '状态：自动推理关闭';
+  } else if (s.paused_reason === 'weekly_flatten_window') {
+    label = '自动推理暂停 · 周末清仓';
+    type = 'warning';
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：周末清仓期间暂停`;
   } else if (s.in_flight) {
     label = '自动推理中';
     type = 'running';
@@ -814,7 +819,7 @@ function connectBridgeStatusWs(onReady) {
           } else if (msg.status === 'completed') {
             toast('周末风险控制已完成：系统持仓和挂单均已清理', 'success');
           } else if (msg.status === 'retrying') {
-            toast('周末风险控制尚未完成，系统将继续重试', 'warning');
+            toast('周末风险控制尚未完成，系统将在05:00前继续重试', 'warning');
           } else if (msg.status === 'failed') {
             const reason = msg.reason === 'unsupported_netting' ? '当前为净持仓账户，无法安全区分系统仓与手工仓' : '自动清仓失败';
             toast(`周末风险控制异常：${reason}`, 'error');
@@ -4588,6 +4593,7 @@ function waitReasonText(reason) {
     market_stale_tick: '行情停滞',
     market_unknown: '行情未知',
     redis_unavailable: 'Redis不可用',
+    weekly_flatten_window: '周末清仓中',
     no_api_key: '无API密钥',
     strategy_disabled: '策略已禁用',
     user_bridge_offline: '用户桥接离线',

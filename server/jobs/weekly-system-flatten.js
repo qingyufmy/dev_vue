@@ -3,8 +3,8 @@ import { queryRun } from '../db.js'
 import { getRedis, isRedisAvailable } from '../redis.js'
 import { getAllBridges, sendBridgeCommand, sendToBrowsers } from '../bridge-ws.js'
 import {
-  isWeeklyFlattenPrimaryWindow,
   isWeeklyFlattenWindow,
+  nextWeeklyFlattenStart,
   weeklyFlattenCycleId,
   weeklyFlattenEnabled,
 } from './weekly-risk-window.js'
@@ -13,7 +13,6 @@ const SYSTEM_MAGIC = 234000
 const LOCK_TTL_MS = 2 * 60 * 1000
 const COMPLETED_TTL_SECONDS = 14 * 24 * 60 * 60
 const ACTIVE_INTERVAL_MS = 15 * 1000
-const RECOVERY_INTERVAL_MS = 60 * 1000
 
 const RELEASE_LOCK_LUA = `
 if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -80,7 +79,7 @@ async function reportOnce(redis, key, ttlSeconds, callback) {
   return !!acquired
 }
 
-export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
+export async function runWeeklySystemFlattenForUser(userId, now = new Date(), clock = () => new Date()) {
   if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window' }
   const redis = getRedis()
   if (!redis || !isRedisAvailable()) return { status: 'redis_unavailable' }
@@ -94,9 +93,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
     console.error(`[WeeklyFlatten] Redis completion check failed user=${userId}:`, err.message)
     return { status: 'redis_unavailable', error: err.message, cycle }
   }
-  // Keep verifying throughout 04:00-05:00 because an order accepted just
-  // before the risk window can arrive after the first zero-inventory check.
-  if (wasCompleted && !isWeeklyFlattenPrimaryWindow(now)) return { status: 'already_completed', cycle }
+  if (wasCompleted) return { status: 'already_completed', cycle }
 
   const key = lockKey(userId, cycle)
   const token = crypto.randomUUID()
@@ -146,6 +143,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
 
     const failures = []
     for (const order of pendingOrders) {
+      if (!isWeeklyFlattenWindow(clock())) return { status: 'window_ended', cycle, failures }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
       const result = await sendBridgeCommand(userId, 'cancel_system_pending', { ticket: order.ticket }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
@@ -171,6 +169,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
     }
 
     for (const position of positions) {
+      if (!isWeeklyFlattenWindow(clock())) return { status: 'window_ended', cycle, failures }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
       const result = await sendBridgeCommand(userId, 'close_system_position', { ticket: position.ticket }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
@@ -179,6 +178,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
         { cycle, ticket: position.ticket, volume: position.volume, magic: SYSTEM_MAGIC }, result, ok ? 'success' : 'error')
     }
 
+    if (!isWeeklyFlattenWindow(clock())) return { status: 'window_ended', cycle, failures }
     const after = await inventory(userId)
     if (!after || after.status !== 'success') {
       const result = { status: 'failed', reason: 'verification_unavailable', failures, cycle }
@@ -205,15 +205,12 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
       remaining_pending: remainingPending.map(item => item.ticket),
       remaining_positions: remainingPositions.map(item => item.ticket),
     }
-    const primaryWindow = isWeeklyFlattenPrimaryWindow(now)
-    const reportSuffix = primaryWindow ? 'partial' : 'missed'
-    const reportTtl = primaryWindow ? 300 : COMPLETED_TTL_SECONDS
-    await reportOnce(redis, `${doneKey}:${reportSuffix}:reported`, reportTtl, async () => {
-      await audit(userId, primaryWindow ? 'weekly_flatten_partial' : 'weekly_flatten_missed', null,
-        { cycle, magic: SYSTEM_MAGIC }, result, primaryWindow ? 'warning' : 'error')
-      await notify(userId, primaryWindow ? 'retrying' : 'failed', {
+    await reportOnce(redis, `${doneKey}:partial:reported`, 300, async () => {
+      await audit(userId, 'weekly_flatten_partial', null,
+        { cycle, magic: SYSTEM_MAGIC }, result, 'warning')
+      await notify(userId, 'retrying', {
         cycle,
-        reason: primaryWindow ? 'positions_remaining' : 'deadline_missed',
+        reason: 'positions_remaining',
         remaining_pending: remainingPending.length,
         remaining_positions: remainingPositions.length,
       })
@@ -255,7 +252,9 @@ export async function runWeeklySystemFlatten(now = new Date()) {
 
 function scheduleNext(now = new Date()) {
   if (timer) clearTimeout(timer)
-  const delay = isWeeklyFlattenPrimaryWindow(now) ? ACTIVE_INTERVAL_MS : RECOVERY_INTERVAL_MS
+  const delay = isWeeklyFlattenWindow(now)
+    ? ACTIVE_INTERVAL_MS
+    : Math.max(1000, nextWeeklyFlattenStart(now).getTime() - now.getTime())
   timer = setTimeout(async () => {
     timer = null
     await runWeeklySystemFlatten().catch(err => console.error('[WeeklyFlatten] Cycle failed:', err.message))
@@ -275,7 +274,7 @@ export function startWeeklySystemFlatten(now = new Date()) {
     runWeeklySystemFlatten(now).catch(err => console.error('[WeeklyFlatten] Startup run failed:', err.message))
   }
   scheduleNext(now)
-  console.log('[WeeklyFlatten] Scheduled: Saturday 04:00-05:00 Asia/Shanghai, weekend recovery until Monday 08:00')
+  console.log('[WeeklyFlatten] Scheduled: Saturday 04:00-05:00 Asia/Shanghai')
 }
 
 export function stopWeeklySystemFlatten() {

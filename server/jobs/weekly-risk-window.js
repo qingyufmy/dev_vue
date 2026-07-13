@@ -1,7 +1,6 @@
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000
 const START_HOUR = 4
 const DEADLINE_HOUR = 5
-const RELEASE_HOUR = 8
 
 export function weeklyFlattenEnabled() {
   return process.env.WEEKLY_SYSTEM_FLATTEN_ENABLED !== 'false'
@@ -22,15 +21,23 @@ export function beijingWeeklyParts(now = new Date()) {
 export function isWeeklyFlattenWindow(now = new Date()) {
   if (!weeklyFlattenEnabled()) return false
   const p = beijingWeeklyParts(now)
-  if (p.weekday === 6) return p.hour >= START_HOUR
-  if (p.weekday === 0) return true
-  return p.weekday === 1 && p.hour < RELEASE_HOUR
+  return p.weekday === 6 && p.hour >= START_HOUR && p.hour < DEADLINE_HOUR
 }
 
 export function isWeeklyFlattenPrimaryWindow(now = new Date()) {
-  if (!weeklyFlattenEnabled()) return false
+  return isWeeklyFlattenWindow(now)
+}
+
+export function nextWeeklyFlattenStart(now = new Date()) {
   const p = beijingWeeklyParts(now)
-  return p.weekday === 6 && p.hour >= START_HOUR && p.hour < DEADLINE_HOUR
+  let daysAhead = (6 - p.weekday + 7) % 7
+  if (daysAhead === 0 && p.hour >= START_HOUR) daysAhead = 7
+  return new Date(Date.UTC(p.year, p.month, p.day + daysAhead, START_HOUR) - BEIJING_OFFSET_MS)
+}
+
+export function currentWeeklyFlattenEnd(now = new Date()) {
+  const p = beijingWeeklyParts(now)
+  return new Date(Date.UTC(p.year, p.month, p.day, DEADLINE_HOUR) - BEIJING_OFFSET_MS)
 }
 
 export function weeklyFlattenCycleId(now = new Date()) {
@@ -49,7 +56,7 @@ export function weeklyRiskLockResult(now = new Date()) {
     code: 'weekly_market_close_risk_lock',
     message: '周末风险控制期间禁止新增交易',
     details: {
-      reason: '北京时间周六04:00至周一08:00禁止本系统新增交易',
+      reason: '北京时间周六04:00至05:00禁止本系统新增交易',
       cycle: weeklyFlattenCycleId(now),
     },
   }
@@ -59,5 +66,5 @@ export const WEEKLY_FLATTEN_SCHEDULE = {
   timezone: 'Asia/Shanghai',
   start: 'Saturday 04:00',
   deadline: 'Saturday 05:00',
-  release: 'Monday 08:00',
+  release: 'Saturday 05:00',
 }
