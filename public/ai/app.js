@@ -13,6 +13,7 @@ const state = {
   backgroundSyncTimer: null,
   lastQuote: null,
   currentConfigHasApiKey: false,
+  systemPromptInherited: false,
   pendingManualOrder: null,
   accountBalance: 0,
   historyNetResult: 0,
@@ -38,72 +39,6 @@ let _prevPositionCount = 0;
 // ===== Global Symbol Management =====
 const SYMBOL_STORAGE_KEY = "aurum_selected_symbol";
 const _symSelectors = []; // registered selector IDs
-
-const DEFAULT_PROMPT = `你是一个严谨的交易分析师。根据提供的行情数据，输出交易信号。
-
-## 输出格式（JSON Schema）
-
-你必须输出一个合法的 JSON 对象，结构如下：
-
-\`\`\`json
-{
-  "signal_type": "buy / sell / hold",
-  "confidence": 0.00,
-  "recommended_volume": 0.00,
-  "analysis": "中文行情分析",
-  "reasoning": "中文决策理由",
-  "stop_loss_price": null,
-  "take_profit_1_price": null,
-  "take_profit_2_price": null,
-  "take_profit_3_price": null
-}
-\`\`\`
-
-## 分析规则
-
-### signal_type
-- 只能是 buy、sell、hold，禁止其他值。
-- 方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时，必须返回 hold。
-
-### confidence（动态估算，禁止固定值）
-按以下维度综合评估：
-1. 趋势强度：价格与 SMA20 的距离、momentum_3_pct / momentum_10_pct / momentum_20_pct 是否同向。
-2. 位置结构：range_position_20 是否接近区间高低位，是否追涨/追空。
-3. 波动噪音：volatility_pct 与 avg_volatility 是否过高，过高则降低置信度。
-4. 风险状态：已有持仓、账户净值、止损距离是否合理。
-- BUY/SELL：弱优势 0.52-0.62，中等优势 0.63-0.74，强共振才可高于 0.75。
-- HOLD：方向不清晰时 0.55-0.68，明确应回避风险时可高于 0.70。
-- 即使 signal_type 为 hold，confidence 也不得为 0。
-
-### recommended_volume
-- 不得超过 0.05。
-- 如果 signal_type 为 hold，可以返回 0。
-
-### analysis
-用中文说明行情结构、趋势强弱、波动、支撑阻力、当前价与均线关系。
-
-### reasoning
-用中文说明为什么给出该方向，以及为什么可以执行或为什么不执行。
-
-### 止损止盈
-- 如果 buy 或 sell，必须给出 stop_loss_price、take_profit_1_price、take_profit_2_price、take_profit_3_price，价格必须是数字。
-- 如果 hold，止损止盈可以为 null。
-
-## 输出示例
-
-\`\`\`json
-{
-  "signal_type": "buy",
-  "confidence": 0.68,
-  "recommended_volume": 0.03,
-  "analysis": "当前价2038.50站上SMA20(2035.20)，momentum_3/10/20同向上行，range_position_20=0.65处于中高位但未极端，波动率适中。",
-  "reasoning": "趋势共振向上，均线多头排列，但接近区间上沿不宜重仓，轻仓试探。",
-  "stop_loss_price": 2032.00,
-  "take_profit_1_price": 2042.00,
-  "take_profit_2_price": 2045.50,
-  "take_profit_3_price": 2050.00
-}
-\`\`\``;
 
 function getGlobalSymbol() {
   return localStorage.getItem(SYMBOL_STORAGE_KEY) || "XAUUSD";
@@ -2134,9 +2069,11 @@ function applyProviderPreset(provider) {
 async function loadConfig() {
   const data = await wsApi("ai_config");
   const cfg = data.config;
+  const defaultPrompt = data.default_prompt || "";
   if (!cfg) {
     state.currentConfigHasApiKey = false;
-    $("systemPrompt").value = DEFAULT_PROMPT;
+    state.systemPromptInherited = state.user?.role !== "admin";
+    $("systemPrompt").value = defaultPrompt;
     $("apiKey").placeholder = "输入 API Key 后保存";
     setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
     applyProviderPreset("deepseek");
@@ -2163,8 +2100,9 @@ async function loadConfig() {
   const keyText = state.currentConfigHasApiKey ? `密钥已配置：${cfg.masked_api_key}` : "未配置 API Key，本地规则兜底可用";
   setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · ${keyText}`);
 
-  // Load system prompt from config (per-user in ai_configs)
-  $("systemPrompt").value = cfg.system_prompt || DEFAULT_PROMPT;
+  // Non-admin users without an override inherit the administrator's live prompt.
+  state.systemPromptInherited = state.user?.role !== "admin" && Boolean(cfg._system_prompt_inherited);
+  $("systemPrompt").value = cfg.system_prompt || defaultPrompt;
 
   // Model sharing toggle (admin only)
   const isAdmin = state.user?.role === "admin";
@@ -2221,7 +2159,9 @@ async function saveConfig() {
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
       model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
-      system_prompt: $("systemPrompt").value.trim() || null,
+      system_prompt: state.user?.role !== "admin" && state.systemPromptInherited
+        ? null
+        : ($("systemPrompt").value.trim() || null),
     },
   };
 
@@ -2934,7 +2874,8 @@ async function runAnalysis() {
       return wsApi("analyze", {
         session_id: "default", symbol, timeframe,
         kline_count: klineCount, include_positions: true,
-        prompt_override: promptWithTag, _timeout: 120000,
+        prompt_override: state.systemPromptInherited ? undefined : promptWithTag,
+        _timeout: 120000,
       });
     }));
     if (window._analysisCancelled) { toast("已取消推理", "info"); return; }
@@ -4049,6 +3990,7 @@ function bindEvents() {
       const data = await wsApi("get_default_prompt");
       if (data.status === "success" && data.prompt) {
         $("systemPrompt").value = data.prompt;
+        state.systemPromptInherited = state.user?.role !== "admin";
         toast("已填入管理员模板", "success");
       } else {
         toast("暂无可用模板", "warning");
@@ -4056,6 +3998,9 @@ function bindEvents() {
     } catch (e) {
       toast("获取模板失败", "error");
     }
+  });
+  $("systemPrompt")?.addEventListener("input", () => {
+    if (state.user?.role !== "admin") state.systemPromptInherited = false;
   });
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);

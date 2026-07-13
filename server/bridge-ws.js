@@ -794,11 +794,20 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.handleAnalyze(userId, params)
         break
       case 'ai_config': {
-        // skipFallbacks: manual config UI must show ONLY the user's own settings.
-        // No API key / model / system_prompt leakage from admin model_sharing,
-        // system_config, or global_auto_config.
+        const configUser = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        const isConfigAdmin = configUser?.role === 'admin'
+        const adminPromptRow = await queryOne(
+          "SELECT system_prompt FROM ai_configs WHERE is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') ORDER BY updated_at DESC LIMIT 1"
+        )
+        const defaultPrompt = adminPromptRow?.system_prompt || ''
+        // Keep model credentials user-scoped; only the administrator's manual
+        // prompt is exposed as the inheritable default.
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', null, { skipFallbacks: true })
         const cfg = ai.configPublic(row)
+        if (cfg && !isConfigAdmin && !cfg.system_prompt) {
+          cfg.system_prompt = defaultPrompt
+          cfg._system_prompt_inherited = true
+        }
         // If user has no own API key but admin has model_sharing, attach sharing indicator
         if (!cfg || !cfg.has_api_key) {
           const sharedRow = await queryOne(
@@ -812,8 +821,11 @@ async function handleBrowserCommand(ws, userId, msg) {
             }
             result = {
               status: 'success',
+              default_prompt: defaultPrompt,
               config: cfg || {
                 _model_shared: true,
+                _system_prompt_inherited: !isConfigAdmin,
+                system_prompt: defaultPrompt,
                 api_provider: sharedRow.api_provider,
                 model_name: sharedRow.model_name,
                 enable_auto_trade: userScheduler ? !!userScheduler.enable_auto_trade : true,
@@ -825,12 +837,13 @@ async function handleBrowserCommand(ws, userId, msg) {
             break
           }
         }
-        result = { status: 'success', config: cfg }
+        result = { status: 'success', config: cfg, default_prompt: defaultPrompt }
         break
       }
       case 'save_config': {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
+        const hasSystemPrompt = Object.prototype.hasOwnProperty.call(cfg, 'system_prompt')
         const now = beijingNow()
         const sid = params.session_id || 'default'
         await withTransaction(async (run) => {
@@ -846,13 +859,13 @@ async function handleBrowserCommand(ws, userId, msg) {
               enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
               max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
               model_sharing_enabled = VALUES(model_sharing_enabled),
-              system_prompt = CASE WHEN VALUES(system_prompt) IS NOT NULL THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
+              system_prompt = CASE WHEN ? = 1 THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
               is_active = 1, updated_at = VALUES(updated_at)`,
             [userId, sid, cfg.api_provider || 'deepseek', cfg.api_key || null,
               cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || DEFAULT_MAX_TOKENS,
               cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
               cfg.max_position_size || DEFAULT_MAX_POSITION_SIZE, cfg.selected_take_profit || DEFAULT_SELECTED_TAKE_PROFIT, cfg.model_sharing_enabled ? 1 : 0,
-              cfg.system_prompt || null, now, now])
+              cfg.system_prompt || null, now, now, hasSystemPrompt ? 1 : 0])
         })
         const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
         result = { status: 'success', config: ai.configPublic(row) }

@@ -1016,6 +1016,23 @@ const migrations = [
       }
       console.log(`[Migrations] 051 updated pending lifecycle rules in ${rows.length} active schema(s)`)
     }
+  },
+  {
+    id: '052_inherit_admin_manual_prompt',
+    up: async () => {
+      const result = await queryRun(`
+        UPDATE ai_configs c
+        JOIN users u ON u.id = c.user_id
+        SET c.system_prompt = NULL, c.updated_at = NOW()
+        WHERE u.role <> 'admin'
+          AND c.system_prompt IS NOT NULL
+          AND (
+            c.system_prompt LIKE '%## 输出格式（JSON Schema）%'
+            OR c.system_prompt LIKE '%Return strict JSON with signal_type,%'
+          )
+      `)
+      console.log(`[Migrations] 052 reset ${result?.affectedRows || 0} legacy manual prompt(s) to administrator inheritance`)
+    }
   }
 ]
 
