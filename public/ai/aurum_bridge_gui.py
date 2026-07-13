@@ -2651,15 +2651,30 @@ class SettingsPage(QWidget):
         self.lbl_update_status.style().polish(self.lbl_update_status)
         QApplication.processEvents()
 
-        # Save bridge_was_running state for post-update auto-start
+        # Save bridge_was_running state (caller already saved it, but fallback)
         cfg = load_config()
-        cfg["bridge_was_running"] = (self.bridge_page._worker and self.bridge_page._worker.isRunning())
-        save_config(cfg)
+        if "bridge_was_running" not in cfg:
+            cfg["bridge_was_running"] = False
+            save_config(cfg)
 
         # Generate .bat helper script for silent install + relaunch
-        import subprocess, tempfile
+        import subprocess
+        is_frozen = getattr(sys, "frozen", False)
+        if not is_frozen:
+            # 源码模式：打开安装包所在目录，不自动安装
+            import webbrowser
+            webbrowser.open(dest_path)
+            self.lbl_update_status.setText(f"安装包已下载到: {dest_path}\n请手动运行安装")
+            self.lbl_update_status.setProperty("success", True)
+            self.lbl_update_status.style().polish(self.lbl_update_status)
+            self.btn_check_update.setEnabled(True)
+            self.btn_check_update.setText("检查更新")
+            self.btn_check_update.setProperty("secondary", True)
+            self.btn_check_update.style().polish(self.btn_check_update)
+            return
+
         current_pid = os.getpid()
-        install_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else ""
+        install_dir = os.path.dirname(sys.executable)
         bat_content = f"""@echo off
 REM Auto-update helper: wait for old process, silent install, relaunch, cleanup
 timeout /t 2 /nobreak >nul
@@ -2816,6 +2831,8 @@ class MainWindow(QMainWindow):
                 has_saved_password = bool(cfg.get("saved_password"))
                 if has_saved_password:
                     # 有保存密码：直接自动更新
+                    cfg["bridge_was_running"] = bool(self.bridge_page._worker and self.bridge_page._worker.isRunning())
+                    save_config(cfg)
                     self.bridge_page._log(f"发现新版本 {remote_ver}，开始自动更新...")
                     self.settings_page._pending_update = data
                     self.settings_page._do_update()
