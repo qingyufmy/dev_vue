@@ -5,6 +5,8 @@ import { parseBeijing } from '../../db.js'
 export const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.'
 
 export const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
+export const CHAN_HISTORY_COUNT = 300
+export const CHAN_MAX_HISTORY_COUNT = 500
 
 const BROKER_SUFFIX_RE = /\.(s|c|pro|std|z|ecn|m)$/i
 export function stripBrokerSuffix(sym) {

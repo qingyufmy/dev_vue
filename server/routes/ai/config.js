@@ -46,7 +46,13 @@ export class RiskReject extends Error {
 export function buildBridgeOrderCall(request) {
   const entryMethod = request.entry_method || 'market'
   if (entryMethod === 'market' || entryMethod === 'observe') {
-    return { bridgeAction: 'open', bridgeParams: request }
+    const {
+      tp_tier_requested: _tpTierRequested,
+      tp_tier_used: _tpTierUsed,
+      normalization_info: _normalizationInfo,
+      ...bridgeParams
+    } = request
+    return { bridgeAction: 'open', bridgeParams }
   }
   const orderType = request.order_type || 'buy'
   const pendingTypeMap = {
@@ -586,7 +592,13 @@ export function validateTradeRequest(config, account, positions, request) {
 }
 
 export function signalOrderPayload(signal, config, market, confirm) {
-  const tpKey = `take_profit_${(config || {}).selected_take_profit || 1}_price`
+  const configuredTier = Number((config || {}).selected_take_profit || DEFAULT_SELECTED_TAKE_PROFIT)
+  const requestedTier = [1, 2, 3].includes(configuredTier) ? configuredTier : DEFAULT_SELECTED_TAKE_PROFIT
+  const fallbackTiers = requestedTier === 3 ? [3, 2, 1] : requestedTier === 2 ? [2, 1] : [1]
+  const usedTier = fallbackTiers.find(tier => {
+    const value = Number(signal[`take_profit_${tier}_price`])
+    return Number.isFinite(value) && value > 0
+  }) || null
 
   // Extract base order_type from signal_type (buy_limit → buy, sell_stop → sell)
   const st = String(signal.signal_type || '').toLowerCase()
@@ -598,11 +610,14 @@ export function signalOrderPayload(signal, config, market, confirm) {
     order_type: baseOrderType,
     volume: parseFloat(signal.recommended_volume),
     sl: signal.stop_loss_price,
-    tp: signal[tpKey],
+    tp: usedTier ? signal[`take_profit_${usedTier}_price`] : null,
+    tp_tier_requested: requestedTier,
+    tp_tier_used: usedTier,
     confirm: confirm,
     source: 'ai',
     signal_type: signal.signal_type,
     signal_id: signal.id,
+    normalization_info: signal.normalization_info || null,
     reference_price: market.latest_price,
   }
 

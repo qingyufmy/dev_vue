@@ -20,6 +20,7 @@ export function getRedis() {
     host,
     port: parseInt(process.env.REDIS_PORT || '6379'),
     password: process.env.REDIS_PASSWORD || undefined,
+    db: parseInt(process.env.REDIS_DB || '0'),
     retryStrategy: (times) => {
       if (times > 10) return null // stop retrying
       return Math.min(times * 200, 5000)

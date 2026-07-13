@@ -107,6 +107,8 @@ describe('OpenAI-compatible provider URL', () => {
 describe('normalizeAiSignal', () => {
   const baseMarket = {
     latest_price: 2000,
+    atr_anchor: 10,
+    atr_anchor_tf: 'H1',
     atr_14: 10,
     volatility_pct: 0.3,
     strategy_score: { data_confidence: 0.7, trend_strength: 0.5 }
@@ -220,12 +222,16 @@ describe('maybeAiSignal', () => {
     const market = {
       symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01',
       latest_price: 2000, price_change: 10, price_change_pct: 0.5,
-      account: { balance: 10000 }, positions: [], kline_count: 100
+      account: { balance: 10000 }, positions: [], kline_count: 100,
+      atr_anchor: 10, atr_anchor_tf: 'H1'
     }
 
     const result = await maybeAiSignal(null, config, market)
     expect(result.signal_type).toBe('buy')
     expect(result._inference_source).toBe('ai')
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body.messages[0].content).toContain('禁止比较任何时间字符串来判断挂单是否过期')
+    expect(body.messages[0].content).toContain('禁止仅以时间、有效期或过期为理由输出 cancel_pending')
   })
 
   it('有{{USE_CHAN}}时system prompt不包含原始标签', async () => {
@@ -237,7 +243,7 @@ describe('maybeAiSignal', () => {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
       temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}'
     }
-    const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
+    const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100, atr_anchor: 15, atr_anchor_tf: 'H1',
       strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
     }
     await maybeAiSignal(null, config, market)
@@ -254,13 +260,14 @@ describe('maybeAiSignal', () => {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
       temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}'
     }
-    const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
+    const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100, atr_anchor: 15, atr_anchor_tf: 'H1',
       strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
     }
     await maybeAiSignal(null, config, market)
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
+    expect(userPayload).toMatchObject({ atr_anchor: 15, atr_anchor_tf: 'H1' })
   })
 
   it('无{{USE_CHAN}}时payload剥离chan', async () => {
@@ -283,7 +290,7 @@ describe('maybeAiSignal', () => {
 })
 
 describe('normalizeAiSignal - SL/TP fallback', () => {
-  const market = { latest_price: 4000, atr_14: 10, strategy_score: {} }
+  const market = { latest_price: 4000, atr_anchor: 10, atr_anchor_tf: 'H1', atr_14: 10, strategy_score: {} }
   const config = { risk_level: 'medium', max_position_size: 0.05 }
 
   it('buy_limit: SL below limitPrice, TP above limitPrice', () => {
@@ -293,7 +300,7 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     expect(result.stop_loss_price).toBeLessThan(3980)
     expect(result.take_profit_1_price).toBeGreaterThan(3980)
     expect(result.stop_loss_price).toBe(3965)
-    expect(result.take_profit_1_price).toBe(3995)
+    expect(result.take_profit_1_price).toBe(4002.5)
   })
 
   it('sell_stop: SL above limitPrice, TP below limitPrice', () => {
@@ -303,7 +310,7 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     expect(result.stop_loss_price).toBeGreaterThan(3990)
     expect(result.take_profit_1_price).toBeLessThan(3990)
     expect(result.stop_loss_price).toBe(4005)
-    expect(result.take_profit_1_price).toBe(3975)
+    expect(result.take_profit_1_price).toBe(3967.5)
   })
 
   it('buy (market): SL/TP anchored to latest_price', () => {
@@ -311,7 +318,7 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
       signal_type: 'buy', confidence: 0.8
     }, config, market)
     expect(result.stop_loss_price).toBe(3985)
-    expect(result.take_profit_1_price).toBe(4015)
+    expect(result.take_profit_1_price).toBe(4022.5)
   })
 
   it('model-provided SL/TP not overwritten when distance sufficient', () => {
@@ -324,10 +331,49 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
   })
   it('model-provided SL too tight overridden by ATR minimum', () => {
     const result = normalizeAiSignal({
-      signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980,
-      stop_loss_price: 3970, take_profit_1_price: 4000
+      signal_type: 'buy_limit', confidence: 0.8, recommended_volume: 0.03, limit_price: 3980,
+      stop_loss_price: 3975, take_profit_1_price: 4000
     }, config, market)
-    // ATR=10, slAtrMult=1.5 → min distance=15, AI SL distance=10 < 15 → overridden to 3980-15=3965
-    expect(result.stop_loss_price).toBe(3965)
+    // Anchor ATR=10, K_MIN=1.0: distance 5 is widened to 10 and volume halves.
+    expect(result.stop_loss_price).toBe(3970)
+    expect(result.recommended_volume).toBe(0.01)
+    expect(result.normalization_info.type).toBe('sl_widened')
+  })
+
+  it('使用小时级锚点派生止损和三档止盈', () => {
+    const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03 }, config, { ...market, atr_anchor: 15, atr_anchor_tf: 'H1' })
+    expect(result.stop_loss_price).toBe(3977.5)
+    expect(result.take_profit_1_price).toBe(4033.75)
+    expect(result.take_profit_2_price).toBe(4056.25)
+    expect(result.take_profit_3_price).toBe(4090)
+  })
+
+  it('止损超过3倍锚点时降级为观望', () => {
+    const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3940, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
+    expect(result).toMatchObject({ signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, normalization_info: { type: 'sl_too_far_hold' } })
+  })
+
+  it('放宽后所需手数低于0.01时降级为观望', () => {
+    const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3996, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
+    expect(result).toMatchObject({ signal_type: 'hold', recommended_volume: 0, normalization_info: { type: 'sl_widen_min_lot_hold' } })
+  })
+
+  it('小时级ATR不可用时失败关闭', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03,
+      stop_loss_price: 3990, take_profit_1_price: 4020,
+    }, config, { ...market, atr_anchor: 0 })
+    expect(result).toMatchObject({
+      signal_type: 'hold', recommended_volume: 0,
+      normalization_info: { type: 'atr_anchor_unavailable_hold' },
+    })
+  })
+
+  it('高风险等级不会突破用户最大手数', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.08,
+      stop_loss_price: 3990, take_profit_1_price: 4020,
+    }, { risk_level: 'high', max_position_size: 0.05 }, market)
+    expect(result.recommended_volume).toBe(0.05)
   })
 })

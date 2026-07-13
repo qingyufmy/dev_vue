@@ -42,6 +42,34 @@ describe('calculateMarketData', () => {
     expect(result.rsi_14).toBeGreaterThanOrEqual(0)
     expect(result.rsi_14).toBeLessThanOrEqual(100)
     expect(result.atr_14).toBeGreaterThanOrEqual(0)
+    expect(result.atr_14_closed).toBeGreaterThanOrEqual(0)
+  })
+
+  it('已收盘ATR不受最后一根实时K线变化影响', () => {
+    const rates = generateRates(50)
+    const changed = rates.map(rate => ({ ...rate }))
+    changed[changed.length - 1] = { ...changed[changed.length - 1], high: '9999', low: '1', close: '5000' }
+    const baseline = calculateMarketData('XAUUSD', 'H1', rates, baseAccount, basePositions)
+    const liveChanged = calculateMarketData('XAUUSD', 'H1', changed, baseAccount, basePositions)
+    expect(liveChanged.atr_14_closed).toBe(baseline.atr_14_closed)
+    expect(liveChanged.atr_14).not.toBe(baseline.atr_14)
+  })
+
+  it('扩展缠论历史不会改变普通指标窗口', () => {
+    const history = generateRates(300)
+    const visible = history.slice(-80)
+    const baseline = calculateMarketData('XAUUSD', 'H1', visible, baseAccount, basePositions)
+    const withChan = calculateMarketData('XAUUSD', 'H1', visible, baseAccount, basePositions, {
+      computeChan: true,
+      chanRates: history,
+      requestedChanHistoryCount: 300,
+    })
+    expect(withChan.kline_count).toBe(80)
+    expect(withChan.price_change).toBe(baseline.price_change)
+    expect(withChan.price_change_pct).toBe(baseline.price_change_pct)
+    expect(withChan.avg_volatility).toBe(baseline.avg_volatility)
+    expect(withChan.volume).toEqual(baseline.volume)
+    expect(withChan.chan.received_history_count).toBe(300)
   })
 
   it('计算 MACD', () => {

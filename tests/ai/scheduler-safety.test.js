@@ -276,6 +276,18 @@ describe('Migration 049 repair (Fix 9 from previous round)', () => {
   })
 })
 
+describe('Migration 051 pending lifecycle schema', () => {
+  it('forbids time-based cancellation while preserving structural cancellation', async () => {
+    const { applyPendingLifecycleSchema } = await import('../../server/migrations.js')
+    const schema = applyPendingLifecycleSchema({ signal_type: 'buy | sell | hold', reasoning: 'old' })
+    expect(schema.signal_type).toBe('buy | sell | hold')
+    expect(schema.cancel_pending).toContain('禁止比较任何时间字符串判断挂单是否过期')
+    expect(schema.cancel_pending).toContain('市场结构被破坏')
+    expect(schema.reasoning).toContain('禁止声称挂单已过期')
+    expect(schema.reasoning).toContain('由 MT5 与后端负责')
+  })
+})
+
 describe('Delivery claiming (Fix 3)', () => {
   beforeEach(() => { vi.clearAllMocks() })
 

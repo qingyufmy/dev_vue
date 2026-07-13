@@ -22,10 +22,11 @@ const _bridgeLocks = new Map()
 // === Chan Theory Constants ===
 const MIN_BARS_PER_BI = 5
 const MIN_BIS_PER_SEGMENT = 3
-const FEED_LAST_N_BIS = 3
+const FEED_LAST_N_BIS = 6
 const ENABLE_DIVERGENCE = true
 const MIN_KLINES_FOR_CHAN = 30
 const DIVERGENCE_MIN_AREA_RATIO = 0.85
+const MACD_WARMUP_BARS = 40
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
 // === MACD Series Calculation ===
@@ -71,6 +72,15 @@ function normalizeBarsForChan(rates) {
 
   const merged = [bars[0]]
   let direction = 0
+  function inferInitialDirection(reference, fromIndex) {
+    for (let j = fromIndex; j < bars.length; j++) {
+      const probe = bars[j]
+      if (probe.high > reference.high && probe.low > reference.low) return 1
+      if (probe.high < reference.high && probe.low < reference.low) return -1
+    }
+    const last = bars[bars.length - 1]
+    return last.close >= reference.close ? 1 : -1
+  }
   for (let i = 1; i < bars.length; i++) {
     const prev = merged[merged.length - 1]
     const cur = bars[i]
@@ -78,11 +88,7 @@ function normalizeBarsForChan(rates) {
     const curContainsPrev = cur.high >= prev.high && cur.low <= prev.low
     if (prevContainsCur || curContainsPrev) {
       if (direction === 0) {
-        if (i + 1 < bars.length) {
-          const next = bars[i + 1]
-          direction = next.high > prev.high ? 1 : -1
-        }
-        if (direction === 0) direction = 1
+        direction = inferInitialDirection(prev, i + 1)
       }
       if (direction > 0) {
         merged[merged.length - 1] = { ...prev, high: Math.max(prev.high, cur.high), low: Math.max(prev.low, cur.low), raw_end_idx: cur.raw_end_idx }
@@ -149,7 +155,6 @@ function buildBis(fractals, bars) {
     const dir = s.type === 'bottom' ? 'up' : 'down'
     if (dir === 'up' && e.price <= s.price) { invalidCount++; continue }
     if (dir === 'down' && e.price >= s.price) { invalidCount++; continue }
-    const isLast = i === pivots.length - 1
     bis.push({
       id: bis.length + 1, dir,
       start_idx: s.idx, end_idx: e.idx,
@@ -157,86 +162,186 @@ function buildBis(fractals, bars) {
       raw_end_idx: Math.max(s.raw_end_idx ?? s.raw_idx, e.raw_end_idx ?? e.raw_idx),
       start_price: s.price, end_price: e.price,
       high: Math.max(s.high, e.high), low: Math.min(s.low, e.low),
-      confirmed: !isLast,
+      confirmed: true,
     })
   }
   if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}, invalid=${invalidCount}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
   return { bis, invalidCount }
 }
 
-// === Chan Theory: Segment Construction (conservative) ===
-function buildSegments(confirmedBis) {
-  if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null }
-  const segments = []
-  let segStart = 0
+function rangesOverlap(a, b) {
+  return Math.max(a.low, b.low) <= Math.min(a.high, b.high)
+}
 
-  while (segStart < confirmedBis.length - 2) {
-    const first = confirmedBis[segStart]
-    const segDir = first.dir
-    let segEnd = segStart + 2
-    let broken = false
-
-    if (segDir === 'up') {
-      let extreme = confirmedBis[segStart].end_price
-      let lastLow = Math.min(confirmedBis[segStart].start_price, confirmedBis[segStart].end_price)
-      for (let i = segStart + 1; i < confirmedBis.length; i++) {
-        const bi = confirmedBis[i]
-        if (bi.dir === 'up') {
-          if (bi.end_price > extreme) extreme = bi.end_price
-        } else {
-          if (bi.end_price < lastLow) {
-            if (i - segStart >= MIN_BIS_PER_SEGMENT) {
-              segEnd = i
-              broken = true
-            }
-            break
-          }
-          lastLow = Math.min(lastLow, bi.end_price)
-        }
-        segEnd = i
-      }
-    } else {
-      let extreme = confirmedBis[segStart].end_price
-      let lastHigh = Math.max(confirmedBis[segStart].start_price, confirmedBis[segStart].end_price)
-      for (let i = segStart + 1; i < confirmedBis.length; i++) {
-        const bi = confirmedBis[i]
-        if (bi.dir === 'down') {
-          if (bi.end_price < extreme) extreme = bi.end_price
-        } else {
-          if (bi.end_price > lastHigh) {
-            if (i - segStart >= MIN_BIS_PER_SEGMENT) {
-              segEnd = i
-              broken = true
-            }
-            break
-          }
-          lastHigh = Math.max(lastHigh, bi.end_price)
-        }
-        segEnd = i
-      }
+function normalizeFeatureSequence(elements) {
+  if (elements.length < 2) return elements.map(item => ({ ...item }))
+  const merged = [{ ...elements[0] }]
+  let direction = 0
+  for (let i = 1; i < elements.length; i++) {
+    const prev = merged[merged.length - 1]
+    const cur = elements[i]
+    const included = (prev.high >= cur.high && prev.low <= cur.low) || (cur.high >= prev.high && cur.low <= prev.low)
+    if (!included) {
+      direction = cur.high > prev.high && cur.low > prev.low ? 1 : -1
+      merged.push({ ...cur })
+      continue
     }
-
-    const biIds = confirmedBis.slice(segStart, segEnd + 1).map(b => b.id)
-    if (biIds.length >= MIN_BIS_PER_SEGMENT) {
-      const segBis = confirmedBis.slice(segStart, segEnd + 1)
-      const seg = {
-        id: segments.length + 1, dir: segDir,
-        start_price: confirmedBis[segStart].start_price,
-        end_price: confirmedBis[segEnd].end_price,
-        high: Math.max(...segBis.map(b => b.high)),
-        low: Math.min(...segBis.map(b => b.low)),
-        bi_ids: biIds, broken, weak: false,
+    if (direction === 0) {
+      for (let j = i + 1; j < elements.length; j++) {
+        if (elements[j].high > prev.high && elements[j].low > prev.low) { direction = 1; break }
+        if (elements[j].high < prev.high && elements[j].low < prev.low) { direction = -1; break }
       }
-      segments.push(seg)
-      // Next segment starts from the last bi of current segment
-      segStart = segEnd
+      if (direction === 0) direction = cur.end_price >= prev.end_price ? 1 : -1
+    }
+    if (direction > 0) {
+      merged[merged.length - 1] = {
+        ...prev,
+        high: Math.max(prev.high, cur.high),
+        low: Math.max(prev.low, cur.low),
+        high_source_index: prev.high >= cur.high ? prev.high_source_index : cur.high_source_index,
+        low_source_index: prev.low >= cur.low ? prev.low_source_index : cur.low_source_index,
+        source_end_index: cur.source_end_index,
+      }
     } else {
-      segStart++
+      merged[merged.length - 1] = {
+        ...prev,
+        high: Math.min(prev.high, cur.high),
+        low: Math.min(prev.low, cur.low),
+        high_source_index: prev.high <= cur.high ? prev.high_source_index : cur.high_source_index,
+        low_source_index: prev.low <= cur.low ? prev.low_source_index : cur.low_source_index,
+        source_end_index: cur.source_end_index,
+      }
     }
   }
+  return merged
+}
 
-  // Candidate segment from remaining tail
-  const tailBis = confirmedBis.slice(segStart)
+function findFeatureFractals(rawFeatures, segmentDirection) {
+  const features = normalizeFeatureSequence(rawFeatures)
+  const fractals = []
+  for (let i = 1; i + 1 < features.length; i++) {
+    const prev = features[i - 1]
+    const cur = features[i]
+    const next = features[i + 1]
+    const matched = segmentDirection === 'up'
+      ? cur.high > prev.high && cur.high > next.high && cur.low > prev.low && cur.low > next.low
+      : cur.low < prev.low && cur.low < next.low && cur.high < prev.high && cur.high < next.high
+    if (matched) fractals.push({ prev, cur, next, features })
+  }
+  return fractals
+}
+
+// Evaluate each standard-sequence prefix as it becomes confirmable. Once a
+// fractal confirms an endpoint, later elements belong to the next segment and
+// must not be merged back across that boundary.
+function findFeatureFractalCandidates(rawFeatures, segmentDirection) {
+  const candidates = []
+  const seen = new Set()
+  for (let length = 3; length <= rawFeatures.length; length++) {
+    for (const fractal of findFeatureFractals(rawFeatures.slice(0, length), segmentDirection)) {
+      const endpointIndex = segmentDirection === 'up' ? fractal.cur.high_source_index : fractal.cur.low_source_index
+      const key = `${fractal.prev.source_start_index}:${endpointIndex}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidates.push(fractal)
+    }
+  }
+  return candidates
+}
+
+function makeFeature(bi, index) {
+  return {
+    source_start_index: index,
+    source_end_index: index,
+    high_source_index: index,
+    low_source_index: index,
+    high: bi.high,
+    low: bi.low,
+    start_price: bi.start_price,
+    end_price: bi.end_price,
+  }
+}
+
+// In the gap case, the first feature fractal is only a candidate. The segment
+// ends there after the new reverse segment's standard feature sequence forms
+// its own opposite fractal. A new old-direction extreme invalidates it first.
+function confirmGapEndpoint(bis, endpointIndex, oldDirection) {
+  const endpointBi = bis[endpointIndex]
+  if (!endpointBi) return false
+  const reverseDirection = oldDirection === 'up' ? 'down' : 'up'
+  const secondFeatures = []
+  for (let i = endpointIndex + 1; i < bis.length; i += 2) {
+    const bi = bis[i]
+    if (!bi || bi.dir !== oldDirection) break
+    if (oldDirection === 'up' && bi.high > endpointBi.high) return false
+    if (oldDirection === 'down' && bi.low < endpointBi.low) return false
+    secondFeatures.push(makeFeature(bi, i))
+    if (findFeatureFractals(secondFeatures, reverseDirection).length > 0) return true
+  }
+  return false
+}
+
+function findSegmentEndpoint(bis, startIndex, segmentDirection) {
+  const featureDirection = segmentDirection === 'up' ? 'down' : 'up'
+  const rawFeatures = []
+  for (let i = startIndex + 1; i < bis.length; i += 2) {
+    const bi = bis[i]
+    if (bi.dir !== featureDirection) break
+    rawFeatures.push(makeFeature(bi, i))
+  }
+  for (const { prev, cur, features } of findFeatureFractalCandidates(rawFeatures, segmentDirection)) {
+    const endpointIndex = segmentDirection === 'up' ? cur.high_source_index : cur.low_source_index
+    const strokeCount = endpointIndex - startIndex
+    if (strokeCount < MIN_BIS_PER_SEGMENT || strokeCount % 2 === 0) continue
+    const hasGap = !rangesOverlap(prev, cur)
+    if (hasGap && !confirmGapEndpoint(bis, endpointIndex, segmentDirection)) continue
+    return { endpointIndex, hasGap, feature_count: features.length }
+  }
+  return null
+}
+
+// === Chan Theory: Segment Construction from characteristic sequences ===
+function buildSegments(confirmedBis, options = {}) {
+  if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null, resynced: false }
+  const trustedStart = options.trustedStart !== false
+  const segments = []
+  let startIndex = 0
+  let resynced = false
+  while (startIndex + MIN_BIS_PER_SEGMENT <= confirmedBis.length) {
+    const dir = confirmedBis[startIndex].dir
+    const endpoint = findSegmentEndpoint(confirmedBis, startIndex, dir)
+    if (!endpoint) break
+    if (!trustedStart && !resynced && segments.length === 0) {
+      // A rolling rates window normally starts in the middle of an older
+      // segment. Use its first detectable endpoint only as the structure
+      // anchor; emitting the truncated prefix would repaint history.
+      startIndex = endpoint.endpointIndex
+      resynced = true
+      continue
+    }
+    const segBis = confirmedBis.slice(startIndex, endpoint.endpointIndex)
+    const startPrice = segBis[0].start_price
+    const endPrice = segBis[segBis.length - 1].end_price
+    if ((dir === 'up' && endPrice <= startPrice) || (dir === 'down' && endPrice >= startPrice)) break
+    segments.push({
+      id: segments.length + 1,
+      dir,
+      start_price: startPrice,
+      end_price: endPrice,
+      high: Math.max(...segBis.map(b => b.high)),
+      low: Math.min(...segBis.map(b => b.low)),
+      bi_ids: segBis.map(b => b.id),
+      start_bi_id: segBis[0].id,
+      end_bi_id: segBis[segBis.length - 1].id,
+      broken: true,
+      ended_reason: 'broken',
+      weak: false,
+      confirmation: endpoint.hasGap ? 'gap_reverse_confirmed' : 'feature_fractal',
+    })
+    startIndex = endpoint.endpointIndex
+  }
+
+  const tailBis = confirmedBis.slice(startIndex)
   const candidate = tailBis.length > 0 ? {
     dir: tailBis[0].dir,
     bi_ids: tailBis.map(b => b.id),
@@ -245,102 +350,235 @@ function buildSegments(confirmedBis) {
   } : null
 
   if (DEBUG_CHAN) console.log(`[Chan] Segments(${segments.length}): ${segments.map(s => `#${s.id}(${s.dir}) bis=${s.bi_ids.length}`).join(' | ')}`)
-  return { segments, candidate }
+  return { segments, candidate, resynced }
 }
 
-// === Chan Theory: Center (Zhongshu) Detection ===
-function buildCenters(confirmedBis) {
-  if (confirmedBis.length < 3) return []
+// === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
+function buildCenters(components) {
+  if (components.length < 3) return []
   const centers = []
-  for (let i = 0; i + 2 < confirmedBis.length; i++) {
-    const ranges = [confirmedBis[i], confirmedBis[i + 1], confirmedBis[i + 2]].map(b => [Math.min(b.start_price, b.end_price), Math.max(b.start_price, b.end_price)])
+  let i = 0
+  while (i + 2 < components.length) {
+    const initial = components.slice(i, i + 3)
+    const ranges = initial.map(item => [
+      Number.isFinite(item.low) ? item.low : Math.min(item.start_price, item.end_price),
+      Number.isFinite(item.high) ? item.high : Math.max(item.start_price, item.end_price),
+    ])
     const zl = Math.max(ranges[0][0], ranges[1][0], ranges[2][0])
     const zh = Math.min(ranges[0][1], ranges[1][1], ranges[2][1])
-    if (zl < zh) {
-      const existing = centers[centers.length - 1]
-      if (existing && existing.status !== 'closed') {
-        const nextZl = Math.max(existing.zl, zl)
-        const nextZh = Math.min(existing.zh, zh)
-        if (nextZl < nextZh) {
-          existing.zl = nextZl
-          existing.zh = nextZh
-          existing.bi_ids.push(confirmedBis[i + 2].id)
-          existing.end_bi_id = confirmedBis[i + 2].id
-          existing.status = 'extended'
-        } else {
-          existing.status = 'closed'
-          centers.push({ id: centers.length + 1, zl, zh, start_bi_id: confirmedBis[i].id, end_bi_id: confirmedBis[i + 2].id, bi_ids: [confirmedBis[i].id, confirmedBis[i + 1].id, confirmedBis[i + 2].id], level: '', status: 'confirmed' })
-        }
-      } else {
-        centers.push({ id: centers.length + 1, zl, zh, start_bi_id: confirmedBis[i].id, end_bi_id: confirmedBis[i + 2].id, bi_ids: [confirmedBis[i].id, confirmedBis[i + 1].id, confirmedBis[i + 2].id], level: '', status: 'confirmed' })
-      }
+    if (!(zl < zh)) { i++; continue }
+
+    const center = {
+      id: centers.length + 1,
+      zl,
+      zh,
+      start_segment_id: initial[0].id,
+      end_segment_id: initial[2].id,
+      segment_ids: initial.map(item => item.id),
+      fluctuation_low: Math.min(...ranges.map(range => range[0])),
+      fluctuation_high: Math.max(...ranges.map(range => range[1])),
+      level: '',
+      status: 'confirmed',
+      closed_by_segment_id: null,
     }
+    let j = i + 3
+    while (j < components.length) {
+      const item = components[j]
+      const low = Number.isFinite(item.low) ? item.low : Math.min(item.start_price, item.end_price)
+      const high = Number.isFinite(item.high) ? item.high : Math.max(item.start_price, item.end_price)
+      if (Math.max(center.zl, low) >= Math.min(center.zh, high)) {
+        center.closed_by_segment_id = item.id
+        break
+      }
+      center.fluctuation_low = Math.min(center.fluctuation_low, low)
+      center.fluctuation_high = Math.max(center.fluctuation_high, high)
+      center.segment_ids.push(item.id)
+      center.end_segment_id = item.id
+      center.status = 'extended'
+      j++
+    }
+    if (j < components.length) center.status = 'closed'
+    centers.push(center)
+    i = j < components.length ? j : components.length
   }
   return centers
 }
 
 // === Chan Theory: Divergence Detection (conservative) ===
 function detectDivergence(segments, bis, macdHist, centers = []) {
-  if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return { type: 'none', strength: 'none', reason: 'no_macd_data', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const emptyResult = reason => ({ type: 'none', strength: 'none', reason, area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 })
+  if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return emptyResult('no_macd_data')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
-  if (validSegs.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_valid_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
-  const validCenters = centers.filter(c => c.status !== 'closed')
-  if (validCenters.length === 0) return { type: 'none', strength: 'none', reason: 'no_valid_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  if (validSegs.length < 2) return emptyResult('insufficient_valid_segments')
+  if (centers.length === 0) return emptyResult('no_valid_center')
 
-  const lastCenter = validCenters[validCenters.length - 1]
-  const lastCenterEndBiId = lastCenter.end_bi_id || 0
-
-  function calcArea(biIds, dir) {
+  function calcMacdStats(biIds, dir) {
     let area = 0
+    let peak = 0
+    const seenIndexes = new Set()
     for (const bid of biIds) {
       const bi = bis.find(b => b.id === bid)
       if (!bi) continue
       for (let j = bi.raw_start_idx; j <= bi.raw_end_idx && j < macdHist.length; j++) {
+        if (seenIndexes.has(j)) continue
+        seenIndexes.add(j)
         const v = macdHist[j] || 0
-        if (dir === 'up' && v > 0) area += v
-        else if (dir === 'down' && v < 0) area += Math.abs(v)
+        if (dir === 'up' && v > 0) {
+          area += v
+          peak = Math.max(peak, v)
+        } else if (dir === 'down' && v < 0) {
+          const magnitude = Math.abs(v)
+          area += magnitude
+          peak = Math.max(peak, magnitude)
+        }
       }
     }
-    return area
+    return { area, peak }
   }
 
-  function isAfterCenter(seg) {
-    return seg.bi_ids.some(id => id > lastCenterEndBiId)
-  }
-
-  // Use latest segment direction
+  // Compare the latest departure segment with the same-direction segment that
+  // entered the same center. This prevents unrelated historical segments from
+  // being paired solely because their direction matches.
   const current = validSegs[validSegs.length - 1]
-  const sameDir = validSegs.filter(s => s.dir === current.dir)
-  if (sameDir.length < 2) return { type: 'none', strength: 'none', reason: 'insufficient_same_direction_segments', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const eligibleCenters = centers.filter(c => current.id === (c.end_segment_id || 0) + 1)
+  if (eligibleCenters.length === 0) return emptyResult('not_after_center')
+  const lastCenter = eligibleCenters[eligibleCenters.length - 1]
+  const prev = validSegs.find(s => s.id === lastCenter.start_segment_id - 1)
+  if (!prev || prev.dir !== current.dir) return emptyResult('no_entry_segment')
+  const cur = current
 
-  const prev = sameDir[sameDir.length - 2]
-  const cur = sameDir[sameDir.length - 1]
+  const comparisonBis = [...prev.bi_ids, ...cur.bi_ids]
+    .map(id => bis.find(b => b.id === id))
+    .filter(Boolean)
+  if (comparisonBis.some(b => Number(b.raw_start_idx) < MACD_WARMUP_BARS)) {
+    return emptyResult('macd_warmup_overlap')
+  }
 
-  if (!isAfterCenter(cur)) return { type: 'none', strength: 'none', reason: 'not_after_center', area_cur: 0, area_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 }
+  const prevMacd = calcMacdStats(prev.bi_ids, cur.dir)
+  const curMacd = calcMacdStats(cur.bi_ids, cur.dir)
+  const areaPrev = prevMacd.area
+  const areaCur = curMacd.area
+  const peakPrev = prevMacd.peak
+  const peakCur = curMacd.peak
 
-  const areaPrev = calcArea(prev.bi_ids, cur.dir)
-  const areaCur = calcArea(cur.bi_ids, cur.dir)
+  if (areaCur === 0 || areaPrev === 0) return { type: 'none', strength: 'none', reason: 'invalid_macd_area', area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev), price_extreme_cur: 0, price_extreme_prev: 0 }
 
-  if (areaCur === 0 || areaPrev === 0) return { type: 'none', strength: 'none', reason: 'invalid_macd_area', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: 0, price_extreme_prev: 0 }
+  const areaDiverged = areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO
+  const heightDiverged = peakCur < peakPrev
+  const strength = areaDiverged && heightDiverged ? 'strong' : 'weak'
+  const reason = areaDiverged && heightDiverged
+    ? 'macd_area_and_height_divergence'
+    : areaDiverged
+      ? 'macd_area_divergence_only'
+      : heightDiverged
+        ? 'macd_height_divergence_only'
+        : 'macd_no_divergence'
+  const macdFields = { area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev) }
 
   if (cur.dir === 'up') {
-    if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'top', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (areaDiverged || heightDiverged) return { type: 'top', category: 'center_departure', trend_confirmed: false, strength, reason, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    return { type: 'none', strength: 'none', reason, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
   } else {
-    if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    if (areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO) return { type: 'bottom', strength: 'strong', reason: 'macd_area_divergence', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    return { type: 'none', strength: 'none', reason: 'macd_area_not_shrunk_enough', area_cur: round2(areaCur), area_prev: round2(areaPrev), price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (areaDiverged || heightDiverged) return { type: 'bottom', category: 'center_departure', trend_confirmed: false, strength, reason, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    return { type: 'none', strength: 'none', reason, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+  }
+}
+
+function summarizeSegment(segment) {
+  if (!segment) return null
+  return {
+    id: segment.id,
+    dir: segment.dir,
+    start_price: round5(segment.start_price),
+    end_price: round5(segment.end_price),
+    high: round5(segment.high),
+    low: round5(segment.low),
+    bi_count: segment.bi_ids.length,
+    ended_reason: segment.ended_reason,
+    broken: segment.broken,
+  }
+}
+
+function summarizeCenter(center, timeframe) {
+  if (!center) return null
+  return {
+    id: center.id,
+    zl: round5(center.zl),
+    zh: round5(center.zh),
+    gg: round5(center.fluctuation_high),
+    dd: round5(center.fluctuation_low),
+    status: center.status,
+    source_timeframe: timeframe,
+    structure_level: 'segment',
+    level: timeframe,
+    start_segment_id: center.start_segment_id,
+    end_segment_id: center.end_segment_id,
+    closed_by_segment_id: center.closed_by_segment_id,
+  }
+}
+
+function emptyDivergence(reason = 'structure_unavailable') {
+  return {
+    type: 'none', strength: 'none', reason,
+    area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0,
+    price_extreme_cur: 0, price_extreme_prev: 0,
+  }
+}
+
+function emptyChanResult(overrides = {}) {
+  return {
+    status: 'insufficient_klines',
+    reliability: 'low',
+    requested_history_count: 0,
+    received_history_count: 0,
+    history_sufficient: false,
+    window_resynced: false,
+    raw_bar_count: 0,
+    closed_bar_count: 0,
+    processed_bar_count: 0,
+    fractal_count: 0,
+    bi_count: 0,
+    segment_count: 0,
+    center_count: 0,
+    current_bi: null,
+    developing_bi: null,
+    recent_bis: [],
+    current_segment: null,
+    prev_segment: null,
+    candidate_segment: null,
+    current_center: null,
+    active_center: null,
+    latest_center: null,
+    price_vs_center: 'none',
+    divergence: emptyDivergence(),
+    warnings: [],
+    ...overrides,
   }
 }
 
 // === Chan Theory: Assembly ===
 function computeChan(rates, timeframe, macdHist, options = {}) {
   const warnings = []
-  if (!rates || rates.length < MIN_KLINES_FOR_CHAN) {
-    return { status: 'insufficient_klines', reliability: 'low', raw_bar_count: rates?.length || 0, processed_bar_count: 0, fractal_count: 0, bi_count: 0, segment_count: 0, center_count: 0, warnings: ['raw_bars_too_few'] }
+  const requestedHistoryCount = Number(options.requestedHistoryCount) || rates?.length || 0
+  const historySufficient = Array.isArray(rates) && rates.length >= requestedHistoryCount
+  if (!historySufficient) warnings.push('history_bars_below_requested')
+  const closedRates = Array.isArray(rates) ? rates.slice(0, -1) : []
+  const closedMacdHist = Array.isArray(macdHist) ? macdHist.slice(0, closedRates.length) : []
+  if (closedRates.length < MIN_KLINES_FOR_CHAN) {
+    return emptyChanResult({
+      status: 'insufficient_klines',
+      requested_history_count: requestedHistoryCount,
+      received_history_count: rates?.length || 0,
+      history_sufficient: historySufficient,
+      raw_bar_count: rates?.length || 0,
+      closed_bar_count: closedRates.length,
+      divergence: emptyDivergence('insufficient_klines'),
+      warnings: [...warnings, 'raw_bars_too_few'],
+    })
   }
-  const bars = normalizeBarsForChan(rates)
+  const bars = normalizeBarsForChan(closedRates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
   const fractals = options.fractalsForTest || detectFractals(bars)
   const { bis: allBis, invalidCount } = buildBis(fractals, bars)
@@ -348,56 +586,85 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
   if (confirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
-    return { status: 'insufficient_bis', reliability: 'low', raw_bar_count: rates.length, processed_bar_count: bars.length, fractal_count: fractals.length, bi_count: allBis.length, segment_count: 0, center_count: 0, warnings }
+    const lastBi = allBis[allBis.length - 1]
+    return emptyChanResult({
+      status: 'insufficient_bis',
+      requested_history_count: requestedHistoryCount,
+      received_history_count: rates.length,
+      history_sufficient: historySufficient,
+      raw_bar_count: rates.length,
+      closed_bar_count: closedRates.length,
+      processed_bar_count: bars.length,
+      fractal_count: fractals.length,
+      bi_count: allBis.length,
+      current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+      recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
+      divergence: emptyDivergence('insufficient_bis'),
+      warnings,
+    })
   }
-  const { segments, candidate } = buildSegments(confirmedBis)
+  const { segments, candidate, resynced } = buildSegments(confirmedBis, { trustedStart: false })
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
-  const centers = buildCenters(confirmedBis)
-  const validCenters = centers.filter(c => c.status !== 'closed')
-  if (validCenters.length === 0) warnings.push('no_valid_center')
-  const lastCenter = validCenters.length > 0 ? validCenters[validCenters.length - 1] : null
+  const centers = buildCenters(validSegs)
+  if (centers.length === 0) warnings.push('no_valid_center')
+  const latestCenter = centers.length > 0 ? centers[centers.length - 1] : null
+  const activeCenter = latestCenter?.status === 'closed' ? null : latestCenter
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
   const lastBi = allBis[allBis.length - 1]
   const latest = parseFloat(rates[rates.length - 1].close)
+  const liveRate = rates[rates.length - 1]
+  const lastFractal = fractals[fractals.length - 1]
+  let developingBi = null
+  if (lastFractal && liveRate) {
+    const liveHigh = Number(liveRate.high)
+    const liveLow = Number(liveRate.low)
+    if (lastFractal.type === 'bottom' && Number.isFinite(liveHigh) && liveHigh > lastFractal.price) {
+      developingBi = { dir: 'up', start_price: round5(lastFractal.price), end_price: round5(liveHigh), confirmed: false }
+    } else if (lastFractal.type === 'top' && Number.isFinite(liveLow) && liveLow < lastFractal.price) {
+      developingBi = { dir: 'down', start_price: round5(lastFractal.price), end_price: round5(liveLow), confirmed: false }
+    }
+  }
   let priceVsCenter = 'none'
-  if (lastCenter) {
-    if (latest > lastCenter.zh) priceVsCenter = 'above'
-    else if (latest < lastCenter.zl) priceVsCenter = 'below'
+  if (latestCenter) {
+    if (latest > latestCenter.zh) priceVsCenter = 'above'
+    else if (latest < latestCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
   }
-  const divergence = detectDivergence(validSegs, allBis, macdHist, validCenters)
+  const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers)
   if (divergence.type !== 'none') {
     // ok
-  } else if (divergence.reason === 'insufficient_valid_segments') {
-    warnings.push('divergence_skipped_no_valid_segment')
-  } else if (divergence.reason === 'no_valid_center') {
-    warnings.push('divergence_skipped_no_valid_center')
-  } else if (divergence.reason === 'not_after_center') {
-    warnings.push('divergence_skipped_not_after_center')
-  } else if (divergence.reason === 'no_price_extreme_break') {
-    warnings.push('divergence_skipped_no_price_extreme_break')
+  } else if (divergence.reason === 'invalid_macd_area' || divergence.reason === 'no_macd_data') {
+    warnings.push('divergence_skipped_invalid_macd')
   }
 
   let reliability = 'low'
-  if (validSegs.length > 0 && validCenters.length > 0) reliability = 'high'
-  else if (confirmedBis.length > 0 && validSegs.length > 0) reliability = 'medium'
+  if (historySufficient && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
+  else if (historySufficient && validSegs.length > 0) reliability = 'medium'
 
   let status = 'ok'
   if (validSegs.length === 0 && confirmedBis.length >= 3) status = 'unreliable_segments'
-  else if (validSegs.length > 0 && validCenters.length === 0) status = 'partial'
+  else if (validSegs.length > 0 && centers.length === 0) status = 'partial'
   else if (warnings.length > 0) status = 'partial'
 
-  console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${validCenters.length} warnings=${warnings.join(',') || 'none'}`)
+  console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
   return {
     status, reliability,
-    raw_bar_count: rates.length, processed_bar_count: bars.length,
-    fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: validCenters.length,
+    requested_history_count: requestedHistoryCount,
+    received_history_count: rates.length,
+    history_sufficient: historySufficient,
+    window_resynced: resynced,
+    raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
+    fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+    developing_bi: developingBi,
     recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
-    current_segment: lastSeg ? { id: lastSeg.id, dir: lastSeg.dir, start_price: round5(lastSeg.start_price), end_price: round5(lastSeg.end_price), broken: lastSeg.broken } : null,
+    current_segment: summarizeSegment(lastSeg),
+    prev_segment: summarizeSegment(validSegs[validSegs.length - 2]),
     candidate_segment: candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price) } : null,
-    current_center: lastCenter ? { id: lastCenter.id, zl: round5(lastCenter.zl), zh: round5(lastCenter.zh), level: timeframe, status: lastCenter.status } : null,
+    current_center: summarizeCenter(latestCenter, timeframe),
+    active_center: summarizeCenter(activeCenter, timeframe),
+    latest_center: summarizeCenter(latestCenter, timeframe),
     price_vs_center: priceVsCenter,
     divergence,
     warnings,
@@ -405,7 +672,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildSegments, buildCenters, detectDivergence, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
@@ -494,6 +761,8 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const bbPosition = bbWidth > 0 ? (latest - bbLower) / bbWidth : 0.5
 
   const atr14 = computeAtr14(rates)
+  const closedRates = rates.length > 1 ? rates.slice(0, -1) : []
+  const atr14Closed = computeAtr14(closedRates)
 
   const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
   const recentLows = lows.length >= 20 ? lows.slice(-20) : lows
@@ -545,7 +814,12 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const shortPositions = positions.filter(p => p.type === 'sell')
   const totalProfit = positions.reduce((sum, p) => sum + parseFloat(p.profit || 0), 0)
 
-  const chan = options.computeChan ? computeChan(rates, timeframe, macdSeries.histSeries) : undefined
+  const chanRates = options.chanRates || rates
+  const chanCloses = chanRates === rates ? closes : chanRates.map(r => parseFloat(r.close))
+  const chanMacdSeries = chanRates === rates ? macdSeries : calculateMacdSeries(chanCloses)
+  const chan = options.computeChan
+    ? computeChan(chanRates, timeframe, chanMacdSeries.histSeries, { requestedHistoryCount: options.requestedChanHistoryCount })
+    : undefined
 
   return {
     symbol, timeframe,
@@ -581,6 +855,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
       position: round3(bbPosition),
     },
     atr_14: round5(atr14),
+    atr_14_closed: round5(atr14Closed),
     support_resistance: {
       pivot: round5(pivot), r1: round5(r1), r2: round5(r2), s1: round5(s1), s2: round5(s2),
       recent_high: round5(recentHigh), recent_low: round5(recentLow),
