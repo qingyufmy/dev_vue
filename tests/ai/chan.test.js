@@ -679,6 +679,36 @@ describe('computeChan', () => {
     expect(result.developing_bi).toMatchObject({ dir: 'down', start_price: 130, end_price: 80, confirmed: false })
   })
 
+  it('anchors the developing bi to the last pivot accepted by bi construction', () => {
+    const rates = Array.from({ length: 31 }, (_, i) => ({ time: `t${i}`, open: 115, high: 120, low: 110, close: 115, tick_volume: 1 }))
+    rates[20] = { ...rates[20], high: 140, low: 120, close: 130 }
+    const fractal = (idx, type, price) => ({ idx, raw_start_idx: idx, raw_end_idx: idx, type, price, high: price, low: price, time: `t${idx}` })
+    const fractals = [
+      fractal(0, 'bottom', 100),
+      fractal(4, 'top', 120),
+      fractal(8, 'bottom', 110),
+      fractal(12, 'top', 130),
+      fractal(14, 'bottom', 115), // Rejected: fewer than five processed bars from the accepted top.
+    ]
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
+    expect(result.developing_bi).toMatchObject({ dir: 'down', start_price: 130, end_price: 110, confirmed: false })
+  })
+
+  it('returns a developing bi even when fewer than three confirmed bis exist', () => {
+    const rates = Array.from({ length: 31 }, (_, i) => ({ time: `t${i}`, open: 115, high: 120, low: 110, close: 115, tick_volume: 1 }))
+    rates[20] = { ...rates[20], high: 140, close: 135 }
+    const fractal = (idx, type, price) => ({ idx, raw_start_idx: idx, raw_end_idx: idx, type, price, high: price, low: price, time: `t${idx}` })
+    const fractals = [
+      fractal(0, 'bottom', 100),
+      fractal(4, 'top', 120),
+      fractal(8, 'bottom', 110),
+    ]
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
+    expect(result.status).toBe('insufficient_bis')
+    expect(result.bi_count).toBe(2)
+    expect(result.developing_bi).toMatchObject({ dir: 'up', start_price: 110, end_price: 140, confirmed: false })
+  })
+
   it('扩展历史在首段重同步后仍能输出后续完整线段', () => {
     const rates = makeRates(300)
     const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries)

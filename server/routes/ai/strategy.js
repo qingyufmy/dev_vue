@@ -87,7 +87,8 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
       chanRates: rates,
       requestedChanHistoryCount: historyCount,
     })
-    if (hasUseChanTag && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || summary.chan?.segment_count === 0)) {
+    const chanNeedsMoreHistory = summary.chan && (summary.chan.segment_count === 0 || summary.chan.center_count === 0)
+    if (hasUseChanTag && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || chanNeedsMoreHistory)) {
       const retry = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
       const retryRates = retry?.rates || []
       if (retryRates.length > rates.length) {

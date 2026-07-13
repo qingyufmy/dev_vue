@@ -174,7 +174,29 @@ function buildBis(fractals, bars) {
     anchor = e
   }
   if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}, invalid=${invalidCount}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
-  return { bis, invalidCount }
+  return { bis, invalidCount, activePivot: anchor || null }
+}
+
+function buildDevelopingBi(activePivot, rates) {
+  if (!activePivot || !Array.isArray(rates) || rates.length === 0) return null
+  const pivotRawEnd = Number(activePivot.raw_end_idx ?? activePivot.raw_idx)
+  const afterPivotIndex = Number.isFinite(pivotRawEnd) ? pivotRawEnd + 1 : rates.length - 1
+  const developingRates = rates.slice(Math.max(afterPivotIndex, 0))
+  if (activePivot.type === 'bottom') {
+    const highs = developingRates.map(rate => Number(rate.high)).filter(Number.isFinite)
+    const developingHigh = highs.length > 0 ? Math.max(...highs) : NaN
+    return Number.isFinite(developingHigh) && developingHigh > activePivot.price
+      ? { dir: 'up', start_price: round5(activePivot.price), end_price: round5(developingHigh), confirmed: false }
+      : null
+  }
+  if (activePivot.type === 'top') {
+    const lows = developingRates.map(rate => Number(rate.low)).filter(Number.isFinite)
+    const developingLow = lows.length > 0 ? Math.min(...lows) : NaN
+    return Number.isFinite(developingLow) && developingLow < activePivot.price
+      ? { dir: 'down', start_price: round5(activePivot.price), end_price: round5(developingLow), confirmed: false }
+      : null
+  }
+  return null
 }
 
 function rangesOverlap(a, b) {
@@ -598,9 +620,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const bars = normalizeBarsForChan(closedRates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
   const fractals = options.fractalsForTest || detectFractals(bars)
-  const { bis: allBis, invalidCount } = buildBis(fractals, bars)
+  const { bis: allBis, invalidCount, activePivot } = buildBis(fractals, bars)
   if (invalidCount > 0) warnings.push('invalid_bi_price_direction')
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
+  const developingBi = buildDevelopingBi(activePivot, rates)
   if (confirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
     const lastBi = allBis[allBis.length - 1]
@@ -615,6 +638,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       fractal_count: fractals.length,
       bi_count: allBis.length,
       current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+      developing_bi: developingBi,
       recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
       divergence: emptyDivergence('insufficient_bis'),
       warnings,
@@ -630,27 +654,6 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
   const lastBi = allBis[allBis.length - 1]
   const latest = parseFloat(rates[rates.length - 1].close)
-  const liveRate = rates[rates.length - 1]
-  const lastFractal = fractals[fractals.length - 1]
-  let developingBi = null
-  if (lastFractal && liveRate) {
-    const fractalRawEnd = Number(lastFractal.raw_end_idx ?? lastFractal.raw_idx)
-    const afterFractalIndex = Number.isFinite(fractalRawEnd) ? fractalRawEnd + 1 : rates.length - 1
-    const developingRates = rates.slice(Math.max(afterFractalIndex, 0))
-    if (lastFractal.type === 'bottom') {
-      const highs = developingRates.map(rate => Number(rate.high)).filter(Number.isFinite)
-      const developingHigh = highs.length > 0 ? Math.max(...highs) : NaN
-      if (Number.isFinite(developingHigh) && developingHigh > lastFractal.price) {
-        developingBi = { dir: 'up', start_price: round5(lastFractal.price), end_price: round5(developingHigh), confirmed: false }
-      }
-    } else if (lastFractal.type === 'top') {
-      const lows = developingRates.map(rate => Number(rate.low)).filter(Number.isFinite)
-      const developingLow = lows.length > 0 ? Math.min(...lows) : NaN
-      if (Number.isFinite(developingLow) && developingLow < lastFractal.price) {
-        developingBi = { dir: 'down', start_price: round5(lastFractal.price), end_price: round5(developingLow), confirmed: false }
-      }
-    }
-  }
   let priceVsCenter = 'none'
   if (latestCenter) {
     if (latest > latestCenter.zh) priceVsCenter = 'above'
@@ -698,7 +701,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
