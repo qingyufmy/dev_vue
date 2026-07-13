@@ -27,7 +27,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.3.9"
+APP_VERSION = "v2.3.8"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 MAX_LOG_MESSAGE_CHARS = 1000
@@ -1934,8 +1934,8 @@ class LoginPage(QWidget):
         cfg = load_config()
         self.input_server.setText(cfg.get("server_url", DEFAULT_SERVER))
         self.input_email.setText(cfg.get("email", ""))
-        self.chk_remember.setChecked(cfg.get("remember", True))
-        self.chk_auto_login.setChecked(cfg.get("auto_login", True))
+        self.chk_remember.setChecked(cfg.get("remember", False))
+        self.chk_auto_login.setChecked(cfg.get("auto_login", False))
         if cfg.get("remember") and cfg.get("saved_password"):
             self.input_password.setText(decrypt_password(cfg["saved_password"]))
 
@@ -2354,8 +2354,8 @@ class SettingsPage(QWidget):
         self.progress_bar.setRange(0, 100)
         version_layout.addWidget(self.progress_bar)
 
-        self.btn_retry_download = QPushButton("重试")
-        self.btn_retry_download.setProperty("secondary", True)
+        self.btn_retry_download = QPushButton("重试下载")
+        self.btn_retry_download.setProperty("warning", True)
         self.btn_retry_download.setFixedHeight(30)
         self.btn_retry_download.setVisible(False)
         self.btn_retry_download.clicked.connect(self._do_update)
@@ -2537,8 +2537,6 @@ class SettingsPage(QWidget):
         self.lbl_update_status.setVisible(True)
         self.lbl_update_status.setText("正在连接服务器...")
         self.lbl_update_status.setProperty("muted", True)
-        self.lbl_update_status.style().polish(self.lbl_update_status)
-        self.btn_retry_download.setVisible(False)
         QApplication.processEvents()
 
         url = f"{server.rstrip('/')}/api/bridge/version"
@@ -2548,18 +2546,11 @@ class SettingsPage(QWidget):
 
         if status_code == 200 and data.get("version"):
             remote_ver = data["version"]
-            local_ver = APP_VERSION
-            if self._version_newer(remote_ver, local_ver):
-                changelog = data.get("changelog", "")
-                status_text = f"发现新版本 {remote_ver}"
-                if local_ver:
-                    status_text += f"（当前 {local_ver}）"
-                if changelog:
-                    status_text += f"\n{changelog}"
-                self.lbl_update_status.setText(status_text)
+            if self._version_newer(remote_ver, APP_VERSION):
+                self.lbl_update_status.setText(f"发现新版本 v{remote_ver}")
                 self.lbl_update_status.setProperty("warning", True)
                 self.lbl_update_status.style().polish(self.lbl_update_status)
-                self.btn_check_update.setText("下载更新")
+                self.btn_check_update.setText("立即更新")
                 self.btn_check_update.setProperty("secondary", False)
                 self.btn_check_update.style().polish(self.btn_check_update)
                 try: self.btn_check_update.clicked.disconnect()
@@ -2568,7 +2559,7 @@ class SettingsPage(QWidget):
                 self.btn_retry_download.setVisible(False)
                 self._pending_update = data
             else:
-                self.lbl_update_status.setText(f"已是最新版本 {local_ver}")
+                self.lbl_update_status.setText("✅ 已是最新版本")
                 self.lbl_update_status.setProperty("success", True)
                 self.lbl_update_status.style().polish(self.lbl_update_status)
                 self.btn_check_update.setText("检查更新")
@@ -2576,7 +2567,7 @@ class SettingsPage(QWidget):
                 self.btn_check_update.style().polish(self.btn_check_update)
                 self.btn_retry_download.setVisible(False)
         else:
-            self.lbl_update_status.setText(f"检查失败: {data.get('error', f'HTTP {status_code}')}")
+            self.lbl_update_status.setText(f"❌ 检查失败: {data.get('error', f'HTTP {status_code}')}")
             self.lbl_update_status.setProperty("error", True)
             self.lbl_update_status.style().polish(self.lbl_update_status)
             self.btn_check_update.setText("检查更新")
@@ -2600,31 +2591,27 @@ class SettingsPage(QWidget):
         if not updater_url:
             return
 
-        remote_ver = data.get("version", "unknown")
         self.btn_check_update.setEnabled(False)
         self.btn_check_update.setText("下载中...")
         self.btn_retry_download.setVisible(False)
         self.lbl_update_status.setVisible(True)
-        self.lbl_update_status.setText(f"正在下载 {remote_ver} 安装包...")
+        self.lbl_update_status.setText("正在下载更新器...")
         self.lbl_update_status.setProperty("muted", True)
         self.lbl_update_status.style().polish(self.lbl_update_status)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         QApplication.processEvents()
 
-        # Save to temp directory
-        temp_dir = os.environ.get("TEMP", os.environ.get("TMP", os.path.expanduser("~")))
-        filename = f"AURUM_Bridge_Setup_{remote_ver}.exe"
-        dest_path = os.path.join(temp_dir, filename)
-
+        # Download updater from Qiniu
+        updater_tmp = os.path.join(CONFIG_DIR, "aurum_updater.exe")
         try:
-            import urllib.request
+            import urllib.request, shutil
             ctx = _get_ssl_context()
             req = urllib.request.Request(updater_url, headers={"User-Agent": "AURUM-Bridge/1.0"})
-            with urllib.request.urlopen(req, timeout=300, context=ctx) as resp:
+            with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
                 downloaded = 0
-                with open(dest_path, "wb") as f:
+                with open(updater_tmp, "wb") as f:
                     while True:
                         chunk = resp.read(65536)
                         if not chunk:
@@ -2635,65 +2622,25 @@ class SettingsPage(QWidget):
                             self.progress_bar.setValue(int(downloaded * 100 / total))
                             QApplication.processEvents()
         except Exception as e:
-            self.lbl_update_status.setText(f"下载失败: {e}")
+            self.lbl_update_status.setText(f"❌ 下载失败: {e}")
             self.lbl_update_status.setProperty("error", True)
             self.lbl_update_status.style().polish(self.lbl_update_status)
             self.btn_check_update.setEnabled(True)
-            self.btn_check_update.setText("重试下载")
-            self.btn_check_update.setProperty("secondary", True)
-            self.btn_check_update.style().polish(self.btn_check_update)
+            self.btn_check_update.setText("重试")
             self.progress_bar.setVisible(False)
             return
 
         self.progress_bar.setValue(100)
-        self.lbl_update_status.setText("下载完成，正在准备安装...")
-        self.lbl_update_status.setProperty("success", True)
-        self.lbl_update_status.style().polish(self.lbl_update_status)
+        self.lbl_update_status.setText("正在替换，程序将自动重启...")
         QApplication.processEvents()
 
-        # Save bridge_was_running state (caller already saved it, but fallback)
-        cfg = load_config()
-        if "bridge_was_running" not in cfg:
-            cfg["bridge_was_running"] = False
-            save_config(cfg)
-
-        # Generate .bat helper script for silent install + relaunch
+        # Launch updater
+        exe_path = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
         import subprocess
-        is_frozen = getattr(sys, "frozen", False)
-        if not is_frozen:
-            # 源码模式：打开安装包所在目录，不自动安装
-            import webbrowser
-            webbrowser.open(dest_path)
-            self.lbl_update_status.setText(f"安装包已下载到: {dest_path}\n请手动运行安装")
-            self.lbl_update_status.setProperty("success", True)
-            self.lbl_update_status.style().polish(self.lbl_update_status)
-            self.btn_check_update.setEnabled(True)
-            self.btn_check_update.setText("检查更新")
-            self.btn_check_update.setProperty("secondary", True)
-            self.btn_check_update.style().polish(self.btn_check_update)
-            return
-
-        current_pid = os.getpid()
-        install_dir = os.path.dirname(sys.executable)
-        bat_content = f"""@echo off
-REM Auto-update helper: wait for old process, silent install, relaunch, cleanup
-timeout /t 2 /nobreak >nul
-taskkill /PID {current_pid} /F >nul 2>&1
-timeout /t 1 /nobreak >nul
-"{dest_path}" /SILENT /DIR="{install_dir}" /NORESTART
-start "" "{install_dir}\\{os.path.basename(sys.executable)}"
-del "%TEMP%\\{filename}" >nul 2>&1
-del "%~f0" >nul 2>&1
-"""
-        bat_path = os.path.join(temp_dir, "aurum_update_helper.bat")
-        with open(bat_path, "w", encoding="utf-8") as f:
-            f.write(bat_content)
-
-        # Launch .bat detached then exit
         subprocess.Popen(
-            ["cmd", "/c", bat_path],
+            [updater_tmp, server, exe_path, str(os.getpid())],
             shell=False,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
         )
         QTimer.singleShot(500, lambda: os._exit(0))
 
@@ -2743,10 +2690,6 @@ class MainWindow(QMainWindow):
             self.login_page.load_config()
             self.stack.setCurrentIndex(0)
 
-        # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次（不依赖登录状态）
-        QTimer.singleShot(3000, self._auto_check_update)
-        self._update_timer.start(30 * 60 * 1000)
-
     def _auto_login(self):
         cfg = load_config()
         server = cfg.get("server_url", DEFAULT_SERVER)
@@ -2771,28 +2714,7 @@ class MainWindow(QMainWindow):
                 self._on_login_success(email, token)
                 return
 
-        # Token 无效，尝试用保存的密码重新登录
-        saved_pwd = cfg.get("saved_password", "")
-        if saved_pwd:
-            password = decrypt_password(saved_pwd)
-            if password:
-                self.login_page.lbl_status.setText("Token 已过期，使用密码重新登录...")
-                self.login_page.lbl_status.setProperty("muted", True)
-                self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
-                QApplication.processEvents()
-
-                is_phone = email.isdigit() and 7 <= len(email) <= 15
-                payload = {"phone": email, "password": password} if is_phone else {"email": email, "password": password}
-                status_code, data = http_post_json(f"{server.rstrip('/')}/api/login", payload, timeout=10)
-                if status_code == 200 and data.get("token"):
-                    new_token = data["token"]
-                    cfg["token"] = new_token
-                    cfg["plan"] = data.get("user", {}).get("plan", "free")
-                    save_config(cfg)
-                    self._on_login_success(email, new_token)
-                    return
-
-        # 无法自动登录，回到登录页
+        # Token 无效，回到登录页手动输入密码
         self.login_page.lbl_status.setText("登录已过期，请重新登录")
         self.login_page.lbl_status.setProperty("warning", True)
         self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
@@ -2811,36 +2733,22 @@ class MainWindow(QMainWindow):
             self.bridge_page.lbl_update_hint.setVisible(False)
         except Exception:
             pass
-
-        # After update: auto-start bridge if it was running before
-        cfg = load_config()
-        if cfg.get("bridge_was_running"):
-            cfg["bridge_was_running"] = False
-            save_config(cfg)
-            self.bridge_page._log("检测到更新前桥接正在运行，自动启动桥接...")
-            QTimer.singleShot(1000, self.bridge_page._toggle_bridge)
+        # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
+        QTimer.singleShot(3000, self._auto_check_update)
+        self._update_timer.start(30 * 60 * 1000)
 
     def _auto_check_update(self):
-        """静默检查更新，有新版本时根据是否有保存密码决定行为"""
+        """静默检查更新，有新版本时在主页显示提示条"""
         cfg = load_config()
         server = cfg.get("server_url", DEFAULT_SERVER)
         status_code, data = http_get_json(f"{server.rstrip('/')}/api/bridge/version", timeout=8)
         if status_code == 200 and data.get("version"):
             remote_ver = data["version"]
             if self.settings_page._version_newer(remote_ver, APP_VERSION):
-                has_saved_password = bool(cfg.get("saved_password"))
-                if has_saved_password:
-                    # 有保存密码：直接自动更新
-                    cfg["bridge_was_running"] = bool(self.bridge_page._worker and self.bridge_page._worker.isRunning())
-                    save_config(cfg)
-                    self.bridge_page._log(f"发现新版本 {remote_ver}，开始自动更新...")
-                    self.settings_page._pending_update = data
-                    self.settings_page._do_update()
-                elif not self._pending_update_data:
-                    # 无保存密码：只显示提示，需手动更新
+                if not self._pending_update_data:
                     self._pending_update_data = data
-                    self.bridge_page._log(f"发现新版本 {remote_ver}，请前往设置页更新")
-                    self.bridge_page.lbl_update_hint.setText(f"新版本 {remote_ver} 可用 — 点此前往更新")
+                    self.bridge_page._log(f"发现新版本 v{remote_ver}，请前往设置页更新")
+                    self.bridge_page.lbl_update_hint.setText(f"新版本 v{remote_ver} 可用 — 点此前往更新")
                     self.bridge_page.lbl_update_hint.setVisible(True)
 
     def _show_settings(self):
