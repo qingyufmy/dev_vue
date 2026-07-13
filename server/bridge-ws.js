@@ -6,6 +6,7 @@ import { getRedis, isRedisAvailable } from './redis.js'
 import { autoSchedulerState } from './routes/ai/scheduler.js'
 import { utcToMt5Time } from './routes/ai/utils.js'
 import { DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from './routes/ai/config.js'
+import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -358,6 +359,12 @@ async function _initBridge(ws, userId, user) {
 
   // Notify browsers with current trade/auto state — use auto_scheduler.enabled as single source of truth
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: schedulerAutoEnabled, trade_mode: -1 })
+
+  // A bridge reconnecting during the weekend risk window must immediately
+  // reconcile any system-owned positions left from the Friday session.
+  import('./jobs/weekly-system-flatten.js')
+    .then(({ triggerWeeklySystemFlattenForUser }) => triggerWeeklySystemFlattenForUser(userId))
+    .catch(e => console.error(`[WeeklyFlatten] Reconnect trigger failed user=${userId}:`, e.message))
 
   // Restore auto-reasoning — use auto_scheduler.enabled as source of truth
   console.log(`[BridgeWS] _initBridge user ${userId}: autoScheduler=${schedulerAutoEnabled} hasDbRow=${hasDbRow}`)
@@ -2065,6 +2072,14 @@ async function handleBrowserCommand(ws, userId, msg) {
 // Send command to bridge and wait for result
 export function sendBridgeCommand(userId, action, params, timeoutMs = 5000, options = {}) {
   return new Promise((resolve) => {
+    if (action === 'open' || action === 'pending') {
+      const riskLock = weeklyRiskLockResult()
+      if (riskLock) {
+        resolve(riskLock)
+        return
+      }
+    }
+
     let bridge = bridges.get(userId)
     let usingFallback = false
 

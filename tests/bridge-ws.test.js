@@ -218,6 +218,18 @@ describe('getBridgeTradeMode', () => {
 describe('sendBridgeCommand', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('rejects new orders during the Beijing weekend risk window before bridge lookup', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T20:00:00.000Z'))
+
+    const result = await sendBridgeCommand(999, 'open', { symbol: 'XAUUSD' })
+
+    expect(result.status).toBe('rejected')
+    expect(result.code).toBe('weekly_market_close_risk_lock')
+    expect(result.message).toBe('周末风险控制期间禁止新增交易')
+    vi.useRealTimers()
+  })
+
   it('returns error when no bridge connected', async () => {
     const result = await sendBridgeCommand(999, 'account', {})
     expect(result.status).toBe('error')

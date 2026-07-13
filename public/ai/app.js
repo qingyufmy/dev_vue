@@ -805,6 +805,21 @@ function connectBridgeStatusWs(onReady) {
         // New signal pushed — refresh status and signal list
         handleNewSignal(msg);
         loadStatus().catch(() => {});
+      } else if (msg.type === 'weekly_flatten_state') {
+        const noticeKey = `${msg.cycle || ''}:${msg.status || ''}:${msg.reason || ''}`;
+        if (state._weeklyFlattenNoticeKey !== noticeKey) {
+          state._weeklyFlattenNoticeKey = noticeKey;
+          if (msg.status === 'running') {
+            toast(`周末风险控制已启动：正在撤销系统挂单并平仓（持仓 ${msg.position_count || 0}，挂单 ${msg.pending_count || 0}）`, 'warning');
+          } else if (msg.status === 'completed') {
+            toast('周末风险控制已完成：系统持仓和挂单均已清理', 'success');
+          } else if (msg.status === 'retrying') {
+            toast('周末风险控制尚未完成，系统将继续重试', 'warning');
+          } else if (msg.status === 'failed') {
+            const reason = msg.reason === 'unsupported_netting' ? '当前为净持仓账户，无法安全区分系统仓与手工仓' : '自动清仓失败';
+            toast(`周末风险控制异常：${reason}`, 'error');
+          }
+        }
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {

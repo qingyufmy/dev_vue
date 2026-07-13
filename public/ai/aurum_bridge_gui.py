@@ -27,11 +27,12 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.3.8"
+APP_VERSION = "v2.3.9"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 MAX_LOG_MESSAGE_CHARS = 1000
 MT5_COLLECT_TIMEOUT_SEC = 3
+SYSTEM_TRADE_MAGIC = 234000
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 
 # Bundle resource path — compatible with PyInstaller and Nuitka
@@ -535,7 +536,7 @@ class BridgeWorker(QThread):
                 sl = float(params["sl"]) if params.get("sl") else None
                 tp = float(params["tp"]) if params.get("tp") else None
                 base_req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
-                            "volume": volume, "type": ot, "magic": 234000,
+                            "volume": volume, "type": ot, "magic": SYSTEM_TRADE_MAGIC,
                             "comment": params.get("comment", "AI交易实验室"),
                             "type_time": self.mt5.ORDER_TIME_GTC,
                             "type_filling": self._get_filling_mode(symbol)}
@@ -563,7 +564,7 @@ class BridgeWorker(QThread):
                     def _close(tick):
                         price = tick.bid if ct == self.mt5.ORDER_TYPE_SELL else tick.ask
                         req = {"action": self.mt5.TRADE_ACTION_DEAL, "position": pos.ticket,
-                               "symbol": sym, "volume": vol, "type": ct, "magic": 234000,
+                               "symbol": sym, "volume": vol, "type": ct, "magic": SYSTEM_TRADE_MAGIC,
                                "type_filling": fill, "price": price}
                         return req, price
                     result, comment = self._order_send_with_retry(sym, _close)
@@ -588,7 +589,7 @@ class BridgeWorker(QThread):
                             continue
                         price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask
                         result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
-                            "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
+                            "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": SYSTEM_TRADE_MAGIC,
                             "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
                             ct_map={"type": ct})
                         if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
@@ -611,7 +612,7 @@ class BridgeWorker(QThread):
                         continue
                     price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask
                     result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
-                        "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": 234000,
+                        "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": SYSTEM_TRADE_MAGIC,
                         "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
                         ct_map={"type": ct})
                     if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
@@ -655,6 +656,80 @@ class BridgeWorker(QThread):
                         "time": self._mt5_time(getattr(p,'time',0)), "source": "mt5"} for p in positions]
                     return {"status": "success", "positions": payload, "count": len(payload), "source": "mt5"}
                 return {"status": "success", "positions": [], "count": 0, "source": "mt5"}
+            elif action == "system_trade_inventory":
+                acc = self.mt5.account_info()
+                if not acc:
+                    return {"status": "error", "message": "no account info"}
+                positions = self.mt5.positions_get()
+                orders = self.mt5.orders_get()
+                if positions is None:
+                    return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
+                if orders is None:
+                    return {"status": "error", "message": f"orders_get failed: {self.mt5.last_error()}"}
+                system_positions = [{
+                    "ticket": p.ticket, "symbol": p.symbol,
+                    "type": "buy" if p.type == self.mt5.ORDER_TYPE_BUY else "sell",
+                    "volume": p.volume, "price_open": p.price_open,
+                    "price_current": p.price_current, "profit": p.profit,
+                    "magic": p.magic, "comment": p.comment,
+                } for p in positions if int(getattr(p, "magic", 0) or 0) == SYSTEM_TRADE_MAGIC]
+                system_pending = [{
+                    "ticket": o.ticket, "symbol": o.symbol, "type": o.type,
+                    "volume": o.volume_current, "price": o.price_open,
+                    "magic": o.magic, "comment": o.comment,
+                } for o in orders if int(getattr(o, "magic", 0) or 0) == SYSTEM_TRADE_MAGIC]
+                margin_mode = int(getattr(acc, "margin_mode", -1) or -1)
+                hedging_mode = int(getattr(self.mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2))
+                return {
+                    "status": "success",
+                    "account": {"login": acc.login, "server": acc.server,
+                                "margin_mode": margin_mode, "is_hedging": margin_mode == hedging_mode},
+                    "magic": SYSTEM_TRADE_MAGIC,
+                    "positions": system_positions,
+                    "pending_orders": system_pending,
+                }
+            elif action == "close_system_position":
+                ticket = params.get("ticket")
+                if not ticket:
+                    return {"status": "error", "message": "ticket is required"}
+                positions = self.mt5.positions_get(ticket=int(ticket))
+                if positions is None:
+                    return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
+                if not positions:
+                    return {"status": "success", "ticket": int(ticket), "already_absent": True}
+                pos = positions[0]
+                if int(getattr(pos, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC:
+                    return {"status": "rejected", "message": "position_magic_mismatch", "ticket": pos.ticket}
+                close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+                self.mt5.symbol_select(pos.symbol, True)
+                fill = self._get_filling_mode(pos.symbol)
+                def _close_system(tick):
+                    price = tick.bid if close_type == self.mt5.ORDER_TYPE_SELL else tick.ask
+                    return ({"action": self.mt5.TRADE_ACTION_DEAL, "position": pos.ticket,
+                             "symbol": pos.symbol, "volume": pos.volume, "type": close_type,
+                             "magic": SYSTEM_TRADE_MAGIC, "comment": "周末系统强制平仓",
+                             "type_filling": fill, "price": price}, price)
+                result, comment = self._order_send_with_retry(pos.symbol, _close_system)
+                if result:
+                    return {"status": "success", "ticket": pos.ticket, "deal": result.deal,
+                            "order": result.order, "price": result.price, "warning": comment}
+                return {"status": "error", "message": comment or "close failed", "ticket": pos.ticket}
+            elif action == "cancel_system_pending":
+                ticket = params.get("ticket")
+                if not ticket:
+                    return {"status": "error", "message": "ticket is required"}
+                orders = self.mt5.orders_get(ticket=int(ticket))
+                if orders is None:
+                    return {"status": "error", "message": f"orders_get failed: {self.mt5.last_error()}"}
+                if not orders:
+                    return {"status": "success", "ticket": int(ticket), "already_absent": True}
+                order = orders[0]
+                if int(getattr(order, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC:
+                    return {"status": "rejected", "message": "pending_magic_mismatch", "ticket": order.ticket}
+                result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_REMOVE, "order": order.ticket})
+                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                    return {"status": "success", "ticket": order.ticket}
+                return {"status": "error", "message": result.comment if result else "cancel failed", "ticket": order.ticket}
             elif action == "symbols":
                 symbols = self.mt5.symbols_get()
                 if symbols is None: return {"status": "error", "message": "MT5 symbols_get failed"}
@@ -964,7 +1039,7 @@ class BridgeWorker(QThread):
                 req = {
                     "action": self.mt5.TRADE_ACTION_PENDING,
                     "symbol": symbol, "volume": volume, "type": ot,
-                    "price": price, "magic": 234000,
+                    "price": price, "magic": SYSTEM_TRADE_MAGIC,
                     "comment": params.get("comment", "AI挂单"),
                     "type_filling": self.mt5.ORDER_FILLING_RETURN,
                     "type_time": type_time,
@@ -1062,6 +1137,7 @@ class BridgeWorker(QThread):
                         "volume": o.volume_current,
                         "sl": o.sl,
                         "tp": o.tp,
+                        "magic": o.magic,
                         "comment": o.comment,
                         "valid_until": _fmt_time(o.time_expiration),
                         "created_at": _fmt_time(o.time_setup),
@@ -1654,7 +1730,8 @@ class BridgeWorker(QThread):
                 "time": self._mt5_time(p.time) if p.time else '', "time_update": self._mt5_time(p.time_update) if getattr(p, 'time_update', None) else '',
                 "profit": round(p.profit, 2), "sl": p.sl, "tp": p.tp,
                 "digits": getattr(p, 'digits', 2),
-                "swap": p.swap, "commission": getattr(p, 'commission', 0)} for p in positions],
+                "swap": p.swap, "commission": getattr(p, 'commission', 0),
+                "magic": p.magic, "comment": p.comment} for p in positions],
             "live_trading_enabled": self._trade_enabled}
 
     async def _async_recv_loop(self, ws):
