@@ -158,8 +158,10 @@ HIST[i]  = DIF[i] - DEA[i]
 3. 特征序列先按方向处理包含关系，并按可确认前缀逐步寻找端点，确认后不允许后续元素跨端点重新合并
 4. 第一、第二特征元素无缺口时，特征序列分型直接确认线段端点
 5. 存在缺口时，从候选端点开始建立第二特征序列；只有出现相反分型才确认，原趋势先创新极值则候选失效
-6. 滚动窗口首个可检测端点仅用于重同步，不输出截断首段；后续不足确认条件的笔保留为 `candidate_segment`
-7. 每个线段记录完整 `high`/`low` 和组成笔 ID
+6. 滚动窗口首个可检测端点仅用于初步重同步，不输出截断首段
+7. 使用完整确认笔窗口和内部后缀窗口独立分段，只保留两次计算中首尾笔边界一致的末端线段；没有共同稳定后缀时设置 `window_stable: false`
+8. 只有窗口已经重同步且末端结构稳定时，才允许输出 `candidate_segment`、中枢和背驰；否则候选线段返回 `null`
+9. 每个线段记录完整 `high`/`low` 和组成笔 ID
 
 ### 输出
 
@@ -263,6 +265,7 @@ HIST[i]  = DIF[i] - DEA[i]
   status: 'ok' | 'partial' | 'insufficient_klines' | 'insufficient_bis' | 'unreliable_segments',
   reliability: 'high' | 'medium' | 'low',
   raw_bar_count, processed_bar_count,
+  window_resynced, window_stable,
   fractal_count, bi_count, segment_count, center_count,
   current_bi, recent_bis, developing_bi,
   current_segment, prev_segment, candidate_segment,
@@ -301,6 +304,8 @@ HIST[i]  = DIF[i] - DEA[i]
 | `processed_bars_too_few` | 包含处理后有效柱过少 |
 | `invalid_bi_price_direction` | 检测到不满足价格方向的候选笔 |
 | `insufficient_confirmed_bis` | 已确认笔不足 3 笔 |
+| `segment_window_not_resynced` | 滚动窗口内尚未找到可用于重同步的线段端点 |
+| `segment_window_unstable` | 完整窗口与内部后缀窗口的末端线段边界不一致 |
 | `segments_not_confirmed` | 尚未形成可确认线段 |
 | `no_valid_center` | 已有线段但尚未形成有效中枢 |
 | `divergence_skipped_invalid_macd` | MACD 数据或面积无效，无法判定背驰 |
@@ -311,7 +316,7 @@ HIST[i]  = DIF[i] - DEA[i]
 
 1. 最后一根 K 线视为未收盘柱，不进入正式分型、笔、线段、中枢和背驰。
 2. 未收盘柱只可用于 `developing_bi`，其变化不得重绘已确认结构。
-3. 普通指标只使用提示词指定的可见窗口；扩展到 300/500 根的历史只用于缠论。300 根尚无线段或尚无中枢时，单次补取至 500 根。
+3. 普通指标只使用提示词指定的可见窗口；扩展到 300/500 根的历史只用于缠论。300 根尚无线段或尚无中枢时，单次补取至 500 根；同一进程内记住该“用户+品种+周期”需要最大历史，后续直接请求 500 根，避免重复获取 300+500 根。
 4. 分型必须顶底交替；笔必须方向交替且满足最少处理后 K 线间隔。
 5. 正式线段至少包含 3 笔，滚动窗口截断的首段不会输出。
 6. 中枢必须由至少 3 条确认线段的正宽度重叠形成，单点接触不算重叠。

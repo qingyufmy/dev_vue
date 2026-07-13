@@ -331,7 +331,7 @@ function findSegmentEndpoint(bis, startIndex, segmentDirection) {
 }
 
 // === Chan Theory: Segment Construction from characteristic sequences ===
-function buildSegments(confirmedBis, options = {}) {
+function buildSegmentsFromAnchor(confirmedBis, options = {}) {
   if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null, resynced: false }
   const trustedStart = options.trustedStart !== false
   const segments = []
@@ -390,6 +390,40 @@ function buildSegments(confirmedBis, options = {}) {
 
   if (DEBUG_CHAN) console.log(`[Chan] Segments(${segments.length}): ${segments.map(s => `#${s.id}(${s.dir}) bis=${s.bi_ids.length}`).join(' | ')}`)
   return { segments, candidate, resynced }
+}
+
+function sameSegmentBoundary(a, b) {
+  return Boolean(a && b && a.dir === b.dir && a.start_bi_id === b.start_bi_id && a.end_bi_id === b.end_bi_id)
+}
+
+function sameCandidate(a, b) {
+  if (!a || !b || a.dir !== b.dir || a.start_price !== b.start_price || a.end_price !== b.end_price) return false
+  return a.bi_ids.length === b.bi_ids.length && a.bi_ids.every((id, index) => id === b.bi_ids[index])
+}
+
+function buildSegments(confirmedBis, options = {}) {
+  const primary = buildSegmentsFromAnchor(confirmedBis, options)
+  if (options.trustedStart !== false) return { ...primary, stable: true }
+  if (!primary.resynced) return { ...primary, candidate: null, stable: false }
+
+  // A finite rolling window can begin inside an older segment. Validate the
+  // terminal decomposition from an independent internal suffix and expose
+  // only the segment boundaries on which both windows agree.
+  const suffixStart = Math.max(2, Math.floor(confirmedBis.length / 3))
+  const suffixBis = confirmedBis.slice(suffixStart)
+  const secondary = buildSegmentsFromAnchor(suffixBis, { trustedStart: false })
+  if (!secondary.resynced) return { segments: [], candidate: null, resynced: true, stable: false }
+
+  let commonCount = 0
+  while (commonCount < primary.segments.length && commonCount < secondary.segments.length) {
+    const primarySegment = primary.segments[primary.segments.length - 1 - commonCount]
+    const secondarySegment = secondary.segments[secondary.segments.length - 1 - commonCount]
+    if (!sameSegmentBoundary(primarySegment, secondarySegment)) break
+    commonCount++
+  }
+  const segments = commonCount > 0 ? primary.segments.slice(-commonCount) : []
+  const candidate = sameCandidate(primary.candidate, secondary.candidate) ? primary.candidate : null
+  return { segments, candidate, resynced: true, stable: segments.length > 0 || candidate !== null }
 }
 
 // === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
@@ -574,6 +608,7 @@ function emptyChanResult(overrides = {}) {
     received_history_count: 0,
     history_sufficient: false,
     window_resynced: false,
+    window_stable: false,
     raw_bar_count: 0,
     closed_bar_count: 0,
     processed_bar_count: 0,
@@ -644,7 +679,9 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       warnings,
     })
   }
-  const { segments, candidate, resynced } = buildSegments(confirmedBis, { trustedStart: false })
+  const { segments, candidate, resynced, stable: windowStable } = buildSegments(confirmedBis, { trustedStart: false })
+  if (!resynced) warnings.push('segment_window_not_resynced')
+  else if (!windowStable) warnings.push('segment_window_unstable')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
   const centers = buildCenters(validSegs)
@@ -683,6 +720,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     received_history_count: rates.length,
     history_sufficient: historySufficient,
     window_resynced: resynced,
+    window_stable: windowStable,
     raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
     fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,

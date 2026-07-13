@@ -8,6 +8,22 @@ import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
+const CHAN_HISTORY_HINT_LIMIT = 512
+const _chanMaxHistoryHints = new Map()
+
+function rememberChanMaxHistory(key) {
+  _chanMaxHistoryHints.delete(key)
+  _chanMaxHistoryHints.set(key, true)
+  if (_chanMaxHistoryHints.size > CHAN_HISTORY_HINT_LIMIT) {
+    _chanMaxHistoryHints.delete(_chanMaxHistoryHints.keys().next().value)
+  }
+}
+
+function clearChanHistoryHints() {
+  _chanMaxHistoryHints.clear()
+}
+
+export const __strategyTest = { clearChanHistoryHints }
 
 export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) {
   const timeframes = market.strategy_context?.timeframes || {}
@@ -72,7 +88,9 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
   const timeframes = {}
   for (const { tf, count } of tags) {
-    const historyCount = hasUseChanTag ? Math.max(count, CHAN_HISTORY_COUNT) : count
+    const historyHintKey = `${userId}:${String(symbol).toUpperCase()}:${tf}`
+    const preferredChanHistory = _chanMaxHistoryHints.has(historyHintKey) ? CHAN_MAX_HISTORY_COUNT : CHAN_HISTORY_COUNT
+    const historyCount = hasUseChanTag ? Math.max(count, preferredChanHistory) : count
     let rates
     if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
       rates = fallbackRates
@@ -89,16 +107,19 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     })
     const chanNeedsMoreHistory = summary.chan && (summary.chan.segment_count === 0 || summary.chan.center_count === 0)
     if (hasUseChanTag && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || chanNeedsMoreHistory)) {
-      const retry = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
-      const retryRates = retry?.rates || []
-      if (retryRates.length > rates.length) {
-        rates = retryRates
-        visibleRates = rates.slice(-count)
-        summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
-          computeChan: true,
-          chanRates: rates,
-          requestedChanHistoryCount: CHAN_MAX_HISTORY_COUNT,
-        })
+      rememberChanMaxHistory(historyHintKey)
+      if (rates.length < CHAN_MAX_HISTORY_COUNT) {
+        const retry = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
+        const retryRates = retry?.rates || []
+        if (retryRates.length > rates.length) {
+          rates = retryRates
+          visibleRates = rates.slice(-count)
+          summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
+            computeChan: true,
+            chanRates: rates,
+            requestedChanHistoryCount: CHAN_MAX_HISTORY_COUNT,
+          })
+        }
       }
     }
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary

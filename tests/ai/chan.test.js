@@ -297,7 +297,7 @@ describe('buildSegments', () => {
     expect(segments[0].bi_ids).toEqual([1, 2, 3])
   })
 
-  it('滚动窗口首段仅用于重同步，不输出截断线段', () => {
+  it('滚动窗口只输出完整窗口和内部后缀一致的候选结构', () => {
     const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
     const bis = [
       makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
@@ -308,8 +308,40 @@ describe('buildSegments', () => {
     ]
     const result = buildSegments(bis, { trustedStart: false })
     expect(result.resynced).toBe(true)
-    expect(result.segments).toHaveLength(1)
-    expect(result.segments[0]).toMatchObject({ dir: 'down', start_bi_id: 4, end_bi_id: 6 })
+    expect(result.stable).toBe(true)
+    expect(result.segments).toHaveLength(0)
+    expect(result.candidate).toMatchObject({ dir: 'up', bi_ids: [7, 8, 9, 10], start_price: 105, end_price: 128 })
+  })
+
+  it('滚动窗口尚未找到重同步端点时不输出候选线段', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 110),
+      makeBi(2, 'down', 110, 105),
+      makeBi(3, 'up', 105, 115),
+      makeBi(4, 'down', 115, 108),
+    ]
+    const result = buildSegments(bis, { trustedStart: false })
+    expect(result).toMatchObject({ segments: [], candidate: null, resynced: false, stable: false })
+  })
+
+  it('完整窗口和内部后缀末端边界不一致时抑制全部线段结构', () => {
+    let state = 3
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    let price = 100
+    const bis = []
+    for (let i = 0; i < 60; i++) {
+      const dir = i % 2 === 0 ? 'up' : 'down'
+      const distance = 1 + random() * 25
+      const end = dir === 'up' ? price + distance : price - distance
+      bis.push({ id: i + 1, dir, start_price: price, end_price: end, high: Math.max(price, end), low: Math.min(price, end) })
+      price = end
+    }
+    const result = buildSegments(bis, { trustedStart: false })
+    expect(result).toMatchObject({ segments: [], candidate: null, resynced: true, stable: false })
   })
 
   it('keeps candidate segment direction consistent with its extreme', () => {
@@ -646,6 +678,7 @@ describe('computeChan', () => {
     expect(result.reliability).toBeDefined()
     expect(result.raw_bar_count).toBe(50)
     expect(result.closed_bar_count).toBe(49)
+    expect(typeof result.window_stable).toBe('boolean')
     expect(result.warnings).toBeDefined()
     expect(Array.isArray(result.warnings)).toBe(true)
     expect(result.recent_bis).toHaveLength(6)
@@ -707,6 +740,39 @@ describe('computeChan', () => {
     expect(result.status).toBe('insufficient_bis')
     expect(result.bi_count).toBe(2)
     expect(result.developing_bi).toMatchObject({ dir: 'up', start_price: 110, end_price: 140, confirmed: false })
+  })
+
+  it('末端线段边界不稳定时组装层禁止中枢和背驰输出', () => {
+    let state = 3
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    let price = 100
+    const vertices = [{ type: 'bottom', price }]
+    for (let i = 0; i < 60; i++) {
+      const dir = i % 2 === 0 ? 'up' : 'down'
+      const distance = 1 + random() * 25
+      price = dir === 'up' ? price + distance : price - distance
+      vertices.push({ type: dir === 'up' ? 'top' : 'bottom', price })
+    }
+    const fractals = vertices.map((vertex, index) => ({
+      idx: index * 4,
+      raw_start_idx: index * 4,
+      raw_end_idx: index * 4,
+      type: vertex.type,
+      price: vertex.price,
+      high: vertex.price,
+      low: vertex.price,
+      time: `t${index * 4}`,
+    }))
+    const rates = Array.from({ length: 300 }, (_, i) => ({ time: `t${i}`, open: 100, high: 110, low: 90, close: 100, tick_volume: 1 }))
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
+    expect(result).toMatchObject({ window_resynced: true, window_stable: false, segment_count: 0, center_count: 0 })
+    expect(result.candidate_segment).toBeNull()
+    expect(result.current_center).toBeNull()
+    expect(result.divergence.type).toBe('none')
+    expect(result.warnings).toContain('segment_window_unstable')
   })
 
   it('扩展历史在首段重同步后仍能输出后续完整线段', () => {
