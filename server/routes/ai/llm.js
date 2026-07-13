@@ -89,7 +89,7 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
   }
 }
 
-export async function maybeAiSignal(db, config, market) {
+export async function maybeAiSignal(db, config, market, promptOverride) {
   if (!config || !config.api_key_encrypted) return aiFailureHold(market, 'missing_ai_configuration_or_key')
   const apiKey = config.api_key_encrypted
   const provider = config.api_provider || 'deepseek'
@@ -110,7 +110,8 @@ export async function maybeAiSignal(db, config, market) {
   const url = `${normalizedBaseUrl}/chat/completions`
 
   try {
-    const prompt = stripTimeframeTags(config.system_prompt || DEFAULT_PROMPT)
+    const effectivePrompt = typeof promptOverride === 'string' ? promptOverride : (config.system_prompt || DEFAULT_PROMPT)
+    const prompt = stripTimeframeTags(effectivePrompt)
 
     // Load output schema from DB (cached 5 min)
     let outputFormat = ''
@@ -129,7 +130,7 @@ export async function maybeAiSignal(db, config, market) {
     const fullPrompt = prompt + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + '\n\n' + PENDING_LIFECYCLE_RULE
 
     // Check if prompt wants Chan theory data
-    const useChan = /\{\{USE_CHAN\}\}/.test(config.system_prompt || '')
+    const useChan = /\{\{USE_CHAN\}\}/.test(effectivePrompt)
     const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
     console.log(`[LLM] USE_CHAN tag: ${useChan ? 'detected' : 'not found'}`)
 

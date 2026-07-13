@@ -6,8 +6,8 @@ import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers,
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
-import { attachAtrAnchor, buildStrategyContextFromTags } from './strategy.js'
-import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix, CHAN_HISTORY_COUNT } from './utils.js'
+import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount } from './strategy.js'
+import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
@@ -1043,7 +1043,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     const usedTimeframes = tags.length > 0 ? tags.map(t => t.tf) : ['M5']
     const primaryCount = tags.length > 0 ? tags[0].count : 100
     const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
-    const primaryHistoryCount = hasUseChanTag ? Math.max(primaryCount, CHAN_HISTORY_COUNT) : primaryCount
+    const primaryHistoryCount = resolveChanHistoryCount(adminUserId, symbol, primaryTf, primaryCount, hasUseChanTag)
     const t1 = Date.now()
     const ratesResp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
     if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return { status: 'blocked', reason: 'rates_failed' } }

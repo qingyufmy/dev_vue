@@ -406,23 +406,41 @@ function buildSegments(confirmedBis, options = {}) {
   if (options.trustedStart !== false) return { ...primary, stable: true }
   if (!primary.resynced) return { ...primary, candidate: null, stable: false }
 
-  // A finite rolling window can begin inside an older segment. Validate the
-  // terminal decomposition from an independent internal suffix and expose
-  // only the segment boundaries on which both windows agree.
-  const suffixStart = Math.max(2, Math.floor(confirmedBis.length / 3))
-  const suffixBis = confirmedBis.slice(suffixStart)
-  const secondary = buildSegmentsFromAnchor(suffixBis, { trustedStart: false })
-  if (!secondary.resynced) return { segments: [], candidate: null, resynced: true, stable: false }
+  const firstStructureBiId = primary.segments[0]?.start_bi_id ?? primary.candidate?.bi_ids?.[0]
+  const firstStructureIndex = confirmedBis.findIndex(bi => bi.id === firstStructureBiId)
+  const latestProbeStart = firstStructureIndex - MIN_BIS_PER_SEGMENT
+  if (latestProbeStart < 1) return { segments: [], candidate: null, resynced: true, stable: false }
 
+  // Validate the claimed terminal structure from every alternate start that
+  // still leaves room to resync before that structure begins. Two arbitrary
+  // truncated windows can agree on the same false internal endpoint; requiring
+  // consensus across all eligible starts exposes that ambiguity.
+  const decompositions = [primary]
+  for (let start = 1; start <= latestProbeStart; start++) {
+    const probe = buildSegmentsFromAnchor(confirmedBis.slice(start), { trustedStart: false })
+    if (probe.resynced) decompositions.push(probe)
+  }
+  if (decompositions.length < 2) return { segments: [], candidate: null, resynced: true, stable: false }
+
+  const segmentValidators = decompositions.filter(result => result.segments.length > 0)
   let commonCount = 0
-  while (commonCount < primary.segments.length && commonCount < secondary.segments.length) {
+  while (segmentValidators.length >= 2 && commonCount < primary.segments.length) {
     const primarySegment = primary.segments[primary.segments.length - 1 - commonCount]
-    const secondarySegment = secondary.segments[secondary.segments.length - 1 - commonCount]
-    if (!sameSegmentBoundary(primarySegment, secondarySegment)) break
+    const agreed = segmentValidators.every(result => {
+      const segment = result.segments[result.segments.length - 1 - commonCount]
+      return sameSegmentBoundary(primarySegment, segment)
+    })
+    if (!agreed) break
     commonCount++
   }
-  const segments = commonCount > 0 ? primary.segments.slice(-commonCount) : []
-  const candidate = sameCandidate(primary.candidate, secondary.candidate) ? primary.candidate : null
+  // One matching terminal segment can still share a false endpoint when every
+  // available start is missing the same older context. Two consecutive common
+  // segments are the minimum evidence that decomposition phase has recovered.
+  const segments = commonCount >= 2 ? primary.segments.slice(-commonCount) : []
+  const candidateValidators = decompositions.filter(result => result.candidate)
+  const candidate = primary.candidate && candidateValidators.length >= 2 && candidateValidators.every(result => sameCandidate(primary.candidate, result.candidate))
+    ? primary.candidate
+    : null
   return { segments, candidate, resynced: true, stable: segments.length > 0 || candidate !== null }
 }
 

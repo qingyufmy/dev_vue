@@ -23,6 +23,18 @@ function clearChanHistoryHints() {
   _chanMaxHistoryHints.clear()
 }
 
+function chanHistoryHintKey(userId, symbol, timeframe) {
+  return `${userId}:${String(symbol).toUpperCase()}:${String(timeframe).toUpperCase()}`
+}
+
+export function resolveChanHistoryCount(userId, symbol, timeframe, requestedCount, useChan) {
+  if (!useChan) return requestedCount
+  const preferred = _chanMaxHistoryHints.has(chanHistoryHintKey(userId, symbol, timeframe))
+    ? CHAN_MAX_HISTORY_COUNT
+    : CHAN_HISTORY_COUNT
+  return Math.max(requestedCount, preferred)
+}
+
 export const __strategyTest = { clearChanHistoryHints }
 
 export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) {
@@ -88,9 +100,8 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
   const timeframes = {}
   for (const { tf, count } of tags) {
-    const historyHintKey = `${userId}:${String(symbol).toUpperCase()}:${tf}`
-    const preferredChanHistory = _chanMaxHistoryHints.has(historyHintKey) ? CHAN_MAX_HISTORY_COUNT : CHAN_HISTORY_COUNT
-    const historyCount = hasUseChanTag ? Math.max(count, preferredChanHistory) : count
+    const historyHintKey = chanHistoryHintKey(userId, symbol, tf)
+    const historyCount = resolveChanHistoryCount(userId, symbol, tf, count, hasUseChanTag)
     let rates
     if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
       rates = fallbackRates
@@ -153,7 +164,7 @@ export async function handleAnalyze(userId, params) {
   const primaryTf = tags.length > 0 ? tags[0].tf : timeframe.toUpperCase()
   const primaryCount = tags.length > 0 ? tags[0].count : kline_count
   const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
-  const primaryHistoryCount = hasUseChanTag ? Math.max(primaryCount, CHAN_HISTORY_COUNT) : primaryCount
+  const primaryHistoryCount = resolveChanHistoryCount(userId, symbol, primaryTf, primaryCount, hasUseChanTag)
   const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
   if (!ratesResp || ratesResp.status === 'error') return { status: 'error', message: 'Failed to get rates' }
   const rates = ratesResp.rates || []
@@ -163,7 +174,7 @@ export async function handleAnalyze(userId, params) {
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
   if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
   await attachAtrAnchor(userId, symbol, market, primaryTf)
-  const signal = await maybeAiSignal(null, config, market)
+  const signal = await maybeAiSignal(null, config, market, prompt)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
 

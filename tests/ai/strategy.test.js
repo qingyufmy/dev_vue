@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { attachAtrAnchor, buildStrategyContextFromTags, __strategyTest } from '../../server/routes/ai/strategy.js'
+import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount, __strategyTest } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
@@ -121,6 +121,7 @@ describe('buildStrategyContextFromTags', () => {
     mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValue({ rates: rates500 })
     const args = [1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual']
     await buildStrategyContextFromTags(...args)
+    expect(resolveChanHistoryCount(1, 'XAUUSD', 'H1', 80, true)).toBe(500)
     mockMt5Bridge.mockClear()
     await buildStrategyContextFromTags(...args)
     expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
