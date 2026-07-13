@@ -27,7 +27,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.3.7"
+APP_VERSION = "v2.3.8"
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 MAX_LOG_MESSAGE_CHARS = 1000
@@ -1860,12 +1860,12 @@ class LoginPage(QWidget):
         self.input_server.setPlaceholderText("http://你的服务器:3000")
         card_layout.addWidget(self.input_server)
 
-        # Email
-        lbl_email = QLabel("邮箱")
-        lbl_email.setProperty("muted", True)
-        card_layout.addWidget(lbl_email)
+        # Account (email or phone)
+        lbl_account = QLabel("账号")
+        lbl_account.setProperty("muted", True)
+        card_layout.addWidget(lbl_account)
         self.input_email = QLineEdit()
-        self.input_email.setPlaceholderText("your@email.com")
+        self.input_email.setPlaceholderText("手机号或邮箱")
         card_layout.addWidget(self.input_email)
 
         # Password
@@ -1958,7 +1958,9 @@ class LoginPage(QWidget):
         QApplication.processEvents()
 
         url = f"{server.rstrip('/')}/api/login"
-        status_code, data = http_post_json(url, {"email": email, "password": password}, timeout=10)
+        is_phone = email.isdigit() and 7 <= len(email) <= 15
+        payload = {"phone": email, "password": password} if is_phone else {"email": email, "password": password}
+        status_code, data = http_post_json(url, payload, timeout=10)
 
         self.btn_login.setEnabled(True)
         self.btn_login.setText("登录并连接")
@@ -2389,6 +2391,14 @@ class SettingsPage(QWidget):
             name = parts[0]
             if len(name) > 2:
                 masked = name[:2] + "***@" + parts[1]
+            else:
+                masked = email
+            self.lbl_user.setText(f"当前用户: {masked}")
+            self.lbl_user.setProperty("success", True)
+            self.lbl_user.style().polish(self.lbl_user)
+        elif email and email.isdigit():
+            if len(email) > 7:
+                masked = email[:3] + "***" + email[-4:]
             else:
                 masked = email
             self.lbl_user.setText(f"当前用户: {masked}")
