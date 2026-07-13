@@ -30,6 +30,9 @@ return 0
 
 let timer = null
 let running = false
+let activeCycle = null
+const localCycleStates = new Map()
+const activeUserRuns = new Set()
 
 function userConcurrency() {
   const configured = Number.parseInt(process.env.WEEKLY_SYSTEM_FLATTEN_CONCURRENCY || '', 10)
@@ -57,12 +60,65 @@ function completedKey(userId, cycle) {
   return `risk:weekly_flatten:${cycle}:user:${userId}:completed`
 }
 
+function cycleUsersKey(cycle) {
+  return `risk:weekly_flatten:${cycle}:users`
+}
+
+function cycleStateKey(userId, cycle) {
+  return `risk:weekly_flatten:${cycle}:user:${userId}:last_result`
+}
+
+function cycleFinalizedKey(cycle) {
+  return `risk:weekly_flatten:${cycle}:deadline_finalized`
+}
+
+function rememberLocalResult(cycle, userId, result) {
+  let states = localCycleStates.get(cycle)
+  if (!states) {
+    states = new Map()
+    localCycleStates.set(cycle, states)
+  }
+  states.set(Number(userId), result || { status: 'unknown' })
+}
+
+async function rememberCycleResult(cycle, userId, result) {
+  rememberLocalResult(cycle, userId, result)
+  const redis = getRedis()
+  if (!redis || !isRedisAvailable()) return
+  try {
+    await redis.sadd(cycleUsersKey(cycle), String(userId))
+    await redis.expire(cycleUsersKey(cycle), COMPLETED_TTL_SECONDS)
+    await redis.set(cycleStateKey(userId, cycle), JSON.stringify(result || { status: 'unknown' }), 'EX', COMPLETED_TTL_SECONDS)
+  } catch (err) {
+    console.error(`[WeeklyFlatten] Failed to persist cycle state user=${userId}:`, err.message)
+  }
+}
+
+function runTrackedUserFlatten(userId, now = new Date(), clock = () => new Date()) {
+  const cycle = weeklyFlattenCycleId(now)
+  activeCycle = cycle
+  const run = (async () => {
+    const result = await runWeeklySystemFlattenForUser(userId, now, clock)
+    await rememberCycleResult(cycle, userId, result)
+    return result
+  })()
+  activeUserRuns.add(run)
+  run.finally(() => activeUserRuns.delete(run)).catch(() => {})
+  return run
+}
+
 async function audit(userId, action, symbol, request, result, status) {
-  await queryRun(
-    `INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-    [userId, action, symbol || null, JSON.stringify(request || {}), JSON.stringify(result || {}), status]
-  ).catch(err => console.error(`[WeeklyFlatten] Audit failed user=${userId} action=${action}:`, err.message))
+  try {
+    await queryRun(
+      `INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [userId, action, symbol || null, JSON.stringify(request || {}), JSON.stringify(result || {}), status]
+    )
+    return true
+  } catch (err) {
+    console.error(`[WeeklyFlatten] Audit failed user=${userId} action=${action}:`, err.message)
+    return false
+  }
 }
 
 async function inventory(userId) {
@@ -129,10 +185,6 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 
     const pendingOrders = Array.isArray(before.pending_orders) ? before.pending_orders : []
     const positions = Array.isArray(before.positions) ? before.positions : []
-    if (wasCompleted && pendingOrders.length === 0 && positions.length === 0) {
-      return { status: 'already_completed', cycle, verified: true }
-    }
-    if (wasCompleted) await redis.del(doneKey)
     const announced = await redis.set(`${doneKey}:started`, '1', 'NX', 'EX', COMPLETED_TTL_SECONDS)
     if (announced) {
       await audit(userId, 'weekly_flatten_started', null,
@@ -231,23 +283,89 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 export async function runWeeklySystemFlatten(now = new Date()) {
   if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window', users: [] }
   if (running) return { status: 'already_running', users: [] }
-  if (!getRedis() || !isRedisAvailable()) return { status: 'redis_unavailable', users: [] }
+
+  const cycle = weeklyFlattenCycleId(now)
+  activeCycle = cycle
+  const users = getAllBridges().filter(item => item.connected && item.alive)
+  if (!getRedis() || !isRedisAvailable()) {
+    for (const item of users) rememberLocalResult(cycle, item.userId, { status: 'redis_unavailable', cycle })
+    return { status: 'redis_unavailable', users: [] }
+  }
 
   running = true
   try {
-    const users = getAllBridges().filter(item => item.connected && item.alive)
     const results = await mapWithConcurrency(users, userConcurrency(), async item => {
       try {
-        return { userId: item.userId, result: await runWeeklySystemFlattenForUser(item.userId, now) }
+        const result = await runTrackedUserFlatten(item.userId, now)
+        return { userId: item.userId, result }
       } catch (err) {
         console.error(`[WeeklyFlatten] Unhandled user failure user=${item.userId}:`, err.message)
-        return { userId: item.userId, result: { status: 'failed', error: err.message } }
+        const result = { status: 'failed', error: err.message, cycle }
+        await rememberCycleResult(cycle, item.userId, result)
+        return { userId: item.userId, result }
       }
     })
     return { status: 'completed', users: results }
   } finally {
     running = false
   }
+}
+
+export async function finalizeWeeklyFlattenCycle(cycle) {
+  if (!cycle) return { status: 'no_cycle', users: [] }
+
+  if (activeUserRuns.size > 0) {
+    await Promise.allSettled([...activeUserRuns])
+  }
+
+  const states = new Map(localCycleStates.get(cycle) || [])
+  const redis = getRedis()
+  let redisStatesLoaded = !redis || !isRedisAvailable()
+  if (redis && isRedisAvailable()) {
+    try {
+      if (await redis.get(cycleFinalizedKey(cycle))) {
+        localCycleStates.delete(cycle)
+        if (activeCycle === cycle) activeCycle = null
+        return { status: 'already_finalized', users: [] }
+      }
+      const userIds = await redis.smembers(cycleUsersKey(cycle))
+      for (const rawUserId of userIds || []) {
+        const userId = Number(rawUserId)
+        if (!Number.isInteger(userId)) continue
+        const rawState = await redis.get(cycleStateKey(userId, cycle))
+        if (!rawState) continue
+        try { states.set(userId, JSON.parse(rawState)) } catch {}
+      }
+      redisStatesLoaded = true
+    } catch (err) {
+      console.error(`[WeeklyFlatten] Failed to load deadline states cycle=${cycle}:`, err.message)
+    }
+  }
+
+  const results = []
+  let auditsComplete = true
+  for (const [userId, lastResult] of states) {
+    if (lastResult?.status === 'completed' || lastResult?.status === 'already_completed') {
+      results.push({ userId, status: 'completed' })
+      continue
+    }
+    const result = { status: 'failed', reason: 'deadline_reached', cycle, last_result: lastResult || null }
+    const audited = await audit(userId, 'weekly_flatten_deadline_ended', null, { cycle, magic: SYSTEM_MAGIC }, result, 'error')
+    if (!audited) auditsComplete = false
+    await notify(userId, 'failed', { cycle, reason: 'deadline_reached' })
+    results.push({ userId, status: 'failed' })
+  }
+
+  localCycleStates.delete(cycle)
+  if (activeCycle === cycle) activeCycle = null
+  if (auditsComplete && redisStatesLoaded && redis && isRedisAvailable()) {
+    try {
+      await redis.set(cycleFinalizedKey(cycle), JSON.stringify({ finalized_at: new Date().toISOString() }), 'EX', COMPLETED_TTL_SECONDS)
+    } catch (err) {
+      console.error(`[WeeklyFlatten] Failed to persist deadline finalization cycle=${cycle}:`, err.message)
+    }
+  }
+  return { status: 'finalized', users: results }
 }
 
 function scheduleNext(now = new Date()) {
@@ -258,20 +376,27 @@ function scheduleNext(now = new Date()) {
   timer = setTimeout(async () => {
     timer = null
     await runWeeklySystemFlatten().catch(err => console.error('[WeeklyFlatten] Cycle failed:', err.message))
-    scheduleNext()
+    const afterRun = new Date()
+    if (activeCycle && !isWeeklyFlattenWindow(afterRun)) {
+      await finalizeWeeklyFlattenCycle(activeCycle).catch(err => console.error('[WeeklyFlatten] Deadline finalize failed:', err.message))
+    }
+    scheduleNext(afterRun)
   }, delay)
   timer.unref?.()
 }
 
 export async function triggerWeeklySystemFlattenForUser(userId, now = new Date()) {
   if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window' }
-  return runWeeklySystemFlattenForUser(userId, now)
+  return runTrackedUserFlatten(userId, now)
 }
 
 export function startWeeklySystemFlatten(now = new Date()) {
   if (timer || !weeklyFlattenEnabled()) return
   if (isWeeklyFlattenWindow(now)) {
     runWeeklySystemFlatten(now).catch(err => console.error('[WeeklyFlatten] Startup run failed:', err.message))
+  } else {
+    finalizeWeeklyFlattenCycle(weeklyFlattenCycleId(now))
+      .catch(err => console.error('[WeeklyFlatten] Startup deadline finalize failed:', err.message))
   }
   scheduleNext(now)
   console.log('[WeeklyFlatten] Scheduled: Saturday 04:00-05:00 Asia/Shanghai')
@@ -282,4 +407,7 @@ export function stopWeeklySystemFlatten() {
   timer = null
 }
 
-export const __weeklyFlattenTest = { lockKey, completedKey, mapWithConcurrency, SYSTEM_MAGIC }
+export const __weeklyFlattenTest = {
+  lockKey, completedKey, cycleUsersKey, cycleStateKey, mapWithConcurrency,
+  cycleFinalizedKey, rememberLocalResult, rememberCycleResult, runTrackedUserFlatten, SYSTEM_MAGIC,
+}

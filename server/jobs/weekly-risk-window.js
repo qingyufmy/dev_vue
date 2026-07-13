@@ -42,9 +42,7 @@ export function currentWeeklyFlattenEnd(now = new Date()) {
 
 export function weeklyFlattenCycleId(now = new Date()) {
   const p = beijingWeeklyParts(now)
-  let daysBack = 0
-  if (p.weekday === 0) daysBack = 1
-  else if (p.weekday === 1) daysBack = 2
+  const daysBack = (p.weekday - 6 + 7) % 7
   const shifted = new Date(Date.UTC(p.year, p.month, p.day) - daysBack * 24 * 60 * 60 * 1000)
   return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`
 }

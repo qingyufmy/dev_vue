@@ -566,6 +566,13 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, schedul
   }
 }
 
+async function discardSharedSignalForWeeklyWindow(signalId) {
+  await withTransaction(async run => {
+    await run('DELETE FROM auto_signal_deliveries WHERE signal_id = ?', [signalId])
+    await run("DELETE FROM ai_signals WHERE id = ? AND source = 'auto_shared'", [signalId])
+  })
+}
+
 // === Reconcile: start/stop schedulers based on DB state ===
 export async function reconcileAutoSchedulers() {
   try {
@@ -1144,11 +1151,16 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
 
     if (isWeeklyFlattenWindow()) {
       l('BLOCKED: weekly flatten window began before signal delivery')
+      await discardSharedSignalForWeeklyWindow(signalId)
       return { status: 'blocked', reason: 'weekly_flatten_window' }
     }
 
     // 7. Notify online subscribers
     for (const uid of onlineSubscribers) {
+      if (isWeeklyFlattenWindow()) {
+        l('BLOCKED: weekly flatten window began during signal delivery')
+        return { status: 'blocked', reason: 'weekly_flatten_window' }
+      }
       sendToBrowsers(uid, {
         type: 'new_signal',
         signal_id: signalId,
@@ -1163,6 +1175,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     }
 
     // 7.5 AI cancel_pending: cancel matching pending orders for eligible subscribers only (lock check)
+    if (isWeeklyFlattenWindow()) {
+      l('BLOCKED: weekly flatten window began before cancel_pending')
+      return { status: 'blocked', reason: 'weekly_flatten_window' }
+    }
     if (lockGuard && !(await lockGuard.assertOwned('cancel_pending'))) {
       l('BLOCKED: lock lost before cancel_pending')
       return { status: 'error', reason: 'lock_lost' }
@@ -1182,6 +1198,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       if (validConds.length > 0) {
         l(`cancel_pending: ${validConds.length} valid condition(s)`)
         for (const uid of onlineSubscribers) {
+          if (isWeeklyFlattenWindow()) {
+            l('BLOCKED: weekly flatten window began during cancel_pending')
+            return { status: 'blocked', reason: 'weekly_flatten_window' }
+          }
           // Permission gate: must be eligible for auto execution
           const eligible = await isUserEligibleForAutoExecution(uid)
           if (!eligible) {
@@ -1220,6 +1240,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
               }
             }
             for (const [ticket, cond] of ticketsToCancel) {
+              if (isWeeklyFlattenWindow()) {
+                l('BLOCKED: weekly flatten window began before cancel ticket')
+                return { status: 'blocked', reason: 'weekly_flatten_window' }
+              }
               // Re-check bridge and trade state before each cancel
               if (!isBridgeAlive(uid) || !isTradeEnabled(uid)) {
                 l(`cancel_pending: skipped ticket=${ticket} (bridge/trade state changed)`)
@@ -1478,6 +1502,11 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           const poIsBuy = poType.startsWith('buy')
           const newIsBuy = newOrderDirection === 'buy'
           if (poIsBuy !== newIsBuy) continue // skip opposite direction
+          if (isWeeklyFlattenWindow()) {
+            l('skipped: weekly flatten window began before supersede cancel')
+            await setTerminalStatus('skipped', 'weekly_flatten_window').catch(() => {})
+            return
+          }
           if (lockGuard && !(await lockGuard.assertOwned('supersede_cancel'))) {
             l(`skipped: lock lost before supersede cancel ticket=${po.ticket}`)
             await setTerminalStatus('skipped', 'lock_lost_before_supersede_cancel', { ticket: po.ticket })
@@ -2108,4 +2137,5 @@ export const __schedulerTest = {
   isFilledHistoryOrder,
   validateInferenceBridgeSnapshot,
   createLockGuard,
+  discardSharedSignalForWeeklyWindow,
 }

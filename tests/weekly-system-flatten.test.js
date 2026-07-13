@@ -9,6 +9,9 @@ const mockRedis = {
   set: vi.fn(),
   eval: vi.fn(),
   del: vi.fn(),
+  sadd: vi.fn(),
+  expire: vi.fn(),
+  smembers: vi.fn(),
 }
 
 vi.mock('../server/db.js', () => ({ queryRun: mockQueryRun }))
@@ -25,6 +28,9 @@ beforeEach(() => {
   mockRedis.get.mockResolvedValue(null)
   mockRedis.set.mockResolvedValue('OK')
   mockRedis.eval.mockResolvedValue(1)
+  mockRedis.sadd.mockResolvedValue(1)
+  mockRedis.expire.mockResolvedValue(1)
+  mockRedis.smembers.mockResolvedValue([])
   mockQueryRun.mockResolvedValue({ affectedRows: 1 })
 })
 
@@ -55,6 +61,7 @@ describe('weekly Beijing risk window', () => {
     expect(weeklyFlattenCycleId(new Date('2026-07-17T20:00:00.000Z'))).toBe('2026-07-18')
     expect(weeklyFlattenCycleId(new Date('2026-07-18T20:00:00.000Z'))).toBe('2026-07-18')
     expect(weeklyFlattenCycleId(new Date('2026-07-19T23:00:00.000Z'))).toBe('2026-07-18')
+    expect(weeklyFlattenCycleId(new Date('2026-07-21T03:00:00.000Z'))).toBe('2026-07-18')
   })
 
   it('returns a deterministic rejection during the risk window', async () => {
@@ -180,5 +187,83 @@ describe('weekly flatten concurrency', () => {
 
     expect(maxActive).toBe(2)
     expect(results).toEqual([10, 20, 30, 40])
+  })
+})
+
+describe('weekly flatten deadline finalization', () => {
+  it('reports an unfinished user without sending another MT5 command', async () => {
+    const { __weeklyFlattenTest, finalizeWeeklyFlattenCycle } = await import('../server/jobs/weekly-system-flatten.js')
+    const cycle = '2026-07-25'
+    __weeklyFlattenTest.rememberLocalResult(cycle, 7, {
+      status: 'partial', remaining_pending: [11], remaining_positions: [22],
+    })
+
+    const result = await finalizeWeeklyFlattenCycle(cycle)
+
+    expect(result).toEqual({ status: 'finalized', users: [{ userId: 7, status: 'failed' }] })
+    expect(mockSendBridgeCommand).not.toHaveBeenCalled()
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO trade_audit_logs'),
+      expect.arrayContaining([7, 'weekly_flatten_deadline_ended'])
+    )
+    expect(mockSendToBrowsers).toHaveBeenCalledWith(7, expect.objectContaining({
+      type: 'weekly_flatten_state', status: 'failed', reason: 'deadline_reached',
+    }))
+  })
+
+  it('does not report a completed user as failed', async () => {
+    const { __weeklyFlattenTest, finalizeWeeklyFlattenCycle } = await import('../server/jobs/weekly-system-flatten.js')
+    const cycle = '2026-08-01'
+    __weeklyFlattenTest.rememberLocalResult(cycle, 8, { status: 'completed' })
+
+    const result = await finalizeWeeklyFlattenCycle(cycle)
+
+    expect(result).toEqual({ status: 'finalized', users: [{ userId: 8, status: 'completed' }] })
+    expect(mockQueryRun).not.toHaveBeenCalled()
+    expect(mockSendToBrowsers).not.toHaveBeenCalled()
+    expect(mockSendBridgeCommand).not.toHaveBeenCalled()
+  })
+
+  it('uses the persisted Redis result after a process restart', async () => {
+    const { __weeklyFlattenTest, finalizeWeeklyFlattenCycle } = await import('../server/jobs/weekly-system-flatten.js')
+    const cycle = '2026-08-08'
+    __weeklyFlattenTest.rememberLocalResult(cycle, 9, { status: 'partial' })
+    mockRedis.smembers.mockResolvedValueOnce(['9'])
+    mockRedis.get
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(JSON.stringify({ status: 'completed' }))
+
+    const result = await finalizeWeeklyFlattenCycle(cycle)
+
+    expect(result).toEqual({ status: 'finalized', users: [{ userId: 9, status: 'completed' }] })
+    expect(mockQueryRun).not.toHaveBeenCalled()
+    expect(mockSendToBrowsers).not.toHaveBeenCalled()
+  })
+
+  it('waits for an in-flight reconnect run before writing the deadline result', async () => {
+    const { __weeklyFlattenTest, finalizeWeeklyFlattenCycle } = await import('../server/jobs/weekly-system-flatten.js')
+    const runAt = new Date('2026-07-17T20:59:59.000Z')
+    let releaseInventory
+    mockSendBridgeCommand.mockReturnValueOnce(new Promise(resolve => { releaseInventory = resolve }))
+
+    const endedAt = new Date('2026-07-17T21:00:00.000Z')
+    const trackedRun = __weeklyFlattenTest.runTrackedUserFlatten(10, runAt, () => endedAt)
+    let finalized = false
+    const finalizing = finalizeWeeklyFlattenCycle('2026-07-18').then(result => {
+      finalized = true
+      return result
+    })
+    await Promise.resolve()
+    expect(finalized).toBe(false)
+
+    releaseInventory({
+      status: 'success', account: { login: 1, server: 'demo', is_hedging: true },
+      pending_orders: [], positions: [],
+    })
+    await trackedRun
+    const result = await finalizing
+
+    expect(result).toEqual({ status: 'finalized', users: [{ userId: 10, status: 'failed' }] })
+    expect(mockSendBridgeCommand).toHaveBeenCalledTimes(1)
   })
 })

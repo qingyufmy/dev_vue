@@ -821,7 +821,11 @@ function connectBridgeStatusWs(onReady) {
           } else if (msg.status === 'retrying') {
             toast('周末风险控制尚未完成，系统将在05:00前继续重试', 'warning');
           } else if (msg.status === 'failed') {
-            const reason = msg.reason === 'unsupported_netting' ? '当前为净持仓账户，无法安全区分系统仓与手工仓' : '自动清仓失败';
+            const reason = msg.reason === 'unsupported_netting'
+              ? '当前为净持仓账户，无法安全区分系统仓与手工仓'
+              : msg.reason === 'deadline_reached'
+                ? '05:00任务已结束，仍有未完成项'
+                : '自动清仓失败';
             toast(`周末风险控制异常：${reason}`, 'error');
           }
         }
