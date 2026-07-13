@@ -2354,8 +2354,8 @@ class SettingsPage(QWidget):
         self.progress_bar.setRange(0, 100)
         version_layout.addWidget(self.progress_bar)
 
-        self.btn_retry_download = QPushButton("重试下载")
-        self.btn_retry_download.setProperty("warning", True)
+        self.btn_retry_download = QPushButton("重试")
+        self.btn_retry_download.setProperty("secondary", True)
         self.btn_retry_download.setFixedHeight(30)
         self.btn_retry_download.setVisible(False)
         self.btn_retry_download.clicked.connect(self._do_update)
@@ -2537,6 +2537,8 @@ class SettingsPage(QWidget):
         self.lbl_update_status.setVisible(True)
         self.lbl_update_status.setText("正在连接服务器...")
         self.lbl_update_status.setProperty("muted", True)
+        self.lbl_update_status.style().polish(self.lbl_update_status)
+        self.btn_retry_download.setVisible(False)
         QApplication.processEvents()
 
         url = f"{server.rstrip('/')}/api/bridge/version"
@@ -2546,11 +2548,18 @@ class SettingsPage(QWidget):
 
         if status_code == 200 and data.get("version"):
             remote_ver = data["version"]
-            if self._version_newer(remote_ver, APP_VERSION):
-                self.lbl_update_status.setText(f"发现新版本 v{remote_ver}")
+            local_ver = APP_VERSION
+            if self._version_newer(remote_ver, local_ver):
+                changelog = data.get("changelog", "")
+                status_text = f"发现新版本 {remote_ver}"
+                if local_ver:
+                    status_text += f"（当前 {local_ver}）"
+                if changelog:
+                    status_text += f"\n{changelog}"
+                self.lbl_update_status.setText(status_text)
                 self.lbl_update_status.setProperty("warning", True)
                 self.lbl_update_status.style().polish(self.lbl_update_status)
-                self.btn_check_update.setText("立即更新")
+                self.btn_check_update.setText("下载更新")
                 self.btn_check_update.setProperty("secondary", False)
                 self.btn_check_update.style().polish(self.btn_check_update)
                 try: self.btn_check_update.clicked.disconnect()
@@ -2559,7 +2568,7 @@ class SettingsPage(QWidget):
                 self.btn_retry_download.setVisible(False)
                 self._pending_update = data
             else:
-                self.lbl_update_status.setText("✅ 已是最新版本")
+                self.lbl_update_status.setText(f"已是最新版本 {local_ver}")
                 self.lbl_update_status.setProperty("success", True)
                 self.lbl_update_status.style().polish(self.lbl_update_status)
                 self.btn_check_update.setText("检查更新")
@@ -2567,7 +2576,7 @@ class SettingsPage(QWidget):
                 self.btn_check_update.style().polish(self.btn_check_update)
                 self.btn_retry_download.setVisible(False)
         else:
-            self.lbl_update_status.setText(f"❌ 检查失败: {data.get('error', f'HTTP {status_code}')}")
+            self.lbl_update_status.setText(f"检查失败: {data.get('error', f'HTTP {status_code}')}")
             self.lbl_update_status.setProperty("error", True)
             self.lbl_update_status.style().polish(self.lbl_update_status)
             self.btn_check_update.setText("检查更新")
@@ -2591,27 +2600,32 @@ class SettingsPage(QWidget):
         if not updater_url:
             return
 
+        remote_ver = data.get("version", "unknown")
         self.btn_check_update.setEnabled(False)
         self.btn_check_update.setText("下载中...")
         self.btn_retry_download.setVisible(False)
         self.lbl_update_status.setVisible(True)
-        self.lbl_update_status.setText("正在下载更新器...")
+        self.lbl_update_status.setText(f"正在下载 {remote_ver} 安装包...")
         self.lbl_update_status.setProperty("muted", True)
         self.lbl_update_status.style().polish(self.lbl_update_status)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         QApplication.processEvents()
 
-        # Download updater from Qiniu
-        updater_tmp = os.path.join(CONFIG_DIR, "aurum_updater.exe")
+        # Save to user's Downloads folder
+        downloads_dir = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Downloads")
+        os.makedirs(downloads_dir, exist_ok=True)
+        filename = f"AURUM_Bridge_Setup_{remote_ver}.exe"
+        dest_path = os.path.join(downloads_dir, filename)
+
         try:
-            import urllib.request, shutil
+            import urllib.request
             ctx = _get_ssl_context()
             req = urllib.request.Request(updater_url, headers={"User-Agent": "AURUM-Bridge/1.0"})
-            with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
+            with urllib.request.urlopen(req, timeout=300, context=ctx) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
                 downloaded = 0
-                with open(updater_tmp, "wb") as f:
+                with open(dest_path, "wb") as f:
                     while True:
                         chunk = resp.read(65536)
                         if not chunk:
@@ -2622,25 +2636,27 @@ class SettingsPage(QWidget):
                             self.progress_bar.setValue(int(downloaded * 100 / total))
                             QApplication.processEvents()
         except Exception as e:
-            self.lbl_update_status.setText(f"❌ 下载失败: {e}")
+            self.lbl_update_status.setText(f"下载失败: {e}")
             self.lbl_update_status.setProperty("error", True)
             self.lbl_update_status.style().polish(self.lbl_update_status)
             self.btn_check_update.setEnabled(True)
-            self.btn_check_update.setText("重试")
+            self.btn_check_update.setText("重试下载")
+            self.btn_check_update.setProperty("secondary", True)
+            self.btn_check_update.style().polish(self.btn_check_update)
             self.progress_bar.setVisible(False)
             return
 
         self.progress_bar.setValue(100)
-        self.lbl_update_status.setText("正在替换，程序将自动重启...")
+        self.lbl_update_status.setText("下载完成，正在启动安装包...")
+        self.lbl_update_status.setProperty("success", True)
+        self.lbl_update_status.style().polish(self.lbl_update_status)
         QApplication.processEvents()
 
-        # Launch updater
-        exe_path = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
+        # Launch installer then exit
         import subprocess
         subprocess.Popen(
-            [updater_tmp, server, exe_path, str(os.getpid())],
+            [dest_path],
             shell=False,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
         )
         QTimer.singleShot(500, lambda: os._exit(0))
 
@@ -2747,8 +2763,8 @@ class MainWindow(QMainWindow):
             if self.settings_page._version_newer(remote_ver, APP_VERSION):
                 if not self._pending_update_data:
                     self._pending_update_data = data
-                    self.bridge_page._log(f"发现新版本 v{remote_ver}，请前往设置页更新")
-                    self.bridge_page.lbl_update_hint.setText(f"新版本 v{remote_ver} 可用 — 点此前往更新")
+                    self.bridge_page._log(f"发现新版本 {remote_ver}，请前往设置页更新")
+                    self.bridge_page.lbl_update_hint.setText(f"新版本 {remote_ver} 可用 — 点此前往更新")
                     self.bridge_page.lbl_update_hint.setVisible(True)
 
     def _show_settings(self):
