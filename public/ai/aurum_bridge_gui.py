@@ -2547,7 +2547,7 @@ class SettingsPage(QWidget):
         if status_code == 200 and data.get("version"):
             remote_ver = data["version"]
             if self._version_newer(remote_ver, APP_VERSION):
-                self.lbl_update_status.setText(f"发现新版本 v{remote_ver}")
+                self.lbl_update_status.setText(f"发现新版本 {remote_ver}")
                 self.lbl_update_status.setProperty("warning", True)
                 self.lbl_update_status.style().polish(self.lbl_update_status)
                 self.btn_check_update.setText("立即更新")
@@ -2747,8 +2747,8 @@ class MainWindow(QMainWindow):
             if self.settings_page._version_newer(remote_ver, APP_VERSION):
                 if not self._pending_update_data:
                     self._pending_update_data = data
-                    self.bridge_page._log(f"发现新版本 v{remote_ver}，请前往设置页更新")
-                    self.bridge_page.lbl_update_hint.setText(f"新版本 v{remote_ver} 可用 — 点此前往更新")
+                    self.bridge_page._log(f"发现新版本 {remote_ver}，请前往设置页更新")
+                    self.bridge_page.lbl_update_hint.setText(f"新版本 {remote_ver} 可用 — 点此前往更新")
                     self.bridge_page.lbl_update_hint.setVisible(True)
 
     def _show_settings(self):
