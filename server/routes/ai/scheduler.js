@@ -1422,52 +1422,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
-    // Cumulative position limit check (Fix 3)
-    if (order.order_type && order.order_type !== 'observe') {
-      try {
-        const positionsResp = await mt5Bridge(userId, 'positions', { symbol }, { noFallback: true })
-        const positionList = positionsResp?.positions
-        if (!Array.isArray(positionList)) {
-          l('rejected: positions response invalid')
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-            ['rejected', signalId, userId])
-          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
-            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'positions_invalid' },
-            { status: 'rejected', message: 'positions_invalid' }, 'warning')
-          return
-        }
-        const symBase = stripBrokerSuffix(symbol)
-        let totalVolume = 0
-        for (const pos of positionList) {
-          if (stripBrokerSuffix(String(pos.symbol || '')) === symBase) {
-            totalVolume += Math.abs(parseFloat(pos.volume) || 0)
-          }
-        }
-        const orderVolume = parseFloat(order.volume) || 0
-        if (!Number.isFinite(totalVolume) || !Number.isFinite(orderVolume)) {
-          l('rejected: non-numeric volume')
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-            ['rejected', signalId, userId])
-          return
-        }
-        const maxVol = parseFloat(riskConfig.max_position_size || DEFAULT_MAX_POSITION_SIZE)
-        if (totalVolume + orderVolume > maxVol) {
-          l(`rejected: cumulative position ${totalVolume} + ${orderVolume} > max ${maxVol}`)
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-            ['rejected', signalId, userId])
-          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
-            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'cumulative_position_exceeded', total_volume: totalVolume, order_volume: orderVolume, max: maxVol },
-            { status: 'rejected', message: 'cumulative_position_exceeded' }, 'warning')
-          return
-        }
-      } catch (posErr) {
-        l(`rejected: position check failed: ${posErr.message}`)
-        await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-          ['rejected', signalId, userId])
-        return
-      }
-    }
-
     // Supersede: cancel same-symbol SAME-DIRECTION pending orders before placing new one
     const SUPERSEDE_SAME_SYMBOL = true
     let remainingPendingCount = 0
