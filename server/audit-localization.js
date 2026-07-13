@@ -145,9 +145,8 @@ export function localizeAuditPayload(value, parentKey = '') {
 }
 
 export function shouldSkipHoldAudit(request, result, status) {
-  const signalType = String(result?.signal_type ?? request?.signal_type ?? '').toLowerCase()
   const resultStatus = String(result?.status ?? status ?? '').toLowerCase()
-  return signalType === 'hold' || resultStatus === 'skipped_hold'
+  return resultStatus === 'skipped_hold'
 }
 
 export function prepareAuditRecord(action, request, result, status) {

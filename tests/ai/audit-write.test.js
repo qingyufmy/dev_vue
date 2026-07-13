@@ -40,4 +40,15 @@ describe('insertAudit', () => {
     expect(written).toBe(false)
     expect(mockQueryRun).not.toHaveBeenCalled()
   })
+
+  it('writes normal success audits and non-skipped hold-related audits', async () => {
+    await insertAudit(null, 7, 'ai_auto_scan', 'XAUUSD', {},
+      { status: 'success', signal_type: 'buy' }, 'success')
+    await insertAudit(null, 7, 'ai_execute', 'XAUUSD', { signal_type: 'hold' },
+      { status: 'rejected', reason: 'hold_signal_cannot_execute' }, 'rejected')
+
+    expect(mockQueryRun).toHaveBeenCalledTimes(2)
+    expect(mockQueryRun.mock.calls[0][1][5]).toBe('成功')
+    expect(mockQueryRun.mock.calls[1][1][5]).toBe('已拒绝')
+  })
 })

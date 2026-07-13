@@ -35,9 +35,10 @@ describe('audit localization', () => {
     })
   })
 
-  it('skips normal hold audits but keeps inference failure audits', () => {
+  it('only skips explicitly marked skipped_hold audits', () => {
     expect(shouldSkipHoldAudit({}, { signal_type: 'hold', status: 'skipped_hold' }, 'success')).toBe(true)
-    expect(shouldSkipHoldAudit({ signal_type: 'hold' }, { status: 'rejected' }, 'rejected')).toBe(true)
+    expect(shouldSkipHoldAudit({ signal_type: 'hold' }, { status: 'rejected' }, 'rejected')).toBe(false)
+    expect(shouldSkipHoldAudit({}, { signal_type: 'buy', status: 'success' }, 'success')).toBe(false)
     expect(shouldSkipHoldAudit({}, { status: 'error', reason: 'ai_failed' }, 'error')).toBe(false)
   })
 
