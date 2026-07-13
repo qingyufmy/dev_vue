@@ -5,6 +5,14 @@
  */
 import { queryOne, queryAll, queryRun } from './db.js'
 
+export function applyPendingLifecycleSchema(schema) {
+  return {
+    ...schema,
+    cancel_pending: '必须字段。不需要取消挂单时返回空数组 []。挂单有效期、过期识别和到期取消由 MT5 与后端负责；禁止比较任何时间字符串判断挂单是否过期，禁止以过期、超时、有效期结束或剩余时间不足为理由取消挂单。仅当当前 pending_orders 中确实存在对应挂单，且价格条件明显失效、市场结构被破坏或交易方向逻辑反转时，才允许输出取消条件。pending_orders 中不存在的挂单不得输出取消条件，也不得推断其已经过期或取消。每个元素包含：symbol（必填，品种）、pending_type（可选，如 buy_limit、sell_limit、buy_stop、sell_stop）、max_price（可选，取消低于或等于该价格的挂单）、min_price（可选，取消高于或等于该价格的挂单）、cancel_all（可选，布尔值，取消该品种全部挂单）、reason（必填，必须说明价格、结构或方向方面的非时间原因）。示例：[{"symbol":"XAUUSD","pending_type":"buy_limit","max_price":4110,"reason":"当前结构已经跌破原入场依据，原限价买入逻辑失效"}]；不需要取消时返回 []。',
+    reasoning: '中文，说明信号方向、入场方式、风险和执行依据。挂单管理只能依据当前 pending_orders 中真实存在的挂单及价格、结构、方向条件进行分析。禁止比较时间字符串判断挂单是否过期，禁止声称挂单已过期、超时失效或已自动取消。挂单到期和过期取消由 MT5 与后端负责。',
+  }
+}
+
 const migrations = [
   {
     id: '001_add_bridge_heartbeat',
@@ -988,6 +996,25 @@ const migrations = [
           throw e
         }
       }
+    }
+  },
+  {
+    id: '051_update_pending_lifecycle_schema',
+    up: async () => {
+      const rows = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      if (!rows.length) {
+        console.log('[Migrations] 051 no active schema found, skip')
+        return
+      }
+      for (const row of rows) {
+        const schema = JSON.parse(row.schema_json)
+        const updated = applyPendingLifecycleSchema(schema)
+        await queryRun(
+          'UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?',
+          [JSON.stringify(updated, null, 2), row.id]
+        )
+      }
+      console.log(`[Migrations] 051 updated pending lifecycle rules in ${rows.length} active schema(s)`)
     }
   }
 ]
