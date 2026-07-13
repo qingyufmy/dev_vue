@@ -617,10 +617,20 @@ function showError(container, message) {
   container.innerHTML = `<div class="loading-state" style="color:var(--accent-danger)"><div class="loading-text">${escapeHtml(message)}</div></div>`;
 }
 
+const _notifiedSignalIds = new Set();
+
 function showSignalNotification(signal) {
   if (!signal) return;
   const host = $("toastHost");
   if (!host) return;
+  const signalId = signal.id != null ? String(signal.id) : "";
+  if (signalId && _notifiedSignalIds.has(signalId)) return;
+  if (signalId) {
+    _notifiedSignalIds.add(signalId);
+    if (_notifiedSignalIds.size > 200) {
+      _notifiedSignalIds.delete(_notifiedSignalIds.values().next().value);
+    }
+  }
   const dir = signalType(signal.signal_type);
   const dirLabel = dir.toUpperCase() + " " + directionText(signal.signal_type);
   const node = document.createElement("div");
@@ -1058,6 +1068,7 @@ async function _maybeRefreshSignal() {
 // Handle new signal pushed from server (replaces polling)
 async function handleNewSignal(msg) {
   try {
+    if (msg.signal_id != null) _lastSignalId = msg.signal_id;
     // Refresh signal list
     const fullData = await wsApi("signals", {});
     const signals = fullData.signals || [];
