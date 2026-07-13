@@ -2728,6 +2728,10 @@ class MainWindow(QMainWindow):
             self.login_page.load_config()
             self.stack.setCurrentIndex(0)
 
+        # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次（不依赖登录状态）
+        QTimer.singleShot(3000, self._auto_check_update)
+        self._update_timer.start(30 * 60 * 1000)
+
     def _auto_login(self):
         cfg = load_config()
         server = cfg.get("server_url", DEFAULT_SERVER)
@@ -2800,10 +2804,6 @@ class MainWindow(QMainWindow):
             save_config(cfg)
             self.bridge_page._log("检测到更新前桥接正在运行，自动启动桥接...")
             QTimer.singleShot(1000, self.bridge_page._toggle_bridge)
-
-        # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
-        QTimer.singleShot(3000, self._auto_check_update)
-        self._update_timer.start(30 * 60 * 1000)
 
     def _auto_check_update(self):
         """静默检查更新，有新版本时根据是否有保存密码决定行为"""
