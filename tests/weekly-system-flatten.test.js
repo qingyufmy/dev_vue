@@ -223,7 +223,7 @@ describe('weekly flatten deadline finalization', () => {
     expect(mockSendBridgeCommand).not.toHaveBeenCalled()
     expect(mockQueryRun).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO trade_audit_logs'),
-      expect.arrayContaining([7, 'weekly_flatten_deadline_ended'])
+      expect.arrayContaining([7, '周末风险清理到期'])
     )
     expect(mockSendToBrowsers).toHaveBeenCalledWith(7, expect.objectContaining({
       type: 'weekly_flatten_state', status: 'failed', reason: 'deadline_reached',
@@ -274,10 +274,10 @@ describe('weekly flatten deadline finalization', () => {
       expect.stringContaining('INSERT INTO trade_audit_logs'),
       expect.arrayContaining([
         11,
-        'weekly_flatten_deadline_ended',
+        '周末风险清理到期',
         null,
         expect.any(String),
-        expect.stringContaining('missing_persisted_state'),
+        expect.stringContaining('系统执行条件未满足'),
       ])
     )
     expect(mockSendToBrowsers).toHaveBeenCalledWith(11, expect.objectContaining({

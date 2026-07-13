@@ -1319,14 +1319,15 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       }
     }
 
-    // 8. Audit
-    await insertAudit(null, adminUserId, 'ai_auto_scan', symbol, {
-      trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf, signal_id: signalId
-    }, {
-      status: signal.signal_type === 'hold' ? 'skipped_hold' : 'success',
-      signal_id: signalId, signal_type: signal.signal_type, confidence: signal.confidence,
-      subscriber_count: onlineSubscribers.size, inference_source: aiSource,
-    }, 'success')
+    // Normal hold signals remain in signal history but do not create audit noise.
+    if (signal.signal_type !== 'hold') {
+      await insertAudit(null, adminUserId, 'ai_auto_scan', symbol, {
+        trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf, signal_id: signalId
+      }, {
+        status: 'success', signal_id: signalId, signal_type: signal.signal_type, confidence: signal.confidence,
+        subscriber_count: onlineSubscribers.size, inference_source: aiSource,
+      }, 'success')
+    }
     l(`<<< cycle complete (signal=#${signalId}, subscribers=${onlineSubscribers.size})`)
     return { status: 'success', signalId, subscriberCount: onlineSubscribers.size, createdAt }
   } catch (err) {

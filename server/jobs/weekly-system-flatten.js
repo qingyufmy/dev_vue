@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { queryRun } from '../db.js'
 import { getRedis, isRedisAvailable } from '../redis.js'
 import { getAllBridges, sendBridgeCommand, sendToBrowsers } from '../bridge-ws.js'
+import { prepareAuditRecord } from '../audit-localization.js'
 import {
   isWeeklyFlattenWindow,
   nextWeeklyFlattenStart,
@@ -40,6 +41,18 @@ let running = false
 let activeCycle = null
 const localCycleStates = new Map()
 const activeUserRuns = new Set()
+
+function logTime() {
+  return new Date().toISOString()
+}
+
+function logCycle(cycle, message) {
+  console.log(`[WeeklyFlatten ${cycle}] ${logTime()} ${message}`)
+}
+
+function logUser(cycle, userId, message) {
+  console.log(`[WeeklyFlatten ${cycle} U${userId}] ${logTime()} ${message}`)
+}
 
 function userConcurrency() {
   const configured = Number.parseInt(process.env.WEEKLY_SYSTEM_FLATTEN_CONCURRENCY || '', 10)
@@ -122,10 +135,11 @@ function runTrackedUserFlatten(userId, now = new Date(), clock = () => new Date(
 
 async function audit(userId, action, symbol, request, result, status) {
   try {
+    const record = prepareAuditRecord(action, request, result, status)
     await queryRun(
       `INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
        VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-      [userId, action, symbol || null, JSON.stringify(request || {}), JSON.stringify(result || {}), status]
+      [userId, record.action, symbol || null, JSON.stringify(record.request), JSON.stringify(record.result), record.status]
     )
     return true
   } catch (err) {
@@ -151,9 +165,12 @@ async function reportOnce(redis, key, ttlSeconds, callback) {
 export async function runWeeklySystemFlattenForUser(userId, now = new Date(), clock = () => new Date()) {
   if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window' }
   const redis = getRedis()
-  if (!redis || !isRedisAvailable()) return { status: 'redis_unavailable' }
-
   const cycle = weeklyFlattenCycleId(now)
+  if (!redis || !isRedisAvailable()) {
+    logUser(cycle, userId, '终止处理：Redis 不可用')
+    return { status: 'redis_unavailable' }
+  }
+
   const doneKey = completedKey(userId, cycle)
   let wasCompleted
   try {
@@ -162,7 +179,9 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     console.error(`[WeeklyFlatten] Redis completion check failed user=${userId}:`, err.message)
     return { status: 'redis_unavailable', error: err.message, cycle }
   }
-  if (wasCompleted) return { status: 'already_completed', cycle }
+  if (wasCompleted) {
+    return { status: 'already_completed', cycle }
+  }
 
   const key = lockKey(userId, cycle)
   const token = crypto.randomUUID()
@@ -173,7 +192,12 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     console.error(`[WeeklyFlatten] Redis lock failed user=${userId}:`, err.message)
     return { status: 'redis_unavailable', error: err.message, cycle }
   }
-  if (!acquired) return { status: 'locked', cycle }
+  if (!acquired) {
+    logUser(cycle, userId, '跳过处理：已有其他实例正在处理该账户')
+    return { status: 'locked', cycle }
+  }
+  logUser(cycle, userId, '开始处理用户账户')
+  logUser(cycle, userId, '已取得 Redis 用户任务锁')
 
   const startedAt = Date.now()
   let lockOwned = true
@@ -186,8 +210,10 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
   }, Math.floor(LOCK_TTL_MS / 3))
   renewTimer.unref?.()
   try {
+    logUser(cycle, userId, '正在获取系统持仓和挂单清单')
     const before = await inventory(userId)
     if (!before || before.status !== 'success') {
+      logUser(cycle, userId, `交易清单获取失败：${before?.message || before?.status || '桥接无响应'}`)
       const result = { status: 'failed', reason: 'inventory_unavailable', response: before, cycle }
       await reportOnce(redis, `${doneKey}:inventory:reported`, 300, async () => {
         await audit(userId, 'weekly_flatten_retry', null, { cycle, stage: 'inventory' }, result, 'error')
@@ -198,6 +224,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 
     const pendingOrders = Array.isArray(before.pending_orders) ? before.pending_orders : []
     const positions = Array.isArray(before.positions) ? before.positions : []
+    logUser(cycle, userId, `交易清单获取完成：系统挂单 ${pendingOrders.length} 笔，系统持仓 ${positions.length} 笔`)
     const announced = await redis.set(`${doneKey}:started`, '1', 'NX', 'EX', COMPLETED_TTL_SECONDS)
     if (announced) {
       await audit(userId, 'weekly_flatten_started', null,
@@ -208,10 +235,15 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 
     const failures = []
     for (const order of pendingOrders) {
-      if (!isWeeklyFlattenWindow(clock())) return { status: 'window_ended', cycle, failures }
+      if (!isWeeklyFlattenWindow(clock())) {
+        logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+        return { status: 'window_ended', cycle, failures }
+      }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
+      logUser(cycle, userId, `开始取消系统挂单：品种=${order.symbol || '未知'}，ticket=${order.ticket}`)
       const result = await sendBridgeCommand(userId, 'cancel_system_pending', { ticket: order.ticket }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
+      logUser(cycle, userId, `${ok ? '系统挂单取消成功' : '系统挂单取消失败'}：品种=${order.symbol || '未知'}，ticket=${order.ticket}${ok ? '' : `，原因=${result?.message || result?.status || '未知'}`}`)
       if (!ok) failures.push({ kind: 'pending', ticket: order.ticket, result })
       if (ok) {
         await Promise.all([
@@ -224,6 +256,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     }
 
     if (positions.length > 0 && before.account?.is_hedging !== true) {
+      logUser(cycle, userId, `终止平仓：检测到净持仓账户，剩余系统持仓 ${positions.length} 笔`)
       const result = { status: 'unsupported_netting', cycle, account: before.account, position_count: positions.length }
       await reportOnce(redis, `${doneKey}:netting:reported`, COMPLETED_TTL_SECONDS, async () => {
         await audit(userId, 'weekly_flatten_unsupported_netting', null,
@@ -234,18 +267,28 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     }
 
     for (const position of positions) {
-      if (!isWeeklyFlattenWindow(clock())) return { status: 'window_ended', cycle, failures }
+      if (!isWeeklyFlattenWindow(clock())) {
+        logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+        return { status: 'window_ended', cycle, failures }
+      }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
+      logUser(cycle, userId, `开始平掉系统持仓：品种=${position.symbol || '未知'}，ticket=${position.ticket}，手数=${position.volume ?? '未知'}`)
       const result = await sendBridgeCommand(userId, 'close_system_position', { ticket: position.ticket }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
+      logUser(cycle, userId, `${ok ? '系统持仓平仓成功' : '系统持仓平仓失败'}：品种=${position.symbol || '未知'}，ticket=${position.ticket}${ok ? '' : `，原因=${result?.message || result?.status || '未知'}`}`)
       if (!ok) failures.push({ kind: 'position', ticket: position.ticket, result })
       await audit(userId, ok ? 'weekly_position_closed' : 'weekly_flatten_retry', position.symbol,
         { cycle, ticket: position.ticket, volume: position.volume, magic: SYSTEM_MAGIC }, result, ok ? 'success' : 'error')
     }
 
-    if (!isWeeklyFlattenWindow(clock())) return { status: 'window_ended', cycle, failures }
+    if (!isWeeklyFlattenWindow(clock())) {
+      logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+      return { status: 'window_ended', cycle, failures }
+    }
+    logUser(cycle, userId, '正在复核清理结果')
     const after = await inventory(userId)
     if (!after || after.status !== 'success') {
+      logUser(cycle, userId, `清理结果复核失败：${after?.message || after?.status || '桥接无响应'}`)
       const result = { status: 'failed', reason: 'verification_unavailable', failures, cycle }
       await reportOnce(redis, `${doneKey}:verification:reported`, 300, async () => {
         await audit(userId, 'weekly_flatten_retry', null, { cycle, stage: 'verification' }, result, 'error')
@@ -256,12 +299,14 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 
     const remainingPending = Array.isArray(after.pending_orders) ? after.pending_orders : []
     const remainingPositions = Array.isArray(after.positions) ? after.positions : []
+    logUser(cycle, userId, `清理结果复核完成：剩余系统挂单 ${remainingPending.length} 笔，剩余系统持仓 ${remainingPositions.length} 笔`)
     if (remainingPending.length === 0 && remainingPositions.length === 0) {
       const result = { status: 'completed', cycle, duration_ms: Date.now() - startedAt }
       await redis.set(doneKey, JSON.stringify({ completed_at: new Date().toISOString() }), 'EX', COMPLETED_TTL_SECONDS)
       await audit(userId, 'weekly_flatten_completed', null,
         { cycle, magic: SYSTEM_MAGIC }, result, 'success')
       await notify(userId, 'completed', { cycle })
+      logUser(cycle, userId, `账户处理完成，耗时 ${result.duration_ms}ms`)
       return result
     }
 
@@ -280,8 +325,10 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
         remaining_positions: remainingPositions.length,
       })
     })
+    logUser(cycle, userId, `账户处理未完成：剩余系统挂单 ${remainingPending.length} 笔，剩余系统持仓 ${remainingPositions.length} 笔，等待下轮重试`)
     return result
   } catch (err) {
+    logUser(cycle, userId, `账户处理异常：${err.message}`)
     const result = { status: 'failed', error: err.message, cycle }
     await audit(userId, 'weekly_flatten_retry', null, { cycle }, result, 'error')
     return result
@@ -300,7 +347,10 @@ export async function runWeeklySystemFlatten(now = new Date()) {
   const cycle = weeklyFlattenCycleId(now)
   activeCycle = cycle
   const users = getAllBridges().filter(item => item.connected && item.alive)
+  const cycleStartedAt = Date.now()
+  logCycle(cycle, `本轮扫描开始：在线桥接账户 ${users.length} 个，并发数 ${userConcurrency()}`)
   if (!getRedis() || !isRedisAvailable()) {
+    logCycle(cycle, '本轮扫描终止：Redis 不可用')
     for (const item of users) rememberLocalResult(cycle, item.userId, { status: 'redis_unavailable', cycle })
     return { status: 'redis_unavailable', users: [] }
   }
@@ -318,6 +368,9 @@ export async function runWeeklySystemFlatten(now = new Date()) {
         return { userId: item.userId, result }
       }
     })
+    const completed = results.filter(item => ['completed', 'already_completed'].includes(item.result?.status)).length
+    const pending = results.length - completed
+    logCycle(cycle, `本轮扫描结束：账户总数 ${results.length}，已完成 ${completed}，待处理 ${pending}，耗时 ${Date.now() - cycleStartedAt}ms`)
     return { status: 'completed', users: results }
   } finally {
     running = false
@@ -326,6 +379,8 @@ export async function runWeeklySystemFlatten(now = new Date()) {
 
 export async function finalizeWeeklyFlattenCycle(cycle) {
   if (!cycle) return { status: 'no_cycle', users: [] }
+
+  logCycle(cycle, '05:00 任务窗口结束，开始汇总最终状态')
 
   if (activeUserRuns.size > 0) {
     await Promise.allSettled([...activeUserRuns])
@@ -389,6 +444,8 @@ export async function finalizeWeeklyFlattenCycle(cycle) {
       console.error(`[WeeklyFlatten] Failed to persist deadline finalization cycle=${cycle}:`, err.message)
     }
   }
+  const failed = results.filter(item => item.status === 'failed').length
+  logCycle(cycle, `最终状态汇总完成：账户总数 ${results.length}，失败 ${failed}`)
   return { status: 'finalized', users: results }
 }
 

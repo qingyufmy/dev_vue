@@ -7,6 +7,7 @@ import { autoSchedulerState } from './routes/ai/scheduler.js'
 import { utcToMt5Time } from './routes/ai/utils.js'
 import { DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from './routes/ai/config.js'
 import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
+import { localizeAuditRow } from './audit-localization.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -1405,7 +1406,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
           delete item.request_json
           delete item.result_json
-          return item
+          return localizeAuditRow(item)
         })
         result = { status: 'success', logs }
         break
