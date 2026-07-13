@@ -158,6 +158,10 @@ export async function getAnalyzeApiKey(userId, sessionId) {
   const adminConfig = await queryOne(
     "SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
   )
+  const adminPromptConfig = await queryOne(
+    "SELECT system_prompt FROM ai_configs WHERE is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') ORDER BY updated_at DESC LIMIT 1"
+  )
+  const effectivePrompt = userConfig?.system_prompt || adminPromptConfig?.system_prompt || ''
 
   if (adminConfig && adminConfig.api_key_encrypted) {
     if (userConfig) {
@@ -169,6 +173,7 @@ export async function getAnalyzeApiKey(userId, sessionId) {
         api_base_url: adminConfig.api_base_url || null,
         temperature: adminConfig.temperature ?? 0.7,
         max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
+        system_prompt: effectivePrompt,
         _model_shared: true,
       }
     }
@@ -179,7 +184,7 @@ export async function getAnalyzeApiKey(userId, sessionId) {
       api_base_url: adminConfig.api_base_url || null,
       temperature: adminConfig.temperature ?? 0.7,
       max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
-      system_prompt: 'You are a disciplined trading analyst. Return strict JSON with signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price.',
+      system_prompt: effectivePrompt,
       enable_auto_trade: false,
       max_position_size: DEFAULT_MAX_POSITION_SIZE,
       selected_take_profit: DEFAULT_SELECTED_TAKE_PROFIT,
@@ -189,7 +194,7 @@ export async function getAnalyzeApiKey(userId, sessionId) {
   }
 
   if (!userConfig) return null
-  return userConfig
+  return { ...userConfig, system_prompt: effectivePrompt }
 }
 
 export async function getAutoConfig(db, userId) {
