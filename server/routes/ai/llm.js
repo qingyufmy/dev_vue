@@ -170,7 +170,7 @@ export async function maybeAiSignal(db, config, market) {
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
-      temperature: parseFloat(config.temperature || 0.7),
+      temperature: parseFloat(config.temperature ?? 0.3),
       maxTokens: parseInt(config.max_tokens || 2000),
       thinkingEnabled,
       reasoningEffort: config.reasoning_effort || 'max',

@@ -862,7 +862,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               system_prompt = CASE WHEN ? = 1 THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
               is_active = 1, updated_at = VALUES(updated_at)`,
             [userId, sid, cfg.api_provider || 'deepseek', cfg.api_key || null,
-              cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature || 0.7, cfg.max_tokens || DEFAULT_MAX_TOKENS,
+              cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature ?? DEFAULT_TEMPERATURE, cfg.max_tokens || DEFAULT_MAX_TOKENS,
               cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
               cfg.max_position_size || DEFAULT_MAX_POSITION_SIZE, cfg.selected_take_profit || DEFAULT_SELECTED_TAKE_PROFIT, cfg.model_sharing_enabled ? 1 : 0,
               cfg.system_prompt || null, now, now, hasSystemPrompt ? 1 : 0])

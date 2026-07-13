@@ -1033,6 +1033,13 @@ const migrations = [
       `)
       console.log(`[Migrations] 052 reset ${result?.affectedRows || 0} legacy manual prompt(s) to administrator inheritance`)
     }
+  },
+  {
+    id: '053_manual_temperature_default',
+    up: async () => {
+      await queryRun('ALTER TABLE ai_configs ALTER COLUMN temperature SET DEFAULT 0.3')
+      console.log('[Migrations] 053 set manual inference temperature default to 0.3')
+    }
   }
 ]
 

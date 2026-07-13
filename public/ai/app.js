@@ -2099,7 +2099,7 @@ async function loadConfig() {
   $("modelName").value = cfg.model_name || "deepseek-chat";
   $("apiBaseUrl").value = cfg.api_base_url || "";
   applyProviderPreset($("apiProvider").value);
-  $("temperature").value = cfg.temperature ?? 0.7;
+  $("temperature").value = cfg.temperature ?? 0.3;
   $("maxTokens").value = cfg.max_tokens ?? 2000;
   $("riskLevel").value = cfg.risk_level || "medium";
   const configuredMaxPosition = Number(cfg.max_position_size ?? 0.05);
