@@ -229,6 +229,9 @@ describe('maybeAiSignal', () => {
     const result = await maybeAiSignal(null, config, market)
     expect(result.signal_type).toBe('buy')
     expect(result._inference_source).toBe('ai')
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body.messages[0].content).toContain('禁止比较任何时间字符串来判断挂单是否过期')
+    expect(body.messages[0].content).toContain('禁止仅以时间、有效期或过期为理由输出 cancel_pending')
   })
 
   it('有{{USE_CHAN}}时system prompt不包含原始标签', async () => {
