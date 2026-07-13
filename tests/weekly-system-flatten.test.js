@@ -191,6 +191,25 @@ describe('weekly flatten concurrency', () => {
 })
 
 describe('weekly flatten deadline finalization', () => {
+  it('persists the cycle member and result in one Redis Lua operation', async () => {
+    const { __weeklyFlattenTest } = await import('../server/jobs/weekly-system-flatten.js')
+    const cycle = '2026-09-05'
+
+    await __weeklyFlattenTest.rememberCycleResult(cycle, 6, { status: 'partial' })
+
+    expect(mockRedis.eval).toHaveBeenCalledWith(
+      __weeklyFlattenTest.REMEMBER_CYCLE_RESULT_LUA,
+      2,
+      'risk:weekly_flatten:2026-09-05:users',
+      'risk:weekly_flatten:2026-09-05:user:6:last_result',
+      '6',
+      JSON.stringify({ status: 'partial' }),
+      '1209600'
+    )
+    expect(mockRedis.sadd).not.toHaveBeenCalled()
+    expect(mockRedis.expire).not.toHaveBeenCalled()
+  })
+
   it('reports an unfinished user without sending another MT5 command', async () => {
     const { __weeklyFlattenTest, finalizeWeeklyFlattenCycle } = await import('../server/jobs/weekly-system-flatten.js')
     const cycle = '2026-07-25'
@@ -238,6 +257,32 @@ describe('weekly flatten deadline finalization', () => {
     expect(result).toEqual({ status: 'finalized', users: [{ userId: 9, status: 'completed' }] })
     expect(mockQueryRun).not.toHaveBeenCalled()
     expect(mockSendToBrowsers).not.toHaveBeenCalled()
+  })
+
+  it('does not silently finalize a Redis member whose persisted result is missing', async () => {
+    const { finalizeWeeklyFlattenCycle } = await import('../server/jobs/weekly-system-flatten.js')
+    const cycle = '2026-08-15'
+    mockRedis.smembers.mockResolvedValueOnce(['11'])
+    mockRedis.get
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+
+    const result = await finalizeWeeklyFlattenCycle(cycle)
+
+    expect(result).toEqual({ status: 'finalized', users: [{ userId: 11, status: 'failed' }] })
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO trade_audit_logs'),
+      expect.arrayContaining([
+        11,
+        'weekly_flatten_deadline_ended',
+        null,
+        expect.any(String),
+        expect.stringContaining('missing_persisted_state'),
+      ])
+    )
+    expect(mockSendToBrowsers).toHaveBeenCalledWith(11, expect.objectContaining({
+      type: 'weekly_flatten_state', status: 'failed', reason: 'deadline_reached',
+    }))
   })
 
   it('waits for an in-flight reconnect run before writing the deadline result', async () => {

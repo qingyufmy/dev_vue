@@ -28,6 +28,13 @@ end
 return 0
 `
 
+const REMEMBER_CYCLE_RESULT_LUA = `
+redis.call("sadd", KEYS[1], ARGV[1])
+redis.call("expire", KEYS[1], ARGV[3])
+redis.call("set", KEYS[2], ARGV[2], "EX", ARGV[3])
+return 1
+`
+
 let timer = null
 let running = false
 let activeCycle = null
@@ -86,9 +93,15 @@ async function rememberCycleResult(cycle, userId, result) {
   const redis = getRedis()
   if (!redis || !isRedisAvailable()) return
   try {
-    await redis.sadd(cycleUsersKey(cycle), String(userId))
-    await redis.expire(cycleUsersKey(cycle), COMPLETED_TTL_SECONDS)
-    await redis.set(cycleStateKey(userId, cycle), JSON.stringify(result || { status: 'unknown' }), 'EX', COMPLETED_TTL_SECONDS)
+    await redis.eval(
+      REMEMBER_CYCLE_RESULT_LUA,
+      2,
+      cycleUsersKey(cycle),
+      cycleStateKey(userId, cycle),
+      String(userId),
+      JSON.stringify(result || { status: 'unknown' }),
+      String(COMPLETED_TTL_SECONDS)
+    )
   } catch (err) {
     console.error(`[WeeklyFlatten] Failed to persist cycle state user=${userId}:`, err.message)
   }
@@ -333,8 +346,19 @@ export async function finalizeWeeklyFlattenCycle(cycle) {
         const userId = Number(rawUserId)
         if (!Number.isInteger(userId)) continue
         const rawState = await redis.get(cycleStateKey(userId, cycle))
-        if (!rawState) continue
-        try { states.set(userId, JSON.parse(rawState)) } catch {}
+        if (!rawState) {
+          if (!states.has(userId)) {
+            states.set(userId, { status: 'unknown', reason: 'missing_persisted_state' })
+          }
+          continue
+        }
+        try {
+          states.set(userId, JSON.parse(rawState))
+        } catch {
+          if (!states.has(userId)) {
+            states.set(userId, { status: 'unknown', reason: 'invalid_persisted_state' })
+          }
+        }
       }
       redisStatesLoaded = true
     } catch (err) {
@@ -409,5 +433,6 @@ export function stopWeeklySystemFlatten() {
 
 export const __weeklyFlattenTest = {
   lockKey, completedKey, cycleUsersKey, cycleStateKey, mapWithConcurrency,
-  cycleFinalizedKey, rememberLocalResult, rememberCycleResult, runTrackedUserFlatten, SYSTEM_MAGIC,
+  cycleFinalizedKey, rememberLocalResult, rememberCycleResult, runTrackedUserFlatten,
+  REMEMBER_CYCLE_RESULT_LUA, SYSTEM_MAGIC,
 }
