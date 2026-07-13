@@ -191,14 +191,12 @@ export async function handleAnalyze(userId, params) {
       }
       const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
 
-      // Get account and positions for risk validation (fresh fetch)
+      // Get the latest account state for risk validation.
       const freshAccount = await mt5Bridge(userId, 'account', {})
-      const freshPositionsResult = await mt5Bridge(userId, 'positions', {})
-      const freshPositions = freshPositionsResult.positions || []
 
       // Run risk validation before executing
       try {
-        validateTradeRequest(riskCfg, freshAccount, freshPositions, orderPayload)
+        validateTradeRequest(riskCfg, freshAccount, orderPayload)
       } catch (e) {
         console.log(`[Analyze] Auto-execute blocked by risk: ${e.message}`)
         await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', risk_block: e.message }, { status: 'rejected', message: e.message }, 'rejected')

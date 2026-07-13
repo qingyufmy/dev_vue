@@ -545,7 +545,7 @@ export async function getDeliveryExecuteRiskConfig(userId) {
   }
 }
 
-export function validateTradeRequest(config, account, positions, request) {
+export function validateTradeRequest(config, account, request) {
   const symbol = String(request.symbol || '').toUpperCase()
   const orderType = String(request.order_type || '').toLowerCase()
   const volume = parseFloat(request.volume || 0)
@@ -676,10 +676,8 @@ export async function getCloseSignalTickets(userId) {
 }
 
 export async function executeOrderCore(userId, config, request, action, options = {}) {
-  let accountResult, positionsResult, quote
+  let accountResult, quote
   accountResult = await mt5Bridge(userId, 'account', {}, options)
-  positionsResult = await mt5Bridge(userId, 'positions', {}, options)
-  const positions = positionsResult.positions || []
   const account = accountResult
 
   if (request.symbol) {
@@ -702,7 +700,7 @@ export async function executeOrderCore(userId, config, request, action, options 
 
   let result
   try {
-    const risk = validateTradeRequest(config, account, positions, request)
+    const risk = validateTradeRequest(config, account, request)
     const { bridgeAction, bridgeParams } = buildBridgeOrderCall(request)
     const openResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
     result = { ...openResult, risk }

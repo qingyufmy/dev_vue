@@ -14,7 +14,6 @@ describe('RiskReject', () => {
 describe('validateTradeRequest', () => {
   const baseConfig = { max_position_size: 0.05 }
   const baseAccount = { equity: 10000 }
-  const basePositions = []
 
   it('有效的 buy 请求通过', () => {
     const request = {
@@ -24,7 +23,7 @@ describe('validateTradeRequest', () => {
       confirm: true,
       source: 'manual'
     }
-    const result = validateTradeRequest(baseConfig, baseAccount, basePositions, request)
+    const result = validateTradeRequest(baseConfig, baseAccount, request)
     expect(result.symbol).toBe('XAUUSD')
     expect(result.order_type).toBe('buy')
     expect(result.volume).toBe(0.03)
@@ -32,7 +31,7 @@ describe('validateTradeRequest', () => {
 
   it('缺少 symbol 拒绝', () => {
     const request = { order_type: 'buy', volume: 0.03, confirm: true }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .toThrow(RiskReject)
   })
 
@@ -45,7 +44,7 @@ describe('validateTradeRequest', () => {
       source: 'ai',
       signal_type: 'hold'
     }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .toThrow('hold_signal_cannot_execute')
   })
 
@@ -56,7 +55,7 @@ describe('validateTradeRequest', () => {
       volume: 0.1,
       confirm: true
     }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .toThrow('volume_exceeds_config_limit')
   })
 
@@ -67,7 +66,7 @@ describe('validateTradeRequest', () => {
       volume: 0.03,
       confirm: false
     }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .toThrow('confirmation_required')
   })
 
@@ -78,7 +77,7 @@ describe('validateTradeRequest', () => {
       volume: 0.03,
       confirm: true
     }
-    expect(() => validateTradeRequest(baseConfig, { equity: 0 }, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, { equity: 0 }, request))
       .toThrow('invalid_account_equity')
   })
 
@@ -92,7 +91,7 @@ describe('validateTradeRequest', () => {
       reference_price: 2000,
       quote_price: 2010 // 0.5% 滑点
     }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .toThrow('signal_price_slippage_exceeded')
   })
 })
@@ -248,7 +247,6 @@ describe('buildBridgeOrderCall', () => {
 describe('validateTradeRequest - slippage skip for pending', () => {
   const baseConfig = { max_position_size: 0.05 }
   const baseAccount = { equity: 10000 }
-  const basePositions = []
 
   it('市价单触发滑点校验', () => {
     const request = {
@@ -257,7 +255,7 @@ describe('validateTradeRequest - slippage skip for pending', () => {
       reference_price: 4000, quote_price: 4010,
       confirm: true,
     }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .toThrow(RiskReject)
   })
 
@@ -268,7 +266,7 @@ describe('validateTradeRequest - slippage skip for pending', () => {
       reference_price: 4000, quote_price: 4010,
       confirm: true,
     }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, basePositions, request))
+    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .not.toThrow()
   })
 })
