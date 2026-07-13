@@ -150,11 +150,18 @@ function buildBis(fractals, bars) {
   }
   const bis = []
   let invalidCount = 0
+  let anchor = pivots[0]
   for (let i = 1; i < pivots.length; i++) {
-    const s = pivots[i - 1], e = pivots[i]
+    const s = anchor, e = pivots[i]
     const dir = s.type === 'bottom' ? 'up' : 'down'
-    if (dir === 'up' && e.price <= s.price) { invalidCount++; continue }
-    if (dir === 'down' && e.price >= s.price) { invalidCount++; continue }
+    if ((dir === 'up' && e.price <= s.price) || (dir === 'down' && e.price >= s.price)) {
+      invalidCount++
+      // The price topology is discontinuous. Restart from the newer pivot so
+      // confirmed bis before and after the break cannot enter one structure.
+      bis.length = 0
+      anchor = e
+      continue
+    }
     bis.push({
       id: bis.length + 1, dir,
       start_idx: s.idx, end_idx: e.idx,
@@ -164,6 +171,7 @@ function buildBis(fractals, bars) {
       high: Math.max(s.high, e.high), low: Math.min(s.low, e.low),
       confirmed: true,
     })
+    anchor = e
   }
   if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}, invalid=${invalidCount}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
   return { bis, invalidCount }
@@ -342,12 +350,21 @@ function buildSegments(confirmedBis, options = {}) {
   }
 
   const tailBis = confirmedBis.slice(startIndex)
-  const candidate = tailBis.length > 0 ? {
-    dir: tailBis[0].dir,
-    bi_ids: tailBis.map(b => b.id),
-    start_price: tailBis[0].start_price,
-    end_price: tailBis[tailBis.length - 1].end_price,
-  } : null
+  let candidate = null
+  if (tailBis.length > 0) {
+    const dir = tailBis[0].dir
+    const directionalEnds = tailBis
+      .filter(b => b.dir === dir)
+      .map(b => Number(b.end_price))
+      .filter(Number.isFinite)
+    const endPrice = dir === 'up' ? Math.max(...directionalEnds) : Math.min(...directionalEnds)
+    candidate = {
+      dir,
+      bi_ids: tailBis.map(b => b.id),
+      start_price: tailBis[0].start_price,
+      end_price: endPrice,
+    }
+  }
 
   if (DEBUG_CHAN) console.log(`[Chan] Segments(${segments.length}): ${segments.map(s => `#${s.id}(${s.dir}) bis=${s.bi_ids.length}`).join(' | ')}`)
   return { segments, candidate, resynced }
@@ -617,12 +634,21 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const lastFractal = fractals[fractals.length - 1]
   let developingBi = null
   if (lastFractal && liveRate) {
-    const liveHigh = Number(liveRate.high)
-    const liveLow = Number(liveRate.low)
-    if (lastFractal.type === 'bottom' && Number.isFinite(liveHigh) && liveHigh > lastFractal.price) {
-      developingBi = { dir: 'up', start_price: round5(lastFractal.price), end_price: round5(liveHigh), confirmed: false }
-    } else if (lastFractal.type === 'top' && Number.isFinite(liveLow) && liveLow < lastFractal.price) {
-      developingBi = { dir: 'down', start_price: round5(lastFractal.price), end_price: round5(liveLow), confirmed: false }
+    const fractalRawEnd = Number(lastFractal.raw_end_idx ?? lastFractal.raw_idx)
+    const afterFractalIndex = Number.isFinite(fractalRawEnd) ? fractalRawEnd + 1 : rates.length - 1
+    const developingRates = rates.slice(Math.max(afterFractalIndex, 0))
+    if (lastFractal.type === 'bottom') {
+      const highs = developingRates.map(rate => Number(rate.high)).filter(Number.isFinite)
+      const developingHigh = highs.length > 0 ? Math.max(...highs) : NaN
+      if (Number.isFinite(developingHigh) && developingHigh > lastFractal.price) {
+        developingBi = { dir: 'up', start_price: round5(lastFractal.price), end_price: round5(developingHigh), confirmed: false }
+      }
+    } else if (lastFractal.type === 'top') {
+      const lows = developingRates.map(rate => Number(rate.low)).filter(Number.isFinite)
+      const developingLow = lows.length > 0 ? Math.min(...lows) : NaN
+      if (Number.isFinite(developingLow) && developingLow < lastFractal.price) {
+        developingBi = { dir: 'down', start_price: round5(lastFractal.price), end_price: round5(developingLow), confirmed: false }
+      }
     }
   }
   let priceVsCenter = 'none'
