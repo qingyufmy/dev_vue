@@ -57,6 +57,15 @@ describe('weekly Beijing risk window', () => {
     expect(result.message).toBe('周末风险控制期间禁止新增交易')
     expect(result.details.cycle).toBe('2026-07-18')
   })
+
+  it('can be explicitly disabled by deployment configuration', async () => {
+    process.env.WEEKLY_SYSTEM_FLATTEN_ENABLED = 'false'
+    const { isWeeklyFlattenWindow, weeklyRiskLockResult } = await import('../server/jobs/weekly-risk-window.js')
+    const now = new Date('2026-07-17T20:00:00.000Z')
+
+    expect(isWeeklyFlattenWindow(now)).toBe(false)
+    expect(weeklyRiskLockResult(now)).toBeNull()
+  })
 })
 
 describe('weekly system flatten execution', () => {
@@ -137,6 +146,17 @@ describe('weekly system flatten execution', () => {
     expect(result.status).toBe('completed')
     expect(mockRedis.del).toHaveBeenCalledWith('risk:weekly_flatten:2026-07-18:user:7:completed')
     expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toContain('close_system_position')
+  })
+
+  it('contains Redis completion-check failures without sending MT5 commands', async () => {
+    mockRedis.get.mockRejectedValueOnce(new Error('redis down'))
+    const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
+
+    const result = await runWeeklySystemFlattenForUser(7, runAt)
+
+    expect(result.status).toBe('redis_unavailable')
+    expect(result.error).toBe('redis down')
+    expect(mockSendBridgeCommand).not.toHaveBeenCalled()
   })
 })
 

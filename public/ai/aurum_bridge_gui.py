@@ -678,7 +678,8 @@ class BridgeWorker(QThread):
                     "volume": o.volume_current, "price": o.price_open,
                     "magic": o.magic, "comment": o.comment,
                 } for o in orders if int(getattr(o, "magic", 0) or 0) == SYSTEM_TRADE_MAGIC]
-                margin_mode = int(getattr(acc, "margin_mode", -1) or -1)
+                raw_margin_mode = getattr(acc, "margin_mode", None)
+                margin_mode = int(raw_margin_mode) if raw_margin_mode is not None else -1
                 hedging_mode = int(getattr(self.mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2))
                 return {
                     "status": "success",
@@ -710,10 +711,22 @@ class BridgeWorker(QThread):
                              "magic": SYSTEM_TRADE_MAGIC, "comment": "周末系统强制平仓",
                              "type_filling": fill, "price": price}, price)
                 result, comment = self._order_send_with_retry(pos.symbol, _close_system)
-                if result:
-                    return {"status": "success", "ticket": pos.ticket, "deal": result.deal,
-                            "order": result.order, "price": result.price, "warning": comment}
-                return {"status": "error", "message": comment or "close failed", "ticket": pos.ticket}
+                remaining = self.mt5.positions_get(ticket=pos.ticket)
+                if remaining is None:
+                    return {"status": "error", "message": f"close verification failed: {self.mt5.last_error()}",
+                            "ticket": pos.ticket}
+                if len(remaining) == 0:
+                    return {"status": "success", "ticket": pos.ticket,
+                            "deal": getattr(result, "deal", 0) if result else 0,
+                            "order": getattr(result, "order", 0) if result else 0,
+                            "price": getattr(result, "price", 0) if result else 0,
+                            "warning": comment}
+                remaining_volume = float(remaining[0].volume)
+                retcode = getattr(result, "retcode", -1) if result else -1
+                return {"status": "partial" if remaining_volume < float(pos.volume) else "error",
+                        "message": comment or "position still exists after close",
+                        "ticket": pos.ticket, "retcode": retcode,
+                        "remaining_volume": remaining_volume}
             elif action == "cancel_system_pending":
                 ticket = params.get("ticket")
                 if not ticket:
@@ -727,9 +740,15 @@ class BridgeWorker(QThread):
                 if int(getattr(order, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC:
                     return {"status": "rejected", "message": "pending_magic_mismatch", "ticket": order.ticket}
                 result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_REMOVE, "order": order.ticket})
-                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                    return {"status": "success", "ticket": order.ticket}
-                return {"status": "error", "message": result.comment if result else "cancel failed", "ticket": order.ticket}
+                remaining = self.mt5.orders_get(ticket=order.ticket)
+                if remaining is None:
+                    return {"status": "error", "message": f"cancel verification failed: {self.mt5.last_error()}",
+                            "ticket": order.ticket}
+                if len(remaining) == 0:
+                    return {"status": "success", "ticket": order.ticket,
+                            "warning": result.comment if result and result.retcode != self.mt5.TRADE_RETCODE_DONE else None}
+                return {"status": "error", "message": result.comment if result else "pending order still exists after cancel",
+                        "ticket": order.ticket, "retcode": getattr(result, "retcode", -1) if result else -1}
             elif action == "symbols":
                 symbols = self.mt5.symbols_get()
                 if symbols is None: return {"status": "error", "message": "MT5 symbols_get failed"}

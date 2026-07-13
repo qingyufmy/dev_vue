@@ -74,6 +74,12 @@ async function notify(userId, status, details = {}) {
   sendToBrowsers(userId, { type: 'weekly_flatten_state', status, ...details })
 }
 
+async function reportOnce(redis, key, ttlSeconds, callback) {
+  const acquired = await redis.set(key, '1', 'NX', 'EX', ttlSeconds)
+  if (acquired) await callback()
+  return !!acquired
+}
+
 export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
   if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window' }
   const redis = getRedis()
@@ -81,14 +87,26 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
 
   const cycle = weeklyFlattenCycleId(now)
   const doneKey = completedKey(userId, cycle)
-  const wasCompleted = !!(await redis.get(doneKey))
+  let wasCompleted
+  try {
+    wasCompleted = !!(await redis.get(doneKey))
+  } catch (err) {
+    console.error(`[WeeklyFlatten] Redis completion check failed user=${userId}:`, err.message)
+    return { status: 'redis_unavailable', error: err.message, cycle }
+  }
   // Keep verifying throughout 04:00-05:00 because an order accepted just
   // before the risk window can arrive after the first zero-inventory check.
   if (wasCompleted && !isWeeklyFlattenPrimaryWindow(now)) return { status: 'already_completed', cycle }
 
   const key = lockKey(userId, cycle)
   const token = crypto.randomUUID()
-  const acquired = await redis.set(key, token, 'NX', 'PX', LOCK_TTL_MS)
+  let acquired
+  try {
+    acquired = await redis.set(key, token, 'NX', 'PX', LOCK_TTL_MS)
+  } catch (err) {
+    console.error(`[WeeklyFlatten] Redis lock failed user=${userId}:`, err.message)
+    return { status: 'redis_unavailable', error: err.message, cycle }
+  }
   if (!acquired) return { status: 'locked', cycle }
 
   const startedAt = Date.now()
@@ -105,8 +123,10 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
     const before = await inventory(userId)
     if (!before || before.status !== 'success') {
       const result = { status: 'failed', reason: 'inventory_unavailable', response: before, cycle }
-      await audit(userId, 'weekly_flatten_retry', null, { cycle, stage: 'inventory' }, result, 'error')
-      await notify(userId, 'retrying', { cycle, reason: 'inventory_unavailable' })
+      await reportOnce(redis, `${doneKey}:inventory:reported`, 300, async () => {
+        await audit(userId, 'weekly_flatten_retry', null, { cycle, stage: 'inventory' }, result, 'error')
+        await notify(userId, 'retrying', { cycle, reason: 'inventory_unavailable' })
+      })
       return result
     }
 
@@ -142,9 +162,11 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
 
     if (positions.length > 0 && before.account?.is_hedging !== true) {
       const result = { status: 'unsupported_netting', cycle, account: before.account, position_count: positions.length }
-      await audit(userId, 'weekly_flatten_unsupported_netting', null,
-        { cycle, magic: SYSTEM_MAGIC, account: before.account }, result, 'error')
-      await notify(userId, 'failed', { cycle, reason: 'unsupported_netting', remaining_positions: positions.length })
+      await reportOnce(redis, `${doneKey}:netting:reported`, COMPLETED_TTL_SECONDS, async () => {
+        await audit(userId, 'weekly_flatten_unsupported_netting', null,
+          { cycle, magic: SYSTEM_MAGIC, account: before.account }, result, 'error')
+        await notify(userId, 'failed', { cycle, reason: 'unsupported_netting', remaining_positions: positions.length })
+      })
       return result
     }
 
@@ -160,8 +182,10 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
     const after = await inventory(userId)
     if (!after || after.status !== 'success') {
       const result = { status: 'failed', reason: 'verification_unavailable', failures, cycle }
-      await audit(userId, 'weekly_flatten_retry', null, { cycle, stage: 'verification' }, result, 'error')
-      await notify(userId, 'retrying', { cycle, reason: 'verification_unavailable' })
+      await reportOnce(redis, `${doneKey}:verification:reported`, 300, async () => {
+        await audit(userId, 'weekly_flatten_retry', null, { cycle, stage: 'verification' }, result, 'error')
+        await notify(userId, 'retrying', { cycle, reason: 'verification_unavailable' })
+      })
       return result
     }
 
@@ -184,8 +208,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
     const primaryWindow = isWeeklyFlattenPrimaryWindow(now)
     const reportSuffix = primaryWindow ? 'partial' : 'missed'
     const reportTtl = primaryWindow ? 300 : COMPLETED_TTL_SECONDS
-    const shouldReport = await redis.set(`${doneKey}:${reportSuffix}:reported`, '1', 'NX', 'EX', reportTtl)
-    if (shouldReport) {
+    await reportOnce(redis, `${doneKey}:${reportSuffix}:reported`, reportTtl, async () => {
       await audit(userId, primaryWindow ? 'weekly_flatten_partial' : 'weekly_flatten_missed', null,
         { cycle, magic: SYSTEM_MAGIC }, result, primaryWindow ? 'warning' : 'error')
       await notify(userId, primaryWindow ? 'retrying' : 'failed', {
@@ -194,7 +217,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date()) {
         remaining_pending: remainingPending.length,
         remaining_positions: remainingPositions.length,
       })
-    }
+    })
     return result
   } catch (err) {
     const result = { status: 'failed', error: err.message, cycle }
@@ -216,10 +239,14 @@ export async function runWeeklySystemFlatten(now = new Date()) {
   running = true
   try {
     const users = getAllBridges().filter(item => item.connected && item.alive)
-    const results = await mapWithConcurrency(users, userConcurrency(), async item => ({
-      userId: item.userId,
-      result: await runWeeklySystemFlattenForUser(item.userId, now),
-    }))
+    const results = await mapWithConcurrency(users, userConcurrency(), async item => {
+      try {
+        return { userId: item.userId, result: await runWeeklySystemFlattenForUser(item.userId, now) }
+      } catch (err) {
+        console.error(`[WeeklyFlatten] Unhandled user failure user=${item.userId}:`, err.message)
+        return { userId: item.userId, result: { status: 'failed', error: err.message } }
+      }
+    })
     return { status: 'completed', users: results }
   } finally {
     running = false
