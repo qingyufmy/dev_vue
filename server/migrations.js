@@ -1059,6 +1059,27 @@ const migrations = [
       }
       console.log(`[Migrations] 054 updated single-trade volume rule in ${updatedCount} active schema(s)`)
     }
+  },
+  {
+    id: '055_course_morning_category',
+    up: async () => {
+      const result = await queryRun(`
+        UPDATE courses c
+        SET c.category = 'morning', c.updated_at = NOW()
+        WHERE c.content_type = 'video'
+          AND c.category <> 'morning'
+          AND (
+            c.has_stream_video = 1
+            OR COALESCE(c.bilibili_id, '') <> ''
+            OR COALESCE(c.youtube_id, '') <> ''
+            OR COALESCE(c.local_video_path, '') <> ''
+            OR EXISTS (
+              SELECT 1 FROM video_streams vs WHERE vs.episode_id = c.episode_id
+            )
+          )
+      `)
+      console.log(`[Migrations] 055 moved ${result?.affectedRows || 0} existing video course(s) to morning category`)
+    }
   }
 ]
 
