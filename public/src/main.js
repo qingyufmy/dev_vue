@@ -2,8 +2,8 @@ import { episodes as staticEpisodes, categories } from './data/episodes.js'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
-import { getCourseMediaValidationError } from './lib/admin-course.js'
-import { getVideoEpisodeIds } from './lib/course-media.js'
+import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js'
+import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -2348,6 +2348,7 @@ function renderArticle() {
 
   const hasPaidVideo = state.paidVideoEpisodes.includes(ep.id)
   const hasAccess = canAccessVideo(ep.id)
+  const articleTarget = classifyArticleUrl(ep.articleUrl, window.location.origin)
 
   renderEpisodeDetailShell({
     ep,
@@ -2376,21 +2377,34 @@ function renderArticle() {
           <span class="article-study-order-text">学习顺序：先看图解的文字知识点，再看视频教学</span>
         </div>
       ` : ''}
-      <div class="article-container" id="articleContainer">
-        <div class="article-loading">正在加载文章...</div>
-        <iframe
-          class="article-frame"
-          id="articleFrame"
-          title="${escapeHtml(ep.title)}"
-          src="${ep.articleUrl}"
-          loading="eager"
-          scrolling="no"
-        ></iframe>
-      </div>
+      ${articleTarget.mode === 'embedded' ? `
+        <div class="article-container" id="articleContainer">
+          <div class="article-loading">正在加载文章...</div>
+          <iframe
+            class="article-frame"
+            id="articleFrame"
+            title="${escapeHtml(ep.title)}"
+            src="${escapeHtml(articleTarget.url)}"
+            loading="eager"
+            scrolling="no"
+          ></iframe>
+        </div>
+      ` : articleTarget.mode === 'external' ? `
+        <div class="article-container loaded">
+          <div class="comments-empty">该文章需要在原站打开</div>
+          <div style="display:flex;justify-content:center;padding:0 0 32px;">
+            <a class="btn btn-primary" href="${escapeHtml(articleTarget.url)}" target="_blank" rel="noopener noreferrer">打开文章</a>
+          </div>
+        </div>
+      ` : `
+        <div class="article-container loaded">
+          <div class="comments-empty">暂无文章内容</div>
+        </div>
+      `}
     `,
   })
 
-  initArticleFrame(ep)
+  if (articleTarget.mode === 'embedded') initArticleFrame(ep)
 
   // 若当前用户可观看该文章配套视频，则拉取 CF Stream 并嵌入播放
   if (hasPaidVideo && hasAccess) {
@@ -5214,6 +5228,7 @@ async function saveAdminResourceBundle() {
     const contentType = document.getElementById('courseContentType')?.value || 'video'
     const videoFile = contentType === 'video' ? document.getElementById('streamFileInput')?.files?.[0] : null
     const bilibiliId = document.getElementById('courseBilibiliId')?.value?.trim()
+    const articleUrl = document.getElementById('courseArticleUrl')?.value?.trim()
     const titleInput = document.getElementById('courseTitle')
     if (videoFile && titleInput && !titleInput.value.trim()) {
       titleInput.value = videoFile.name.replace(/\.[^.]+$/, '')
@@ -5225,6 +5240,8 @@ async function saveAdminResourceBundle() {
       bilibiliId,
     })
     if (mediaError) throw new Error(mediaError)
+    const articleError = getArticleContentValidationError({ contentType, articleUrl })
+    if (articleError) throw new Error(articleError)
     if (!titleInput?.value.trim()) throw new Error('请填写标题')
 
     saveBtn.disabled = true

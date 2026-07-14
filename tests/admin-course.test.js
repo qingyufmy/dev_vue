@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getCourseMediaValidationError } from '../public/src/lib/admin-course.js'
+import { getArticleContentValidationError, getCourseMediaValidationError } from '../public/src/lib/admin-course.js'
 
 describe('admin course media validation', () => {
   it('allows a new article without video media', () => {
@@ -24,5 +24,11 @@ describe('admin course media validation', () => {
     expect(getCourseMediaValidationError({ contentType: 'video', isExistingCourse: true })).toBe('')
     expect(getCourseMediaValidationError({ contentType: 'video', hasVideoFile: true })).toBe('')
     expect(getCourseMediaValidationError({ contentType: 'video', bilibiliId: 'BV123' })).toBe('')
+  })
+
+  it('requires an article link only for article courses', () => {
+    expect(getArticleContentValidationError({ contentType: 'article', articleUrl: '  ' })).toBe('请填写文章链接')
+    expect(getArticleContentValidationError({ contentType: 'article', articleUrl: '/articles/test.html' })).toBe('')
+    expect(getArticleContentValidationError({ contentType: 'video', articleUrl: '' })).toBe('')
   })
 })
