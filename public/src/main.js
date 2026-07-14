@@ -2158,7 +2158,7 @@ async function resolveArticleThemeUrl() {
           if (resp.ok && contentType.includes('text/css')) return href
         } catch {}
       }
-      return ARTICLE_THEME_URL_CANDIDATES[0]
+      return null
     })()
   }
   return articleThemeUrlPromise
@@ -2209,14 +2209,18 @@ async function syncArticleFrameTheme(frame = document.getElementById('articleFra
   const href = await resolveArticleThemeUrl()
 
   let link = doc.getElementById('wsArticleTheme')
-  if (!link) {
-    link = doc.createElement('link')
-    link.id = 'wsArticleTheme'
-    link.rel = 'stylesheet'
-    doc.head.appendChild(link)
-  }
-  if (link.getAttribute('href') !== href) {
-    link.setAttribute('href', href)
+  if (href) {
+    if (!link) {
+      link = doc.createElement('link')
+      link.id = 'wsArticleTheme'
+      link.rel = 'stylesheet'
+      doc.head.appendChild(link)
+    }
+    if (link.getAttribute('href') !== href) {
+      link.setAttribute('href', href)
+    }
+  } else if (link) {
+    link.remove()
   }
 
   const dark = document.documentElement.getAttribute('data-theme') === 'dark'
@@ -2292,16 +2296,24 @@ function renderEpisodeActions(ep, progressRecord) {
   `
 }
 
-function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
+function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, infoBeforeMedia = false }) {
   const progressRecord = state.user ? progress.get(ep.id) : null
   const percent = progressRecord
     ? Math.min(100, Math.round((progressRecord.watchedSeconds / (progressRecord.totalDuration || 1)) * 100))
     : 0
+  const infoHtml = `
+    <div class="video-info">
+      <h1 class="video-title">${escapeHtml(ep.title)}</h1>
+      <p class="video-description">${escapeHtml(ep.description)}</p>
+      ${renderEpisodeActions(ep, progressRecord)}
+    </div>
+  `
 
   mainContent.innerHTML = `
     <div class="${viewClass} fade-in">
       <button class="back-btn" id="backHome">← 返回课程列表</button>
 
+      ${infoBeforeMedia ? infoHtml : ''}
       ${mediaHtml}
 
       ${showProgress ? `
@@ -2314,11 +2326,7 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
         </div>
       ` : ''}
 
-      <div class="video-info">
-        <h1 class="video-title">${escapeHtml(ep.title)}</h1>
-        <p class="video-description">${escapeHtml(ep.description)}</p>
-        ${renderEpisodeActions(ep, progressRecord)}
-      </div>
+      ${infoBeforeMedia ? '' : infoHtml}
     </div>
   `
 }
@@ -2354,6 +2362,7 @@ function renderArticle() {
     ep,
     viewClass: 'article-view',
     showProgress: state.user && hasPaidVideo && hasAccess,
+    infoBeforeMedia: true,
     mediaHtml: `
       ${hasPaidVideo ? `
         <div class="article-video-section">
