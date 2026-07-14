@@ -2,6 +2,7 @@ import { episodes as staticEpisodes, categories } from './data/episodes.js'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
+import { getCourseMediaValidationError } from './lib/admin-course.js'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -4814,22 +4815,33 @@ function fillAdminCourseForm(course) {
 }
 
 function getAdminCoursePayload() {
+  const contentType = document.getElementById('courseContentType')?.value || 'video'
   return {
     episodeId: document.getElementById('courseEpisodeId')?.value || undefined,
     number: Number(document.getElementById('courseNumber')?.value || 0),
     title: document.getElementById('courseTitle')?.value || '',
     description: document.getElementById('courseDescription')?.value || '',
     category: document.getElementById('courseCategory')?.value || 'strategy',
-    contentType: document.getElementById('courseContentType')?.value || 'video',
+    contentType,
     status: document.getElementById('courseStatus')?.value || 'published',
     accessLevel: document.getElementById('courseAccessLevel')?.value || 'free',
     duration: document.getElementById('courseDuration')?.value || '',
-    bilibiliId: document.getElementById('courseBilibiliId')?.value || '',
+    bilibiliId: contentType === 'video' ? document.getElementById('courseBilibiliId')?.value || '' : '',
     cover: document.getElementById('courseCover')?.value || '',
     sortOrder: Number(document.getElementById('courseSortOrder')?.value || 0),
-    articleUrl: document.getElementById('courseArticleUrl')?.value || '',
-    articleObjectKey: document.getElementById('courseArticleObjectKey')?.value || '',
+    articleUrl: contentType === 'article' ? document.getElementById('courseArticleUrl')?.value || '' : '',
+    articleObjectKey: contentType === 'article' ? document.getElementById('courseArticleObjectKey')?.value || '' : '',
   }
+}
+
+function syncAdminCourseContentType() {
+  const isArticle = document.getElementById('courseContentType')?.value === 'article'
+  const bilibiliField = document.getElementById('adminBilibiliField')
+  const articleField = document.getElementById('adminArticleField')
+  const videoField = document.getElementById('adminVideoField')
+  if (bilibiliField) bilibiliField.style.display = isArticle ? 'none' : 'grid'
+  if (articleField) articleField.style.display = isArticle ? 'grid' : 'none'
+  if (videoField) videoField.style.display = isArticle ? 'none' : 'grid'
 }
 
 function refreshAdminCourseSelects() {
@@ -5026,15 +5038,15 @@ function openCourseModal(course = null) {
               </select>
             </div>
           </div>
-          <div class="course-form-group">
+          <div class="course-form-group" id="adminBilibiliField">
             <label>B站BV号</label>
             <input class="stream-input" id="courseBilibiliId" value="${isEdit ? escapeHtml(course.bilibiliId || '') : ''}" placeholder="BV1xx411c7mD">
           </div>
-          <div class="course-form-group">
+          <div class="course-form-group" id="adminArticleField">
             <label>文章链接</label>
             <input class="stream-input" id="courseArticleUrl" value="${isEdit ? escapeHtml(course.articleUrl || '') : ''}" placeholder="https://... 或 /articles/xxx.html">
           </div>
-          <div class="course-form-group">
+          <div class="course-form-group" id="adminVideoField">
             <label>视频文件</label>
             <label class="stream-file-label" id="adminVideoUploadField">
               <span id="streamFileName">点击选择视频文件</span>
@@ -5093,6 +5105,8 @@ function openCourseModal(course = null) {
   })
   syncAdminResourceChoiceInputs()
   updateResourceUploadFileLabels()
+  syncAdminCourseContentType()
+  modal.querySelector('#courseContentType')?.addEventListener('change', syncAdminCourseContentType)
 
   // Form submit
   modal.querySelector('form#adminCourseFormInner')?.addEventListener('submit', e => e.preventDefault())
@@ -5181,10 +5195,6 @@ function collectSelectedResourceFiles(episodeId) {
   if (!quizChecked && !mindmapChecked && !infoChecked && files.length) {
     throw new Error('请选择要导入的内容类型')
   }
-  if ((quizChecked || mindmapChecked || infoChecked) && !files.length) {
-    throw new Error('请选择 NotebookLM 文件夹或补充文件')
-  }
-
   form.append('includeQuiz', quizChecked ? '1' : '0')
   form.append('includeMindmap', mindmapChecked ? '1' : '0')
   form.append('includeInfographic', infoChecked ? '1' : '0')
@@ -5196,13 +5206,20 @@ async function saveAdminResourceBundle() {
   const saveBtn = document.getElementById('saveResourceAll')
   try {
     const selectedEpisodeId = getSelectedResourceEpisodeId()
-    const videoFile = document.getElementById('streamFileInput')?.files?.[0]
+    const contentType = document.getElementById('courseContentType')?.value || 'video'
+    const videoFile = contentType === 'video' ? document.getElementById('streamFileInput')?.files?.[0] : null
     const bilibiliId = document.getElementById('courseBilibiliId')?.value?.trim()
     const titleInput = document.getElementById('courseTitle')
     if (videoFile && titleInput && !titleInput.value.trim()) {
       titleInput.value = videoFile.name.replace(/\.[^.]+$/, '')
     }
-    if (!selectedEpisodeId && !videoFile && !bilibiliId) throw new Error('请选择已有视频、上传新视频、或填写B站BV号')
+    const mediaError = getCourseMediaValidationError({
+      contentType,
+      isExistingCourse: Boolean(selectedEpisodeId),
+      hasVideoFile: Boolean(videoFile),
+      bilibiliId,
+    })
+    if (mediaError) throw new Error(mediaError)
     if (!titleInput?.value.trim()) throw new Error('请填写标题')
 
     saveBtn.disabled = true
