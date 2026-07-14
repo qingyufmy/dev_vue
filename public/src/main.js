@@ -2,8 +2,8 @@ import { episodes as staticEpisodes, categories } from './data/episodes.js'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
-import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js'
-import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js'
+import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260714f'
+import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
