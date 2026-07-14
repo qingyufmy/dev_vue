@@ -1,6 +1,6 @@
 // 课程分类
 export const categories = [
-  { id: 'all', name: '视频课程' },
+  { id: 'morning', name: '早盘解读' },
   { id: 'indicator', name: '技术指标' },
   { id: 'pattern', name: '形态分析' },
   { id: 'strategy', name: '交易策略' },
@@ -156,7 +156,7 @@ const episodeRaw = [
     youtubeId: 'upwxoQYCdQw',
   },
 
-  // ===== EP.14-59 视频课程 =====
+  // ===== EP.14-59 早盘解读 =====
   {
     title: 'VWAP实战教学与连续测试破位',
     description: '25年12月6日 · 第十四期',
@@ -978,7 +978,7 @@ const episodeRaw = [
 
 // 构建完整课程数据
 // 1. ep.number 硬编码的优先（如第60期），不计入自动计数
-// 2. 有 youtubeId 的视频课程按顺序自动递增编号
+// 2. 有 youtubeId 的早盘解读按顺序自动递增编号
 // 3. 非视频内容（技术指标/形态分析/交易策略/技术模型）不编号，number = 0
 let _videoCounter = 0
 export const episodes = episodeRaw.map((ep, i) => {
@@ -997,7 +997,7 @@ export const episodes = episodeRaw.map((ep, i) => {
     number,
     title: ep.title,
     description: ep.description,
-    category: ep.category,
+    category: ep.youtubeId ? 'morning' : ep.category,
     contentType: ep.articleUrl ? 'article' : 'video',
     duration: ep.duration,
     youtubeId: ep.youtubeId || '',

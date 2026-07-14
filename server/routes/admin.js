@@ -23,6 +23,34 @@ const resourceUpload = multer({
 })
 
 const router = Router()
+const COURSE_CATEGORIES = new Set(['morning', 'indicator', 'pattern', 'strategy', 'advanced'])
+const COURSE_CONTENT_TYPES = new Set(['video', 'article'])
+
+function serializeAdminCourse(c) {
+  return {
+    id: c.episode_id,
+    episodeId: c.episode_id,
+    number: c.number,
+    title: c.title,
+    description: c.description,
+    category: c.category,
+    contentType: c.content_type,
+    duration: c.duration,
+    youtubeId: c.youtube_id,
+    bilibiliId: c.bilibili_id || '',
+    cover: c.cover,
+    gradient: c.gradient,
+    articleUrl: c.article_url,
+    articleObjectKey: c.article_object_key,
+    accessLevel: c.access_level,
+    hasStreamVideo: !!c.has_stream_video,
+    quizCount: c.quiz_count,
+    status: c.status,
+    sortOrder: c.sort_order,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+  }
+}
 
 // Admin: get users with full stats and enriched data
 router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
@@ -455,22 +483,18 @@ router.put('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res)
 router.get('/admin-course-items', authMiddleware, adminOnly, async (req, res) => {
   try {
     const courses = await queryAll('SELECT * FROM courses ORDER BY created_at DESC')
-    res.json({ ok: true, courses: courses.map(c => ({
-      id: c.episode_id, episodeId: c.episode_id, number: c.number, title: c.title,
-      description: c.description, category: c.category, contentType: c.content_type,
-      duration: c.duration, youtubeId: c.youtube_id, bilibiliId: c.bilibili_id || '',
-      cover: c.cover, gradient: c.gradient,
-      articleUrl: c.article_url, articleObjectKey: c.article_object_key,
-      accessLevel: c.access_level, hasStreamVideo: !!c.has_stream_video,
-      quizCount: c.quiz_count, status: c.status, sortOrder: c.sort_order,
-      createdAt: c.created_at, updatedAt: c.updated_at,
-    })) })
+    res.json({ ok: true, courses: courses.map(serializeAdminCourse) })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
 })
 
 router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { episodeId, number, title, description, category, contentType, duration, youtubeId, bilibiliId, cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status } = req.body
+    const { episodeId, number, title, description, duration, youtubeId, bilibiliId, cover, accessLevel, sortOrder, articleUrl, articleObjectKey, status } = req.body
+    const category = String(req.body.category || '').trim()
+    const contentType = String(req.body.contentType || '').trim()
+    if (!category) return res.status(400).json({ ok: false, error: '请选择发布栏目' })
+    if (!COURSE_CATEGORIES.has(category)) return res.status(400).json({ ok: false, error: '无效的发布栏目' })
+    if (!COURSE_CONTENT_TYPES.has(contentType)) return res.status(400).json({ ok: false, error: '无效的课程类型' })
 
     // Shared: auto-fetch Bilibili cover + duration
     let finalCover = cover, finalDuration = duration
@@ -491,7 +515,7 @@ router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) =
         status=?, updated_at=NOW() WHERE episode_id=?
       `, [number, title, description, category, contentType, finalDuration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status, episodeId])
       const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episodeId])
-      res.json({ ok: true, course })
+      res.json({ ok: true, course: serializeAdminCourse(course) })
     } else {
       const maxRow = await queryOne('SELECT MAX(episode_id) as m FROM courses')
       const maxId = maxRow?.m || 0
@@ -500,7 +524,7 @@ router.post('/admin-course-items', authMiddleware, adminOnly, async (req, res) =
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [maxId + 1, number || maxId + 1, title, description, category, contentType, finalDuration, youtubeId || '', bilibiliId || '', finalCover, accessLevel, sortOrder, articleUrl, articleObjectKey, status || 'published'])
       const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [maxId + 1])
-      res.json({ ok: true, course })
+      res.json({ ok: true, course: serializeAdminCourse(course) })
     }
   } catch (err) { console.error('[AdminCourse] Error:', err); res.json({ ok: false, error: '保存失败' }) }
 })

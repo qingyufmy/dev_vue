@@ -1,4 +1,4 @@
-import { episodes as staticEpisodes, categories } from './data/episodes.js'
+import { episodes as staticEpisodes, categories } from './data/episodes.js?v=20260714i'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
@@ -6,6 +6,7 @@ import { getArticleContentValidationError, getCourseMediaValidationError } from 
 import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
 import { getCourseProgramByView } from './data/course-programs.js?v=20260714h'
 import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260714h'
+import { getCoursesForCategory } from './lib/course-catalog.js?v=20260714i'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -576,8 +577,7 @@ const allQuotes = [
 const state = {
   currentView: 'home',
   currentEpisode: null,
-  currentCategory: 'all',
-  sortOrder: 'latest',
+  currentCategory: 'morning',
   user: (() => { try { return JSON.parse(localStorage.getItem('ws_user')); } catch { return null; } })(),
   quizState: { currentQuestion: 0, answers: [], answered: false, wrongCount: 0, attempt: 0 },
   currentBoard: 'ideas',
@@ -1888,13 +1888,6 @@ function renderHome() {
           `).join('')}
         </div>
 
-        ${state.currentCategory === 'all' ? `
-        <div class="sort-bar">
-          <button class="sort-btn ${state.sortOrder === 'default' ? 'active' : ''}" data-sort="default">默认</button>
-          <button class="sort-btn ${state.sortOrder === 'latest' ? 'active' : ''}" data-sort="latest">最新</button>
-        </div>
-        ` : ''}
-
         <div class="episode-grid">
           ${filtered.map(ep => renderEpisodeCard(ep)).join('')}
         </div>
@@ -2153,7 +2146,8 @@ function formatTimeAgo(timestamp) {
 }
 
 // Category labels matching homepage tabs
-const CATEGORY_LABELS = { strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型', basics: '基础', analysis: '分析', psychology: '心理', risk: '风控' }
+const COURSE_CATEGORY_IDS = ['morning', 'indicator', 'pattern', 'strategy', 'advanced']
+const CATEGORY_LABELS = { morning: '早盘解读', strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型' }
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
 
 function syncVideoAccessState(items = []) {
@@ -2350,21 +2344,7 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, info
 }
 
 function getFilteredEpisodes() {
-  let list
-  if (state.currentCategory === 'all') {
-    // 视频课程分类：文章课程即使挂了视频讲解也不混入此列表
-    list = episodes.filter(ep => !isArticleEpisode(ep) && (ep.hasStreamVideo || state.paidVideoEpisodes.includes(ep.id)))
-    list = [...list].sort((a, b) => state.sortOrder === 'latest'
-      ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
-      : new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
-  } else {
-    // 其他分类：文章课程始终保留；无视频的占位课程也显示
-    list = episodes.filter(ep => ep.category === state.currentCategory && (isArticleEpisode(ep) || (!ep.hasStreamVideo && !state.paidVideoEpisodes.includes(ep.id))))
-    list = [...list].sort((a, b) => state.sortOrder === 'latest'
-      ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
-      : new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
-  }
-  return list
+  return getCoursesForCategory(episodes, state.currentCategory)
 }
 
 function renderArticle() {
@@ -4867,7 +4847,7 @@ function getAdminCoursePayload() {
     number: Number(document.getElementById('courseNumber')?.value || 0),
     title: document.getElementById('courseTitle')?.value || '',
     description: document.getElementById('courseDescription')?.value || '',
-    category: document.getElementById('courseCategory')?.value || 'strategy',
+    category: document.getElementById('courseCategory')?.value || 'morning',
     contentType,
     status: document.getElementById('courseStatus')?.value || 'published',
     accessLevel: document.getElementById('courseAccessLevel')?.value || 'free',
@@ -4983,7 +4963,7 @@ function renderAdminCourseList(courses) {
 
   el.innerHTML = `
     <table class="admin-table">
-      <thead><tr><th>ID</th><th>课程</th><th>类型</th><th>分类</th><th>发布时间</th><th>状态</th><th>操作</th></tr></thead>
+      <thead><tr><th>ID</th><th>课程</th><th>类型</th><th>发布栏目</th><th>发布时间</th><th>状态</th><th>操作</th></tr></thead>
       <tbody>
         ${pageItems.map(course => `
           <tr>
@@ -5065,9 +5045,9 @@ function openCourseModal(course = null) {
           </div>
           <div class="course-form-row">
             <div class="course-form-group">
-              <label>分类</label>
+              <label>发布栏目</label>
               <select class="stream-input" id="courseCategory">
-                ${['strategy','indicator','pattern','advanced'].map(v => `<option value="${v}" ${(isEdit ? course.category : 'strategy') === v ? 'selected' : ''}>${CATEGORY_LABELS[v]}</option>`).join('')}
+                ${COURSE_CATEGORY_IDS.map(v => `<option value="${v}" ${(isEdit ? course.category : 'morning') === v ? 'selected' : ''}>${CATEGORY_LABELS[v]}</option>`).join('')}
               </select>
             </div>
             <div class="course-form-group">
@@ -10068,13 +10048,6 @@ function setupGlobalEvents() {
       } catch (e) {
         console.error('invalid update target', e)
       }
-      return
-    }
-
-    const sortBtn = target.closest('.sort-btn')
-    if (sortBtn) {
-      state.sortOrder = sortBtn.dataset.sort
-      renderHome()
       return
     }
 
