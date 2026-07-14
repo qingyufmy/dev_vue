@@ -4,6 +4,8 @@ import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
 import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260714f'
 import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
+import { getCourseProgramByView } from './data/course-programs.js?v=20260714h'
+import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260714h'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -1552,8 +1554,18 @@ async function init() {
 
 // ===== Routing =====
 function renderView() {
+  const pageTitles = {
+    home: '量见',
+    courses: '课程体系 | 量见',
+    courseCraft: '交易是一门手艺 | 量见',
+    courseAi: 'AI铸剑 | 量见',
+  }
+  document.title = pageTitles[state.currentView] || '量见'
   switch (state.currentView) {
     case 'home': renderHome(); break
+    case 'courses': mainContent.innerHTML = renderCourseOverviewPage(); break
+    case 'courseCraft': mainContent.innerHTML = renderCourseProgramPage(getCourseProgramByView('courseCraft')); break
+    case 'courseAi': mainContent.innerHTML = renderCourseProgramPage(getCourseProgramByView('courseAi')); break
     case 'article': renderArticle(); break
     case 'video': renderVideo(); break
     case 'quiz': renderQuiz(); break
@@ -1658,6 +1670,9 @@ function renderAvatar(user, extraClass = '') {
 function viewToPath(view, episode) {
   switch (view) {
     case 'home': return '/'
+    case 'courses': return '/courses'
+    case 'courseCraft': return '/courses/trading-craft'
+    case 'courseAi': return '/courses/ai-forging'
     case 'article': return episode ? `/article/${episode.id}` : '/article'
     case 'video': return episode ? `/video/${episode.id}` : '/video'
     case 'quiz': return state.currentEpisode ? `/quiz/${state.currentEpisode.id}` : '/quiz'
@@ -1679,6 +1694,9 @@ function viewToPath(view, episode) {
 function pathToRoute(path) {
   const clean = path.replace(/\/$/, '') || '/'
   if (clean === '/') return { view: 'home' }
+  if (clean === '/courses') return { view: 'courses' }
+  if (clean === '/courses/trading-craft') return { view: 'courseCraft' }
+  if (clean === '/courses/ai-forging') return { view: 'courseAi' }
   if (clean === '/trades') return { view: 'trades' }
   if (clean === '/tools') return { view: 'tools' }
   if (clean === '/community') return { view: 'community' }
@@ -1832,8 +1850,8 @@ function renderHome() {
       <p class="hero-lead">在这里，系统学习交易的底层逻辑、技术分析方法，以及 AI 在交易分析中的技术应用。我们教方法、讲原理，帮你建立属于自己的判断力。</p>
       <p class="hero-fineprint">市场永远有风险。我们能交付的是能力与方法，而不是对收益的承诺——这一点，从第一天起就不会变。</p>
       <div class="hero-cta">
-        <button class="btn btn-primary" onclick="document.querySelector('.tabs')?.scrollIntoView({behavior:'smooth'})">免费领取入门课程</button>
-        <button class="btn btn-outline" onclick="document.querySelector('.tabs')?.scrollIntoView({behavior:'smooth'})">浏览课程大纲</button>
+        <button class="btn btn-primary" type="button" data-course-route="courseCraft">免费试听入门课</button>
+        <button class="btn btn-outline" type="button" data-course-route="courses">查看完整课程体系</button>
       </div>
       <div class="hero-tags">
         <span class="hero-tag"><b>讲方法</b>，不讲内幕</span>
@@ -9537,6 +9555,10 @@ function setupGlobalEvents() {
   }
 
   $('#logoHome').addEventListener('click', () => navigate('home'))
+  $('#navCourses')?.addEventListener('click', (e) => {
+    e.preventDefault()
+    navigate('courses')
+  })
   marketToggle?.addEventListener('click', (e) => {
     e.stopPropagation()
     toggleMarketMenu()
@@ -9556,6 +9578,9 @@ function setupGlobalEvents() {
     navigate('community')
   })
   $('#navMembership').addEventListener('click', () => navigate('membership'))
+  $('#footerCourses')?.addEventListener('click', (e) => { e.preventDefault(); navigate('courses') })
+  $('#footerCourseCraft')?.addEventListener('click', (e) => { e.preventDefault(); navigate('courseCraft') })
+  $('#footerCourseAi')?.addEventListener('click', (e) => { e.preventDefault(); navigate('courseAi') })
 
   $('#loginBtn').addEventListener('click', () => showAuthModal('login_password'))
   $('#registerBtn').addEventListener('click', () => showAuthModal('register'))
@@ -9967,6 +9992,29 @@ function setupGlobalEvents() {
 
   mainContent.addEventListener('click', async (e) => {
     const target = e.target
+
+    const courseRoute = target.closest('[data-course-route]')
+    if (courseRoute) {
+      navigate(courseRoute.dataset.courseRoute)
+      return
+    }
+
+    const courseTrial = target.closest('[data-course-trial]')
+    if (courseTrial) {
+      if (!requireLogin()) return
+      const firstFreeCourse = episodes.find((ep) => {
+        const level = state.videoAccessMap[ep.id] || ep.accessLevel || 'free'
+        const hasPlayableVideo = ep.hasStreamVideo || Boolean(ep.youtubeId)
+        return level === 'free' && hasPlayableVideo && !isArticleEpisode(ep)
+      })
+      if (firstFreeCourse) {
+        navigateToEpisode(firstFreeCourse)
+      } else {
+        navigate('home')
+        requestAnimationFrame(() => document.querySelector('.tabs')?.scrollIntoView({ behavior: 'smooth' }))
+      }
+      return
+    }
 
     const card = target.closest('.episode-card')
     if (card) {
