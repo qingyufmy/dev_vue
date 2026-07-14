@@ -13,10 +13,10 @@ function applyHeaders(path) {
 }
 
 describe('security headers', () => {
-  it('does not emit frame embedding restrictions', () => {
+  it('leaves CSP to the page-level policy', () => {
     for (const path of ['/', '/api/course-items', '/ai']) {
       const { headers } = applyHeaders(path)
-      expect(headers.get('Content-Security-Policy')).not.toContain('frame-ancestors')
+      expect(headers.has('Content-Security-Policy')).toBe(false)
       expect(headers.has('X-Frame-Options')).toBe(false)
     }
   })

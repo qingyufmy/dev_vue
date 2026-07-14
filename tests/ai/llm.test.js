@@ -398,4 +398,12 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     }, { risk_level: 'high', max_position_size: 0.05 }, market)
     expect(result.recommended_volume).toBe(0.05)
   })
+
+  it('低风险等级仍以用户配置作为单笔最大手数', () => {
+    const result = normalizeAiSignal({
+      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.05,
+      stop_loss_price: 3980, take_profit_1_price: 4030,
+    }, { risk_level: 'low', max_position_size: 0.05 }, market)
+    expect(result.recommended_volume).toBe(0.05)
+  })
 })

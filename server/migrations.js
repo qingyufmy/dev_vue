@@ -313,7 +313,7 @@ const migrations = [
           const defaultSchema = JSON.stringify({
             signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold",
             confidence: "0.00-1.00，动态估算，禁止固定值。按趋势强度、位置结构、波动噪音、风险状态综合评估。BUY/SELL弱优势0.52-0.62，中等0.63-0.74，强共振>0.75。HOLD时0.55-0.68，明确回避风险可>0.70。hold时也不得为0",
-            recommended_volume: "0.01-0.05手，不得超过0.05。根据风险等级调整：low=0.01-0.02, medium=0.02-0.03, high=0.03-0.05。hold时返回0",
+            recommended_volume: "0.01至输入市场数据中的max_position_size手，不得超过max_position_size。应根据当前风险与止损距离合理建议；hold时返回0",
             limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
             stop_limit_price: "止损触发价，仅buy_stop_limit/sell_stop_limit时需要。触发后按limit_price成交。通常设在关键支撑/阻力突破位，limit_price设在突破后合理入场位",
             pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
@@ -1039,6 +1039,25 @@ const migrations = [
     up: async () => {
       await queryRun('ALTER TABLE ai_configs ALTER COLUMN temperature SET DEFAULT 0.3')
       console.log('[Migrations] 053 set manual inference temperature default to 0.3')
+    }
+  },
+  {
+    id: '054_single_trade_volume_limit_schema',
+    up: async () => {
+      const rows = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      const recommendedVolumeRule = '0.01至输入市场数据中的max_position_size手，不得超过max_position_size。应根据当前风险与止损距离合理建议；hold时返回0'
+      let updatedCount = 0
+      for (const row of rows) {
+        const schema = JSON.parse(row.schema_json)
+        if (!schema || typeof schema !== 'object' || Array.isArray(schema)) continue
+        schema.recommended_volume = recommendedVolumeRule
+        await queryRun(
+          'UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?',
+          [JSON.stringify(schema, null, 2), row.id]
+        )
+        updatedCount++
+      }
+      console.log(`[Migrations] 054 updated single-trade volume rule in ${updatedCount} active schema(s)`)
     }
   }
 ]
