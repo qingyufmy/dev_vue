@@ -4,6 +4,7 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../..
 import { round2, round3, stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge } from './market-data.js'
+import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -86,10 +87,13 @@ export function buildBridgeOrderCall(request) {
 }
 
 export async function insertAudit(db, userId, action, symbol, request, result, status) {
+  if (shouldSkipHoldAudit(request, result, status)) return false
+  const record = prepareAuditRecord(action, request, result, status)
   await queryRun(`
     INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [userId, action, symbol || null, JSON.stringify(request), JSON.stringify(result), status, beijingNow()])
+  `, [userId, record.action, symbol || null, JSON.stringify(record.request), JSON.stringify(record.result), record.status, beijingNow()])
+  return true
 }
 
 export async function getActiveConfig(db, userId, sessionId = 'default', provider = null, opts = {}) {
@@ -171,7 +175,7 @@ export async function getAnalyzeApiKey(userId, sessionId) {
         api_provider: adminConfig.api_provider || 'deepseek',
         model_name: adminConfig.model_name || 'deepseek-chat',
         api_base_url: adminConfig.api_base_url || null,
-        temperature: adminConfig.temperature ?? 0.7,
+        temperature: adminConfig.temperature ?? DEFAULT_TEMPERATURE,
         max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
         system_prompt: effectivePrompt,
         _model_shared: true,
@@ -182,7 +186,7 @@ export async function getAnalyzeApiKey(userId, sessionId) {
       api_provider: adminConfig.api_provider || 'deepseek',
       model_name: adminConfig.model_name || 'deepseek-chat',
       api_base_url: adminConfig.api_base_url || null,
-      temperature: adminConfig.temperature ?? 0.7,
+      temperature: adminConfig.temperature ?? DEFAULT_TEMPERATURE,
       max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
       system_prompt: effectivePrompt,
       enable_auto_trade: false,

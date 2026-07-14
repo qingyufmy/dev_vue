@@ -128,10 +128,11 @@ HIST[i]  = DIF[i] - DEA[i]
 3. 价格方向校验：
    - 底→顶：`end_price > start_price`
    - 顶→底：`end_price < start_price`
-4. 不满足则跳过，计入 `invalidCount`
+4. 间距不足的候选分型不进入活动端点链；价格方向不满足时计入 `invalidCount`，清空断点前的活动笔链，并从较新的分型重新起算
 5. 由两个已确认分型构成的笔标记为 `confirmed: true`
 6. 未收盘 K 线不参与分型和正式笔构造
-7. 最后一个确认分型到当前未收盘 K 线的实时变化单独输出为 `developing_bi`，不进入线段、中枢或背驰
+7. 最后一个被笔构造接受的活动分型到其后全部 K 线（包括当前未收盘 K 线）的实时极值变化，单独输出为 `developing_bi`，不进入线段、中枢或背驰
+8. 即使已确认笔不足 3 笔、暂时不能构造线段，只要存在有效活动分型，仍计算 `developing_bi`
 
 ### 输出
 
@@ -157,8 +158,10 @@ HIST[i]  = DIF[i] - DEA[i]
 3. 特征序列先按方向处理包含关系，并按可确认前缀逐步寻找端点，确认后不允许后续元素跨端点重新合并
 4. 第一、第二特征元素无缺口时，特征序列分型直接确认线段端点
 5. 存在缺口时，从候选端点开始建立第二特征序列；只有出现相反分型才确认，原趋势先创新极值则候选失效
-6. 滚动窗口首个可检测端点仅用于重同步，不输出截断首段；后续不足确认条件的笔保留为 `candidate_segment`
-7. 每个线段记录完整 `high`/`low` 和组成笔 ID
+6. 滚动窗口首个可检测端点仅用于初步重同步，不输出截断首段
+7. 从完整确认笔窗口以及待验证结构起点之前仍具备重同步空间的多个起点独立分段；只有至少两个能够生成完整线段的分解对连续两个或以上末端线段的首尾笔边界达成一致，才保留共同末端线段，单个共同线段不足以证明分段相位已经恢复
+8. 多起点分解存在边界冲突、可验证分解不足或候选结构缺少至少两个独立起点确认时，设置 `window_stable: false`，并禁止输出 `candidate_segment`、中枢和背驰
+9. 每个线段记录完整 `high`/`low` 和组成笔 ID
 
 ### 输出
 
@@ -262,6 +265,7 @@ HIST[i]  = DIF[i] - DEA[i]
   status: 'ok' | 'partial' | 'insufficient_klines' | 'insufficient_bis' | 'unreliable_segments',
   reliability: 'high' | 'medium' | 'low',
   raw_bar_count, processed_bar_count,
+  window_resynced, window_stable,
   fractal_count, bi_count, segment_count, center_count,
   current_bi, recent_bis, developing_bi,
   current_segment, prev_segment, candidate_segment,
@@ -300,6 +304,8 @@ HIST[i]  = DIF[i] - DEA[i]
 | `processed_bars_too_few` | 包含处理后有效柱过少 |
 | `invalid_bi_price_direction` | 检测到不满足价格方向的候选笔 |
 | `insufficient_confirmed_bis` | 已确认笔不足 3 笔 |
+| `segment_window_not_resynced` | 滚动窗口内尚未找到可用于重同步的线段端点 |
+| `segment_window_unstable` | 完整窗口与内部后缀窗口的末端线段边界不一致 |
 | `segments_not_confirmed` | 尚未形成可确认线段 |
 | `no_valid_center` | 已有线段但尚未形成有效中枢 |
 | `divergence_skipped_invalid_macd` | MACD 数据或面积无效，无法判定背驰 |
@@ -310,7 +316,7 @@ HIST[i]  = DIF[i] - DEA[i]
 
 1. 最后一根 K 线视为未收盘柱，不进入正式分型、笔、线段、中枢和背驰。
 2. 未收盘柱只可用于 `developing_bi`，其变化不得重绘已确认结构。
-3. 普通指标只使用提示词指定的可见窗口；扩展到 300/500 根的历史只用于缠论。
+3. 普通指标只使用提示词指定的可见窗口；扩展到 300/500 根的历史只用于缠论。300 根尚无线段或尚无中枢时，单次补取至 500 根；同一进程内记住该“用户+品种+周期”需要最大历史，手动推理入口、自动调度入口和上下文构造器后续统一直接请求 500 根，避免重复获取 300+500 根。
 4. 分型必须顶底交替；笔必须方向交替且满足最少处理后 K 线间隔。
 5. 正式线段至少包含 3 笔，滚动窗口截断的首段不会输出。
 6. 中枢必须由至少 3 条确认线段的正宽度重叠形成，单点接触不算重叠。

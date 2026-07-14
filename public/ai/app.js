@@ -369,6 +369,7 @@ const AUTO_REASON_LABELS = {
   market_unknown_no_tick: '等待行情数据',
   market_stale_tick: '行情停滞',
   redis_unavailable: '缓存服务未连接',
+  weekly_flatten_window: '周末清仓处理中',
   redis_lock_failed: '调度锁获取失败',
   redis_cooldown_active: '等待下一轮调度',
   no_api_key: '未配置接口密钥',
@@ -445,6 +446,10 @@ function renderAutoAnalyzeBadge(s) {
     label = '自动推理关闭';
     type = 'neutral';
     title = '状态：自动推理关闭';
+  } else if (s.paused_reason === 'weekly_flatten_window') {
+    label = '自动推理暂停 · 周末清仓';
+    type = 'warning';
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：周末清仓期间暂停`;
   } else if (s.in_flight) {
     label = '自动推理中';
     type = 'running';
@@ -805,6 +810,25 @@ function connectBridgeStatusWs(onReady) {
         // New signal pushed — refresh status and signal list
         handleNewSignal(msg);
         loadStatus().catch(() => {});
+      } else if (msg.type === 'weekly_flatten_state') {
+        const noticeKey = `${msg.cycle || ''}:${msg.status || ''}:${msg.reason || ''}`;
+        if (state._weeklyFlattenNoticeKey !== noticeKey) {
+          state._weeklyFlattenNoticeKey = noticeKey;
+          if (msg.status === 'running') {
+            toast(`周末风险控制已启动：正在撤销系统挂单并平仓（持仓 ${msg.position_count || 0}，挂单 ${msg.pending_count || 0}）`, 'warning');
+          } else if (msg.status === 'completed') {
+            toast('周末风险控制已完成：系统持仓和挂单均已清理', 'success');
+          } else if (msg.status === 'retrying') {
+            toast('周末风险控制尚未完成，系统将在05:00前继续重试', 'warning');
+          } else if (msg.status === 'failed') {
+            const reason = msg.reason === 'unsupported_netting'
+              ? '当前为净持仓账户，无法安全区分系统仓与手工仓'
+              : msg.reason === 'deadline_reached'
+                ? '05:00任务已结束，仍有未完成项'
+                : '自动清仓失败';
+            toast(`周末风险控制异常：${reason}`, 'error');
+          }
+        }
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -2099,7 +2123,7 @@ async function loadConfig() {
   $("modelName").value = cfg.model_name || "deepseek-chat";
   $("apiBaseUrl").value = cfg.api_base_url || "";
   applyProviderPreset($("apiProvider").value);
-  $("temperature").value = cfg.temperature ?? 0.7;
+  $("temperature").value = cfg.temperature ?? 0.3;
   $("maxTokens").value = cfg.max_tokens ?? 2000;
   $("riskLevel").value = cfg.risk_level || "medium";
   const configuredMaxPosition = Number(cfg.max_position_size ?? 0.05);
@@ -3902,8 +3926,29 @@ function auditActionLabel(action) {
     ai_execute: "AI 信号执行",
     ai_auto_execute: "AI 自动执行",
     ai_auto_scan: "AI 自动扫描",
+    ai_auto_execute_skipped: "AI 自动执行跳过",
+    ai_auto_execute_rejected: "AI 自动执行拒绝",
+    cancel_pending_invalid: "忽略无效撤单条件",
+    cancel_pending_invalid_price: "跳过价格无效挂单",
+    cancel_pending_invalid_ticket: "跳过编号无效挂单",
+    ai_cancel_pending: "AI 取消挂单",
+    ai_cancel_pending_failed: "AI 取消挂单失败",
+    pending_superseded: "旧挂单已替换",
+    pending_supersede_failed: "旧挂单替换失败",
+    pending_expire_cancel_failed: "过期挂单取消失败",
+    pending_expired: "挂单已过期",
+    pending_filled: "挂单已成交",
+    delivery_stale_executing: "执行状态超时待确认",
     smart_close: "AI 智能平仓",
     smart_close_rule: "规则智能平仓",
+    weekly_flatten_started: "周末风险清理开始",
+    weekly_pending_cancelled: "周末系统挂单已取消",
+    weekly_position_closed: "周末系统持仓已平仓",
+    weekly_flatten_completed: "周末风险清理完成",
+    weekly_flatten_partial: "周末风险清理未完成",
+    weekly_flatten_retry: "周末风险清理重试",
+    weekly_flatten_deadline_ended: "周末风险清理到期",
+    weekly_flatten_unsupported_netting: "周末风险清理不支持净持仓账户",
   }[action] || action || "--";
 }
 
@@ -3912,8 +3957,12 @@ function auditStatusLabel(status) {
     success: "成功",
     skipped: "已跳过",
     error: "错误",
+    failed: "失败",
     rejected: "风控拒绝",
     needs_confirmation: "需要确认",
+    warning: "警告",
+    info: "信息",
+    unknown: "未知",
   }[status] || status || "--";
 }
 
@@ -3954,8 +4003,8 @@ function renderAuditRows() {
   if (!body) return;
   const filters = state.auditFilters;
   const filtered = state.auditRows.filter((row) => {
-    const status = String(row.status || "");
-    const type = auditActionType(row.action);
+    const status = String(row.status_code || row.status || "");
+    const type = auditActionType(row.action_code || row.action);
     return (!filters.status || status === filters.status) && (!filters.type || type === filters.type);
   });
   filters.page = clampPage(filters.page, filters.pageSize, filtered.length);
@@ -3966,16 +4015,16 @@ function renderAuditRows() {
     const result = row.result || {};
     const rawReason = result.reason || result.message || result.status || "";
     const reasonText = auditReasonLabel(rawReason) || "--";
-    const status = row.status || "";
+    const status = row.status_code || row.status || "";
     const statusClass = status || "unknown";
-    const actionType = auditActionType(row.action);
+    const actionType = auditActionType(row.action_code || row.action);
     const resultText = auditResultText(row);
     return `
       <tr class="audit-row ${auditRowClass(status)}">
         <td>${compactTimeHtml(row?.created_at_mt5 || row?.created_at)}</td>
         <td><span class="action-badge ${actionType}">${escapeHtml(auditActionLabel(row.action))}</span></td>
         <td>${escapeHtml(row.symbol || "--")}</td>
-        <td><span class="audit-status ${statusClass}">${escapeHtml(auditStatusLabel(row.status))}</span></td>
+        <td><span class="audit-status ${statusClass}">${escapeHtml(auditStatusLabel(row.status_code || row.status))}</span></td>
         <td class="audit-result-cell"><button class="audit-result-text" type="button" title="${escapeHtml(resultText)}" data-audit-result>${escapeHtml(resultText)}</button></td>
         <td title="${escapeHtml(rawReason || "--")}">${escapeHtml(reasonText)}</td>
       </tr>
@@ -4573,6 +4622,7 @@ function waitReasonText(reason) {
     market_stale_tick: '行情停滞',
     market_unknown: '行情未知',
     redis_unavailable: 'Redis不可用',
+    weekly_flatten_window: '周末清仓中',
     no_api_key: '无API密钥',
     strategy_disabled: '策略已禁用',
     user_bridge_offline: '用户桥接离线',

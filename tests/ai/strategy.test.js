@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { attachAtrAnchor, buildStrategyContextFromTags } from '../../server/routes/ai/strategy.js'
+import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount, __strategyTest } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
@@ -18,13 +18,17 @@ vi.mock('../../server/routes/ai/market-data.js', () => ({
     strategy_score: { trend_strength: 0.6, momentum_alignment: 1, data_confidence: 0.7 },
     kline_count: rates.length, positions: { total_positions: 0, details: [] },
     account: { balance: 10000, equity: 10500 },
-    ...(options.computeChan ? { chan: { segment_count: rates.length >= 500 ? 1 : 0 } } : {}),
+    ...(options.computeChan ? { chan: {
+      segment_count: rates[0]?.chan_segment_count ?? (rates.length >= 500 ? 1 : 0),
+      center_count: rates[0]?.chan_center_count ?? (rates.length >= 500 ? 1 : 0),
+    } } : {}),
   })),
 }))
 
 describe('buildStrategyContextFromTags', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    __strategyTest.clearChanHistoryHints()
     mockMt5Bridge.mockResolvedValue({ rates: Array(100).fill({ time: '2026-01-01', open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }) })
   })
 
@@ -51,6 +55,14 @@ describe('buildStrategyContextFromTags', () => {
     const prompt = '分析 {{MTF:M5:100}}'
     await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], prompt, 'M5', rates, 'manual'
+    )
+    expect(mockMt5Bridge).not.toHaveBeenCalled()
+  })
+
+  it('已有500根缠论回退数据时不会重复请求500根', async () => {
+    const rates = Array.from({ length: 500 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'H1', rates, 'manual'
     )
     expect(mockMt5Bridge).not.toHaveBeenCalled()
   })
@@ -85,6 +97,35 @@ describe('buildStrategyContextFromTags', () => {
     expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
     expect(result.timeframes.H1.klines[0].time).toBe('b420')
+  })
+
+  it('300根已有线段但没有中枢时自适应补取500根', async () => {
+    const rates300 = Array.from({ length: 300 }, (_, i) => ({
+      time: `a${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100',
+      chan_segment_count: 2, chan_center_count: 0,
+    }))
+    const rates500 = Array.from({ length: 500 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValueOnce({ rates: rates500 })
+    const result = await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
+    )
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 300 }))
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
+    expect(result.timeframes.H1.klines).toHaveLength(80)
+    expect(result.timeframes.H1.klines[0].time).toBe('b420')
+  })
+
+  it('某品种周期补取过500根后下轮直接请求500根', async () => {
+    const rates300 = Array.from({ length: 300 }, (_, i) => ({ time: `a${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    const rates500 = Array.from({ length: 500 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValue({ rates: rates500 })
+    const args = [1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual']
+    await buildStrategyContextFromTags(...args)
+    expect(resolveChanHistoryCount(1, 'XAUUSD', 'H1', 80, true)).toBe(500)
+    mockMt5Bridge.mockClear()
+    await buildStrategyContextFromTags(...args)
+    expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
+    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
   })
 })
 

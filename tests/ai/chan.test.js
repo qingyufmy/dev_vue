@@ -139,6 +139,21 @@ describe('buildBis', () => {
     expect(bis[1].dir).toBe('down')
     expect(bis[1].end_price).toBeLessThan(bis[1].start_price)
   })
+
+  it('resets the confirmed bi chain after an invalid price relation', () => {
+    const fractals = [
+      { idx: 0, raw_idx: 0, type: 'bottom', price: 80, high: 80, low: 80, time: 't0' },
+      { idx: 5, raw_idx: 5, type: 'top', price: 100, high: 100, low: 100, time: 't5' },
+      { idx: 10, raw_idx: 10, type: 'bottom', price: 110, high: 110, low: 110, time: 't10' },
+      { idx: 15, raw_idx: 15, type: 'top', price: 120, high: 120, low: 120, time: 't15' },
+      { idx: 20, raw_idx: 20, type: 'bottom', price: 105, high: 105, low: 105, time: 't20' },
+    ]
+    const { bis, invalidCount } = buildBis(fractals, [])
+    expect(invalidCount).toBe(1)
+    expect(bis.map(b => b.dir)).toEqual(['up', 'down'])
+    expect(bis[0]).toMatchObject({ start_price: 110, end_price: 120 })
+    expect(bis[1]).toMatchObject({ start_price: 120, end_price: 105 })
+  })
 })
 
 describe('buildSegments', () => {
@@ -282,7 +297,7 @@ describe('buildSegments', () => {
     expect(segments[0].bi_ids).toEqual([1, 2, 3])
   })
 
-  it('滚动窗口首段仅用于重同步，不输出截断线段', () => {
+  it('候选结构缺少多个独立起点确认时保持不稳定', () => {
     const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
     const bis = [
       makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
@@ -293,8 +308,77 @@ describe('buildSegments', () => {
     ]
     const result = buildSegments(bis, { trustedStart: false })
     expect(result.resynced).toBe(true)
-    expect(result.segments).toHaveLength(1)
-    expect(result.segments[0]).toMatchObject({ dir: 'down', start_bi_id: 4, end_bi_id: 6 })
+    expect(result.stable).toBe(false)
+    expect(result.segments).toHaveLength(0)
+    expect(result.candidate).toBeNull()
+  })
+
+  it('滚动窗口尚未找到重同步端点时不输出候选线段', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 110),
+      makeBi(2, 'down', 110, 105),
+      makeBi(3, 'up', 105, 115),
+      makeBi(4, 'down', 115, 108),
+    ]
+    const result = buildSegments(bis, { trustedStart: false })
+    expect(result).toMatchObject({ segments: [], candidate: null, resynced: false, stable: false })
+  })
+
+  it('完整窗口和内部后缀末端边界不一致时抑制全部线段结构', () => {
+    let state = 3
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    let price = 100
+    const bis = []
+    for (let i = 0; i < 60; i++) {
+      const dir = i % 2 === 0 ? 'up' : 'down'
+      const distance = 1 + random() * 25
+      const end = dir === 'up' ? price + distance : price - distance
+      bis.push({ id: i + 1, dir, start_price: price, end_price: end, high: Math.max(price, end), low: Math.min(price, end) })
+      price = end
+    }
+    const result = buildSegments(bis, { trustedStart: false })
+    expect(result).toMatchObject({ segments: [], candidate: null, resynced: true, stable: false })
+  })
+
+  it('不会把多个截断起点共同产生的伪边界当成完整历史稳定线段', () => {
+    let state = 2
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    let price = 100
+    const bis = []
+    for (let i = 0; i < 40; i++) {
+      const dir = i % 2 === 0 ? 'up' : 'down'
+      const distance = 1 + random() * 25
+      const end = dir === 'up' ? price + distance : price - distance
+      bis.push({ id: i + 1, dir, start_price: price, end_price: end, high: Math.max(price, end), low: Math.min(price, end) })
+      price = end
+    }
+
+    const trusted = buildSegments(bis)
+    const trustedBoundaries = new Set(trusted.segments.map(segment => `${segment.dir}:${segment.start_bi_id}:${segment.end_bi_id}`))
+    const rolling = buildSegments(bis.slice(5), { trustedStart: false })
+
+    expect(rolling.segments.every(segment => trustedBoundaries.has(`${segment.dir}:${segment.start_bi_id}:${segment.end_bi_id}`))).toBe(true)
+    expect(rolling.segments.some(segment => segment.start_bi_id === 24 && segment.end_bi_id === 34)).toBe(false)
+  })
+
+  it('keeps candidate segment direction consistent with its extreme', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const bis = [
+      makeBi(1, 'up', 100, 110),
+      makeBi(2, 'down', 110, 95),
+      makeBi(3, 'up', 95, 105),
+      makeBi(4, 'down', 105, 90),
+    ]
+    const { candidate } = buildSegments(bis)
+    expect(candidate).toMatchObject({ dir: 'up', start_price: 100, end_price: 110 })
+    expect(candidate.end_price).toBeGreaterThan(candidate.start_price)
   })
 
   it('多组交替笔序列始终满足线段结构不变量', () => {
@@ -618,6 +702,7 @@ describe('computeChan', () => {
     expect(result.reliability).toBeDefined()
     expect(result.raw_bar_count).toBe(50)
     expect(result.closed_bar_count).toBe(49)
+    expect(typeof result.window_stable).toBe('boolean')
     expect(result.warnings).toBeDefined()
     expect(Array.isArray(result.warnings)).toBe(true)
     expect(result.recent_bis).toHaveLength(6)
@@ -636,12 +721,113 @@ describe('computeChan', () => {
     expect(second.developing_bi).not.toEqual(first.developing_bi)
   })
 
-  it('扩展历史在首段重同步后仍能输出后续完整线段', () => {
-    const rates = makeRates(300)
-    const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries)
+  it('uses all post-fractal bars for the developing bi extreme', () => {
+    const rates = Array.from({ length: 31 }, (_, i) => ({ time: `t${i}`, open: 105, high: 110, low: 100, close: 105, tick_volume: 1 }))
+    rates[20] = { ...rates[20], low: 80, close: 90 }
+    rates[30] = { ...rates[30], low: 90, close: 95 }
+    const fractal = (idx, type, price) => ({ idx, raw_start_idx: idx, raw_end_idx: idx, type, price, high: price, low: price, time: `t${idx}` })
+    const fractals = [
+      fractal(0, 'bottom', 100),
+      fractal(4, 'top', 120),
+      fractal(8, 'bottom', 110),
+      fractal(12, 'top', 130),
+    ]
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
+    expect(result.developing_bi).toMatchObject({ dir: 'down', start_price: 130, end_price: 80, confirmed: false })
+  })
+
+  it('anchors the developing bi to the last pivot accepted by bi construction', () => {
+    const rates = Array.from({ length: 31 }, (_, i) => ({ time: `t${i}`, open: 115, high: 120, low: 110, close: 115, tick_volume: 1 }))
+    rates[20] = { ...rates[20], high: 140, low: 120, close: 130 }
+    const fractal = (idx, type, price) => ({ idx, raw_start_idx: idx, raw_end_idx: idx, type, price, high: price, low: price, time: `t${idx}` })
+    const fractals = [
+      fractal(0, 'bottom', 100),
+      fractal(4, 'top', 120),
+      fractal(8, 'bottom', 110),
+      fractal(12, 'top', 130),
+      fractal(14, 'bottom', 115), // Rejected: fewer than five processed bars from the accepted top.
+    ]
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
+    expect(result.developing_bi).toMatchObject({ dir: 'down', start_price: 130, end_price: 110, confirmed: false })
+  })
+
+  it('returns a developing bi even when fewer than three confirmed bis exist', () => {
+    const rates = Array.from({ length: 31 }, (_, i) => ({ time: `t${i}`, open: 115, high: 120, low: 110, close: 115, tick_volume: 1 }))
+    rates[20] = { ...rates[20], high: 140, close: 135 }
+    const fractal = (idx, type, price) => ({ idx, raw_start_idx: idx, raw_end_idx: idx, type, price, high: price, low: price, time: `t${idx}` })
+    const fractals = [
+      fractal(0, 'bottom', 100),
+      fractal(4, 'top', 120),
+      fractal(8, 'bottom', 110),
+    ]
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
+    expect(result.status).toBe('insufficient_bis')
+    expect(result.bi_count).toBe(2)
+    expect(result.developing_bi).toMatchObject({ dir: 'up', start_price: 110, end_price: 140, confirmed: false })
+  })
+
+  it('末端线段边界不稳定时组装层禁止中枢和背驰输出', () => {
+    let state = 3
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    let price = 100
+    const vertices = [{ type: 'bottom', price }]
+    for (let i = 0; i < 60; i++) {
+      const dir = i % 2 === 0 ? 'up' : 'down'
+      const distance = 1 + random() * 25
+      price = dir === 'up' ? price + distance : price - distance
+      vertices.push({ type: dir === 'up' ? 'top' : 'bottom', price })
+    }
+    const fractals = vertices.map((vertex, index) => ({
+      idx: index * 4,
+      raw_start_idx: index * 4,
+      raw_end_idx: index * 4,
+      type: vertex.type,
+      price: vertex.price,
+      high: vertex.price,
+      low: vertex.price,
+      time: `t${index * 4}`,
+    }))
+    const rates = Array.from({ length: 300 }, (_, i) => ({ time: `t${i}`, open: 100, high: 110, low: 90, close: 100, tick_volume: 1 }))
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
+    expect(result).toMatchObject({ window_resynced: true, window_stable: false, segment_count: 0, center_count: 0 })
+    expect(result.candidate_segment).toBeNull()
+    expect(result.current_center).toBeNull()
+    expect(result.divergence.type).toBe('none')
+    expect(result.warnings).toContain('segment_window_unstable')
+  })
+
+  it('多个起点对末端边界达成共识时仍输出完整线段', () => {
+    let state = 1
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    let price = 100
+    const vertices = [{ type: 'bottom', price }]
+    for (let i = 0; i < 60; i++) {
+      const dir = i % 2 === 0 ? 'up' : 'down'
+      const distance = 1 + random() * 25
+      price = dir === 'up' ? price + distance : price - distance
+      vertices.push({ type: dir === 'up' ? 'top' : 'bottom', price })
+    }
+    const fractals = vertices.map((vertex, index) => ({
+      idx: index * 4,
+      raw_start_idx: index * 4,
+      raw_end_idx: index * 4,
+      type: vertex.type,
+      price: vertex.price,
+      high: vertex.price,
+      low: vertex.price,
+      time: `t${index * 4}`,
+    }))
+    const rates = Array.from({ length: 300 }, (_, i) => ({ time: `t${i}`, open: 100, high: 110, low: 90, close: 100, tick_volume: 1 }))
+    const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
     expect(result.closed_bar_count).toBe(299)
     expect(result.window_resynced).toBe(true)
-    expect(result.warnings).not.toContain('segment_window_resynced')
+    expect(result.window_stable).toBe(true)
     expect(result.segment_count).toBeGreaterThan(0)
   })
 

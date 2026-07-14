@@ -150,11 +150,18 @@ function buildBis(fractals, bars) {
   }
   const bis = []
   let invalidCount = 0
+  let anchor = pivots[0]
   for (let i = 1; i < pivots.length; i++) {
-    const s = pivots[i - 1], e = pivots[i]
+    const s = anchor, e = pivots[i]
     const dir = s.type === 'bottom' ? 'up' : 'down'
-    if (dir === 'up' && e.price <= s.price) { invalidCount++; continue }
-    if (dir === 'down' && e.price >= s.price) { invalidCount++; continue }
+    if ((dir === 'up' && e.price <= s.price) || (dir === 'down' && e.price >= s.price)) {
+      invalidCount++
+      // The price topology is discontinuous. Restart from the newer pivot so
+      // confirmed bis before and after the break cannot enter one structure.
+      bis.length = 0
+      anchor = e
+      continue
+    }
     bis.push({
       id: bis.length + 1, dir,
       start_idx: s.idx, end_idx: e.idx,
@@ -164,9 +171,32 @@ function buildBis(fractals, bars) {
       high: Math.max(s.high, e.high), low: Math.min(s.low, e.low),
       confirmed: true,
     })
+    anchor = e
   }
   if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}, invalid=${invalidCount}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
-  return { bis, invalidCount }
+  return { bis, invalidCount, activePivot: anchor || null }
+}
+
+function buildDevelopingBi(activePivot, rates) {
+  if (!activePivot || !Array.isArray(rates) || rates.length === 0) return null
+  const pivotRawEnd = Number(activePivot.raw_end_idx ?? activePivot.raw_idx)
+  const afterPivotIndex = Number.isFinite(pivotRawEnd) ? pivotRawEnd + 1 : rates.length - 1
+  const developingRates = rates.slice(Math.max(afterPivotIndex, 0))
+  if (activePivot.type === 'bottom') {
+    const highs = developingRates.map(rate => Number(rate.high)).filter(Number.isFinite)
+    const developingHigh = highs.length > 0 ? Math.max(...highs) : NaN
+    return Number.isFinite(developingHigh) && developingHigh > activePivot.price
+      ? { dir: 'up', start_price: round5(activePivot.price), end_price: round5(developingHigh), confirmed: false }
+      : null
+  }
+  if (activePivot.type === 'top') {
+    const lows = developingRates.map(rate => Number(rate.low)).filter(Number.isFinite)
+    const developingLow = lows.length > 0 ? Math.min(...lows) : NaN
+    return Number.isFinite(developingLow) && developingLow < activePivot.price
+      ? { dir: 'down', start_price: round5(activePivot.price), end_price: round5(developingLow), confirmed: false }
+      : null
+  }
+  return null
 }
 
 function rangesOverlap(a, b) {
@@ -301,7 +331,7 @@ function findSegmentEndpoint(bis, startIndex, segmentDirection) {
 }
 
 // === Chan Theory: Segment Construction from characteristic sequences ===
-function buildSegments(confirmedBis, options = {}) {
+function buildSegmentsFromAnchor(confirmedBis, options = {}) {
   if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null, resynced: false }
   const trustedStart = options.trustedStart !== false
   const segments = []
@@ -342,15 +372,76 @@ function buildSegments(confirmedBis, options = {}) {
   }
 
   const tailBis = confirmedBis.slice(startIndex)
-  const candidate = tailBis.length > 0 ? {
-    dir: tailBis[0].dir,
-    bi_ids: tailBis.map(b => b.id),
-    start_price: tailBis[0].start_price,
-    end_price: tailBis[tailBis.length - 1].end_price,
-  } : null
+  let candidate = null
+  if (tailBis.length > 0) {
+    const dir = tailBis[0].dir
+    const directionalEnds = tailBis
+      .filter(b => b.dir === dir)
+      .map(b => Number(b.end_price))
+      .filter(Number.isFinite)
+    const endPrice = dir === 'up' ? Math.max(...directionalEnds) : Math.min(...directionalEnds)
+    candidate = {
+      dir,
+      bi_ids: tailBis.map(b => b.id),
+      start_price: tailBis[0].start_price,
+      end_price: endPrice,
+    }
+  }
 
   if (DEBUG_CHAN) console.log(`[Chan] Segments(${segments.length}): ${segments.map(s => `#${s.id}(${s.dir}) bis=${s.bi_ids.length}`).join(' | ')}`)
   return { segments, candidate, resynced }
+}
+
+function sameSegmentBoundary(a, b) {
+  return Boolean(a && b && a.dir === b.dir && a.start_bi_id === b.start_bi_id && a.end_bi_id === b.end_bi_id)
+}
+
+function sameCandidate(a, b) {
+  if (!a || !b || a.dir !== b.dir || a.start_price !== b.start_price || a.end_price !== b.end_price) return false
+  return a.bi_ids.length === b.bi_ids.length && a.bi_ids.every((id, index) => id === b.bi_ids[index])
+}
+
+function buildSegments(confirmedBis, options = {}) {
+  const primary = buildSegmentsFromAnchor(confirmedBis, options)
+  if (options.trustedStart !== false) return { ...primary, stable: true }
+  if (!primary.resynced) return { ...primary, candidate: null, stable: false }
+
+  const firstStructureBiId = primary.segments[0]?.start_bi_id ?? primary.candidate?.bi_ids?.[0]
+  const firstStructureIndex = confirmedBis.findIndex(bi => bi.id === firstStructureBiId)
+  const latestProbeStart = firstStructureIndex - MIN_BIS_PER_SEGMENT
+  if (latestProbeStart < 1) return { segments: [], candidate: null, resynced: true, stable: false }
+
+  // Validate the claimed terminal structure from every alternate start that
+  // still leaves room to resync before that structure begins. Two arbitrary
+  // truncated windows can agree on the same false internal endpoint; requiring
+  // consensus across all eligible starts exposes that ambiguity.
+  const decompositions = [primary]
+  for (let start = 1; start <= latestProbeStart; start++) {
+    const probe = buildSegmentsFromAnchor(confirmedBis.slice(start), { trustedStart: false })
+    if (probe.resynced) decompositions.push(probe)
+  }
+  if (decompositions.length < 2) return { segments: [], candidate: null, resynced: true, stable: false }
+
+  const segmentValidators = decompositions.filter(result => result.segments.length > 0)
+  let commonCount = 0
+  while (segmentValidators.length >= 2 && commonCount < primary.segments.length) {
+    const primarySegment = primary.segments[primary.segments.length - 1 - commonCount]
+    const agreed = segmentValidators.every(result => {
+      const segment = result.segments[result.segments.length - 1 - commonCount]
+      return sameSegmentBoundary(primarySegment, segment)
+    })
+    if (!agreed) break
+    commonCount++
+  }
+  // One matching terminal segment can still share a false endpoint when every
+  // available start is missing the same older context. Two consecutive common
+  // segments are the minimum evidence that decomposition phase has recovered.
+  const segments = commonCount >= 2 ? primary.segments.slice(-commonCount) : []
+  const candidateValidators = decompositions.filter(result => result.candidate)
+  const candidate = primary.candidate && candidateValidators.length >= 2 && candidateValidators.every(result => sameCandidate(primary.candidate, result.candidate))
+    ? primary.candidate
+    : null
+  return { segments, candidate, resynced: true, stable: segments.length > 0 || candidate !== null }
 }
 
 // === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
@@ -535,6 +626,7 @@ function emptyChanResult(overrides = {}) {
     received_history_count: 0,
     history_sufficient: false,
     window_resynced: false,
+    window_stable: false,
     raw_bar_count: 0,
     closed_bar_count: 0,
     processed_bar_count: 0,
@@ -581,9 +673,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const bars = normalizeBarsForChan(closedRates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
   const fractals = options.fractalsForTest || detectFractals(bars)
-  const { bis: allBis, invalidCount } = buildBis(fractals, bars)
+  const { bis: allBis, invalidCount, activePivot } = buildBis(fractals, bars)
   if (invalidCount > 0) warnings.push('invalid_bi_price_direction')
   const confirmedBis = allBis.filter(b => b.confirmed !== false)
+  const developingBi = buildDevelopingBi(activePivot, rates)
   if (confirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
     const lastBi = allBis[allBis.length - 1]
@@ -598,12 +691,15 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       fractal_count: fractals.length,
       bi_count: allBis.length,
       current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+      developing_bi: developingBi,
       recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
       divergence: emptyDivergence('insufficient_bis'),
       warnings,
     })
   }
-  const { segments, candidate, resynced } = buildSegments(confirmedBis, { trustedStart: false })
+  const { segments, candidate, resynced, stable: windowStable } = buildSegments(confirmedBis, { trustedStart: false })
+  if (!resynced) warnings.push('segment_window_not_resynced')
+  else if (!windowStable) warnings.push('segment_window_unstable')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
   const centers = buildCenters(validSegs)
@@ -613,18 +709,6 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
   const lastBi = allBis[allBis.length - 1]
   const latest = parseFloat(rates[rates.length - 1].close)
-  const liveRate = rates[rates.length - 1]
-  const lastFractal = fractals[fractals.length - 1]
-  let developingBi = null
-  if (lastFractal && liveRate) {
-    const liveHigh = Number(liveRate.high)
-    const liveLow = Number(liveRate.low)
-    if (lastFractal.type === 'bottom' && Number.isFinite(liveHigh) && liveHigh > lastFractal.price) {
-      developingBi = { dir: 'up', start_price: round5(lastFractal.price), end_price: round5(liveHigh), confirmed: false }
-    } else if (lastFractal.type === 'top' && Number.isFinite(liveLow) && liveLow < lastFractal.price) {
-      developingBi = { dir: 'down', start_price: round5(lastFractal.price), end_price: round5(liveLow), confirmed: false }
-    }
-  }
   let priceVsCenter = 'none'
   if (latestCenter) {
     if (latest > latestCenter.zh) priceVsCenter = 'above'
@@ -654,6 +738,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     received_history_count: rates.length,
     history_sufficient: historySufficient,
     window_resynced: resynced,
+    window_stable: windowStable,
     raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
     fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
@@ -672,7 +757,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()

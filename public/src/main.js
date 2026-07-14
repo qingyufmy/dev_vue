@@ -2,6 +2,10 @@ import { episodes as staticEpisodes, categories } from './data/episodes.js'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
+import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260714f'
+import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
+import { getCourseProgramByView } from './data/course-programs.js?v=20260714h'
+import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260714h'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -1529,9 +1533,7 @@ async function init() {
   // Load video access map (public, no sensitive data — only episode IDs + access_level)
   api.get('/api/video-stream').then(r => {
     if (r.episodes) {
-      state.paidVideoEpisodes = r.episodes.map(e => e.id)
-      state.videoAccessMap = {}
-      r.episodes.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
+      syncVideoAccessState(r.episodes)
       const streamIds = new Set(state.paidVideoEpisodes.map(Number))
       episodes = episodes.map(ep => ({
         ...ep,
@@ -1552,8 +1554,18 @@ async function init() {
 
 // ===== Routing =====
 function renderView() {
+  const pageTitles = {
+    home: '量见',
+    courses: '课程体系 | 量见',
+    courseCraft: '交易是一门手艺 | 量见',
+    courseAi: 'AI铸剑 | 量见',
+  }
+  document.title = pageTitles[state.currentView] || '量见'
   switch (state.currentView) {
     case 'home': renderHome(); break
+    case 'courses': mainContent.innerHTML = renderCourseOverviewPage(); break
+    case 'courseCraft': mainContent.innerHTML = renderCourseProgramPage(getCourseProgramByView('courseCraft')); break
+    case 'courseAi': mainContent.innerHTML = renderCourseProgramPage(getCourseProgramByView('courseAi')); break
     case 'article': renderArticle(); break
     case 'video': renderVideo(); break
     case 'quiz': renderQuiz(); break
@@ -1658,6 +1670,9 @@ function renderAvatar(user, extraClass = '') {
 function viewToPath(view, episode) {
   switch (view) {
     case 'home': return '/'
+    case 'courses': return '/courses'
+    case 'courseCraft': return '/courses/trading-craft'
+    case 'courseAi': return '/courses/ai-forging'
     case 'article': return episode ? `/article/${episode.id}` : '/article'
     case 'video': return episode ? `/video/${episode.id}` : '/video'
     case 'quiz': return state.currentEpisode ? `/quiz/${state.currentEpisode.id}` : '/quiz'
@@ -1679,6 +1694,9 @@ function viewToPath(view, episode) {
 function pathToRoute(path) {
   const clean = path.replace(/\/$/, '') || '/'
   if (clean === '/') return { view: 'home' }
+  if (clean === '/courses') return { view: 'courses' }
+  if (clean === '/courses/trading-craft') return { view: 'courseCraft' }
+  if (clean === '/courses/ai-forging') return { view: 'courseAi' }
   if (clean === '/trades') return { view: 'trades' }
   if (clean === '/tools') return { view: 'tools' }
   if (clean === '/community') return { view: 'community' }
@@ -1832,8 +1850,8 @@ function renderHome() {
       <p class="hero-lead">在这里，系统学习交易的底层逻辑、技术分析方法，以及 AI 在交易分析中的技术应用。我们教方法、讲原理，帮你建立属于自己的判断力。</p>
       <p class="hero-fineprint">市场永远有风险。我们能交付的是能力与方法，而不是对收益的承诺——这一点，从第一天起就不会变。</p>
       <div class="hero-cta">
-        <button class="btn btn-primary" onclick="document.querySelector('.tabs')?.scrollIntoView({behavior:'smooth'})">免费领取入门课程</button>
-        <button class="btn btn-outline" onclick="document.querySelector('.tabs')?.scrollIntoView({behavior:'smooth'})">浏览课程大纲</button>
+        <button class="btn btn-primary" type="button" data-course-route="courseCraft">免费试听入门课</button>
+        <button class="btn btn-outline" type="button" data-course-route="courses">查看完整课程体系</button>
       </div>
       <div class="hero-tags">
         <span class="hero-tag"><b>讲方法</b>，不讲内幕</span>
@@ -2138,6 +2156,12 @@ function formatTimeAgo(timestamp) {
 const CATEGORY_LABELS = { strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型', basics: '基础', analysis: '分析', psychology: '心理', risk: '风控' }
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
 
+function syncVideoAccessState(items = []) {
+  state.paidVideoEpisodes = getVideoEpisodeIds(items)
+  state.videoAccessMap = {}
+  items.forEach(item => { state.videoAccessMap[item.id] = item.access_level || 'plus_pro' })
+}
+
 function hasEpisodeVideo(ep) {
   return Boolean(ep?.hasStreamVideo) || state.paidVideoEpisodes.includes(ep?.id)
 }
@@ -2152,7 +2176,7 @@ async function resolveArticleThemeUrl() {
           if (resp.ok && contentType.includes('text/css')) return href
         } catch {}
       }
-      return ARTICLE_THEME_URL_CANDIDATES[0]
+      return null
     })()
   }
   return articleThemeUrlPromise
@@ -2203,14 +2227,18 @@ async function syncArticleFrameTheme(frame = document.getElementById('articleFra
   const href = await resolveArticleThemeUrl()
 
   let link = doc.getElementById('wsArticleTheme')
-  if (!link) {
-    link = doc.createElement('link')
-    link.id = 'wsArticleTheme'
-    link.rel = 'stylesheet'
-    doc.head.appendChild(link)
-  }
-  if (link.getAttribute('href') !== href) {
-    link.setAttribute('href', href)
+  if (href) {
+    if (!link) {
+      link = doc.createElement('link')
+      link.id = 'wsArticleTheme'
+      link.rel = 'stylesheet'
+      doc.head.appendChild(link)
+    }
+    if (link.getAttribute('href') !== href) {
+      link.setAttribute('href', href)
+    }
+  } else if (link) {
+    link.remove()
   }
 
   const dark = document.documentElement.getAttribute('data-theme') === 'dark'
@@ -2286,16 +2314,24 @@ function renderEpisodeActions(ep, progressRecord) {
   `
 }
 
-function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
+function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, infoBeforeMedia = false }) {
   const progressRecord = state.user ? progress.get(ep.id) : null
   const percent = progressRecord
     ? Math.min(100, Math.round((progressRecord.watchedSeconds / (progressRecord.totalDuration || 1)) * 100))
     : 0
+  const infoHtml = `
+    <div class="video-info">
+      <h1 class="video-title">${escapeHtml(ep.title)}</h1>
+      <p class="video-description">${escapeHtml(ep.description)}</p>
+      ${renderEpisodeActions(ep, progressRecord)}
+    </div>
+  `
 
   mainContent.innerHTML = `
     <div class="${viewClass} fade-in">
       <button class="back-btn" id="backHome">← 返回课程列表</button>
 
+      ${infoBeforeMedia ? infoHtml : ''}
       ${mediaHtml}
 
       ${showProgress ? `
@@ -2308,11 +2344,7 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress }) {
         </div>
       ` : ''}
 
-      <div class="video-info">
-        <h1 class="video-title">${escapeHtml(ep.title)}</h1>
-        <p class="video-description">${escapeHtml(ep.description)}</p>
-        ${renderEpisodeActions(ep, progressRecord)}
-      </div>
+      ${infoBeforeMedia ? '' : infoHtml}
     </div>
   `
 }
@@ -2342,11 +2374,13 @@ function renderArticle() {
 
   const hasPaidVideo = state.paidVideoEpisodes.includes(ep.id)
   const hasAccess = canAccessVideo(ep.id)
+  const articleTarget = classifyArticleUrl(ep.articleUrl, window.location.origin)
 
   renderEpisodeDetailShell({
     ep,
     viewClass: 'article-view',
     showProgress: state.user && hasPaidVideo && hasAccess,
+    infoBeforeMedia: true,
     mediaHtml: `
       ${hasPaidVideo ? `
         <div class="article-video-section">
@@ -2370,21 +2404,34 @@ function renderArticle() {
           <span class="article-study-order-text">学习顺序：先看图解的文字知识点，再看视频教学</span>
         </div>
       ` : ''}
-      <div class="article-container" id="articleContainer">
-        <div class="article-loading">正在加载文章...</div>
-        <iframe
-          class="article-frame"
-          id="articleFrame"
-          title="${escapeHtml(ep.title)}"
-          src="${ep.articleUrl}"
-          loading="eager"
-          scrolling="no"
-        ></iframe>
-      </div>
+      ${articleTarget.mode === 'embedded' ? `
+        <div class="article-container" id="articleContainer">
+          <div class="article-loading">正在加载文章...</div>
+          <iframe
+            class="article-frame"
+            id="articleFrame"
+            title="${escapeHtml(ep.title)}"
+            src="${escapeHtml(articleTarget.url)}"
+            loading="eager"
+            scrolling="no"
+          ></iframe>
+        </div>
+      ` : articleTarget.mode === 'external' ? `
+        <div class="article-container loaded">
+          <div class="comments-empty">该文章需要在原站打开</div>
+          <div style="display:flex;justify-content:center;padding:0 0 32px;">
+            <a class="btn btn-primary" href="${escapeHtml(articleTarget.url)}" target="_blank" rel="noopener noreferrer">打开文章</a>
+          </div>
+        </div>
+      ` : `
+        <div class="article-container loaded">
+          <div class="comments-empty">暂无文章内容</div>
+        </div>
+      `}
     `,
   })
 
-  initArticleFrame(ep)
+  if (articleTarget.mode === 'embedded') initArticleFrame(ep)
 
   // 若当前用户可观看该文章配套视频，则拉取 CF Stream 并嵌入播放
   if (hasPaidVideo && hasAccess) {
@@ -4814,22 +4861,33 @@ function fillAdminCourseForm(course) {
 }
 
 function getAdminCoursePayload() {
+  const contentType = document.getElementById('courseContentType')?.value || 'video'
   return {
     episodeId: document.getElementById('courseEpisodeId')?.value || undefined,
     number: Number(document.getElementById('courseNumber')?.value || 0),
     title: document.getElementById('courseTitle')?.value || '',
     description: document.getElementById('courseDescription')?.value || '',
     category: document.getElementById('courseCategory')?.value || 'strategy',
-    contentType: document.getElementById('courseContentType')?.value || 'video',
+    contentType,
     status: document.getElementById('courseStatus')?.value || 'published',
     accessLevel: document.getElementById('courseAccessLevel')?.value || 'free',
     duration: document.getElementById('courseDuration')?.value || '',
-    bilibiliId: document.getElementById('courseBilibiliId')?.value || '',
+    bilibiliId: contentType === 'video' ? document.getElementById('courseBilibiliId')?.value || '' : '',
     cover: document.getElementById('courseCover')?.value || '',
     sortOrder: Number(document.getElementById('courseSortOrder')?.value || 0),
-    articleUrl: document.getElementById('courseArticleUrl')?.value || '',
-    articleObjectKey: document.getElementById('courseArticleObjectKey')?.value || '',
+    articleUrl: contentType === 'article' ? document.getElementById('courseArticleUrl')?.value || '' : '',
+    articleObjectKey: contentType === 'article' ? document.getElementById('courseArticleObjectKey')?.value || '' : '',
   }
+}
+
+function syncAdminCourseContentType() {
+  const isArticle = document.getElementById('courseContentType')?.value === 'article'
+  const bilibiliField = document.getElementById('adminBilibiliField')
+  const articleField = document.getElementById('adminArticleField')
+  const videoField = document.getElementById('adminVideoField')
+  if (bilibiliField) bilibiliField.style.display = isArticle ? 'none' : 'grid'
+  if (articleField) articleField.style.display = isArticle ? 'grid' : 'none'
+  if (videoField) videoField.style.display = isArticle ? 'none' : 'grid'
 }
 
 function refreshAdminCourseSelects() {
@@ -5026,15 +5084,15 @@ function openCourseModal(course = null) {
               </select>
             </div>
           </div>
-          <div class="course-form-group">
+          <div class="course-form-group" id="adminBilibiliField">
             <label>B站BV号</label>
             <input class="stream-input" id="courseBilibiliId" value="${isEdit ? escapeHtml(course.bilibiliId || '') : ''}" placeholder="BV1xx411c7mD">
           </div>
-          <div class="course-form-group">
+          <div class="course-form-group" id="adminArticleField">
             <label>文章链接</label>
             <input class="stream-input" id="courseArticleUrl" value="${isEdit ? escapeHtml(course.articleUrl || '') : ''}" placeholder="https://... 或 /articles/xxx.html">
           </div>
-          <div class="course-form-group">
+          <div class="course-form-group" id="adminVideoField">
             <label>视频文件</label>
             <label class="stream-file-label" id="adminVideoUploadField">
               <span id="streamFileName">点击选择视频文件</span>
@@ -5093,6 +5151,8 @@ function openCourseModal(course = null) {
   })
   syncAdminResourceChoiceInputs()
   updateResourceUploadFileLabels()
+  syncAdminCourseContentType()
+  modal.querySelector('#courseContentType')?.addEventListener('change', syncAdminCourseContentType)
 
   // Form submit
   modal.querySelector('form#adminCourseFormInner')?.addEventListener('submit', e => e.preventDefault())
@@ -5181,10 +5241,6 @@ function collectSelectedResourceFiles(episodeId) {
   if (!quizChecked && !mindmapChecked && !infoChecked && files.length) {
     throw new Error('请选择要导入的内容类型')
   }
-  if ((quizChecked || mindmapChecked || infoChecked) && !files.length) {
-    throw new Error('请选择 NotebookLM 文件夹或补充文件')
-  }
-
   form.append('includeQuiz', quizChecked ? '1' : '0')
   form.append('includeMindmap', mindmapChecked ? '1' : '0')
   form.append('includeInfographic', infoChecked ? '1' : '0')
@@ -5196,13 +5252,23 @@ async function saveAdminResourceBundle() {
   const saveBtn = document.getElementById('saveResourceAll')
   try {
     const selectedEpisodeId = getSelectedResourceEpisodeId()
-    const videoFile = document.getElementById('streamFileInput')?.files?.[0]
+    const contentType = document.getElementById('courseContentType')?.value || 'video'
+    const videoFile = contentType === 'video' ? document.getElementById('streamFileInput')?.files?.[0] : null
     const bilibiliId = document.getElementById('courseBilibiliId')?.value?.trim()
+    const articleUrl = document.getElementById('courseArticleUrl')?.value?.trim()
     const titleInput = document.getElementById('courseTitle')
     if (videoFile && titleInput && !titleInput.value.trim()) {
       titleInput.value = videoFile.name.replace(/\.[^.]+$/, '')
     }
-    if (!selectedEpisodeId && !videoFile && !bilibiliId) throw new Error('请选择已有视频、上传新视频、或填写B站BV号')
+    const mediaError = getCourseMediaValidationError({
+      contentType,
+      isExistingCourse: Boolean(selectedEpisodeId),
+      hasVideoFile: Boolean(videoFile),
+      bilibiliId,
+    })
+    if (mediaError) throw new Error(mediaError)
+    const articleError = getArticleContentValidationError({ contentType, articleUrl })
+    if (articleError) throw new Error(articleError)
     if (!titleInput?.value.trim()) throw new Error('请填写标题')
 
     saveBtn.disabled = true
@@ -5516,9 +5582,7 @@ async function startStreamUpload() {
         // Refresh paid video list + access map
         const listRes = await api.get('/api/video-stream')
         if (listRes.episodes) {
-          state.paidVideoEpisodes = listRes.episodes.map(e => e.id)
-          state.videoAccessMap = {}
-          listRes.episodes.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
+          syncVideoAccessState(listRes.episodes)
         }
       } else { showToast(r.error || '关联失败', 'error'); linkBtn.disabled = false; linkBtn.textContent = '关联' }
     })
@@ -5548,9 +5612,7 @@ async function loadStreamVideos() {
     ])
     const videos = res.videos || []
     const epList = mappingRes.episodes || []
-    state.paidVideoEpisodes = epList.map(e => e.id)
-    state.videoAccessMap = {}
-    epList.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
+    syncVideoAccessState(epList)
 
     if (videos.length === 0) {
       listEl.innerHTML = '<div class="comments-empty">暂无视频，上传第一个吧</div>'
@@ -9493,6 +9555,10 @@ function setupGlobalEvents() {
   }
 
   $('#logoHome').addEventListener('click', () => navigate('home'))
+  $('#navCourses')?.addEventListener('click', (e) => {
+    e.preventDefault()
+    navigate('courses')
+  })
   marketToggle?.addEventListener('click', (e) => {
     e.stopPropagation()
     toggleMarketMenu()
@@ -9512,6 +9578,9 @@ function setupGlobalEvents() {
     navigate('community')
   })
   $('#navMembership').addEventListener('click', () => navigate('membership'))
+  $('#footerCourses')?.addEventListener('click', (e) => { e.preventDefault(); navigate('courses') })
+  $('#footerCourseCraft')?.addEventListener('click', (e) => { e.preventDefault(); navigate('courseCraft') })
+  $('#footerCourseAi')?.addEventListener('click', (e) => { e.preventDefault(); navigate('courseAi') })
 
   $('#loginBtn').addEventListener('click', () => showAuthModal('login_password'))
   $('#registerBtn').addEventListener('click', () => showAuthModal('register'))
@@ -9923,6 +9992,29 @@ function setupGlobalEvents() {
 
   mainContent.addEventListener('click', async (e) => {
     const target = e.target
+
+    const courseRoute = target.closest('[data-course-route]')
+    if (courseRoute) {
+      navigate(courseRoute.dataset.courseRoute)
+      return
+    }
+
+    const courseTrial = target.closest('[data-course-trial]')
+    if (courseTrial) {
+      if (!requireLogin()) return
+      const firstFreeCourse = episodes.find((ep) => {
+        const level = state.videoAccessMap[ep.id] || ep.accessLevel || 'free'
+        const hasPlayableVideo = ep.hasStreamVideo || Boolean(ep.youtubeId)
+        return level === 'free' && hasPlayableVideo && !isArticleEpisode(ep)
+      })
+      if (firstFreeCourse) {
+        navigateToEpisode(firstFreeCourse)
+      } else {
+        navigate('home')
+        requestAnimationFrame(() => document.querySelector('.tabs')?.scrollIntoView({ behavior: 'smooth' }))
+      }
+      return
+    }
 
     const card = target.closest('.episode-card')
     if (card) {

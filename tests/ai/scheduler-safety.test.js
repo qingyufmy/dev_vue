@@ -116,6 +116,22 @@ describe('Lock Guard (Fix 1+2)', () => {
   })
 })
 
+describe('weekly flatten inference boundary', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('removes an undelivered shared signal and its deliveries atomically', async () => {
+    const run = vi.fn().mockResolvedValue([{ affectedRows: 1 }])
+    db.withTransaction.mockImplementation(async callback => callback(run))
+
+    await __schedulerTest.discardSharedSignalForWeeklyWindow(123)
+
+    expect(run.mock.calls).toEqual([
+      ['DELETE FROM auto_signal_deliveries WHERE signal_id = ?', [123]],
+      ["DELETE FROM ai_signals WHERE id = ? AND source = 'auto_shared'", [123]],
+    ])
+  })
+})
+
 describe('cancel_pending broker suffix (Fix 4)', () => {
   it('normalizes condition type and broker suffix', () => {
     expect(__schedulerTest.normalizeCancelCondition(

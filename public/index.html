@@ -24,8 +24,8 @@
   
   
   <link rel="stylesheet" href="/src/quill.snow.css?v=20260702a">
-  <link rel="stylesheet" href="/src/style.css?v=20260714b">
-  <link rel="stylesheet" href="/admin-extras.css?v=20260714b">
+  <link rel="stylesheet" href="/src/style.css?v=20260714h">
+  <link rel="stylesheet" href="/admin-extras.css?v=20260714f">
 </head>
 <body>
   <!-- Background Decoration -->
@@ -47,6 +47,7 @@
             <span class="logo-subtitle">道诚出品</span>
           </div>
           <nav class="header-nav">
+            <a class="header-nav-item" id="navCourses" href="/courses" aria-label="课程体系" data-short-label="课程"><span class="header-nav-label">课程体系</span></a>
             <button class="header-nav-item header-nav-menu-trigger" id="navAIToggle" type="button" aria-label="AI交易菜单" aria-haspopup="true" aria-expanded="false" aria-controls="aiDropdownMenu" data-short-label="AI交易">
               <span class="header-nav-label">AI 交易</span> <svg class="header-nav-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
             </button>
@@ -129,8 +130,9 @@
         </div>
         <div>
           <h5>课程</h5>
-          <a href="#courses">交易技术课程</a>
-          <a href="#courses">AI 交易技术课程</a>
+          <a href="/courses/trading-craft" id="footerCourseCraft">交易是一门手艺</a>
+          <a href="/courses/ai-forging" id="footerCourseAi">AI铸剑</a>
+          <a href="/courses" id="footerCourses">完整课程体系</a>
           <a href="#review">每日复盘课</a>
         </div>
         <div>
@@ -167,6 +169,6 @@
   </div>
 
   <script src="/vendor/quill.js?v=2.0.3"></script>
-  <script type="module" src="/src/main.js?v=20260714b"></script>
+  <script type="module" src="/src/main.js?v=20260714h"></script>
 </body>
 </html>

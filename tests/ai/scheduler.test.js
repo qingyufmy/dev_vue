@@ -67,6 +67,7 @@ vi.mock('../../server/routes/ai/strategy.js', () => ({
   })),
   executeOrder: vi.fn(() => ({ status: 'success' })),
   handleAnalyze: vi.fn(),
+  resolveChanHistoryCount: vi.fn((_userId, _symbol, _timeframe, requestedCount, useChan) => useChan ? Math.max(requestedCount, 300) : requestedCount),
 }))
 
 vi.mock('../../server/routes/ai/utils.js', () => ({

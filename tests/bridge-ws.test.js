@@ -58,6 +58,7 @@ import {
   sendToBrowsers,
   collectTradeRefs,
   buildSignalRefIndex,
+  buildAdminGlobalAutoConfig,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -126,6 +127,27 @@ describe('history export signal association', () => {
     expect(index.get('1001')?.[0].analysis).toBe('inference result')
     expect(index.get('2002')?.[0].id).toBe(9)
     expect(index.get('3003')?.[0].id).toBe(9)
+  })
+})
+
+describe('admin global auto config response', () => {
+  it('returns saved thinking settings for form hydration', () => {
+    expect(buildAdminGlobalAutoConfig({
+      thinking_enabled: 0,
+      reasoning_effort: 'low',
+    })).toMatchObject({
+      thinking_enabled: 0,
+      reasoning_effort: 'low',
+    })
+  })
+
+  it('normalizes database flag values and preserves defaults', () => {
+    expect(buildAdminGlobalAutoConfig({ thinking_enabled: '0' }).thinking_enabled).toBe(0)
+    expect(buildAdminGlobalAutoConfig({ thinking_enabled: true }).thinking_enabled).toBe(1)
+    expect(buildAdminGlobalAutoConfig(null)).toMatchObject({
+      thinking_enabled: 1,
+      reasoning_effort: 'max',
+    })
   })
 })
 
@@ -217,6 +239,18 @@ describe('getBridgeTradeMode', () => {
 
 describe('sendBridgeCommand', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('rejects new orders during the Beijing weekend risk window before bridge lookup', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T20:00:00.000Z'))
+
+    const result = await sendBridgeCommand(999, 'open', { symbol: 'XAUUSD' })
+
+    expect(result.status).toBe('rejected')
+    expect(result.code).toBe('weekly_market_close_risk_lock')
+    expect(result.message).toBe('周末风险控制期间禁止新增交易')
+    vi.useRealTimers()
+  })
 
   it('returns error when no bridge connected', async () => {
     const result = await sendBridgeCommand(999, 'account', {})

@@ -117,6 +117,8 @@ npm run dev
 | `REDIS_HOST` | Redis 地址（不设则禁用缓存） | - | |
 | `REDIS_PORT` | Redis 端口 | `6379` | |
 | `REDIS_PASSWORD` | Redis 密码 | - | |
+| `WEEKLY_SYSTEM_FLATTEN_ENABLED` | 周六 04:00 周末系统撤单和平仓（依赖 Redis） | `true` | |
+| `WEEKLY_SYSTEM_FLATTEN_CONCURRENCY` | 周末清仓并行处理账户数（最大 20） | `5` | |
 | `UPLOAD_DIR` | 上传目录 | `./uploads` | |
 | `CORS_ORIGINS` | CORS 允许源（逗号分隔） | localhost + cnfxtrade.com | |
 | `DEBUG_CHAN` | 缠论调试日志 | `0` | |

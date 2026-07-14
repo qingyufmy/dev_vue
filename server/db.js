@@ -420,7 +420,7 @@ export async function initDB() {
       api_key_encrypted TEXT,
       api_base_url VARCHAR(500),
       model_name VARCHAR(100) NOT NULL DEFAULT 'deepseek-chat',
-      temperature DOUBLE NOT NULL DEFAULT 0.7,
+      temperature DOUBLE NOT NULL DEFAULT 0.3,
       max_tokens INT NOT NULL DEFAULT 2000,
       enable_auto_trade TINYINT NOT NULL DEFAULT 1,
       enable_futures_trading TINYINT NOT NULL DEFAULT 0,
