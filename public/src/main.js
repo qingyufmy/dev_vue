@@ -3,6 +3,7 @@ import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js'
 import { getCourseMediaValidationError } from './lib/admin-course.js'
+import { getVideoEpisodeIds } from './lib/course-media.js'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -1530,9 +1531,7 @@ async function init() {
   // Load video access map (public, no sensitive data — only episode IDs + access_level)
   api.get('/api/video-stream').then(r => {
     if (r.episodes) {
-      state.paidVideoEpisodes = r.episodes.map(e => e.id)
-      state.videoAccessMap = {}
-      r.episodes.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
+      syncVideoAccessState(r.episodes)
       const streamIds = new Set(state.paidVideoEpisodes.map(Number))
       episodes = episodes.map(ep => ({
         ...ep,
@@ -2138,6 +2137,12 @@ function formatTimeAgo(timestamp) {
 // Category labels matching homepage tabs
 const CATEGORY_LABELS = { strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型', basics: '基础', analysis: '分析', psychology: '心理', risk: '风控' }
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
+
+function syncVideoAccessState(items = []) {
+  state.paidVideoEpisodes = getVideoEpisodeIds(items)
+  state.videoAccessMap = {}
+  items.forEach(item => { state.videoAccessMap[item.id] = item.access_level || 'plus_pro' })
+}
 
 function hasEpisodeVideo(ep) {
   return Boolean(ep?.hasStreamVideo) || state.paidVideoEpisodes.includes(ep?.id)
@@ -5533,9 +5538,7 @@ async function startStreamUpload() {
         // Refresh paid video list + access map
         const listRes = await api.get('/api/video-stream')
         if (listRes.episodes) {
-          state.paidVideoEpisodes = listRes.episodes.map(e => e.id)
-          state.videoAccessMap = {}
-          listRes.episodes.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
+          syncVideoAccessState(listRes.episodes)
         }
       } else { showToast(r.error || '关联失败', 'error'); linkBtn.disabled = false; linkBtn.textContent = '关联' }
     })
@@ -5565,9 +5568,7 @@ async function loadStreamVideos() {
     ])
     const videos = res.videos || []
     const epList = mappingRes.episodes || []
-    state.paidVideoEpisodes = epList.map(e => e.id)
-    state.videoAccessMap = {}
-    epList.forEach(e => { state.videoAccessMap[e.id] = e.access_level || 'plus_pro' })
+    syncVideoAccessState(epList)
 
     if (videos.length === 0) {
       listEl.innerHTML = '<div class="comments-empty">暂无视频，上传第一个吧</div>'
