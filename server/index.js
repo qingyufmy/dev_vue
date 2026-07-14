@@ -33,6 +33,7 @@ import { startMonitor } from './crypto/monitor.js'
 import { initCryptoWallet } from './crypto/wallet.js'
 import { startHoldSignalCleanup } from './jobs/hold-signal-cleanup.js'
 import { startWeeklySystemFlatten } from './jobs/weekly-system-flatten.js'
+import { securityHeaders } from './security-headers.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -64,15 +65,8 @@ app.use(cors({
 app.use(express.json({ limit: JSON_BODY_LIMIT }))
 app.use(express.urlencoded({ extended: true }))
 
-// Security headers
-app.use((req, res, next) => {
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.hdslb.com https://i0.hdslb.com https://i1.hdslb.com https://i2.hdslb.com; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'")
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.setHeader('X-Frame-Options', 'DENY')
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
-  res.removeHeader('X-Powered-By')
-  next()
-})
+// Security headers (embedding restrictions intentionally disabled).
+app.use(securityHeaders)
 
 // Rate limiting — prevent brute force and DoS
 const apiLimiter = rateLimit({
