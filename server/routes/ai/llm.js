@@ -19,6 +19,7 @@ const SCHEMA_CACHE_TTL = 300_000 // 5 minutes
 
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold。挂单管理：同品种同方向最多保留1笔挂单，如果market_data_json.pending_orders中已有同品种同方向挂单且价格合理则返回hold不挂新单，仅在现有挂单价格明显不合理时才用cancel_pending取消旧单挂新单",
+  entry_method: "必须字段。仅允许 market | limit | stop | stop_limit | observe，并且必须与signal_type一致：buy/sell=market，*_limit=limit，*_stop=stop，*_stop_limit=stop_limit，hold=observe",
   confidence: "0.00-1.00，动态估算，禁止固定值。按趋势强度、位置结构、波动噪音、风险状态综合评估。BUY/SELL弱优势0.52-0.62，中等0.63-0.74，强共振>0.75。HOLD时0.55-0.68，明确回避风险可>0.70。hold时也不得为0",
   recommended_volume: "0.01至输入市场数据中的max_position_size手，不得超过max_position_size。应根据当前风险与止损距离合理建议；hold时返回0",
   limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
@@ -278,6 +279,18 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
 }
 
 export function normalizeAiSignal(parsed, config, market) {
+  const strictInference = parsed?._inference_source === 'ai'
+  const schemaHold = reason => ({
+    ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe',
+    recommended_volume: 0, limit_price: null, stop_limit_price: null,
+    pending_valid_minutes: 0, pending_valid_until: null,
+    normalization_info: { type: 'l5_schema_hold', reason },
+  })
+  if (strictInference) {
+    const strictRequired = ['signal_type', 'entry_method', 'recommended_volume', 'stop_loss_price', 'take_profit_1_price']
+    const missing = strictRequired.filter(key => parsed[key] === undefined || parsed[key] === null || parsed[key] === '')
+    if (missing.length) return schemaHold(`missing:${missing.join(',')}`)
+  }
   let signalType = String(parsed.signal_type || 'hold').toLowerCase()
   const validTypes = ['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
   if (!validTypes.includes(signalType)) signalType = 'hold'
@@ -290,7 +303,11 @@ export function normalizeAiSignal(parsed, config, market) {
     buy: 'market', sell: 'market',
   }
   let entryMethod = String(parsed.entry_method || typeEntryMap[signalType] || 'market').toLowerCase()
-  if (!['market', 'limit', 'stop', 'stop_limit', 'observe'].includes(entryMethod)) entryMethod = 'market'
+  if (!['market', 'limit', 'stop', 'stop_limit', 'observe'].includes(entryMethod)) {
+    if (strictInference) return schemaHold('invalid_entry_method')
+    entryMethod = 'market'
+  }
+  if (strictInference && signalType !== 'hold' && entryMethod !== typeEntryMap[signalType]) return schemaHold('signal_entry_mismatch')
   if (signalType === 'hold') entryMethod = 'observe'
   if (entryMethod === 'observe') { signalType = 'hold'; }
 
@@ -330,6 +347,9 @@ export function normalizeAiSignal(parsed, config, market) {
   const configuredMaxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE)
   const maxPosition = configuredMaxPosition
   const rawVolume = parseFloat(parsed.recommended_volume || 0)
+  if (strictInference && signalType !== 'hold' && (!Number.isFinite(rawVolume) || rawVolume < 0.01 || rawVolume > 0.05 || Math.abs(rawVolume * 100 - Math.round(rawVolume * 100)) > 1e-7)) {
+    return schemaHold('ai_volume_out_of_platform_range')
+  }
   const boundedVolume = Math.max(0.01, Math.min(Number.isFinite(rawVolume) ? rawVolume : 0.01, maxPosition))
   let recommendedVolume = signalType === 'hold' ? 0 : Math.floor(boundedVolume * 100 + 1e-9) / 100
 

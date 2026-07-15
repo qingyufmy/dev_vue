@@ -289,6 +289,7 @@ describe('maybeAiSignal', () => {
           message: {
             content: JSON.stringify({
               signal_type: 'buy',
+              entry_method: 'market',
               confidence: 0.7,
               recommended_volume: 0.03,
               stop_loss_price: 1990,
@@ -496,5 +497,26 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
       stop_loss_price: 3980, take_profit_1_price: 4030,
     }, { risk_level: 'low', max_position_size: 0.05 }, market)
     expect(result.recommended_volume).toBe(0.05)
+  })
+})
+
+describe('normalizeAiSignal - L5 strict schema', () => {
+  const market = { latest_price: 2000, atr_anchor: 10, strategy_score: {}, volatility_pct: 0 }
+  const config = { risk_level: 'medium', max_position_size: 0.05 }
+
+  it('invalid explicit entry_method degrades to hold instead of market', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'buy', entry_method: 'instant', confidence: 0.8,
+      recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2020,
+    }, config, market)
+    expect(result).toMatchObject({ signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, normalization_info: { type: 'l5_schema_hold' } })
+  })
+
+  it('out-of-platform AI volume degrades to hold without clamping', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      recommended_volume: 0.06, stop_loss_price: 1990, take_profit_1_price: 2020,
+    }, config, market)
+    expect(result).toMatchObject({ signal_type: 'hold', recommended_volume: 0, normalization_info: { reason: 'ai_volume_out_of_platform_range' } })
   })
 })

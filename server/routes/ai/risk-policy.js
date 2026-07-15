@@ -1,0 +1,295 @@
+// Versioned risk policy resolution and deterministic L1/L4/L5 core gate.
+
+import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
+import { stripBrokerSuffix } from './utils.js'
+
+const HOUR_MS = 3600_000
+const rule = (code, type, unit, safety, value, min, max, locked, label) => ({ code, type, unit, safety_direction: safety, default_value: value, allowed_min: min, allowed_max: max, locked, label })
+
+export const RISK_RULES = Object.freeze({
+  allowed_symbols: rule('R1.1', 'set', 'symbol', 'subset', ['*'], null, null, false, '允许交易品种'),
+  require_stop_loss: rule('R1.2', 'boolean', 'bool', 'locked_true', true, true, true, true, '强制止损'),
+  sl_atr_min: rule('R1.3', 'number', 'ATR', 'higher', 1, 0.2, 5, false, '最小止损距离'),
+  sl_atr_max: rule('R1.4', 'number', 'ATR', 'lower', 3, 0.5, 10, false, '最大止损距离'),
+  min_rr: rule('R1.5', 'number', 'ratio', 'higher', 1.2, 0.5, 10, false, '最低盈亏比'),
+  pending_price_deviation_pct: rule('R1.7A', 'number', 'percent', 'lower', 0.5, 0.01, 10, false, '挂单价格偏离百分比'),
+  pending_price_deviation_atr: rule('R1.7B', 'number', 'ATR', 'lower', 2, 0.1, 10, false, '挂单价格偏离 ATR'),
+  pending_valid_minutes: rule('R1.8', 'number', 'minute', 'lower', 240, 5, 1440, false, '挂单默认有效期'),
+  ai_volume_min: rule('R1.9A', 'number', 'lot', 'locked', 0.01, 0.001, 100, true, 'AI 建议最小手数'),
+  ai_volume_max: rule('R1.9B', 'number', 'lot', 'locked', 0.05, 0.001, 100, true, 'AI 建议最大手数'),
+  ai_volume_step: rule('R1.9C', 'number', 'lot', 'locked', 0.01, 0.001, 100, true, 'AI 建议手数步进'),
+  max_position_size: rule('R1.9D', 'number', 'lot', 'lower', 0.05, 0.001, 100, false, '账户单笔最大手数'),
+  max_risk_per_trade_pct: rule('R1.10', 'number', 'percent', 'lower', 2, 0.01, 20, false, '单笔最大风险比例'),
+  signal_ttl_seconds: rule('R4.3', 'number', 'second', 'lower', 900, 5, 86400, false, '信号有效期'),
+  max_quote_age_seconds: rule('R4.4', 'number', 'second', 'lower', 10, 1, 300, false, '报价最大年龄'),
+  max_spread_points: rule('R4.5', 'number', 'point', 'lower', 100, 1, 100000, false, '最大点差'),
+  market_signal_drift_atr: rule('R4.6', 'number', 'ATR', 'lower', 0.3, 0.01, 5, false, '市价信号价格漂移'),
+  broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '经纪商成交滑点'),
+  weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 120, 0, 2880, false, '周末保护提前量'),
+})
+
+export const DEFAULT_RISK_POLICY = Object.freeze(Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => [key, Array.isArray(meta.default_value) ? [...meta.default_value] : meta.default_value])))
+
+const parseJson = (value, fallback = {}) => {
+  if (value == null) return fallback
+  if (typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
+const finite = value => Number.isFinite(Number(value)) ? Number(value) : null
+
+function normalizeValue(key, value) {
+  const meta = RISK_RULES[key]
+  if (!meta) return undefined
+  if (meta.type === 'boolean') return Boolean(value)
+  if (meta.type === 'set') return Array.isArray(value) ? [...new Set(value.map(item => String(item).toUpperCase().trim()).filter(Boolean))] : undefined
+  const number = finite(value)
+  return number == null ? undefined : Math.min(meta.allowed_max, Math.max(meta.allowed_min, number))
+}
+
+function mergeKnown(base, override) {
+  const result = { ...base }
+  for (const [key, value] of Object.entries(override || {})) {
+    const normalized = normalizeValue(key, value)
+    if (normalized !== undefined) result[key] = normalized
+  }
+  result.require_stop_loss = true
+  return result
+}
+
+function buildPlatformControls(rawConfig = {}) {
+  const configured = rawConfig.controls || rawConfig._controls || {}
+  return Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => {
+    const input = configured[key] || {}
+    const allowedMin = meta.type === 'number' && finite(input.allowed_min) != null
+      ? Math.max(meta.allowed_min, finite(input.allowed_min)) : meta.allowed_min
+    const allowedMax = meta.type === 'number' && finite(input.allowed_max) != null
+      ? Math.min(meta.allowed_max, finite(input.allowed_max)) : meta.allowed_max
+    const lockedValue = input.locked_value === null || input.locked_value === undefined
+      ? null : normalizeValue(key, input.locked_value)
+    return [key, {
+      default_value: input.default_value === undefined ? meta.default_value : normalizeValue(key, input.default_value),
+      allowed_min: allowedMin, allowed_max: allowedMax, locked_value: lockedValue,
+      user_editable: meta.locked ? false : input.user_editable !== false,
+    }]
+  }))
+}
+
+function applyAccountConfig(base, rawConfig, controls) {
+  const values = rawConfig?.values || rawConfig || {}
+  const result = { ...base }
+  for (const [key, meta] of Object.entries(RISK_RULES)) {
+    const control = controls[key]
+    if (control.locked_value !== null && control.locked_value !== undefined) {
+      result[key] = control.locked_value
+      continue
+    }
+    if (!control.user_editable || values[key] === undefined) continue
+    let value = normalizeValue(key, values[key])
+    if (value === undefined) continue
+    if (meta.type === 'number') value = Math.min(control.allowed_max, Math.max(control.allowed_min, value))
+    if (meta.type === 'set' && !result[key].includes('*')) value = value.filter(item => result[key].includes(item))
+    result[key] = value
+  }
+  result.require_stop_loss = true
+  return result
+}
+
+function stricter(key, base, candidate) {
+  const direction = RISK_RULES[key]?.safety_direction
+  if (candidate === undefined) return base
+  if (direction === 'lower') return Math.min(Number(base), Number(candidate))
+  if (direction === 'higher') return Math.max(Number(base), Number(candidate))
+  if (direction === 'subset') return base.includes('*') ? candidate : candidate.filter(item => base.includes(item))
+  return base
+}
+
+export function isRelaxation(key, oldValue, newValue) {
+  const meta = RISK_RULES[key]
+  if (!meta) throw new Error(`unknown_risk_field:${key}`)
+  if (meta.locked || meta.safety_direction.startsWith('locked')) return false
+  if (meta.safety_direction === 'lower') return Number(newValue) > Number(oldValue)
+  if (meta.safety_direction === 'higher') return Number(newValue) < Number(oldValue)
+  if (meta.safety_direction === 'subset') {
+    if ((oldValue || []).includes('*')) return false
+    if ((newValue || []).includes('*')) return true
+    const oldSet = new Set(oldValue || [])
+    return (newValue || []).some(value => !oldSet.has(value))
+  }
+  return false
+}
+
+export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = null, riskProfileId = null, legacyConfig = {}, now = beijingNow() } = {}) {
+  const platform = await queryOne("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id ASC LIMIT 1")
+  const account = tradingAccountId
+    ? await queryOne("SELECT * FROM risk_policy_sets WHERE scope = 'account' AND owner_user_id = ? AND trading_account_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1", [userId, tradingAccountId])
+    : await queryOne("SELECT * FROM risk_policy_sets WHERE scope = 'account' AND owner_user_id = ? AND trading_account_id IS NULL AND status = 'active' ORDER BY id DESC LIMIT 1", [userId])
+  let policy = { ...DEFAULT_RISK_POLICY }
+  const policyVersionIds = []
+  let platformRaw = {}, controls = buildPlatformControls()
+  if (platform) {
+    const version = await queryOne('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= ? ORDER BY version_no DESC LIMIT 1', [platform.id, now])
+    if (version) {
+      platformRaw = parseJson(version.config_json)
+      policy = mergeKnown(policy, platformRaw.values || platformRaw.defaults || platformRaw)
+      controls = buildPlatformControls(platformRaw)
+      policyVersionIds.push(version.id)
+    }
+  }
+  if (account) {
+    const version = await queryOne('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= ? ORDER BY version_no DESC LIMIT 1', [account.id, now])
+    if (version) {
+      policy = applyAccountConfig(policy, parseJson(version.config_json), controls)
+      policyVersionIds.push(version.id)
+    }
+    const due = await queryAll("SELECT * FROM risk_policy_change_items WHERE policy_set_id = ? AND status = 'pending' AND effective_at <= ? ORDER BY id", [account.id, now])
+    for (const item of due) policy = applyAccountConfig(policy, { [item.field_code]: parseJson(item.new_value_json, null) }, controls)
+  }
+  for (const [key, control] of Object.entries(controls)) {
+    if (control.locked_value !== null && control.locked_value !== undefined) policy[key] = control.locked_value
+  }
+  policy.max_position_size = Math.min(policy.max_position_size, finite(legacyConfig.max_position_size) || policy.max_position_size)
+  if (riskProfileId) {
+    const profile = await queryOne("SELECT * FROM risk_profiles WHERE id = ? AND user_id = ? AND status = 'active' AND deleted_at IS NULL", [riskProfileId, userId])
+    if (!profile) throw new Error('risk_profile_not_found')
+    const profileConfig = mergeKnown({}, parseJson(profile.config_json))
+    for (const [key, value] of Object.entries(profileConfig)) policy[key] = stricter(key, policy[key], value)
+  }
+  return { policy, policyVersionIds }
+}
+
+export async function submitRiskPolicyChanges({ policySetId, actorId, changes, reason = '', cooldownHours = 2 } = {}) {
+  if (!policySetId || !actorId || !changes || typeof changes !== 'object') throw new Error('invalid_risk_policy_change')
+  return withTransaction(async run => {
+    const [[set]] = await run("SELECT * FROM risk_policy_sets WHERE id = ? AND status = 'active' FOR UPDATE", [policySetId])
+    if (!set) throw new Error('risk_policy_set_not_found')
+    const [[current]] = await run('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= NOW() ORDER BY version_no DESC LIMIT 1', [policySetId])
+    const currentConfig = mergeKnown(DEFAULT_RISK_POLICY, parseJson(current?.config_json))
+    const immediate = {}, pending = []
+    for (const [key, raw] of Object.entries(changes)) {
+      const meta = RISK_RULES[key]
+      if (!meta) throw new Error(`unknown_risk_field:${key}`)
+      if (meta.locked) throw new Error(`risk_field_locked:${key}`)
+      const value = normalizeValue(key, raw)
+      if (value === undefined) throw new Error(`invalid_risk_value:${key}`)
+      if (isRelaxation(key, currentConfig[key], value)) pending.push([key, value])
+      else immediate[key] = value
+    }
+    let versionId = current?.id || null
+    if (Object.keys(immediate).length) {
+      const next = mergeKnown(currentConfig, immediate)
+      const [insert] = await run('INSERT INTO risk_policy_versions (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at) VALUES (?, ?, ?, ?, ?, NOW(), ?)', [policySetId, Number(current?.version_no || 0) + 1, JSON.stringify(next), actorId, reason, beijingNow()])
+      versionId = insert.insertId
+      await run('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [versionId, beijingNow(), policySetId])
+    }
+    for (const [key, value] of pending) {
+      await run(`INSERT INTO risk_policy_change_items
+        (policy_set_id, field_code, old_value_json, new_value_json, change_class, status, requested_by, reason, effective_at, created_at)
+        VALUES (?, ?, ?, ?, 'relax', 'pending', ?, ?, DATE_ADD(NOW(), INTERVAL ? HOUR), ?)`,
+      [policySetId, key, JSON.stringify(currentConfig[key]), JSON.stringify(value), actorId, reason, Math.max(1, Number(cooldownHours) || 2), beijingNow()])
+    }
+    return { active_version_id: versionId, immediate_fields: Object.keys(immediate), pending_fields: pending.map(([key]) => key) }
+  })
+}
+
+const floorStep = (value, step) => Number((Math.floor((value + 1e-12) / step) * step).toFixed(8))
+const aligned = (value, step, origin = 0) => Math.abs((value - origin) / step - Math.round((value - origin) / step)) < 1e-7
+const pass = (rules, code, details = {}) => rules.push({ code, outcome: 'pass', details })
+const rejection = (rules, code, details = {}) => ({ decision_status: 'reject', reject_code: code, rule_results: [...rules, { code, outcome: 'reject', details }] })
+const quoteEpoch = value => {
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000
+  const text = String(value || '')
+  const parsed = Date.parse(text.replace(' ', 'T') + (/[zZ]|[+-]\d\d:\d\d$/.test(text) ? '' : '+08:00'))
+  return Number.isFinite(parsed) ? parsed : null
+}
+function weekendProtected(nowMs, minutes) {
+  const date = new Date(nowMs + 8 * HOUR_MS)
+  const day = date.getUTCDay()
+  const minute = day * 1440 + date.getUTCHours() * 60 + date.getUTCMinutes()
+  return day === 0 || day === 6 || minute >= 6 * 1440 - minutes
+}
+
+export function evaluateCoreRisk({ request, account, quote, instrument, policy = DEFAULT_RISK_POLICY, nowMs = Date.now() }) {
+  const original = structuredClone(request || {}), approved = structuredClone(request || {}), rules = []
+  const fail = (code, details) => ({ ...rejection(rules, code, details), original_order: original })
+  const symbol = String(approved.symbol || '').toUpperCase(), side = String(approved.order_type || '').toLowerCase()
+  const method = String(approved.entry_method || 'market').toLowerCase(), ai = approved.source === 'ai'
+  if (!symbol) return fail('R5_SCHEMA_SYMBOL')
+  if (!['buy', 'sell'].includes(side)) return fail('R5_SCHEMA_ORDER_TYPE')
+  if (!['market', 'limit', 'stop', 'stop_limit'].includes(method)) return fail('R5_SCHEMA_ENTRY_METHOD', { entry_method: method })
+  if (ai) {
+    const expected = method === 'market' ? side : `${side}_${method}`
+    if (String(approved.signal_type || '').toLowerCase() !== expected || !Number.isFinite(Number(approved.volume)) || !(finite(approved.reference_price) > 0)) return fail('R5_SCHEMA_AI_REQUIRED')
+    if (method !== 'market' && !(finite(approved.limit_price) > 0)) return fail('R5_SCHEMA_PENDING_PRICE')
+  }
+  pass(rules, 'R5_SCHEMA')
+  const standard = stripBrokerSuffix(symbol)
+  if (!policy.allowed_symbols.includes('*') && !policy.allowed_symbols.includes(symbol) && !policy.allowed_symbols.includes(standard)) return fail('R1.1_SYMBOL_NOT_ALLOWED', { symbol })
+  const needed = ['tick_value', 'tick_size', 'contract_size', 'volume_min', 'volume_max', 'volume_step', 'digits', 'point', 'trade_mode']
+  const missing = needed.filter(key => !Number.isFinite(Number(instrument?.[key])))
+  if (missing.length) return fail('R1_INSTRUMENT_DATA_INCOMPLETE', { missing })
+  if (Number(instrument.trade_mode) === 0) return fail('R1_SYMBOL_TRADE_DISABLED')
+  const bid = finite(quote?.bid), ask = finite(quote?.ask), entry = method === 'market' ? (side === 'buy' ? ask : bid) : finite(approved.limit_price)
+  if (!(entry > 0)) return fail('R4_QUOTE_INVALID')
+  const sl = finite(approved.sl), tp = finite(approved.tp)
+  if (policy.require_stop_loss && !(sl > 0)) return fail('R1.2_STOP_LOSS_REQUIRED')
+  if (!(tp > 0)) return fail('R1.5_TAKE_PROFIT_REQUIRED')
+  if ((side === 'buy' && !(sl < entry && tp > entry)) || (side === 'sell' && !(sl > entry && tp < entry))) return fail('R1.6_SL_TP_DIRECTION', { entry, sl, tp })
+  const atr = finite(approved.atr_anchor)
+  if (!(atr > 0)) return fail('R1_ATR_REQUIRED')
+  let volume = finite(approved.volume)
+  if (!(volume > 0)) return fail('R1.9_VOLUME_INVALID')
+  if (ai && (volume < policy.ai_volume_min || volume > policy.ai_volume_max || !aligned(volume, policy.ai_volume_step, policy.ai_volume_min))) return fail('R1.9_AI_VOLUME_OUT_OF_RANGE', { volume })
+  const originalDistance = Math.abs(entry - sl), minDistance = atr * policy.sl_atr_min
+  let adjusted = false
+  if (originalDistance < minDistance) {
+    approved.sl = Number((side === 'buy' ? entry - minDistance : entry + minDistance).toFixed(Number(instrument.digits)))
+    volume = floorStep(volume * originalDistance / minDistance, Number(instrument.volume_step))
+    approved.volume = volume; adjusted = true
+    rules.push({ code: 'R1.3_SL_WIDEN_VOLUME_DOWN', outcome: 'adjust', details: { from_sl: sl, to_sl: approved.sl, from_volume: original.volume, to_volume: volume } })
+  }
+  const finalDistance = Math.abs(entry - Number(approved.sl))
+  if (finalDistance > atr * policy.sl_atr_max + Number(instrument.tick_size)) return fail('R1.4_STOP_LOSS_TOO_FAR')
+  const rr = Math.abs(tp - entry) / finalDistance
+  if (rr + 1e-9 < policy.min_rr) return fail('R1.5_RR_TOO_LOW', { rr, minimum: policy.min_rr })
+  volume = floorStep(Math.min(volume, policy.max_position_size, Number(instrument.volume_max)), Number(instrument.volume_step))
+  const riskPerLot = finalDistance / Number(instrument.tick_size) * Number(instrument.tick_value), equity = finite(account?.equity)
+  if (!(equity > 0) || !(riskPerLot > 0)) return fail('R1.10_RISK_DATA_INVALID')
+  const riskCap = equity * policy.max_risk_per_trade_pct / 100
+  volume = floorStep(Math.min(volume, riskCap / riskPerLot), Number(instrument.volume_step))
+  const minimumLot = Math.max(policy.ai_volume_min, Number(instrument.volume_min))
+  if (volume + 1e-9 < minimumLot) return fail('R1.9_BELOW_MINIMUM_AFTER_RISK', { volume, minimum: minimumLot })
+  if (volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN')
+  if (volume !== Number(approved.volume)) adjusted = true
+  approved.volume = volume
+  pass(rules, 'R1.10_REAL_RISK', { risk_amount: Number((riskPerLot * volume).toFixed(8)), risk_cap: riskCap })
+  if (method !== 'market') {
+    const current = side === 'buy' ? ask : bid, deviation = Math.abs(entry - current)
+    const maximum = Math.min(current * policy.pending_price_deviation_pct / 100, atr * policy.pending_price_deviation_atr)
+    if (deviation > maximum + Number(instrument.tick_size)) return fail('R1.7_PENDING_DEVIATION', { deviation, maximum })
+    if ((method === 'limit' && ((side === 'buy' && entry >= current) || (side === 'sell' && entry <= current))) || (method === 'stop' && ((side === 'buy' && entry <= current) || (side === 'sell' && entry >= current)))) return fail('R1.7_PENDING_DIRECTION')
+    if (!approved.pending_valid_until && !approved.pending_valid_minutes) {
+      approved.pending_valid_minutes = policy.pending_valid_minutes; adjusted = true
+      rules.push({ code: 'R1.8_PENDING_TTL_DEFAULT', outcome: 'default', details: { minutes: policy.pending_valid_minutes } })
+    }
+  } else if (ai && Math.abs(entry - Number(approved.reference_price)) > atr * policy.market_signal_drift_atr) return fail('R4.6_MARKET_SIGNAL_DRIFT')
+  const quoteTime = quoteEpoch(quote?.time_msc ?? quote?.time)
+  if (quoteTime == null || nowMs - quoteTime > policy.max_quote_age_seconds * 1000 || nowMs < quoteTime - 5000) return fail('R4.4_QUOTE_STALE')
+  const spreadPoints = Math.abs(ask - bid) / Number(instrument.point)
+  if (!Number.isFinite(spreadPoints) || spreadPoints > policy.max_spread_points) return fail('R4.5_SPREAD_TOO_WIDE', { spread_points: spreadPoints })
+  if (ai) {
+    const signalTime = quoteEpoch(approved.signal_created_at)
+    if (signalTime == null || nowMs - signalTime > policy.signal_ttl_seconds * 1000) return fail('R4.3_SIGNAL_EXPIRED')
+  }
+  if (weekendProtected(nowMs, policy.weekend_close_minutes)) return fail('R4.2_WEEKEND_PROTECTION')
+  approved.deviation = Math.floor(policy.broker_slippage_points)
+  pass(rules, 'PX.3_BROKER_SLIPPAGE', { points: approved.deviation })
+  return { decision_status: adjusted ? 'adjust' : 'pass', reject_code: null, original_order: original, approved_order: approved, rule_results: rules, risk_amount: Number((riskPerLot * volume).toFixed(8)) }
+}
+
+export async function persistRiskDecision(intentId, decision, policyVersionIds = []) {
+  const result = await queryRun(`INSERT INTO risk_decisions
+    (order_intent_id, policy_version_ids_json, original_order_json, approved_order_json, rule_results_json, decision_status, reject_code, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+  [intentId, JSON.stringify(policyVersionIds), JSON.stringify(decision.original_order || {}), decision.approved_order ? JSON.stringify(decision.approved_order) : null, JSON.stringify(decision.rule_results || []), decision.decision_status, decision.reject_code || null, beijingNow()])
+  return result.insertId
+}

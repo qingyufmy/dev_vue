@@ -3,7 +3,7 @@
  * Each migration has an id and an up() function.
  * Already-run migrations are tracked in the `schema_migrations` table.
  */
-import { queryOne, queryAll, queryRun } from './db.js'
+import { queryOne, queryAll, queryRun, beijingNow } from './db.js'
 
 export function applyPendingLifecycleSchema(schema) {
   return {
@@ -1262,6 +1262,71 @@ const migrations = [
         INDEX idx_risk_reservation_account (trading_account_id, status, expires_at),
         INDEX idx_risk_reservation_user (user_id, status, expires_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
+  },
+  {
+    id: '059_core_risk_policy',
+    up: async () => {
+      const stmts = [
+        `CREATE TABLE IF NOT EXISTS risk_policy_sets (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY, scope VARCHAR(24) NOT NULL,
+          owner_user_id INT NOT NULL DEFAULT 0, trading_account_id INT DEFAULT NULL,
+          name VARCHAR(128) NOT NULL, active_version_id BIGINT DEFAULT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'active', created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+          INDEX idx_risk_policy_scope (scope, owner_user_id, trading_account_id, status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+        `CREATE TABLE IF NOT EXISTS risk_policy_versions (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY, policy_set_id BIGINT NOT NULL, version_no INT NOT NULL,
+          config_json LONGTEXT NOT NULL, created_by INT NOT NULL, change_reason VARCHAR(500) DEFAULT NULL,
+          effective_at DATETIME NOT NULL, created_at DATETIME NOT NULL,
+          UNIQUE KEY uk_risk_policy_version (policy_set_id, version_no), INDEX idx_risk_policy_effective (policy_set_id, effective_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+        `CREATE TABLE IF NOT EXISTS risk_policy_change_items (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY, policy_set_id BIGINT NOT NULL, field_code VARCHAR(80) NOT NULL,
+          old_value_json TEXT DEFAULT NULL, new_value_json TEXT NOT NULL, change_class VARCHAR(20) NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'pending', requested_by INT NOT NULL, reason VARCHAR(500) DEFAULT NULL,
+          effective_at DATETIME NOT NULL, cancelled_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL,
+          INDEX idx_risk_change_due (policy_set_id, status, effective_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+        `CREATE TABLE IF NOT EXISTS risk_profiles (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, name VARCHAR(128) NOT NULL,
+          config_json LONGTEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'active',
+          created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, deleted_at DATETIME DEFAULT NULL,
+          INDEX idx_risk_profile_user (user_id, status, deleted_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+        `CREATE TABLE IF NOT EXISTS risk_decisions (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY, order_intent_id BIGINT NOT NULL,
+          policy_version_ids_json TEXT DEFAULT NULL, original_order_json LONGTEXT NOT NULL,
+          approved_order_json LONGTEXT DEFAULT NULL, rule_results_json LONGTEXT NOT NULL,
+          decision_status VARCHAR(20) NOT NULL, reject_code VARCHAR(128) DEFAULT NULL, created_at DATETIME NOT NULL,
+          UNIQUE KEY uk_risk_decision_intent (order_intent_id), INDEX idx_risk_decision_status (decision_status, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      ]
+      for (const sql of stmts) await queryRun(sql)
+
+      const additions = [
+        ['order_intents', 'original_order_json', 'LONGTEXT DEFAULT NULL'],
+        ['order_intents', 'approved_order_json', 'LONGTEXT DEFAULT NULL'],
+        ['order_intents', 'risk_decision_id', 'BIGINT DEFAULT NULL'],
+        ['auto_signal_deliveries', 'order_intent_id', 'BIGINT DEFAULT NULL'],
+        ['auto_signal_deliveries', 'risk_decision_id', 'BIGINT DEFAULT NULL'],
+        ['auto_signal_deliveries', 'approved_order_json', 'LONGTEXT DEFAULT NULL'],
+      ]
+      for (const [table, name, definition] of additions) {
+        const rows = await queryAll('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?', [table, name])
+        if (!rows.length) await queryRun(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`)
+      }
+
+      // L5 requires an explicit entry method. Upgrade every active persisted
+      // schema so production does not silently hold otherwise valid signals.
+      const schemas = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      for (const row of schemas) {
+        let schema
+        try { schema = JSON.parse(row.schema_json || '{}') } catch { continue }
+        if (schema.entry_method !== undefined) continue
+        schema.entry_method = '必须字段。仅允许 market | limit | stop | stop_limit | observe，且必须与 signal_type 一致'
+        await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = ? WHERE id = ?', [JSON.stringify(schema, null, 2), beijingNow(), row.id])
+      }
     }
   }
 ]

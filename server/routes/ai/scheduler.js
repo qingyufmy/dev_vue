@@ -1615,6 +1615,13 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       deliveryId: `${signalId}:${userId}`,
     })
 
+    await queryRun(
+      `UPDATE auto_signal_deliveries SET order_intent_id = ?, risk_decision_id = ?, approved_order_json = ?
+       WHERE signal_id = ? AND user_id = ?`,
+      [execResult.order_intent_id || null, execResult.risk?.risk_decision_id || execResult.risk_decision_id || null,
+        execResult.risk?.approved_order ? JSON.stringify(execResult.risk.approved_order) : null, signalId, userId]
+    )
+
     if (execResult.status === 'success') {
       const ticket = execResult.order || execResult.ticket || null
       const isPending = order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe'

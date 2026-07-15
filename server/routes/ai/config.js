@@ -3,11 +3,12 @@
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { round2, round3, stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
-import { mt5Bridge } from './market-data.js'
+import { mt5Bridge, computeAtr14 } from './market-data.js'
 import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
 import { isEncryptionAvailable } from '../../ai-credential.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
+import { evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy } from './risk-policy.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -84,6 +85,7 @@ export function buildBridgeOrderCall(request) {
       volume: request.volume,
       sl: request.sl,
       tp: request.tp,
+      deviation: request.deviation,
       expiration,
     },
   }
@@ -617,11 +619,13 @@ export function signalOrderPayload(signal, config, market, confirm) {
     signal_id: signal.id,
     normalization_info: signal.normalization_info || null,
     reference_price: market.latest_price,
+    atr_anchor: market.atr_anchor,
+    signal_created_at: signal.created_at || beijingNow(),
+    entry_method: entryMethod,
   }
 
   // Pending order fields
   if (entryMethod !== 'market' && entryMethod !== 'observe') {
-    payload.entry_method = entryMethod
     payload.limit_price = signal.limit_price
     payload.pending_valid_until = signal.pending_valid_until
     if (entryMethod === 'stop_limit' && signal.stop_limit_price) {
@@ -682,8 +686,41 @@ export async function executeOrderCore(userId, config, request, action, options 
     request,
     config,
     options,
-    validateRequest: validateTradeRequest,
+    validateRequest: async (legacyConfig, account, prepared, context) => {
+      const resolved = await resolveEffectiveRiskPolicy({
+        userId,
+        tradingAccountId: options.tradingAccountId ?? prepared.trading_account_id ?? null,
+        riskProfileId: options.riskProfileId ?? prepared.risk_profile_id ?? null,
+        legacyConfig,
+      })
+      const decision = evaluateCoreRisk({ request: prepared, account, quote: context.quote, instrument: context.instrument, policy: resolved.policy })
+      const decisionId = await persistRiskDecision(context.intentId, decision, resolved.policyVersionIds)
+      if (decision.decision_status === 'reject') throw new RiskReject(decision.reject_code, { risk_decision_id: decisionId, rules: decision.rule_results })
+      return {
+        ...validateTradeRequest(legacyConfig, account, decision.approved_order),
+        approved_order: decision.approved_order,
+        original_order: decision.original_order,
+        rule_results: decision.rule_results,
+        risk_amount: decision.risk_amount,
+        risk_decision_id: decisionId,
+        policy_version_ids: resolved.policyVersionIds,
+      }
+    },
     buildBridgeCall: buildBridgeOrderCall,
+    loadRiskContext: async ({ bridge, actorId, request: prepared, quote, bridgeOptions }) => {
+      const symbolsResult = await bridge(actorId, 'symbols', {}, bridgeOptions)
+      if (!symbolsResult || symbolsResult.status === 'error') throw new Error(symbolsResult?.message || 'symbol_metadata_failed')
+      const wanted = stripBrokerSuffix(prepared.symbol)
+      const instrument = (symbolsResult.symbols || []).find(item => String(item.name || '').toUpperCase() === String(prepared.symbol || '').toUpperCase())
+        || (symbolsResult.symbols || []).find(item => stripBrokerSuffix(item.name) === wanted)
+      if (!instrument) throw new Error('symbol_metadata_not_found')
+      if (!(Number(prepared.atr_anchor) > 0)) {
+        const ratesResult = await bridge(actorId, 'rates', { symbol: prepared.symbol, timeframe: 'H1', count: 30 }, bridgeOptions)
+        const atr = computeAtr14(ratesResult?.rates || [])
+        if (atr > 0) prepared.atr_anchor = atr
+      }
+      return { quote, instrument }
+    },
     enrichRequest: ({ request: prepared, quote }) => {
       if (!quote || !prepared.symbol) return
       prepared.quote_price = parseFloat(prepared.order_type === 'buy' ? quote.ask : quote.bid)

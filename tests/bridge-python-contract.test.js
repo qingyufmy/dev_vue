@@ -1,0 +1,13 @@
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+
+describe('Python Bridge history contract', () => {
+  it('treats an empty date filter as full account history', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const historyStart = source.indexOf('elif action == "history"')
+    const chartStart = source.indexOf('elif action == "chart_data"', historyStart)
+    const block = source.slice(historyStart, chartStart)
+    expect(block).toContain('date_from = datetime(1970, 1, 1)')
+    expect(block).not.toContain('else: date_from = date_to - timedelta(days=31)')
+  })
+})

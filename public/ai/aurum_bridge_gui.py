@@ -540,6 +540,8 @@ class BridgeWorker(QThread):
                             "comment": params.get("comment", "AI交易实验室"),
                             "type_time": self.mt5.ORDER_TIME_GTC,
                             "type_filling": self._get_filling_mode(symbol)}
+                if params.get("deviation") is not None:
+                    base_req["deviation"] = max(0, int(params.get("deviation") or 0))
                 if sl: base_req["sl"] = sl
                 if tp: base_req["tp"] = tp
                 def _build(tick):
@@ -642,7 +644,8 @@ class BridgeWorker(QThread):
                 if not tick: return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
                 return {"status": "success", "symbol": symbol, "bid": tick.bid, "ask": tick.ask,
                         "spread": round(info.spread * info.point, info.digits) if info else 0,
-                        "time": self._mt5_time(tick.time), "digits": info.digits if info else 2,
+                        "time": self._mt5_time(tick.time), "time_msc": getattr(tick, "time_msc", tick.time * 1000),
+                        "digits": info.digits if info else 2,
                         "point": info.point if info else 0.01, "source": "mt5"}
             elif action == "positions":
                 sym = params.get("symbol")
@@ -753,7 +756,13 @@ class BridgeWorker(QThread):
                 symbols = self.mt5.symbols_get()
                 if symbols is None: return {"status": "error", "message": "MT5 symbols_get failed"}
                 payload = [{"name": s.name, "description": s.description, "digits": s.digits,
-                    "trade_mode": s.trade_mode, "point": s.point} for s in symbols]
+                    "trade_mode": s.trade_mode, "point": s.point,
+                    "tick_size": float(getattr(s, "trade_tick_size", 0) or 0),
+                    "tick_value": float(getattr(s, "trade_tick_value", 0) or 0),
+                    "contract_size": float(getattr(s, "trade_contract_size", 0) or 0),
+                    "volume_min": float(getattr(s, "volume_min", 0) or 0),
+                    "volume_max": float(getattr(s, "volume_max", 0) or 0),
+                    "volume_step": float(getattr(s, "volume_step", 0) or 0)} for s in symbols]
                 return {"status": "success", "symbols": payload, "source": "mt5"}
             elif action == "account":
                 acc = self.mt5.account_info(); terminal = self.mt5.terminal_info()
@@ -794,9 +803,11 @@ class BridgeWorker(QThread):
                     date_to = datetime.utcnow() + timedelta(days=1)
                 if "date_from" in params:
                     try: date_from = datetime.strptime(params["date_from"][:10], "%Y-%m-%d")
-                    except (ValueError, KeyError, TypeError): date_from = date_to - timedelta(days=31)
+                    except (ValueError, KeyError, TypeError): date_from = datetime(1970, 1, 1)
                 else:
-                    date_from = date_to - timedelta(days=31)
+                    # Empty UI filters mean complete account history. A rolling
+                    # default would undercount deposits, withdrawals and profit.
+                    date_from = datetime(1970, 1, 1)
                 self.log_signal.emit(f"[History] date_from={date_from}, date_to={date_to}")
                 deals = self.mt5.history_deals_get(date_from, date_to)
                 self.log_signal.emit(f"[History] deals={len(deals) if deals else 'None'}")
@@ -1066,6 +1077,8 @@ class BridgeWorker(QThread):
                 }
                 if sl: req["sl"] = sl
                 if tp: req["tp"] = tp
+                if params.get("deviation") is not None:
+                    req["deviation"] = max(0, int(params.get("deviation") or 0))
                 stoplimit_price = params.get("stoplimit_price")
                 if stoplimit_price and ot in (self.mt5.ORDER_TYPE_BUY_STOP_LIMIT, self.mt5.ORDER_TYPE_SELL_STOP_LIMIT):
                     req["stoplimit_price"] = float(stoplimit_price)

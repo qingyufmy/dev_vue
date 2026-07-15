@@ -168,8 +168,13 @@ async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, reque
     )
     await run(
       `UPDATE order_intents SET status = 'prepared', request_json = ?, risk_json = ?,
+         original_order_json = ?, approved_order_json = ?, risk_decision_id = ?,
          lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = ? WHERE id = ?`,
-      [JSON.stringify(request), JSON.stringify(risk || {}), LEASE_SECONDS, beijingNow(), intentId]
+      [
+        JSON.stringify(request), JSON.stringify(risk || {}),
+        JSON.stringify(risk?.original_order || request), JSON.stringify(risk?.approved_order || request),
+        risk?.risk_decision_id || null, LEASE_SECONDS, beijingNow(), intentId,
+      ]
     )
   })
 }
@@ -256,6 +261,7 @@ export async function prepareAndExecuteOrderIntent({
   validateRequest,
   buildBridgeCall,
   enrichRequest,
+  loadRiskContext,
   bridge = mt5Bridge,
 }) {
   const actorId = toPositiveId(userId)
@@ -293,7 +299,11 @@ export async function prepareAndExecuteOrderIntent({
     if (typeof enrichRequest === 'function') {
       await enrichRequest({ request: preparedRequest, account, quote })
     }
-    const risk = await validateRequest(config, account, preparedRequest)
+    const riskContext = typeof loadRiskContext === 'function'
+      ? await loadRiskContext({ bridge, actorId, request: preparedRequest, account, quote, bridgeOptions: options, intentId })
+      : { quote, instrument: options.instrument || null }
+    const risk = await validateRequest(config, account, preparedRequest, { ...riskContext, intentId })
+    if (risk?.approved_order) Object.assign(preparedRequest, risk.approved_order)
     await reserveRisk(intentId, leaseToken, actorId, accountId, preparedRequest, risk)
     const { bridgeAction, bridgeParams } = buildBridgeCall(preparedRequest)
     if (!['open', 'pending'].includes(bridgeAction)) throw new Error('invalid_new_order_bridge_action')
