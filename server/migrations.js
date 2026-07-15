@@ -1455,6 +1455,44 @@ const migrations = [
         INDEX idx_outcome_deals_position (trading_account_id, position_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '063_trade_review_workflow',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS trade_review_cases (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, outcome_id BIGINT NOT NULL, signal_id BIGINT DEFAULT NULL,
+        user_id INT NOT NULL, trading_account_id INT NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'evidence_pending',
+        evidence_status VARCHAR(24) NOT NULL DEFAULT 'pending', evidence_reason VARCHAR(255) DEFAULT NULL,
+        evidence_json LONGTEXT DEFAULT NULL, evidence_hash CHAR(64) DEFAULT NULL,
+        trade_process_issue_status VARCHAR(24) NOT NULL DEFAULT 'unreviewed',
+        review_content_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        current_version_id BIGINT DEFAULT NULL, approved_version_id BIGINT DEFAULT NULL,
+        deferred_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_trade_review_outcome (outcome_id),
+        INDEX idx_trade_review_owner (user_id, status, updated_at),
+        INDEX idx_trade_review_health (status, evidence_status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS trade_review_versions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, case_id BIGINT NOT NULL, version_no INT NOT NULL,
+        parent_version_id BIGINT DEFAULT NULL, author_type VARCHAR(16) NOT NULL,
+        author_user_id INT DEFAULT NULL, content_json LONGTEXT NOT NULL, content_hash CHAR(64) NOT NULL,
+        change_note VARCHAR(500) DEFAULT NULL, created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_trade_review_version (case_id, version_no),
+        INDEX idx_trade_review_versions_case (case_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS trade_review_jobs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, case_id BIGINT NOT NULL, idempotency_key VARCHAR(180) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued', attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3, lease_token CHAR(36) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL, model_profile_id INT DEFAULT NULL,
+        credential_source VARCHAR(32) DEFAULT NULL, last_error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_trade_review_job_key (idempotency_key),
+        INDEX idx_trade_review_job_claim (status, lease_expires_at, updated_at),
+        INDEX idx_trade_review_job_case (case_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

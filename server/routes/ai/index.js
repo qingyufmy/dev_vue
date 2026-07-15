@@ -13,6 +13,8 @@ import { getActiveConfig, getAnalyzeApiKey, getAutoConfig, getGlobalAutoConfig, 
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
+import { listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
+  ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 
 const router = Router()
 
@@ -48,6 +50,51 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
     bridges: getBridgeDiagnostics(),
     recentStatus,
   })
+})
+
+function reviewError(res, error) {
+  const code = String(error?.message || 'review_request_failed')
+  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : code.includes('access_denied') ? 403 : 400
+  return res.status(status).json({ ok: false, error: code })
+}
+
+router.get('/ai/reviews', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, cases: await listReviewCases(req.user.id, req.query) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/reviews/:id', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, review: await getReviewCase(Number(req.params.id), req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/reviews/outcomes/:outcomeId', authMiddleware, async (req, res) => {
+  try {
+    const outcome = await queryAll('SELECT user_id FROM signal_outcomes WHERE id = ? LIMIT 1', [Number(req.params.outcomeId)])
+    if (!outcome[0] || Number(outcome[0].user_id) !== Number(req.user.id)) return res.status(404).json({ ok: false, error: 'outcome_not_found' })
+    res.json({ ok: true, review: await ensureReviewCaseForOutcome(Number(req.params.outcomeId)) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/reviews/:id/edit', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await editReviewCase({ caseId: Number(req.params.id), userId: req.user.id, content: req.body?.content, expectedVersionId: req.body?.expected_version_id, changeNote: req.body?.change_note })) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/reviews/:id/confirm', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await confirmReviewCase({ caseId: Number(req.params.id), userId: req.user.id, versionId: req.body?.version_id, action: req.body?.action, tradeProcessIssueStatus: req.body?.trade_process_issue_status })) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/reviews/:id/retry', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await retryReviewCase(Number(req.params.id), req.user.id)) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/reviews/health', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  try { res.json({ ok: true, health: await getReviewAdminHealth() }) }
+  catch (error) { reviewError(res, error) }
 })
 
 export { initAutoSchedulers }
@@ -96,6 +143,10 @@ export { calculateAccountRiskMetrics, aggregateClosedPositions, requestRiskRecov
   reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 export { analyzeOutcomeAttribution, resolveOutcomeClosureTransition,
   reconcileSignalOutcomes, startOutcomeMonitor, stopOutcomeMonitor } from './signal-outcomes.js'
+export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome,
+  enqueueEligibleReviewCases, runReviewWorkerOnce, startReviewWorker, stopReviewWorker,
+  listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
+  getReviewAdminHealth } from './review-workflow.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'
