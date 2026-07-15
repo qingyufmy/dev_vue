@@ -948,9 +948,11 @@ class BridgeWorker(QThread):
                     date_to = datetime.utcnow() + timedelta(days=1)
                 if "date_from" in params:
                     try: date_from = datetime.strptime(params["date_from"][:10], "%Y-%m-%d")
-                    except: date_from = date_to - timedelta(days=31)
+                    except (ValueError, KeyError, TypeError): date_from = datetime(1970, 1, 1)
                 else:
-                    date_from = date_to - timedelta(days=31)
+                    # Keep chart totals consistent with the history table: an
+                    # empty UI filter means the complete account history.
+                    date_from = datetime(1970, 1, 1)
                 # Optional filters
                 direction_filter = params.get("direction", "")
                 profit_filter = params.get("profit_filter", "")

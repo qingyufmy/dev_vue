@@ -176,6 +176,13 @@ async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, reque
           [JSON.stringify(risk.approved_order), JSON.stringify(risk.rule_results), risk.risk_decision_id])
       }
     }
+    if (state?.shadow_rules?.length) {
+      risk.rule_results = [...(risk.rule_results || []), ...state.shadow_rules]
+      if (risk?.risk_decision_id) {
+        await run('UPDATE risk_decisions SET rule_results_json = ? WHERE id = ?',
+          [JSON.stringify(risk.rule_results), risk.risk_decision_id])
+      }
+    }
     await run(
       `INSERT INTO risk_reservations
         (order_intent_id, user_id, trading_account_id, symbol, reserved_volume, reserved_risk_amount,

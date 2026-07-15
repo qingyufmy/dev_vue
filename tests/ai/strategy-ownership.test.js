@@ -199,6 +199,8 @@ describe('subscription transaction and V1 execution constraint', () => {
     expect(sql.some(value => value.includes('FROM trading_accounts') && value.includes('FOR UPDATE'))).toBe(true)
     expect(sql.some(value => value.includes('FROM strategy_subscriptions ss') && value.includes('FOR UPDATE'))).toBe(true)
     expect(sql.findIndex(value => value.startsWith('INSERT'))).toBeGreaterThan(sql.findIndex(value => value.includes('FROM strategy_subscriptions ss')))
+    expect(sql.some(value => value.includes('INSERT INTO auto_scheduler'))).toBe(true)
+    expect(sql.some(value => value.includes('INSERT INTO user_bridge_settings'))).toBe(true)
   })
 
   it('treats broker suffix variants as the same standard symbol', async () => {
@@ -250,10 +252,29 @@ describe('subscription transaction and V1 execution constraint', () => {
       .rejects.toThrow('strategy_not_selectable')
   })
 
+  it('converts platform personal-memory subscriptions into owner-only inference', async () => {
+    txRun.mockImplementation(sql => {
+      if (sql.includes('FROM auto_prompt_types') && !sql.includes("scope = 'private'")) return [[PLATFORM], []]
+      if (sql.includes("scope = 'private'") && sql.includes('version_label')) return [[], []]
+      if (sql.startsWith('INSERT INTO auto_prompt_types')) return [{ insertId: 77 }, []]
+      return defaultTx(sql)
+    })
+    await createSubscription(2, 'user', { trading_account_id: 10, strategy_id: 1, memory_mode: 'personal', execution_enabled: true })
+    const calls = txRun.mock.calls
+    expect(calls.some(([sql]) => sql.startsWith('INSERT INTO auto_prompt_types'))).toBe(true)
+    const subscriptionInsert = calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
+    expect(subscriptionInsert[1]).toContain(77)
+    const schedulerWrite = calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
+    expect(schedulerWrite[1]).toContain(77)
+  })
+
   it('soft-deletes only the owner subscription and detects missing rows', async () => {
-    db.queryRun.mockResolvedValueOnce({ changes: 1 })
     await expect(deleteSubscription(20, 2)).resolves.toBeUndefined()
-    db.queryRun.mockResolvedValueOnce({ changes: 0 })
+    expect(txRun.mock.calls.some(([sql]) => sql.includes('UPDATE auto_scheduler SET enabled = 0'))).toBe(true)
+    txRun.mockImplementation(sql => {
+      if (sql.includes('SELECT * FROM strategy_subscriptions WHERE id = ?')) return [[], []]
+      return defaultTx(sql)
+    })
     await expect(deleteSubscription(20, 2)).rejects.toThrow('subscription_not_found')
   })
 })

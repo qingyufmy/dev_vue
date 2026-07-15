@@ -11,6 +11,14 @@ describe('Python Bridge history contract', () => {
     expect(block).not.toContain('else: date_from = date_to - timedelta(days=31)')
   })
 
+  it('uses the same full-history default for chart totals', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const chartStart = source.indexOf('elif action == "chart_data"')
+    const block = source.slice(chartStart)
+    expect(block).toContain('date_from = datetime(1970, 1, 1)')
+    expect(block).not.toContain('date_from = date_to - timedelta(days=31)')
+  })
+
   it('includes trading fees in history net profit and account statistics', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     const historyStart = source.indexOf('elif action == "history"')

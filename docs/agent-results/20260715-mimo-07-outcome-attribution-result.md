@@ -36,5 +36,5 @@
 
 - 覆盖 Hedging 完整/部分平仓、Netting 单意图、多意图歧义、手续费净损益、外部加仓/手工成交/SL-TP 修改、费用稳定双扫描、Bridge 离线与数据库唯一约束。
 - Python Bridge 通过 `py_compile`，静态契约覆盖归因字段和按需原始 deal 输出。
-- 全量回归：51 个测试文件、767 项测试通过。
-- 真实 MySQL migration、真实 Hedging/Netting 账户和 MT5 deal 原因枚举联调保留到 Task 11。
+- 本阶段基线为 51 个测试文件、767 项测试通过；最终数量见最终审计提交。
+- Migration 062 已在真实 MySQL 应用并通过 schema readiness；真实 Hedging/Netting MT5 账户及 deal 原因枚举仍需在 Kill Switch 开启或模拟账户环境完成生产前冒烟。

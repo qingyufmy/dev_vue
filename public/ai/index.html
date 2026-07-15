@@ -15,7 +15,9 @@
     " />
     <script>
       (function() {
-        var t = localStorage.getItem('authToken');
+        var t = new URLSearchParams(window.location.search).get('token');
+        if (t) localStorage.setItem('authToken', t);
+        if (!t) t = localStorage.getItem('authToken');
         if (!t) {
           var m = document.cookie.match(/(?:^|;\s*)ws_token=([^;]*)/);
           if (m) t = decodeURIComponent(m[1]);
@@ -27,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260715j" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260715k" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -399,6 +401,18 @@
               <span class="card-title">推理策略</span>
             </div>
             <div class="strategy-source-row"><div><strong>当前模型来源</strong><span id="strategyModelSource">正在解析…</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
+            <div class="form-actions"><button id="addPrivateStrategyBtn" class="btn btn-primary btn-sm">新建自定义策略</button></div>
+            <section id="strategyEditor" class="workspace-panel hidden">
+              <div class="section-heading"><div><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm">取消</button></div>
+              <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120"></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD"></label><label id="strategyScopeField" class="admin-only"><span>策略范围</span><select id="strategyScope"><option value="platform">平台全局策略</option><option value="private">管理员自己的私有策略</option></select></label><label id="strategyVisibilityField" class="admin-only"><span>平台可见状态</span><select id="strategyVisibility"><option value="active">上线</option><option value="draft">草稿</option><option value="archived">归档</option></select></label><label><span>绑定模型</span><select id="strategyModelProfile"><option value="">继承默认模型 / 平台自动共享</option></select></label><label><span>推理间隔（分钟）</span><input id="strategyInterval" type="number" min="1" value="5"></label></div>
+              <label><span>策略提示词</span><textarea id="strategyPrompt" rows="8"></textarea></label>
+              <div class="form-actions"><button id="saveStrategyBtn" class="btn btn-primary">保存策略</button></div>
+            </section>
+            <section id="subscriptionEditor" class="workspace-panel hidden">
+              <div class="section-heading"><div><h2>订阅与执行</h2><p id="subscriptionCostNotice">个人记忆会把平台共享策略转换为逐用户推理，可能使用你的模型或平台共享配额。</p></div><button id="cancelSubscriptionEditorBtn" class="btn btn-secondary btn-sm">取消</button></div>
+              <div class="settings-grid"><label><span>交易账户</span><select id="subscriptionAccount"></select></label><label><span>品种（留空表示策略全部品种）</span><input id="subscriptionSymbols"></label><label><span>记忆模式</span><select id="subscriptionMemoryMode"><option value="platform_only">仅平台策略</option><option value="personal">个人记忆（逐用户推理）</option><option value="shadow">只影子检索</option><option value="off">关闭记忆</option></select></label><label class="check-row"><input id="subscriptionExecutionEnabled" type="checkbox"><span>启用自动执行</span></label></div>
+              <div class="form-actions"><button id="saveSubscriptionBtn" class="btn btn-primary">保存订阅</button></div>
+            </section>
             <div id="strategyCatalog" class="strategy-catalog"><div class="workspace-skeleton"></div></div>
             <div class="config-sub-tabs">
               <button class="config-sub-tab active" data-config-tab="manual-config">手动推理配置</button>
@@ -407,37 +421,7 @@
 
             <!-- 手动推理配置 -->
             <div id="manual-config" class="config-sub-panel active">
-              <div class="config-section">
-                <div class="config-section-title">AI 推理引擎</div>
-                <label class="model-sharing-toggle" id="modelSharingWrap" style="display:none">
-                  <div class="model-sharing-row">
-                    <span>共享模型给其他用户</span>
-                    <label class="switch">
-                      <input type="checkbox" id="modelSharingEnabled">
-                      <span class="slider round"></span>
-                    </label>
-                  </div>
-                  <small class="field-help">开启后，未配置模型的用户将自动使用您的模型设置</small>
-                </label>
-                <label class="model-sharing-toggle" id="autoConfigOverrideWrap" style="display:none">
-                </label>
-                <div class="config-grid">
-                  <label><span>模型供应商</span><select id="apiProvider">
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="gpt">GPT</option>
-                    <option value="kimi">Kimi</option>
-                    <option value="qwen">Qwen</option>
-                    <option value="zhipu">Zhipu</option>
-                    <option value="doubao">DouBao</option>
-                    <option value="volcengine_agent_plan">火山方舟 Agent Plan</option>
-                  </select></label>
-                  <label><span>模型名称</span><input id="modelName" value="deepseek-chat" /></label>
-                  <label><span>API Key</span><input id="apiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
-                  <label><span>API 地址</span><input id="apiBaseUrl" value="https://api.deepseek.com" placeholder="API 基础地址" /></label>
-                  <label><span>推理温度 Temperature</span><input id="temperature" class="num" type="number" min="0" max="2" step="0.1" value="0.3" /><small class="field-help">数值越低越稳定，建议 0.2-0.7</small></label>
-                  <label><span>最大输出 Max Tokens</span><input id="maxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /><small class="field-help">控制推理输出长度，建议 1200-2500</small></label>
-                </div>
-              </div>
+              <div class="strategy-source-row"><div><strong>推理模型</strong><span>手动与自动推理统一使用“模型管理”中的有效模型和共享策略；本页不保存凭据。</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
               <div class="config-section">
                 <div class="config-section-title">交易约束</div>
                 <div class="config-grid">
@@ -524,32 +508,7 @@
 
               <!-- Admin-only: Global model/API config + Prompt types -->
               <div class="admin-only-auto-config" style="display:none">
-                <div class="config-section" style="margin-top:20px;border-top:2px solid var(--color-border);padding-top:20px">
-                  <div class="config-section-title">全局模型/API 配置 <span class="admin-badge">仅管理员</span></div>
-                  <div class="config-grid">
-                    <label><span>模型供应商</span><select id="autoApiProvider">
-                      <option value="deepseek">DeepSeek</option>
-                      <option value="gpt">GPT</option>
-                      <option value="kimi">Kimi</option>
-                      <option value="qwen">Qwen</option>
-                      <option value="zhipu">Zhipu</option>
-                      <option value="doubao">DouBao</option>
-                      <option value="volcengine_agent_plan">火山方舟 Agent Plan</option>
-                    </select></label>
-                    <label><span>模型名称</span><input id="autoModelName" value="deepseek-chat" /></label>
-                    <label><span>API Key</span><input id="autoApiKey" type="password" placeholder="留空则不更新密钥" autocomplete="off" /></label>
-                    <label><span>API 地址</span><input id="autoApiBaseUrl" value="https://api.deepseek.com" placeholder="API 基础地址" /></label>
-                    <label><span>推理温度</span><input id="autoTemperature" class="num" type="number" min="0" max="2" step="0.1" value="0.3" /></label>
-                    <label><span>最大输出</span><input id="autoMaxTokens" class="num" type="number" min="100" max="10000" step="100" value="2000" /></label>
-                    <label style="display:flex;align-items:center;gap:8px"><span>思考模式</span><input id="autoThinkingEnabled" type="checkbox" checked style="width:auto" /></label>
-                    <label><span>思考强度</span><select id="autoReasoningEffort">
-                      <option value="low">low（较快）</option>
-                      <option value="medium">medium（均衡）</option>
-                      <option value="high">high（快速）</option>
-                      <option value="max" selected>max（深度）</option>
-                    </select></label>
-                  </div>
-                </div>
+                <div class="strategy-source-row"><div><strong>平台自动推理模型</strong><span>平台默认模型、共享范围和配额统一在“模型管理”维护。</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
 
                 <div class="config-section">
                   <div class="config-section-title" style="display:flex;justify-content:space-between;align-items:center">
@@ -743,7 +702,7 @@
           <div class="workspace-page">
             <header class="workspace-header"><div><h1>复盘与记忆</h1><p>复盘证据只读，正文可修订；只有你确认准确的版本才会成为个人经验。</p></div><button class="btn btn-secondary" data-action="refresh-review-memory"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
             <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>个人灰度功能</h2><p>个人开关只能进一步关闭功能，不能绕过管理员的全局开关。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存个人开关</button></div><div class="policy-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span>只影子检索</span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span>配对实验资格</span></label></div></section>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>个人灰度功能</h2><p>个人开关只能进一步关闭功能，不能绕过管理员的全局开关。启用付费配对实验后，每次符合条件的私有推理会额外调用一次无记忆对照模型；对照结果不会下单。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存个人开关</button></div><div class="policy-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span>只影子检索</span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span>付费配对实验（额外一次调用）</span></label></div></section>
             <div class="review-status-tabs" role="tablist"><button class="active" data-review-filter="">全部</button><button data-review-filter="evidence_pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">内容有问题</button></div>
             <div class="review-layout">
               <div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div>
@@ -829,8 +788,9 @@
           <div class="workspace-page">
             <header class="workspace-header"><div><h1>全局风控</h1><p>分别管理默认值、允许范围和锁定值；保存后创建不可变的新版本并立即生效。</p></div><button id="saveGlobalRiskBtn" class="btn btn-primary">保存全局风控</button></header>
             <div class="admin-boundary-note"><i data-lucide="shield-check" size="18"></i><div><strong>管理员边界</strong><span>可管理平台规则、账户状态与恢复申请；不可查看用户复盘正文或个人记忆内容。</span></div></div>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>AI 功能灰度</h2><p>默认关闭生成与注入；经验先开启检索影子，再逐步进入实际注入。强制风控不受这些开关影响。</p></div><button id="saveGlobalFeatureFlagsBtn" class="btn btn-primary btn-sm">保存全局灰度</button></div><div class="policy-switches"><label><input id="globalReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="globalExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="globalMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="globalRetrievalShadowFlag" type="checkbox"><span>检索影子</span></label><label><input id="globalPairedExperimentFlag" type="checkbox"><span>配对实验</span></label></div><div id="rolloutHealthSummary" class="workspace-row-meta rollout-health-summary"></div></section>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>AI 功能灰度</h2><p>默认关闭生成与注入；经验先开启检索影子，再逐步进入实际注入。强制风控不受这些开关影响。配对实验只授权用户自愿双跑，不会替用户自动同意费用。</p></div><button id="saveGlobalFeatureFlagsBtn" class="btn btn-primary btn-sm">保存全局灰度</button></div><div class="policy-switches"><label><input id="globalReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="globalExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="globalMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="globalRetrievalShadowFlag" type="checkbox"><span>检索影子</span></label><label><input id="globalPairedExperimentFlag" type="checkbox"><span>允许用户付费配对实验</span></label></div><div id="rolloutHealthSummary" class="workspace-row-meta rollout-health-summary"></div></section>
             <section class="workspace-panel"><div class="section-heading"><div><h2>平台紧急停止</h2><p>开启后阻止所有新开仓。关闭时也必须填写原因，全部操作进入审计日志。</p></div><button id="globalKillSwitchBtn" class="btn btn-danger">正在读取…</button></div><div id="globalKillSwitchMeta" class="workspace-row-meta"></div></section>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>规则级灰度</h2><p>强制规则始终 Enforce；可调规则切到 Shadow 后只记录“本应拒绝”，不会拦截订单，适合上线观察。</p></div></div><div id="riskRuleRolloutList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
             <div id="globalRiskEditor" class="workspace-list"><div class="workspace-skeleton"></div></div>
             <section class="workspace-panel"><div class="section-heading"><div><h2>待审核恢复申请</h2><p>恢复账户前请核对停机原因、数据完整性与用户说明。</p></div></div><div id="adminRecoveryList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
             <section class="workspace-panel"><div class="section-heading"><div><h2>用户风险状态</h2><p>Kill Switch、回撤、连亏和冷却状态均来自服务端。</p></div></div><div id="adminRiskAccounts" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
@@ -1070,7 +1030,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260715j"></script>
+    <script src="/ai/app.js?v=20260715m"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

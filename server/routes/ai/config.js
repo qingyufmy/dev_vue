@@ -10,6 +10,7 @@ import { resolveAiTaskModel, upsertDefaultModelProfileFromLegacyInput } from './
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
 import { evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy } from './risk-policy.js'
 import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
+import { getRiskRuleRolloutModes } from './rollout-governance.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -701,6 +702,7 @@ export async function getCloseSignalTickets(userId) {
 export async function executeOrderCore(userId, config, request, action, options = {}) {
   const signalId = request.signal_id ?? options.signalId ?? null
   const sourceType = options.sourceType || (options.deliveryId ? 'auto_delivery' : signalId ? 'signal' : 'manual')
+  const ruleModes = await getRiskRuleRolloutModes()
   const result = await prepareAndExecuteOrderIntent({
     userId,
     tradingAccountId: options.tradingAccountId ?? request.trading_account_id ?? null,
@@ -719,7 +721,7 @@ export async function executeOrderCore(userId, config, request, action, options 
         riskProfileId: options.riskProfileId ?? prepared.risk_profile_id ?? null,
         legacyConfig,
       })
-      const decision = evaluateCoreRisk({ request: prepared, account, quote: context.quote, instrument: context.instrument, policy: resolved.policy })
+      const decision = evaluateCoreRisk({ request: prepared, account, quote: context.quote, instrument: context.instrument, policy: resolved.policy, ruleModes })
       const decisionId = await persistRiskDecision(context.intentId, decision, resolved.policyVersionIds)
       if (decision.decision_status === 'reject') throw new RiskReject(decision.reject_code, { risk_decision_id: decisionId, rules: decision.rule_results })
       return {
@@ -742,6 +744,7 @@ export async function executeOrderCore(userId, config, request, action, options 
       request: approved,
       policy: risk.policy,
       snapshot: riskContext,
+      ruleModes,
     }),
     loadRiskContext: async ({ bridge, actorId, request: prepared, account, quote, bridgeOptions }) => {
       const symbolsResult = await bridge(actorId, 'symbols', {}, bridgeOptions)

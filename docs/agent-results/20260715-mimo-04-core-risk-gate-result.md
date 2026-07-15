@@ -39,4 +39,4 @@
 - 风控、订单意图、配置、LLM 和 Python Bridge 契约定向测试：87 项通过。
 - Python Bridge 通过 `py_compile`。
 - 全量回归：48 个测试文件、739 项测试通过。
-- 尚未执行真实 MySQL migration 与真实 MT5 账户联调，保留到 Task 11。
+- 对应 migration 已在真实 MySQL 应用并通过 readiness；真实 MT5 账户风控联调仍需在 Kill Switch 开启或模拟账户环境完成。

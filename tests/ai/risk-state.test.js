@@ -107,6 +107,15 @@ describe('stateful gate', () => {
     expect(result.reject_code).toBe('R2.3_DAILY_OPEN_COUNT')
   })
 
+  it('observes an adjustable state rule in shadow mode without blocking the order', async () => {
+    const result = await evaluateStatefulRiskTx(runner({ reserved: { volume: 0, daily_count: 2, notional: 0 }, successes: 8 }), {
+      userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
+      ruleModes: { 'R2.3_DAILY_OPEN_COUNT': { mode: 'shadow', forced: false } },
+    })
+    expect(result.reject_code).toBeUndefined()
+    expect(result.shadow_rules).toContainEqual(expect.objectContaining({ code: 'R2.3_DAILY_OPEN_COUNT', outcome: 'shadow_reject' }))
+  })
+
   it('uses persisted halt after a process restart', async () => {
     const result = await evaluateStatefulRiskTx(runner({ state: { ...stateRow, halt_status: 'halted', halt_reason: 'R3.3_MAX_DRAWDOWN' } }), {
       userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),

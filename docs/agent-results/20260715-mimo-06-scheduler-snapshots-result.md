@@ -37,4 +37,4 @@
 - 测试覆盖共享提示词白名单、实际渲染提示词回传、Schema hash、递归密钥脱敏、512 KiB 限制与显式证据降级。
 - 调度、LLM、模型解析和配置定向测试 149 项通过。
 - 全量回归：50 个测试文件、758 项测试通过。
-- 真实 MySQL migration、真实平台/用户 Bridge 与模型联调保留到 Task 11。
+- Migration 已在真实 MySQL 应用并通过 readiness；真实平台/用户 Bridge 与模型调用需在部署方配置 credential keyring 后做受控联调。

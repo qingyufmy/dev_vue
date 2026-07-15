@@ -20,7 +20,10 @@ import { createMemoryFromApprovedReview, listMemoryItems, revokeMemoryItem, acti
 import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
-import { listStrategies, listTradingAccounts, listSubscriptions, adminReviewTradingAccount } from './strategy-ownership.js'
+import { listStrategies, getStrategyById, createStrategy, updateStrategy, deleteStrategy,
+  listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
+  listSubscriptions, createSubscription, updateSubscription, deleteSubscription,
+  adminReviewTradingAccount } from './strategy-ownership.js'
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { requestRiskRecovery, reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
@@ -64,7 +67,7 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
 
 function reviewError(res, error) {
   const code = String(error?.message || 'review_request_failed')
-  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only')) ? 403 : 400
+  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required')) ? 403 : 400
   return res.status(status).json({ ok: false, error: code })
 }
 
@@ -190,12 +193,71 @@ router.get('/ai/model-source', authMiddleware, async (req, res) => {
 
 router.get('/ai/strategies', authMiddleware, async (req, res) => {
   try {
-    const [strategies, subscriptions] = await Promise.all([
+    const [strategies, subscriptions, accounts] = await Promise.all([
       listStrategies(req.user.id, req.user.role, { scope: req.query.scope || undefined, includeInactive: req.query.include_inactive === '1' }),
       listSubscriptions(req.user.id, req.user.role),
+      listTradingAccounts(req.user.id),
     ])
-    res.json({ ok: true, strategies, subscriptions })
+    res.json({ ok: true, strategies, subscriptions, accounts })
   }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategies/:id', authMiddleware, async (req, res) => {
+  try {
+    const strategy = await getStrategyById(Number(req.params.id), req.user.id, req.user.role)
+    if (!strategy) return res.status(404).json({ ok:false, error:'strategy_not_found' })
+    res.json({ ok:true, strategy })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/strategies', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, strategy:await createStrategy(req.user.id, req.user.role, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, strategy:await updateStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.delete('/ai/strategies/:id', authMiddleware, async (req, res) => {
+  try { await deleteStrategy(Number(req.params.id), req.user.id, req.user.role); res.json({ ok:true }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/trading-accounts', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, accounts:await listTradingAccounts(req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/trading-accounts', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, account:await createTradingAccount(req.user.id, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/trading-accounts/:id', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, account:await updateTradingAccount(Number(req.params.id), req.user.id, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.delete('/ai/trading-accounts/:id', authMiddleware, async (req, res) => {
+  try { await deleteTradingAccount(Number(req.params.id), req.user.id); res.json({ ok:true }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/subscriptions', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, subscription:await createSubscription(req.user.id, req.user.role, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, subscription:await updateSubscription(Number(req.params.id), req.user.id, req.user.role, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.delete('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
+  try { await deleteSubscription(Number(req.params.id), req.user.id); res.json({ ok:true }) }
   catch (error) { reviewError(res, error) }
 })
 

@@ -3468,7 +3468,6 @@ input:checked + .slider::before { transform: translateX(18px); }
 .admin-boundary-note > div { display:flex; flex-direction:column; gap:3px; }
 .global-risk-row { display:grid; grid-template-columns:minmax(180px,1fr) repeat(5,minmax(105px,.55fr)); gap:10px; align-items:end; padding:14px 0; border-bottom:1px solid var(--border-default); }
 .global-risk-row:last-child { border-bottom:0; }.global-risk-row label { display:flex; flex-direction:column; gap:6px; color:var(--text-secondary); font-size:12px; }
-#manual-config > .config-section:first-child,.admin-only-auto-config > .config-section:first-child { display:none !important; }
 
 @media (max-width:900px) {
   .workspace-header,.section-heading { align-items:stretch; flex-direction:column; }
@@ -3546,7 +3545,7 @@ input:checked + .slider::before { transform: translateX(18px); }
   .app-layout {
     height: auto;
     min-height: 100vh;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto 1fr;
     grid-template-areas:
       "topbar"
@@ -3557,8 +3556,14 @@ input:checked + .slider::before { transform: translateX(18px); }
 
   .topbar {
     flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100vw;
     min-height: 56px;
     padding: var(--space-3);
+  }
+
+  .topbar-brand {
+    min-width: 0;
   }
 
   .topbar-badges {
@@ -3569,6 +3574,8 @@ input:checked + .slider::before { transform: translateX(18px); }
 
   .sidebar {
     flex-direction: row;
+    min-width: 0;
+    max-width: 100vw;
     overflow-x: auto;
     padding: var(--space-2);
   }
@@ -3591,6 +3598,8 @@ input:checked + .slider::before { transform: translateX(18px); }
   }
 
   .main {
+    width: 100%;
+    max-width: 100vw;
     overflow: visible;
     padding: var(--space-3);
   }

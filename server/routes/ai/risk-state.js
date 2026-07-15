@@ -2,6 +2,7 @@
 
 import { queryOne, queryRun, withTransaction, beijingNow, logAudit, parseBeijing } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
+import { riskRuleIsEnforced } from './rollout-governance.js'
 
 const toNumber = value => Number.isFinite(Number(value)) ? Number(value) : 0
 const parseJson = (value, fallback = {}) => {
@@ -143,8 +144,14 @@ function sameDirection(item, request) {
   return stripBrokerSuffix(item.symbol) === stripBrokerSuffix(request.symbol) && side.includes(request.order_type)
 }
 
-export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId, request, policy, snapshot }) {
+export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId, request, policy, snapshot, ruleModes = {} }) {
+  const shadowRules = []
   const blocked = (rejectCode, details = {}) => ({ reject_code: rejectCode, details })
+  const rolloutBlock = (rejectCode, details = {}) => {
+    if (riskRuleIsEnforced(rejectCode, ruleModes)) return blocked(rejectCode, details)
+    shadowRules.push({ code: rejectCode, outcome: 'shadow_reject', details })
+    return null
+  }
   const accountRow = await txOne(run, 'SELECT * FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [accountId, userId])
   if (!accountRow) return blocked('R6_ACCOUNT_NOT_FOUND')
   const global = await txOne(run, 'SELECT * FROM global_risk_control WHERE id = 1 FOR UPDATE')
@@ -159,15 +166,26 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   if (['paused', 'switched', 'frozen'].includes(accountRow.observe_status)) return blocked('R6_ACCOUNT_PAUSED')
   if (state.user_kill_switch) return blocked('R6_USER_KILL_SWITCH')
   if (state.halt_status !== 'active') return blocked('R3_ACCOUNT_HALTED', { reason: state.halt_reason })
-  if (state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now()) return blocked('R3.2_LOSS_COOLDOWN', { until: state.cooldown_until })
+  if (state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now()) {
+    const rejected = rolloutBlock('R3.2_LOSS_COOLDOWN', { until: state.cooldown_until }); if (rejected) return rejected
+  }
 
   const metrics = calculateAccountRiskMetrics({ ...snapshot, previousState: state })
-  let haltReason = null
-  if (!metrics.data_complete) haltReason = 'R3_RISK_DATA_INCOMPLETE'
-  else if (metrics.daily_loss_pct >= policy.daily_loss_limit_pct) haltReason = 'R3.1_DAILY_LOSS_LIMIT'
-  else if (metrics.drawdown_pct >= policy.max_drawdown_pct) haltReason = 'R3.3_MAX_DRAWDOWN'
-  const cooldownUntil = metrics.consecutive_losses >= policy.consecutive_loss_limit
+  let proposedHalt = null
+  if (!metrics.data_complete) proposedHalt = 'R3_RISK_DATA_INCOMPLETE'
+  else if (metrics.daily_loss_pct >= policy.daily_loss_limit_pct) proposedHalt = 'R3.1_DAILY_LOSS_LIMIT'
+  else if (metrics.drawdown_pct >= policy.max_drawdown_pct) proposedHalt = 'R3.3_MAX_DRAWDOWN'
+  let haltReason = proposedHalt
+  if (proposedHalt && !riskRuleIsEnforced(proposedHalt, ruleModes)) {
+    shadowRules.push({ code: proposedHalt, outcome: 'shadow_reject', details: metrics })
+    haltReason = null
+  }
+  let cooldownUntil = metrics.consecutive_losses >= policy.consecutive_loss_limit
     ? new Date(Date.now() + policy.loss_cooldown_minutes * 60_000).toISOString().replace('T', ' ').slice(0, 19) : null
+  if (cooldownUntil && !riskRuleIsEnforced('R3.2_CONSECUTIVE_LOSS_COOLDOWN', ruleModes)) {
+    shadowRules.push({ code: 'R3.2_CONSECUTIVE_LOSS_COOLDOWN', outcome: 'shadow_reject', details: { until: cooldownUntil } })
+    cooldownUntil = null
+  }
   await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
     cumulative_cash_flow = ?, equity_high_water = ?, drawdown_pct = ?, consecutive_losses = ?, cooldown_until = ?,
     halt_status = ?, halt_reason = ?, data_complete = ?, updated_at = ? WHERE trading_account_id = ?`,
@@ -183,14 +201,18 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
     COALESCE(SUM(reserved_notional), 0) AS notional FROM risk_reservations
     WHERE trading_account_id = ? AND status = 'active' AND order_intent_id <> ?`, [accountId, intentId])
   if (externalDirectional + toNumber(reserved?.volume) + toNumber(request.volume) > policy.max_directional_exposure_lots + 1e-9) {
-    return blocked('R2.1_DIRECTIONAL_EXPOSURE')
+    const rejected = rolloutBlock('R2.1_DIRECTIONAL_EXPOSURE'); if (rejected) return rejected
   }
   const successCount = await txOne(run, `SELECT COUNT(*) AS count FROM order_intents WHERE trading_account_id = ? AND status = 'succeeded'
     AND completed_at >= CONCAT(CURDATE(), ' 00:00:00')`, [accountId])
-  if (toNumber(successCount?.count) + toNumber(reserved?.daily_count) + 1 > policy.max_daily_open_count) return blocked('R2.3_DAILY_OPEN_COUNT')
+  if (toNumber(successCount?.count) + toNumber(reserved?.daily_count) + 1 > policy.max_daily_open_count) {
+    const rejected = rolloutBlock('R2.3_DAILY_OPEN_COUNT'); if (rejected) return rejected
+  }
   const latest = await txOne(run, `SELECT completed_at FROM order_intents WHERE trading_account_id = ? AND status = 'succeeded'
     ORDER BY completed_at DESC LIMIT 1`, [accountId])
-  if (latest?.completed_at && Date.now() - parseBeijing(latest.completed_at).getTime() < policy.min_open_interval_seconds * 1000) return blocked('R2.2_MIN_OPEN_INTERVAL')
+  if (latest?.completed_at && Date.now() - parseBeijing(latest.completed_at).getTime() < policy.min_open_interval_seconds * 1000) {
+    const rejected = rolloutBlock('R2.2_MIN_OPEN_INTERVAL'); if (rejected) return rejected
+  }
   const duplicates = await txAll(run, `SELECT id, approved_order_json FROM order_intents WHERE trading_account_id = ? AND id <> ?
     AND symbol = ? AND status IN ('preparing','prepared','bridge_sending','uncertain','succeeded')
     AND created_at >= DATE_SUB(NOW(), INTERVAL ? SECOND) ORDER BY id DESC LIMIT 20`,
@@ -199,17 +221,23 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
     const prior = parseJson(duplicate.approved_order_json)
     const currentPrice = toNumber(request.limit_price || request.reference_price || request.quote_price)
     const priorPrice = toNumber(prior.limit_price || prior.reference_price || prior.quote_price)
-    if (prior.order_type === request.order_type && Math.abs(currentPrice - priorPrice) <= toNumber(request.atr_anchor) * policy.dedup_price_atr) return blocked('R2.4_PRICE_TIME_DUPLICATE')
+    if (prior.order_type === request.order_type && Math.abs(currentPrice - priorPrice) <= toNumber(request.atr_anchor) * policy.dedup_price_atr) {
+      const rejected = rolloutBlock('R2.4_PRICE_TIME_DUPLICATE'); if (rejected) return rejected
+    }
   }
   const marginLevel = toNumber(snapshot.account?.margin_level)
-  if (toNumber(snapshot.account?.margin) > 0 && marginLevel < policy.min_margin_level_pct) return blocked('R3.4_MARGIN_LEVEL')
+  if (toNumber(snapshot.account?.margin) > 0 && marginLevel < policy.min_margin_level_pct) {
+    const rejected = rolloutBlock('R3.4_MARGIN_LEVEL'); if (rejected) return rejected
+  }
   const orderNotional = exposureNotional([{
     symbol: request.symbol, volume: request.volume,
     price: request.limit_price || request.quote_price || request.reference_price,
   }], snapshot.instruments || {}, snapshot.account?.currency, snapshot.fxRates || {})
   if (orderNotional == null) return blocked('R3.4_NOTIONAL_DATA_INCOMPLETE')
   const projectedNotional = metrics.notional + toNumber(reserved?.notional) + orderNotional
-  if (projectedNotional > metrics.equity * policy.max_notional_exposure_pct / 100) return blocked('R3.4_NOTIONAL_EXPOSURE')
+  if (projectedNotional > metrics.equity * policy.max_notional_exposure_pct / 100) {
+    const rejected = rolloutBlock('R3.4_NOTIONAL_EXPOSURE'); if (rejected) return rejected
+  }
 
   const observedUntil = parseBeijing(accountRow.observed_until)?.getTime() || 0
   let approvedVolume = toNumber(request.volume), adjusted = false
@@ -217,7 +245,7 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
     approvedVolume = policy.observation_max_lot; adjusted = true
   }
   if (approvedVolume < Math.max(policy.ai_volume_min, toNumber(snapshot.instrument?.volume_min))) return blocked('R6.4_OBSERVATION_BELOW_MINIMUM')
-  return { approved_volume: approvedVolume, adjusted, reserved_notional: orderNotional, metrics }
+  return { approved_volume: approvedVolume, adjusted, reserved_notional: orderNotional, metrics, shadow_rules: shadowRules }
 }
 
 export async function recordSuccessfulOpenTx(run, accountId) {

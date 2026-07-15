@@ -2,6 +2,7 @@
 
 import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
+import { riskRuleIsEnforced } from './rollout-governance.js'
 
 const HOUR_MS = 3600_000
 const rule = (code, type, unit, safety, value, min, max, locked, label) => ({ code, type, unit, safety_direction: safety, default_value: value, allowed_min: min, allowed_max: max, locked, label })
@@ -221,9 +222,14 @@ function weekendProtected(nowMs, minutes) {
   return day === 0 || day === 6 || minute >= 6 * 1440 - minutes
 }
 
-export function evaluateCoreRisk({ request, account, quote, instrument, policy = DEFAULT_RISK_POLICY, nowMs = Date.now() }) {
+export function evaluateCoreRisk({ request, account, quote, instrument, policy = DEFAULT_RISK_POLICY, ruleModes = {}, nowMs = Date.now() }) {
   const original = structuredClone(request || {}), approved = structuredClone(request || {}), rules = []
   const fail = (code, details) => ({ ...rejection(rules, code, details), original_order: original })
+  const rolloutReject = (code, details = {}) => {
+    if (riskRuleIsEnforced(code, ruleModes)) return fail(code, details)
+    rules.push({ code, outcome: 'shadow_reject', details })
+    return null
+  }
   const symbol = String(approved.symbol || '').toUpperCase(), side = String(approved.order_type || '').toLowerCase()
   const method = String(approved.entry_method || 'market').toLowerCase(), ai = approved.source === 'ai'
   if (!symbol) return fail('R5_SCHEMA_SYMBOL')
@@ -236,7 +242,9 @@ export function evaluateCoreRisk({ request, account, quote, instrument, policy =
   }
   pass(rules, 'R5_SCHEMA')
   const standard = stripBrokerSuffix(symbol)
-  if (!policy.allowed_symbols.includes('*') && !policy.allowed_symbols.includes(symbol) && !policy.allowed_symbols.includes(standard)) return fail('R1.1_SYMBOL_NOT_ALLOWED', { symbol })
+  if (!policy.allowed_symbols.includes('*') && !policy.allowed_symbols.includes(symbol) && !policy.allowed_symbols.includes(standard)) {
+    const rejected = rolloutReject('R1.1_SYMBOL_NOT_ALLOWED', { symbol }); if (rejected) return rejected
+  }
   const needed = ['tick_value', 'tick_size', 'contract_size', 'volume_min', 'volume_max', 'volume_step', 'digits', 'point', 'trade_mode']
   const missing = needed.filter(key => !Number.isFinite(Number(instrument?.[key])))
   if (missing.length) return fail('R1_INSTRUMENT_DATA_INCOMPLETE', { missing })
@@ -261,9 +269,13 @@ export function evaluateCoreRisk({ request, account, quote, instrument, policy =
     rules.push({ code: 'R1.3_SL_WIDEN_VOLUME_DOWN', outcome: 'adjust', details: { from_sl: sl, to_sl: approved.sl, from_volume: original.volume, to_volume: volume } })
   }
   const finalDistance = Math.abs(entry - Number(approved.sl))
-  if (finalDistance > atr * policy.sl_atr_max + Number(instrument.tick_size)) return fail('R1.4_STOP_LOSS_TOO_FAR')
+  if (finalDistance > atr * policy.sl_atr_max + Number(instrument.tick_size)) {
+    const rejected = rolloutReject('R1.4_STOP_LOSS_TOO_FAR'); if (rejected) return rejected
+  }
   const rr = Math.abs(tp - entry) / finalDistance
-  if (rr + 1e-9 < policy.min_rr) return fail('R1.5_RR_TOO_LOW', { rr, minimum: policy.min_rr })
+  if (rr + 1e-9 < policy.min_rr) {
+    const rejected = rolloutReject('R1.5_RR_TOO_LOW', { rr, minimum: policy.min_rr }); if (rejected) return rejected
+  }
   volume = floorStep(Math.min(volume, policy.max_position_size, Number(instrument.volume_max)), Number(instrument.volume_step))
   const riskPerLot = finalDistance / Number(instrument.tick_size) * Number(instrument.tick_value), equity = finite(account?.equity)
   if (!(equity > 0) || !(riskPerLot > 0)) return fail('R1.10_RISK_DATA_INVALID')
@@ -278,22 +290,34 @@ export function evaluateCoreRisk({ request, account, quote, instrument, policy =
   if (method !== 'market') {
     const current = side === 'buy' ? ask : bid, deviation = Math.abs(entry - current)
     const maximum = Math.min(current * policy.pending_price_deviation_pct / 100, atr * policy.pending_price_deviation_atr)
-    if (deviation > maximum + Number(instrument.tick_size)) return fail('R1.7_PENDING_DEVIATION', { deviation, maximum })
+    if (deviation > maximum + Number(instrument.tick_size)) {
+      const rejected = rolloutReject('R1.7_PENDING_DEVIATION', { deviation, maximum }); if (rejected) return rejected
+    }
     if ((method === 'limit' && ((side === 'buy' && entry >= current) || (side === 'sell' && entry <= current))) || (method === 'stop' && ((side === 'buy' && entry <= current) || (side === 'sell' && entry >= current)))) return fail('R1.7_PENDING_DIRECTION')
     if (!approved.pending_valid_until && !approved.pending_valid_minutes) {
       approved.pending_valid_minutes = policy.pending_valid_minutes; adjusted = true
       rules.push({ code: 'R1.8_PENDING_TTL_DEFAULT', outcome: 'default', details: { minutes: policy.pending_valid_minutes } })
     }
-  } else if (ai && Math.abs(entry - Number(approved.reference_price)) > atr * policy.market_signal_drift_atr) return fail('R4.6_MARKET_SIGNAL_DRIFT')
+  } else if (ai && Math.abs(entry - Number(approved.reference_price)) > atr * policy.market_signal_drift_atr) {
+    const rejected = rolloutReject('R4.6_MARKET_SIGNAL_DRIFT'); if (rejected) return rejected
+  }
   const quoteTime = quoteEpoch(quote?.time_msc ?? quote?.time)
-  if (quoteTime == null || nowMs - quoteTime > policy.max_quote_age_seconds * 1000 || nowMs < quoteTime - 5000) return fail('R4.4_QUOTE_STALE')
+  if (quoteTime == null || nowMs - quoteTime > policy.max_quote_age_seconds * 1000 || nowMs < quoteTime - 5000) {
+    const rejected = rolloutReject('R4.4_QUOTE_STALE'); if (rejected) return rejected
+  }
   const spreadPoints = Math.abs(ask - bid) / Number(instrument.point)
-  if (!Number.isFinite(spreadPoints) || spreadPoints > policy.max_spread_points) return fail('R4.5_SPREAD_TOO_WIDE', { spread_points: spreadPoints })
+  if (!Number.isFinite(spreadPoints) || spreadPoints > policy.max_spread_points) {
+    const rejected = rolloutReject('R4.5_SPREAD_TOO_WIDE', { spread_points: spreadPoints }); if (rejected) return rejected
+  }
   if (ai) {
     const signalTime = quoteEpoch(approved.signal_created_at)
-    if (signalTime == null || nowMs - signalTime > policy.signal_ttl_seconds * 1000) return fail('R4.3_SIGNAL_EXPIRED')
+    if (signalTime == null || nowMs - signalTime > policy.signal_ttl_seconds * 1000) {
+      const rejected = rolloutReject('R4.3_SIGNAL_EXPIRED'); if (rejected) return rejected
+    }
   }
-  if (weekendProtected(nowMs, policy.weekend_close_minutes)) return fail('R4.2_WEEKEND_PROTECTION')
+  if (weekendProtected(nowMs, policy.weekend_close_minutes)) {
+    const rejected = rolloutReject('R4.2_WEEKEND_PROTECTION'); if (rejected) return rejected
+  }
   approved.deviation = Math.floor(policy.broker_slippage_points)
   pass(rules, 'PX.3_BROKER_SLIPPAGE', { points: approved.deviation })
   return { decision_status: adjusted ? 'adjust' : 'pass', reject_code: null, original_order: original, approved_order: approved, rule_results: rules, risk_amount: Number((riskPerLot * volume).toFixed(8)) }

@@ -11,7 +11,7 @@ vi.mock('../../server/db.js', () => ({
 }))
 
 import { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatureFlags,
-  updateRiskRuleRollout } from '../../server/routes/ai/rollout-governance.js'
+  riskRuleIsEnforced, updateRiskRuleRollout } from '../../server/routes/ai/rollout-governance.js'
 
 describe('AI rollout governance', () => {
   beforeEach(() => {
@@ -39,6 +39,15 @@ describe('AI rollout governance', () => {
     await expect(updateRiskRuleRollout({ actorId:1, actorRole:'admin', ruleCode:'kill_switch', mode:'shadow' }))
       .rejects.toThrow('forced_rule_must_enforce')
     expect(mocks.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('applies rule-level shadow modes while runtime safety rules remain enforced', () => {
+    const modes = {
+      'R4.5_SPREAD_TOO_WIDE': { mode: 'shadow', forced: false },
+      'R1.9_AI_VOLUME_OUT_OF_RANGE': { mode: 'shadow', forced: false },
+    }
+    expect(riskRuleIsEnforced('R4.5_SPREAD_TOO_WIDE', modes)).toBe(false)
+    expect(riskRuleIsEnforced('R1.9_AI_VOLUME_OUT_OF_RANGE', modes)).toBe(true)
   })
 
   it('fails readiness when any required migration is absent', async () => {

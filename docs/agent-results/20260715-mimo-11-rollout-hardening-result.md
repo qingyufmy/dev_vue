@@ -2,7 +2,7 @@
 
 ## 结论
 
-Task 01–11 的实现已完成并通过全量回归。Task 11 实现提交为 `a6cfae9`，完整功能提交范围为 `122d056..a6cfae9`。未合并 `main`。
+Task 01–11 的实现已完成并通过最终整合审查。Task 11 初始实现提交为 `a6cfae9`，后续由 Codex 补齐运行时双写、手动推理快照、付费配对、规则级 Shadow、前端权限与移动端验收。未合并 `main`。
 
 ## 本任务实现
 
@@ -32,10 +32,12 @@ Task 01–11 的实现已完成并通过全量回归。Task 11 实现提交为 `
 | 063 | review cases / versions / jobs | IF NOT EXISTS；失败阻止启动 |
 | 064 | memory / summaries / compression / injection logs | IF NOT EXISTS；失败阻止启动 |
 | 065 | rollout flags / rule modes / credential runs / user deletion | 幂等补列建表；失败阻止启动 |
+| 066 | paired inference decision evidence | 仅保存脱敏摘要/hash；失败阻止启动 |
+| 067 | manual inference snapshots | 允许手动推理以空 strategy_id 保留不可变快照；失败阻止启动 |
 
 ## 测试与静态验证
 
-- `npm test -- --run`：56 个测试文件、802 项测试全部通过。
+- 最终 `npm test`：56 个测试文件、814 项测试全部通过。
 - 关键并发覆盖：订单意图幂等与租约、Redis 锁丢失、Bridge 发送后 uncertain、pending reconciler、风险预留与状态风控。
 - `node --check`：migrations、governance、model profiles、AI routes、workers、scheduler、admin route 和前端脚本通过。
 - 秘密/正文日志扫描：无 `console` 输出 API Key、Authorization、Bearer、evidence/content JSON 或 lesson text 的匹配。
@@ -46,11 +48,11 @@ Task 01–11 的实现已完成并通过全量回归。Task 11 实现提交为 `
 
 - `npm run dev` / `node server/index.js`：服务成功监听 `:3000`。
 - `/health`：`status=ok`、MySQL connected、Redis connected。
-- 数据库确认：`065_ai_rollout_governance` 已应用；服务能监听说明 migration 和 readiness 均已通过。
+- 数据库确认：056–067 已应用；`assertAiGovernanceSchemaReady()` 返回 ready，服务在 worker 启动前完成 migration/readiness 检查。
 - JWT_SECRET：当前环境已配置。
 - AI credential keyring：当前环境未配置 `AI_CREDENTIAL_KEYS_JSON` / active version；模型调用按失败关闭策略禁用，未进行真实模型请求。
 - Bridge：管理员 WS health 的进程内连接数为 0；数据库存在近期状态记录，但不能据此声称当前 Bridge 实际在线。因此 MT5 实盘开仓/挂单链路未做真实执行验证。
-- 验证结束后已停止本次启动产生的所有 Node 进程，端口 3000 已释放。
+- 验证结束后停止本次启动产生的 Node 进程并释放端口 3000。
 
 ## 剩余生产风险
 
@@ -58,12 +60,12 @@ Task 01–11 的实现已完成并通过全量回归。Task 11 实现提交为 `
 2. 未连接真实 Bridge，真实 MT5 账户身份、报价、下单与回报链路仍需在 Kill Switch 开启或模拟账户环境完成冒烟。
 3. 平台成本目前以请求数与 Token 聚合为代理指标；若需要精确货币成本，需要维护供应商/模型价格表。
 4. 旧字段清理是不可自动回退的数据动作，必须完成备份、轮换、连接测试和观察窗后由管理员显式执行。
-5. 配对实验只开放受控资格与分组标记；额外模型调用必须在单独成本预算和实验执行器下启用，当前不会自动双倍调用。
+5. 配对实验已接入手动与私有自动推理，但只有管理员授权且用户显式同意时才额外调用一次；必须纳入单独成本预算，对照结果不下单。
 
 ## 生产启用顺序
 
 1. 备份 MySQL，配置并验证 JWT、Redis、Bridge 和独立 AI credential keyring。
-2. 保持平台/账户 Kill Switch 可用，部署并确认 056–065 与 readiness。
+2. 保持平台/账户 Kill Switch 可用，部署并确认 056–067 与 readiness。
 3. 迁移旧 Key，测试每个 model profile；先不清旧字段。
 4. 验证订单意图、uncertain、风控拒绝和 outcome 指标。
 5. 小用户组开启复盘生成。

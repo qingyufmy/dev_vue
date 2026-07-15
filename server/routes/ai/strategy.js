@@ -1,12 +1,13 @@
 // ai/strategy.js — 策略上下文 + 执行 + 分析
 
-import { queryRun, beijingNow } from '../../db.js'
+import { queryRun, beijingNow, withTransaction } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
-import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
+import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds, stripBrokerSuffix } from './utils.js'
 import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal } from './memory-system.js'
+import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun } from './memory-system.js'
+import { persistInferenceSnapshotTx } from './inference-snapshots.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
@@ -185,26 +186,46 @@ export async function handleAnalyze(userId, params) {
     config._memoryContext = memory.promptBlock
     config._memoryMode = memory.mode || 'off'
   }
-  const signal = await maybeAiSignal(null, config, market, prompt)
+  let renderedEvidence = null
+  if (config) config._onInferencePrepared = evidence => { renderedEvidence = evidence }
+  let signal
+  try {
+    signal = await maybeAiSignal(null, config, market, prompt)
+  } finally {
+    if (config) delete config._onInferencePrepared
+  }
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
 
   const createdAt = beijingNow()
   const marketJson = JSON.stringify(market)
   const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
-  const result = await queryRun(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
-    analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
-    market_data_json, token_count, ai_model, ttl_seconds, created_at,
-    entry_method, limit_price, stop_limit_price, pending_valid_until)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [userId, session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
-      signal.analysis, signal.reasoning, signal.stop_loss_price || null,
-      signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
-      marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
-      signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null])
+  if (!renderedEvidence) throw new Error('inference_evidence_missing')
+  const persisted = await withTransaction(async run => {
+    const [result] = await run(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
+      analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+      market_data_json, token_count, ai_model, ttl_seconds, created_at,
+      entry_method, limit_price, stop_limit_price, pending_valid_until)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
+        signal.analysis, signal.reasoning, signal.stop_loss_price || null,
+        signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
+        marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
+        signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null])
+    const snapshotId = await persistInferenceSnapshotTx(run, {
+      signalId: result.insertId, strategyId: null, strategyVersion: 1, strategyScope: 'manual', ownerUserId: userId,
+      standardSymbol: stripBrokerSuffix(symbol).toUpperCase(), marketSource: 'owner_mt5_bridge',
+      systemPrompt: renderedEvidence.systemPrompt, userPrompt: renderedEvidence.userPrompt,
+      outputSchemaVersion: renderedEvidence.outputSchemaVersion, marketSnapshot: market,
+      modelProfileId: config?._model_profile_id, provider: config?.api_provider,
+      modelName: config?.model_name, credentialSource: config?._credential_source,
+      memoryMode: memory.mode || 'off', createdAt,
+    })
+    return { signalId: result.insertId, snapshotId }
+  })
 
-  signal.id = result.insertId
-  try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id) }
+  signal.id = persisted.signalId
+  try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId) }
   catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
   signal.symbol = symbol
   signal.timeframe = primaryTf
@@ -258,6 +279,29 @@ export async function handleAnalyze(userId, params) {
     } catch (e) {
       console.error('[Analyze] Auto-execute failed:', e.message)
     }
+    }
+  }
+
+  if (memory.pairedExperimentEnabled && memory.mode === 'active' && memory.promptBlock) {
+    let control = null
+    let pairStatus = 'failed'
+    let pairError = null
+    try {
+      const controlConfig = { ...config, _memoryContext: '', _memoryMode: 'off' }
+      delete controlConfig._onInferencePrepared
+      control = await maybeAiSignal(null, controlConfig, market, prompt)
+      const controlSource = control?._inference_source
+      if (control) delete control._inference_source
+      pairStatus = controlSource === 'ai' ? 'succeeded' : 'failed'
+      pairError = pairStatus === 'failed' ? (control?.reasoning || 'paired_control_failed') : null
+    } catch (error) {
+      pairError = error.message || 'paired_control_failed'
+    }
+    try {
+      await recordPairedInferenceRun({ userId, strategyId: null, signalId: signal.id,
+        memoryLogId: memory.logId, treatment: signal, control, status: pairStatus, errorCode: pairError })
+    } catch (error) {
+      console.error('[Analyze] Paired inference evidence write failed:', error.message)
     }
   }
 

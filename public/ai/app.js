@@ -1227,6 +1227,16 @@ function profileScopeQuery() {
   return state.user?.role === "admin" ? "?scope=platform" : "";
 }
 
+const PROVIDER_PRESETS = {
+  deepseek: { models: ['deepseek-chat', 'deepseek-reasoner'], url: 'https://api.deepseek.com' },
+  gpt: { models: ['gpt-4o', 'gpt-4o-mini'], url: 'https://api.openai.com/v1' },
+  kimi: { models: ['moonshot-v1-8k'], url: 'https://api.moonshot.cn/v1' },
+  qwen: { models: ['qwen-plus'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  zhipu: { models: ['glm-4-flash'], url: 'https://open.bigmodel.cn/api/paas/v4' },
+  doubao: { models: ['doubao-1.5-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
+  volcengine_agent_plan: { models: ['ark-code-latest'], url: 'https://ark.cn-beijing.volces.com/api/plan/v3' },
+};
+
 function renderModelProfiles() {
   const host = $("modelProfilesList");
   if (!host) return;
@@ -1312,6 +1322,7 @@ async function loadStrategyCatalog() {
   const data = await api(`/api/ai/strategies${state.user?.role === 'admin' ? '?include_inactive=1' : ''}`);
   const items = data.strategies || [];
   const subscriptions = data.subscriptions || [];
+  state.strategies = items; state.strategySubscriptions = subscriptions; state.tradingAccounts = data.accounts || [];
   host.innerHTML = items.length ? items.map(item => {
     const symbols = parseJsonField(item.symbols_json, []);
     const source = item.model_profile_id ? `绑定模型 #${item.model_profile_id}` : "继承默认模型";
@@ -1319,11 +1330,65 @@ async function loadStrategyCatalog() {
     const linked = subscriptions.filter(sub => Number(sub.strategy_id) === Number(item.id));
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
     const memoryMode = linked.some(sub => sub.memory_mode === "disabled") ? "部分订阅关闭记忆" : memory;
-    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '私有' : '平台'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(item.visibility_status)}</span></div><div class="workspace-row-meta"><span>所有者：${item.scope === 'private' ? escapeHtml(item.owner_nickname || `用户 #${item.owner_user_id}`) : '平台'}</span><span>${source}</span><span>${escapeHtml(memoryMode)}</span><span>执行：${escapeHtml(execution)}</span><span>品种：${symbols.map(escapeHtml).join('、') || '未设置'}</span><span>AI 手数受平台上下限与风控档案约束</span></div></div></article>`;
+    const canEdit = (item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id)) || (item.scope === 'platform' && state.user?.role === 'admin');
+    const subRows = linked.map(sub => `<div class="workspace-row-meta"><span>订阅 #${sub.id} · 账户 #${sub.trading_account_id} · ${sub.execution_enabled ? '执行中' : '未执行'} · ${escapeHtml(sub.memory_mode)}</span><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}">编辑订阅</button><button class="btn btn-secondary btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}">删除订阅</button></div>`).join("");
+    const canSubscribe = item.scope === 'platform' || Number(item.owner_user_id) === Number(state.user?.id);
+    return `<article class="workspace-row" data-strategy-id="${Number(item.id)}"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '私有' : '平台'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(item.visibility_status)}</span></div><div class="workspace-row-meta"><span>所有者：${item.scope === 'private' ? escapeHtml(item.owner_nickname || `用户 #${item.owner_user_id}`) : '平台'}</span><span>${source}</span><span>${escapeHtml(memoryMode)}</span><span>执行：${escapeHtml(execution)}</span><span>品种：${symbols.map(escapeHtml).join('、') || '未设置'}</span><span>AI 手数受平台上下限与风控档案约束</span></div>${subRows}</div><div class="workspace-row-actions">${canSubscribe ? '<button class="btn btn-primary btn-sm" data-strategy-action="subscribe">订阅 / 执行</button>' : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit">编辑</button><button class="btn btn-danger btn-sm" data-strategy-action="delete">删除</button>' : ''}</div></article>`;
   }).join("") : '<div class="empty-state"><strong>暂无可用策略</strong><span>用户仅能看到平台策略和自己创建的私有策略。</span></div>';
 }
 
-const RISK_LABELS = { max_position_size:"最大手数", market_signal_drift_atr:"市价漂移 ATR", pending_price_deviation_pct:"挂单偏差百分比", pending_price_deviation_atr:"挂单偏差 ATR", broker_slippage_points:"成交滑点", max_spread_points:"最大点差", max_quote_age_seconds:"报价年龄", max_daily_open_count:"每日交易数", max_directional_exposure_lots:"同向敞口", max_drawdown_pct:"最大回撤", consecutive_loss_limit:"连续亏损", daily_loss_limit_pct:"每日亏损", max_risk_per_trade_pct:"单笔风险" };
+function openStrategyEditor(strategy = null) {
+  const editor = $("strategyEditor"); editor.classList.remove("hidden"); editor.dataset.strategyId = strategy?.id || "";
+  const admin = state.user?.role === "admin";
+  $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (admin ? "新建策略" : "新建自定义策略");
+  $("strategyEditorBoundary").textContent = admin ? "平台策略对所有合资格用户可见；他人私有策略只允许审计查看，不能代替用户修改或执行。" : "你创建的私有策略仅自己可见、可选和执行。";
+  $("strategyTitle").value = strategy?.title || ""; $("strategySymbols").value = parseJsonField(strategy?.symbols_json, []).join(", ");
+  $("strategyPrompt").value = strategy?.system_prompt || ""; $("strategyInterval").value = strategy?.interval_minutes || 5;
+  if (admin) {
+    $("strategyScope").value = strategy?.scope || "platform";
+    $("strategyScope").disabled = Boolean(strategy);
+    $("strategyVisibility").value = strategy?.visibility_status || "active";
+    $("strategyVisibilityField").style.display = $("strategyScope").value === "platform" ? "" : "none";
+  }
+  const scope = strategy?.scope || (admin ? $("strategyScope").value : "private");
+  const profiles = (state.modelProfiles || []).filter(item => item.scope !== "platform");
+  $("strategyModelProfile").innerHTML = '<option value="">继承默认模型 / 平台自动共享</option>' + profiles.map(profile => `<option value="${Number(profile.id)}">${escapeHtml(profile.model_name)}</option>`).join("");
+  $("strategyModelProfile").value = strategy?.model_profile_id || "";
+  $("strategyModelProfile").disabled = scope === "platform";
+  editor.scrollIntoView({ behavior:"smooth", block:"start" });
+}
+
+async function saveStrategyEditor() {
+  const id = Number($("strategyEditor").dataset.strategyId || 0);
+  const body = { title:$("strategyTitle").value.trim(), symbols:$("strategySymbols").value.split(",").map(value => value.trim()).filter(Boolean),
+    system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
+    model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
+    scope:state.user?.role === "admin" ? $("strategyScope").value : "private",
+    visibility_status:state.user?.role === "admin" ? $("strategyVisibility").value : "active" };
+  await api(id ? `/api/ai/strategies/${id}` : "/api/ai/strategies", { method:id ? "PUT" : "POST", body });
+  $("strategyEditor").classList.add("hidden"); toast("策略已保存", "success"); await loadStrategyCatalog();
+}
+
+function openSubscriptionEditor(strategy, subscription = null) {
+  if (!state.tradingAccounts?.length) { toast("请先连接交易桥并完成账户登记/审核", "warning"); return; }
+  const editor = $("subscriptionEditor"); editor.classList.remove("hidden"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
+  $("subscriptionAccount").innerHTML = state.tradingAccounts.map(account => `<option value="${Number(account.id)}">${escapeHtml(account.nickname || account.login_account)} · ${escapeHtml(account.broker_server)}</option>`).join("");
+  $("subscriptionAccount").value = subscription?.trading_account_id || state.tradingAccounts[0].id;
+  $("subscriptionSymbols").value = parseJsonField(subscription?.symbols_json, []).join(", ");
+  $("subscriptionMemoryMode").value = subscription?.memory_mode || (strategy.scope === "private" ? "personal" : "platform_only");
+  $("subscriptionExecutionEnabled").checked = Boolean(subscription?.execution_enabled); editor.scrollIntoView({ behavior:"smooth", block:"start" });
+}
+
+async function saveSubscriptionEditor() {
+  const editor = $("subscriptionEditor"), id = Number(editor.dataset.subscriptionId || 0);
+  const body = { trading_account_id:Number($("subscriptionAccount").value), strategy_id:Number(editor.dataset.strategyId),
+    symbols:$("subscriptionSymbols").value.split(",").map(value => value.trim()).filter(Boolean), memory_mode:$("subscriptionMemoryMode").value,
+    execution_enabled:$("subscriptionExecutionEnabled").checked };
+  await api(id ? `/api/ai/subscriptions/${id}` : "/api/ai/subscriptions", { method:id ? "PUT" : "POST", body });
+  editor.classList.add("hidden"); toast("订阅已保存", "success"); await loadStrategyCatalog(); await loadAutoConfig();
+}
+
+const RISK_LABELS = { ai_volume_min:"AI 建议最小手数", ai_volume_max:"AI 建议最大手数", ai_volume_step:"AI 建议手数步进", max_position_size:"最终最大手数", market_signal_drift_atr:"市价漂移 ATR", pending_price_deviation_pct:"挂单偏差百分比", pending_price_deviation_atr:"挂单偏差 ATR", broker_slippage_points:"成交滑点", max_spread_points:"最大点差", max_quote_age_seconds:"报价年龄", max_daily_open_count:"每日交易数", max_directional_exposure_lots:"同向敞口", max_drawdown_pct:"最大回撤", consecutive_loss_limit:"连续亏损", daily_loss_limit_pct:"每日亏损", max_risk_per_trade_pct:"单笔风险" };
 function formatRiskValue(key, value) { if (value == null) return "--"; if (key.endsWith("_pct")) return `${Number(value)}%`; if (key.endsWith("_ms")) return `${Number(value)} ms`; return String(value); }
 
 async function loadRiskCenter() {
@@ -1335,7 +1400,7 @@ async function loadRiskCenter() {
     const editable = ["max_position_size","max_risk_per_trade_pct","market_signal_drift_atr","pending_price_deviation_pct","pending_price_deviation_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds"];
     const pending = (row.pending_changes || []).map(change => `${RISK_LABELS[change.field_code] || change.field_code} → ${parseJsonField(change.new_value_json,null)}（${change.effective_at}）`).join("；");
     const stateInfo = row.risk_state || {}, killEnabled = Boolean(stateInfo.user_kill_switch);
-    return `<article class="workspace-panel" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · ${escapeHtml(row.account.margin_mode)} · 审核 ${escapeHtml(row.account.review_status)}</p></div><div class="workspace-row-actions"><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(stateInfo.halt_status || '未初始化')}</span><button class="btn ${killEnabled ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${killEnabled ? '0' : '1'}">${killEnabled ? '解除紧急停止' : '紧急停止新开仓'}</button>${stateInfo.halt_status && stateInfo.halt_status !== 'active' ? `<button class="btn btn-secondary btn-sm" data-risk-recovery="${row.account.id}">申请恢复</button>` : ''}</div></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(stateInfo.halt_reason)}</span></div>` : ''}${pending ? `<div class="source-notice"><span><strong>待生效：</strong>${escapeHtml(pending)}</span></div>` : ''}<div class="risk-value-grid">${Object.keys(RISK_LABELS).slice(0,8).map(key => `<div class="risk-value"><span>${RISK_LABELS[key]} · 最终有效</span><strong>${escapeHtml(formatRiskValue(key,p[key]))}</strong></div>`).join("")}</div><details class="risk-user-editor"><summary>修改我的自定义风控</summary><p class="field-help">收紧立即生效；放宽进入冷却倒计时。平台锁定项不可修改。</p><div class="settings-grid compact">${editable.map(key => `<label><span>${RISK_LABELS[key]}</span><input type="number" step="any" data-user-risk-field="${key}" value="${escapeHtml(p[key] ?? '')}"></label>`).join("")}</div><div class="form-actions"><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存用户风控</button></div></details></article>`;
+    return `<article class="workspace-panel" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · ${escapeHtml(row.account.margin_mode)} · 审核 ${escapeHtml(row.account.review_status)}</p></div><div class="workspace-row-actions"><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(stateInfo.halt_status || '未初始化')}</span><button class="btn ${killEnabled ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${killEnabled ? '0' : '1'}">${killEnabled ? '解除紧急停止' : '紧急停止新开仓'}</button>${stateInfo.halt_status && stateInfo.halt_status !== 'active' ? `<button class="btn btn-secondary btn-sm" data-risk-recovery="${row.account.id}">申请恢复</button>` : ''}</div></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(stateInfo.halt_reason)}</span></div>` : ''}${pending ? `<div class="source-notice"><span><strong>待生效：</strong>${escapeHtml(pending)}</span></div>` : ''}<div class="risk-value-grid">${Object.keys(RISK_LABELS).slice(0,10).map(key => `<div class="risk-value"><span>${RISK_LABELS[key]} · 最终有效</span><strong>${escapeHtml(formatRiskValue(key,p[key]))}</strong></div>`).join("")}</div><details class="risk-user-editor"><summary>修改我的自定义风控</summary><p class="field-help">收紧立即生效；放宽进入冷却倒计时。AI 建议手数范围属于平台强制边界，不能由用户放宽。</p><div class="settings-grid compact">${editable.map(key => `<label><span>${RISK_LABELS[key]}</span><input type="number" step="any" data-user-risk-field="${key}" value="${escapeHtml(p[key] ?? '')}"></label>`).join("")}</div><div class="form-actions"><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存用户风控</button></div></details></article>`;
   }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>账户接入并通过服务端审核后，这里会显示最终有效风控。</span></div>';
   const firstPolicy = rows[0]?.effective?.policy || {};
   $("priceExecutionRules").classList.remove("empty-state");
@@ -1362,7 +1427,11 @@ async function loadReviewMemory() {
   $("sharedCredentialNotice")?.classList.toggle("hidden", (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
   const userFlags = featureData.flags?.user || {};
   const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled", userPairedExperimentFlag:"paired_experiment_enabled" };
-  for (const [id,key] of Object.entries(featureInputs)) if ($(id)) $(id).checked = userFlags[key] ?? true;
+  for (const [id,key] of Object.entries(featureInputs)) if ($(id)) {
+    // Paid paired inference is opt-in: an inherited/global permission must not
+    // silently become explicit user consent when this form is saved.
+    $(id).checked = key === "paired_experiment_enabled" ? userFlags[key] === true : userFlags[key] ?? true;
+  }
   renderReviewCases(); renderMemoryItems(memoryData.items || [], memoryData.settings || {});
 }
 
@@ -1416,6 +1485,8 @@ async function loadAdminRiskCenter() {
   for (const [id,key] of Object.entries(globalInputs)) if ($(id)) $(id).checked = Boolean(globalFlags[key]);
   const metrics = health.metrics || {};
   $("rolloutHealthSummary").innerHTML = `<span>告警 ${Number(health.alerts?.length || 0)}</span><span>不确定订单 ${Number(metrics.uncertain?.count || 0)}</span><span>最老不确定 ${Number(metrics.uncertain?.oldest_seconds || 0)} 秒</span><span>Outcome 积压 ${Number(metrics.outcome_backlog?.backlog || 0)}</span><span>凭据迁移 ${escapeHtml(health.credential_migration?.status || '未执行')}</span>`;
+  const rolloutHost = $("riskRuleRolloutList");
+  if (rolloutHost) rolloutHost.innerHTML = (health.risk_rule_rollouts || []).map(rule => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(rule.rule_code)} ${rule.forced_enforce ? '<span class="status-chip danger">强制</span>' : '<span class="status-chip info">可调</span>'}</div><div class="workspace-row-meta"><span>${rule.forced_enforce ? '系统安全边界，不允许影子放行' : 'Shadow 仅记录，Enforce 正式拦截'}</span><span>更新 ${escapeHtml(rule.updated_at || '--')}</span></div></div><div class="workspace-row-actions"><select data-risk-rollout="${escapeHtml(rule.rule_code)}" ${rule.forced_enforce ? 'disabled' : ''}><option value="enforce" ${rule.mode === 'enforce' ? 'selected' : ''}>Enforce</option><option value="shadow" ${rule.mode === 'shadow' ? 'selected' : ''}>Shadow</option></select></div></article>`).join("") || '<div class="empty-state">暂无规则灰度数据</div>';
   renderAccountReviews(data.accounts || []);
 }
 
@@ -2053,7 +2124,8 @@ async function loadKlineData() {
 
     _klineChart.timeScale().fitContent();
   } catch (e) {
-    if (!String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
+    const bridgeUnavailable = state._lastGatewayLive !== true;
+    if (!bridgeUnavailable && !String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
       console.error('loadKlineData:', e);
     }
   }
@@ -2207,6 +2279,7 @@ function applyRoleUI() {
   document.querySelectorAll('.admin-only').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
   });
+  if ($("addPrivateStrategyBtn")) $("addPrivateStrategyBtn").textContent = isAdmin ? "新建策略" : "新建自定义策略";
 
   // 管理分组：仅桥接已连接时显示
   const navGroupManage = document.getElementById('navGroupManage');
@@ -2311,125 +2384,44 @@ function applyRoleUI() {
   modelTabs.forEach(modelTab => { modelTab.style.display = ""; });
 }
 
-/* ---- Provider presets: model name → API base URL ---- */
-const PROVIDER_PRESETS = {
-  deepseek: { models: ['deepseek-chat', 'deepseek-reasoner'], url: 'https://api.deepseek.com' },
-  gpt:      { models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-mini'], url: 'https://api.openai.com/v1' },
-  kimi:     { models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'], url: 'https://api.moonshot.cn/v1' },
-  qwen:     { models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
-  zhipu:    { models: ['glm-4-flash', 'glm-4-air', 'glm-4', 'glm-4v'], url: 'https://open.bigmodel.cn/api/paas/v4' },
-  doubao:   { models: ['doubao-1.5-pro-32k', 'doubao-1.5-lite-32k', 'doubao-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
-  volcengine_agent_plan: { models: ['ark-code-latest'], url: 'https://ark.cn-beijing.volces.com/api/plan/v3' },
-};
-
-function applyProviderPreset(provider) {
-  const preset = PROVIDER_PRESETS[provider];
-  if (!preset) return;
-  /* Only auto-fill URL if empty or matches another preset URL */
-  const urlInput = $('apiBaseUrl');
-  const currentUrl = urlInput.value.trim();
-  const isPresetUrl = Object.values(PROVIDER_PRESETS).some(p => p.url === currentUrl);
-  if (!currentUrl || isPresetUrl) urlInput.value = preset.url;
-  /* Only auto-fill model if empty or matches another preset model */
-  const modelInput = $('modelName');
-  const currentModel = modelInput.value.trim();
-  const allModels = Object.values(PROVIDER_PRESETS).flatMap(p => p.models);
-  if (!currentModel || allModels.includes(currentModel)) modelInput.value = preset.models[0];
-}
-
 async function loadConfig() {
   const data = await wsApi("ai_config");
   const cfg = data.config;
   const defaultPrompt = data.default_prompt || "";
   if (!cfg) {
-    state.currentConfigHasApiKey = false;
     state.systemPromptInherited = state.user?.role !== "admin";
     $("systemPrompt").value = defaultPrompt;
-    $("apiKey").placeholder = "输入 API Key 后保存";
-    setText("configStatus", "未配置 API Key，系统将使用本地规则兜底");
-    applyProviderPreset("deepseek");
+    setText("configStatus", "交易约束尚未保存；推理模型请在“模型管理”配置");
     return;
   }
 
-  state.currentConfigHasApiKey = Boolean(cfg.has_api_key);
-  if (![...$("apiProvider").options].some((option) => option.value === cfg.api_provider)) {
-    $("apiProvider").add(new Option(cfg.api_provider, cfg.api_provider));
-  }
-  $("apiProvider").value = cfg.api_provider || "deepseek";
-  $("modelName").value = cfg.model_name || "deepseek-chat";
-  $("apiBaseUrl").value = cfg.api_base_url || "";
-  applyProviderPreset($("apiProvider").value);
-  $("temperature").value = cfg.temperature ?? 0.3;
-  $("maxTokens").value = cfg.max_tokens ?? 2000;
   $("riskLevel").value = cfg.risk_level || "medium";
   const configuredMaxPosition = Number(cfg.max_position_size ?? 0.05);
   $("maxPositionSize").value = (Number.isFinite(configuredMaxPosition) ? configuredMaxPosition : 0.05).toFixed(2);
   $("selectedTakeProfit").value = String(cfg.selected_take_profit || 1);
   $("enableAutoTrade").checked = Boolean(cfg.enable_auto_trade);
   $("enableFuturesTrading").checked = Boolean(cfg.enable_futures_trading);
-  $("apiKey").placeholder = state.currentConfigHasApiKey ? "已配置；如需保存配置请重新输入密钥" : "输入 API Key 后保存";
-  const keyText = state.currentConfigHasApiKey ? `密钥已配置：${cfg.masked_api_key}` : "未配置 API Key，本地规则兜底可用";
-  setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · ${keyText}`);
+  setText("configStatus", "推理模型由“模型管理”统一解析；此处只保存提示词和交易约束");
 
   // Non-admin users without an override inherit the administrator's live prompt.
   state.systemPromptInherited = state.user?.role !== "admin" && Boolean(cfg._system_prompt_inherited);
   $("systemPrompt").value = cfg.system_prompt || defaultPrompt;
 
-  // Model sharing toggle (admin only)
   const isAdmin = state.user?.role === "admin";
-  const sharingWrap = $("modelSharingWrap");
-  if (sharingWrap) sharingWrap.style.display = isAdmin ? "" : "none";
-  if (isAdmin && $("modelSharingEnabled")) {
-    $("modelSharingEnabled").checked = Boolean(cfg.model_sharing_enabled);
-  }
   // Restore per-user auto symbol + interval (backend fills defaults from global auto config)
   if ($("overrideSymbolSelect")) $("overrideSymbolSelect").value = cfg.auto_symbols;
   if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
-  // 模型共享：只要管理员开启了共享且当前用户非管理员，API Key 为空就共享
-  const isUsingShared = !isAdmin && cfg._model_shared;
-  if (isUsingShared) {
-    // 提示用户当前使用的是管理员共享的 API Key，但允许自行填入覆盖
-    $("apiKey").type = "password";
-    $("apiKey").value = "";
-    $("apiKey").disabled = false;
-    $("apiKey").style.opacity = "";
-    $("apiKey").placeholder = "留空则使用管理员共享的API Key";
-    setText("configStatus", `${cfg.api_provider || "Provider"} · ${cfg.model_name || "model"} · 当前使用管理员共享的API Key（可自行填写覆盖）`);
-  } else {
-    $("apiKey").type = "password";
-    $("apiKey").value = "";
-    $("apiKey").disabled = false;
-    $("apiKey").style.opacity = "";
-    $("apiKey").placeholder = "";
-  }
-  state._isUsingSharedModel = isUsingShared;
 }
 
 async function saveConfig() {
-  const apiKey = $("apiKey").value.trim();
-  const isUsingShared = state._isUsingSharedModel;
-  // 共享模型下留空可以（后端fallback到管理员Key），但用户填了就用用户的
-  if (!apiKey && !state.currentConfigHasApiKey && !isUsingShared) {
-    toast("请先填写 API Key", "warning");
-    $("apiKey").focus();
-    return;
-  }
-
   const body = {
     session_id: "default",
     config: {
-      api_provider: $("apiProvider").value,
-      api_key: apiKey || null,
-      api_base_url: $("apiBaseUrl").value || null,
-      model_name: $("modelName").value || "deepseek-chat",
-      temperature: Number($("temperature").value),
-      max_tokens: Number($("maxTokens").value),
       enable_auto_trade: $("enableAutoTrade").checked,
       enable_futures_trading: $("enableFuturesTrading").checked,
       risk_level: $("riskLevel").value,
       max_position_size: Number($("maxPositionSize").value) || 0.05,
       selected_take_profit: Number($("selectedTakeProfit").value),
-      model_sharing_enabled: state.user?.role === "admin" && $("modelSharingEnabled")?.checked ? 1 : 0,
       system_prompt: state.user?.role !== "admin" && state.systemPromptInherited
         ? null
         : ($("systemPrompt").value.trim() || null),
@@ -2448,9 +2440,8 @@ async function saveConfig() {
       }
     }
     await wsApi("save_config", { config: configPayload, session_id: body.session_id });
-    $("apiKey").value = "";
     await loadConfig();
-    toast("模型配置已保存", "success");
+    toast("推理配置已保存", "success");
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2477,19 +2468,6 @@ function initConfigSubTabs() {
 }
 
 // ============ Auto Config ============
-function applyAutoProviderPreset(provider) {
-  const preset = PROVIDER_PRESETS[provider];
-  if (!preset) return;
-  const urlEl = document.getElementById('autoApiBaseUrl');
-  const modelEl = document.getElementById('autoModelName');
-  const currentUrl = urlEl?.value?.trim() || '';
-  const currentModel = modelEl?.value?.trim() || '';
-  const isPresetUrl = Object.values(PROVIDER_PRESETS).some(item => item.url === currentUrl);
-  const allModels = Object.values(PROVIDER_PRESETS).flatMap(item => item.models || []);
-  if (urlEl && (!currentUrl || isPresetUrl)) urlEl.value = preset.url;
-  if (modelEl && (!currentModel || allModels.includes(currentModel))) modelEl.value = preset.models?.[0] || '';
-}
-
 async function loadAutoConfig() {
   const autoPanel = document.getElementById('auto-config');
   if (autoPanel) autoPanel.style.display = '';
@@ -2522,24 +2500,9 @@ async function loadAutoConfig() {
     document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
     document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enable_auto_trade);
 
-    // Admin: global config
+    // Admin strategy maintenance remains here. Models and global risk have
+    // dedicated pages and are deliberately not duplicated in this form.
     if (isAdmin && data.admin) {
-      const gc = data.admin.global_config;
-      document.getElementById('autoApiProvider').value = gc.api_provider || 'deepseek';
-      document.getElementById('autoModelName').value = gc.model_name || 'deepseek-chat';
-      document.getElementById('autoApiBaseUrl').value = gc.api_base_url || '';
-      document.getElementById('autoTemperature').value = gc.temperature ?? 0.3;
-      document.getElementById('autoMaxTokens').value = gc.max_tokens ?? 2000;
-      document.getElementById('autoApiKey').placeholder = gc.has_api_key ? '已配置；如需更新请重新输入' : '输入 API Key';
-      applyAutoProviderPreset(gc.api_provider || 'deepseek');
-      if (document.getElementById('autoThinkingEnabled')) {
-        document.getElementById('autoThinkingEnabled').checked = gc.thinking_enabled !== 0;
-      }
-      if (document.getElementById('autoReasoningEffort')) {
-        document.getElementById('autoReasoningEffort').value = gc.reasoning_effort || 'max';
-      }
-
-      // Prompt type table
       renderPromptTypeTable(data.prompt_types || [], cfg.prompt_type_id);
     }
   } catch (e) {
@@ -2770,8 +2733,6 @@ function initAutoSymbolsSelector() {
 }
 
 async function saveAutoConfig() {
-  const isAdmin = state.user?.role === 'admin';
-
   try {
     // Save user config (all users)
     const ptVal = document.getElementById('autoPromptTypeSelect')?.value;
@@ -2785,27 +2746,6 @@ async function saveAutoConfig() {
       enable_auto_trade: document.getElementById('autoEnableAutoTrade').checked,
     };
     await wsApi('save_user_auto_config', userPayload);
-
-    // Admin: save global config
-    if (isAdmin) {
-      const apiKey = document.getElementById('autoApiKey')?.value?.trim();
-      const globalPayload = {
-        api_provider: document.getElementById('autoApiProvider').value,
-        model_name: document.getElementById('autoModelName').value,
-        api_base_url: document.getElementById('autoApiBaseUrl').value,
-        temperature: parseFloat(document.getElementById('autoTemperature').value) || 0.3,
-        max_tokens: parseInt(document.getElementById('autoMaxTokens').value) || 2000,
-        risk_level: document.getElementById('autoRiskLevel').value,
-        max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
-        selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
-        enable_auto_trade: document.getElementById('autoEnableAutoTrade').checked,
-        thinking_enabled: document.getElementById('autoThinkingEnabled')?.checked ?? true,
-        reasoning_effort: document.getElementById('autoReasoningEffort')?.value || 'max',
-      };
-      if (apiKey) globalPayload.api_key = apiKey;
-      await wsApi('admin_save_auto_global_config', globalPayload);
-      if (apiKey) document.getElementById('autoApiKey').value = '';
-    }
 
     toast('配置已保存', 'success');
     await loadAutoConfig();
@@ -4281,7 +4221,6 @@ async function loadAudit() {
 
 function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
-  $('apiProvider')?.addEventListener('change', e => applyProviderPreset(e.target.value));
   $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("saveConfigBtn").addEventListener("click", saveConfig);
@@ -4361,7 +4300,17 @@ function bindEvents() {
   initConfigSubTabs();
   initAutoSymbolsSelector();
   $("saveAutoConfigBtn")?.addEventListener("click", saveAutoConfig);
-  $("autoApiProvider")?.addEventListener("change", (e) => applyAutoProviderPreset(e.target.value));
+  $("addPrivateStrategyBtn")?.addEventListener("click", () => openStrategyEditor());
+  $("strategyScope")?.addEventListener("change", event => {
+    const platform = event.target.value === "platform";
+    $("strategyModelProfile").disabled = platform;
+    if (platform) $("strategyModelProfile").value = "";
+    $("strategyVisibilityField").style.display = platform ? "" : "none";
+  });
+  $("cancelStrategyEditorBtn")?.addEventListener("click", () => $("strategyEditor")?.classList.add("hidden"));
+  $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => toast(error.message, "error")));
+  $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => $("subscriptionEditor")?.classList.add("hidden"));
+  $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
   $("addModelProfileBtn")?.addEventListener("click", () => openModelEditor());
   $("cancelModelProfileBtn")?.addEventListener("click", () => $("modelProfileEditor")?.classList.add("hidden"));
   $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(error.message, "error")));
@@ -4388,6 +4337,12 @@ function bindEvents() {
     document.querySelectorAll("[data-review-filter]").forEach(item => item.classList.toggle("active", item === button));
     state.reviewFilter = button.dataset.reviewFilter; loadReviewMemory().catch(error => toast(error.message,"error"));
   }));
+  document.body.addEventListener("change", async event => {
+    const riskRollout = event.target.closest("[data-risk-rollout]");
+    if (!riskRollout) return;
+    try { await api(`/api/ai/admin/risk-rule-rollouts/${encodeURIComponent(riskRollout.dataset.riskRollout)}`, { method:"PUT", body:{ mode:riskRollout.value } }); toast("规则灰度已更新", "success"); await loadAdminRiskCenter(); }
+    catch (error) { toast(error.message, "error"); await loadAdminRiskCenter(); }
+  });
 
   // Timeframe checkbox change → update confirm text
   // (removed old modal handlers)
@@ -4413,6 +4368,29 @@ function bindEvents() {
     const killSwitch = event.target.closest("[data-kill-switch]");
     const riskRecovery = event.target.closest("[data-risk-recovery]");
     const recoveryReview = event.target.closest("[data-recovery-review]");
+    const strategyAction = event.target.closest("[data-strategy-action]");
+    const subscriptionAction = event.target.closest("[data-subscription-action]");
+
+    if (strategyAction) {
+      const row = strategyAction.closest("[data-strategy-id]"), strategy = (state.strategies || []).find(item => Number(item.id) === Number(row?.dataset.strategyId));
+      if (!strategy) return;
+      try {
+        if (strategyAction.dataset.strategyAction === "edit") openStrategyEditor(strategy);
+        else if (strategyAction.dataset.strategyAction === "subscribe") openSubscriptionEditor(strategy);
+        else if (strategyAction.dataset.strategyAction === "delete" && confirm("确认删除这个策略？现有订阅将停止执行。")) { await api(`/api/ai/strategies/${strategy.id}`, { method:"DELETE" }); toast("策略已删除", "success"); await loadStrategyCatalog(); }
+      } catch (error) { toast(error.message, "error"); }
+      return;
+    }
+    if (subscriptionAction) {
+      const subscription = (state.strategySubscriptions || []).find(item => Number(item.id) === Number(subscriptionAction.dataset.subscriptionId));
+      const strategy = (state.strategies || []).find(item => Number(item.id) === Number(subscription?.strategy_id));
+      if (!subscription) return;
+      try {
+        if (subscriptionAction.dataset.subscriptionAction === "edit") openSubscriptionEditor(strategy || { id:subscription.strategy_id, scope:subscription.strategy_scope }, subscription);
+        else if (subscriptionAction.dataset.subscriptionAction === "delete" && confirm("确认删除这个订阅？自动执行会同步关闭。")) { await api(`/api/ai/subscriptions/${subscription.id}`, { method:"DELETE" }); toast("订阅已删除", "success"); await loadStrategyCatalog(); await loadAutoConfig(); }
+      } catch (error) { toast(error.message, "error"); }
+      return;
+    }
 
     if (modelAction) {
       const row = modelAction.closest("[data-model-id]"); const id = Number(row?.dataset.modelId); const profile = state.modelProfiles.find(item => Number(item.id) === id); const scope = state.user?.role === "admin" ? "platform" : "user";

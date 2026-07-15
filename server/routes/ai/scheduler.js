@@ -4,7 +4,7 @@ import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../..
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
-import { maybeAiSignal } from './llm.js'
+import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix } from './utils.js'
@@ -12,7 +12,7 @@ import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal } from './memory-system.js'
+import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun } from './memory-system.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 
@@ -1406,6 +1406,33 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       }
     }
 
+    // Paid paired inference is an explicitly user-enabled experiment. The
+    // control run never enters delivery/execution and runs only after the
+    // treatment signal has completed its normal trading path.
+    if (isPrivate && memory.pairedExperimentEnabled && memory.mode === 'active' && memory.promptBlock) {
+      let control = null
+      let pairStatus = 'failed'
+      let pairError = null
+      try {
+        const controlConfig = { ...config, _memoryContext: '', _memoryMode: 'off' }
+        delete controlConfig._onInferencePrepared
+        control = await maybeAiSignal(null, controlConfig, market)
+        const controlSource = control?._inference_source
+        if (control) delete control._inference_source
+        pairStatus = controlSource === 'ai' ? 'succeeded' : 'failed'
+        pairError = pairStatus === 'failed' ? (control?.reasoning || 'paired_control_failed') : null
+      } catch (error) {
+        pairError = error.message || 'paired_control_failed'
+      }
+      try {
+        await recordPairedInferenceRun({ userId: inferenceUserId, strategyId: promptTypeId,
+          signalId, memoryLogId: memory.logId, treatment: signal, control,
+          status: pairStatus, errorCode: pairError })
+      } catch (error) {
+        l(`paired inference evidence write failed (${error.message})`)
+      }
+    }
+
     // Normal hold signals remain in signal history but do not create audit noise.
     if (signal.signal_type !== 'hold') {
       await insertAudit(null, isPrivate ? inferenceUserId : 0, 'ai_auto_scan', symbol, {
@@ -2113,57 +2140,18 @@ async function runSmartClose(userId, closeConfig, account, positions) {
   const reasoningEffort = globalCfg?.reasoning_effort || 'max'
 
   try {
-    const body = { model, messages: [
-      { role: 'system', content: stripTimeframeTags(prompt) },
-      { role: 'user', content: JSON.stringify(contextPayload) },
-    ] }
-    if (thinkingEnabled) {
-      body.thinking = { type: 'enabled' }
-      body.reasoning_effort = reasoningEffort
-    } else {
-      body.temperature = temperature
-      body.max_tokens = maxTokens
-    }
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
+    const provider = resolvedModel.model.provider || resolvedModel.model.api_provider || 'deepseek'
+    const protocol = provider === 'volcengine_agent_plan' ? 'responses' : 'chat_completions'
+    const parsed = await requestJsonObject({
+      url: `${baseUrl}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
+      apiKey, model, temperature, maxTokens, thinkingEnabled, reasoningEffort, protocol,
+      messages: [
+        { role: 'system', content: stripTimeframeTags(prompt) },
+        { role: 'user', content: JSON.stringify(contextPayload) },
+      ],
+      usageContext: { userId, profileId: resolvedModel.model_profile_id,
+        credentialSource: resolvedModel.credential_source, usage: 'manual', strategyId: null },
     })
-    const data = await resp.json()
-    let content = data.choices?.[0]?.message?.content || ''
-    if (!content) {
-      const reasoning = data.choices?.[0]?.message?.reasoning_content || ''
-      if (reasoning) {
-        const jsonMatch = reasoning.match(/\{[\s\S]*"positions"[\s\S]*\]/)
-        if (jsonMatch) {
-          let candidate = jsonMatch[0]
-          const openBraces = (candidate.match(/\{/g) || []).length
-          const closeBraces = (candidate.match(/\}/g) || []).length
-          if (openBraces > closeBraces) candidate += '}'.repeat(openBraces - closeBraces)
-          content = candidate
-        } else {
-          console.error('[SmartClose] No JSON found in reasoning_content (first 500):', reasoning.substring(0, 500))
-          return []
-        }
-      } else {
-        console.error('[SmartClose] Empty AI response. Status:', resp.status, 'Response:', JSON.stringify(data).substring(0, 300))
-        return []
-      }
-    }
-
-    let jsonStr = content.replace(/```json\n?|```/g, '').trim()
-    const firstBrace = jsonStr.indexOf('{')
-    const lastBrace = jsonStr.lastIndexOf('}')
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      jsonStr = jsonStr.substring(firstBrace, lastBrace + 1)
-    }
-    let parsed
-    try {
-      parsed = JSON.parse(jsonStr)
-    } catch (e) {
-      console.error('[SmartClose] JSON parse error:', e.message, '\nRaw content (first 500):', content.substring(0, 500))
-      return []
-    }
 
     if (!Array.isArray(parsed.positions) || parsed.positions.length === 0) return []
 

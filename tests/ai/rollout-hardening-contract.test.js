@@ -7,12 +7,34 @@ const migrations = readFileSync(new URL('../../server/migrations.js', import.met
 const bridge = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const config = readFileSync(new URL('../../server/routes/ai/config.js', import.meta.url), 'utf8')
 const rollout = readFileSync(new URL('../../server/routes/ai/rollout-governance.js', import.meta.url), 'utf8')
+const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
+const strategy = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
 
 describe('rollout hardening contract', () => {
   it('adds the readiness-tracked rollout migration and defaults generative features off', () => {
     expect(migrations).toContain("id: '065_ai_rollout_governance'")
     expect(migrations).toContain("VALUES ('global', 0, 0, 0, 0, 1, 0")
     expect(rollout).toContain('065_ai_rollout_governance')
+    expect(rollout).toContain('066_paired_inference_evidence')
+    expect(rollout).toContain('067_manual_inference_snapshots')
+  })
+
+  it('persists manual inference evidence atomically and keeps paired control outside execution', () => {
+    const analyze = strategy.slice(strategy.indexOf('export async function handleAnalyze'))
+    expect(analyze).toContain('await withTransaction(async run =>')
+    expect(analyze).toContain('await persistInferenceSnapshotTx(run, {')
+    expect(analyze).toContain("strategyScope: 'manual'")
+    expect(analyze).toContain('attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId)')
+    const paired = analyze.slice(analyze.indexOf('if (memory.pairedExperimentEnabled'))
+    expect(paired).toContain("_memoryContext: ''")
+    expect(paired).toContain('recordPairedInferenceRun')
+    expect(paired).not.toContain('executeOrder(')
+  })
+
+  it('keeps every provider request behind the metered JSON request path', () => {
+    expect(scheduler).not.toContain('await fetch(')
+    expect(scheduler).toContain('await requestJsonObject({')
+    expect(scheduler).toContain("usage: 'manual'")
   })
 
   it('anonymizes deleted accounts, destroys credentials and preserves trading evidence', () => {

@@ -233,12 +233,40 @@ export async function retrievePersonalMemory({ userId, strategyId = null, symbol
     selectedItems.push(Number(candidate.item.id)); used += cost
     reasons.push({ item_id: Number(candidate.item.id), score: candidate.score, reasons: candidate.reasons })
   }
-  const group = experimentGroup || (actualMode === 'shadow' ? 'retrieval_shadow' : rollout.paired_experiment_enabled ? 'paired_inference_controlled' : 'memory_active')
+  // A paid paired inference must be explicitly enabled by the user as well as
+  // globally authorized. Merely enabling the global rollout must not double a
+  // user's model spend.
+  const pairedExperimentEnabled = Boolean(rollout.paired_experiment_enabled && rollout.user?.paired_experiment_enabled === true)
+  const group = experimentGroup || (actualMode === 'shadow' ? 'retrieval_shadow' : pairedExperimentEnabled ? 'paired_inference_treatment' : 'memory_active')
   const log = await queryRun(`INSERT INTO memory_injection_logs
     (user_id, strategy_id, symbol, mode, experiment_group, selected_item_ids_json,
      selected_summary_ids_json, token_count, retrieval_reasons_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [userId, strategyId, symbol, actualMode, group, JSON.stringify(selectedItems), JSON.stringify(selectedSummaries), used, JSON.stringify(reasons), beijingNow()])
-  return { promptBlock: actualMode === 'active' ? buildInjectionBlock(parts) : '', selectedItemIds: selectedItems, selectedSummaryIds: selectedSummaries, tokenCount: used, logId: log.insertId, mode: actualMode, retrievalReasons: reasons }
+  return { promptBlock: actualMode === 'active' ? buildInjectionBlock(parts) : '', selectedItemIds: selectedItems, selectedSummaryIds: selectedSummaries, tokenCount: used, logId: log.insertId, mode: actualMode, retrievalReasons: reasons, pairedExperimentEnabled }
+}
+
+export function pairedInferenceDigest(signal = {}) {
+  const digest = {
+    signal_type: signal.signal_type || 'hold', entry_method: signal.entry_method || 'observe',
+    confidence: Number(signal.confidence || 0), recommended_volume: Number(signal.recommended_volume || 0),
+    stop_loss_price: signal.stop_loss_price ?? null, take_profit_1_price: signal.take_profit_1_price ?? null,
+    limit_price: signal.limit_price ?? null,
+    analysis_hash: sha256(signal.analysis || ''), reasoning_hash: sha256(signal.reasoning || ''),
+  }
+  return { digest, hash: sha256(JSON.stringify(digest)) }
+}
+
+export async function recordPairedInferenceRun({ userId, strategyId, signalId, memoryLogId, treatment, control, status, errorCode = null }) {
+  const treatmentResult = pairedInferenceDigest(treatment)
+  const controlResult = control ? pairedInferenceDigest(control) : null
+  await queryRun(`INSERT INTO ai_paired_inference_runs
+    (user_id, strategy_id, signal_id, memory_injection_log_id, treatment_digest_json,
+     control_digest_json, treatment_hash, control_hash, status, error_code, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    userId, strategyId, signalId || null, memoryLogId || null, JSON.stringify(treatmentResult.digest),
+    controlResult ? JSON.stringify(controlResult.digest) : null, treatmentResult.hash,
+    controlResult?.hash || null, status, errorCode ? String(errorCode).slice(0, 128) : null, beijingNow(),
+  ])
 }
 
 export async function attachMemoryInjectionSignal(logId, userId, signalId, inferenceSnapshotId = null) {

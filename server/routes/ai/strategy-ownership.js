@@ -251,15 +251,16 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
 export async function deleteStrategy(strategyId, userId, userRole) {
   const id = toId(strategyId, 'strategy_id')
   const actorId = toId(userId, 'user_id')
-  const existing = await queryOne('SELECT * FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [id])
-  if (!existing) throw new Error('strategy_not_found')
-  if (existing.scope === 'platform' ? !isAdmin(userRole) : Number(existing.owner_user_id) !== actorId) {
-    throw new Error('access_denied')
-  }
-  await queryRun(
-    "UPDATE auto_prompt_types SET deleted_at = ?, is_active = 0, visibility_status = 'archived' WHERE id = ?",
-    [beijingNow(), id]
-  )
+  await withTransaction(async run => {
+    const existing = await txOne(run, 'SELECT * FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL FOR UPDATE', [id])
+    if (!existing) throw new Error('strategy_not_found')
+    if (existing.scope === 'platform' ? !isAdmin(userRole) : Number(existing.owner_user_id) !== actorId) throw new Error('access_denied')
+    const affected = await txAll(run, `SELECT DISTINCT user_id FROM strategy_subscriptions
+      WHERE strategy_id = ? AND is_deleted = 0 AND execution_enabled = 1 FOR UPDATE`, [id])
+    await run("UPDATE auto_prompt_types SET deleted_at = ?, is_active = 0, visibility_status = 'archived' WHERE id = ?", [beijingNow(), id])
+    await run('UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE strategy_id = ? AND is_deleted = 0', [beijingNow(), id])
+    for (const row of affected) await syncLegacySchedulerTx(run, Number(row.user_id))
+  })
 }
 
 // ─── Trading accounts ───
@@ -360,6 +361,27 @@ async function loadExecutableStrategyTx(run, strategyId, userId) {
   return strategy
 }
 
+async function ensurePersonalStrategyTx(run, strategy, userId) {
+  if (strategy.scope !== 'platform') return strategy
+  const versionLabel = `personalized_from:${strategy.id}`
+  const existing = await txOne(run, `SELECT * FROM auto_prompt_types
+    WHERE scope = 'private' AND owner_user_id = ? AND version_label = ?
+      AND deleted_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE`, [userId, versionLabel])
+  if (existing) return existing
+  const now = beijingNow()
+  const [insert] = await run(`INSERT INTO auto_prompt_types
+    (title, description, system_prompt, symbols_json, interval_minutes, is_active, sort_order,
+     created_by, scope, owner_user_id, model_profile_id, inference_mode, visibility_status,
+     version, version_label, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'private', ?, NULL, 'user_default', 'active', ?, ?, ?, ?)`, [
+    `${strategy.title} · 个人记忆`, strategy.description || '', strategy.system_prompt || '',
+    strategy.symbols_json || '[]', strategy.interval_minutes || 5, strategy.sort_order || 0,
+    userId, userId, Number(strategy.version || 1), versionLabel, now, now,
+  ])
+  return { ...strategy, id: insert.insertId, title: `${strategy.title} · 个人记忆`, scope: 'private',
+    owner_user_id: userId, model_profile_id: null, inference_mode: 'user_default', version_label: versionLabel }
+}
+
 async function assertNoExecutionConflictTx(run, accountId, symbols, excludeSubscriptionId = null) {
   const rows = await txAll(
     run,
@@ -378,19 +400,57 @@ async function assertNoExecutionConflictTx(run, accountId, symbols, excludeSubsc
   }
 }
 
+// During the V1 compatibility window the unified scheduler still reads one
+// row per user from auto_scheduler. Keep the active subscription mirrored in
+// the same transaction so the new API can never report execution enabled
+// while the runtime silently continues with an older strategy.
+async function syncLegacySchedulerTx(run, userId, preferred = null) {
+  let active = preferred?.execution_enabled ? preferred : null
+  if (!active) {
+    active = await txOne(run, `SELECT ss.strategy_id, ss.symbols_json, ss.execution_enabled
+      FROM strategy_subscriptions ss
+      JOIN trading_accounts ta ON ta.id = ss.trading_account_id AND ta.is_deleted = 0
+      JOIN auto_prompt_types apt ON apt.id = ss.strategy_id AND apt.deleted_at IS NULL
+      WHERE ss.user_id = ? AND ss.is_deleted = 0 AND ss.execution_enabled = 1
+        AND apt.is_active = 1 AND apt.visibility_status = 'active'
+      ORDER BY ss.updated_at DESC, ss.id DESC LIMIT 1 FOR UPDATE`, [userId])
+  }
+  const now = beijingNow()
+  if (active) {
+    await run(`INSERT INTO auto_scheduler
+      (user_id, enabled, prompt_type_id, selected_symbols_json, created_at, updated_at)
+      VALUES (?, 1, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE enabled = 1, prompt_type_id = VALUES(prompt_type_id),
+        selected_symbols_json = VALUES(selected_symbols_json), updated_at = VALUES(updated_at)`,
+    [userId, active.strategy_id, active.symbols_json ?? null, now, now])
+    await run(`INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at)
+      VALUES (?, 1, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = VALUES(updated_at)`,
+    [userId, now])
+    return
+  }
+  await run('UPDATE auto_scheduler SET enabled = 0, updated_at = ? WHERE user_id = ?', [now, userId])
+  await run(`INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at)
+    VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 0, updated_at = VALUES(updated_at)`,
+  [userId, now])
+}
+
 export async function createSubscription(userId, userRole, payload = {}) {
   const actorId = toId(userId, 'user_id')
   if (payload.trading_account_id == null) throw new Error('trading_account_id_required')
   if (payload.strategy_id == null) throw new Error('strategy_id_required')
   const accountId = toId(payload.trading_account_id, 'trading_account_id')
-  const strategyId = toId(payload.strategy_id, 'strategy_id')
+  let strategyId = toId(payload.strategy_id, 'strategy_id')
   const memoryMode = payload.memory_mode || 'isolated'
   if (!VALID_MEMORY_MODES.has(memoryMode)) throw new Error('invalid_memory_mode')
   const result = await withTransaction(async run => {
     await assertTxProAccess(run, actorId, userRole)
     const account = await txOne(run, 'SELECT * FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [accountId, actorId])
     if (!account) throw new Error('account_not_found')
-    const strategy = await loadExecutableStrategyTx(run, strategyId, actorId)
+    let strategy = await loadExecutableStrategyTx(run, strategyId, actorId)
+    if (memoryMode === 'personal' && strategy.scope === 'platform') {
+      strategy = await ensurePersonalStrategyTx(run, strategy, actorId)
+      strategyId = Number(strategy.id)
+    }
     const symbolsJson = normalizeRequestedSymbols(payload.symbols, strategy.symbols_json)
     const executionEnabled = payload.execution_enabled ? 1 : 0
     if (executionEnabled) {
@@ -406,6 +466,11 @@ export async function createSubscription(userId, userRole, payload = {}) {
         executionEnabled, memoryMode, payload.conflicting_strategy_id || null, beijingNow(), beijingNow(),
       ]
     )
+    if (executionEnabled) {
+      await syncLegacySchedulerTx(run, actorId, {
+        strategy_id: strategyId, symbols_json: symbolsJson, execution_enabled: 1,
+      })
+    }
     return insert.insertId
   })
   return queryOne('SELECT * FROM strategy_subscriptions WHERE id = ?', [result])
@@ -423,27 +488,33 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
     if (!account) throw new Error('account_not_found')
     const existing = await txOne(run, 'SELECT * FROM strategy_subscriptions WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [id, actorId])
     if (!existing) throw new Error('subscription_not_found')
-    const strategy = await loadExecutableStrategyTx(run, Number(existing.strategy_id), actorId)
+    let strategy = await loadExecutableStrategyTx(run, Number(existing.strategy_id), actorId)
     const symbolsJson = payload.symbols === undefined
       ? existing.symbols_json
       : normalizeRequestedSymbols(payload.symbols, strategy.symbols_json)
     const executionEnabled = payload.execution_enabled === undefined ? Number(existing.execution_enabled) : (payload.execution_enabled ? 1 : 0)
     const memoryMode = payload.memory_mode ?? existing.memory_mode
     if (!VALID_MEMORY_MODES.has(memoryMode)) throw new Error('invalid_memory_mode')
+    if (memoryMode === 'personal' && strategy.scope === 'platform') {
+      strategy = await ensurePersonalStrategyTx(run, strategy, actorId)
+    }
     if (executionEnabled) {
       await assertNoExecutionConflictTx(run, accountId, effectiveSymbols(symbolsJson, strategy.symbols_json), id)
     }
     await run(
-      `UPDATE strategy_subscriptions SET risk_profile_id = ?, symbols_json = ?, execution_enabled = ?,
+      `UPDATE strategy_subscriptions SET strategy_id = ?, risk_profile_id = ?, symbols_json = ?, execution_enabled = ?,
          memory_mode = ?, conflicting_strategy_id = ?, updated_at = ?
        WHERE id = ? AND user_id = ? AND is_deleted = 0`,
       [
-        payload.risk_profile_id !== undefined ? payload.risk_profile_id : existing.risk_profile_id,
+        Number(strategy.id), payload.risk_profile_id !== undefined ? payload.risk_profile_id : existing.risk_profile_id,
         symbolsJson, executionEnabled, memoryMode,
         payload.conflicting_strategy_id !== undefined ? payload.conflicting_strategy_id : existing.conflicting_strategy_id,
         beijingNow(), id, actorId,
       ]
     )
+    await syncLegacySchedulerTx(run, actorId, executionEnabled ? {
+      strategy_id: Number(strategy.id), symbols_json: symbolsJson, execution_enabled: 1,
+    } : null)
   })
   return queryOne('SELECT * FROM strategy_subscriptions WHERE id = ?', [id])
 }
@@ -451,11 +522,12 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
 export async function deleteSubscription(subscriptionId, userId) {
   const id = toId(subscriptionId, 'subscription_id')
   const actorId = toId(userId, 'user_id')
-  const result = await queryRun(
-    'UPDATE strategy_subscriptions SET is_deleted = 1, execution_enabled = 0, updated_at = ? WHERE id = ? AND user_id = ? AND is_deleted = 0',
-    [beijingNow(), id, actorId]
-  )
-  if (!result.changes) throw new Error('subscription_not_found')
+  await withTransaction(async run => {
+    const existing = await txOne(run, 'SELECT * FROM strategy_subscriptions WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [id, actorId])
+    if (!existing) throw new Error('subscription_not_found')
+    await run('UPDATE strategy_subscriptions SET is_deleted = 1, execution_enabled = 0, updated_at = ? WHERE id = ?', [beijingNow(), id])
+    await syncLegacySchedulerTx(run, actorId)
+  })
 }
 
 export async function adminListUserStrategies(actorUserId, actorRole, targetUserId) {

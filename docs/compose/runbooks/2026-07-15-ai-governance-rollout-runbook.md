@@ -19,7 +19,7 @@
    AI_LEGACY_CREDENTIAL_READ_ENABLED=false
    ```
 
-3. 新版本首次启动必须完整应用 056–065；服务随后检查 migration tracking、关键表、关键列和关键索引。
+3. 新版本首次启动必须完整应用 056–067；服务随后检查 migration tracking、关键表、关键列和关键索引。
 4. 确认数据库、Redis、JWT、Bridge 和模型供应商网络分别可用。任何缺失都只能标记为“未验证”，不能视为通过。
 
 ## 迁移清单
@@ -36,6 +36,8 @@
 | 063 | 复盘案例、版本和队列 | 关闭复盘开关 |
 | 064 | 个人记忆、摘要、压缩与注入日志 | 关闭记忆开关，不删历史 |
 | 065 | 灰度开关、规则发布、凭据迁移记录、用户匿名化字段 | 所有生成开关默认关闭 |
+| 066 | 付费配对推理脱敏证据 | 关闭双层开关即停止新增，不删除历史摘要 |
+| 067 | 手动推理快照兼容 | 保留快照；不回填虚构策略 |
 
 DDL 采用可重入的 `CREATE TABLE IF NOT EXISTS` 或 information_schema 判定。单个迁移失败时不写 `schema_migrations`，进程退出；修复原因后重启即可从未完成版本继续。
 
@@ -61,7 +63,7 @@ DDL 采用可重入的 `CREATE TABLE IF NOT EXISTS` 或 information_schema 判�
 3. 开启 `experience_memory_enabled`，同时保持 `retrieval_shadow_enabled=1`；只记录会选择的记忆，不注入提示词。
 4. 验证检索相关性、隔离边界和 Token 预算后，对小范围用户关闭 retrieval shadow，实际注入经验。
 5. 数据规模达到阈值后再开启 `memory_compression_enabled`。
-6. `paired_experiment_enabled` 只赋予实验资格；必须另有成本预算和明确实验组，不得自动扩大仓位。
+6. 管理员打开全局 `paired_experiment_enabled` 只赋予实验资格；用户还必须在个人开关中显式同意。启用后，私有推理在正常交易路径完成后额外付费调用一次“不注入记忆”的对照推理；对照结果绝不进入下单，只保存脱敏决策摘要与 hash。关闭任一侧开关会立即停止新增双跑，不得自动扩大仓位。
 7. 新的可调风控规则先写入 `risk_rule_rollouts` 的 Shadow 观测，再由管理员切换 Enforce。065 中标记 `forced_enforce=1` 的规则拒绝 Shadow 修改。
 
 ## 监控与告警
@@ -89,7 +91,7 @@ DDL 采用可重入的 `CREATE TABLE IF NOT EXISTS` 或 information_schema 判�
 
 1. 立即开启平台和账户 Kill Switch，阻止新开仓。
 2. 关闭 review、memory、compression 和 paired experiment 全局开关。
-3. 停止新服务进程，保留数据库与 Redis 现场；不得删除 056–065 表。
+3. 停止新服务进程，保留数据库与 Redis 现场；不得删除 056–067 表。
 4. 若尚未清理旧字段，可临时启用旧服务和 `AI_LEGACY_CREDENTIAL_READ_ENABLED=true`。若已清理旧字段，旧服务不具备模型凭据，必须修复新服务或从受控备份恢复，禁止把 Key 写回日志/工单。
 5. 对 `uncertain` 订单只运行 reconciler/人工核对，不重放开仓。
 6. 回滚后记录版本、时间、开关、migration 状态和未决订单清单。

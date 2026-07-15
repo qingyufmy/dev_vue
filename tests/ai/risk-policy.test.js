@@ -28,6 +28,7 @@ const run = (overrides = {}) => evaluateCoreRisk({
   account: { equity: 10000, ...(overrides.account || {}) },
   quote: { ...quote, ...(overrides.quote || {}) }, instrument: { ...instrument, ...(overrides.instrument || {}) },
   policy: { ...DEFAULT_RISK_POLICY, ...(overrides.policy || {}) }, nowMs: overrides.nowMs ?? nowMs,
+  ruleModes: overrides.ruleModes || {},
 })
 
 describe('L1/L4/L5 core risk gate', () => {
@@ -89,6 +90,18 @@ describe('L1/L4/L5 core risk gate', () => {
     expect(run({ request: { signal_created_at: '2026-07-15T12:40:00Z' } }).reject_code).toBe('R4.3_SIGNAL_EXPIRED')
     expect(run({ quote: { ask: 2001.1 } }).reject_code).toBe('R4.5_SPREAD_TOO_WIDE')
     expect(run({ nowMs: Date.parse('2026-07-18T02:00:00Z'), quote: { time_msc: Date.parse('2026-07-18T02:00:00Z') }, request: { signal_created_at: '2026-07-18T01:59:00Z' } }).reject_code).toBe('R4.2_WEEKEND_PROTECTION')
+  })
+
+  it('records an adjustable shadow rejection but still enforces mandatory boundaries', () => {
+    const shadow = run({ request: { reference_price: 1990 }, ruleModes: {
+      'R4.6_MARKET_SIGNAL_DRIFT': { mode: 'shadow', forced: false },
+    } })
+    expect(shadow.decision_status).toBe('pass')
+    expect(shadow.rule_results).toContainEqual(expect.objectContaining({ code: 'R4.6_MARKET_SIGNAL_DRIFT', outcome: 'shadow_reject' }))
+    const forced = run({ request: { volume: 0.06 }, ruleModes: {
+      'R1.9_AI_VOLUME_OUT_OF_RANGE': { mode: 'shadow', forced: false },
+    } })
+    expect(forced.reject_code).toBe('R1.9_AI_VOLUME_OUT_OF_RANGE')
   })
 
   it('keeps every approved volume on step and at or below the AI suggestion', () => {

@@ -1607,6 +1607,43 @@ const migrations = [
         INDEX idx_credential_migration_status (status, started_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '066_paired_inference_evidence',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_paired_inference_runs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL, strategy_id INT DEFAULT NULL, signal_id BIGINT DEFAULT NULL,
+        memory_injection_log_id BIGINT DEFAULT NULL,
+        treatment_digest_json TEXT NOT NULL, control_digest_json TEXT DEFAULT NULL,
+        treatment_hash CHAR(64) NOT NULL, control_hash CHAR(64) DEFAULT NULL,
+        status VARCHAR(24) NOT NULL, error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        INDEX idx_paired_inference_user (user_id, created_at),
+        INDEX idx_paired_inference_signal (signal_id),
+        INDEX idx_paired_inference_status (status, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      const adjustableRules = [
+        'R1.1_SYMBOL_NOT_ALLOWED', 'R1.4_STOP_LOSS_TOO_FAR', 'R1.5_RR_TOO_LOW',
+        'R1.7_PENDING_DEVIATION', 'R4.2_WEEKEND_PROTECTION', 'R4.3_SIGNAL_EXPIRED',
+        'R4.4_QUOTE_STALE', 'R4.5_SPREAD_TOO_WIDE', 'R4.6_MARKET_SIGNAL_DRIFT',
+        'R2.1_DIRECTIONAL_EXPOSURE', 'R2.2_MIN_OPEN_INTERVAL', 'R2.3_DAILY_OPEN_COUNT',
+        'R2.4_PRICE_TIME_DUPLICATE', 'R3.1_DAILY_LOSS_LIMIT', 'R3.2_LOSS_COOLDOWN',
+        'R3.2_CONSECUTIVE_LOSS_COOLDOWN', 'R3.3_MAX_DRAWDOWN', 'R3.4_MARGIN_LEVEL',
+        'R3.4_NOTIONAL_EXPOSURE',
+      ]
+      for (const code of adjustableRules) {
+        await queryRun(`INSERT IGNORE INTO risk_rule_rollouts
+          (rule_code, mode, forced_enforce, updated_at) VALUES (?, 'enforce', 0, ?)`, [code, beijingNow()])
+      }
+    }
+  },
+  {
+    id: '067_manual_inference_snapshots',
+    up: async () => {
+      await queryRun('ALTER TABLE inference_snapshots MODIFY strategy_id INT DEFAULT NULL')
+      await queryRun('ALTER TABLE ai_paired_inference_runs MODIFY strategy_id INT DEFAULT NULL')
+    }
   }
 ]
 

@@ -124,7 +124,7 @@ export async function persistInferenceSnapshotTx(run, input) {
      output_schema_version, klines_json, market_snapshot_json, memory_mode, evidence_status,
      omitted_fields_json, content_hash, byte_size, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-    row.signalId || null, row.strategyId, row.strategyVersion || 1, row.strategyScope, row.ownerUserId || 0,
+    row.signalId || null, row.strategyId ?? null, row.strategyVersion || 1, row.strategyScope, row.ownerUserId || 0,
     row.standardSymbol, row.marketSource, row.systemPrompt, row.userPrompt, row.promptHash,
     row.modelProfileId || null, row.provider || null, row.modelName || null, row.credentialSource || 'none',
     row.outputSchemaVersion, JSON.stringify(row.klines || {}), JSON.stringify(row.marketSnapshot || {}),

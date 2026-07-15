@@ -16,6 +16,12 @@ describe('AI governance navigation and DOM contract', () => {
     for (const tab of ['global-risk', 'account-review', 'audit']) expect(html).toContain(`data-tab="${tab}"`)
   })
 
+  it('accepts a token handoff before the early authentication redirect', () => {
+    const earlyAuth = html.slice(html.indexOf('(function()'), html.indexOf('</script>'))
+    expect(earlyAuth).toContain("new URLSearchParams(window.location.search).get('token')")
+    expect(earlyAuth.indexOf("localStorage.setItem('authToken', t)")).toBeLessThan(earlyAuth.indexOf("window.location.replace('/')"))
+  })
+
   it('marks administrator controls and keeps private review and memory pages user-scoped', () => {
     expect(html).toContain('id="global-risk" class="tab-panel admin-only"')
     expect(html).toContain('id="account-review" class="tab-panel admin-only"')
@@ -30,6 +36,10 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('id="policyDailyRequests"')
     const stateBlock = app.slice(app.indexOf('const state = {'), app.indexOf('// ===== History Cache'))
     expect(stateBlock).not.toMatch(/^\s*(?:apiKey|api_key|credential)\s*:/mi)
+    expect(html).not.toContain('id="apiKey"')
+    expect(html).not.toContain('id="autoApiKey"')
+    expect(app).not.toContain('$("apiKey")')
+    expect(html).toContain('付费配对实验（额外一次调用）')
   })
 
   it('shows user-editable price controls and separates AI, cap and final execution volume', () => {
@@ -49,11 +59,26 @@ describe('AI governance navigation and DOM contract', () => {
     expect(routes).toContain("'/ai/admin/risk-center/kill-switch'")
   })
 
+  it('lets administrators operate adjustable rule rollouts while forced rules stay disabled', () => {
+    expect(html).toContain('id="riskRuleRolloutList"')
+    expect(app).toContain('data-risk-rollout=')
+    expect(app).toContain('/api/ai/admin/risk-rule-rollouts/')
+    expect(app).toContain("rule.forced_enforce ? 'disabled' : ''")
+  })
+
   it('uses exact review language and separates process issue from content confirmation', () => {
     expect(app).toContain('内容准确并加入记忆')
     expect(app).toContain('内容有问题，继续修改')
     expect(app).toContain('交易流程问题')
     expect(app).toContain('复盘内容确认')
+  })
+
+  it('separates strategy visibility, editing and execution permissions in the UI', () => {
+    expect(html).toContain('id="strategyScopeField" class="admin-only"')
+    expect(html).toContain('平台全局策略')
+    expect(html).toContain('你创建的私有策略仅自己可见、可选和执行')
+    expect(app).toContain("const canSubscribe = item.scope === 'platform' || Number(item.owner_user_id) === Number(state.user?.id)")
+    expect(app).toContain('仅审计可见')
   })
 
   it('has responsive behavior, loading skeletons and reduced-motion handling', () => {
@@ -62,6 +87,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain('.workspace-skeleton')
     expect(html).toContain('empty-state')
+    expect(css).toContain('grid-template-columns: minmax(0, 1fr)')
+    expect(css).toContain('max-width: 100vw')
+    expect(app).toContain('state._lastGatewayLive !== true')
   })
 })
 
@@ -72,6 +100,22 @@ describe('route permissions and credential redaction', () => {
     }
     expect(routes).toContain("req.user.role !== 'admin'")
     expect(routes).toContain("error: 'admin_only'")
+  })
+
+  it('exposes authenticated strategy, account and subscription CRUD routes', () => {
+    for (const route of [
+      "router.get('/ai/strategies', authMiddleware",
+      "router.post('/ai/strategies', authMiddleware",
+      "router.put('/ai/strategies/:id', authMiddleware",
+      "router.delete('/ai/strategies/:id', authMiddleware",
+      "router.get('/ai/trading-accounts', authMiddleware",
+      "router.post('/ai/trading-accounts', authMiddleware",
+      "router.put('/ai/trading-accounts/:id', authMiddleware",
+      "router.delete('/ai/trading-accounts/:id', authMiddleware",
+      "router.post('/ai/subscriptions', authMiddleware",
+      "router.put('/ai/subscriptions/:id', authMiddleware",
+      "router.delete('/ai/subscriptions/:id', authMiddleware",
+    ]) expect(routes).toContain(route)
   })
 
   it('returns sanitized profiles and never serializes encrypted or plaintext credentials', () => {
