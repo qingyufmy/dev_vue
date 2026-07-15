@@ -12,6 +12,7 @@ import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
+import { retrievePersonalMemory, attachMemoryInjectionSignal } from './memory-system.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 
 // === Unified Scheduler State ===
@@ -1027,8 +1028,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   const configuredMemoryMode = isPrivate
     ? (await queryOne(`SELECT memory_mode FROM strategy_subscriptions
         WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT 1`,
-      [inferenceUserId, promptTypeId]))?.memory_mode || 'off'
-    : 'off'
+      [inferenceUserId, promptTypeId]))?.memory_mode || 'personal'
+    : 'platform_only'
 
   // 2. Resolve platform-primary or private owner model without runtime fallback.
   let config
@@ -1110,6 +1111,18 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     }
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
+    let memory = { promptBlock: '', mode: 'off', logId: null }
+    if (isPrivate && configuredMemoryMode !== 'off' && configuredMemoryMode !== 'platform_only') {
+      try {
+        memory = await retrievePersonalMemory({ userId: inferenceUserId, strategyId: promptTypeId,
+          symbol, timeframe: primaryTf, mode: configuredMemoryMode === 'shadow' ? 'shadow' : 'active' })
+        config._memoryContext = memory.promptBlock
+        config._memoryMode = memory.mode
+      } catch (error) {
+        l(`personal memory unavailable; continuing without it (${error.message})`)
+      }
+    }
+
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型推理中...' })
     const t3 = Date.now()
     l(`calling AI (model=${config.model_name}, thinking=${config.thinking_enabled !== false}, effort=${config.reasoning_effort || 'max'})...`)
@@ -1186,7 +1199,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
         provider: config.api_provider,
         modelName: config.model_name,
         credentialSource: config._credential_source,
-        memoryMode: configuredMemoryMode,
+        memoryMode: isPrivate ? (memory.mode || 'off') : 'platform_only',
         createdAt,
       })
       const deliveryValues = []
@@ -1205,6 +1218,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       return insertedSignalId
     })
     signal.id = signalId
+    if (isPrivate && memory.logId) {
+      try { await attachMemoryInjectionSignal(memory.logId, inferenceUserId, signalId) }
+      catch (error) { l(`memory attribution failed (${error.message})`) }
+    }
     signal.symbol = symbol
     signal.timeframe = primaryTf
     signal.created_at = createdAt

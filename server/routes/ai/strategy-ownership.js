@@ -7,7 +7,9 @@ import { stripBrokerSuffix } from './utils.js'
 
 const VALID_SCOPES = new Set(['platform', 'private'])
 const VALID_VISIBILITY = new Set(['active', 'draft', 'archived'])
-const VALID_MEMORY_MODES = new Set(['shared', 'isolated'])
+// shared/isolated remain accepted for existing rows; personal/platform_only/off
+// are the explicit runtime modes used by the personal-memory subsystem.
+const VALID_MEMORY_MODES = new Set(['shared', 'isolated', 'personal', 'platform_only', 'off', 'shadow'])
 const VALID_MARGIN_MODES = new Set(['unknown', 'netting', 'hedging'])
 
 function toId(value, field = 'id') {

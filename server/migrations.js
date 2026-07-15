@@ -1493,6 +1493,60 @@ const migrations = [
         INDEX idx_trade_review_job_case (case_id, created_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '064_personal_experience_memory',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS user_memory_settings (
+        user_id INT NOT NULL PRIMARY KEY, enabled TINYINT NOT NULL DEFAULT 1,
+        runtime_token_budget INT NOT NULL DEFAULT 800, retrieval_mode VARCHAR(16) NOT NULL DEFAULT 'active',
+        updated_at DATETIME NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS experience_memory_items (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, review_case_id BIGINT NOT NULL,
+        review_version_id BIGINT NOT NULL, strategy_id INT DEFAULT NULL, symbol VARCHAR(64) DEFAULT NULL,
+        timeframe VARCHAR(16) DEFAULT NULL, direction VARCHAR(20) DEFAULT NULL,
+        entry_method VARCHAR(20) DEFAULT NULL, market_regime VARCHAR(64) DEFAULT NULL,
+        scope_json TEXT NOT NULL, conditions_json TEXT NOT NULL, lesson_text TEXT NOT NULL,
+        anti_pattern_text TEXT DEFAULT NULL, evidence_refs_json TEXT NOT NULL,
+        ancestor_memory_ids_json TEXT NOT NULL, content_hash CHAR(64) NOT NULL,
+        token_count INT NOT NULL, confidence DECIMAL(8,6) NOT NULL DEFAULT 0.5,
+        status VARCHAR(24) NOT NULL DEFAULT 'active', confirmed_at DATETIME NOT NULL,
+        revoked_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_memory_review_version (review_version_id),
+        INDEX idx_memory_retrieval (user_id, status, strategy_id, symbol, timeframe, updated_at),
+        INDEX idx_memory_hash (user_id, content_hash)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS experience_memory_summaries (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, scope_key VARCHAR(191) NOT NULL,
+        version_no INT NOT NULL, source_memory_ids_json LONGTEXT NOT NULL, source_set_hash CHAR(64) NOT NULL,
+        summary_text LONGTEXT NOT NULL, token_count INT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'active',
+        model_profile_id INT DEFAULT NULL, credential_source VARCHAR(32) DEFAULT NULL,
+        created_at DATETIME NOT NULL, invalidated_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_memory_summary_version (user_id, scope_key, version_no),
+        INDEX idx_memory_summary_active (user_id, scope_key, status, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS memory_compression_jobs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, scope_key VARCHAR(191) NOT NULL,
+        source_memory_ids_json LONGTEXT NOT NULL, source_set_hash CHAR(64) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued', attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3, lease_token CHAR(36) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL, last_error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_memory_compression_source (user_id, scope_key, source_set_hash),
+        INDEX idx_memory_compression_claim (status, lease_expires_at, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS memory_injection_logs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, signal_id BIGINT DEFAULT NULL,
+        inference_snapshot_id BIGINT DEFAULT NULL, strategy_id INT DEFAULT NULL, symbol VARCHAR(64) DEFAULT NULL,
+        mode VARCHAR(16) NOT NULL, experiment_group VARCHAR(24) NOT NULL,
+        selected_item_ids_json TEXT NOT NULL, selected_summary_ids_json TEXT NOT NULL,
+        token_count INT NOT NULL DEFAULT 0, retrieval_reasons_json LONGTEXT NOT NULL,
+        created_at DATETIME NOT NULL,
+        INDEX idx_memory_injection_user (user_id, created_at),
+        INDEX idx_memory_injection_signal (signal_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

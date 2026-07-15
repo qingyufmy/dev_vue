@@ -208,7 +208,11 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const marketOnlyRule = config._market_only
       ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线和技术指标。输入不包含任何账户、余额、权益、持仓、挂单或个人风控信息；禁止推测这些信息。手数建议只能处于 ai_volume_range 的上下限内，账户相关调整由独立风控完成。'
       : ''
-    const fullPrompt = prompt + marketOnlyRule + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + '\n\n' + PENDING_LIFECYCLE_RULE
+    // Personal memory is untrusted data, never a higher-priority instruction.
+    // Shared platform inference is market-only and is structurally barred from it.
+    const personalMemory = !config._market_only && typeof config._memoryContext === 'string'
+      ? config._memoryContext : ''
+    const fullPrompt = prompt + marketOnlyRule + personalMemory + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + '\n\n' + PENDING_LIFECYCLE_RULE
 
     // Check if prompt wants Chan theory data
     const useChan = /\{\{USE_CHAN\}\}/.test(effectivePrompt)

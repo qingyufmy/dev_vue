@@ -6,6 +6,7 @@ import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, 
 import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
+import { retrievePersonalMemory, attachMemoryInjectionSignal } from './memory-system.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
@@ -174,6 +175,16 @@ export async function handleAnalyze(userId, params) {
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
   if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
   await attachAtrAnchor(userId, symbol, market, primaryTf)
+  let memory = { promptBlock: '', mode: 'off', logId: null }
+  try {
+    memory = await retrievePersonalMemory({ userId, symbol, timeframe: primaryTf, mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
+  } catch (error) {
+    console.error('[Analyze] Personal memory retrieval failed; continuing without memory:', error.message)
+  }
+  if (config) {
+    config._memoryContext = memory.promptBlock
+    config._memoryMode = memory.mode || 'off'
+  }
   const signal = await maybeAiSignal(null, config, market, prompt)
   market.inference_source = signal._inference_source || 'unknown'
   delete signal._inference_source
@@ -193,6 +204,8 @@ export async function handleAnalyze(userId, params) {
       signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null])
 
   signal.id = result.insertId
+  try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id) }
+  catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
   signal.symbol = symbol
   signal.timeframe = primaryTf
   signal.created_at = createdAt

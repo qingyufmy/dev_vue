@@ -71,8 +71,9 @@ export function assessReviewEvidence(row, deals = []) {
 async function loadEvidence(outcomeId) {
   const row = await queryOne(`SELECT so.*, s.signal_type, s.confidence, s.recommended_volume, s.analysis,
       s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price,
-      s.market_data_json AS signal_market_data_json, s.created_at AS signal_created_at,
+      s.timeframe AS signal_timeframe, s.market_data_json AS signal_market_data_json, s.created_at AS signal_created_at,
       snap.id AS snapshot_id, snap.system_prompt, snap.user_prompt, snap.prompt_hash,
+      snap.strategy_id AS snapshot_strategy_id,
       snap.model_profile_id AS inference_model_profile_id, snap.provider AS inference_provider,
       snap.model_name AS inference_model_name, snap.credential_source AS inference_credential_source,
       snap.klines_json, snap.market_snapshot_json, snap.evidence_status AS snapshot_evidence_status,
@@ -101,14 +102,14 @@ async function loadEvidence(outcomeId) {
   const bundle = {
     schema_version: 1,
     inference_time: {
-      signal: row.signal_id ? { id: row.signal_id, signal_type: row.signal_type, confidence: row.confidence, recommended_volume: row.recommended_volume, analysis: row.analysis, reasoning: row.reasoning, stop_loss_price: row.stop_loss_price, take_profit_1_price: row.take_profit_1_price, take_profit_2_price: row.take_profit_2_price, take_profit_3_price: row.take_profit_3_price, created_at: row.signal_created_at } : null,
-      snapshot: row.snapshot_id ? { id: row.snapshot_id, system_prompt: row.system_prompt, user_prompt: row.user_prompt, prompt_hash: row.prompt_hash, model_profile_id: row.inference_model_profile_id, provider: row.inference_provider, model_name: row.inference_model_name, credential_source: row.inference_credential_source, market_snapshot: parse(row.market_snapshot_json, {}), klines: parse(row.klines_json, {}), content_hash: row.snapshot_content_hash } : null,
+      signal: row.signal_id ? { id: row.signal_id, signal_type: row.signal_type, timeframe: row.signal_timeframe, confidence: row.confidence, recommended_volume: row.recommended_volume, analysis: row.analysis, reasoning: row.reasoning, stop_loss_price: row.stop_loss_price, take_profit_1_price: row.take_profit_1_price, take_profit_2_price: row.take_profit_2_price, take_profit_3_price: row.take_profit_3_price, created_at: row.signal_created_at } : null,
+      snapshot: row.snapshot_id ? { id: row.snapshot_id, strategy_id: row.snapshot_strategy_id, system_prompt: row.system_prompt, user_prompt: row.user_prompt, prompt_hash: row.prompt_hash, model_profile_id: row.inference_model_profile_id, provider: row.inference_provider, model_name: row.inference_model_name, credential_source: row.inference_credential_source, market_snapshot: parse(row.market_snapshot_json, {}), klines: parse(row.klines_json, {}), content_hash: row.snapshot_content_hash } : null,
       risk_decision: { status: row.risk_decision_status, reject_code: row.risk_reject_code, policy_version_ids: parse(row.policy_version_ids_json, []), rule_results: parse(row.rule_results_json, []) },
       original_order: parse(row.original_order_json, parse(row.request_json, {})),
       approved_order: parse(row.approved_order_json, null),
     },
     post_trade: {
-      outcome: { id: row.id, status: row.status, attribution_status: row.attribution_status, expected_volume: row.expected_volume, entry_volume: row.entry_volume, closed_volume: row.closed_volume, gross_profit: row.gross_profit, commission: row.commission, swap: row.swap, fee: row.fee, net_profit: row.net_profit, external_intervention: Boolean(row.external_intervention), intervention: parse(row.intervention_json, []) },
+      outcome: { id: row.id, symbol: row.symbol, status: row.status, attribution_status: row.attribution_status, expected_volume: row.expected_volume, entry_volume: row.entry_volume, closed_volume: row.closed_volume, gross_profit: row.gross_profit, commission: row.commission, swap: row.swap, fee: row.fee, net_profit: row.net_profit, external_intervention: Boolean(row.external_intervention), intervention: parse(row.intervention_json, []) },
       execution: { status: row.execution_status, result: parse(row.result_json, {}), bridge_command_ref: row.bridge_command_ref },
       deals: deals.map(deal => ({ deal_ticket: deal.deal_ticket, position_id: deal.position_id, order_ticket: deal.order_ticket, entry_type: deal.entry_type, magic: deal.magic, reason: deal.reason, volume: deal.volume, price: deal.price, profit: deal.profit, commission: deal.commission, swap: deal.swap, fee: deal.fee, deal_time: deal.deal_time })),
       post_trade_klines: null,
@@ -344,4 +345,3 @@ export async function getReviewAdminHealth() {
     FROM trade_review_jobs GROUP BY status`)
   return { cases: rows, jobs, content_redacted: true }
 }
-

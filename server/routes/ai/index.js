@@ -15,6 +15,8 @@ import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedu
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
+import { createMemoryFromApprovedReview, listMemoryItems, revokeMemoryItem, activateDuplicateMemory,
+  getMemorySettings, setMemorySettings, rollbackMemorySummary } from './memory-system.js'
 
 const router = Router()
 
@@ -82,7 +84,13 @@ router.post('/ai/reviews/:id/edit', authMiddleware, async (req, res) => {
 })
 
 router.post('/ai/reviews/:id/confirm', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await confirmReviewCase({ caseId: Number(req.params.id), userId: req.user.id, versionId: req.body?.version_id, action: req.body?.action, tradeProcessIssueStatus: req.body?.trade_process_issue_status })) }) }
+  try {
+    const caseId = Number(req.params.id)
+    const result = await confirmReviewCase({ caseId, userId: req.user.id, versionId: req.body?.version_id, action: req.body?.action, tradeProcessIssueStatus: req.body?.trade_process_issue_status })
+    let memory = null
+    if (req.body?.action === 'approve') memory = await createMemoryFromApprovedReview(caseId, req.user.id)
+    res.json({ ok: true, ...result, memory })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -94,6 +102,31 @@ router.post('/ai/reviews/:id/retry', authMiddleware, async (req, res) => {
 router.get('/ai/admin/reviews/health', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
   try { res.json({ ok: true, health: await getReviewAdminHealth() }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/memory', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, items: await listMemoryItems(req.user.id, req.query), settings: await getMemorySettings(req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/memory/settings', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, settings: await setMemorySettings(req.user.id, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/memory/:id/revoke', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await revokeMemoryItem(Number(req.params.id), req.user.id)) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/memory/:id/activate', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, item: await activateDuplicateMemory(Number(req.params.id), req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/memory/summaries/:id/rollback', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await rollbackMemorySummary(Number(req.params.id), req.user.id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -147,6 +180,11 @@ export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome
   enqueueEligibleReviewCases, runReviewWorkerOnce, startReviewWorker, stopReviewWorker,
   listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   getReviewAdminHealth } from './review-workflow.js'
+export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
+  createMemoryFromApprovedReview, setMemorySettings, getMemorySettings, listMemoryItems,
+  revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
+  maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,
+  startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'
