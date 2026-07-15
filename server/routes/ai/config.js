@@ -235,7 +235,7 @@ export async function getGlobalAutoConfig() {
 
 export async function saveGlobalAutoConfig(cfg) {
   const now = beijingNow()
-  const supportedProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao'])
+  const supportedProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao', 'volcengine_agent_plan'])
   if (cfg.api_provider && !supportedProviders.has(cfg.api_provider)) {
     throw new Error(`unsupported_ai_provider:${cfg.api_provider}`)
   }

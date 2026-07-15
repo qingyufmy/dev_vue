@@ -32,10 +32,26 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：检查现有挂单状态，是否需要取消、是否已有同方向挂单"
 }, null, 2)
 
-export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, timeout = 120000 }) {
-  if (apiKey && /[^ -~]/.test(apiKey)) {
-    throw new Error('API key contains non-ASCII characters, please check your configuration')
+function buildLlmRequestBody({ protocol, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort }) {
+  if (protocol === 'responses') {
+    const instructions = messages
+      .filter(message => message.role === 'system')
+      .map(message => String(message.content || ''))
+      .filter(Boolean)
+      .join('\n\n')
+    const input = messages
+      .filter(message => message.role !== 'system')
+      .map(message => ({ role: message.role, content: String(message.content || '') }))
+    const body = { model, input, max_output_tokens: maxTokens }
+    if (instructions) body.instructions = instructions
+    if (thinkingEnabled) {
+      body.reasoning = { effort: reasoningEffort === 'max' ? 'high' : (reasoningEffort || 'high') }
+    } else {
+      body.temperature = temperature
+    }
+    return body
   }
+
   const body = { model, messages }
   // DeepSeek thinking mode: temperature/top_p ignored when enabled
   if (thinkingEnabled) {
@@ -45,6 +61,30 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
     body.temperature = temperature
     body.max_tokens = maxTokens
   }
+  return body
+}
+
+function extractLlmContent(data, protocol) {
+  if (protocol === 'responses') {
+    if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text
+    const chunks = []
+    for (const item of data?.output || []) {
+      for (const part of item?.content || []) {
+        if ((part?.type === 'output_text' || typeof part?.text === 'string') && part.text) chunks.push(part.text)
+      }
+    }
+    return chunks.join('\n')
+  }
+
+  const msg = data?.choices?.[0]?.message
+  return msg?.content || msg?.reasoning_content || ''
+}
+
+export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000 }) {
+  if (apiKey && /[^ -~]/.test(apiKey)) {
+    throw new Error('API key contains non-ASCII characters, please check your configuration')
+  }
+  const body = buildLlmRequestBody({ protocol, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -53,10 +93,8 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
   })
   if (!response.ok) throw new Error(`LLM HTTP ${response.status}`)
   const data = await response.json()
-  const msg = data.choices?.[0]?.message
-  if (!msg) throw new Error(`LLM response missing choices[0].message, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
-  const content = msg.content || msg.reasoning_content || ''
-  if (!content) throw new Error('LLM response content is empty')
+  const content = extractLlmContent(data, protocol)
+  if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
   try {
     return parseJsonObject(content)
   } catch (exc) {
@@ -65,14 +103,10 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
       { role: 'assistant', content: content.substring(0, 6000) },
       { role: 'user', content: `上一次输出不是合法 JSON，解析错误为：${exc.message}。请只返回修正后的一个 JSON 对象，不要 Markdown，不要解释。` },
     ]
-    const repairBody = { model, messages: repairMessages }
-    if (thinkingEnabled) {
-      repairBody.thinking = { type: 'enabled' }
-      repairBody.reasoning_effort = reasoningEffort || 'max'
-    } else {
-      repairBody.temperature = 0
-      repairBody.max_tokens = maxTokens
-    }
+    const repairBody = buildLlmRequestBody({
+      protocol, model, temperature: 0, maxTokens, messages: repairMessages,
+      thinkingEnabled, reasoningEffort,
+    })
     const repairResp = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -81,9 +115,7 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
     })
     if (!repairResp.ok) throw new Error(`LLM repair HTTP ${repairResp.status}`)
     const repairedData = await repairResp.json()
-    const repairedMsg = repairedData.choices?.[0]?.message
-    if (!repairedMsg) throw new Error(`LLM repair response missing choices[0].message`)
-    const repaired = repairedMsg.content || repairedMsg.reasoning_content || ''
+    const repaired = extractLlmContent(repairedData, protocol)
     if (!repaired) throw new Error('LLM repair response content is empty')
     return parseJsonObject(repaired)
   }
@@ -96,7 +128,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
   const baseUrl = config.api_base_url
   if (!apiKey) return aiFailureHold(market, 'empty_ai_key')
 
-  const compatibleProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao'])
+  const compatibleProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao', 'volcengine_agent_plan'])
   if (!compatibleProviders.has(provider)) return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
   const providerDefaults = {
     deepseek: DEFAULT_API_BASE_URL,
@@ -105,9 +137,11 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     zhipu: 'https://open.bigmodel.cn/api/paas/v4',
     doubao: 'https://ark.cn-beijing.volces.com/api/v3',
+    volcengine_agent_plan: 'https://ark.cn-beijing.volces.com/api/plan/v3',
   }
   const normalizedBaseUrl = String(baseUrl || providerDefaults[provider]).replace(/\/+$/, '')
-  const url = `${normalizedBaseUrl}/chat/completions`
+  const protocol = provider === 'volcengine_agent_plan' ? 'responses' : 'chat_completions'
+  const url = `${normalizedBaseUrl}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`
 
   try {
     const effectivePrompt = typeof promptOverride === 'string' ? promptOverride : (config.system_prompt || DEFAULT_PROMPT)
@@ -164,9 +198,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     }
     console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
     if (DEBUG_LLM_PAYLOAD) console.log(JSON.stringify(aiPayload, null, 2).substring(0, 3000))
-    // The current `thinking: {type:"enabled"}` contract is DeepSeek-specific.
-    // Other OpenAI-compatible providers receive only portable parameters.
-    const thinkingEnabled = provider === 'deepseek' && config.thinking_enabled !== 0 && config.thinking_enabled !== false
+    // DeepSeek and Agent Plan use different reasoning contracts.
+    const thinkingEnabled = (provider === 'deepseek' || provider === 'volcengine_agent_plan')
+      && config.thinking_enabled !== 0 && config.thinking_enabled !== false
     console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
     const parsed = await requestJsonObject({
       url, apiKey,
@@ -175,6 +209,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       maxTokens: parseInt(config.max_tokens || 2000),
       thinkingEnabled,
       reasoningEffort: config.reasoning_effort || 'max',
+      protocol,
       messages: [
         { role: 'system', content: cleanPrompt },
         { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(aiPayload) },

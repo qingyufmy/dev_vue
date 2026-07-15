@@ -2084,6 +2084,7 @@ const PROVIDER_PRESETS = {
   qwen:     { models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   zhipu:    { models: ['glm-4-flash', 'glm-4-air', 'glm-4', 'glm-4v'], url: 'https://open.bigmodel.cn/api/paas/v4' },
   doubao:   { models: ['doubao-1.5-pro-32k', 'doubao-1.5-lite-32k', 'doubao-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
+  volcengine_agent_plan: { models: ['ark-code-latest'], url: 'https://ark.cn-beijing.volces.com/api/plan/v3' },
 };
 
 function applyProviderPreset(provider) {
@@ -2244,11 +2245,14 @@ function initConfigSubTabs() {
 function applyAutoProviderPreset(provider) {
   const preset = PROVIDER_PRESETS[provider];
   if (!preset) return;
-  const defaultModel = preset.models?.[0] || '';
   const urlEl = document.getElementById('autoApiBaseUrl');
   const modelEl = document.getElementById('autoModelName');
-  if (urlEl && !urlEl.value) urlEl.value = preset.url;
-  if (modelEl && (!modelEl.value || modelEl.value === 'deepseek-chat')) modelEl.value = defaultModel;
+  const currentUrl = urlEl?.value?.trim() || '';
+  const currentModel = modelEl?.value?.trim() || '';
+  const isPresetUrl = Object.values(PROVIDER_PRESETS).some(item => item.url === currentUrl);
+  const allModels = Object.values(PROVIDER_PRESETS).flatMap(item => item.models || []);
+  if (urlEl && (!currentUrl || isPresetUrl)) urlEl.value = preset.url;
+  if (modelEl && (!currentModel || allModels.includes(currentModel))) modelEl.value = preset.models?.[0] || '';
 }
 
 async function loadAutoConfig() {

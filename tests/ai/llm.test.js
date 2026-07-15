@@ -78,6 +78,68 @@ describe('requestJsonObject', () => {
       messages: []
     })).rejects.toThrow('non-ASCII characters')
   })
+
+  it('解析 Responses API output 内容', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        output: [{ type: 'message', content: [{ type: 'output_text', text: '{"key":"responses"}' }] }],
+      }),
+    })
+
+    const result = await requestJsonObject({
+      url: 'https://ark.cn-beijing.volces.com/api/plan/v3/responses',
+      apiKey: 'test-key',
+      model: 'ark-code-latest',
+      temperature: 0.3,
+      maxTokens: 2000,
+      messages: [
+        { role: 'system', content: '只返回 JSON' },
+        { role: 'user', content: 'test' },
+      ],
+      protocol: 'responses',
+      thinkingEnabled: true,
+      reasoningEffort: 'max',
+    })
+
+    expect(result).toEqual({ key: 'responses' })
+    const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(requestBody.instructions).toBe('只返回 JSON')
+    expect(requestBody.input).toEqual([{ role: 'user', content: 'test' }])
+    expect(requestBody.max_output_tokens).toBe(2000)
+    expect(requestBody.reasoning).toEqual({ effort: 'high' })
+    expect(requestBody).not.toHaveProperty('messages')
+    expect(requestBody).not.toHaveProperty('max_tokens')
+  })
+
+  it('Responses API JSON 修复仍使用 Responses 请求结构', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ output_text: 'invalid json' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ output_text: '{"fixed":true}' }),
+      })
+
+    const result = await requestJsonObject({
+      url: 'https://ark.cn-beijing.volces.com/api/plan/v3/responses',
+      apiKey: 'test-key', model: 'ark-code-latest', temperature: 0.3, maxTokens: 2000,
+      messages: [{ role: 'user', content: 'test' }],
+      protocol: 'responses', thinkingEnabled: false,
+    })
+
+    expect(result).toEqual({ fixed: true })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    expect(repairBody.input.map(item => item.role)).toEqual(['user', 'assistant', 'user'])
+    expect(repairBody.temperature).toBe(0)
+    expect(repairBody).not.toHaveProperty('messages')
+  })
 })
 
 describe('OpenAI-compatible provider URL', () => {
@@ -101,6 +163,35 @@ describe('OpenAI-compatible provider URL', () => {
     expect(requestBody).not.toHaveProperty('thinking')
     expect(requestBody).not.toHaveProperty('reasoning_effort')
     expect(requestBody).toHaveProperty('max_tokens')
+  })
+
+  it('uses the Agent Plan Responses API endpoint and payload', async () => {
+    vi.clearAllMocks()
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ output_text: JSON.stringify({
+        signal_type: 'hold', confidence: 0.7, recommended_volume: 0,
+        analysis: 'test', reasoning: 'test', cancel_pending: [],
+      }) }),
+    })
+
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'plan-key',
+      api_provider: 'volcengine_agent_plan',
+      model_name: 'ark-code-latest',
+      api_base_url: 'https://ark.cn-beijing.volces.com/api/plan/v3/',
+      thinking_enabled: true,
+      reasoning_effort: 'high',
+    }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
+
+    expect(mockFetch.mock.calls[0][0]).toBe('https://ark.cn-beijing.volces.com/api/plan/v3/responses')
+    const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(requestBody.model).toBe('ark-code-latest')
+    expect(requestBody.reasoning).toEqual({ effort: 'high' })
+    expect(requestBody).toHaveProperty('instructions')
+    expect(requestBody).toHaveProperty('input')
+    expect(requestBody).not.toHaveProperty('messages')
   })
 })
 
