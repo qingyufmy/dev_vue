@@ -1328,6 +1328,73 @@ const migrations = [
         await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = ? WHERE id = ?', [JSON.stringify(schema, null, 2), beijingNow(), row.id])
       }
     }
+  },
+  {
+    id: '060_stateful_risk_governance',
+    up: async () => {
+      const accountAdditions = [
+        ['observed_until', 'DATETIME DEFAULT NULL'],
+        ['identity_verified_at', 'DATETIME DEFAULT NULL'],
+      ]
+      for (const [name, definition] of accountAdditions) {
+        const rows = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trading_accounts' AND COLUMN_NAME = ?", [name])
+        if (!rows.length) await queryRun(`ALTER TABLE trading_accounts ADD COLUMN ${name} ${definition}`)
+      }
+      const identityIndex = await queryAll("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trading_accounts' AND INDEX_NAME = 'uk_trading_account_identity'")
+      if (!identityIndex.length) {
+        const duplicates = await queryAll(`SELECT user_id, broker_server, login_account FROM trading_accounts
+          GROUP BY user_id, broker_server, login_account HAVING COUNT(*) > 1`)
+        for (const duplicate of duplicates) {
+          const rows = await queryAll(`SELECT id, is_deleted FROM trading_accounts
+            WHERE user_id = ? AND broker_server = ? AND login_account = ?
+            ORDER BY is_deleted ASC, updated_at DESC, id DESC`, [duplicate.user_id, duplicate.broker_server, duplicate.login_account])
+          const keeper = rows[0]
+          const redundant = rows.slice(1).map(row => Number(row.id))
+          if (keeper && redundant.length) {
+            await queryRun(`UPDATE strategy_subscriptions SET trading_account_id = ? WHERE trading_account_id IN (${redundant.map(() => '?').join(',')})`, [keeper.id, ...redundant])
+            await queryRun(`DELETE FROM trading_accounts WHERE id IN (${redundant.map(() => '?').join(',')})`, redundant)
+          }
+        }
+        await queryRun('CREATE UNIQUE INDEX uk_trading_account_identity ON trading_accounts(user_id, broker_server, login_account)')
+      }
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS risk_account_state (
+        trading_account_id INT NOT NULL PRIMARY KEY, user_id INT NOT NULL,
+        business_date DATE DEFAULT NULL, day_start_equity DECIMAL(20,8) DEFAULT NULL,
+        day_realized_net DECIMAL(20,8) NOT NULL DEFAULT 0, day_floating_pnl DECIMAL(20,8) NOT NULL DEFAULT 0,
+        cumulative_cash_flow DECIMAL(20,8) DEFAULT NULL, equity_high_water DECIMAL(20,8) DEFAULT NULL,
+        drawdown_pct DECIMAL(12,6) NOT NULL DEFAULT 0, consecutive_losses INT NOT NULL DEFAULT 0,
+        cooldown_until DATETIME DEFAULT NULL, halt_status VARCHAR(24) NOT NULL DEFAULT 'active',
+        halt_reason VARCHAR(128) DEFAULT NULL, user_kill_switch TINYINT NOT NULL DEFAULT 0,
+        data_complete TINYINT NOT NULL DEFAULT 0, last_success_open_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+        INDEX idx_risk_state_user (user_id, halt_status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS risk_recovery_requests (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, trading_account_id INT NOT NULL, user_id INT NOT NULL,
+        request_type VARCHAR(32) NOT NULL, reason VARCHAR(1000) NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        requested_by INT NOT NULL, reviewed_by INT DEFAULT NULL, review_reason VARCHAR(1000) DEFAULT NULL,
+        created_at DATETIME NOT NULL, reviewed_at DATETIME DEFAULT NULL,
+        INDEX idx_recovery_account (trading_account_id, status, created_at), INDEX idx_recovery_status (status, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS global_risk_control (
+        id INT NOT NULL PRIMARY KEY, global_kill_switch TINYINT NOT NULL DEFAULT 0,
+        reason VARCHAR(1000) DEFAULT NULL, changed_by INT DEFAULT NULL, updated_at DATETIME NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`INSERT INTO global_risk_control (id, global_kill_switch, updated_at)
+        VALUES (1, 0, ?) ON DUPLICATE KEY UPDATE id = id`, [beijingNow()])
+
+      const reservationAdditions = [
+        ['reserved_daily_count', 'INT NOT NULL DEFAULT 1'],
+        ['reserved_notional', 'DECIMAL(20,8) DEFAULT NULL'],
+      ]
+      for (const [name, definition] of reservationAdditions) {
+        const rows = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'risk_reservations' AND COLUMN_NAME = ?", [name])
+        if (!rows.length) await queryRun(`ALTER TABLE risk_reservations ADD COLUMN ${name} ${definition}`)
+      }
+    }
   }
 ]
 

@@ -3,6 +3,7 @@
 import { createHash, randomUUID } from 'crypto'
 import { queryAll, queryOne, withTransaction, beijingNow } from '../../db.js'
 import { mt5Bridge } from './market-data.js'
+import { StatefulRiskReject, recordSuccessfulOpenTx } from './risk-state.js'
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'rejected', 'failed'])
 const LEASE_SECONDS = 30
@@ -133,7 +134,7 @@ async function claimIntent({ userId, tradingAccountId, idempotencyKey, sourceTyp
 
 async function finishBeforeSend(intentId, leaseToken, status, result, errorCode = null) {
   await withTransaction(async run => {
-    const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    const intent = await txOne(run, 'SELECT id, status, lease_token, trading_account_id FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.lease_token !== leaseToken || intent.status === 'bridge_sending') return
     await run(
       `UPDATE order_intents SET status = ?, result_json = ?, error_code = ?, lease_token = NULL,
@@ -148,22 +149,44 @@ async function finishBeforeSend(intentId, leaseToken, status, result, errorCode 
   })
 }
 
-async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, request, risk) {
-  await withTransaction(async run => {
+async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, request, risk, statefulValidate, riskContext) {
+  const stateResult = await withTransaction(async run => {
     await lockAccountScope(run, userId, tradingAccountId)
     const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.status !== 'preparing' || intent.lease_token !== leaseToken) throw new Error('order_intent_lease_lost')
+    const state = typeof statefulValidate === 'function'
+      ? await statefulValidate({ run, userId, tradingAccountId, intentId, request, risk, riskContext })
+      : null
+    if (state?.reject_code) {
+      const rules = [...(risk?.rule_results || []), { code: state.reject_code, outcome: 'reject', details: state.details || {} }]
+      if (risk?.risk_decision_id) {
+        await run(`UPDATE risk_decisions SET decision_status = 'reject', reject_code = ?, rule_results_json = ? WHERE id = ?`,
+          [state.reject_code, JSON.stringify(rules), risk.risk_decision_id])
+      }
+      return state
+    }
+    if (state?.adjusted) {
+      request.volume = state.approved_volume
+      risk.approved_order = { ...(risk.approved_order || request), volume: state.approved_volume }
+      risk.rule_results = [...(risk.rule_results || []), { code: 'R6.4_OBSERVATION_VOLUME_CAP', outcome: 'adjust', details: { volume: state.approved_volume } }]
+      risk.risk_amount = Number(risk.risk_amount || 0) * state.approved_volume / Number(risk.original_order?.volume || request.volume)
+      if (risk.risk_decision_id) {
+        await run(`UPDATE risk_decisions SET decision_status = 'adjust', approved_order_json = ?, rule_results_json = ? WHERE id = ?`,
+          [JSON.stringify(risk.approved_order), JSON.stringify(risk.rule_results), risk.risk_decision_id])
+      }
+    }
     await run(
       `INSERT INTO risk_reservations
         (order_intent_id, user_id, trading_account_id, symbol, reserved_volume, reserved_risk_amount,
-         status, expires_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'active', DATE_ADD(NOW(), INTERVAL ? SECOND), ?, ?)
+         reserved_daily_count, reserved_notional, status, expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'active', DATE_ADD(NOW(), INTERVAL ? SECOND), ?, ?)
        ON DUPLICATE KEY UPDATE reserved_volume = VALUES(reserved_volume),
-         reserved_risk_amount = VALUES(reserved_risk_amount), status = 'active',
+         reserved_risk_amount = VALUES(reserved_risk_amount), reserved_daily_count = 1,
+         reserved_notional = VALUES(reserved_notional), status = 'active',
          expires_at = VALUES(expires_at), updated_at = VALUES(updated_at)`,
       [
         intentId, userId, tradingAccountId, request.symbol || null, Number(request.volume) || 0,
-        risk?.risk_amount ?? null, RESERVATION_SECONDS, beijingNow(), beijingNow(),
+        risk?.risk_amount ?? null, state?.reserved_notional ?? null, RESERVATION_SECONDS, beijingNow(), beijingNow(),
       ]
     )
     await run(
@@ -176,13 +199,15 @@ async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, reque
         risk?.risk_decision_id || null, LEASE_SECONDS, beijingNow(), intentId,
       ]
     )
+    return state
   })
+  if (stateResult?.reject_code) throw new StatefulRiskReject(stateResult.reject_code, stateResult.details)
 }
 
 async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId, bridgeAction, bridgeParams) {
   return withTransaction(async run => {
     await lockAccountScope(run, userId, tradingAccountId)
-    const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    const intent = await txOne(run, 'SELECT id, status, lease_token, trading_account_id FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.status !== 'prepared' || intent.lease_token !== leaseToken) throw new Error('order_intent_lease_lost')
     const bridgeRef = `AI-${Number(intentId).toString(36).toUpperCase()}`.slice(0, 24)
     const payload = { ...bridgeParams, comment: String(bridgeParams.comment || bridgeRef).slice(0, 31) }
@@ -206,7 +231,7 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
       ? bridgeResult
       : { ...bridgeResult, status: 'uncertain', message: bridgeResult?.message || bridgeResult?.error || '订单结果待确认，禁止自动重发' }
   await withTransaction(async run => {
-    const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    const intent = await txOne(run, 'SELECT id, status, lease_token, trading_account_id FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.status !== 'bridge_sending' || intent.lease_token !== leaseToken) return
     await run(
       `UPDATE order_intents SET status = ?, trade_ticket = ?, pending_ticket = ?, result_json = ?,
@@ -220,6 +245,7 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
     )
     if (succeeded) {
       await run("UPDATE risk_reservations SET status = 'committed', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
+      if (intent.trading_account_id) await recordSuccessfulOpenTx(run, intent.trading_account_id)
     } else if (explicitReject) {
       await run("UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
     }
@@ -262,11 +288,25 @@ export async function prepareAndExecuteOrderIntent({
   buildBridgeCall,
   enrichRequest,
   loadRiskContext,
+  resolveTradingAccount,
+  statefulValidate,
   bridge = mt5Bridge,
 }) {
   const actorId = toPositiveId(userId)
   if (!actorId) return { status: 'rejected', message: 'invalid_user_id' }
-  const accountId = toPositiveId(tradingAccountId)
+  let accountId = toPositiveId(tradingAccountId)
+  let account = null
+  if (typeof resolveTradingAccount === 'function') {
+    try {
+      account = await bridge(actorId, 'account', {}, options)
+      if (!account || account.status === 'error') throw new Error(account?.message || account?.error || 'account_snapshot_failed')
+      const resolved = await resolveTradingAccount({ actorId, account, requestedAccountId: accountId })
+      accountId = toPositiveId(resolved?.accountId)
+      if (!accountId) throw new Error('trading_account_resolution_failed')
+    } catch (error) {
+      return { status: 'rejected', message: error.message || 'trading_account_resolution_failed' }
+    }
+  }
   const effectiveClientId = clientRequestId || request.client_request_id || request.request_id || null
   let idempotencyKey
   try {
@@ -286,11 +326,10 @@ export async function prepareAndExecuteOrderIntent({
   if (claim.replay) return claim.replay
   const { intentId, leaseToken } = claim
   const preparedRequest = { ...request }
-  let account
   let quote = null
   let bridgeStarted = false
   try {
-    account = await bridge(actorId, 'account', {}, options)
+    account = account || await bridge(actorId, 'account', {}, options)
     if (!account || account.status === 'error') throw new Error(account?.message || account?.error || 'account_snapshot_failed')
     if (preparedRequest.symbol) {
       quote = await bridge(actorId, 'quote', { symbol: preparedRequest.symbol }, options)
@@ -302,9 +341,9 @@ export async function prepareAndExecuteOrderIntent({
     const riskContext = typeof loadRiskContext === 'function'
       ? await loadRiskContext({ bridge, actorId, request: preparedRequest, account, quote, bridgeOptions: options, intentId })
       : { quote, instrument: options.instrument || null }
-    const risk = await validateRequest(config, account, preparedRequest, { ...riskContext, intentId })
+    const risk = await validateRequest(config, account, preparedRequest, { ...riskContext, intentId, tradingAccountId: accountId })
     if (risk?.approved_order) Object.assign(preparedRequest, risk.approved_order)
-    await reserveRisk(intentId, leaseToken, actorId, accountId, preparedRequest, risk)
+    await reserveRisk(intentId, leaseToken, actorId, accountId, preparedRequest, risk, statefulValidate, riskContext)
     const { bridgeAction, bridgeParams } = buildBridgeCall(preparedRequest)
     if (!['open', 'pending'].includes(bridgeAction)) throw new Error('invalid_new_order_bridge_action')
     const sending = await markBridgeSending(intentId, leaseToken, actorId, accountId, bridgeAction, bridgeParams)

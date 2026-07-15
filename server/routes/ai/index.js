@@ -86,8 +86,14 @@ export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
 
 export { listStrategies, getStrategyById, createStrategy, updateStrategy, deleteStrategy,
   listTradingAccounts, getTradingAccountById, createTradingAccount, updateTradingAccount, deleteTradingAccount,
+  adminReviewTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription,
   adminListUserStrategies, adminListUserSubscriptions, getSubscriptionWithContext } from './strategy-ownership.js'
+
+export { RISK_RULES, DEFAULT_RISK_POLICY, resolveEffectiveRiskPolicy, submitRiskPolicyChanges,
+  evaluateCoreRisk } from './risk-policy.js'
+export { calculateAccountRiskMetrics, aggregateClosedPositions, requestRiskRecovery,
+  reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'

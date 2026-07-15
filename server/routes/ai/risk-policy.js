@@ -26,6 +26,19 @@ export const RISK_RULES = Object.freeze({
   market_signal_drift_atr: rule('R4.6', 'number', 'ATR', 'lower', 0.3, 0.01, 5, false, '市价信号价格漂移'),
   broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '经纪商成交滑点'),
   weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 120, 0, 2880, false, '周末保护提前量'),
+  max_directional_exposure_lots: rule('R2.1', 'number', 'lot', 'lower', 0.1, 0.001, 1000, false, '同向最大敞口'),
+  min_open_interval_seconds: rule('R2.2', 'number', 'second', 'higher', 60, 0, 86400, false, '最小开仓间隔'),
+  max_daily_open_count: rule('R2.3', 'number', 'count', 'lower', 10, 1, 10000, false, '每日成功开仓次数'),
+  dedup_window_seconds: rule('R2.4A', 'number', 'second', 'higher', 300, 0, 86400, false, '重复订单时间窗'),
+  dedup_price_atr: rule('R2.4B', 'number', 'ATR', 'higher', 0.1, 0, 5, false, '重复订单价格距离'),
+  daily_loss_limit_pct: rule('R3.1', 'number', 'percent', 'lower', 5, 0.1, 100, false, '每日最大亏损'),
+  consecutive_loss_limit: rule('R3.2A', 'number', 'count', 'lower', 3, 1, 100, false, '连续亏损次数'),
+  loss_cooldown_minutes: rule('R3.2B', 'number', 'minute', 'higher', 120, 1, 10080, false, '连续亏损冷却'),
+  max_drawdown_pct: rule('R3.3', 'number', 'percent', 'lower', 10, 0.1, 100, false, '最大回撤'),
+  min_margin_level_pct: rule('R3.4A', 'number', 'percent', 'higher', 200, 0, 100000, false, '最低保证金水平'),
+  max_notional_exposure_pct: rule('R3.4B', 'number', 'percent', 'lower', 300, 1, 100000, false, '最大名义敞口'),
+  observation_hours: rule('R6.4A', 'number', 'hour', 'higher', 72, 0, 8760, false, '新账户观察期'),
+  observation_max_lot: rule('R6.4B', 'number', 'lot', 'lower', 0.01, 0.001, 100, false, '观察期最大手数'),
 })
 
 export const DEFAULT_RISK_POLICY = Object.freeze(Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => [key, Array.isArray(meta.default_value) ? [...meta.default_value] : meta.default_value])))

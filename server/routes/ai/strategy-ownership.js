@@ -1,6 +1,6 @@
 // ai/strategy-ownership.js — 策略所有权、可见性、模型绑定和订阅管理
 
-import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow, logAudit } from '../../db.js'
 import { parsePromptSymbols } from './config.js'
 import { getModelProfileById } from './model-profiles.js'
 import { stripBrokerSuffix } from './utils.js'
@@ -279,11 +279,26 @@ export async function createTradingAccount(userId, payload = {}) {
   const now = beijingNow()
   const result = await queryRun(
     `INSERT INTO trading_accounts
-      (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', 'active', ?, ?)`,
+      (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status, observed_until, is_deleted, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', 'observing', DATE_ADD(NOW(), INTERVAL 72 HOUR), 0, ?, ?)
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), nickname = VALUES(nickname), margin_mode = VALUES(margin_mode),
+       review_status = 'pending', observe_status = 'observing', observed_until = DATE_ADD(NOW(), INTERVAL 72 HOUR),
+       is_deleted = 0, updated_at = VALUES(updated_at)`,
     [actorId, brokerServer, loginAccount, String(payload.nickname || ''), normalizeMarginMode(payload.margin_mode), now, now]
   )
   return queryOne('SELECT * FROM trading_accounts WHERE id = ?', [result.insertId])
+}
+
+export async function adminReviewTradingAccount(accountId, adminId, adminRole, { approved, reason } = {}) {
+  if (!isAdmin(adminRole)) throw new Error('admin_required')
+  if (!String(reason || '').trim()) throw new Error('review_reason_required')
+  const id = toId(accountId, 'account_id')
+  const existing = await queryOne('SELECT * FROM trading_accounts WHERE id = ? AND is_deleted = 0', [id])
+  if (!existing) throw new Error('account_not_found')
+  await queryRun(`UPDATE trading_accounts SET review_status = ?, observe_status = ?, updated_at = ? WHERE id = ?`,
+    [approved ? 'approved' : 'rejected', approved ? (existing.observed_until ? 'observing' : 'active') : 'frozen', beijingNow(), id])
+  await logAudit({ userId: adminId, action: approved ? 'trading_account_approved' : 'trading_account_rejected', targetType: 'trading_account', targetId: id, detail: JSON.stringify({ reason }) })
+  return queryOne('SELECT * FROM trading_accounts WHERE id = ?', [id])
 }
 
 export async function updateTradingAccount(accountId, userId, payload = {}) {

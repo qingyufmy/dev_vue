@@ -9,6 +9,7 @@ import { isEncryptionAvailable } from '../../ai-credential.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
 import { evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy } from './risk-policy.js'
+import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -689,7 +690,7 @@ export async function executeOrderCore(userId, config, request, action, options 
     validateRequest: async (legacyConfig, account, prepared, context) => {
       const resolved = await resolveEffectiveRiskPolicy({
         userId,
-        tradingAccountId: options.tradingAccountId ?? prepared.trading_account_id ?? null,
+        tradingAccountId: context.tradingAccountId ?? options.tradingAccountId ?? prepared.trading_account_id ?? null,
         riskProfileId: options.riskProfileId ?? prepared.risk_profile_id ?? null,
         legacyConfig,
       })
@@ -704,10 +705,20 @@ export async function executeOrderCore(userId, config, request, action, options 
         risk_amount: decision.risk_amount,
         risk_decision_id: decisionId,
         policy_version_ids: resolved.policyVersionIds,
+        policy: resolved.policy,
       }
     },
     buildBridgeCall: buildBridgeOrderCall,
-    loadRiskContext: async ({ bridge, actorId, request: prepared, quote, bridgeOptions }) => {
+    resolveTradingAccount: ({ actorId, account, requestedAccountId }) => syncTradingAccountIdentity(actorId, account, requestedAccountId),
+    statefulValidate: ({ run, tradingAccountId, intentId, request: approved, risk, riskContext }) => evaluateStatefulRiskTx(run, {
+      userId,
+      accountId: tradingAccountId,
+      intentId,
+      request: approved,
+      policy: risk.policy,
+      snapshot: riskContext,
+    }),
+    loadRiskContext: async ({ bridge, actorId, request: prepared, account, quote, bridgeOptions }) => {
       const symbolsResult = await bridge(actorId, 'symbols', {}, bridgeOptions)
       if (!symbolsResult || symbolsResult.status === 'error') throw new Error(symbolsResult?.message || 'symbol_metadata_failed')
       const wanted = stripBrokerSuffix(prepared.symbol)
@@ -719,7 +730,35 @@ export async function executeOrderCore(userId, config, request, action, options 
         const atr = computeAtr14(ratesResult?.rates || [])
         if (atr > 0) prepared.atr_anchor = atr
       }
-      return { quote, instrument }
+      const today = beijingNow().slice(0, 10)
+      const [positionsResult, pendingResult, historyToday, historyAll] = await Promise.all([
+        bridge(actorId, 'positions', {}, bridgeOptions),
+        bridge(actorId, 'pending_list', {}, bridgeOptions),
+        bridge(actorId, 'history', { page: 1, page_size: 5000, date_from: today }, bridgeOptions),
+        bridge(actorId, 'history', { page: 1, page_size: 5000 }, bridgeOptions),
+      ])
+      const instruments = Object.fromEntries((symbolsResult.symbols || []).map(item => [stripBrokerSuffix(item.name), item]))
+      const fxRates = {}
+      const accountCurrency = String(account?.currency || '').toUpperCase()
+      const quoteCurrencies = new Set([...(positionsResult?.positions || []), ...(pendingResult?.orders || []), prepared]
+        .map(item => stripBrokerSuffix(item.symbol)).filter(symbol => symbol.length >= 6).map(symbol => symbol.slice(3, 6)))
+      for (const currency of quoteCurrencies) {
+        if (!currency || !accountCurrency || currency === accountCurrency) continue
+        for (const pair of [`${currency}${accountCurrency}`, `${accountCurrency}${currency}`]) {
+          try {
+            const rate = await bridge(actorId, 'quote', { symbol: pair }, bridgeOptions)
+            const mid = (Number(rate?.bid) + Number(rate?.ask)) / 2
+            if (Number.isFinite(mid) && mid > 0) { fxRates[pair] = mid; break }
+          } catch { /* Missing conversion is handled fail-closed by stateful risk. */ }
+        }
+      }
+      return {
+        account, quote, instrument, instruments, fxRates,
+        positions: positionsResult?.status === 'success' ? (positionsResult.positions || []) : [],
+        pending: pendingResult?.status === 'success' ? (pendingResult.orders || []) : [],
+        snapshot_complete: positionsResult?.status === 'success' && pendingResult?.status === 'success',
+        historyToday, historyAll,
+      }
     },
     enrichRequest: ({ request: prepared, quote }) => {
       if (!quote || !prepared.symbol) return

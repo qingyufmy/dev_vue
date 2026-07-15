@@ -1,0 +1,189 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const db = vi.hoisted(() => ({
+  queryOne: vi.fn(), queryRun: vi.fn(), withTransaction: vi.fn(), logAudit: vi.fn(),
+  beijingNow: vi.fn(() => '2026-07-15 21:00:00'),
+  parseBeijing: vi.fn(value => value ? new Date(String(value).replace(' ', 'T') + '+08:00') : null),
+}))
+vi.mock('../../server/db.js', () => db)
+
+import { DEFAULT_RISK_POLICY } from '../../server/routes/ai/risk-policy.js'
+import {
+  aggregateClosedPositions, calculateAccountRiskMetrics, evaluateStatefulRiskTx,
+  reviewRiskRecovery, setGlobalKillSwitch, syncTradingAccountIdentity,
+} from '../../server/routes/ai/risk-state.js'
+
+const accountRow = {
+  id: 4, user_id: 2, review_status: 'approved', observe_status: 'active',
+  observed_until: '2026-07-01 00:00:00', is_deleted: 0,
+}
+const stateRow = {
+  trading_account_id: 4, user_id: 2, business_date: '2026-07-15', day_start_equity: 10000,
+  cumulative_cash_flow: 0, equity_high_water: 10000, halt_status: 'active', user_kill_switch: 0,
+}
+const history = (orders = [], statistics = {}) => ({
+  status: 'success', orders, statistics: { deposit: 0, withdrawal: 0, credit: 0, ...statistics },
+  pagination: { total_count: orders.length },
+})
+const instrument = { contract_size: 100, volume_min: 0.01 }
+const snapshot = (overrides = {}) => ({
+  account: { equity: 10000, currency: 'USD', margin: 0, margin_level: 0 },
+  positions: [], pending: [], historyToday: history(), historyAll: history(),
+  instruments: { XAUUSD: instrument }, instrument, fxRates: {}, snapshot_complete: true,
+  ...overrides,
+})
+const request = { symbol: 'XAUUSD', order_type: 'buy', volume: 0.01, quote_price: 2000, reference_price: 2000, atr_anchor: 10 }
+
+function runner({ state = stateRow, reserved = { volume: 0, daily_count: 0, notional: 0 }, successes = 0, latest = null, duplicates = [], updates = [] } = {}) {
+  return vi.fn(async (sql, params = []) => {
+    if (sql.includes('FROM trading_accounts')) return [[accountRow], []]
+    if (sql.includes('FROM global_risk_control')) return [[{ global_kill_switch: 0 }], []]
+    if (sql.includes('FROM risk_account_state')) return [[state], []]
+    if (sql.includes('SUM(reserved_volume)')) return [[reserved], []]
+    if (sql.includes('COUNT(*) AS count')) return [[{ count: successes }], []]
+    if (sql.includes('ORDER BY completed_at')) return [latest ? [latest] : [], []]
+    if (sql.includes('approved_order_json')) return [duplicates, []]
+    if (sql.startsWith('UPDATE risk_account_state')) updates.push({ sql, params })
+    return [{ affectedRows: 1 }, []]
+  })
+}
+
+describe('account metrics', () => {
+  it('aggregates partial closes by complete position', () => {
+    const result = aggregateClosedPositions([
+      { position_id: 7, profit: -10, commission: -1, close_time: '2026-07-15 10:00:00' },
+      { position_id: 7, profit: 15, swap: -1, close_time: '2026-07-15 11:00:00' },
+      { position_id: 8, profit: -2, fee: -1, close_time: '2026-07-15 12:00:00' },
+    ])
+    expect(result).toEqual([
+      { position_id: '8', net: -3, close_time: '2026-07-15 12:00:00' },
+      { position_id: '7', net: 3, close_time: '2026-07-15 11:00:00' },
+    ])
+  })
+
+  it('uses Beijing daily baseline and includes fees plus floating loss', () => {
+    const result = calculateAccountRiskMetrics({
+      ...snapshot({
+        account: { equity: 10870, currency: 'USD' },
+        positions: [{ symbol: 'XAUUSD', volume: 0.01, price_current: 2000, profit: -100 }],
+        historyToday: history([{ position_id: 1, profit: -20, commission: -5, swap: -2, fee: -3 }], { deposit: 1000 }),
+        historyAll: history([{ position_id: 1, profit: -20, commission: -5, swap: -2, fee: -3 }], { deposit: 1000 }),
+      }),
+      previousState: {}, businessDate: '2026-07-15',
+    })
+    expect(result.realized).toBe(-30)
+    expect(result.day_start_equity).toBe(10000)
+    expect(result.daily_loss_pct).toBe(1.3)
+  })
+
+  it('corrects high-water equity for deposits and withdrawals', () => {
+    const deposit = calculateAccountRiskMetrics({ ...snapshot({ account: { equity: 10500, currency: 'USD' }, historyAll: history([], { deposit: 1500 }), historyToday: history() }), previousState: { ...stateRow, cumulative_cash_flow: 1000, equity_high_water: 10000 } })
+    expect(deposit.equity_high_water).toBe(10500)
+    expect(deposit.drawdown_pct).toBe(0)
+    const withdrawal = calculateAccountRiskMetrics({ ...snapshot({ account: { equity: 9500, currency: 'USD' }, historyAll: history([], { deposit: 500 }), historyToday: history() }), previousState: { ...stateRow, cumulative_cash_flow: 1000, equity_high_water: 10000 } })
+    expect(withdrawal.equity_high_water).toBe(9500)
+    expect(withdrawal.drawdown_pct).toBe(0)
+  })
+
+  it('fails closed when full position history was paginated', () => {
+    const result = calculateAccountRiskMetrics({ ...snapshot({ historyAll: { ...history(), pagination: { total_count: 2 } } }), previousState: stateRow })
+    expect(result.data_complete).toBe(false)
+  })
+})
+
+describe('stateful gate', () => {
+  it('counts external MT5 positions and pending orders in directional exposure', async () => {
+    const result = await evaluateStatefulRiskTx(runner(), {
+      userId: 2, accountId: 4, intentId: 9, request: { ...request, volume: 0.02 }, policy: DEFAULT_RISK_POLICY,
+      snapshot: snapshot({ positions: [{ symbol: 'XAUUSD', type: 'buy', volume: 0.09, price_current: 2000 }] }),
+    })
+    expect(result.reject_code).toBe('R2.1_DIRECTIONAL_EXPOSURE')
+  })
+
+  it('enforces daily count including active reservations', async () => {
+    const result = await evaluateStatefulRiskTx(runner({ reserved: { volume: 0, daily_count: 2, notional: 0 }, successes: 8 }), {
+      userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
+    })
+    expect(result.reject_code).toBe('R2.3_DAILY_OPEN_COUNT')
+  })
+
+  it('uses persisted halt after a process restart', async () => {
+    const result = await evaluateStatefulRiskTx(runner({ state: { ...stateRow, halt_status: 'halted', halt_reason: 'R3.3_MAX_DRAWDOWN' } }), {
+      userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
+    })
+    expect(result.reject_code).toBe('R3_ACCOUNT_HALTED')
+  })
+
+  it('persists a fail-closed halt when history is incomplete', async () => {
+    const updates = []
+    const result = await evaluateStatefulRiskTx(runner({ updates }), {
+      userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY,
+      snapshot: snapshot({ historyAll: { status: 'error' } }),
+    })
+    expect(result.reject_code).toBe('R3_RISK_DATA_INCOMPLETE')
+    expect(updates[0].params).toContain('halted')
+  })
+
+  it('detects price/time duplicates beyond signal-id idempotency', async () => {
+    const duplicate = { approved_order_json: JSON.stringify({ order_type: 'buy', reference_price: 2000.5 }) }
+    const result = await evaluateStatefulRiskTx(runner({ duplicates: [duplicate] }), {
+      userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
+    })
+    expect(result.reject_code).toBe('R2.4_PRICE_TIME_DUPLICATE')
+  })
+
+  it('caps an approved order during observation without increasing it', async () => {
+    const observedRunner = runner()
+    observedRunner.mockImplementation(async (sql, params) => {
+      if (sql.includes('FROM trading_accounts')) return [[{ ...accountRow, observed_until: '2099-01-01 00:00:00' }], []]
+      return runner()(sql, params)
+    })
+    const result = await evaluateStatefulRiskTx(observedRunner, {
+      userId: 2, accountId: 4, intentId: 9, request: { ...request, volume: 0.03 },
+      policy: { ...DEFAULT_RISK_POLICY, max_directional_exposure_lots: 1 }, snapshot: snapshot(),
+    })
+    expect(result).toMatchObject({ adjusted: true, approved_volume: 0.01 })
+  })
+
+  it('serializes 20 attempts so reservations cannot exceed the daily limit', async () => {
+    let reservations = 0
+    let lock = Promise.resolve()
+    const attempt = () => {
+      const next = lock.then(async () => {
+        const result = await evaluateStatefulRiskTx(runner({ reserved: { volume: 0, daily_count: reservations, notional: 0 } }), {
+          userId: 2, accountId: 4, intentId: 100 + reservations, request,
+          policy: { ...DEFAULT_RISK_POLICY, max_daily_open_count: 3, max_directional_exposure_lots: 1 }, snapshot: snapshot(),
+        })
+        if (!result.reject_code) reservations += 1
+        return result
+      })
+      lock = next.catch(() => {})
+      return next
+    }
+    const results = await Promise.all(Array.from({ length: 20 }, attempt))
+    expect(results.filter(result => !result.reject_code)).toHaveLength(3)
+    expect(results.filter(result => result.reject_code === 'R2.3_DAILY_OPEN_COUNT')).toHaveLength(17)
+  })
+})
+
+describe('identity and recovery permissions', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('creates a pending observed account and pauses subscriptions on identity switch', async () => {
+    const writes = []
+    db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
+      if (sql.startsWith('SELECT * FROM trading_accounts')) return [[{ id: 1, broker_server: 'Old', login_account: '1', is_deleted: 0 }], []]
+      writes.push(sql)
+      if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 2 }, []]
+      return [{ affectedRows: 1 }, []]
+    }))
+    const result = await syncTradingAccountIdentity(2, { server: 'New', login: 9 }, 1)
+    expect(result).toEqual({ accountId: 2, switched: true })
+    expect(writes.some(sql => sql.includes('strategy_subscriptions SET execution_enabled = 0'))).toBe(true)
+  })
+
+  it('only admins can approve recovery or clear the global kill switch', async () => {
+    await expect(reviewRiskRecovery(2, 'user', 1, true, 'ok')).rejects.toThrow('admin_required')
+    await expect(setGlobalKillSwitch(2, 'user', false, 'ok')).rejects.toThrow('admin_required')
+  })
+})

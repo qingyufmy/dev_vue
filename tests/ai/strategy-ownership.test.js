@@ -170,7 +170,7 @@ describe('trading account control fields', () => {
       review_status: 'approved', observe_status: 'paused',
     })
     const [sql, params] = db.queryRun.mock.calls[0]
-    expect(sql).toContain("'pending', 'active'")
+    expect(sql).toContain("'pending', 'observing'")
     expect(params).not.toContain('approved')
     expect(params).not.toContain('paused')
     expect(params).toContain('hedging')

@@ -873,7 +873,9 @@ class BridgeWorker(QThread):
                     rows.append({"ticket": eo, "deal_ticket": d.get("ticket"), "order": eo,
                         "position_id": pid, "symbol": sym, "type": direction, "volume": d.get("volume"),
                         "entry_price": ep, "exit_price": xp, "price": xp, "profit": d.get("profit"),
-                        "swap": d.get("swap"), "commission": d.get("commission"), "profit_points": pp,
+                        "swap": d.get("swap"), "commission": d.get("commission"), "fee": d.get("fee"),
+                        "net_profit": float(d.get("profit") or 0) + float(d.get("swap") or 0) + float(d.get("commission") or 0) + float(d.get("fee") or 0),
+                        "profit_points": pp,
                         "entry_time": self._mt5_time((ed or {}).get("time")),
                         "close_time": self._mt5_time(d.get("time")), "time": self._mt5_time(d.get("time")),
                         "comment": d.get("comment"),
@@ -890,7 +892,7 @@ class BridgeWorker(QThread):
                     rows = [r for r in rows if float(r.get("profit") or 0) < 0]
                 total = len(rows); si = max(page-1,0)*page_size
                 pr = rows[si:si+page_size]
-                tp = sum(float(r.get("profit") or 0) for r in rows)
+                tp = sum(float(r.get("net_profit") or 0) for r in rows)
                 nr = tp+credit+deposit-withdrawal
                 ab = 10000.0
                 try:
