@@ -1,188 +1,271 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { randomBytes } from 'crypto'
 
 const mockQueryOne = vi.fn()
 const mockQueryAll = vi.fn()
 const mockQueryRun = vi.fn()
+const mockWithTransaction = vi.fn()
+const mockTx = vi.fn()
 
 vi.mock('../../server/db.js', () => ({
   queryOne: (...args) => mockQueryOne(...args),
   queryAll: (...args) => mockQueryAll(...args),
   queryRun: (...args) => mockQueryRun(...args),
-  withTransaction: (...args) => Promise.resolve(),
+  withTransaction: (...args) => mockWithTransaction(...args),
   beijingNow: () => '2026-07-15 12:00:00',
-  parseBeijing: (s) => s ? new Date(s) : null,
+  parseBeijing: value => value ? new Date(value) : null,
 }))
 
 const TEST_KEY = randomBytes(32).toString('base64')
-process.env.AI_CREDENTIAL_KEYS_JSON = JSON.stringify({ '1': TEST_KEY })
-process.env.AI_CREDENTIAL_ACTIVE_KEY_VERSION = '1'
 
-import { resolveAiTaskModel, createModelProfile, setDefaultModelProfile } from '../../server/routes/ai/model-profiles.js'
+import {
+  beginModelUsage,
+  assertModelProfileSchemaReady,
+  createModelProfile,
+  finishModelUsage,
+  migrateLegacyConfigs,
+  resolveAiTaskModel,
+  setDefaultModelProfile,
+} from '../../server/routes/ai/model-profiles.js'
 import { encryptCredential, resetKeyringForTests } from '../../server/ai-credential.js'
+
+const policy = (overrides = {}) => ({
+  share_for_manual: 0,
+  share_for_auto: 0,
+  share_for_review: 0,
+  share_for_memory_compression: 0,
+  allowed_plans: JSON.stringify(['pro']),
+  daily_requests_per_user: 100,
+  daily_tokens_per_user: 500000,
+  ...overrides,
+})
+
+const profile = (overrides = {}) => ({
+  id: 10,
+  owner_user_id: 1,
+  scope: 'user',
+  provider: 'qwen',
+  model_name: 'qwen-plus',
+  api_key_encrypted: encryptCredential('user-key'),
+  key_version: '1',
+  temperature: 0.3,
+  max_tokens: 2000,
+  thinking_enabled: 0,
+  reasoning_effort: 'max',
+  status: 'active',
+  ...overrides,
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
   resetKeyringForTests()
   process.env.AI_CREDENTIAL_KEYS_JSON = JSON.stringify({ '1': TEST_KEY })
   process.env.AI_CREDENTIAL_ACTIVE_KEY_VERSION = '1'
+  mockWithTransaction.mockImplementation(fn => fn(mockTx))
 })
 
 describe('resolveAiTaskModel', () => {
-  describe('manual usage', () => {
-    it('returns user default model with decrypted key', async () => {
-      const enc = encryptCredential('user-key')
-      mockQueryOne
-        .mockResolvedValueOnce({ // getUserModelDefault JOIN (first query for manual)
-          id: 10, owner_user_id: 1, provider: 'deepseek', model_name: 'deepseek-chat',
-          api_key_encrypted: enc, key_version: '1',
-          temperature: 0.3, max_tokens: 2000, thinking_enabled: 1, reasoning_effort: 'max',
-          status: 'active',
-        })
-
-      const result = await resolveAiTaskModel({ userId: 1, strategyId: null, usage: 'manual' })
-      expect(result.credential_source).toBe('user')
-      expect(result.model.provider).toBe('deepseek')
-      expect(result.model.api_key_encrypted).toBe('user-key')
-    })
-
-    it('falls back to platform shared with quota check', async () => {
-      mockQueryOne
-        .mockResolvedValueOnce(null) // getUserModelDefault
-        .mockResolvedValueOnce({ // policy
-          share_for_manual: 1, share_for_auto: 0, share_for_review: 0, share_for_memory_compression: 0,
-          allowed_plans: JSON.stringify(['pro']), daily_requests_per_user: 100, daily_tokens_per_user: 500000,
-        })
-        .mockResolvedValueOnce({ // platform model
-          id: 99, owner_user_id: 0, provider: 'deepseek', model_name: 'deepseek-chat',
-          api_key_encrypted: encryptCredential('admin-key'), key_version: '1',
-          temperature: 0.3, max_tokens: 2000, thinking_enabled: 1, reasoning_effort: 'max',
-        })
-        .mockResolvedValueOnce({ plan: 'pro' }) // user plan
-        .mockResolvedValueOnce({ cnt: 5, tokens: 10000 }) // checkPlatformQuota: count query
-        .mockResolvedValueOnce({ // checkPlatformQuota: getPlatformUsagePolicy
-          share_for_manual: 1, share_for_auto: 0, share_for_review: 0, share_for_memory_compression: 0,
-          allowed_plans: JSON.stringify(['pro']), daily_requests_per_user: 100, daily_tokens_per_user: 500000,
-        })
-
-      const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
-      expect(result.credential_source).toBe('platform_shared')
-      expect(result.model.api_key_encrypted).toBe('admin-key')
-    })
-
-    it('denies platform shared when quota exceeded', async () => {
-      mockQueryOne
-        .mockResolvedValueOnce(null) // getUserModelDefault
-        .mockResolvedValueOnce({ // policy
-          share_for_manual: 1, share_for_auto: 0, share_for_review: 0, share_for_memory_compression: 0,
-          allowed_plans: JSON.stringify(['pro']), daily_requests_per_user: 10, daily_tokens_per_user: 500000,
-        })
-        .mockResolvedValueOnce({ // platform model
-          id: 99, owner_user_id: 0, provider: 'deepseek', model_name: 'deepseek-chat',
-          api_key_encrypted: encryptCredential('admin-key'), key_version: '1',
-          temperature: 0.3, max_tokens: 2000, thinking_enabled: 1, reasoning_effort: 'max',
-        })
-        .mockResolvedValueOnce({ plan: 'pro' }) // user plan
-        .mockResolvedValueOnce({ cnt: 15, tokens: 10000 }) // checkPlatformQuota: count query
-        .mockResolvedValueOnce({ // checkPlatformQuota: getPlatformUsagePolicy
-          share_for_manual: 1, share_for_auto: 0, share_for_review: 0, share_for_memory_compression: 0,
-          allowed_plans: JSON.stringify(['pro']), daily_requests_per_user: 10, daily_tokens_per_user: 500000,
-        })
-
-      const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
-      expect(result.credential_source).toBe('none')
-      expect(result.error).toBe('daily_request_limit')
-    })
+  it('returns a decrypted user default and preserves provider aliases', async () => {
+    mockQueryOne.mockResolvedValueOnce(profile())
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: null, usage: 'manual' })
+    expect(result.credential_source).toBe('user')
+    expect(result.model.api_key_encrypted).toBe('user-key')
+    expect(result.model.provider).toBe('qwen')
+    expect(result.model.api_provider).toBe('qwen')
   })
 
-  describe('auto_private usage', () => {
-    it('uses strategy-bound model with ownership check', async () => {
-      mockQueryOne
-        .mockResolvedValueOnce({ // apt ownership check
-          owner_user_id: 1, model_profile_id: 5,
-        })
-        .mockResolvedValueOnce({ // bound profile
-          id: 5, owner_user_id: 1, provider: 'deepseek', model_name: 'deepseek-chat',
-          api_key_encrypted: encryptCredential('user-key'), key_version: '1',
-          temperature: 0.3, max_tokens: 2000, thinking_enabled: 1, reasoning_effort: 'max',
-        })
-
-      const result = await resolveAiTaskModel({ userId: 1, strategyId: 10, usage: 'auto_private' })
-      expect(result.credential_source).toBe('user')
-      expect(result.reason).toBe('strategy_bound')
-    })
-
-    it('does not silently fall back when strategy bound model is invalid', async () => {
-      mockQueryOne
-        .mockResolvedValueOnce({ model_profile_id: 999 }) // apt has binding
-        .mockResolvedValueOnce(null) // profile not found
-
-      const result = await resolveAiTaskModel({ userId: 1, strategyId: 10, usage: 'auto_private' })
-      expect(result.credential_source).toBe('none')
-      expect(result.error).toBe('strategy_bound_model_invalid')
-    })
-
-    it('does not fall back when strategy bound model has no key', async () => {
-      mockQueryOne
-        .mockResolvedValueOnce({ owner_user_id: 1, model_profile_id: 5 })
-        .mockResolvedValueOnce({
-          id: 5, owner_user_id: 1, provider: 'deepseek', model_name: 'deepseek-chat',
-          api_key_encrypted: null, key_version: '1',
-        })
-
-      const result = await resolveAiTaskModel({ userId: 1, strategyId: 10, usage: 'auto_private' })
-      expect(result.credential_source).toBe('none')
-      expect(result.error).toBe('strategy_bound_model_no_key')
-    })
+  it('rejects a plaintext credential stored in a profile', async () => {
+    mockQueryOne.mockResolvedValueOnce(profile({ api_key_encrypted: 'plain-key' }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: null, usage: 'manual' })
+    expect(result.model).toBeNull()
+    expect(result.error).toBe('credential_not_encrypted')
   })
 
-  describe('auto_platform usage', () => {
-    it('returns platform model', async () => {
-      mockQueryOne.mockResolvedValueOnce({
-        id: 99, owner_user_id: 0, scope: 'platform', provider: 'deepseek', model_name: 'deepseek-chat',
-        api_key_encrypted: encryptCredential('admin-key'), key_version: '1',
-        temperature: 0.3, max_tokens: 2000, thinking_enabled: 1, reasoning_effort: 'max',
-      })
-
-      const result = await resolveAiTaskModel({ userId: 1, strategyId: null, usage: 'auto_platform' })
-      expect(result.credential_source).toBe('platform_primary')
-    })
+  it('falls back to a platform model only when sharing and plan allow it', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(policy({ share_for_manual: 1 }))
+      .mockResolvedValueOnce(profile({ id: 99, owner_user_id: 0, scope: 'platform', api_key_encrypted: encryptCredential('admin-key') }))
+      .mockResolvedValueOnce({ plan: 'pro' })
+    const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
+    expect(result.credential_source).toBe('platform_shared')
+    expect(result.model.api_key_encrypted).toBe('admin-key')
   })
 
-  describe('authorization', () => {
-    it('createModelProfile rejects platform scope from non-admin', async () => {
-      await expect(createModelProfile(1, { scope: 'platform', api_key: 'test' }, 'pro'))
-        .rejects.toThrow('platform_scope_requires_admin')
-    })
-
-    it('createModelProfile allows platform scope from admin', async () => {
-      mockQueryRun.mockResolvedValueOnce({ insertId: 1 })
-      mockQueryOne.mockResolvedValueOnce(null) // getModelProfileById
-      // createModelProfile(userId, payload, callerRole)
-      const result = await createModelProfile(0, { scope: 'platform', api_key: 'test' }, 'admin')
-      expect(mockQueryRun).toHaveBeenCalled()
-    })
+  it('does not share when the usage switch is disabled', async () => {
+    mockQueryOne.mockResolvedValueOnce(null).mockResolvedValueOnce(policy())
+    const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
+    expect(result.error).toBe('no_model_configured')
   })
 
-  describe('default model unification', () => {
-    it('setDefaultModelProfile writes both is_default and user_model_defaults', async () => {
-      mockQueryOne.mockResolvedValueOnce({ // profile exists
-        id: 5, owner_user_id: 1, status: 'active',
-      })
-      mockQueryRun.mockResolvedValue({ affectedRows: 1 })
-
-      await setDefaultModelProfile(1, 5)
-      // Should have 3 queryRun calls: clear is_default, set is_default, upsert user_model_defaults
-      expect(mockQueryRun).toHaveBeenCalledTimes(3)
-      const calls = mockQueryRun.mock.calls.map(c => c[0])
-      expect(calls.some(c => c.includes('user_model_defaults'))).toBe(true)
-    })
+  it('does not share with a disallowed plan', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(policy({ share_for_review: 1 }))
+      .mockResolvedValueOnce(profile({ owner_user_id: 0, scope: 'platform' }))
+      .mockResolvedValueOnce({ plan: 'free' })
+    const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'review' })
+    expect(result.error).toBe('no_model_configured')
   })
 
-  describe('invalid usage', () => {
-    it('throws on invalid usage type', async () => {
-      await expect(resolveAiTaskModel({ userId: 1, strategyId: null, usage: 'invalid' }))
-        .rejects.toThrow('invalid_usage:invalid')
+  it('auto_private uses the requesting user default without Task 02 columns', async () => {
+    mockQueryOne.mockResolvedValueOnce(profile())
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'auto_private' })
+    expect(result.credential_source).toBe('user')
+    expect(mockQueryOne.mock.calls[0][0]).toContain('user_model_defaults')
+    expect(mockQueryOne.mock.calls.every(([sql]) => !sql.includes('owner_user_id, model_profile_id FROM auto_prompt_types'))).toBe(true)
+  })
+
+  it('uses the independent memory compression switch', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(policy({ share_for_memory_compression: 1 }))
+      .mockResolvedValueOnce(profile({ owner_user_id: 0, scope: 'platform' }))
+      .mockResolvedValueOnce({ plan: 'pro' })
+    const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'memory_compression' })
+    expect(result.credential_source).toBe('platform_shared')
+  })
+
+  it('returns the primary platform model for auto_platform', async () => {
+    mockQueryOne.mockResolvedValueOnce(profile({ owner_user_id: 0, scope: 'platform' }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: null, usage: 'auto_platform' })
+    expect(result.credential_source).toBe('platform_primary')
+  })
+
+  it('rejects unknown usages', async () => {
+    await expect(resolveAiTaskModel({ userId: 1, usage: 'invalid' })).rejects.toThrow('invalid_usage:invalid')
+  })
+})
+
+describe('model profile authorization and defaults', () => {
+  it('rejects platform scope from a non-admin caller', async () => {
+    await expect(createModelProfile(1, { scope: 'platform', api_key: 'test' }, 'pro'))
+      .rejects.toThrow('platform_scope_requires_admin')
+  })
+
+  it('stores admin-created platform profiles with owner 0', async () => {
+    mockQueryRun.mockResolvedValueOnce({ insertId: 7 })
+    mockQueryOne.mockResolvedValueOnce(null)
+    await createModelProfile(55, { scope: 'platform', api_key: 'test' }, 'admin')
+    expect(mockQueryRun.mock.calls[0][1][0]).toBe(0)
+  })
+
+  it('updates both default representations in one transaction', async () => {
+    mockQueryOne.mockResolvedValueOnce({ id: 5, owner_user_id: 1, status: 'active' })
+    mockTx.mockResolvedValue([{ affectedRows: 1 }])
+    await setDefaultModelProfile(1, 5)
+    expect(mockWithTransaction).toHaveBeenCalledTimes(1)
+    expect(mockTx).toHaveBeenCalledTimes(3)
+    expect(mockTx.mock.calls.some(([sql]) => sql.includes('user_model_defaults'))).toBe(true)
+  })
+})
+
+describe('model usage accounting', () => {
+  it('creates a reserved log for a user-owned model', async () => {
+    mockQueryRun.mockResolvedValueOnce({ insertId: 21 })
+    const result = await beginModelUsage({
+      userId: 2, profileId: 10, credentialSource: 'user', usage: 'manual', estimatedTokens: 3000,
     })
+    expect(result).toEqual({ logId: 21, reservedTokens: 0 })
+    expect(mockQueryRun.mock.calls[0][0]).toContain("'reserved'")
+  })
+
+  it('atomically reserves platform quota under a user row lock', async () => {
+    mockTx
+      .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
+      .mockResolvedValueOnce([[policy({ share_for_manual: 1 })]])
+      .mockResolvedValueOnce([[{ cnt: 3, tokens: 1000 }]])
+      .mockResolvedValueOnce([{ insertId: 44 }])
+    const result = await beginModelUsage({
+      userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 2500,
+    })
+    expect(result).toEqual({ logId: 44, reservedTokens: 2500 })
+    expect(mockTx.mock.calls[0][0]).toContain('FOR UPDATE')
+  })
+
+  it('rejects a platform request when the request quota is exhausted', async () => {
+    mockTx
+      .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
+      .mockResolvedValueOnce([[policy({ share_for_manual: 1, daily_requests_per_user: 3 })]])
+      .mockResolvedValueOnce([[{ cnt: 3, tokens: 1000 }]])
+    await expect(beginModelUsage({
+      userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 100,
+    })).rejects.toThrow('daily_request_limit')
+  })
+
+  it('rechecks the sharing switch inside the quota transaction', async () => {
+    mockTx
+      .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
+      .mockResolvedValueOnce([[policy({ share_for_manual: 0 })]])
+    await expect(beginModelUsage({
+      userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 100,
+    })).rejects.toThrow('platform_sharing_disabled')
+  })
+
+  it('rejects a platform request when its reservation exceeds token quota', async () => {
+    mockTx
+      .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
+      .mockResolvedValueOnce([[policy({ share_for_manual: 1, daily_tokens_per_user: 2000 })]])
+      .mockResolvedValueOnce([[{ cnt: 1, tokens: 1500 }]])
+    await expect(beginModelUsage({
+      userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 600,
+    })).rejects.toThrow('daily_token_limit')
+  })
+
+  it('requires a concrete user for platform-shared quota', async () => {
+    await expect(beginModelUsage({
+      userId: 0, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 100,
+    })).rejects.toThrow('platform_shared_user_required')
+  })
+
+  it('finalizes a reservation with actual tokens and status', async () => {
+    mockQueryRun.mockResolvedValueOnce({ changes: 1 })
+    await finishModelUsage(44, { tokenCount: 321, status: 'error', errorCode: 'provider_timeout' })
+    expect(mockQueryRun).toHaveBeenCalledWith(expect.stringContaining("request_status = 'reserved'"), [321, 'error', 'provider_timeout', 44])
+  })
+})
+
+describe('legacy credential migration', () => {
+  it('encrypts legacy keys, creates a user default, and never stores plaintext in the profile', async () => {
+    mockQueryAll
+      .mockResolvedValueOnce([{
+        id: 8, user_id: 2, api_key_encrypted: 'legacy-secret', api_provider: 'qwen',
+        model_name: 'qwen-plus', api_base_url: 'https://example.test/v1', temperature: 0.2, max_tokens: 3000,
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    mockQueryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+    mockQueryRun
+      .mockResolvedValueOnce({ insertId: 30 })
+      .mockResolvedValueOnce({ changes: 1 })
+      .mockResolvedValueOnce({ changes: 1 })
+
+    const result = await migrateLegacyConfigs()
+
+    expect(result).toEqual([{ source: 'ai_configs', id: 8, user_id: 2 }])
+    const insertParams = mockQueryRun.mock.calls[0][1]
+    expect(insertParams).not.toContain('legacy-secret')
+    expect(JSON.parse(insertParams[5])).toMatchObject({ v: '1' })
+    expect(mockQueryRun.mock.calls.some(([sql]) => sql.includes('user_model_defaults'))).toBe(true)
+  })
+
+  it('propagates a legacy migration read failure', async () => {
+    mockQueryAll.mockRejectedValueOnce(new Error('legacy db down'))
+    await expect(migrateLegacyConfigs()).rejects.toThrow('legacy db down')
+  })
+})
+
+describe('model schema readiness', () => {
+  it('checks every required model-management table', async () => {
+    mockQueryOne.mockResolvedValue(null)
+    await assertModelProfileSchemaReady()
+    expect(mockQueryOne).toHaveBeenCalledTimes(4)
+  })
+
+  it('propagates a missing-table error', async () => {
+    mockQueryOne.mockRejectedValueOnce(new Error('table missing'))
+    await expect(assertModelProfileSchemaReady()).rejects.toThrow('table missing')
   })
 })

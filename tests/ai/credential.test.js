@@ -143,17 +143,17 @@ describe('AI Credential Encryption', () => {
     })
   })
 
-  describe('legacy plaintext migration', () => {
-    it('decryptCredential returns legacy plaintext as-is', () => {
+  describe('legacy plaintext rejection', () => {
+    it('decryptCredential rejects legacy plaintext', () => {
       setupKeyring()
       const legacy = 'plain-api-key-no-envelope'
-      expect(decryptCredential(legacy)).toBe(legacy)
+      expect(() => decryptCredential(legacy)).toThrow('credential_not_encrypted')
     })
 
-    it('decryptCredential returns non-envelope JSON string as-is', () => {
+    it('decryptCredential rejects non-envelope JSON strings', () => {
       setupKeyring()
       const notEnvelope = '{"some":"other_json"}'
-      expect(decryptCredential(notEnvelope)).toBe(notEnvelope)
+      expect(() => decryptCredential(notEnvelope)).toThrow('credential_not_encrypted')
     })
   })
 

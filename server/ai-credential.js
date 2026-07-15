@@ -61,14 +61,10 @@ export function decryptCredential(envelope) {
   if (!_keyring) throw new Error('encryption_master_key_missing')
   let parsed
   try { parsed = JSON.parse(envelope) } catch {
-    // Legacy plaintext — return as-is during migration period
-    console.warn('[Credential] Legacy plaintext detected, will be re-encrypted on next save')
-    return envelope
+    throw new Error('credential_not_encrypted')
   }
   if (!parsed.v || !parsed.ct || !parsed.iv || !parsed.tag) {
-    // Not an envelope — treat as legacy plaintext
-    console.warn('[Credential] Legacy plaintext detected, will be re-encrypted on next save')
-    return envelope
+    throw new Error('credential_not_encrypted')
   }
   const key = _keyring[parsed.v]
   if (!key) throw new Error(`encryption_key_version_not_found:${parsed.v}`)

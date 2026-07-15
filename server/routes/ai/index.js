@@ -67,7 +67,8 @@ export { insertAudit, getActiveConfig, getAnalyzeApiKey,
   saveUserAutoConfig, getUnifiedAutoInferenceConfig,
   getCloseConfig, saveCloseConfig, getCloseSignalTickets } from './config.js'
 
-export { resolveAiTaskModel, logModelUsage, checkPlatformQuota,
+export { resolveAiTaskModel, logModelUsage, beginModelUsage, finishModelUsage, checkPlatformQuota,
+  assertModelProfileSchemaReady,
   createModelProfile, getModelProfileById, getUserModelProfiles,
   updateModelProfile, deleteModelProfile, setDefaultModelProfile,
   getUserModelDefault, setUserModelDefault,

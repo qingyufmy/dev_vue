@@ -10,6 +10,8 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { initDB, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
+import { isEncryptionAvailable } from './ai-credential.js'
+import { assertModelProfileSchemaReady, migrateLegacyConfigs } from './routes/ai/model-profiles.js'
 import { BILIBILI_HEADERS } from './utils.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
@@ -361,6 +363,12 @@ initBridgeWS(server)
 ;(async () => {
   await initDB()
   await runMigrations()
+  if (isEncryptionAvailable()) {
+    await assertModelProfileSchemaReady()
+    await migrateLegacyConfigs()
+  } else {
+    console.warn('[AI] Credential master key is unavailable; model calls and key updates are disabled')
+  }
   await initAutoSchedulers()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()

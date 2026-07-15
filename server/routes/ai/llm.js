@@ -4,7 +4,7 @@ import { queryOne } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
-import { logModelUsage } from './model-profiles.js'
+import { beginModelUsage, finishModelUsage } from './model-profiles.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const SL_CLAMP = { K_MIN: 1.0, K_MAX: 3.0 }
@@ -81,19 +81,64 @@ function extractLlmContent(data, protocol) {
   return msg?.content || msg?.reasoning_content || ''
 }
 
-export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000 }) {
+function extractTokenCount(data) {
+  const usage = data?.usage || data?.response?.usage || {}
+  const total = usage.total_tokens ?? usage.totalTokens
+  if (Number.isFinite(Number(total))) return Math.max(0, Math.trunc(Number(total)))
+  const input = usage.input_tokens ?? usage.prompt_tokens ?? 0
+  const output = usage.output_tokens ?? usage.completion_tokens ?? 0
+  return Math.max(0, Math.trunc(Number(input) + Number(output)))
+}
+
+async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, estimatedTokens, phase }) {
+  let usageLogId = null
+  try {
+    if (usageContext) {
+      const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
+      usageLogId = reservation.logId
+    }
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeout),
+    })
+    if (!response.ok) throw new Error(`${phase === 'repair' ? 'LLM repair' : 'LLM'} HTTP ${response.status}`)
+    const data = await response.json()
+    if (usageLogId) {
+      const reportedTokens = extractTokenCount(data)
+      const fallbackTokens = Math.ceil((JSON.stringify(body).length + JSON.stringify(data).length) / 4)
+      try {
+        await finishModelUsage(usageLogId, { tokenCount: reportedTokens || fallbackTokens, status: 'success' })
+      } catch (logError) {
+        // The reservation remains at its conservative estimate. Do not repeat a
+        // provider call merely because post-call accounting could not finalize.
+        console.error('[LLM] Failed to finalize successful usage log:', logError.message)
+      }
+      usageLogId = null
+    }
+    return { response, data }
+  } catch (error) {
+    if (usageLogId) {
+      try {
+        await finishModelUsage(usageLogId, { tokenCount: 0, status: 'error', errorCode: error.message })
+      } catch (logError) {
+        console.error('[LLM] Failed to finalize usage log:', logError.message)
+      }
+    }
+    throw error
+  }
+}
+
+export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
   const body = buildLlmRequestBody({ protocol, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeout),
+  const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + Math.max(0, Number(maxTokens) || 0)
+  const { response, data } = await trackedModelRequest({
+    url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request',
   })
-  if (!response.ok) throw new Error(`LLM HTTP ${response.status}`)
-  const data = await response.json()
   const content = extractLlmContent(data, protocol)
   if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
   try {
@@ -108,14 +153,10 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
       protocol, model, temperature: 0, maxTokens, messages: repairMessages,
       thinkingEnabled, reasoningEffort,
     })
-    const repairResp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(repairBody),
-      signal: AbortSignal.timeout(timeout),
+    const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
+    const { data: repairedData } = await trackedModelRequest({
+      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate, phase: 'repair',
     })
-    if (!repairResp.ok) throw new Error(`LLM repair HTTP ${repairResp.status}`)
-    const repairedData = await repairResp.json()
     const repaired = extractLlmContent(repairedData, protocol)
     if (!repaired) throw new Error('LLM repair response content is empty')
     return parseJsonObject(repaired)
@@ -203,6 +244,13 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const thinkingEnabled = (provider === 'deepseek' || provider === 'volcengine_agent_plan')
       && config.thinking_enabled !== 0 && config.thinking_enabled !== false
     console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
+    const usageContext = config._model_profile_id ? {
+      userId: config._userId || 0,
+      profileId: config._model_profile_id,
+      credentialSource: config._credential_source || (config._model_shared ? 'platform_shared' : 'user'),
+      usage: config._usage || 'manual',
+      strategyId: config._strategyId || null,
+    } : null
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
@@ -215,6 +263,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
         { role: 'system', content: cleanPrompt },
         { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(aiPayload) },
       ],
+      usageContext,
     })
     const required = ['signal_type', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
     if (!required.every(k => k in parsed)) {
@@ -222,12 +271,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
     }
     parsed._inference_source = 'ai'
-    const result = normalizeAiSignal(parsed, config, market)
-    // [P0-2] Log model usage after successful inference
-    const credentialSource = config._credential_source || (config._model_shared ? 'platform_shared' : 'user')
-    const profileId = config._model_profile_id || null
-    logModelUsage(config._userId || 0, profileId, credentialSource, 'manual', null, 0, 'success', null).catch(() => {})
-    return result
+    return normalizeAiSignal(parsed, config, market)
   } catch (exc) {
     return aiFailureHold(market, exc.message)
   }

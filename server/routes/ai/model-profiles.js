@@ -1,10 +1,22 @@
 // ai/model-profiles.js — 统一模型管理 + 解析器 + 使用日志
 
-import { queryOne, queryAll, queryRun, beijingNow } from '../../db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { encryptCredential, decryptCredential, isEncryptionAvailable, isEncryptedEnvelope, getActiveKeyVersion } from '../../ai-credential.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'auto_private', 'auto_platform', 'review', 'memory_compression']
+
+export async function assertModelProfileSchemaReady() {
+  const requiredTables = [
+    'ai_model_profiles',
+    'user_model_defaults',
+    'platform_model_usage_policy',
+    'ai_model_usage_logs',
+  ]
+  for (const table of requiredTables) {
+    await queryOne(`SELECT 1 AS ok FROM ${table} LIMIT 1`)
+  }
+}
 
 // ─── Model Profiles CRUD ───
 
@@ -15,6 +27,7 @@ export async function createModelProfile(userId, payload, callerRole) {
   if (scope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') {
     throw new Error('platform_scope_requires_admin')
   }
+  const ownerUserId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
   let keyEnc = null
   let keyVersion = null
   if (payload.api_key) {
@@ -28,7 +41,7 @@ export async function createModelProfile(userId, payload, callerRole) {
        temperature, max_tokens, thinking_enabled, reasoning_effort, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
     [
-      userId,
+      ownerUserId,
       scope,
       payload.provider || 'deepseek',
       payload.model_name || 'deepseek-chat',
@@ -112,14 +125,16 @@ export async function setDefaultModelProfile(userId, profileId) {
     [profileId, userId]
   )
   if (!profile) throw new Error('model_profile_not_found_or_inactive')
-  await queryRun('UPDATE ai_model_profiles SET is_default = 0 WHERE owner_user_id = ? AND deleted_at IS NULL', [userId])
-  await queryRun('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
-  await queryRun(
-    `INSERT INTO user_model_defaults (user_id, model_profile_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE model_profile_id = VALUES(model_profile_id), updated_at = VALUES(updated_at)`,
-    [userId, profileId, now, now]
-  )
+  await withTransaction(async run => {
+    await run('UPDATE ai_model_profiles SET is_default = 0 WHERE owner_user_id = ? AND deleted_at IS NULL', [userId])
+    await run('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
+    await run(
+      `INSERT INTO user_model_defaults (user_id, model_profile_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE model_profile_id = VALUES(model_profile_id), updated_at = VALUES(updated_at)`,
+      [userId, profileId, now, now]
+    )
+  })
 }
 
 // ─── User Model Defaults ───
@@ -137,18 +152,7 @@ export async function getUserModelDefault(userId) {
 }
 
 export async function setUserModelDefault(userId, profileId) {
-  const now = beijingNow()
-  const profile = await queryOne(
-    'SELECT * FROM ai_model_profiles WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL AND status = "active"',
-    [profileId, userId]
-  )
-  if (!profile) throw new Error('model_profile_not_found_or_inactive')
-  await queryRun(
-    `INSERT INTO user_model_defaults (user_id, model_profile_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE model_profile_id = VALUES(model_profile_id), updated_at = VALUES(updated_at)`,
-    [userId, profileId, now, now]
-  )
+  return await setDefaultModelProfile(userId, profileId)
 }
 
 // ─── Platform Usage Policy ───
@@ -206,6 +210,78 @@ export async function logModelUsage(userId, profileId, credentialSource, usage, 
   }
 }
 
+/**
+ * Create one usage row before an outbound model request. Platform-shared calls
+ * reserve their worst-case token budget under a per-user row lock so concurrent
+ * requests cannot all pass the same quota check.
+ */
+export async function beginModelUsage({ userId, profileId, credentialSource, usage, strategyId = null, estimatedTokens = 0 }) {
+  const safeEstimate = Math.max(0, Math.trunc(Number(estimatedTokens) || 0))
+  if (credentialSource !== 'platform_shared') {
+    const result = await queryRun(
+      `INSERT INTO ai_model_usage_logs
+        (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, token_count, request_status, error_code, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, 'reserved', NULL, ?)`,
+      [userId || 0, profileId || null, credentialSource || 'user', usage, strategyId, beijingNow()]
+    )
+    return { logId: result.insertId, reservedTokens: 0 }
+  }
+
+  if (!Number.isInteger(Number(userId)) || Number(userId) <= 0) {
+    throw new Error('platform_shared_user_required')
+  }
+
+  return await withTransaction(async run => {
+    const [lockedUsers] = await run('SELECT id, plan FROM users WHERE id = ? FOR UPDATE', [userId])
+    if (!lockedUsers.length) throw new Error('model_usage_user_not_found')
+
+    const [policies] = await run('SELECT * FROM platform_model_usage_policy WHERE id = 1')
+    const policy = policies[0] || {
+      share_for_manual: 0,
+      share_for_auto: 0,
+      share_for_review: 0,
+      share_for_memory_compression: 0,
+      allowed_plans: JSON.stringify(['pro']),
+      daily_requests_per_user: 100,
+      daily_tokens_per_user: 500000,
+    }
+    const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
+    if (!policy[shareKey]) throw new Error('platform_sharing_disabled')
+    const allowedPlans = JSON.parse(policy.allowed_plans || '["pro"]')
+    if (!allowedPlans.includes(lockedUsers[0].plan)) throw new Error('platform_plan_not_allowed')
+    const [rows] = await run(
+      `SELECT COUNT(*) AS cnt, COALESCE(SUM(token_count), 0) AS tokens
+       FROM ai_model_usage_logs
+       WHERE user_id = ? AND credential_source = 'platform_shared' AND \`usage\` = ?
+         AND created_at >= CURRENT_DATE()`,
+      [userId, usage]
+    )
+    const usedRequests = Number(rows[0]?.cnt || 0)
+    const usedTokens = Number(rows[0]?.tokens || 0)
+    if (usedRequests >= Number(policy.daily_requests_per_user)) throw new Error('daily_request_limit')
+    if (usedTokens + safeEstimate > Number(policy.daily_tokens_per_user)) throw new Error('daily_token_limit')
+
+    const [insert] = await run(
+      `INSERT INTO ai_model_usage_logs
+        (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, token_count, request_status, error_code, created_at)
+       VALUES (?, ?, 'platform_shared', ?, ?, ?, 'reserved', NULL, ?)`,
+      [userId, profileId || null, usage, strategyId, safeEstimate, beijingNow()]
+    )
+    return { logId: insert.insertId, reservedTokens: safeEstimate }
+  })
+}
+
+export async function finishModelUsage(logId, { tokenCount = 0, status = 'success', errorCode = null } = {}) {
+  if (!logId) return
+  const safeTokens = Math.max(0, Math.trunc(Number(tokenCount) || 0))
+  await queryRun(
+    `UPDATE ai_model_usage_logs
+     SET token_count = ?, request_status = ?, error_code = ?
+     WHERE id = ? AND request_status = 'reserved'`,
+    [safeTokens, status, errorCode ? String(errorCode).slice(0, 128) : null, logId]
+  )
+}
+
 // [P1-1] Check platform shared model quota
 export async function checkPlatformQuota(userId, usage) {
   const today = beijingNow().substring(0, 10)
@@ -235,27 +311,8 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
     return await resolvePlatformModel()
   }
 
-  // For auto_private: check strategy-bound model
-  if (usage === 'auto_private' && strategyId) {
-    // [P1-2] Verify strategy ownership before resolving bound model
-    const apt = await queryOne('SELECT owner_user_id, model_profile_id FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [strategyId])
-    if (apt && apt.model_profile_id) {
-      const boundProfile = await queryOne(
-        `SELECT mp.* FROM ai_model_profiles mp
-         WHERE mp.id = ? AND mp.deleted_at IS NULL AND mp.status = 'active'`,
-        [apt.model_profile_id]
-      )
-      if (boundProfile) {
-        if (boundProfile.api_key_encrypted) {
-          const source = boundProfile.owner_user_id === userId ? 'user' : 'platform_primary'
-          return buildResult(boundProfile, source, usage, 'strategy_bound')
-        }
-        return { model: null, credential_source: 'none', error: 'strategy_bound_model_no_key', usage }
-      }
-      // Bound profile gone/inactive — don't silently fall back
-      return { model: null, credential_source: 'none', error: 'strategy_bound_model_invalid', usage }
-    }
-  }
+  // Strategy ownership/model binding columns are introduced by Task 02. Until
+  // then auto_private safely resolves only the requesting user's default model.
 
   // Step 1: User's own model (via user_model_defaults)
   const userDefault = await getUserModelDefault(userId)
@@ -272,11 +329,6 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
       const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
       const allowedPlans = JSON.parse(policy.allowed_plans || '["pro"]')
       if (user && allowedPlans.includes(user.plan)) {
-        // [P1-1] Enforce quota before allowing platform shared
-        const quota = await checkPlatformQuota(userId, usage)
-        if (!quota.allowed) {
-          return { model: null, credential_source: 'none', error: quota.reason, usage, quota }
-        }
         return buildResult(platformModel, 'platform_shared', usage, 'platform_fallback')
       }
     }
@@ -299,19 +351,24 @@ async function getPlatformModelForSharing() {
 
 // [P0-3] Decrypt credential before returning to callers
 function buildResult(profile, source, usage, reason) {
-  let decryptedKey = profile.api_key_encrypted
-  if (decryptedKey && isEncryptedEnvelope(decryptedKey)) {
-    try {
-      decryptedKey = decryptCredential(decryptedKey)
-    } catch (e) {
-      console.error(`[ModelProfiles] Failed to decrypt key for profile ${profile.id}:`, e.message)
-      return { model: null, credential_source: source, error: 'credential_decryption_failed', usage, reason }
-    }
+  if (!isEncryptionAvailable()) {
+    return { model: null, credential_source: source, error: 'encryption_master_key_missing', usage, reason }
+  }
+  if (!isEncryptedEnvelope(profile.api_key_encrypted)) {
+    return { model: null, credential_source: source, error: 'credential_not_encrypted', usage, reason }
+  }
+  let decryptedKey
+  try {
+    decryptedKey = decryptCredential(profile.api_key_encrypted)
+  } catch (e) {
+    console.error(`[ModelProfiles] Failed to decrypt key for profile ${profile.id}:`, e.message)
+    return { model: null, credential_source: source, error: 'credential_decryption_failed', usage, reason }
   }
   return {
     model: {
       id: profile.id,
       provider: profile.provider,
+      api_provider: profile.provider,
       model_name: profile.model_name,
       api_base_url: profile.api_base_url,
       api_key_encrypted: decryptedKey,
@@ -340,132 +397,115 @@ function sanitizeProfile(row) {
 
 // ─── Legacy Migration Helpers ───
 
+async function ensureMigratedDefault(scope, ownerUserId, profileId, now) {
+  if (scope === MODEL_PROFILE_SCOPE.PLATFORM) {
+    const current = await queryOne(
+      "SELECT id FROM ai_model_profiles WHERE scope = 'platform' AND is_default = 1 AND status = 'active' AND deleted_at IS NULL LIMIT 1"
+    )
+    if (!current) await queryRun('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
+    return
+  }
+  const inserted = await queryRun(
+    `INSERT IGNORE INTO user_model_defaults (user_id, model_profile_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?)`,
+    [ownerUserId, profileId, now, now]
+  )
+  if (inserted.changes > 0) {
+    await queryRun('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
+  }
+}
+
+async function migrateOneProfile({ ownerUserId, scope, provider, modelName, baseUrl, apiKey, temperature, maxTokens, now }) {
+  const normalizedProvider = provider || 'deepseek'
+  const normalizedModel = modelName || 'deepseek-chat'
+  let profile = await queryOne(
+    `SELECT id FROM ai_model_profiles
+     WHERE owner_user_id = ? AND scope = ? AND provider = ? AND model_name = ? AND deleted_at IS NULL`,
+    [ownerUserId, scope, normalizedProvider, normalizedModel]
+  )
+  let created = false
+  if (!profile) {
+    const encrypted = isEncryptedEnvelope(apiKey) ? apiKey : encryptCredential(apiKey)
+    const result = await queryRun(
+      `INSERT INTO ai_model_profiles
+        (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
+         temperature, max_tokens, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+      [ownerUserId, scope, normalizedProvider, normalizedModel, baseUrl || null, encrypted,
+       JSON.parse(encrypted).v, temperature ?? 0.3, maxTokens ?? 2000, now, now]
+    )
+    profile = { id: result.insertId }
+    created = true
+  }
+  await ensureMigratedDefault(scope, ownerUserId, profile.id, now)
+  return { profileId: profile.id, created }
+}
+
 export async function migrateLegacyConfigs() {
+  if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
   const results = []
   const now = beijingNow()
 
-  if (!isEncryptionAvailable()) {
-    console.warn('[ModelProfiles] Encryption unavailable, skipping legacy migration')
-    return results
+  const configs = await queryAll(
+    `SELECT id, user_id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens
+     FROM ai_configs WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted != ''
+     ORDER BY updated_at DESC`
+  )
+  for (const cfg of configs) {
+    const migrated = await migrateOneProfile({
+      ownerUserId: cfg.user_id, scope: MODEL_PROFILE_SCOPE.USER, provider: cfg.api_provider,
+      modelName: cfg.model_name, baseUrl: cfg.api_base_url, apiKey: cfg.api_key_encrypted,
+      temperature: cfg.temperature, maxTokens: cfg.max_tokens, now,
+    })
+    if (migrated.created) results.push({ source: 'ai_configs', id: cfg.id, user_id: cfg.user_id })
   }
 
-  // 1. Migrate ai_configs with API keys
-  try {
-    const configs = await queryAll(
-      "SELECT id, user_id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens FROM ai_configs WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted != ''"
-    )
-    for (const cfg of configs) {
-      if (isEncryptedEnvelope(cfg.api_key_encrypted)) continue
-      const profile = await queryOne(
-        'SELECT id FROM ai_model_profiles WHERE owner_user_id = ? AND provider = ? AND model_name = ? AND deleted_at IS NULL',
-        [cfg.user_id, cfg.api_provider, cfg.model_name]
-      )
-      if (profile) continue
-      const encrypted = encryptCredential(cfg.api_key_encrypted)
-      await queryRun(
-        `INSERT INTO ai_model_profiles
-          (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
-           temperature, max_tokens, status, created_at, updated_at)
-         VALUES (?, 'user', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-        [cfg.user_id, cfg.api_provider, cfg.model_name, cfg.api_base_url,
-         encrypted, getActiveKeyVersion(), cfg.temperature ?? 0.3, cfg.max_tokens ?? 2000, now, now]
-      )
-      results.push({ source: 'ai_configs', id: cfg.id, user_id: cfg.user_id })
-    }
-  } catch (e) { console.error('[ModelProfiles] ai_configs migration error:', e.message) }
+  const gac = await queryOne(
+    "SELECT id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens FROM global_auto_config WHERE id = 1 AND api_key_encrypted IS NOT NULL AND api_key_encrypted != ''"
+  )
+  if (gac) {
+    const migrated = await migrateOneProfile({
+      ownerUserId: 0, scope: MODEL_PROFILE_SCOPE.PLATFORM, provider: gac.api_provider,
+      modelName: gac.model_name, baseUrl: gac.api_base_url, apiKey: gac.api_key_encrypted,
+      temperature: gac.temperature, maxTokens: gac.max_tokens, now,
+    })
+    if (migrated.created) results.push({ source: 'global_auto_config', id: gac.id })
+  }
 
-  // 2. Migrate global_auto_config
-  try {
-    const gac = await queryOne(
-      "SELECT id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens FROM global_auto_config WHERE id = 1 AND api_key_encrypted IS NOT NULL AND api_key_encrypted != ''"
-    )
-    if (gac && !isEncryptedEnvelope(gac.api_key_encrypted)) {
-      const exists = await queryOne(
-        "SELECT id FROM ai_model_profiles WHERE scope = 'platform' AND deleted_at IS NULL LIMIT 1"
-      )
-      if (!exists) {
-        const encrypted = encryptCredential(gac.api_key_encrypted)
-        await queryRun(
-          `INSERT INTO ai_model_profiles
-            (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
-             temperature, max_tokens, status, created_at, updated_at)
-           VALUES (0, 'platform', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-          [gac.api_provider, gac.model_name, gac.api_base_url,
-           encrypted, getActiveKeyVersion(), gac.temperature ?? 0.3, gac.max_tokens ?? 2000, now, now]
-        )
-        results.push({ source: 'global_auto_config', id: gac.id })
-      }
-    }
-  } catch (e) { console.error('[ModelProfiles] global_auto_config migration error:', e.message) }
+  const allSysConfigs = await queryAll(
+    "SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''"
+  )
+  const providerMap = {}
+  for (const row of allSysConfigs) {
+    const match = row.key.match(/^(.*)_(api_key|model|base_url)$/)
+    if (!match) continue
+    const [, provider, field] = match
+    if (!providerMap[provider]) providerMap[provider] = {}
+    providerMap[provider][field] = row.value
+  }
+  for (const [provider, cfg] of Object.entries(providerMap)) {
+    if (!cfg.api_key) continue
+    const migrated = await migrateOneProfile({
+      ownerUserId: 0, scope: MODEL_PROFILE_SCOPE.PLATFORM, provider,
+      modelName: cfg.model, baseUrl: cfg.base_url, apiKey: cfg.api_key,
+      temperature: 0.3, maxTokens: 2000, now,
+    })
+    if (migrated.created) results.push({ source: 'system_config', provider })
+  }
 
-  // 3. Migrate system_config AI provider keys — [P1-5] query ALL ai_provider rows, not just *_api_key
-  try {
-    const allSysConfigs = await queryAll(
-      "SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''"
-    )
-    // Group by provider prefix
-    const providerMap = {}
-    for (const row of allSysConfigs) {
-      const key = row.key
-      if (key.endsWith('_api_key')) {
-        const provider = key.replace('_api_key', '')
-        if (!providerMap[provider]) providerMap[provider] = {}
-        providerMap[provider].api_key = row.value
-      } else if (key.endsWith('_model')) {
-        const provider = key.replace('_model', '')
-        if (!providerMap[provider]) providerMap[provider] = {}
-        providerMap[provider].model = row.value
-      } else if (key.endsWith('_base_url')) {
-        const provider = key.replace('_base_url', '')
-        if (!providerMap[provider]) providerMap[provider] = {}
-        providerMap[provider].base_url = row.value
-      }
-    }
-    for (const [provider, cfg] of Object.entries(providerMap)) {
-      if (!cfg.api_key || isEncryptedEnvelope(cfg.api_key)) continue
-      const exists = await queryOne(
-        "SELECT id FROM ai_model_profiles WHERE scope = 'platform' AND provider = ? AND deleted_at IS NULL",
-        [provider]
-      )
-      if (!exists) {
-        const encrypted = encryptCredential(cfg.api_key)
-        await queryRun(
-          `INSERT INTO ai_model_profiles
-            (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
-             temperature, max_tokens, status, created_at, updated_at)
-           VALUES (0, 'platform', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-          [provider, cfg.model || 'deepseek-chat', cfg.base_url || null,
-           encrypted, getActiveKeyVersion(), 0.3, 2000, now, now]
-        )
-        results.push({ source: 'system_config', provider })
-      }
-    }
-  } catch (e) { console.error('[ModelProfiles] system_config migration error:', e.message) }
-
-  // 4. Migrate close_config
-  try {
-    const closeConfigs = await queryAll(
-      "SELECT id, user_id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens FROM close_config WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted != ''"
-    )
-    for (const cfg of closeConfigs) {
-      if (isEncryptedEnvelope(cfg.api_key_encrypted)) continue
-      const exists = await queryOne(
-        'SELECT id FROM ai_model_profiles WHERE owner_user_id = ? AND provider = ? AND model_name = ? AND deleted_at IS NULL',
-        [cfg.user_id, cfg.api_provider, cfg.model_name]
-      )
-      if (exists) continue
-      const encrypted = encryptCredential(cfg.api_key_encrypted)
-      await queryRun(
-        `INSERT INTO ai_model_profiles
-          (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
-           temperature, max_tokens, status, created_at, updated_at)
-         VALUES (?, 'user', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-        [cfg.user_id, cfg.api_provider, cfg.model_name, cfg.api_base_url,
-         encrypted, getActiveKeyVersion(), cfg.temperature ?? 0.3, cfg.max_tokens ?? 2000, now, now]
-      )
-      results.push({ source: 'close_config', id: cfg.id, user_id: cfg.user_id })
-    }
-  } catch (e) { console.error('[ModelProfiles] close_config migration error:', e.message) }
+  const closeConfigs = await queryAll(
+    `SELECT user_id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens
+     FROM close_config WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted != ''
+     ORDER BY updated_at DESC`
+  )
+  for (const cfg of closeConfigs) {
+    const migrated = await migrateOneProfile({
+      ownerUserId: cfg.user_id, scope: MODEL_PROFILE_SCOPE.USER, provider: cfg.api_provider,
+      modelName: cfg.model_name, baseUrl: cfg.api_base_url, apiKey: cfg.api_key_encrypted,
+      temperature: cfg.temperature, maxTokens: cfg.max_tokens, now,
+    })
+    if (migrated.created) results.push({ source: 'close_config', user_id: cfg.user_id })
+  }
 
   console.log(`[ModelProfiles] Legacy migration: ${results.length} profiles created`)
   return results

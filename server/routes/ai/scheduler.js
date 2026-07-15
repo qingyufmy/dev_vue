@@ -1013,6 +1013,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   // 3. Check admin bridge
   const adminUserId = await getActiveAdminBridgeUserId()
   if (!adminUserId) { l('BLOCKED: admin bridge offline'); return { status: 'blocked', reason: 'admin_bridge_offline' } }
+  config._userId = adminUserId
 
   const marketState = getOwnBridgeMarketState(adminUserId)
   if (!marketState.isOpen) {
