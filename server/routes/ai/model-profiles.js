@@ -72,6 +72,14 @@ export async function getUserModelProfiles(userId) {
   return rows.map(sanitizeProfile)
 }
 
+/** Runtime-only credential resolution for an owner testing a specific profile. */
+export async function resolveOwnedModelProfileForRuntime(id, userId) {
+  const row = await queryOne(`SELECT * FROM ai_model_profiles
+    WHERE id = ? AND owner_user_id = ? AND status = 'active' AND deleted_at IS NULL`, [id, userId])
+  if (!row) return { model: null, credential_source: 'none', error: 'model_profile_not_found_or_inactive', usage: 'manual' }
+  return buildResult(row, row.scope === 'platform' ? 'platform_primary' : 'user', 'manual', 'connection_test')
+}
+
 export async function updateModelProfile(id, userId, payload) {
   const now = beijingNow()
   const existing = await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])

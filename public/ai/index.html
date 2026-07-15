@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260709f" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260715i" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -100,11 +100,14 @@
 
         <div class="nav-group">
           <span class="nav-group-label">策略</span>
-          <button class="nav-item" data-tab="ai-config" data-title="模型">
-            <i data-lucide="brain" size="16"></i>模型
+          <button class="nav-item" data-tab="model-management" data-title="模型管理">
+            <i data-lucide="brain" size="16"></i>模型管理
           </button>
-          <button class="nav-item" data-tab="ai-analyze" data-title="推理">
-            <i data-lucide="git-branch" size="16"></i>推理
+          <button class="nav-item" data-tab="ai-config" data-title="推理策略">
+            <i data-lucide="git-branch" size="16"></i>推理策略
+          </button>
+          <button class="nav-item" data-tab="ai-analyze" data-title="手动推理">
+            <i data-lucide="play-circle" size="16"></i>手动推理
           </button>
         </div>
 
@@ -113,13 +116,25 @@
           <button class="nav-item" data-tab="trading" data-title="交易">
             <i data-lucide="trending-up" size="16"></i>交易
           </button>
+          <button class="nav-item" data-tab="risk-center" data-title="风控中心">
+            <i data-lucide="shield" size="16"></i>风控中心
+          </button>
           <button class="nav-item" data-tab="history" data-title="历史">
             <i data-lucide="clock" size="16"></i>历史
+          </button>
+          <button class="nav-item" data-tab="review-memory" data-title="复盘与记忆">
+            <i data-lucide="notebook-tabs" size="16"></i>复盘与记忆
           </button>
         </div>
 
         <div class="nav-group" id="navGroupManage" style="display:none">
           <span class="nav-group-label">管理</span>
+          <button class="nav-item admin-only" data-tab="global-risk" data-title="全局风控" style="display:none">
+            <i data-lucide="shield-alert" size="16"></i>全局风控
+          </button>
+          <button class="nav-item admin-only" data-tab="account-review" data-title="账户审核" style="display:none">
+            <i data-lucide="user-check" size="16"></i>账户审核
+          </button>
           <button class="nav-item" data-tab="audit" data-title="审计">
             <i data-lucide="shield-check" size="16"></i>审计
           </button>
@@ -348,11 +363,43 @@
           </div>
         </section>
 
+        <section id="model-management" class="tab-panel">
+          <div class="workspace-page">
+            <header class="workspace-header">
+              <div><h1>模型管理</h1><p>一处配置，供手动推理、自动推理、复盘与记忆压缩按权限使用。</p></div>
+              <button id="addModelProfileBtn" class="btn btn-primary"><i data-lucide="plus" size="16"></i>添加模型</button>
+            </header>
+            <div id="modelSourceNotice" class="source-notice" role="status">正在解析当前模型来源…</div>
+            <section id="modelProfileEditor" class="workspace-panel hidden" aria-label="模型配置表单">
+              <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div></div>
+              <div class="settings-grid">
+                <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="gpt">OpenAI compatible</option><option value="kimi">Kimi</option><option value="qwen">Qwen</option><option value="zhipu">智谱</option><option value="doubao">豆包</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option></select></label>
+                <label><span>模型名称</span><input id="profileModelName" value="deepseek-chat" autocomplete="off"></label>
+                <label><span>API 地址</span><input id="profileBaseUrl" value="https://api.deepseek.com" autocomplete="off"></label>
+                <label><span>API Key</span><input id="profileApiKey" type="password" autocomplete="new-password" placeholder="编辑时留空表示不更换"></label>
+                <label><span>Temperature</span><input id="profileTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label>
+                <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="10000" step="100" value="2000"></label>
+              </div>
+              <div class="form-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button><button id="cancelModelProfileBtn" class="btn btn-secondary">取消</button></div>
+            </section>
+            <div id="modelProfilesList" class="workspace-list"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>
+            <section id="platformModelPolicy" class="workspace-panel admin-only" style="display:none">
+              <div class="section-heading"><div><h2>平台共享与配额</h2><p>共享凭据只用于已开启的用途，并受用户日配额限制。</p></div><button id="savePlatformPolicyBtn" class="btn btn-primary btn-sm">保存策略</button></div>
+              <div class="policy-switches">
+                <label><input id="shareForManual" type="checkbox"><span>手动推理</span></label><label><input id="shareForAuto" type="checkbox"><span>自动推理</span></label><label><input id="shareForReview" type="checkbox"><span>复盘生成</span></label><label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
+              </div>
+              <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
+            </section>
+          </div>
+        </section>
+
         <section id="ai-config" class="tab-panel">
           <div class="card content-card">
             <div class="card-header">
-              <span class="card-title">模型与推理配置</span>
+              <span class="card-title">推理策略</span>
             </div>
+            <div class="strategy-source-row"><div><strong>当前模型来源</strong><span id="strategyModelSource">正在解析…</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
+            <div id="strategyCatalog" class="strategy-catalog"><div class="workspace-skeleton"></div></div>
             <div class="config-sub-tabs">
               <button class="config-sub-tab active" data-config-tab="manual-config">手动推理配置</button>
               <button class="config-sub-tab" data-config-tab="auto-config">自动推理配置</button>
@@ -521,6 +568,7 @@
         </section>
 
         <section id="ai-analyze" class="tab-panel">
+          <div class="strategy-source-row"><div><strong>推理模型</strong><span>使用“模型管理”中的当前有效模型；页面不再保存 API Key。</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">查看模型来源</button></div>
           <div class="analysis-grid">
             <div class="card">
               <div class="card-header">
@@ -675,6 +723,38 @@
           </div>
         </section>
 
+        <section id="risk-center" class="tab-panel">
+          <div class="workspace-page">
+            <header class="workspace-header"><div><h1>风控中心</h1><p>所有数值均由服务端计算。用户值不能放宽平台上限，最终有效值才会用于下单。</p></div><button class="btn btn-secondary" data-action="refresh-risk-center"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
+            <div class="risk-legend"><span><i class="legend-dot user"></i>用户设置</span><span><i class="legend-dot platform"></i>平台范围</span><span><i class="legend-dot effective"></i>最终有效</span><span><i class="legend-dot pending"></i>待生效</span></div>
+            <div id="riskAccountsList" class="workspace-list"><div class="workspace-skeleton"></div></div>
+            <section class="workspace-panel">
+              <div class="section-heading"><div><h2>价格与成交</h2><p>价格偏差由用户配置与平台限制共同约束，不由 AI 自行放宽。</p></div></div>
+              <div id="priceExecutionRules" class="metric-table empty-state">连接账户后显示市价漂移、挂单百分比、挂单 ATR、成交滑点、点差与报价年龄。</div>
+            </section>
+            <section class="workspace-panel">
+              <div class="section-heading"><div><h2>最近执行决策</h2><p>对照 AI 建议手数、风险上限、最终手数和实际成交偏差。</p></div></div>
+              <div id="executionDecisionList" class="workspace-list"><div class="workspace-skeleton"></div></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="review-memory" class="tab-panel">
+          <div class="workspace-page">
+            <header class="workspace-header"><div><h1>复盘与记忆</h1><p>复盘证据只读，正文可修订；只有你确认准确的版本才会成为个人经验。</p></div><button class="btn btn-secondary" data-action="refresh-review-memory"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
+            <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
+            <div class="review-status-tabs" role="tablist"><button class="active" data-review-filter="">全部</button><button data-review-filter="evidence_pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">内容有问题</button></div>
+            <div class="review-layout">
+              <div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div>
+              <aside id="reviewDetail" class="workspace-panel review-detail"><div class="empty-state"><strong>选择一条复盘</strong><span>查看证据、版本并确认内容。</span></div></aside>
+            </div>
+            <section class="workspace-panel memory-section">
+              <div class="section-heading"><div><h2>个人经验</h2><p>可以全局关闭或撤销单条经验；历史推理快照不会被改写。</p></div><label class="inline-switch"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div>
+              <div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div>
+            </section>
+          </div>
+        </section>
+
         <section id="history" class="tab-panel">
           <div class="card content-card">
             <div class="card-header">
@@ -741,6 +821,24 @@
               </table>
             </div>
             <div id="historyPager" class="pager"></div>
+          </div>
+        </section>
+
+        <section id="global-risk" class="tab-panel admin-only" style="display:none">
+          <div class="workspace-page">
+            <header class="workspace-header"><div><h1>全局风控</h1><p>分别管理默认值、允许范围和锁定值；保存后创建不可变的新版本并立即生效。</p></div><button id="saveGlobalRiskBtn" class="btn btn-primary">保存全局风控</button></header>
+            <div class="admin-boundary-note"><i data-lucide="shield-check" size="18"></i><div><strong>管理员边界</strong><span>可管理平台规则、账户状态与恢复申请；不可查看用户复盘正文或个人记忆内容。</span></div></div>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>平台紧急停止</h2><p>开启后阻止所有新开仓。关闭时也必须填写原因，全部操作进入审计日志。</p></div><button id="globalKillSwitchBtn" class="btn btn-danger">正在读取…</button></div><div id="globalKillSwitchMeta" class="workspace-row-meta"></div></section>
+            <div id="globalRiskEditor" class="workspace-list"><div class="workspace-skeleton"></div></div>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>待审核恢复申请</h2><p>恢复账户前请核对停机原因、数据完整性与用户说明。</p></div></div><div id="adminRecoveryList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>用户风险状态</h2><p>Kill Switch、回撤、连亏和冷却状态均来自服务端。</p></div></div><div id="adminRiskAccounts" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+          </div>
+        </section>
+
+        <section id="account-review" class="tab-panel admin-only" style="display:none">
+          <div class="workspace-page">
+            <header class="workspace-header"><div><h1>账户审核</h1><p>审核交易账户归属与观察期状态。所有操作都会写入审计日志。</p></div><button class="btn btn-secondary" data-action="refresh-account-review">刷新</button></header>
+            <div id="accountReviewList" class="workspace-list"><div class="workspace-skeleton"></div></div>
           </div>
         </section>
 
@@ -970,7 +1068,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260715h"></script>
+    <script src="/ai/app.js?v=20260715i"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">
