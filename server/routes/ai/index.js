@@ -80,6 +80,11 @@ export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   runSmartCloseCycle, syncUserRedisSubscription, removeUserRuntimeAutoSubscription,
   getUserAutoRuntimeStatus } from './scheduler.js'
 
+export { listStrategies, getStrategyById, createStrategy, updateStrategy, deleteStrategy,
+  listTradingAccounts, getTradingAccountById, createTradingAccount, updateTradingAccount, deleteTradingAccount,
+  listSubscriptions, createSubscription, updateSubscription, deleteSubscription,
+  adminListUserStrategies, adminListUserSubscriptions, getSubscriptionWithContext } from './strategy-ownership.js'
+
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'
 
