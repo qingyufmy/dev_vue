@@ -1395,6 +1395,27 @@ const migrations = [
         if (!rows.length) await queryRun(`ALTER TABLE risk_reservations ADD COLUMN ${name} ${definition}`)
       }
     }
+  },
+  {
+    id: '061_inference_snapshots',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS inference_snapshots (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        signal_id BIGINT DEFAULT NULL, strategy_id INT NOT NULL, strategy_version INT NOT NULL DEFAULT 1,
+        strategy_scope VARCHAR(20) NOT NULL, owner_user_id INT NOT NULL DEFAULT 0,
+        standard_symbol VARCHAR(64) NOT NULL, market_source VARCHAR(64) NOT NULL,
+        system_prompt LONGTEXT NOT NULL, user_prompt LONGTEXT NOT NULL, prompt_hash CHAR(64) NOT NULL,
+        model_profile_id INT DEFAULT NULL, provider VARCHAR(50) DEFAULT NULL, model_name VARCHAR(150) DEFAULT NULL,
+        credential_source VARCHAR(32) NOT NULL, output_schema_version CHAR(64) NOT NULL,
+        klines_json LONGTEXT DEFAULT NULL, market_snapshot_json LONGTEXT NOT NULL,
+        memory_mode VARCHAR(20) NOT NULL DEFAULT 'off', evidence_status VARCHAR(24) NOT NULL DEFAULT 'complete',
+        omitted_fields_json TEXT DEFAULT NULL, content_hash CHAR(64) NOT NULL, byte_size INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        INDEX idx_inference_snapshot_signal (signal_id),
+        INDEX idx_inference_snapshot_strategy (strategy_id, created_at),
+        INDEX idx_inference_snapshot_owner (owner_user_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

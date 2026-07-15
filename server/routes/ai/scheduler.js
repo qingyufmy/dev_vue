@@ -11,6 +11,7 @@ import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parse
 import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
+import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -205,7 +206,8 @@ export async function rebuildRedisSubscriptions() {
       FROM auto_scheduler s
       JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
       JOIN users u ON u.id = s.user_id
-       WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL
+      WHERE s.enabled = 1 AND s.prompt_type_id IS NOT NULL
+        AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = s.user_id))
          AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))
     `)
 
@@ -321,9 +323,11 @@ export async function getUserAutoRuntimeStatus(userId) {
 
   let selectedSymbols = []
   let promptTypeName = ''
+  let promptType = null
   if (scheduler.prompt_type_id) {
     const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
     if (pt) {
+      promptType = pt
       promptTypeName = pt.title || ''
       selectedSymbols = resolveEffectiveSymbols(scheduler.selected_symbols_json, pt.symbols_json || '[]')
     }
@@ -331,9 +335,11 @@ export async function getUserAutoRuntimeStatus(userId) {
 
   const redis = getRedis()
   const redisAvailable = !!redis && isRedisAvailable()
-  const adminUserId = await getActiveAdminBridgeUserId()
+  const adminUserId = promptType?.scope === 'private' ? null : await getActiveAdminBridgeUserId()
+  const marketBridgeUserId = promptType?.scope === 'private' ? Number(promptType.owner_user_id) : adminUserId
   const adminBridgeOnline = !!adminUserId
-  const marketState = adminUserId ? getOwnBridgeMarketState(adminUserId) : { alive: false, isOpen: false, tradeMode: -1, reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null }
+  const marketBridgeOnline = !!marketBridgeUserId && isBridgeAlive(marketBridgeUserId)
+  const marketState = marketBridgeOnline ? getOwnBridgeMarketState(marketBridgeUserId) : { alive: false, isOpen: false, tradeMode: -1, reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null }
 
   // Find user's active scheduler keys
   const activeKeys = []
@@ -378,7 +384,7 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (!userBridgeAlive) pausedReason = 'user_bridge_offline'
     else pausedReason = 'no_runtime_scheduler'
   }
-  else if (!adminBridgeOnline) pausedReason = 'admin_bridge_offline'
+  else if (!marketBridgeOnline) pausedReason = promptType?.scope === 'private' ? 'owner_bridge_offline' : 'admin_bridge_offline'
   else if (!marketState.isOpen) pausedReason = marketState.reason
   else if (!redisAvailable) pausedReason = 'redis_unavailable'
   else if (overallLastError && !anyInFlight) pausedReason = overallLastError
@@ -403,6 +409,8 @@ export async function getUserAutoRuntimeStatus(userId) {
     last_run_at: overallLastRunAt,
     last_signal_id: overallLastSignalId,
     admin_bridge_online: adminBridgeOnline,
+    market_bridge_online: marketBridgeOnline,
+    strategy_scope: promptType?.scope || 'platform',
     market_state: marketState,
     redis_available: redisAvailable,
   }
@@ -568,8 +576,9 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, schedul
 
 async function discardSharedSignalForWeeklyWindow(signalId) {
   await withTransaction(async run => {
+    await run('DELETE FROM inference_snapshots WHERE signal_id = ?', [signalId])
     await run('DELETE FROM auto_signal_deliveries WHERE signal_id = ?', [signalId])
-    await run("DELETE FROM ai_signals WHERE id = ? AND source = 'auto_shared'", [signalId])
+    await run('DELETE FROM ai_signals WHERE id = ?', [signalId])
   })
 }
 
@@ -608,6 +617,7 @@ export async function reconcileAutoSchedulers() {
       WHERE s.enabled = 1
         AND apt.is_active = 1
         AND apt.deleted_at IS NULL
+        AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = s.user_id))
         AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))
     `)
 
@@ -714,24 +724,36 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       }
     } catch (e) { console.error(`[UnifiedScheduler] ${key} subscriber refresh failed:`, e.message) }
 
-    // Check admin bridge
-    const adminUserId = await getActiveAdminBridgeUserId()
-    if (!adminUserId) {
+    // Resolve the strategy before choosing its market-data bridge. Platform
+    // strategies use the platform market bridge; private strategies are
+    // strictly owner-only and use the owner's own bridge/model.
+    const ptRow = await getAutoPromptTypeById(promptTypeId)
+    if (!ptRow || !ptRow.is_active) {
+      st.lastError = 'strategy_disabled'
+      st.waitReason = ''
+      const delay = retryDelayMs('strategy_disabled')
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      return
+    }
+    const platformBridgeUserId = ptRow.scope === 'private' ? null : await getActiveAdminBridgeUserId()
+    const marketUserId = ptRow.scope === 'private' ? Number(ptRow.owner_user_id) : platformBridgeUserId
+    if (!marketUserId || !isBridgeAlive(marketUserId)) {
       st._waitCount = (st._waitCount || 0) + 1
       if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        console.log(`[UnifiedScheduler] ${key}: admin bridge offline, pausing (retry#${st._waitCount})`)
+        console.log(`[UnifiedScheduler] ${key}: market bridge offline, pausing (retry#${st._waitCount})`)
       }
       st.lastError = null
-      st.waitReason = 'admin_bridge_offline'
-      const delay = retryDelayMs('admin_bridge_offline')
+      st.waitReason = ptRow.scope === 'private' ? 'owner_bridge_offline' : 'admin_bridge_offline'
+      const delay = retryDelayMs(st.waitReason)
       st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
 
-    // Check admin market status
-    const marketState = getOwnBridgeMarketState(adminUserId)
+    const marketState = getOwnBridgeMarketState(marketUserId)
     if (!marketState.isOpen) {
       st._waitCount = (st._waitCount || 0) + 1
       if (st._waitCount === 1 || st._waitCount % 10 === 0) {
@@ -751,23 +773,14 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.lastError = null
     st.waitReason = ''
 
-    // Preflight: check API key and strategy
-    const ptRow = await getAutoPromptTypeById(promptTypeId)
-    if (!ptRow || !ptRow.is_active) {
-      st.lastError = 'strategy_disabled'
+    // Resolve the exact runtime model. Private model failures never switch to
+    // another model after a request starts; missing configuration pauses here.
+    try {
+      await getUnifiedAutoInferenceConfig(promptTypeId, ptRow.scope === 'private' ? marketUserId : null)
+    } catch (error) {
+      st.lastError = error.message || 'no_api_key'
       st.waitReason = ''
-      const delay = retryDelayMs('strategy_disabled')
-      st.nextRunInSeconds = Math.round(delay / 1000)
-      await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
-      return
-    }
-    // Check API key
-    const globalCfg = await getGlobalAutoConfig()
-    if (!globalCfg?.api_key_encrypted) {
-      st.lastError = 'no_api_key'
-      st.waitReason = ''
-      const delay = retryDelayMs('no_api_key')
+      const delay = retryDelayMs(st.lastError)
       st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
@@ -1003,39 +1016,63 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   const supportedSymbols = parsePromptSymbols(pt.symbols_json)
   if (!supportedSymbols.includes(symbol.toUpperCase())) { l(`BLOCKED: symbol ${symbol} not in strategy symbols`); return { status: 'blocked', reason: 'symbol_not_supported' } }
 
-  // 2. Get unified config (model/API from global, prompt from strategy)
-  const config = await getUnifiedAutoInferenceConfig(promptTypeId)
+  const isPrivate = pt.scope === 'private'
+  const platformBridgeUserId = isPrivate ? null : await getActiveAdminBridgeUserId()
+  const inferenceUserId = isPrivate ? Number(pt.owner_user_id) : platformBridgeUserId
+  const signalSource = isPrivate ? 'auto_private' : 'auto_shared'
+  if (!inferenceUserId || !isBridgeAlive(inferenceUserId)) {
+    return { status: 'blocked', reason: isPrivate ? 'owner_bridge_offline' : 'admin_bridge_offline' }
+  }
+  const configuredMemoryMode = isPrivate
+    ? (await queryOne(`SELECT memory_mode FROM strategy_subscriptions
+        WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT 1`,
+      [inferenceUserId, promptTypeId]))?.memory_mode || 'off'
+    : 'off'
+
+  // 2. Resolve platform-primary or private owner model without runtime fallback.
+  let config
+  try {
+    config = await getUnifiedAutoInferenceConfig(promptTypeId, isPrivate ? inferenceUserId : null)
+  } catch (error) {
+    l(`BLOCKED: model resolution failed (${error.message})`)
+    return { status: 'blocked', reason: error.message || 'no_model_configured' }
+  }
   if (!config || !config.api_key_encrypted) {
     l(`BLOCKED: no API key (hasKey=${!!config?.api_key_encrypted})`)
     return { status: 'blocked', reason: 'no_api_key' }
   }
 
-  // 3. Check admin bridge
-  const adminUserId = await getActiveAdminBridgeUserId()
-  if (!adminUserId) { l('BLOCKED: admin bridge offline'); return { status: 'blocked', reason: 'admin_bridge_offline' } }
-  config._userId = adminUserId
+  // Usage belongs to the private owner. Platform inference remains user 0 and
+  // only uses the admin connection as a market-data transport.
+  config._userId = isPrivate ? inferenceUserId : 0
 
-  const marketState = getOwnBridgeMarketState(adminUserId)
+  const marketState = getOwnBridgeMarketState(inferenceUserId)
   if (!marketState.isOpen) {
     l(`BLOCKED: market not open (${marketState.reason}, tradeMode=${marketState.tradeMode}, tickAgeMs=${marketState.tickAgeMs})`)
     return { status: 'blocked', reason: marketState.reason }
   }
 
   try {
-    broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: '获取管理员行情数据...' })
+    broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: isPrivate ? '获取用户账户与行情数据...' : '获取平台行情数据...' })
     const t0 = Date.now()
-    const [account, positionsData, pendingData] = await Promise.all([
-      mt5Bridge(adminUserId, 'account', {}),
-      mt5Bridge(adminUserId, 'positions', { symbol }),
-      mt5Bridge(adminUserId, 'pending_list', { symbol }),
-    ])
-    const snapshot = validateInferenceBridgeSnapshot(account, positionsData, pendingData)
-    if (!snapshot.ok) {
-      l(`BLOCKED: inference bridge snapshot invalid (${snapshot.reason})`)
-      return { status: 'blocked', reason: snapshot.reason }
+    let account = null
+    let positions = []
+    let pendingOrders = []
+    if (isPrivate) {
+      const [accountData, positionsData, pendingData] = await Promise.all([
+        mt5Bridge(inferenceUserId, 'account', {}),
+        mt5Bridge(inferenceUserId, 'positions', { symbol }),
+        mt5Bridge(inferenceUserId, 'pending_list', { symbol }),
+      ])
+      const accountSnapshot = validateInferenceBridgeSnapshot(accountData, positionsData, pendingData)
+      if (!accountSnapshot.ok) {
+        l(`BLOCKED: inference bridge snapshot invalid (${accountSnapshot.reason})`)
+        return { status: 'blocked', reason: accountSnapshot.reason }
+      }
+      account = accountSnapshot.account
+      positions = accountSnapshot.positions
+      pendingOrders = accountSnapshot.pendingOrders
     }
-    const positions = snapshot.positions
-    const pendingOrders = snapshot.pendingOrders
     l(`bridge done (${Date.now()-t0}ms, positions=${positions.length}, pending=${pendingOrders.length})`)
 
     const prompt = config.system_prompt || ''
@@ -1044,9 +1081,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     const usedTimeframes = tags.length > 0 ? tags.map(t => t.tf) : ['M5']
     const primaryCount = tags.length > 0 ? tags[0].count : 100
     const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
-    const primaryHistoryCount = resolveChanHistoryCount(adminUserId, symbol, primaryTf, primaryCount, hasUseChanTag)
+    const primaryHistoryCount = resolveChanHistoryCount(inferenceUserId, symbol, primaryTf, primaryCount, hasUseChanTag)
     const t1 = Date.now()
-    const ratesResp = await mt5Bridge(adminUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
+    const ratesResp = await mt5Bridge(inferenceUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
     if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return { status: 'blocked', reason: 'rates_failed' } }
     const rates = ratesResp.rates || []
     if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return { status: 'blocked', reason: 'rates_empty' } }
@@ -1054,28 +1091,38 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算技术指标...' })
     const t2 = Date.now()
-    const market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-    market.strategy_context = await buildStrategyContextFromTags(adminUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
+    let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
+    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
     if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
     market.primary_timeframe = primaryTf
-    await attachAtrAnchor(adminUserId, symbol, market, primaryTf)
+    await attachAtrAnchor(inferenceUserId, symbol, market, primaryTf)
     const actualUsedTimeframes = Object.keys(market.strategy_context?.timeframes || {})
     market.requested_timeframes = usedTimeframes
     market.used_timeframes = actualUsedTimeframes
     market.missing_timeframes = usedTimeframes.filter(tf => !actualUsedTimeframes.includes(tf))
+    if (!isPrivate) {
+      market = buildSharedMarketSnapshot(market, {
+        standardSymbol: symbol,
+        volumeMin: config._ai_volume_min,
+        volumeMax: config._ai_volume_max,
+      })
+    }
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型推理中...' })
     const t3 = Date.now()
     l(`calling AI (model=${config.model_name}, thinking=${config.thinking_enabled !== false}, effort=${config.reasoning_effort || 'max'})...`)
+    let renderedEvidence = null
+    config._onInferencePrepared = evidence => { renderedEvidence = evidence }
     const signal = await maybeAiSignal(null, config, market)
+    delete config._onInferencePrepared
     market.inference_source = signal._inference_source || 'unknown'
     const aiSource = signal._inference_source
     delete signal._inference_source
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
     if (aiSource === 'ai_error_hold') {
       l(`BLOCKED: AI inference failed (${signal.reasoning || 'unknown error'})`)
-      await insertAudit(null, adminUserId, 'ai_auto_scan', symbol,
+      await insertAudit(null, isPrivate ? inferenceUserId : 0, 'ai_auto_scan', symbol,
         { trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf },
         { status: 'error', reason: 'ai_failed', message: signal.reasoning || '' }, 'error')
       return { status: 'blocked', reason: 'ai_failed' }
@@ -1113,7 +1160,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
           entry_method, limit_price, stop_limit_price, pending_valid_until)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
       `, [
-        0, 0, promptTypeId, 'auto_shared', 'auto_shared', symbol, primaryTf,
+        isPrivate ? inferenceUserId : 0, 0, promptTypeId, signalSource, signalSource, symbol, primaryTf,
         signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price,
         signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
@@ -1121,6 +1168,26 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
         signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null
       ])
       const insertedSignalId = signalResult.insertId
+      if (!renderedEvidence) throw new Error('inference_evidence_missing')
+      await persistInferenceSnapshotTx(run, {
+        signalId: insertedSignalId,
+        strategyId: promptTypeId,
+        strategyVersion: Number(pt.version || 1),
+        strategyScope: pt.scope || 'platform',
+        ownerUserId: isPrivate ? inferenceUserId : 0,
+        standardSymbol: stripBrokerSuffix(symbol).toUpperCase(),
+        marketSource: isPrivate ? 'owner_mt5_bridge' : 'platform_market_bridge',
+        systemPrompt: renderedEvidence.systemPrompt,
+        userPrompt: renderedEvidence.userPrompt,
+        outputSchemaVersion: renderedEvidence.outputSchemaVersion,
+        marketSnapshot: market,
+        modelProfileId: config._model_profile_id,
+        provider: config.api_provider,
+        modelName: config.model_name,
+        credentialSource: config._credential_source,
+        memoryMode: configuredMemoryMode,
+        createdAt,
+      })
       const deliveryValues = []
       const deliveryParams = []
       for (const uid of onlineSubscribers) {
@@ -1143,8 +1210,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     signal.market_data = market
     signal.is_executed = false
     signal.config_id = 0
-    signal.session_id = 'auto_shared'
-    signal.source = 'auto_shared'
+    signal.session_id = signalSource
+    signal.source = signalSource
     signal.prompt_type_id = promptTypeId
     signal.ai_model = config.model_name || 'deepseek-chat'
     attachSignalTiming(signal)
@@ -1322,7 +1389,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
 
     // Normal hold signals remain in signal history but do not create audit noise.
     if (signal.signal_type !== 'hold') {
-      await insertAudit(null, adminUserId, 'ai_auto_scan', symbol, {
+      await insertAudit(null, isPrivate ? inferenceUserId : 0, 'ai_auto_scan', symbol, {
         trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf, signal_id: signalId
       }, {
         status: 'success', signal_id: signalId, signal_type: signal.signal_type, confidence: signal.confidence,
@@ -1334,7 +1401,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   } catch (err) {
     l(`<<< EXCEPTION: ${err.message}`)
     console.error(`[UnifiedCycle] ${key} error:`, err.message)
-    await insertAudit(null, adminUserId || 0, 'ai_auto_scan', symbol, { prompt_type_id: promptTypeId, symbol }, { status: 'error', message: err.message }, 'error')
+    await insertAudit(null, isPrivate ? inferenceUserId : 0, 'ai_auto_scan', symbol, { prompt_type_id: promptTypeId, symbol }, { status: 'error', message: err.message }, 'error')
     return { status: 'error', reason: 'exception', message: err.message }
   }
 }

@@ -5,6 +5,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { beginModelUsage, finishModelUsage } from './model-profiles.js'
+import { sha256 } from './inference-snapshots.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const SL_CLAMP = { K_MIN: 1.0, K_MAX: 3.0 }
@@ -204,14 +205,17 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
     console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
-    const fullPrompt = prompt + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + '\n\n' + PENDING_LIFECYCLE_RULE
+    const marketOnlyRule = config._market_only
+      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线和技术指标。输入不包含任何账户、余额、权益、持仓、挂单或个人风控信息；禁止推测这些信息。手数建议只能处于 ai_volume_range 的上下限内，账户相关调整由独立风控完成。'
+      : ''
+    const fullPrompt = prompt + marketOnlyRule + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + '\n\n' + PENDING_LIFECYCLE_RULE
 
     // Check if prompt wants Chan theory data
     const useChan = /\{\{USE_CHAN\}\}/.test(effectivePrompt)
     const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
     console.log(`[LLM] USE_CHAN tag: ${useChan ? 'detected' : 'not found'}`)
 
-    const aiPayload = {
+    const aiPayload = config._market_only ? { ...market } : {
       symbol: market.symbol, timeframe: market.timeframe, timestamp: market.timestamp,
       latest_price: market.latest_price, price_change: market.price_change,
       price_change_pct: market.price_change_pct, account: market.account,
@@ -252,6 +256,15 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       usage: config._usage || 'manual',
       strategyId: config._strategyId || null,
     } : null
+    const renderedUserPrompt = '市场数据 JSON：\n' + JSON.stringify(aiPayload)
+    if (typeof config._onInferencePrepared === 'function') {
+      config._onInferencePrepared({
+        systemPrompt: cleanPrompt,
+        userPrompt: renderedUserPrompt,
+        outputSchemaVersion: sha256(outputFormat),
+        aiPayload,
+      })
+    }
     const parsed = await requestJsonObject({
       url, apiKey,
       model: config.model_name || 'deepseek-chat',
@@ -262,7 +275,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       protocol,
       messages: [
         { role: 'system', content: cleanPrompt },
-        { role: 'user', content: '市场数据 JSON：\n' + JSON.stringify(aiPayload) },
+        { role: 'user', content: renderedUserPrompt },
       ],
       usageContext,
     })

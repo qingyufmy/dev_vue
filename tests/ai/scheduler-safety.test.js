@@ -126,8 +126,9 @@ describe('weekly flatten inference boundary', () => {
     await __schedulerTest.discardSharedSignalForWeeklyWindow(123)
 
     expect(run.mock.calls).toEqual([
+      ['DELETE FROM inference_snapshots WHERE signal_id = ?', [123]],
       ['DELETE FROM auto_signal_deliveries WHERE signal_id = ?', [123]],
-      ["DELETE FROM ai_signals WHERE id = ? AND source = 'auto_shared'", [123]],
+      ['DELETE FROM ai_signals WHERE id = ?', [123]],
     ])
   })
 })

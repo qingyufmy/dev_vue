@@ -370,6 +370,10 @@ export async function getUserAutoConfig(userId) {
     else {
       const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
       if (!pt || !pt.is_active) pausedReason = 'prompt_disabled'
+      else if (pt.scope === 'private') {
+        try { await getUnifiedAutoInferenceConfig(pt.id, userId) }
+        catch (error) { pausedReason = error.message || 'no_model_configured' }
+      }
     }
   }
   return { scheduler, running: false, pausedReason }
@@ -450,13 +454,17 @@ export async function saveUserAutoConfig(userId, payload) {
 
 // === Unified Auto Inference Config (for signal generation) ===
 
-export async function getUnifiedAutoInferenceConfig(promptTypeId) {
+export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserId = null) {
   if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
-  const resolved = await resolveAiTaskModel({ userId: 0, strategyId: promptTypeId, usage: 'auto_platform' })
-  if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || 'no_platform_model')
-  const globalCfg = await getGlobalAutoConfig()
   const pt = await getAutoPromptTypeById(promptTypeId)
   if (!pt) return null
+  const isPrivate = pt.scope === 'private'
+  const ownerUserId = Number(pt.owner_user_id || 0)
+  if (isPrivate && Number(requestedUserId) !== ownerUserId) throw new Error('private_strategy_access_denied')
+  const usage = isPrivate ? 'auto_private' : 'auto_platform'
+  const resolved = await resolveAiTaskModel({ userId: isPrivate ? ownerUserId : 0, strategyId: promptTypeId, usage })
+  if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || (isPrivate ? 'no_model_configured' : 'no_platform_model'))
+  const globalCfg = await getGlobalAutoConfig()
   return {
     ...resolved.model,
     system_prompt: pt.system_prompt || '',
@@ -466,12 +474,18 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId) {
     enable_auto_trade: !!globalCfg?.enable_auto_trade,
     thinking_enabled: resolved.model.thinking_enabled !== 0,
     reasoning_effort: resolved.model.reasoning_effort || 'max',
-    _userId: 0,
-    _usage: 'auto_platform',
+    _userId: isPrivate ? ownerUserId : 0,
+    _usage: usage,
     _strategyId: promptTypeId,
     _source: 'unified',
     _model_profile_id: resolved.model_profile_id,
     _credential_source: resolved.credential_source,
+    _market_only: !isPrivate,
+    _strategy_scope: pt.scope || 'platform',
+    _strategy_owner_user_id: ownerUserId,
+    _strategy_version: Number(pt.version || 1),
+    _ai_volume_min: 0.01,
+    _ai_volume_max: Number(globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
     prompt_type_id: promptTypeId,
   }
 }
@@ -484,16 +498,19 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   // Read user's selected_symbols_json (Fix 4): NULL means use strategy all symbols
   const rows = await queryAll(
     `SELECT s.user_id, s.selected_symbols_json, apt.symbols_json as strategy_symbols_json,
+            apt.scope AS strategy_scope, apt.owner_user_id AS strategy_owner_user_id,
             s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
             u.plan, u.role
      FROM auto_scheduler s
      JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
      JOIN users u ON u.id = s.user_id
      WHERE s.prompt_type_id = ? AND s.enabled = 1
+       AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = s.user_id))
        AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))`,
     [promptTypeId]
   )
   const filtered = rows.filter(r => {
+    if (r.strategy_scope === 'private' && Number(r.strategy_owner_user_id) !== Number(r.user_id)) return false
     // Determine user's effective symbols: selected_symbols_json ∩ strategy symbols
     let userSymbols = []
     try {

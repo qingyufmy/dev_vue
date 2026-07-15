@@ -326,6 +326,32 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).toContain('禁止仅以时间、有效期或过期为理由输出 cancel_pending')
   })
 
+  it('共享推理只渲染市场白名单并回传可复现提示词证据', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', entry_method: 'observe', confidence: 0.6, recommended_volume: 0,
+        stop_loss_price: null, take_profit_1_price: null, analysis: '等待', reasoning: '无明确优势',
+      }) } }] }),
+    })
+    let evidence
+    const config = {
+      api_key_encrypted: 'must-not-leak', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      _market_only: true, _onInferencePrepared: value => { evidence = value },
+    }
+    const market = {
+      standard_symbol: 'XAUUSD', symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
+      atr_14: 10, ai_volume_range: { min: 0.01, max: 0.05 }, strategy_context: { timeframes: {} },
+    }
+    await maybeAiSignal(null, config, market)
+    expect(evidence.systemPrompt).toContain('共享市场推理边界')
+    expect(evidence.userPrompt).toContain('"ai_volume_range"')
+    expect(evidence.userPrompt).not.toContain('account')
+    expect(evidence.userPrompt).not.toContain('positions')
+    expect(JSON.stringify(evidence)).not.toContain('must-not-leak')
+    expect(evidence.outputSchemaVersion).toMatch(/^[a-f0-9]{64}$/)
+  })
+
   it('有{{USE_CHAN}}时system prompt不包含原始标签', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
