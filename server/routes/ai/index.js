@@ -94,6 +94,8 @@ export { RISK_RULES, DEFAULT_RISK_POLICY, resolveEffectiveRiskPolicy, submitRisk
   evaluateCoreRisk } from './risk-policy.js'
 export { calculateAccountRiskMetrics, aggregateClosedPositions, requestRiskRecovery,
   reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
+export { analyzeOutcomeAttribution, resolveOutcomeClosureTransition,
+  reconcileSignalOutcomes, startOutcomeMonitor, stopOutcomeMonitor } from './signal-outcomes.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'

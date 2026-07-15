@@ -1416,6 +1416,45 @@ const migrations = [
         INDEX idx_inference_snapshot_owner (owner_user_id, created_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '062_signal_outcomes',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS signal_outcomes (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, signal_id BIGINT DEFAULT NULL, delivery_id BIGINT DEFAULT NULL,
+        order_intent_id BIGINT NOT NULL, user_id INT NOT NULL, trading_account_id INT NOT NULL,
+        margin_mode VARCHAR(20) NOT NULL, symbol VARCHAR(64) NOT NULL,
+        entry_order_ticket VARCHAR(64) DEFAULT NULL, entry_deal_ticket VARCHAR(64) DEFAULT NULL,
+        pending_ticket VARCHAR(64) DEFAULT NULL, position_id VARCHAR(64) DEFAULT NULL,
+        expected_volume DECIMAL(18,8) NOT NULL DEFAULT 0, entry_volume DECIMAL(18,8) NOT NULL DEFAULT 0,
+        closed_volume DECIMAL(18,8) NOT NULL DEFAULT 0, gross_profit DECIMAL(20,8) NOT NULL DEFAULT 0,
+        commission DECIMAL(20,8) NOT NULL DEFAULT 0, swap DECIMAL(20,8) NOT NULL DEFAULT 0,
+        fee DECIMAL(20,8) NOT NULL DEFAULT 0, net_profit DECIMAL(20,8) NOT NULL DEFAULT 0,
+        status VARCHAR(32) NOT NULL DEFAULT 'open', attribution_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        external_intervention TINYINT NOT NULL DEFAULT 0, intervention_json TEXT DEFAULT NULL,
+        closing_candidate_hash CHAR(64) DEFAULT NULL, fee_stable_at DATETIME DEFAULT NULL,
+        fully_closed_at DATETIME DEFAULT NULL, review_eligible_at DATETIME DEFAULT NULL,
+        last_scan_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_signal_outcome_intent (order_intent_id),
+        INDEX idx_outcome_user_status (user_id, status, updated_at),
+        INDEX idx_outcome_account_status (trading_account_id, status, updated_at),
+        INDEX idx_outcome_position (trading_account_id, position_id),
+        INDEX idx_outcome_ticket (trading_account_id, entry_order_ticket)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS signal_outcome_deals (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, outcome_id BIGINT NOT NULL, user_id INT NOT NULL,
+        trading_account_id INT NOT NULL, deal_ticket VARCHAR(64) NOT NULL, position_id VARCHAR(64) DEFAULT NULL,
+        order_ticket VARCHAR(64) DEFAULT NULL, entry_type INT DEFAULT NULL, magic BIGINT DEFAULT NULL,
+        reason INT DEFAULT NULL, comment VARCHAR(255) DEFAULT NULL, volume DECIMAL(18,8) NOT NULL DEFAULT 0,
+        price DECIMAL(20,8) DEFAULT NULL, profit DECIMAL(20,8) NOT NULL DEFAULT 0,
+        commission DECIMAL(20,8) NOT NULL DEFAULT 0, swap DECIMAL(20,8) NOT NULL DEFAULT 0,
+        fee DECIMAL(20,8) NOT NULL DEFAULT 0, deal_time DATETIME DEFAULT NULL, raw_json TEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_outcome_account_deal (trading_account_id, deal_ticket),
+        INDEX idx_outcome_deals_outcome (outcome_id, deal_time),
+        INDEX idx_outcome_deals_position (trading_account_id, position_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

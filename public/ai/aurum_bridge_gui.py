@@ -550,7 +550,16 @@ class BridgeWorker(QThread):
                     return req, req["price"]
                 result, comment = self._order_send_with_retry(symbol, _build)
                 if result:
-                    resp = {"status": "success", "order": result.order, "price": result.price}
+                    position_id = getattr(result, "position", 0) or 0
+                    deal_ticket = getattr(result, "deal", 0) or 0
+                    if not position_id and deal_ticket:
+                        try:
+                            result_deals = self.mt5.history_deals_get(ticket=deal_ticket)
+                            if result_deals: position_id = getattr(result_deals[0], "position_id", 0) or 0
+                        except Exception:
+                            pass
+                    resp = {"status": "success", "order": result.order, "deal": deal_ticket,
+                            "position_id": position_id or result.order, "price": result.price}
                     if comment: resp["warning"] = comment
                     return resp
                 return {"status": "error", "message": comment or "order_send failed"}
@@ -815,6 +824,7 @@ class BridgeWorker(QThread):
                 deal_rows = [d._asdict() for d in deals]
                 orders = self.mt5.history_orders_get(date_from, date_to)
                 order_lookup = {}
+                history_order_rows = []
                 if orders:
                     for o in orders:
                         od = o._asdict()
@@ -822,8 +832,15 @@ class BridgeWorker(QThread):
                         if ticket is None: continue
                         tp = getattr(o, "tp", 0) or od.get("tp") or 0
                         sl = getattr(o, "sl", 0) or od.get("sl") or 0
-                        if tp != 0 or sl != 0:
-                            order_lookup[int(ticket)] = {"tp": tp, "sl": sl}
+                        order_lookup[int(ticket)] = {**od, "tp": tp, "sl": sl}
+                        history_order_rows.append({
+                            "ticket": ticket, "position_id": od.get("position_id"), "symbol": od.get("symbol"),
+                            "type": od.get("type"), "state": od.get("state"), "magic": od.get("magic"),
+                            "reason": od.get("reason"), "comment": od.get("comment"),
+                            "volume_initial": od.get("volume_initial"), "volume_current": od.get("volume_current"),
+                            "price_open": od.get("price_open"), "price_current": od.get("price_current"),
+                            "sl": sl, "tp": tp, "time_setup": self._mt5_time(od.get("time_setup")),
+                            "time_done": self._mt5_time(od.get("time_done"))})
                 deals_by_pos = {}
                 balance_type = getattr(self.mt5, "DEAL_TYPE_BALANCE", 2)
                 credit_type = getattr(self.mt5, "DEAL_TYPE_CREDIT", 3)
@@ -900,7 +917,19 @@ class BridgeWorker(QThread):
                     if acc: ab = float(acc.balance)
                 except Exception as e:
                     self.log_signal.emit(f"获取账户余额失败: {e}")
-                return {"status": "success", "orders": pr, "statistics": {
+                raw_deals = []
+                if params.get("include_deals", False):
+                    for d in deal_rows:
+                        raw_deals.append({"deal_ticket": d.get("ticket"), "ticket": d.get("ticket"),
+                            "order": d.get("order"), "position_id": d.get("position_id"), "symbol": d.get("symbol"),
+                            "type": d.get("type"), "entry": d.get("entry"), "magic": d.get("magic"),
+                            "reason": d.get("reason"), "comment": d.get("comment"), "volume": d.get("volume"),
+                            "price": d.get("price"), "profit": d.get("profit"), "commission": d.get("commission"),
+                            "swap": d.get("swap"), "fee": d.get("fee"), "sl": d.get("sl"), "tp": d.get("tp"),
+                            "time": self._mt5_time(d.get("time")), "time_msc": d.get("time_msc")})
+                return {"status": "success", "orders": pr,
+                    "deals": raw_deals, "history_orders": history_order_rows if params.get("include_deals", False) else [],
+                    "statistics": {
                     "account_principal": round(ab-nr,2), "account_balance": round(ab,2),
                     "total_profit": round(tp,2), "credit": round(credit,2), "deposit": round(deposit,2),
                     "withdrawal": round(withdrawal,2), "net_result": round(nr,2),

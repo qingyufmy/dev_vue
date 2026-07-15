@@ -12,6 +12,7 @@ import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
+import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -1688,6 +1689,8 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       [execResult.order_intent_id || null, execResult.risk?.risk_decision_id || execResult.risk_decision_id || null,
         execResult.risk?.approved_order ? JSON.stringify(execResult.risk.approved_order) : null, signalId, userId]
     )
+    const deliveryRow = await queryOne('SELECT id FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ? LIMIT 1', [signalId, userId])
+    await attachOutcomeDelivery(execResult.order_intent_id, deliveryRow?.id)
 
     if (execResult.status === 'success') {
       const ticket = execResult.order || execResult.ticket || null
@@ -1749,6 +1752,7 @@ export async function initAutoSchedulers() {
   await reconcileAutoSchedulers()
   startAutoSchedulerReconciler()
   startPendingReconciler()
+  startOutcomeMonitor()
 }
 
 let _reconcileInterval = null
@@ -1798,7 +1802,7 @@ export async function reconcilePendingOrders() {
   } catch (e) { console.error('[PendingReconciler] stale executing check error:', e.message) }
 
   const deliveryRows = await queryAll(
-    "SELECT id, user_id, signal_id, pending_ticket, pending_valid_until, 'delivery' as src FROM auto_signal_deliveries WHERE pending_state = 'pending'"
+    "SELECT id, user_id, signal_id, order_intent_id, pending_ticket, pending_valid_until, 'delivery' as src FROM auto_signal_deliveries WHERE pending_state = 'pending'"
   )
 
   const signalRows = await queryAll(
@@ -1842,9 +1846,12 @@ export async function reconcilePendingOrders() {
       let historySet
       const getHistorySet = async () => {
         if (historySet !== undefined) return historySet
-        const historyResp = await mt5Bridge(userId, 'history', { page: 1, page_size: 200 }, { noFallback: true })
-        historyOrders = historyResp?.status === 'success' && Array.isArray(historyResp.orders)
-          ? historyResp.orders.filter(isFilledHistoryOrder)
+        const historyResp = await mt5Bridge(userId, 'history', { page: 1, page_size: 200, include_deals: true }, { noFallback: true })
+        const historyItems = historyResp?.status === 'success' && Array.isArray(historyResp.orders)
+          ? [...historyResp.orders, ...(Array.isArray(historyResp.deals) ? historyResp.deals : [])]
+          : null
+        historyOrders = historyItems
+          ? historyItems.filter(isFilledHistoryOrder)
           : null
         historySet = historyOrders ? collectRefs(historyOrders) : null
         return historySet
@@ -1881,14 +1888,21 @@ export async function reconcilePendingOrders() {
         if (positionSet.has(ticket) || confirmedHistorySet?.has(ticket)) {
           const matchedPosition = positionList.find(item => itemHasRef(item, ticket))
           const matchedHistory = historyOrders?.find(item => itemHasRef(item, ticket))
-          const resolvedTradeTicket = String(matchedPosition?.ticket ?? matchedPosition?.position_id ?? matchedHistory?.ticket ?? ticket)
+          const resolvedTradeTicket = String(matchedPosition?.ticket ?? matchedPosition?.position_id ?? matchedHistory?.position_id ?? matchedHistory?.ticket ?? ticket)
           if (row.src === 'delivery') {
             await queryRun(
               "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
               [resolvedTradeTicket, row.id])
+            await recordPendingOutcomeFill({
+              orderIntentId: row.order_intent_id,
+              deliveryId: row.id,
+              positionId: matchedPosition?.position_id ?? matchedPosition?.ticket ?? matchedHistory?.position_id,
+              orderTicket: ticket,
+              dealTicket: matchedHistory?.deal_ticket,
+            })
             // Fix 6: do NOT sync user ticket to shared root ai_signals
           } else {
-            await queryRun(
+    await queryRun(
               "UPDATE ai_signals SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
               [resolvedTradeTicket, row.signal_id])
           }

@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'crypto'
 import { queryAll, queryOne, withTransaction, beijingNow } from '../../db.js'
 import { mt5Bridge } from './market-data.js'
 import { StatefulRiskReject, recordSuccessfulOpenTx } from './risk-state.js'
+import { createSignalOutcomeTx } from './signal-outcomes.js'
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'rejected', 'failed'])
 const LEASE_SECONDS = 30
@@ -134,7 +135,7 @@ async function claimIntent({ userId, tradingAccountId, idempotencyKey, sourceTyp
 
 async function finishBeforeSend(intentId, leaseToken, status, result, errorCode = null) {
   await withTransaction(async run => {
-    const intent = await txOne(run, 'SELECT id, status, lease_token, trading_account_id FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.lease_token !== leaseToken || intent.status === 'bridge_sending') return
     await run(
       `UPDATE order_intents SET status = ?, result_json = ?, error_code = ?, lease_token = NULL,
@@ -246,6 +247,7 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
     if (succeeded) {
       await run("UPDATE risk_reservations SET status = 'committed', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
       if (intent.trading_account_id) await recordSuccessfulOpenTx(run, intent.trading_account_id)
+      await createSignalOutcomeTx(run, intent, bridgeResult)
     } else if (explicitReject) {
       await run("UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
     }
