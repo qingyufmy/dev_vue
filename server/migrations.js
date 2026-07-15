@@ -1080,6 +1080,75 @@ const migrations = [
       `)
       console.log(`[Migrations] 055 moved ${result?.affectedRows || 0} existing video course(s) to morning category`)
     }
+  },
+  {
+    id: '056_model_profiles_tables',
+    up: async () => {
+      const stmts = [
+        `CREATE TABLE IF NOT EXISTS ai_model_profiles (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          owner_user_id INT NOT NULL DEFAULT 0,
+          scope ENUM('user','platform') NOT NULL DEFAULT 'user',
+          provider VARCHAR(32) NOT NULL DEFAULT 'deepseek',
+          model_name VARCHAR(128) NOT NULL DEFAULT 'deepseek-chat',
+          api_base_url VARCHAR(512) DEFAULT NULL,
+          api_key_encrypted TEXT DEFAULT NULL,
+          key_version VARCHAR(32) DEFAULT NULL,
+          temperature DECIMAL(3,2) DEFAULT 0.30,
+          max_tokens INT DEFAULT 2000,
+          thinking_enabled TINYINT NOT NULL DEFAULT 1,
+          reasoning_effort VARCHAR(16) DEFAULT 'max',
+          is_default TINYINT NOT NULL DEFAULT 0,
+          status VARCHAR(16) NOT NULL DEFAULT 'active',
+          created_at DATETIME NOT NULL,
+          updated_at DATETIME NOT NULL,
+          deleted_at DATETIME DEFAULT NULL,
+          INDEX idx_model_profiles_owner (owner_user_id, deleted_at),
+          INDEX idx_model_profiles_scope (scope, status, deleted_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+        `CREATE TABLE IF NOT EXISTS user_model_defaults (
+          user_id INT NOT NULL PRIMARY KEY,
+          model_profile_id INT NOT NULL,
+          created_at DATETIME NOT NULL,
+          updated_at DATETIME NOT NULL,
+          INDEX idx_umd_profile (model_profile_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+        `CREATE TABLE IF NOT EXISTS platform_model_usage_policy (
+          id INT NOT NULL DEFAULT 1 PRIMARY KEY,
+          share_for_manual TINYINT NOT NULL DEFAULT 0,
+          share_for_auto TINYINT NOT NULL DEFAULT 0,
+          share_for_review TINYINT NOT NULL DEFAULT 0,
+          share_for_memory_compression TINYINT NOT NULL DEFAULT 0,
+          allowed_plans JSON DEFAULT NULL,
+          daily_requests_per_user INT NOT NULL DEFAULT 100,
+          daily_tokens_per_user INT NOT NULL DEFAULT 500000,
+          updated_at DATETIME NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+        `CREATE TABLE IF NOT EXISTS ai_model_usage_logs (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          model_profile_id INT DEFAULT NULL,
+          credential_source VARCHAR(32) NOT NULL DEFAULT 'user',
+          usage VARCHAR(32) NOT NULL,
+          strategy_id INT DEFAULT NULL,
+          token_count INT NOT NULL DEFAULT 0,
+          request_status VARCHAR(16) NOT NULL DEFAULT 'success',
+          error_code VARCHAR(128) DEFAULT NULL,
+          created_at DATETIME NOT NULL,
+          INDEX idx_usage_logs_user (user_id, created_at),
+          INDEX idx_usage_logs_usage (usage, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      ]
+      for (const sql of stmts) {
+        try { await queryRun(sql) } catch (e) {
+          if (!e.message?.includes('already exists') && !e.message?.includes('Duplicate'))
+            console.error('[Migrations] 056 error:', e.message)
+        }
+      }
+    }
   }
 ]
 

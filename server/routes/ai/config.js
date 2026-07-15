@@ -159,29 +159,23 @@ export async function getAnalyzeApiKey(userId, sessionId) {
     'SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1',
     [userId, sessionId]
   )
-  const adminConfig = await queryOne(
-    "SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
-  )
   const adminPromptConfig = await queryOne(
     "SELECT system_prompt FROM ai_configs WHERE is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') ORDER BY updated_at DESC LIMIT 1"
   )
   const effectivePrompt = userConfig?.system_prompt || adminPromptConfig?.system_prompt || ''
 
+  // Fix: user's own model takes priority. Only fall back to admin sharing when user has no key.
+  if (userConfig?.api_key_encrypted) {
+    return { ...userConfig, system_prompt: effectivePrompt }
+  }
+
+  // User has no key — try admin sharing as fallback
+  const adminConfig = await queryOne(
+    "SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
+  )
   if (adminConfig && adminConfig.api_key_encrypted) {
-    if (userConfig) {
-      return {
-        ...userConfig,
-        api_key_encrypted: adminConfig.api_key_encrypted,
-        api_provider: adminConfig.api_provider || 'deepseek',
-        model_name: adminConfig.model_name || 'deepseek-chat',
-        api_base_url: adminConfig.api_base_url || null,
-        temperature: adminConfig.temperature ?? DEFAULT_TEMPERATURE,
-        max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
-        system_prompt: effectivePrompt,
-        _model_shared: true,
-      }
-    }
     return {
+      ...userConfig,
       api_key_encrypted: adminConfig.api_key_encrypted,
       api_provider: adminConfig.api_provider || 'deepseek',
       model_name: adminConfig.model_name || 'deepseek-chat',
@@ -189,10 +183,6 @@ export async function getAnalyzeApiKey(userId, sessionId) {
       temperature: adminConfig.temperature ?? DEFAULT_TEMPERATURE,
       max_tokens: adminConfig.max_tokens ?? DEFAULT_MAX_TOKENS,
       system_prompt: effectivePrompt,
-      enable_auto_trade: false,
-      max_position_size: DEFAULT_MAX_POSITION_SIZE,
-      selected_take_profit: DEFAULT_SELECTED_TAKE_PROFIT,
-      risk_level: 'medium',
       _model_shared: true,
     }
   }
