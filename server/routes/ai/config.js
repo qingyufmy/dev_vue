@@ -5,6 +5,7 @@ import { round2, round3, stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge } from './market-data.js'
 import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
+import { resolveAiTaskModel, logModelUsage, isEncryptionAvailable } from './model-profiles.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -155,6 +156,33 @@ export async function getActiveConfig(db, userId, sessionId = 'default', provide
 }
 
 export async function getAnalyzeApiKey(userId, sessionId) {
+  // [P0-2] Try unified resolver first when encryption is available
+  if (isEncryptionAvailable()) {
+    try {
+      const resolved = await resolveAiTaskModel({ userId, strategyId: null, usage: 'manual' })
+      if (resolved.model && resolved.model.api_key_encrypted) {
+        const userConfig = await queryOne(
+          'SELECT system_prompt FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1',
+          [userId, sessionId]
+        )
+        const adminPromptConfig = await queryOne(
+          "SELECT system_prompt FROM ai_configs WHERE is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') ORDER BY updated_at DESC LIMIT 1"
+        )
+        const effectivePrompt = userConfig?.system_prompt || adminPromptConfig?.system_prompt || ''
+        return {
+          ...resolved.model,
+          system_prompt: effectivePrompt,
+          _model_shared: resolved.credential_source === 'platform_shared',
+          _model_profile_id: resolved.model_profile_id,
+          _credential_source: resolved.credential_source,
+        }
+      }
+    } catch (e) {
+      console.warn('[Config] Unified resolver failed, falling back to legacy:', e.message)
+    }
+  }
+
+  // Legacy path (backward compat)
   const userConfig = await queryOne(
     'SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1',
     [userId, sessionId]
@@ -164,12 +192,10 @@ export async function getAnalyzeApiKey(userId, sessionId) {
   )
   const effectivePrompt = userConfig?.system_prompt || adminPromptConfig?.system_prompt || ''
 
-  // Fix: user's own model takes priority. Only fall back to admin sharing when user has no key.
   if (userConfig?.api_key_encrypted) {
     return { ...userConfig, system_prompt: effectivePrompt }
   }
 
-  // User has no key — try admin sharing as fallback
   const adminConfig = await queryOne(
     "SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
   )
@@ -451,6 +477,34 @@ export async function saveUserAutoConfig(userId, payload) {
 // === Unified Auto Inference Config (for signal generation) ===
 
 export async function getUnifiedAutoInferenceConfig(promptTypeId) {
+  // [P0-2] Try unified resolver first when encryption is available
+  if (isEncryptionAvailable()) {
+    try {
+      const resolved = await resolveAiTaskModel({ userId: 0, strategyId: promptTypeId, usage: 'auto_platform' })
+      if (resolved.model && resolved.model.api_key_encrypted) {
+        const pt = await getAutoPromptTypeById(promptTypeId)
+        if (!pt) return null
+        return {
+          ...resolved.model,
+          system_prompt: pt.system_prompt || '',
+          risk_level: resolved.model.risk_level || 'medium',
+          max_position_size: resolved.model.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
+          selected_take_profit: resolved.model.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+          enable_auto_trade: true,
+          thinking_enabled: resolved.model.thinking_enabled !== 0,
+          reasoning_effort: resolved.model.reasoning_effort || 'max',
+          _source: 'unified',
+          _model_profile_id: resolved.model_profile_id,
+          _credential_source: resolved.credential_source,
+          prompt_type_id: promptTypeId,
+        }
+      }
+    } catch (e) {
+      console.warn('[Config] Unified resolver failed for auto_platform, falling back to legacy:', e.message)
+    }
+  }
+
+  // Legacy path
   const globalCfg = await getGlobalAutoConfig()
   if (!globalCfg) return null
   const pt = await getAutoPromptTypeById(promptTypeId)

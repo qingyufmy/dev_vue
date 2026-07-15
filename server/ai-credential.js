@@ -62,10 +62,12 @@ export function decryptCredential(envelope) {
   let parsed
   try { parsed = JSON.parse(envelope) } catch {
     // Legacy plaintext — return as-is during migration period
+    console.warn('[Credential] Legacy plaintext detected, will be re-encrypted on next save')
     return envelope
   }
   if (!parsed.v || !parsed.ct || !parsed.iv || !parsed.tag) {
     // Not an envelope — treat as legacy plaintext
+    console.warn('[Credential] Legacy plaintext detected, will be re-encrypted on next save')
     return envelope
   }
   const key = _keyring[parsed.v]

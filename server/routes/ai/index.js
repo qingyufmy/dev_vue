@@ -67,6 +67,13 @@ export { insertAudit, getActiveConfig, getAnalyzeApiKey,
   saveUserAutoConfig, getUnifiedAutoInferenceConfig,
   getCloseConfig, saveCloseConfig, getCloseSignalTickets } from './config.js'
 
+export { resolveAiTaskModel, logModelUsage, checkPlatformQuota,
+  createModelProfile, getModelProfileById, getUserModelProfiles,
+  updateModelProfile, deleteModelProfile, setDefaultModelProfile,
+  getUserModelDefault, setUserModelDefault,
+  getPlatformUsagePolicy, updatePlatformUsagePolicy,
+  migrateLegacyConfigs } from './model-profiles.js'
+
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,
   runSmartCloseCycle, syncUserRedisSubscription, removeUserRuntimeAutoSubscription,

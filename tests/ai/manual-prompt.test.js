@@ -7,6 +7,12 @@ vi.mock('../../server/db.js', () => ({
   beijingNow: vi.fn(),
 }))
 
+vi.mock('../../server/routes/ai/model-profiles.js', () => ({
+  isEncryptionAvailable: () => false,
+  resolveAiTaskModel: vi.fn(),
+  logModelUsage: vi.fn(),
+}))
+
 import { queryOne } from '../../server/db.js'
 import { getAnalyzeApiKey } from '../../server/routes/ai/config.js'
 

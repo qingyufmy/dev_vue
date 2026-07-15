@@ -4,6 +4,7 @@ import { queryOne } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
+import { logModelUsage } from './model-profiles.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const SL_CLAMP = { K_MIN: 1.0, K_MAX: 3.0 }
@@ -221,7 +222,12 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
     }
     parsed._inference_source = 'ai'
-    return normalizeAiSignal(parsed, config, market)
+    const result = normalizeAiSignal(parsed, config, market)
+    // [P0-2] Log model usage after successful inference
+    const credentialSource = config._credential_source || (config._model_shared ? 'platform_shared' : 'user')
+    const profileId = config._model_profile_id || null
+    logModelUsage(config._userId || 0, profileId, credentialSource, 'manual', null, 0, 'success', null).catch(() => {})
+    return result
   } catch (exc) {
     return aiFailureHold(market, exc.message)
   }

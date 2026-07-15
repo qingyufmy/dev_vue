@@ -1132,21 +1132,18 @@ const migrations = [
           user_id INT NOT NULL,
           model_profile_id INT DEFAULT NULL,
           credential_source VARCHAR(32) NOT NULL DEFAULT 'user',
-          usage VARCHAR(32) NOT NULL,
+          \`usage\` VARCHAR(32) NOT NULL,
           strategy_id INT DEFAULT NULL,
           token_count INT NOT NULL DEFAULT 0,
           request_status VARCHAR(16) NOT NULL DEFAULT 'success',
           error_code VARCHAR(128) DEFAULT NULL,
           created_at DATETIME NOT NULL,
           INDEX idx_usage_logs_user (user_id, created_at),
-          INDEX idx_usage_logs_usage (usage, created_at)
+          INDEX idx_usage_logs_usage (\`usage\`, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       ]
       for (const sql of stmts) {
-        try { await queryRun(sql) } catch (e) {
-          if (!e.message?.includes('already exists') && !e.message?.includes('Duplicate'))
-            console.error('[Migrations] 056 error:', e.message)
-        }
+        await queryRun(sql)
       }
     }
   }

@@ -8,13 +8,19 @@ export const USAGES = ['manual', 'auto_private', 'auto_platform', 'review', 'mem
 
 // ─── Model Profiles CRUD ───
 
-export async function createModelProfile(userId, payload) {
+export async function createModelProfile(userId, payload, callerRole) {
   const now = beijingNow()
-  const keyVersion = getActiveKeyVersion()
+  const scope = payload.scope || MODEL_PROFILE_SCOPE.USER
+  // [P1-2] Platform scope requires admin role
+  if (scope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') {
+    throw new Error('platform_scope_requires_admin')
+  }
   let keyEnc = null
+  let keyVersion = null
   if (payload.api_key) {
     if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
     keyEnc = encryptCredential(payload.api_key)
+    keyVersion = getActiveKeyVersion()
   }
   const result = await queryRun(
     `INSERT INTO ai_model_profiles
@@ -23,7 +29,7 @@ export async function createModelProfile(userId, payload) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
     [
       userId,
-      payload.scope || MODEL_PROFILE_SCOPE.USER,
+      scope,
       payload.provider || 'deepseek',
       payload.model_name || 'deepseek-chat',
       payload.api_base_url || null,
@@ -60,15 +66,18 @@ export async function updateModelProfile(id, userId, payload) {
   if (existing.owner_user_id !== userId) throw new Error('model_profile_access_denied')
 
   let keyEnc = existing.api_key_encrypted
+  let keyVersion = existing.key_version
+  // [P1-4] Only update key_version when api_key actually changes
   if (payload.api_key) {
     if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
     keyEnc = encryptCredential(payload.api_key)
+    keyVersion = getActiveKeyVersion()
   }
   await queryRun(
     `UPDATE ai_model_profiles SET
       provider = COALESCE(?, provider), model_name = COALESCE(?, model_name),
       api_base_url = COALESCE(?, api_base_url), api_key_encrypted = COALESCE(?, api_key_encrypted),
-      key_version = COALESCE(?, key_version),
+      key_version = ?,
       temperature = COALESCE(?, temperature), max_tokens = COALESCE(?, max_tokens),
       thinking_enabled = COALESCE(?, thinking_enabled), reasoning_effort = COALESCE(?, reasoning_effort),
       updated_at = ?
@@ -77,7 +86,7 @@ export async function updateModelProfile(id, userId, payload) {
       payload.provider ?? null, payload.model_name ?? null,
       payload.api_base_url !== undefined ? payload.api_base_url : null,
       keyEnc !== undefined ? keyEnc : null,
-      getActiveKeyVersion(),
+      keyVersion,
       payload.temperature ?? null, payload.max_tokens ?? null,
       payload.thinking_enabled !== undefined ? (payload.thinking_enabled ? 1 : 0) : null,
       payload.reasoning_effort ?? null,
@@ -95,15 +104,22 @@ export async function deleteModelProfile(id, userId) {
   await queryRun('UPDATE ai_model_profiles SET deleted_at = ?, status = "deleted" WHERE id = ?', [now, id])
 }
 
+// [P1-3] setDefaultModelProfile writes BOTH is_default flag AND user_model_defaults table
 export async function setDefaultModelProfile(userId, profileId) {
   const now = beijingNow()
   const profile = await queryOne(
-    'SELECT * FROM ai_model_profiles WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL',
+    'SELECT * FROM ai_model_profiles WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL AND status = "active"',
     [profileId, userId]
   )
-  if (!profile) throw new Error('model_profile_not_found')
+  if (!profile) throw new Error('model_profile_not_found_or_inactive')
   await queryRun('UPDATE ai_model_profiles SET is_default = 0 WHERE owner_user_id = ? AND deleted_at IS NULL', [userId])
   await queryRun('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
+  await queryRun(
+    `INSERT INTO user_model_defaults (user_id, model_profile_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE model_profile_id = VALUES(model_profile_id), updated_at = VALUES(updated_at)`,
+    [userId, profileId, now, now]
+  )
 }
 
 // ─── User Model Defaults ───
@@ -140,7 +156,6 @@ export async function setUserModelDefault(userId, profileId) {
 export async function getPlatformUsagePolicy() {
   let row = await queryOne('SELECT * FROM platform_model_usage_policy WHERE id = 1')
   if (!row) {
-    // Default policy
     row = {
       share_for_manual: 0, share_for_auto: 0, share_for_review: 0, share_for_memory_compression: 0,
       allowed_plans: JSON.stringify(['pro']),
@@ -176,13 +191,13 @@ export async function updatePlatformUsagePolicy(payload) {
   return await getPlatformUsagePolicy()
 }
 
-// ─── Usage Logging ───
+// ─── Usage Logging + Quota Check ───
 
 export async function logModelUsage(userId, profileId, credentialSource, usage, strategyId, tokenCount, status, errorCode) {
   try {
     await queryRun(
       `INSERT INTO ai_model_usage_logs
-        (user_id, model_profile_id, credential_source, usage, strategy_id, token_count, request_status, error_code, created_at)
+        (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, token_count, request_status, error_code, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, profileId || null, credentialSource, usage, strategyId || null, tokenCount || 0, status || 'success', errorCode || null, beijingNow()]
     )
@@ -191,44 +206,53 @@ export async function logModelUsage(userId, profileId, credentialSource, usage, 
   }
 }
 
+// [P1-1] Check platform shared model quota
+export async function checkPlatformQuota(userId, usage) {
+  const today = beijingNow().substring(0, 10)
+  const row = await queryOne(
+    `SELECT COUNT(*) as cnt, COALESCE(SUM(token_count), 0) as tokens
+     FROM ai_model_usage_logs
+     WHERE user_id = ? AND credential_source = 'platform_shared' AND \`usage\` = ?
+       AND created_at >= ?`,
+    [userId, usage, `${today} 00:00:00`]
+  )
+  const policy = await getPlatformUsagePolicy()
+  if (row.cnt >= policy.daily_requests_per_user) {
+    return { allowed: false, reason: 'daily_request_limit', used: row.cnt, limit: policy.daily_requests_per_user }
+  }
+  if (row.tokens >= policy.daily_tokens_per_user) {
+    return { allowed: false, reason: 'daily_token_limit', used: row.tokens, limit: policy.daily_tokens_per_user }
+  }
+  return { allowed: true, requestsUsed: row.cnt, tokensUsed: row.tokens }
+}
+
 // ─── Unified Model Resolver ───
 
 export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   if (!USAGES.includes(usage)) throw new Error(`invalid_usage:${usage}`)
-  const now = beijingNow()
-
-  // manual: user's explicit model → user default → platform shared (share_for_manual) → null
-  // auto_private: strategy-bound → user default → platform shared (share_for_auto) → null
-  // auto_platform: always platform model (not a fallback path — caller handles directly)
-  // review: user default → platform shared (share_for_review) → null
-  // memory_compression: user default → platform shared (share_for_memory_compression) → null
 
   if (usage === 'auto_platform') {
     return await resolvePlatformModel()
   }
 
-  let boundProfile = null
-
   // For auto_private: check strategy-bound model
   if (usage === 'auto_private' && strategyId) {
-    boundProfile = await queryOne(
-      `SELECT mp.* FROM auto_prompt_types apt
-       JOIN ai_model_profiles mp ON mp.id = apt.model_profile_id
-       WHERE apt.id = ? AND apt.deleted_at IS NULL AND mp.deleted_at IS NULL AND mp.status = 'active'`,
-      [strategyId]
-    )
-    if (boundProfile) {
-      if (boundProfile.api_key_encrypted) {
-        const source = boundProfile.owner_user_id === userId ? 'user' : 'platform_primary'
-        return buildResult(boundProfile, source, usage, 'strategy_bound')
-      }
-      // Strategy bound but no key — error, don't fall through
-      return { model: null, credential_source: 'none', error: 'strategy_bound_model_no_key', usage }
-    }
-    // Strategy has no bound model or bound model inactive → check if explicitly bound but broken
-    const apt = await queryOne('SELECT model_profile_id FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [strategyId])
+    // [P1-2] Verify strategy ownership before resolving bound model
+    const apt = await queryOne('SELECT owner_user_id, model_profile_id FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [strategyId])
     if (apt && apt.model_profile_id) {
-      // Explicitly bound but profile gone/inactive — don't silently fall back
+      const boundProfile = await queryOne(
+        `SELECT mp.* FROM ai_model_profiles mp
+         WHERE mp.id = ? AND mp.deleted_at IS NULL AND mp.status = 'active'`,
+        [apt.model_profile_id]
+      )
+      if (boundProfile) {
+        if (boundProfile.api_key_encrypted) {
+          const source = boundProfile.owner_user_id === userId ? 'user' : 'platform_primary'
+          return buildResult(boundProfile, source, usage, 'strategy_bound')
+        }
+        return { model: null, credential_source: 'none', error: 'strategy_bound_model_no_key', usage }
+      }
+      // Bound profile gone/inactive — don't silently fall back
       return { model: null, credential_source: 'none', error: 'strategy_bound_model_invalid', usage }
     }
   }
@@ -245,16 +269,19 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   if (policy[shareKey]) {
     const platformModel = await getPlatformModelForSharing()
     if (platformModel && platformModel.api_key_encrypted) {
-      // Check plan entitlement
       const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
       const allowedPlans = JSON.parse(policy.allowed_plans || '["pro"]')
       if (user && allowedPlans.includes(user.plan)) {
+        // [P1-1] Enforce quota before allowing platform shared
+        const quota = await checkPlatformQuota(userId, usage)
+        if (!quota.allowed) {
+          return { model: null, credential_source: 'none', error: quota.reason, usage, quota }
+        }
         return buildResult(platformModel, 'platform_shared', usage, 'platform_fallback')
       }
     }
   }
 
-  // No model available
   return { model: null, credential_source: 'none', error: 'no_model_configured', usage }
 }
 
@@ -270,14 +297,24 @@ async function getPlatformModelForSharing() {
   return await queryOne('SELECT * FROM ai_model_profiles WHERE scope = "platform" AND deleted_at IS NULL AND status = "active" ORDER BY is_default DESC LIMIT 1')
 }
 
+// [P0-3] Decrypt credential before returning to callers
 function buildResult(profile, source, usage, reason) {
+  let decryptedKey = profile.api_key_encrypted
+  if (decryptedKey && isEncryptedEnvelope(decryptedKey)) {
+    try {
+      decryptedKey = decryptCredential(decryptedKey)
+    } catch (e) {
+      console.error(`[ModelProfiles] Failed to decrypt key for profile ${profile.id}:`, e.message)
+      return { model: null, credential_source: source, error: 'credential_decryption_failed', usage, reason }
+    }
+  }
   return {
     model: {
       id: profile.id,
       provider: profile.provider,
       model_name: profile.model_name,
       api_base_url: profile.api_base_url,
-      api_key_encrypted: profile.api_key_encrypted,
+      api_key_encrypted: decryptedKey,
       key_version: profile.key_version,
       temperature: profile.temperature,
       max_tokens: profile.max_tokens,
@@ -361,33 +398,46 @@ export async function migrateLegacyConfigs() {
     }
   } catch (e) { console.error('[ModelProfiles] global_auto_config migration error:', e.message) }
 
-  // 3. Migrate system_config AI provider keys
+  // 3. Migrate system_config AI provider keys — [P1-5] query ALL ai_provider rows, not just *_api_key
   try {
-    const sysConfigs = await queryAll(
-      "SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `key` LIKE '%_api_key' AND `value` != ''"
+    const allSysConfigs = await queryAll(
+      "SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''"
     )
-    for (const row of sysConfigs) {
-      if (isEncryptedEnvelope(row.value)) continue
-      const provider = row.key.replace('_api_key', '')
-      const modelKey = `${provider}_model`
-      const baseUrlKey = `${provider}_base_url`
-      const modelVal = sysConfigs.find(r => r.key === modelKey)?.value || 'deepseek-chat'
-      const baseUrlVal = sysConfigs.find(r => r.key === baseUrlKey)?.value || null
+    // Group by provider prefix
+    const providerMap = {}
+    for (const row of allSysConfigs) {
+      const key = row.key
+      if (key.endsWith('_api_key')) {
+        const provider = key.replace('_api_key', '')
+        if (!providerMap[provider]) providerMap[provider] = {}
+        providerMap[provider].api_key = row.value
+      } else if (key.endsWith('_model')) {
+        const provider = key.replace('_model', '')
+        if (!providerMap[provider]) providerMap[provider] = {}
+        providerMap[provider].model = row.value
+      } else if (key.endsWith('_base_url')) {
+        const provider = key.replace('_base_url', '')
+        if (!providerMap[provider]) providerMap[provider] = {}
+        providerMap[provider].base_url = row.value
+      }
+    }
+    for (const [provider, cfg] of Object.entries(providerMap)) {
+      if (!cfg.api_key || isEncryptedEnvelope(cfg.api_key)) continue
       const exists = await queryOne(
         "SELECT id FROM ai_model_profiles WHERE scope = 'platform' AND provider = ? AND deleted_at IS NULL",
         [provider]
       )
       if (!exists) {
-        const encrypted = encryptCredential(row.value)
+        const encrypted = encryptCredential(cfg.api_key)
         await queryRun(
           `INSERT INTO ai_model_profiles
             (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
              temperature, max_tokens, status, created_at, updated_at)
            VALUES (0, 'platform', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-          [provider, modelVal, baseUrlVal,
+          [provider, cfg.model || 'deepseek-chat', cfg.base_url || null,
            encrypted, getActiveKeyVersion(), 0.3, 2000, now, now]
         )
-        results.push({ source: 'system_config', key: row.key })
+        results.push({ source: 'system_config', provider })
       }
     }
   } catch (e) { console.error('[ModelProfiles] system_config migration error:', e.message) }
