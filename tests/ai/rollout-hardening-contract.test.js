@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+
+const admin = readFileSync(new URL('../../server/routes/admin.js', import.meta.url), 'utf8')
+const auth = readFileSync(new URL('../../server/middleware/auth.js', import.meta.url), 'utf8')
+const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
+const bridge = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
+const config = readFileSync(new URL('../../server/routes/ai/config.js', import.meta.url), 'utf8')
+const rollout = readFileSync(new URL('../../server/routes/ai/rollout-governance.js', import.meta.url), 'utf8')
+
+describe('rollout hardening contract', () => {
+  it('adds the readiness-tracked rollout migration and defaults generative features off', () => {
+    expect(migrations).toContain("id: '065_ai_rollout_governance'")
+    expect(migrations).toContain("VALUES ('global', 0, 0, 0, 0, 1, 0")
+    expect(rollout).toContain('065_ai_rollout_governance')
+  })
+
+  it('anonymizes deleted accounts, destroys credentials and preserves trading evidence', () => {
+    const deleteRoute = admin.slice(admin.indexOf("router.delete('/admin-users/:id'"), admin.indexOf("router.get('/admin-audit'"))
+    expect(deleteRoute).toContain("deletion_status = 'anonymized'")
+    expect(deleteRoute).toContain('api_key_encrypted = NULL')
+    expect(deleteRoute).not.toContain('DELETE FROM users')
+    expect(deleteRoute).not.toContain('DELETE FROM trade_audit_logs')
+    expect(deleteRoute).not.toContain('DELETE FROM orders')
+    expect(auth).toContain("deletion_status = 'active'")
+  })
+
+  it('routes legacy key writes into encrypted profiles and disables implicit fallback by default', () => {
+    expect(bridge).toContain('upsertDefaultModelProfileFromLegacyInput')
+    expect(config).toContain("AI_LEGACY_CREDENTIAL_READ_ENABLED !== 'true'")
+    expect(config).toContain("upsertDefaultModelProfileFromLegacyInput(userId, 'user'")
+  })
+
+  it('does not query review bodies or memory lesson text in administrator health metrics', () => {
+    const health = rollout.slice(rollout.indexOf('export async function getAiRolloutHealth'))
+    expect(health).not.toMatch(/content_json|evidence_json|lesson_text|api_key_encrypted/)
+  })
+})

@@ -282,8 +282,8 @@ router.post('/login', async (req, res) => {
     }
 
     const user = phone
-      ? await queryOne('SELECT * FROM users WHERE phone = ?', [phone])
-      : await queryOne('SELECT * FROM users WHERE email = ?', [email])
+      ? await queryOne("SELECT * FROM users WHERE phone = ? AND deletion_status = 'active' AND deleted_at IS NULL", [phone])
+      : await queryOne("SELECT * FROM users WHERE email = ? AND deletion_status = 'active' AND deleted_at IS NULL", [email])
     if (!user) return res.json({ ok: false, error: '账号或密码错误' })
 
     let tokenRecord = null

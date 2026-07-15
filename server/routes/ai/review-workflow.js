@@ -3,6 +3,7 @@ import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../..
 import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
 import { sha256 } from './inference-snapshots.js'
+import { isAiFeatureEnabled } from './rollout-governance.js'
 
 const REVIEW_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const ISSUE_SEVERITIES = new Set(['low', 'medium', 'high', 'critical'])
@@ -135,7 +136,8 @@ export async function ensureReviewCaseForOutcome(outcomeId) {
     json(evidence.bundle), evidence.evidenceHash, now, now,
   ])
   const reviewCase = await queryOne('SELECT * FROM trade_review_cases WHERE outcome_id = ?', [outcomeId])
-  if (evidence.assessment.complete && !reviewCase.current_version_id && !['approved', 'deferred'].includes(reviewCase.status)) {
+  const generationEnabled = evidence.assessment.complete && await isAiFeatureEnabled('review_generation_enabled', evidence.row.user_id)
+  if (generationEnabled && !reviewCase.current_version_id && !['approved', 'deferred'].includes(reviewCase.status)) {
     await queryRun(`INSERT IGNORE INTO trade_review_jobs
       (case_id, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
       VALUES (?, ?, 'queued', 0, 3, ?, ?)`, [reviewCase.id, `review:${reviewCase.id}:${evidence.evidenceHash}`, now, now])
@@ -247,7 +249,10 @@ export async function runReviewWorkerOnce({ requestModel = requestJsonObject } =
 export function startReviewWorker(intervalMs = 30_000) {
   if (workerTimer) return false
   const tick = async () => {
-    try { await enqueueEligibleReviewCases(); await runReviewWorkerOnce() }
+    try {
+      if (!await isAiFeatureEnabled('review_generation_enabled')) return
+      await enqueueEligibleReviewCases(); await runReviewWorkerOnce()
+    }
     catch (error) { console.error('[TradeReview] Worker cycle failed:', safeError(error)) }
   }
   workerTimer = setInterval(tick, Math.max(5_000, Number(intervalMs)))

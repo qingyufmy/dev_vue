@@ -1357,10 +1357,20 @@ function renderExecutionDecisions(rows) {
 function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", deferred:"稍后处理" })[value] || value; }
 async function loadReviewMemory() {
   const query = state.reviewFilter ? `?status=${encodeURIComponent(state.reviewFilter)}` : "";
-  const [reviewData, memoryData, profileData] = await Promise.all([api(`/api/ai/reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`)]);
+  const [reviewData, memoryData, profileData, featureData] = await Promise.all([api(`/api/ai/reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
   state.reviewCases = reviewData.cases || [];
   $("sharedCredentialNotice")?.classList.toggle("hidden", (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
+  const userFlags = featureData.flags?.user || {};
+  const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled", userPairedExperimentFlag:"paired_experiment_enabled" };
+  for (const [id,key] of Object.entries(featureInputs)) if ($(id)) $(id).checked = userFlags[key] ?? true;
   renderReviewCases(); renderMemoryItems(memoryData.items || [], memoryData.settings || {});
+}
+
+async function saveUserFeatureFlags() {
+  await api("/api/ai/feature-flags", { method:"PUT", body:{ review_generation_enabled:$("userReviewGenerationFlag").checked,
+    experience_memory_enabled:$("userExperienceMemoryFlag").checked, memory_compression_enabled:$("userMemoryCompressionFlag").checked,
+    retrieval_shadow_enabled:$("userRetrievalShadowFlag").checked, paired_experiment_enabled:$("userPairedExperimentFlag").checked } });
+  toast("个人灰度开关已保存", "success"); await loadReviewMemory();
 }
 
 function renderReviewCases() {
@@ -1390,7 +1400,7 @@ function renderMemoryItems(items, settings) {
 }
 
 async function loadAdminRiskCenter() {
-  const data = await api("/api/ai/admin/risk-center"); state.globalRiskSnapshot = data;
+  const [data, rolloutData] = await Promise.all([api("/api/ai/admin/risk-center"), api("/api/ai/admin/rollout-health")]); state.globalRiskSnapshot = data;
   const raw = parseJsonField(data.platform_policy_version?.config_json, {}), current = { ...(data.defaults || {}), ...(raw.values || raw.defaults || raw) }, controls = raw.controls || {}, meta = data.rule_metadata || {};
   const editable = Object.keys(data.defaults || {}).filter(key => typeof data.defaults[key] === "number");
   $("globalRiskEditor").innerHTML = `<section class="workspace-panel">${editable.map(key => { const control = controls[key] || {}; return `<div class="global-risk-row"><div><strong>${escapeHtml(RISK_LABELS[key] || key)}</strong><div class="workspace-row-meta">${escapeHtml(meta[key]?.safety_direction || '平台规则')} · ${meta[key]?.locked ? '系统强制锁定' : '管理员可控'}</div></div><label>默认值<input data-global-risk-field="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(current[key])}"></label><label>范围下限<input data-global-risk-min="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_min ?? meta[key]?.allowed_min ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label>范围上限<input data-global-risk-max="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_max ?? meta[key]?.allowed_max ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label>锁定值<input data-global-risk-lock="${escapeHtml(key)}" type="number" step="any" placeholder="不锁定" value="${escapeHtml(control.locked_value ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label></div>`; }).join("")}</section>`;
@@ -1401,7 +1411,19 @@ async function loadAdminRiskCenter() {
   $("globalKillSwitchBtn").classList.toggle("btn-danger", !globalEnabled);
   $("globalKillSwitchMeta").innerHTML = `<span>当前：${globalEnabled ? '已停止新开仓' : '正常'}</span><span>原因：${escapeHtml(global.reason || '--')}</span><span>更新时间：${escapeHtml(global.updated_at || '--')}</span>`;
   $("adminRecoveryList").innerHTML = (data.recoveries || []).map(item => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.user_nickname || item.user_email || `用户 #${item.user_id}`)} · ${escapeHtml(item.account_nickname || item.login_account)}</div><div class="workspace-row-meta"><span>申请时间 ${escapeHtml(item.created_at)}</span><span>说明：${escapeHtml(item.reason)}</span></div></div><div class="workspace-row-actions"><button class="btn btn-primary btn-sm" data-recovery-review="approve" data-recovery-id="${item.id}">批准恢复</button><button class="btn btn-danger btn-sm" data-recovery-review="reject" data-recovery-id="${item.id}">拒绝</button></div></article>`).join("") || '<div class="empty-state">暂无待审核恢复申请</div>';
+  const health = rolloutData.health || {}, globalFlags = (health.feature_flags || []).find(item => item.scope === "global") || {};
+  const globalInputs = { globalReviewGenerationFlag:"review_generation_enabled", globalExperienceMemoryFlag:"experience_memory_enabled", globalMemoryCompressionFlag:"memory_compression_enabled", globalRetrievalShadowFlag:"retrieval_shadow_enabled", globalPairedExperimentFlag:"paired_experiment_enabled" };
+  for (const [id,key] of Object.entries(globalInputs)) if ($(id)) $(id).checked = Boolean(globalFlags[key]);
+  const metrics = health.metrics || {};
+  $("rolloutHealthSummary").innerHTML = `<span>告警 ${Number(health.alerts?.length || 0)}</span><span>不确定订单 ${Number(metrics.uncertain?.count || 0)}</span><span>最老不确定 ${Number(metrics.uncertain?.oldest_seconds || 0)} 秒</span><span>Outcome 积压 ${Number(metrics.outcome_backlog?.backlog || 0)}</span><span>凭据迁移 ${escapeHtml(health.credential_migration?.status || '未执行')}</span>`;
   renderAccountReviews(data.accounts || []);
+}
+
+async function saveGlobalFeatureFlags() {
+  await api("/api/ai/admin/feature-flags", { method:"PUT", body:{ flags:{ review_generation_enabled:$("globalReviewGenerationFlag").checked,
+    experience_memory_enabled:$("globalExperienceMemoryFlag").checked, memory_compression_enabled:$("globalMemoryCompressionFlag").checked,
+    retrieval_shadow_enabled:$("globalRetrievalShadowFlag").checked, paired_experiment_enabled:$("globalPairedExperimentFlag").checked } } });
+  toast("全局灰度开关已保存", "success"); await loadAdminRiskCenter();
 }
 
 function renderAccountReviews(accounts) {
@@ -4345,6 +4367,8 @@ function bindEvents() {
   $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(error.message, "error")));
   $("savePlatformPolicyBtn")?.addEventListener("click", () => savePlatformPolicy().catch(error => toast(error.message, "error")));
   $("saveGlobalRiskBtn")?.addEventListener("click", () => saveGlobalRisk().catch(error => toast(error.message, "error")));
+  $("saveUserFeatureFlagsBtn")?.addEventListener("click", () => saveUserFeatureFlags().catch(error => toast(error.message, "error")));
+  $("saveGlobalFeatureFlagsBtn")?.addEventListener("click", () => saveGlobalFeatureFlags().catch(error => toast(error.message, "error")));
   $("globalKillSwitchBtn")?.addEventListener("click", async event => {
     const enabled = event.currentTarget.dataset.enabled === "1";
     const reason = prompt(enabled ? "请输入停止所有新开仓的原因" : "请输入恢复平台新开仓的原因");

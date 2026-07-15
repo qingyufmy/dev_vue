@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260715i" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260715j" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -743,6 +743,7 @@
           <div class="workspace-page">
             <header class="workspace-header"><div><h1>复盘与记忆</h1><p>复盘证据只读，正文可修订；只有你确认准确的版本才会成为个人经验。</p></div><button class="btn btn-secondary" data-action="refresh-review-memory"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
             <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>个人灰度功能</h2><p>个人开关只能进一步关闭功能，不能绕过管理员的全局开关。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存个人开关</button></div><div class="policy-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span>只影子检索</span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span>配对实验资格</span></label></div></section>
             <div class="review-status-tabs" role="tablist"><button class="active" data-review-filter="">全部</button><button data-review-filter="evidence_pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">内容有问题</button></div>
             <div class="review-layout">
               <div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div>
@@ -828,6 +829,7 @@
           <div class="workspace-page">
             <header class="workspace-header"><div><h1>全局风控</h1><p>分别管理默认值、允许范围和锁定值；保存后创建不可变的新版本并立即生效。</p></div><button id="saveGlobalRiskBtn" class="btn btn-primary">保存全局风控</button></header>
             <div class="admin-boundary-note"><i data-lucide="shield-check" size="18"></i><div><strong>管理员边界</strong><span>可管理平台规则、账户状态与恢复申请；不可查看用户复盘正文或个人记忆内容。</span></div></div>
+            <section class="workspace-panel"><div class="section-heading"><div><h2>AI 功能灰度</h2><p>默认关闭生成与注入；经验先开启检索影子，再逐步进入实际注入。强制风控不受这些开关影响。</p></div><button id="saveGlobalFeatureFlagsBtn" class="btn btn-primary btn-sm">保存全局灰度</button></div><div class="policy-switches"><label><input id="globalReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="globalExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="globalMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="globalRetrievalShadowFlag" type="checkbox"><span>检索影子</span></label><label><input id="globalPairedExperimentFlag" type="checkbox"><span>配对实验</span></label></div><div id="rolloutHealthSummary" class="workspace-row-meta rollout-health-summary"></div></section>
             <section class="workspace-panel"><div class="section-heading"><div><h2>平台紧急停止</h2><p>开启后阻止所有新开仓。关闭时也必须填写原因，全部操作进入审计日志。</p></div><button id="globalKillSwitchBtn" class="btn btn-danger">正在读取…</button></div><div id="globalKillSwitchMeta" class="workspace-row-meta"></div></section>
             <div id="globalRiskEditor" class="workspace-list"><div class="workspace-skeleton"></div></div>
             <section class="workspace-panel"><div class="section-heading"><div><h2>待审核恢复申请</h2><p>恢复账户前请核对停机原因、数据完整性与用户说明。</p></div></div><div id="adminRecoveryList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
@@ -1068,7 +1070,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260715i"></script>
+    <script src="/ai/app.js?v=20260715j"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

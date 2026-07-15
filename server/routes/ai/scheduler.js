@@ -5,7 +5,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getActiveConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
+import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -14,6 +14,7 @@ import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal } from './memory-system.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
+import { resolveAiTaskModel } from './model-profiles.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -2065,7 +2066,9 @@ async function runSmartClose(userId, closeConfig, account, positions) {
   const symbol = positions[0].symbol || 'XAUUSD'
   const prompt = closeConfig.system_prompt
   if (!prompt) { console.error('[SmartClose] No system_prompt configured'); return [] }
-  const model = closeConfig.model_name || 'deepseek-chat'
+  const resolvedModel = await resolveAiTaskModel({ userId, strategyId: null, usage: 'manual' })
+  if (!resolvedModel.model?.api_key_encrypted) return []
+  const model = resolvedModel.model.model_name || 'deepseek-chat'
 
   let strategyContext = {}
   try {
@@ -2096,18 +2099,10 @@ async function runSmartClose(userId, closeConfig, account, positions) {
   }
   const contextPayload = { ...strategyContext, ...closeContext, latest_price: positions[0].price_current || 0 }
 
-  let apiKey, baseUrl
-  if (closeConfig.api_key_encrypted) {
-    apiKey = closeConfig.api_key_encrypted
-    baseUrl = closeConfig.api_base_url || DEFAULT_API_BASE_URL
-  } else {
-    const config = await getActiveConfig(null, userId)
-    if (!config) return []
-    apiKey = config.api_key_encrypted
-    baseUrl = closeConfig.api_base_url || config.api_base_url || DEFAULT_API_BASE_URL
-  }
-  const temperature = closeConfig.temperature ?? 0.3
-  let maxTokens = closeConfig.max_tokens || 4000
+  const apiKey = resolvedModel.model.api_key_encrypted
+  const baseUrl = String(resolvedModel.model.api_base_url || DEFAULT_API_BASE_URL).replace(/\/+$/, '')
+  const temperature = resolvedModel.model.temperature ?? closeConfig.temperature ?? 0.3
+  let maxTokens = resolvedModel.model.max_tokens || closeConfig.max_tokens || 4000
   if (/reason|think|flash/i.test(model) && maxTokens < 8000) {
     maxTokens = Math.min(maxTokens * 2, 8000)
   }
@@ -2129,7 +2124,7 @@ async function runSmartClose(userId, closeConfig, account, positions) {
       body.temperature = temperature
       body.max_tokens = maxTokens
     }
-    const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+    const resp = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
@@ -2237,7 +2232,6 @@ async function executeOrder(userId, config, request, action, options = {}) {
   return executeOrderCore(userId, config, request, action, options)
 }
 
-// getActiveConfig is now imported from config.js directly
 
 // Test-only exports (not for production use)
 export const __schedulerTest = {

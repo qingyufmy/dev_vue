@@ -23,6 +23,8 @@ import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteMod
 import { listStrategies, listTradingAccounts, listSubscriptions, adminReviewTradingAccount } from './strategy-ownership.js'
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { requestRiskRecovery, reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
+import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
+import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 
 const router = Router()
 
@@ -62,7 +64,7 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
 
 function reviewError(res, error) {
   const code = String(error?.message || 'review_request_failed')
-  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : code.includes('access_denied') ? 403 : 400
+  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only')) ? 403 : 400
   return res.status(status).json({ ok: false, error: code })
 }
 
@@ -127,6 +129,47 @@ router.get('/ai/platform-model-policy', authMiddleware, async (req, res) => {
 router.put('/ai/platform-model-policy', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
   try { res.json({ ok: true, policy: await updatePlatformUsagePolicy(req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/feature-flags', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, flags: await getEffectiveFeatureFlags(req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/feature-flags', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, flags: await updateAiFeatureFlags({ actorId:req.user.id, actorRole:req.user.role, targetUserId:req.user.id, flags:req.body || {} }) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/rollout-health', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try { res.json({ ok:true, health:await getAiRolloutHealth() }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/feature-flags', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try { res.json({ ok:true, flags:await updateAiFeatureFlags({ actorId:req.user.id, actorRole:req.user.role, targetUserId:req.body?.user_id || null, flags:req.body?.flags || {} }) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/risk-rule-rollouts/:ruleCode', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try { res.json({ ok:true, rollout:await updateRiskRuleRollout({ actorId:req.user.id, actorRole:req.user.role, ruleCode:req.params.ruleCode, mode:req.body?.mode }) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/admin/credentials/rotate', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try { res.json({ ok:true, result:await rotateModelProfileCredentials() }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/admin/credentials/finalize-legacy-cleanup', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  if (req.body?.confirm !== 'CLEAR_VERIFIED_LEGACY_CREDENTIALS') return res.status(400).json({ ok:false, error:'explicit_confirmation_required' })
+  try { res.json({ ok:true, result:await finalizeLegacyCredentialCleanup() }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -376,7 +419,8 @@ export { resolveAiTaskModel, logModelUsage, beginModelUsage, finishModelUsage, c
   updateModelProfile, deleteModelProfile, setDefaultModelProfile,
   getUserModelDefault, setUserModelDefault,
   getPlatformUsagePolicy, updatePlatformUsagePolicy,
-  migrateLegacyConfigs } from './model-profiles.js'
+  migrateLegacyConfigs, upsertDefaultModelProfileFromLegacyInput,
+  rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 
 export { buildOrderIdempotencyKey, prepareAndExecuteOrderIntent,
   recoverExpiredOrderIntentLeases, reconcileUncertainOrderIntents,
@@ -408,6 +452,9 @@ export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
   revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
   maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,
   startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
+
+export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatureFlags,
+  updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'

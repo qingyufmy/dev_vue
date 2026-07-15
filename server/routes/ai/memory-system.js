@@ -3,6 +3,7 @@ import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../..
 import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
 import { sha256 } from './inference-snapshots.js'
+import { getEffectiveFeatureFlags, isAiFeatureEnabled } from './rollout-governance.js'
 
 const DEFAULT_BUDGET = 800
 const MAX_BUDGET = 1600
@@ -77,6 +78,7 @@ function buildMemoryPayload(reviewCase, version) {
 }
 
 export async function createMemoryFromApprovedReview(caseId, userId) {
+  if (!await isAiFeatureEnabled('experience_memory_enabled', userId)) throw new Error('experience_memory_rollout_disabled')
   const reviewCase = await queryOne('SELECT * FROM trade_review_cases WHERE id = ? AND user_id = ?', [caseId, userId])
   if (!reviewCase || reviewCase.status !== 'approved' || !reviewCase.approved_version_id) throw new Error('approved_review_required')
   const version = await queryOne('SELECT * FROM trade_review_versions WHERE id = ? AND case_id = ?', [reviewCase.approved_version_id, caseId])
@@ -202,9 +204,11 @@ async function getValidSummary(userId, key) {
 export async function retrievePersonalMemory({ userId, strategyId = null, symbol = null, timeframe = null,
   direction = null, entryMethod = null, marketRegime = null, mode = null, experimentGroup = null } = {}) {
   if (!userId) return { promptBlock: '', selectedItemIds: [], selectedSummaryIds: [], tokenCount: 0, disabled: true }
+  const rollout = await getEffectiveFeatureFlags(userId)
+  if (!rollout.experience_memory_enabled) return { promptBlock: '', selectedItemIds: [], selectedSummaryIds: [], tokenCount: 0, disabled: true, reason: 'rollout_disabled' }
   const settings = await getMemorySettings(userId)
   if (!settings.enabled) return { promptBlock: '', selectedItemIds: [], selectedSummaryIds: [], tokenCount: 0, disabled: true }
-  const actualMode = mode === 'shadow' || settings.retrieval_mode === 'shadow' ? 'shadow' : 'active'
+  const actualMode = rollout.retrieval_shadow_enabled || mode === 'shadow' || settings.retrieval_mode === 'shadow' ? 'shadow' : 'active'
   const context = { strategy_id: strategyId, symbol, timeframe, direction, entry_method: entryMethod, market_regime: marketRegime }
   const items = await queryAll(`SELECT * FROM experience_memory_items WHERE user_id = ? AND status = 'active'
     AND (strategy_id IS NULL OR strategy_id = ?) AND (symbol IS NULL OR symbol = ?)
@@ -229,7 +233,7 @@ export async function retrievePersonalMemory({ userId, strategyId = null, symbol
     selectedItems.push(Number(candidate.item.id)); used += cost
     reasons.push({ item_id: Number(candidate.item.id), score: candidate.score, reasons: candidate.reasons })
   }
-  const group = experimentGroup || (actualMode === 'shadow' ? 'retrieval_shadow' : 'paired_inference_controlled')
+  const group = experimentGroup || (actualMode === 'shadow' ? 'retrieval_shadow' : rollout.paired_experiment_enabled ? 'paired_inference_controlled' : 'memory_active')
   const log = await queryRun(`INSERT INTO memory_injection_logs
     (user_id, strategy_id, symbol, mode, experiment_group, selected_item_ids_json,
      selected_summary_ids_json, token_count, retrieval_reasons_json, created_at)
@@ -250,6 +254,7 @@ async function activeScopeItems(userId, key) {
 }
 
 export async function maybeQueueCompression(userId, key, force = false) {
+  if (!await isAiFeatureEnabled('memory_compression_enabled', userId)) return { queued: false, reason: 'rollout_disabled' }
   const items = await activeScopeItems(userId, key)
   const totalTokens = items.reduce((sum, item) => sum + Number(item.token_count || 0), 0)
   if (!force && items.length <= SUMMARY_TRIGGER_ITEMS && totalTokens <= SUMMARY_TRIGGER_TOKENS) return { queued: false }
@@ -348,7 +353,9 @@ export async function rollbackMemorySummary(summaryId, userId) {
 
 export function startMemoryCompressionWorker(intervalMs = 60_000) {
   if (compressionTimer) return false
-  compressionTimer = setInterval(() => void runMemoryCompressionOnce().catch(error => console.error('[MemoryCompression] cycle failed:', safeError(error))), Math.max(5000, Number(intervalMs)))
+  compressionTimer = setInterval(() => void (async () => {
+    if (await isAiFeatureEnabled('memory_compression_enabled')) await runMemoryCompressionOnce()
+  })().catch(error => console.error('[MemoryCompression] cycle failed:', safeError(error))), Math.max(5000, Number(intervalMs)))
   compressionTimer.unref?.()
   return true
 }

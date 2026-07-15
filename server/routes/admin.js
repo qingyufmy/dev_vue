@@ -325,11 +325,13 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
     const user = await queryOne('SELECT id, email, role FROM users WHERE id = ?', [userId])
     if (!user) return res.json({ ok: false, error: '用户不存在' })
     if (user.role === 'admin') return res.json({ ok: false, error: '不能删除管理员账号' })
-    // 级联删除所有关联数据，使用事务确保原子性
+    const destroyedPassword = await bcrypt.hash(`deleted:${userId}:${Date.now()}:${Math.random()}`, 10)
+    const anonymizedEmail = `deleted-${userId}@anonymized.invalid`
+    // 账号匿名化而非物理删除。交易、风控、订单意图、复盘证据与审计记录
+    // 保留原 user_id 关联；所有可用于登录或调用模型的秘密在同一事务中销毁。
     await withTransaction(async (run) => {
       await run('DELETE FROM notifications WHERE user_id = ?', [userId])
       await run('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
-      await run('DELETE FROM orders WHERE user_id = ?', [userId])
       await run('DELETE FROM verification_codes WHERE email = ?', [user.email])
       await run('DELETE FROM progress WHERE user_id = ?', [userId])
       await run('DELETE FROM comments WHERE user_id = ?', [userId])
@@ -337,17 +339,23 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
       await run('DELETE FROM post_replies WHERE user_id = ?', [userId])
       await run('DELETE FROM posts WHERE user_id = ?', [userId])
       await run('DELETE FROM feedback WHERE user_id = ?', [userId])
-      await run('DELETE FROM ai_configs WHERE user_id = ?', [userId])
-      await run('DELETE FROM ai_signals WHERE user_id = ?', [userId])
-      await run('DELETE FROM auto_scheduler WHERE user_id = ?', [userId])
+      await run('UPDATE ai_configs SET api_key_encrypted = NULL, is_active = 0 WHERE user_id = ?', [userId])
+      await run('UPDATE close_config SET api_key_encrypted = NULL, enabled = 0 WHERE user_id = ?', [userId])
+      await run("UPDATE ai_model_profiles SET api_key_encrypted = NULL, status = 'deleted', deleted_at = NOW(), updated_at = NOW() WHERE owner_user_id = ? AND scope = 'user'", [userId])
+      await run('DELETE FROM user_model_defaults WHERE user_id = ?', [userId])
+      await run('UPDATE auto_scheduler SET enabled = 0, enable_auto_trade = 0 WHERE user_id = ?', [userId])
+      await run('UPDATE strategy_subscriptions SET execution_enabled = 0, is_deleted = 1, updated_at = NOW() WHERE user_id = ?', [userId])
+      await run("UPDATE trading_accounts SET observe_status = 'deleted', is_deleted = 1, updated_at = NOW() WHERE user_id = ?", [userId])
       await run('DELETE FROM user_bridge_settings WHERE user_id = ?', [userId])
-      await run('DELETE FROM close_config WHERE user_id = ?', [userId])
-      await run('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
       await run('DELETE FROM crypto_watch_list WHERE user_id = ?', [userId])
-      await run('DELETE FROM auto_signal_deliveries WHERE user_id = ?', [userId])
       await run('DELETE FROM bridge_connection_status WHERE user_id = ?', [userId])
-      await run('DELETE FROM close_signal_tickets WHERE user_id = ?', [userId])
-      await run('DELETE FROM users WHERE id = ?', [userId])
+      await run(`UPDATE users SET email = ?, phone = NULL, password = ?, nickname = ?, avatar = '',
+        role = 'user', plan = 'free', plan_expires_at = NULL, telegram_id = NULL, telegram_username = NULL,
+        telegram_name = NULL, telegram_chat_id = NULL, referral_code = NULL, referral_credit = 0,
+        deletion_status = 'anonymized', deleted_at = NOW(), updated_at = NOW() WHERE id = ?`,
+      [anonymizedEmail, destroyedPassword, `已删除用户 #${userId}`, userId])
+      await run(`INSERT INTO audit_logs (user_id, user_email, user_nickname, action, target_type, target_id, detail, created_at)
+        VALUES (?, ?, ?, 'user_anonymized', 'user', ?, ?, NOW())`, [req.user.id, req.user.email || '', req.user.nickname || '', userId, JSON.stringify({ retained: ['orders','trade_audit_logs','order_intents','risk_decisions','inference_snapshots','review_evidence'], credentials_destroyed: true })])
     })
     res.json({ ok: true })
   } catch (err) {

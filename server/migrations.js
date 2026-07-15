@@ -1547,6 +1547,66 @@ const migrations = [
         INDEX idx_memory_injection_signal (signal_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '065_ai_rollout_governance',
+    up: async () => {
+      const userColumns = [
+        { name: 'deleted_at', definition: 'ADD COLUMN deleted_at DATETIME DEFAULT NULL' },
+        { name: 'deletion_status', definition: "ADD COLUMN deletion_status VARCHAR(24) NOT NULL DEFAULT 'active'" },
+      ]
+      for (const column of userColumns) {
+        const rows = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?", [column.name])
+        if (!rows.length) await queryRun(`ALTER TABLE users ${column.definition}`)
+      }
+      const userIndex = await queryAll("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND INDEX_NAME = 'idx_users_deletion_status'")
+      if (!userIndex.length) await queryRun('CREATE INDEX idx_users_deletion_status ON users(deletion_status, deleted_at)')
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_feature_flags (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        scope VARCHAR(16) NOT NULL,
+        user_id INT NOT NULL DEFAULT 0,
+        review_generation_enabled TINYINT DEFAULT NULL,
+        experience_memory_enabled TINYINT DEFAULT NULL,
+        memory_compression_enabled TINYINT DEFAULT NULL,
+        retrieval_shadow_enabled TINYINT DEFAULT NULL,
+        paired_experiment_enabled TINYINT DEFAULT NULL,
+        updated_by INT DEFAULT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_ai_feature_scope_user (scope, user_id),
+        INDEX idx_ai_feature_user (user_id, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`INSERT IGNORE INTO ai_feature_flags
+        (scope, user_id, review_generation_enabled, experience_memory_enabled, memory_compression_enabled,
+         retrieval_shadow_enabled, paired_experiment_enabled, updated_at)
+        VALUES ('global', 0, 0, 0, 0, 1, 0, ?)`, [beijingNow()])
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS risk_rule_rollouts (
+        rule_code VARCHAR(80) PRIMARY KEY,
+        mode VARCHAR(16) NOT NULL DEFAULT 'shadow',
+        forced_enforce TINYINT NOT NULL DEFAULT 0,
+        updated_by INT DEFAULT NULL,
+        updated_at DATETIME NOT NULL,
+        INDEX idx_risk_rule_rollout_mode (mode, forced_enforce)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      for (const code of ['ownership','entitlement','account_review','kill_switch','data_complete','idempotency','volume_bounds']) {
+        await queryRun(`INSERT IGNORE INTO risk_rule_rollouts (rule_code, mode, forced_enforce, updated_at)
+          VALUES (?, 'enforce', 1, ?)`, [code, beijingNow()])
+      }
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS credential_migration_runs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        status VARCHAR(24) NOT NULL,
+        migrated_count INT NOT NULL DEFAULT 0,
+        rotated_count INT NOT NULL DEFAULT 0,
+        failed_count INT NOT NULL DEFAULT 0,
+        legacy_cleared TINYINT NOT NULL DEFAULT 0,
+        error_code VARCHAR(128) DEFAULT NULL,
+        started_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        INDEX idx_credential_migration_status (status, started_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

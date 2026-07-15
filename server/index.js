@@ -12,6 +12,7 @@ import { initDB, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
 import { isEncryptionAvailable } from './ai-credential.js'
 import { assertModelProfileSchemaReady, migrateLegacyConfigs } from './routes/ai/model-profiles.js'
+import { assertAiGovernanceSchemaReady } from './routes/ai/rollout-governance.js'
 import { BILIBILI_HEADERS } from './utils.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
@@ -364,6 +365,7 @@ initBridgeWS(server)
 ;(async () => {
   await initDB()
   await runMigrations()
+  await assertAiGovernanceSchemaReady()
   if (isEncryptionAvailable()) {
     await assertModelProfileSchemaReady()
     await migrateLegacyConfigs()

@@ -1,7 +1,9 @@
 // ai/model-profiles.js — 统一模型管理 + 解析器 + 使用日志
 
+import crypto from 'node:crypto'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { encryptCredential, decryptCredential, isEncryptionAvailable, isEncryptedEnvelope, getActiveKeyVersion } from '../../ai-credential.js'
+import { recordCredentialMigration } from './rollout-governance.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'auto_private', 'auto_platform', 'review', 'memory_compression']
@@ -70,6 +72,19 @@ export async function getUserModelProfiles(userId) {
     [userId]
   )
   return rows.map(sanitizeProfile)
+}
+
+export async function upsertDefaultModelProfileFromLegacyInput(userId, callerRole, payload = {}, scope = 'user') {
+  if (!payload.api_key) return null
+  if (scope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') throw new Error('platform_scope_requires_admin')
+  const ownerId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
+  const current = await queryOne(`SELECT id FROM ai_model_profiles WHERE owner_user_id = ? AND scope = ?
+    AND status = 'active' AND deleted_at IS NULL ORDER BY is_default DESC, updated_at DESC LIMIT 1`, [ownerId, scope])
+  let profile
+  if (current) profile = await updateModelProfile(current.id, ownerId, payload)
+  else profile = await createModelProfile(userId, { ...payload, scope }, callerRole)
+  await setDefaultModelProfile(ownerId, profile.id)
+  return profile
 }
 
 /** Runtime-only credential resolution for an owner testing a specific profile. */
@@ -552,4 +567,66 @@ export async function migrateLegacyConfigs() {
 
   console.log(`[ModelProfiles] Legacy migration: ${results.length} profiles created`)
   return results
+}
+
+function sameSecret(left, right) {
+  const a = Buffer.from(String(left || ''), 'utf8')
+  const b = Buffer.from(String(right || ''), 'utf8')
+  return a.length === b.length && crypto.timingSafeEqual(a, b)
+}
+
+async function findMatchingRuntimeProfile(run, ownerId, scope, provider, modelName, legacySecret) {
+  const expectedSecret = isEncryptedEnvelope(legacySecret) ? decryptCredential(legacySecret) : legacySecret
+  const [profiles] = await run(`SELECT id, api_key_encrypted FROM ai_model_profiles
+    WHERE owner_user_id = ? AND scope = ? AND provider = ? AND model_name = ?
+      AND status = 'active' AND deleted_at IS NULL`, [ownerId, scope, provider || 'deepseek', modelName || 'deepseek-chat'])
+  for (const profile of profiles) {
+    if (!isEncryptedEnvelope(profile.api_key_encrypted)) continue
+    if (sameSecret(decryptCredential(profile.api_key_encrypted), expectedSecret)) return profile.id
+  }
+  throw new Error(`legacy_credential_not_verified:${scope}:${ownerId}:${provider || 'deepseek'}`)
+}
+
+export async function rotateModelProfileCredentials() {
+  if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
+  const activeVersion = getActiveKeyVersion()
+  return recordCredentialMigration({}, async run => {
+    const [profiles] = await run(`SELECT id, api_key_encrypted, key_version FROM ai_model_profiles
+      WHERE api_key_encrypted IS NOT NULL AND status = 'active' AND deleted_at IS NULL FOR UPDATE`)
+    let rotatedCount = 0
+    for (const profile of profiles) {
+      const plaintext = decryptCredential(profile.api_key_encrypted)
+      if (profile.key_version === activeVersion && JSON.parse(profile.api_key_encrypted).v === activeVersion) continue
+      const encrypted = encryptCredential(plaintext)
+      await run('UPDATE ai_model_profiles SET api_key_encrypted = ?, key_version = ?, updated_at = ? WHERE id = ?', [encrypted, activeVersion, beijingNow(), profile.id])
+      rotatedCount++
+    }
+    return { migratedCount: profiles.length, rotatedCount, legacyCleared: false }
+  })
+}
+
+export async function finalizeLegacyCredentialCleanup() {
+  if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
+  return recordCredentialMigration({}, async run => {
+    const [manual] = await run(`SELECT user_id, api_provider, model_name, api_key_encrypted FROM ai_configs
+      WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted <> '' FOR UPDATE`)
+    const [globalRows] = await run(`SELECT api_provider, model_name, api_key_encrypted FROM global_auto_config
+      WHERE id = 1 AND api_key_encrypted IS NOT NULL AND api_key_encrypted <> '' FOR UPDATE`)
+    const [closeRows] = await run(`SELECT user_id, api_provider, model_name, api_key_encrypted FROM close_config
+      WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted <> '' FOR UPDATE`)
+    const [systemRows] = await run("SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `key` LIKE '%_api_key' AND `value` <> '' FOR UPDATE")
+    for (const row of manual) await findMatchingRuntimeProfile(run, row.user_id, 'user', row.api_provider, row.model_name, row.api_key_encrypted)
+    for (const row of closeRows) await findMatchingRuntimeProfile(run, row.user_id, 'user', row.api_provider, row.model_name, row.api_key_encrypted)
+    for (const row of globalRows) await findMatchingRuntimeProfile(run, 0, 'platform', row.api_provider, row.model_name, row.api_key_encrypted)
+    for (const row of systemRows) {
+      const provider = row.key.replace(/_api_key$/, '')
+      const [[modelRow]] = await run("SELECT `value` FROM system_config WHERE category = 'ai_provider' AND `key` = ? LIMIT 1", [`${provider}_model`])
+      await findMatchingRuntimeProfile(run, 0, 'platform', provider, modelRow?.value, row.value)
+    }
+    await run('UPDATE ai_configs SET api_key_encrypted = NULL WHERE api_key_encrypted IS NOT NULL')
+    await run('UPDATE global_auto_config SET api_key_encrypted = NULL WHERE id = 1')
+    await run('UPDATE close_config SET api_key_encrypted = NULL WHERE api_key_encrypted IS NOT NULL')
+    await run("UPDATE system_config SET `value` = '' WHERE category = 'ai_provider' AND `key` LIKE '%_api_key'")
+    return { migratedCount: manual.length + globalRows.length + closeRows.length + systemRows.length, rotatedCount: 0, legacyCleared: true }
+  })
 }

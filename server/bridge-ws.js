@@ -833,6 +833,11 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'save_config': {
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
+        if (cfg.api_key) {
+          const actor = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+          const scope = actor?.role === 'admin' ? 'platform' : 'user'
+          await ai.upsertDefaultModelProfileFromLegacyInput(userId, actor?.role || 'user', cfg, scope)
+        }
         const hasSystemPrompt = Object.prototype.hasOwnProperty.call(cfg, 'system_prompt')
         const now = beijingNow()
         const sid = params.session_id || 'default'
@@ -851,7 +856,7 @@ async function handleBrowserCommand(ws, userId, msg) {
               model_sharing_enabled = VALUES(model_sharing_enabled),
               system_prompt = CASE WHEN ? = 1 THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
               is_active = 1, updated_at = VALUES(updated_at)`,
-            [userId, sid, cfg.api_provider || 'deepseek', cfg.api_key || null,
+            [userId, sid, cfg.api_provider || 'deepseek', null,
               cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature ?? DEFAULT_TEMPERATURE, cfg.max_tokens || DEFAULT_MAX_TOKENS,
               cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
               cfg.max_position_size || DEFAULT_MAX_POSITION_SIZE, cfg.selected_take_profit || DEFAULT_SELECTED_TAKE_PROFIT, cfg.model_sharing_enabled ? 1 : 0,
@@ -1284,11 +1289,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         const user2 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (user2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
         const existing = await ai.getGlobalAutoConfig()
+        if (params.api_key) await ai.upsertDefaultModelProfileFromLegacyInput(userId, 'admin', params, 'platform')
         const newCfg = {
           interval_minutes: existing?.interval_minutes || 5,
           api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
           model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
-          api_key_encrypted: params.api_key || existing?.api_key_encrypted || null,
+          api_key_encrypted: existing?.api_key_encrypted || null,
           api_base_url: params.api_base_url ?? existing?.api_base_url ?? DEFAULT_API_BASE_URL,
           temperature: params.temperature ?? existing?.temperature ?? DEFAULT_TEMPERATURE,
           max_tokens: params.max_tokens ?? existing?.max_tokens ?? DEFAULT_MAX_TOKENS,

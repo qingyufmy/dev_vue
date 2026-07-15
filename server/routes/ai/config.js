@@ -6,7 +6,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge, computeAtr14 } from './market-data.js'
 import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
 import { isEncryptionAvailable } from '../../ai-credential.js'
-import { resolveAiTaskModel } from './model-profiles.js'
+import { resolveAiTaskModel, upsertDefaultModelProfileFromLegacyInput } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
 import { evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy } from './risk-policy.js'
 import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
@@ -111,6 +111,14 @@ export async function getActiveConfig(db, userId, sessionId = 'default', provide
   }
 
   if (opts.skipFallbacks) return row
+
+  // Emergency rollback only. Runtime inference uses resolveAiTaskModel(); the
+  // legacy credential chain is disabled by default so plaintext fields cannot
+  // silently become an active credential source again.
+  if (process.env.AI_LEGACY_CREDENTIAL_READ_ENABLED !== 'true') {
+    if (row) row.api_key_encrypted = null
+    return row
+  }
 
   const userHasOwnConfig = row && row.api_key_encrypted
   if (!userHasOwnConfig) {
@@ -660,8 +668,8 @@ export async function getCloseConfig(userId) {
 
 export async function saveCloseConfig(userId, cfg) {
   const now = beijingNow()
-  let keyEnc = cfg.api_key_encrypted || null
-  if (cfg.api_key && !keyEnc) { keyEnc = cfg.api_key }
+  if (cfg.api_key) await upsertDefaultModelProfileFromLegacyInput(userId, 'user', cfg, 'user')
+  const keyEnc = null
   await queryRun(`INSERT INTO close_config (user_id, enabled, check_interval_seconds, model_name, api_provider, api_base_url, api_key_encrypted, temperature, max_tokens, system_prompt,
     rule_soft_sl, rule_soft_tp, rule_timeout_minutes, rule_max_loss_pct, rule_reverse_signal, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
