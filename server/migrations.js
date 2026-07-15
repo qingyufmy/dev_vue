@@ -1212,6 +1212,57 @@ const migrations = [
       // 4. Backfill existing auto_prompt_types
       await queryRun("UPDATE auto_prompt_types SET scope = 'platform', owner_user_id = 0 WHERE scope = 'platform' AND owner_user_id = 0 AND deleted_at IS NULL")
     }
+  },
+  {
+    id: '058_order_intent_gateway',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS order_intents (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        idempotency_key VARCHAR(191) NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT DEFAULT NULL,
+        source_type VARCHAR(32) NOT NULL,
+        source_id VARCHAR(64) DEFAULT NULL,
+        client_request_id VARCHAR(128) DEFAULT NULL,
+        action VARCHAR(32) NOT NULL,
+        symbol VARCHAR(64) DEFAULT NULL,
+        request_json LONGTEXT DEFAULT NULL,
+        risk_json LONGTEXT DEFAULT NULL,
+        bridge_payload_json LONGTEXT DEFAULT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'preparing',
+        lease_token VARCHAR(64) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        bridge_command_ref VARCHAR(32) DEFAULT NULL,
+        trade_ticket VARCHAR(64) DEFAULT NULL,
+        pending_ticket VARCHAR(64) DEFAULT NULL,
+        result_json LONGTEXT DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_order_intent_idempotency (idempotency_key),
+        INDEX idx_order_intent_account_status (trading_account_id, status, updated_at),
+        INDEX idx_order_intent_user_status (user_id, status, updated_at),
+        INDEX idx_order_intent_lease (status, lease_expires_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS risk_reservations (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        order_intent_id BIGINT NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT DEFAULT NULL,
+        symbol VARCHAR(64) DEFAULT NULL,
+        reserved_volume DECIMAL(18,8) NOT NULL DEFAULT 0,
+        reserved_risk_amount DECIMAL(20,8) DEFAULT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'active',
+        expires_at DATETIME NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_risk_reservation_intent (order_intent_id),
+        INDEX idx_risk_reservation_account (trading_account_id, status, expires_at),
+        INDEX idx_risk_reservation_user (user_id, status, expires_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

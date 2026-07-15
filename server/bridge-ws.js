@@ -677,45 +677,11 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, 'rejected')
           break
         }
-        // Check if this is a pending order
-        const entryMethod = params.entry_method || 'market'
-        if (entryMethod !== 'market' && entryMethod !== 'observe') {
-          // Build pending type from entry_method + order_type
-          const orderType = params.order_type || 'buy'
-          const pendingTypeMap = {
-            'limit': orderType === 'buy' ? 'buy_limit' : 'sell_limit',
-            'stop': orderType === 'buy' ? 'buy_stop' : 'sell_stop',
-            'stop_limit': orderType === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
-          }
-          const pendingType = pendingTypeMap[entryMethod] || entryMethod
-          // pending_valid_until / pending_valid_minutes → MT5 expiration (Unix ts)
-          let expiration = 0
-          if (params.pending_valid_until) {
-            const expDate = new Date(params.pending_valid_until.replace(' ', 'T') + 'Z')
-            if (!isNaN(expDate.getTime())) {
-              expiration = Math.floor(expDate.getTime() / 1000) + 10800  // UTC → UTC+3
-            }
-          }
-          if (!expiration) {
-            const validMinutes = params.pending_valid_minutes || 240
-            const nowMt5 = Math.floor(Date.now() / 1000) + 10800
-            expiration = nowMt5 + Number(validMinutes) * 60
-          }
-          const pendingParams = {
-            symbol: params.symbol,
-            order_type: pendingType,
-            price: params.limit_price,
-            stoplimit_price: params.stop_limit_price || undefined,
-            volume: params.volume,
-            sl: params.sl,
-            tp: params.tp,
-            expiration: expiration,
-          }
-          result = await ai.mt5Bridge(userId, 'pending', pendingParams)
-        } else {
-          result = await ai.mt5Bridge(userId, 'open', params)
-        }
-        await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, result?.status || 'unknown')
+        const manualConfig = await ai.getActiveConfig(null, userId, params.session_id || 'default') || {}
+        result = await ai.executeOrderCore(userId, {
+          ...manualConfig,
+          max_position_size: manualConfig.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
+        }, params, 'manual_open', { sourceType: 'manual' })
         break
       }
       case 'close': {
@@ -1086,6 +1052,18 @@ async function handleBrowserCommand(ws, userId, msg) {
           signalSource = 'manual'
         }
         if (!signal) return reply({ status: 'error', message: 'Signal not found' })
+        const deliveryAlreadyHandled = delivery && (
+          Number(delivery.is_executed) === 1 ||
+          delivery.pending_ticket || delivery.trade_ticket ||
+          ['success', 'executing', 'uncertain'].includes(delivery.execution_status)
+        )
+        const manualAlreadyHandled = !delivery && (
+          Number(signal.is_executed) === 1 || signal.pending_ticket || signal.trade_ticket
+        )
+        if (deliveryAlreadyHandled || manualAlreadyHandled) {
+          result = { status: 'rejected', message: 'signal_already_executed_or_pending' }
+          break
+        }
 
         const config = await ai.getExecuteRiskConfig(userId, signal)
         if (!config) {
@@ -1105,40 +1083,11 @@ async function handleBrowserCommand(ws, userId, msg) {
           marketData = {}
         }
         const orderPayload = ai.signalOrderPayload(signal, config, marketData, params.confirm)
-        const isPendingOrder = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
-        if (isPendingOrder) {
-          const pendingTypeMap = {
-            'limit': orderPayload.order_type === 'buy' ? 'buy_limit' : 'sell_limit',
-            'stop': orderPayload.order_type === 'buy' ? 'buy_stop' : 'sell_stop',
-            'stop_limit': orderPayload.order_type === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
-          }
-          const pendingType = pendingTypeMap[orderPayload.entry_method] || orderPayload.entry_method
-          // pending_valid_until is a datetime string, convert to MT5 expiration (Unix ts)
-          let expiration = 0
-          if (orderPayload.pending_valid_until) {
-            const expDate = new Date(orderPayload.pending_valid_until.replace(' ', 'T') + 'Z')
-            if (!isNaN(expDate.getTime())) {
-              expiration = Math.floor(expDate.getTime() / 1000) + 10800  // UTC → UTC+3
-            }
-          }
-          if (!expiration) {
-            const nowMt5 = Math.floor(Date.now() / 1000) + 10800
-            expiration = nowMt5 + 240 * 60  // fallback 4h
-          }
-          const pendingParams = {
-            symbol: orderPayload.symbol,
-            order_type: pendingType,
-            price: orderPayload.limit_price,
-            stoplimit_price: orderPayload.entry_method === 'stop_limit' ? (orderPayload.stop_limit_price || orderPayload.limit_price) : undefined,
-            volume: orderPayload.volume,
-            sl: orderPayload.sl,
-            tp: orderPayload.tp,
-            expiration: expiration,
-          }
-          result = await ai.mt5Bridge(userId, 'pending', pendingParams)
-        } else {
-          result = await ai.mt5Bridge(userId, 'open', orderPayload)
-        }
+        result = await ai.executeOrderCore(userId, config, orderPayload, 'ai_execute', {
+          sourceType: delivery ? 'auto_delivery' : 'manual_ai',
+          signalId: signal.id,
+          deliveryId: delivery?.id || null,
+        })
         if (result.status === 'success') {
           const isPending = signal.entry_method && signal.entry_method !== 'market' && signal.entry_method !== 'observe'
           const orderTicket = result.order || result.ticket || null
@@ -1167,13 +1116,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         } else {
           // Update delivery status on failure
           if (signalSource === 'auto_shared' && delivery) {
-            const status = result.status === 'rejected' ? 'rejected' : 'failed'
+            const status = result.status === 'rejected' ? 'rejected' : result.status === 'uncertain' ? 'uncertain' : 'failed'
             await queryRun(
               'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE id = ?',
               [status, JSON.stringify(result), delivery.id])
           }
         }
-        await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: params.signal_id, confirm: params.confirm, source: signalSource }, result, result.status)
         break
       }
       case 'auto_status': {

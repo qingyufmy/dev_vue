@@ -1,0 +1,443 @@
+// ai/order-intents.js — unified new-order intent, idempotency and reconciliation gateway
+
+import { createHash, randomUUID } from 'crypto'
+import { queryAll, queryOne, withTransaction, beijingNow } from '../../db.js'
+import { mt5Bridge } from './market-data.js'
+
+const TERMINAL_STATUSES = new Set(['succeeded', 'rejected', 'failed'])
+const LEASE_SECONDS = 30
+const RESERVATION_SECONDS = 10 * 60
+const RECONCILE_INTERVAL_MS = 30_000
+
+let reconcileTimer = null
+
+function toPositiveId(value) {
+  const id = Number(value)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+function safeParse(value, fallback = {}) {
+  if (!value) return fallback
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+function ticketFromResult(result) {
+  return result?.order ?? result?.ticket ?? result?.order_id ?? result?.trade_ticket ?? result?.pending_ticket ?? null
+}
+
+function isPendingAction(action) {
+  return action === 'pending'
+}
+
+function leaseIsActive(row) {
+  if (!row?.lease_expires_at) return false
+  return new Date(row.lease_expires_at).getTime() > Date.now()
+}
+
+async function txAll(run, sql, params = []) {
+  const [rows] = await run(sql, params)
+  return rows
+}
+
+async function txOne(run, sql, params = []) {
+  const rows = await txAll(run, sql, params)
+  return rows[0] || null
+}
+
+async function lockAccountScope(run, userId, tradingAccountId) {
+  if (tradingAccountId) {
+    const account = await txOne(
+      run,
+      'SELECT id, user_id FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE',
+      [tradingAccountId, userId]
+    )
+    if (!account) throw new Error('trading_account_not_found')
+    return
+  }
+  const user = await txOne(run, 'SELECT id FROM users WHERE id = ? FOR UPDATE', [userId])
+  if (!user) throw new Error('user_not_found')
+}
+
+export function buildOrderIdempotencyKey({ userId, tradingAccountId, signalId, clientRequestId }) {
+  const actor = toPositiveId(userId)
+  if (!actor) throw new Error('invalid_user_id')
+  const account = toPositiveId(tradingAccountId) || `legacy-user-${actor}`
+  let identity
+  if (signalId != null) {
+    identity = `signal:${String(signalId)}`
+  } else {
+    const requestId = String(clientRequestId || '').trim()
+    if (!requestId) throw new Error('client_request_id_required')
+    identity = `client:${requestId}`
+  }
+  const raw = `user:${actor}|account:${account}|${identity}`
+  return `oi:${createHash('sha256').update(raw).digest('hex')}`
+}
+
+function replayResult(row) {
+  const saved = safeParse(row.result_json, {})
+  if (row.status === 'awaiting_confirmation') {
+    return { ...saved, status: 'needs_confirmation', order_intent_id: row.id, idempotent_replay: true }
+  }
+  if (row.status === 'uncertain' || row.status === 'bridge_sending') {
+    return {
+      ...saved,
+      status: 'uncertain',
+      message: saved.message || '订单结果待确认，禁止自动重发',
+      order_intent_id: row.id,
+      idempotent_replay: true,
+    }
+  }
+  if (row.status === 'preparing' || row.status === 'prepared') {
+    return { status: 'in_progress', message: '订单正在处理中', order_intent_id: row.id, idempotent_replay: true }
+  }
+  return { ...saved, order_intent_id: row.id, idempotent_replay: true }
+}
+
+async function claimIntent({ userId, tradingAccountId, idempotencyKey, sourceType, sourceId, clientRequestId, action, request }) {
+  const leaseToken = randomUUID()
+  return withTransaction(async run => {
+    await lockAccountScope(run, userId, tradingAccountId)
+    const existing = await txOne(run, 'SELECT * FROM order_intents WHERE idempotency_key = ? FOR UPDATE', [idempotencyKey])
+    if (existing) {
+      if (TERMINAL_STATUSES.has(existing.status) || existing.status === 'uncertain' || existing.status === 'bridge_sending') {
+        return { replay: replayResult(existing) }
+      }
+      if (existing.status === 'awaiting_confirmation' && request.confirm !== true) {
+        return { replay: replayResult(existing) }
+      }
+      if ((existing.status === 'preparing' || existing.status === 'prepared') && leaseIsActive(existing)) {
+        return { replay: replayResult(existing) }
+      }
+      await run(
+        `UPDATE order_intents SET status = 'preparing', lease_token = ?,
+           lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), request_json = ?,
+           result_json = NULL, error_code = NULL, updated_at = ? WHERE id = ?`,
+        [leaseToken, LEASE_SECONDS, JSON.stringify(request), beijingNow(), existing.id]
+      )
+      return { intentId: Number(existing.id), leaseToken }
+    }
+    const [insert] = await run(
+      `INSERT INTO order_intents
+        (idempotency_key, user_id, trading_account_id, source_type, source_id, client_request_id,
+         action, symbol, request_json, status, lease_token, lease_expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, DATE_ADD(NOW(), INTERVAL ? SECOND), ?, ?)`,
+      [
+        idempotencyKey, userId, tradingAccountId, sourceType, sourceId || null, clientRequestId || null,
+        action, request.symbol || null, JSON.stringify(request), leaseToken, LEASE_SECONDS, beijingNow(), beijingNow(),
+      ]
+    )
+    return { intentId: Number(insert.insertId), leaseToken }
+  })
+}
+
+async function finishBeforeSend(intentId, leaseToken, status, result, errorCode = null) {
+  await withTransaction(async run => {
+    const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    if (!intent || intent.lease_token !== leaseToken || intent.status === 'bridge_sending') return
+    await run(
+      `UPDATE order_intents SET status = ?, result_json = ?, error_code = ?, lease_token = NULL,
+         lease_expires_at = NULL, updated_at = ?, completed_at = CASE WHEN ? = 'awaiting_confirmation' THEN NULL ELSE ? END
+       WHERE id = ?`,
+      [status, JSON.stringify(result), errorCode, beijingNow(), status, beijingNow(), intentId]
+    )
+    await run(
+      "UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'",
+      [beijingNow(), intentId]
+    )
+  })
+}
+
+async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, request, risk) {
+  await withTransaction(async run => {
+    await lockAccountScope(run, userId, tradingAccountId)
+    const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    if (!intent || intent.status !== 'preparing' || intent.lease_token !== leaseToken) throw new Error('order_intent_lease_lost')
+    await run(
+      `INSERT INTO risk_reservations
+        (order_intent_id, user_id, trading_account_id, symbol, reserved_volume, reserved_risk_amount,
+         status, expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'active', DATE_ADD(NOW(), INTERVAL ? SECOND), ?, ?)
+       ON DUPLICATE KEY UPDATE reserved_volume = VALUES(reserved_volume),
+         reserved_risk_amount = VALUES(reserved_risk_amount), status = 'active',
+         expires_at = VALUES(expires_at), updated_at = VALUES(updated_at)`,
+      [
+        intentId, userId, tradingAccountId, request.symbol || null, Number(request.volume) || 0,
+        risk?.risk_amount ?? null, RESERVATION_SECONDS, beijingNow(), beijingNow(),
+      ]
+    )
+    await run(
+      `UPDATE order_intents SET status = 'prepared', request_json = ?, risk_json = ?,
+         lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = ? WHERE id = ?`,
+      [JSON.stringify(request), JSON.stringify(risk || {}), LEASE_SECONDS, beijingNow(), intentId]
+    )
+  })
+}
+
+async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId, bridgeAction, bridgeParams) {
+  return withTransaction(async run => {
+    await lockAccountScope(run, userId, tradingAccountId)
+    const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    if (!intent || intent.status !== 'prepared' || intent.lease_token !== leaseToken) throw new Error('order_intent_lease_lost')
+    const bridgeRef = `AI-${Number(intentId).toString(36).toUpperCase()}`.slice(0, 24)
+    const payload = { ...bridgeParams, comment: String(bridgeParams.comment || bridgeRef).slice(0, 31) }
+    await run(
+      `UPDATE order_intents SET status = 'bridge_sending', bridge_command_ref = ?, bridge_payload_json = ?,
+         lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = ? WHERE id = ?`,
+      [bridgeRef, JSON.stringify({ action: bridgeAction, params: payload }), LEASE_SECONDS, beijingNow(), intentId]
+    )
+    return { bridgeRef, payload }
+  })
+}
+
+async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeResult) {
+  const ticket = ticketFromResult(bridgeResult)
+  const succeeded = bridgeResult?.status === 'success' && ticket != null
+  const explicitReject = bridgeResult?.status === 'rejected'
+  const status = succeeded ? 'succeeded' : explicitReject ? 'rejected' : 'uncertain'
+  const result = succeeded
+    ? bridgeResult
+    : explicitReject
+      ? bridgeResult
+      : { ...bridgeResult, status: 'uncertain', message: bridgeResult?.message || bridgeResult?.error || '订单结果待确认，禁止自动重发' }
+  await withTransaction(async run => {
+    const intent = await txOne(run, 'SELECT id, status, lease_token FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    if (!intent || intent.status !== 'bridge_sending' || intent.lease_token !== leaseToken) return
+    await run(
+      `UPDATE order_intents SET status = ?, trade_ticket = ?, pending_ticket = ?, result_json = ?,
+         error_code = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ?, completed_at = ? WHERE id = ?`,
+      [
+        status, succeeded && !isPendingAction(bridgeAction) ? String(ticket) : null,
+        succeeded && isPendingAction(bridgeAction) ? String(ticket) : null,
+        JSON.stringify(result), succeeded ? null : (bridgeResult?.error || bridgeResult?.message || status),
+        beijingNow(), succeeded || explicitReject ? beijingNow() : null, intentId,
+      ]
+    )
+    if (succeeded) {
+      await run("UPDATE risk_reservations SET status = 'committed', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
+    } else if (explicitReject) {
+      await run("UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
+    }
+  })
+  return { ...result, order_intent_id: intentId, bridge_command_ref: undefined }
+}
+
+async function recoverPostSendFailure(intentId, leaseToken, error) {
+  return withTransaction(async run => {
+    const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    if (!intent) return { status: 'uncertain', message: error.message, order_intent_id: intentId }
+    if (intent.status !== 'bridge_sending') return replayResult(intent)
+    const result = { status: 'uncertain', message: error.message || 'post_send_finalization_failed' }
+    await run(
+      `UPDATE order_intents SET status = 'uncertain', result_json = ?, error_code = ?,
+         lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`,
+      [JSON.stringify(result), 'post_send_finalization_failed', beijingNow(), intentId, leaseToken]
+    )
+    // Reservation deliberately stays active until reconciliation.
+    return { ...result, order_intent_id: intentId }
+  })
+}
+
+/**
+ * Execute every new market/pending order through one durable intent.
+ * Account/quote/Bridge network calls always occur outside DB transactions.
+ */
+export async function prepareAndExecuteOrderIntent({
+  userId,
+  tradingAccountId = null,
+  signalId = null,
+  clientRequestId = null,
+  sourceType = 'manual',
+  sourceId = null,
+  action = 'open',
+  request = {},
+  config = {},
+  options = {},
+  validateRequest,
+  buildBridgeCall,
+  enrichRequest,
+  bridge = mt5Bridge,
+}) {
+  const actorId = toPositiveId(userId)
+  if (!actorId) return { status: 'rejected', message: 'invalid_user_id' }
+  const accountId = toPositiveId(tradingAccountId)
+  const effectiveClientId = clientRequestId || request.client_request_id || request.request_id || null
+  let idempotencyKey
+  try {
+    idempotencyKey = buildOrderIdempotencyKey({ userId: actorId, tradingAccountId: accountId, signalId, clientRequestId: effectiveClientId })
+  } catch (error) {
+    return { status: 'rejected', message: error.message }
+  }
+  let claim
+  try {
+    claim = await claimIntent({
+      userId: actorId, tradingAccountId: accountId, idempotencyKey, sourceType,
+      sourceId: sourceId || signalId, clientRequestId: effectiveClientId, action, request,
+    })
+  } catch (error) {
+    return { status: 'error', message: error.message }
+  }
+  if (claim.replay) return claim.replay
+  const { intentId, leaseToken } = claim
+  const preparedRequest = { ...request }
+  let account
+  let quote = null
+  let bridgeStarted = false
+  try {
+    account = await bridge(actorId, 'account', {}, options)
+    if (!account || account.status === 'error') throw new Error(account?.message || account?.error || 'account_snapshot_failed')
+    if (preparedRequest.symbol) {
+      quote = await bridge(actorId, 'quote', { symbol: preparedRequest.symbol }, options)
+      if (!quote || quote.status === 'error') throw new Error(quote?.message || quote?.error || 'quote_snapshot_failed')
+    }
+    if (typeof enrichRequest === 'function') {
+      await enrichRequest({ request: preparedRequest, account, quote })
+    }
+    const risk = await validateRequest(config, account, preparedRequest)
+    await reserveRisk(intentId, leaseToken, actorId, accountId, preparedRequest, risk)
+    const { bridgeAction, bridgeParams } = buildBridgeCall(preparedRequest)
+    if (!['open', 'pending'].includes(bridgeAction)) throw new Error('invalid_new_order_bridge_action')
+    const sending = await markBridgeSending(intentId, leaseToken, actorId, accountId, bridgeAction, bridgeParams)
+    bridgeStarted = true
+    let bridgeResult
+    try {
+      bridgeResult = await bridge(actorId, bridgeAction, sending.payload, options)
+    } catch (error) {
+      bridgeResult = { status: 'error', error: error.message }
+    }
+    const finalized = await finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeResult)
+    if (quote) finalized.quote = quote
+    finalized.risk = risk
+    return finalized
+  } catch (error) {
+    if (bridgeStarted) {
+      try {
+        return await recoverPostSendFailure(intentId, leaseToken, error)
+      } catch {
+        return { status: 'uncertain', message: error.message || 'post_send_finalization_failed', order_intent_id: intentId }
+      }
+    }
+    const reason = error?.reason || error?.message || 'order_prepare_failed'
+    const awaitingConfirmation = reason === 'confirmation_required'
+    const result = {
+      status: awaitingConfirmation ? 'needs_confirmation' : 'rejected',
+      message: reason,
+      details: error?.details || {},
+      order_intent_id: intentId,
+    }
+    await finishBeforeSend(intentId, leaseToken, awaitingConfirmation ? 'awaiting_confirmation' : 'rejected', result, reason)
+    return result
+  }
+}
+
+export async function recoverExpiredOrderIntentLeases() {
+  const rows = await queryAll(
+    `SELECT id FROM order_intents
+     WHERE status IN ('preparing','prepared','bridge_sending')
+       AND lease_expires_at IS NOT NULL AND lease_expires_at < NOW()
+     ORDER BY id ASC LIMIT 200`
+  )
+  let recovered = 0
+  for (const row of rows) {
+    await withTransaction(async run => {
+      const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [row.id])
+      if (!intent || !['preparing', 'prepared', 'bridge_sending'].includes(intent.status) || leaseIsActive(intent)) return
+      if (intent.status === 'bridge_sending') {
+        await run(
+          `UPDATE order_intents SET status = 'uncertain', result_json = ?, error_code = 'bridge_lease_expired',
+             lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`,
+          [JSON.stringify({ status: 'uncertain', message: 'bridge_lease_expired' }), beijingNow(), intent.id]
+        )
+      } else {
+        await run(
+          `UPDATE order_intents SET status = 'failed', result_json = ?, error_code = 'prepare_lease_expired',
+             lease_token = NULL, lease_expires_at = NULL, updated_at = ?, completed_at = ? WHERE id = ?`,
+          [JSON.stringify({ status: 'error', message: 'prepare_lease_expired' }), beijingNow(), beijingNow(), intent.id]
+        )
+        await run("UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intent.id])
+      }
+      recovered += 1
+    })
+  }
+  return recovered
+}
+
+function collectOrders(result) {
+  const candidates = [result?.orders, result?.pending_list, result?.positions, result?.deals, result?.history, result?.trades]
+  return candidates.flatMap(value => Array.isArray(value) ? value : [])
+}
+
+function matchesIntent(order, intent) {
+  const comment = String(order?.comment || order?.order_comment || '')
+  if (intent.bridge_command_ref && comment.includes(intent.bridge_command_ref)) return true
+  const ticket = String(order?.ticket ?? order?.order ?? order?.position_ticket ?? '')
+  return Boolean(ticket && (ticket === String(intent.trade_ticket || '') || ticket === String(intent.pending_ticket || '')))
+}
+
+export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit = 50 } = {}) {
+  const intents = await queryAll(
+    `SELECT * FROM order_intents WHERE status = 'uncertain' ORDER BY updated_at ASC LIMIT ?`,
+    [Math.max(1, Math.min(Number(limit) || 50, 200))]
+  )
+  let resolved = 0
+  for (const intent of intents) {
+    let found = null
+    let foundKind = null
+    try {
+      const [pending, positions, history] = await Promise.all([
+        bridge(intent.user_id, 'pending_list', { symbol: intent.symbol }, { noFallback: true }),
+        bridge(intent.user_id, 'positions', { symbol: intent.symbol }, { noFallback: true }),
+        bridge(intent.user_id, 'history', { page: 1, page_size: 500 }, { noFallback: true }),
+      ])
+      const pendingMatch = collectOrders(pending).find(order => matchesIntent(order, intent))
+      const tradeMatch = [...collectOrders(positions), ...collectOrders(history)]
+        .find(order => matchesIntent(order, intent))
+      found = pendingMatch || tradeMatch
+      foundKind = pendingMatch ? 'pending' : (tradeMatch ? 'trade' : null)
+    } catch {
+      continue
+    }
+    if (!found) continue
+    const ticket = ticketFromResult(found)
+    await withTransaction(async run => {
+      const current = await txOne(run, 'SELECT id, status FROM order_intents WHERE id = ? FOR UPDATE', [intent.id])
+      if (!current || current.status !== 'uncertain') return
+      await run(
+        `UPDATE order_intents SET status = 'succeeded', trade_ticket = ?, pending_ticket = ?, result_json = ?,
+           error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ?`,
+        [
+          foundKind === 'trade' && ticket != null ? String(ticket) : null,
+          foundKind === 'pending' && ticket != null ? String(ticket) : null,
+          JSON.stringify({ status: 'success', reconciled: true, ticket, kind: foundKind }),
+          beijingNow(),
+          beijingNow(),
+          intent.id,
+        ]
+      )
+      await run("UPDATE risk_reservations SET status = 'committed', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intent.id])
+      resolved += 1
+    })
+  }
+  return resolved
+}
+
+export function startOrderIntentReconciler() {
+  if (reconcileTimer) return
+  const run = async () => {
+    try {
+      await recoverExpiredOrderIntentLeases()
+      await reconcileUncertainOrderIntents()
+    } catch (error) {
+      console.error('[OrderIntent] Reconciler failed:', error.message)
+    }
+  }
+  reconcileTimer = setInterval(run, RECONCILE_INTERVAL_MS)
+  reconcileTimer.unref?.()
+  run()
+}
+
+export function stopOrderIntentReconciler() {
+  if (!reconcileTimer) return
+  clearInterval(reconcileTimer)
+  reconcileTimer = null
+}

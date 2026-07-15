@@ -3060,6 +3060,7 @@ function buildManualOrder(orderType) {
       entry_method: entryMethod,
       limit_price: limitPrice,
       pending_valid_minutes: pendingValidMinutes,
+      client_request_id: globalThis.crypto?.randomUUID?.() || `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     },
     meta: {
       symbol,

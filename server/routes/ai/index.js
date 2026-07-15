@@ -60,7 +60,7 @@ export { handleAnalyze } from './strategy.js'
 export { maybeAiSignal } from './llm.js'
 
 export { insertAudit, getActiveConfig, getAnalyzeApiKey,
-  getAutoConfig, upsertAutoConfig, signalOrderPayload,
+  getAutoConfig, upsertAutoConfig, signalOrderPayload, executeOrderCore,
   getGlobalAutoConfig, saveGlobalAutoConfig,
   getExecuteRiskConfig, getAutoPromptTypes, getAutoPromptTypeById,
   saveAutoPromptType, disableAutoPromptType, getUserAutoConfig,
@@ -74,6 +74,10 @@ export { resolveAiTaskModel, logModelUsage, beginModelUsage, finishModelUsage, c
   getUserModelDefault, setUserModelDefault,
   getPlatformUsagePolicy, updatePlatformUsagePolicy,
   migrateLegacyConfigs } from './model-profiles.js'
+
+export { buildOrderIdempotencyKey, prepareAndExecuteOrderIntent,
+  recoverExpiredOrderIntentLeases, reconcileUncertainOrderIntents,
+  startOrderIntentReconciler, stopOrderIntentReconciler } from './order-intents.js'
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,

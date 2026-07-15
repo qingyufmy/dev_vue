@@ -29,6 +29,7 @@ import sentimentRoutes from './routes/sentiment.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON } from './redis.js'
 import { initAutoSchedulers } from './routes/ai/index.js'
+import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { authMiddleware } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
@@ -370,6 +371,7 @@ initBridgeWS(server)
     console.warn('[AI] Credential master key is unavailable; model calls and key updates are disabled')
   }
   await initAutoSchedulers()
+  startOrderIntentReconciler()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()
   console.log(`[TZ] server=${Intl.DateTimeFormat().resolvedOptions().timeZone} db_session=+08:00 parse=explicit(+08:00)`)

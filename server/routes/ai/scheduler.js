@@ -1608,7 +1608,12 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         { status: 'skipped', reason: 'lock_lost_before_send' }, 'warning')
       return
     }
-    const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', { noFallback: true })
+    const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', {
+      noFallback: true,
+      sourceType: 'auto_delivery',
+      signalId,
+      deliveryId: `${signalId}:${userId}`,
+    })
 
     if (execResult.status === 'success') {
       const ticket = execResult.order || execResult.ticket || null
@@ -1633,7 +1638,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, ticket, volume: order.volume, is_pending: isPending, tp_tier_requested: order.tp_tier_requested, tp_tier_used: order.tp_tier_used, normalization_info: order.normalization_info },
         { status: 'success', ticket, volume: order.volume, tp_tier_used: order.tp_tier_used }, 'success')
     } else {
-      const status = execResult.status === 'rejected' ? 'rejected' : 'failed'
+      const status = execResult.status === 'rejected' ? 'rejected' : execResult.status === 'uncertain' ? 'uncertain' : 'failed'
       await queryRun(
         `UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
         [status, JSON.stringify(execResult), signalId, userId])

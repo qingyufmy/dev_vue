@@ -7,6 +7,7 @@ import { mt5Bridge } from './market-data.js'
 import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
 import { isEncryptionAvailable } from '../../ai-credential.js'
 import { resolveAiTaskModel } from './model-profiles.js'
+import { prepareAndExecuteOrderIntent } from './order-intents.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -668,48 +669,37 @@ export async function getCloseSignalTickets(userId) {
 }
 
 export async function executeOrderCore(userId, config, request, action, options = {}) {
-  let accountResult, quote
-  accountResult = await mt5Bridge(userId, 'account', {}, options)
-  const account = accountResult
-
-  if (request.symbol) {
-    try {
-      quote = await mt5Bridge(userId, 'quote', { symbol: request.symbol }, options)
-      request.quote_price = parseFloat(request.order_type === 'buy' ? quote.ask : quote.bid)
-      const pointSize = quote.point || (request.quote_price > 1000 ? 0.01 : 0.0001)
-      if (request.stop_loss_points && !request.sl) {
-        request.sl = request.order_type === 'buy'
-          ? round2(request.quote_price - request.stop_loss_points * pointSize)
-          : round2(request.quote_price + request.stop_loss_points * pointSize)
+  const signalId = request.signal_id ?? options.signalId ?? null
+  const sourceType = options.sourceType || (options.deliveryId ? 'auto_delivery' : signalId ? 'signal' : 'manual')
+  const result = await prepareAndExecuteOrderIntent({
+    userId,
+    tradingAccountId: options.tradingAccountId ?? request.trading_account_id ?? null,
+    signalId,
+    clientRequestId: options.clientRequestId ?? request.client_request_id ?? request.request_id ?? null,
+    sourceType,
+    sourceId: options.deliveryId ?? signalId,
+    action,
+    request,
+    config,
+    options,
+    validateRequest: validateTradeRequest,
+    buildBridgeCall: buildBridgeOrderCall,
+    enrichRequest: ({ request: prepared, quote }) => {
+      if (!quote || !prepared.symbol) return
+      prepared.quote_price = parseFloat(prepared.order_type === 'buy' ? quote.ask : quote.bid)
+      const pointSize = quote.point || (prepared.quote_price > 1000 ? 0.01 : 0.0001)
+      if (prepared.stop_loss_points && !prepared.sl) {
+        prepared.sl = prepared.order_type === 'buy'
+          ? round2(prepared.quote_price - prepared.stop_loss_points * pointSize)
+          : round2(prepared.quote_price + prepared.stop_loss_points * pointSize)
       }
-      if (request.take_profit_points && !request.tp) {
-        request.tp = request.order_type === 'buy'
-          ? round2(request.quote_price + request.take_profit_points * pointSize)
-          : round2(request.quote_price - request.take_profit_points * pointSize)
+      if (prepared.take_profit_points && !prepared.tp) {
+        prepared.tp = prepared.order_type === 'buy'
+          ? round2(prepared.quote_price + prepared.take_profit_points * pointSize)
+          : round2(prepared.quote_price - prepared.take_profit_points * pointSize)
       }
-    } catch (e) { console.error('[ExecuteOrder] Failed to get quote:', e.message) }
-  }
-
-  let result
-  try {
-    const risk = validateTradeRequest(config, account, request)
-    const { bridgeAction, bridgeParams } = buildBridgeOrderCall(request)
-    const openResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
-    result = { ...openResult, risk }
-    if (quote) result.quote = quote
-  } catch (err) {
-    if (err instanceof RiskReject) {
-      result = {
-        status: err.reason === 'confirmation_required' ? 'needs_confirmation' : 'rejected',
-        message: err.reason,
-        details: err.details,
-      }
-    } else {
-      console.error('[ExecuteOrder] Unexpected error:', err.message)
-      result = { status: 'error', message: '订单执行异常，请重试' }
-    }
-  }
-
+    },
+  })
   await insertAudit(null, userId, action, request.symbol, request, result, result.status)
   return result
 }

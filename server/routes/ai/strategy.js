@@ -5,7 +5,7 @@ import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds } from './utils.js'
 import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAnalyzeApiKey, insertAudit, validateTradeRequest, RiskReject, signalOrderPayload, buildBridgeOrderCall, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
+import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
@@ -143,8 +143,8 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   }
 }
 
-export async function executeOrder(userId, config, request, action) {
-  return executeOrderCore(userId, config, request, action)
+export async function executeOrder(userId, config, request, action, options = {}) {
+  return executeOrderCore(userId, config, request, action, options)
 }
 
 export async function handleAnalyze(userId, params) {
@@ -224,22 +224,9 @@ export async function handleAnalyze(userId, params) {
       }
       const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
 
-      // Get the latest account state for risk validation.
-      const freshAccount = await mt5Bridge(userId, 'account', {})
-
-      // Run risk validation before executing
-      try {
-        validateTradeRequest(riskCfg, freshAccount, orderPayload)
-      } catch (e) {
-        console.log(`[Analyze] Auto-execute blocked by risk: ${e.message}`)
-        await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', risk_block: e.message }, { status: 'rejected', message: e.message }, 'rejected')
-        return { status: 'success', signal, market }
-      }
-
-      const { bridgeAction, bridgeParams } = buildBridgeOrderCall(orderPayload)
-      const execResult = await mt5Bridge(userId, bridgeAction, bridgeParams)
+      const execResult = await executeOrder(userId, riskCfg, orderPayload, 'ai_execute', { sourceType: 'manual_ai' })
       if (execResult && execResult.status === 'success') {
-        const isPending = bridgeAction === 'pending'
+        const isPending = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
         const ticket = execResult.order || execResult.ticket || null
         if (isPending) {
           await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ?, pending_state = ? WHERE id = ?',
