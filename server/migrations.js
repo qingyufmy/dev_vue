@@ -1082,93 +1082,6 @@ const migrations = [
     }
   },
   {
-    id: '057_strategy_ownership',
-    up: async () => {
-      // 1. Extend auto_prompt_types with ownership/visibility columns
-      const aptCols = [
-        { name: 'scope', def: "ADD COLUMN scope VARCHAR(20) NOT NULL DEFAULT 'platform'" },
-        { name: 'owner_user_id', def: 'ADD COLUMN owner_user_id INT NOT NULL DEFAULT 0' },
-        { name: 'model_profile_id', def: 'ADD COLUMN model_profile_id INT DEFAULT NULL' },
-        { name: 'inference_mode', def: "ADD COLUMN inference_mode VARCHAR(32) NOT NULL DEFAULT 'platform_model'" },
-        { name: 'visibility_status', def: "ADD COLUMN visibility_status VARCHAR(20) NOT NULL DEFAULT 'active'" },
-        { name: 'version', def: 'ADD COLUMN version INT NOT NULL DEFAULT 1' },
-        { name: 'version_label', def: "ADD COLUMN version_label VARCHAR(50) DEFAULT ''" },
-      ]
-      for (const col of aptCols) {
-        try {
-          const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types' AND COLUMN_NAME = ?", [col.name])
-          if (!existing || existing.length === 0) {
-            await queryRun(`ALTER TABLE auto_prompt_types ${col.def}`)
-            console.log(`[Migrations] 057 added ${col.name} to auto_prompt_types`)
-          }
-        } catch (e) {
-          if (!e.message?.includes('Duplicate column')) {
-            console.error(`[Migrations] 057 auto_prompt_types.${col.name} failed:`, e.message)
-          }
-        }
-      }
-
-      // Index for scope+owner lookups
-      try {
-        await queryRun('CREATE INDEX idx_apt_scope_owner ON auto_prompt_types(scope, owner_user_id, deleted_at)')
-      } catch (e) {
-        if (!e.message?.includes('Duplicate')) console.error('[Migrations] 057 idx_apt_scope_owner failed:', e.message)
-      }
-
-      // 2. Create trading_accounts table
-      try {
-        await queryRun(`CREATE TABLE IF NOT EXISTS trading_accounts (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          user_id INT NOT NULL,
-          broker_server VARCHAR(100) NOT NULL DEFAULT '',
-          login_account VARCHAR(50) NOT NULL DEFAULT '',
-          nickname VARCHAR(100) DEFAULT '',
-          margin_mode VARCHAR(20) NOT NULL DEFAULT 'netting',
-          review_status VARCHAR(20) NOT NULL DEFAULT 'pending',
-          observe_status VARCHAR(20) NOT NULL DEFAULT 'active',
-          is_deleted TINYINT NOT NULL DEFAULT 0,
-          created_at DATETIME NOT NULL DEFAULT (NOW()),
-          updated_at DATETIME NOT NULL DEFAULT (NOW()),
-          INDEX idx_ta_user (user_id, is_deleted)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
-        console.log('[Migrations] 057 created trading_accounts')
-      } catch (e) {
-        if (!e.message?.includes('Duplicate')) console.error('[Migrations] 057 trading_accounts failed:', e.message)
-      }
-
-      // 3. Create strategy_subscriptions table
-      try {
-        await queryRun(`CREATE TABLE IF NOT EXISTS strategy_subscriptions (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          user_id INT NOT NULL,
-          trading_account_id INT NOT NULL,
-          strategy_id INT NOT NULL,
-          risk_profile_id INT DEFAULT NULL,
-          symbols_json TEXT DEFAULT NULL,
-          execution_enabled TINYINT NOT NULL DEFAULT 0,
-          memory_mode VARCHAR(20) NOT NULL DEFAULT 'shared',
-          conflicting_strategy_id INT DEFAULT NULL,
-          is_deleted TINYINT NOT NULL DEFAULT 0,
-          created_at DATETIME NOT NULL DEFAULT (NOW()),
-          updated_at DATETIME NOT NULL DEFAULT (NOW()),
-          INDEX idx_ss_user_strategy (user_id, strategy_id, is_deleted),
-          INDEX idx_ss_account_strategy (trading_account_id, strategy_id, is_deleted),
-          INDEX idx_ss_account_exec (trading_account_id, execution_enabled, is_deleted)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
-        console.log('[Migrations] 057 created strategy_subscriptions')
-      } catch (e) {
-        if (!e.message?.includes('Duplicate')) console.error('[Migrations] 057 strategy_subscriptions failed:', e.message)
-      }
-
-      // 4. Backfill existing auto_prompt_types: set scope='platform', owner_user_id=0
-      try {
-        await queryRun("UPDATE auto_prompt_types SET scope = 'platform', owner_user_id = 0 WHERE scope = 'platform' AND owner_user_id = 0 AND deleted_at IS NULL")
-      } catch (e) {
-        console.error('[Migrations] 057 backfill scope failed:', e.message)
-      }
-    }
-  },
-  {
     id: '056_model_profiles_tables',
     up: async () => {
       const stmts = [
@@ -1233,6 +1146,72 @@ const migrations = [
         await queryRun(sql)
       }
     }
+  },
+  {
+    id: '057_strategy_ownership',
+    up: async () => {
+      // 1. Extend auto_prompt_types with ownership/visibility columns (idempotent)
+      const aptCols = [
+        { name: 'scope', def: "ADD COLUMN scope VARCHAR(20) NOT NULL DEFAULT 'platform'" },
+        { name: 'owner_user_id', def: 'ADD COLUMN owner_user_id INT NOT NULL DEFAULT 0' },
+        { name: 'model_profile_id', def: 'ADD COLUMN model_profile_id INT DEFAULT NULL' },
+        { name: 'inference_mode', def: "ADD COLUMN inference_mode VARCHAR(32) NOT NULL DEFAULT 'platform_model'" },
+        { name: 'visibility_status', def: "ADD COLUMN visibility_status VARCHAR(20) NOT NULL DEFAULT 'active'" },
+        { name: 'version', def: 'ADD COLUMN version INT NOT NULL DEFAULT 1' },
+        { name: 'version_label', def: "ADD COLUMN version_label VARCHAR(50) DEFAULT ''" },
+      ]
+      for (const col of aptCols) {
+        const existing = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types' AND COLUMN_NAME = ?", [col.name])
+        if (!existing || existing.length === 0) {
+          await queryRun(`ALTER TABLE auto_prompt_types ${col.def}`)
+          console.log(`[Migrations] 057 added ${col.name} to auto_prompt_types`)
+        }
+      }
+
+      // Index for scope+owner lookups (idempotent)
+      const idxRows = await queryAll("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types' AND INDEX_NAME = 'idx_apt_scope_owner'")
+      if (!idxRows || idxRows.length === 0) {
+        await queryRun('CREATE INDEX idx_apt_scope_owner ON auto_prompt_types(scope, owner_user_id, deleted_at)')
+      }
+
+      // 2. Create trading_accounts table
+      await queryRun(`CREATE TABLE IF NOT EXISTS trading_accounts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        broker_server VARCHAR(100) NOT NULL DEFAULT '',
+        login_account VARCHAR(50) NOT NULL DEFAULT '',
+        nickname VARCHAR(100) DEFAULT '',
+        margin_mode VARCHAR(20) NOT NULL DEFAULT 'netting',
+        review_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        observe_status VARCHAR(20) NOT NULL DEFAULT 'active',
+        is_deleted TINYINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT (NOW()),
+        updated_at DATETIME NOT NULL DEFAULT (NOW()),
+        INDEX idx_ta_user (user_id, is_deleted)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // 3. Create strategy_subscriptions table
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_subscriptions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        strategy_id INT NOT NULL,
+        risk_profile_id INT DEFAULT NULL,
+        symbols_json TEXT DEFAULT NULL,
+        execution_enabled TINYINT NOT NULL DEFAULT 0,
+        memory_mode VARCHAR(20) NOT NULL DEFAULT 'shared',
+        conflicting_strategy_id INT DEFAULT NULL,
+        is_deleted TINYINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT (NOW()),
+        updated_at DATETIME NOT NULL DEFAULT (NOW()),
+        INDEX idx_ss_user_strategy (user_id, strategy_id, is_deleted),
+        INDEX idx_ss_account_strategy (trading_account_id, strategy_id, is_deleted),
+        INDEX idx_ss_account_exec (trading_account_id, execution_enabled, is_deleted)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // 4. Backfill existing auto_prompt_types
+      await queryRun("UPDATE auto_prompt_types SET scope = 'platform', owner_user_id = 0 WHERE scope = 'platform' AND owner_user_id = 0 AND deleted_at IS NULL")
+    }
   }
 ]
 
@@ -1252,13 +1231,10 @@ export async function runMigrations() {
       await queryRun('INSERT INTO schema_migrations (id) VALUES (?)', [m.id])
       console.log(`[Migrations] Applied: ${m.id}`)
     } catch (e) {
-      // Ignore "Duplicate column" errors (already exists)
-      if (e.message?.includes('Duplicate column')) {
-        await queryRun('INSERT INTO schema_migrations (id) VALUES (?)', [m.id])
-        console.log(`[Migrations] Already exists, marked: ${m.id}`)
-      } else {
-        console.error(`[Migrations] Failed: ${m.id}`, e.message)
-      }
+      // Every migration must be idempotent on its own. Never mark a partially
+      // applied migration complete merely because one statement collided.
+      console.error(`[Migrations] FATAL: ${m.id} — ${e.message}`)
+      throw e
     }
   }
 }

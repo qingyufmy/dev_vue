@@ -108,12 +108,43 @@ describe('resolveAiTaskModel', () => {
     expect(result.error).toBe('no_model_configured')
   })
 
-  it('auto_private uses the requesting user default without Task 02 columns', async () => {
-    mockQueryOne.mockResolvedValueOnce(profile())
+  it('auto_private validates strategy ownership then uses the requesting user default', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 1, model_profile_id: null, visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(profile())
     const result = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'auto_private' })
     expect(result.credential_source).toBe('user')
-    expect(mockQueryOne.mock.calls[0][0]).toContain('user_model_defaults')
-    expect(mockQueryOne.mock.calls.every(([sql]) => !sql.includes('owner_user_id, model_profile_id FROM auto_prompt_types'))).toBe(true)
+    expect(mockQueryOne.mock.calls[0][0]).toContain('owner_user_id')
+    expect(mockQueryOne.mock.calls[1][0]).toContain('user_model_defaults')
+    expect(result.strategy_id).toBe(123)
+  })
+
+  it('uses an explicit same-owner private strategy model', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 1, model_profile_id: 77, visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(profile({ id: 77 }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'auto_private' })
+    expect(result.reason).toBe('strategy_binding')
+    expect(result.model_profile_id).toBe(77)
+  })
+
+  it('does not fall back when an explicit private strategy model is unavailable', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 1, model_profile_id: 77, visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(null)
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'auto_private' })
+    expect(result.error).toBe('bound_model_unavailable')
+    expect(mockQueryOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects cross-user and inactive private strategy execution', async () => {
+    mockQueryOne.mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 9, model_profile_id: null, visibility_status: 'active', is_active: 1 })
+    const denied = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'auto_private' })
+    expect(denied.error).toBe('private_strategy_access_denied')
+
+    mockQueryOne.mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 1, model_profile_id: null, visibility_status: 'draft', is_active: 1 })
+    const inactive = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'auto_private' })
+    expect(inactive.error).toBe('private_strategy_not_active')
   })
 
   it('uses the independent memory compression switch', async () => {

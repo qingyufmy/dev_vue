@@ -311,13 +311,48 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
     return await resolvePlatformModel()
   }
 
-  // Strategy ownership/model binding columns are introduced by Task 02. Until
-  // then auto_private safely resolves only the requesting user's default model.
+  if (usage === 'auto_private') {
+    if (!strategyId) {
+      return { model: null, credential_source: 'none', error: 'strategy_id_required', usage }
+    }
+    const strategy = await queryOne(
+      `SELECT id, scope, owner_user_id, model_profile_id, visibility_status, is_active
+       FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL`,
+      [strategyId]
+    )
+    if (!strategy || strategy.scope !== 'private' || Number(strategy.owner_user_id) !== Number(userId)) {
+      return { model: null, credential_source: 'none', error: 'private_strategy_access_denied', usage, strategy_id: strategyId }
+    }
+    if (strategy.visibility_status !== 'active' || !Number(strategy.is_active)) {
+      return { model: null, credential_source: 'none', error: 'private_strategy_not_active', usage, strategy_id: strategyId }
+    }
+    if (strategy.model_profile_id) {
+      const bound = await queryOne(
+        `SELECT * FROM ai_model_profiles
+         WHERE id = ? AND scope = 'user' AND owner_user_id = ?
+           AND status = 'active' AND deleted_at IS NULL`,
+        [strategy.model_profile_id, userId]
+      )
+      if (!bound || !bound.api_key_encrypted) {
+        // An explicit binding is an operator decision. Never conceal its
+        // deletion/disablement by silently spending platform credentials.
+        return {
+          model: null,
+          credential_source: 'none',
+          error: 'bound_model_unavailable',
+          usage,
+          strategy_id: strategyId,
+          model_profile_id: strategy.model_profile_id,
+        }
+      }
+      return { ...buildResult(bound, 'user', usage, 'strategy_binding'), strategy_id: strategyId }
+    }
+  }
 
   // Step 1: User's own model (via user_model_defaults)
   const userDefault = await getUserModelDefault(userId)
   if (userDefault && userDefault.api_key_encrypted) {
-    return buildResult(userDefault, 'user', usage, 'user_default')
+    return { ...buildResult(userDefault, 'user', usage, 'user_default'), strategy_id: strategyId || null }
   }
 
   // Step 2: Admin platform shared model
@@ -329,12 +364,12 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
       const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
       const allowedPlans = JSON.parse(policy.allowed_plans || '["pro"]')
       if (user && allowedPlans.includes(user.plan)) {
-        return buildResult(platformModel, 'platform_shared', usage, 'platform_fallback')
+        return { ...buildResult(platformModel, 'platform_shared', usage, 'platform_fallback'), strategy_id: strategyId || null }
       }
     }
   }
 
-  return { model: null, credential_source: 'none', error: 'no_model_configured', usage }
+  return { model: null, credential_source: 'none', error: 'no_model_configured', usage, strategy_id: strategyId || null }
 }
 
 async function resolvePlatformModel() {
