@@ -2072,6 +2072,15 @@ const migrations = [
         LEFT JOIN signal_outcomes so ON so.order_intent_id = oi.id
         WHERE oi.status = 'succeeded' AND oi.user_id IS NOT NULL AND oi.trading_account_id IS NOT NULL AND so.id IS NULL`)
     }
+  },
+  {
+    id: '082_expand_ai_signal_entry_method',
+    up: async () => {
+      // `stop_limit` is ten characters. The original VARCHAR(8) column made a
+      // valid buy_stop_limit/sell_stop_limit signal fail after inference while
+      // persisting ai_signals, before it could reach the execution pipeline.
+      await queryRun("ALTER TABLE ai_signals MODIFY COLUMN entry_method VARCHAR(20) DEFAULT 'market'")
+    }
   }
 ]
 

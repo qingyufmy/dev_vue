@@ -362,14 +362,18 @@ export function normalizeAiSignal(parsed, config, market) {
     pending_valid_minutes: 0, pending_valid_until: null,
     normalization_info: { type: 'l5_schema_hold', reason },
   })
+  let signalType = String(parsed.signal_type || 'hold').toLowerCase()
+  const validTypes = ['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
+  if (!validTypes.includes(signalType)) {
+    if (strictInference) return schemaHold('invalid_signal_type')
+    signalType = 'hold'
+  }
   if (strictInference) {
-    const strictRequired = ['signal_type', 'entry_method', 'recommended_volume', 'stop_loss_price', 'take_profit_1_price']
+    const strictRequired = ['signal_type', 'entry_method', 'recommended_volume']
+    if (signalType !== 'hold') strictRequired.push('stop_loss_price', 'take_profit_1_price')
     const missing = strictRequired.filter(key => parsed[key] === undefined || parsed[key] === null || parsed[key] === '')
     if (missing.length) return schemaHold(`missing:${missing.join(',')}`)
   }
-  let signalType = String(parsed.signal_type || 'hold').toLowerCase()
-  const validTypes = ['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
-  if (!validTypes.includes(signalType)) signalType = 'hold'
 
   // signal_type → entry_method + order_type auto mapping
   const typeEntryMap = {

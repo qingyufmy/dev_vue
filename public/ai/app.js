@@ -382,6 +382,9 @@ function confidenceInfo(value) {
   if (!Number.isFinite(num)) return { value: 0, label: "--" };
   const pct = num <= 1 ? num * 100 : num;
   const rounded = Math.max(0, Math.min(100, Math.round(pct)));
+  // Zero is used by the backend as a fail-closed sentinel when a model result
+  // cannot be trusted. Presenting it as a measured 0% confidence is misleading.
+  if (rounded === 0) return { value: 0, label: "不可用" };
   return { value: rounded, label: `${rounded}%` };
 }
 

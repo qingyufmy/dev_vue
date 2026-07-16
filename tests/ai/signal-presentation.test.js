@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields } from '../../server/routes/ai/signal-presentation.js'
 
+const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+
 describe('signal presentation', () => {
+  it('does not present an unavailable confidence sentinel as a measured zero percent', () => {
+    expect(app).toContain('if (rounded === 0) return { value: 0, label: "不可用" }')
+  })
   it('normalizes model fields and limits untrusted arrays', () => {
     const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
     expect(result.schema_version).toBe(2)

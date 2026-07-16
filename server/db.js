@@ -461,7 +461,7 @@ export async function initDB() {
       executed_at DATETIME,
       trade_ticket VARCHAR(100),
       execution_result TEXT,
-      entry_method VARCHAR(8) DEFAULT 'market',
+      entry_method VARCHAR(20) DEFAULT 'market',
       limit_price DOUBLE DEFAULT NULL,
       stop_limit_price DOUBLE DEFAULT NULL,
       pending_valid_until DATETIME DEFAULT NULL,

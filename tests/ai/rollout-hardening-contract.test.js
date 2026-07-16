@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 const admin = readFileSync(new URL('../../server/routes/admin.js', import.meta.url), 'utf8')
 const auth = readFileSync(new URL('../../server/middleware/auth.js', import.meta.url), 'utf8')
 const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
+const db = readFileSync(new URL('../../server/db.js', import.meta.url), 'utf8')
 const bridge = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const config = readFileSync(new URL('../../server/routes/ai/config.js', import.meta.url), 'utf8')
 const rollout = readFileSync(new URL('../../server/routes/ai/rollout-governance.js', import.meta.url), 'utf8')
@@ -12,6 +13,11 @@ const strategy = readFileSync(new URL('../../server/routes/ai/strategy.js', impo
 const preferences = readFileSync(new URL('../../server/routes/ai/inference-preferences.js', import.meta.url), 'utf8')
 
 describe('rollout hardening contract', () => {
+  it('persists every supported entry method without truncation', () => {
+    expect(migrations).toContain("id: '082_expand_ai_signal_entry_method'")
+    expect(migrations).toContain("MODIFY COLUMN entry_method VARCHAR(20) DEFAULT 'market'")
+    expect(db).toContain("entry_method VARCHAR(20) DEFAULT 'market'")
+  })
   it('adds the readiness-tracked rollout migration and defaults generative features off', () => {
     expect(migrations).toContain("id: '065_ai_rollout_governance'")
     expect(migrations).toContain("VALUES ('global', 0, 0, 0, 0, 1, 0")

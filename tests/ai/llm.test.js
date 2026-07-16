@@ -554,6 +554,17 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   const market = { latest_price: 2000, atr_anchor: 10, strategy_score: {}, volatility_pct: 0 }
   const config = { risk_level: 'medium', max_position_size: 0.05 }
 
+  it('keeps a valid AI hold with nullable trade prices and calibrated confidence', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'hold', entry_method: 'observe', confidence: 0.65,
+      recommended_volume: 0, stop_loss_price: null, take_profit_1_price: null,
+    }, config, market)
+    expect(result.signal_type).toBe('hold')
+    expect(result.entry_method).toBe('observe')
+    expect(result.confidence).toBeGreaterThan(0)
+    expect(result.normalization_info?.type).not.toBe('l5_schema_hold')
+  })
+
   it('invalid explicit entry_method degrades to hold instead of market', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'instant', confidence: 0.8,
