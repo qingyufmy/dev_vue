@@ -236,6 +236,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(stylesheetVersion).toBeTruthy()
     expect(appVersion).toBe(stylesheetVersion)
   })
+
+  it('initializes dynamically rendered risk-center icons without requiring a tab switch', () => {
+    const start = app.indexOf('async function loadRiskCenter()')
+    const end = app.indexOf('async function loadExecutionDecisions()', start)
+    const loadRiskCenter = app.slice(start, end)
+    expect(loadRiskCenter).toContain('class="risk-status-icon"')
+    expect(loadRiskCenter).toContain('renderExecutionDecisions(')
+    expect(loadRiskCenter).toContain('initIcons();')
+    expect(loadRiskCenter.indexOf('initIcons();')).toBeGreaterThan(loadRiskCenter.indexOf('class="risk-status-icon"'))
+  })
 })
 
 describe('route permissions and credential redaction', () => {
