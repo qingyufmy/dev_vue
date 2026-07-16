@@ -907,6 +907,10 @@ function connectBridgeStatusWs(onReady) {
         // New signal pushed — refresh status and signal list
         handleNewSignal(msg);
         loadStatus().catch(() => {});
+      } else if (msg.type === 'signal_execution_updated') {
+        // Execution can complete after the signal itself was pushed. Reload the
+        // same signal so pending/executed state disables duplicate submission.
+        loadSignals().catch(() => {});
       } else if (msg.type === 'weekly_flatten_state') {
         const noticeKey = `${msg.cycle || ''}:${msg.status || ''}:${msg.reason || ''}`;
         if (state._weeklyFlattenNoticeKey !== noticeKey) {
@@ -2972,7 +2976,8 @@ function updateSignalDisplay(signal) {
   };
 
   card.dataset.direction = dir;
-  card.dataset.status = signal.is_executed ? "executed" : signal.is_stale ? "expired" : "live";
+  const advice = signalExecutionAdvice(signal);
+  card.dataset.status = ["executed", "pending"].includes(advice.state) ? advice.state : signal.is_stale ? "expired" : "live";
   card.style.setProperty("--signal-border", colorMap[dir].border);
   card.style.setProperty("--signal-glow", colorMap[dir].glow);
   setText("sigSymbol", signal.symbol || "--");
@@ -2993,14 +2998,13 @@ function updateSignalDisplay(signal) {
   setText("lastSigTime", signalDisplayTime(signal));
   $("lastSigDirection").className = dir;
 
-  const executable = dir !== "hold" && dir !== "close" && !signal.is_stale && !signal.is_executed;
+  const executable = advice.executable === true && dir !== "hold" && dir !== "close" && !signal.is_stale;
   $("executeSignalBtn").disabled = !executable;
   $("executeSignalBtn").title = executable
     ? "复核后发送执行请求"
     : dir === "close" ? "持仓分析信号已自动执行"
       : signal.is_stale ? "信号已过期，无法执行"
-        : signal.is_executed ? "信号已执行"
-          : "HOLD 观望信号不执行";
+        : advice.description || (signal.is_executed ? "信号已执行" : "HOLD 观望信号不执行");
 }
 
 function signalFreshness(signal) {
@@ -3019,7 +3023,11 @@ function signalFreshness(signal) {
 function executionStatus(signal) {
   const dir = signalType(signal?.signal_type);
   if (!signal) return "--";
-  if (signal.is_executed) return "已执行";
+  const advice = signalExecutionAdvice(signal);
+  if (advice.state === "pending") return "挂单已提交";
+  if (advice.state === "executed" || signal.is_executed) return "已执行";
+  if (advice.state === "rejected") return "风控未放行";
+  if (advice.state === "failed") return "执行未完成";
   if (signal.is_stale) return "已过期";
   if (dir === "hold") return "观望，不执行";
   return "可复核";
@@ -3055,13 +3063,28 @@ function signalDecision(signal) {
   const dir = signalType(signal?.signal_type);
   const sourceReasons = signal?.key_reasons || stored.key_reasons;
   const sourceRisks = signal?.risk_factors || stored.risk_factors;
+  const bullish = Number(signal?.bullish_score ?? stored.bullish_score);
+  const bearish = Number(signal?.bearish_score ?? stored.bearish_score);
+  const hasDirectionBias = Number.isFinite(bullish) && Number.isFinite(bearish) && bullish >= 0 && bearish >= 0 && bullish + bearish > 0;
+  const total = hasDirectionBias ? bullish + bearish : 0;
   return {
     summary: signal?.decision_summary || stored.decision_summary || (dir === "hold" ? "当前条件不足，建议继续观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待风控复核。`),
     trigger: signal?.trigger_condition || stored.trigger_condition || "",
     invalidation: signal?.invalidation_condition || stored.invalidation_condition || "",
     reasons: Array.isArray(sourceReasons) ? sourceReasons.slice(0, 4) : [],
     risks: Array.isArray(sourceRisks) ? sourceRisks.slice(0, 4) : [],
+    bullishScore: hasDirectionBias ? Math.round(bullish / total * 1000) / 10 : null,
+    bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
   };
+}
+
+function renderDirectionBias(decision) {
+  if (decision.bullishScore == null || decision.bearishScore == null) return "";
+  return `<section class="direction-bias" aria-label="市场方向倾向">
+    <div class="direction-bias-head"><strong>市场方向倾向</strong><span>倾向强弱，不代表胜率</span></div>
+    <div class="direction-bias-values"><span class="bullish">偏多 ${decision.bullishScore.toFixed(1)}%</span><span class="bearish">偏空 ${decision.bearishScore.toFixed(1)}%</span></div>
+    <div class="direction-bias-track" aria-hidden="true"><i class="bullish" style="width:${decision.bullishScore}%"></i><i class="bearish" style="width:${decision.bearishScore}%"></i></div>
+  </section>`;
 }
 
 function signalExecutionAdvice(signal) {
@@ -3162,6 +3185,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
     </section>
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
+    ${renderDirectionBias(decision)}
     <div class="analysis-status-strip">
       <div><span>置信度</span><strong>${confidence.label}</strong></div>
       <div><span>AI 建议手数</span><strong>${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
@@ -3204,9 +3228,9 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-section">
       <div class="analysis-section-title"><i data-lucide="file-text" size="14"></i>分析正文</div>
     </div>
-    <div id="analysisTextContent" class="analysis-text collapsed">${analysisBlock}${reasoningBlock}</div>
+    <div id="analysisTextContent" class="analysis-text">${analysisBlock}${reasoningBlock}</div>
     <div class="analysis-expand-row">
-      <button class="btn-expand-analysis" type="button" data-action="toggle-analysis-text">展开完整分析</button>
+      <button class="btn-expand-analysis" type="button" data-action="toggle-analysis-text">收起分析正文</button>
     </div>
   `;
   highlightActiveAnalysis(signal.id);
@@ -3698,7 +3722,7 @@ function renderAnalysisHistory(signals, options = {}) {
   if (state.analysisHistoryHasMore) {
     const existing = host.querySelector(".history-sentinel");
     if (!existing) {
-      host.insertAdjacentHTML("beforeend", `<div class="history-sentinel"><span class="history-sentinel-text">滚动加载更多</span></div>`);
+      host.insertAdjacentHTML("beforeend", `<div class="history-sentinel"><button type="button" class="history-load-more"><span class="history-sentinel-text">加载更多</span></button></div>`);
     }
   }
 }
@@ -5039,11 +5063,6 @@ function initAnalysisHistoryScroll() {
       }
     });
   };
-
-  list.addEventListener("scroll", function() {
-    const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 60;
-    if (nearBottom) loadMore();
-  });
 
   list.addEventListener("click", function(e) {
     if (e.target.closest(".history-sentinel")) loadMore();

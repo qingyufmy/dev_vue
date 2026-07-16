@@ -3,10 +3,16 @@ import { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields
 
 describe('signal presentation', () => {
   it('normalizes model fields and limits untrusted arrays', () => {
-    const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
+    const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
     expect(result.schema_version).toBe(2)
     expect(result.decision_summary).toBe('顺势做多')
     expect(result.key_reasons).toHaveLength(4)
+    expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
+  })
+
+  it('normalizes direction inclination without presenting it as confidence', () => {
+    expect(normalizeDecisionFields({ bullish_score: 2, bearish_score: 1 })).toMatchObject({ bullish_score: 66.7, bearish_score: 33.3 })
+    expect(normalizeDecisionFields({ bullish_score: 'bad', bearish_score: 50 })).toMatchObject({ bullish_score: null, bearish_score: null })
   })
 
   it('never marks a hold signal executable', () => {

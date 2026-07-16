@@ -9,6 +9,17 @@ function cleanList(value, maxItems = 4, maxLength = 160) {
   return value.map(item => cleanText(item, maxLength)).filter(Boolean).slice(0, maxItems)
 }
 
+function directionScores(signal) {
+  const bullish = Number(signal.bullish_score)
+  const bearish = Number(signal.bearish_score)
+  if (!Number.isFinite(bullish) || !Number.isFinite(bearish) || bullish < 0 || bearish < 0 || bullish + bearish <= 0) {
+    return { bullish_score: null, bearish_score: null }
+  }
+  const total = bullish + bearish
+  const bullishScore = Math.round(bullish / total * 1000) / 10
+  return { bullish_score: bullishScore, bearish_score: Math.round((100 - bullishScore) * 10) / 10 }
+}
+
 function parseJson(value) {
   if (!value) return null
   if (typeof value === 'object') return value
@@ -28,6 +39,7 @@ export function normalizeDecisionFields(signal = {}) {
     invalidation_condition: cleanText(signal.invalidation_condition, 240),
     key_reasons: cleanList(signal.key_reasons),
     risk_factors: cleanList(signal.risk_factors),
+    ...directionScores(signal),
   }
 }
 

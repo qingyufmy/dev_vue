@@ -234,13 +234,15 @@ describe('normalizeAiSignal', () => {
   }
 
   it('buy 信号正常处理', () => {
-    const parsed = { signal_type: 'buy', confidence: 0.7, recommended_volume: 0.03 }
+    const parsed = { signal_type: 'buy', confidence: 0.7, recommended_volume: 0.03, bullish_score: 7, bearish_score: 3 }
     const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('buy')
     expect(result.confidence).toBeGreaterThan(0)
     expect(result.recommended_volume).toBeGreaterThan(0)
     expect(result.stop_loss_price).toBeTruthy()
     expect(result.take_profit_1_price).toBeTruthy()
+    expect(result.bullish_score).toBe(70)
+    expect(result.bearish_score).toBe(30)
   })
 
   it('hold 信号 volume 设为 0', () => {

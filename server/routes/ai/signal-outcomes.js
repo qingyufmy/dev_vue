@@ -74,7 +74,7 @@ export function resolveOutcomeClosureTransition(outcome, result, now = beijingNo
   }
 }
 
-export async function createSignalOutcomeTx(run, intent, bridgeResult) {
+export async function createSignalOutcomeTx(run, intent, bridgeResult, bridgeAction = null) {
   if (!intent?.trading_account_id) return null
   const request = parse(intent.approved_order_json, parse(intent.request_json))
   const [accounts] = await run('SELECT margin_mode FROM trading_accounts WHERE id = ? LIMIT 1', [intent.trading_account_id])
@@ -83,8 +83,9 @@ export async function createSignalOutcomeTx(run, intent, bridgeResult) {
   const positionId = ref(bridgeResult?.position_id ?? bridgeResult?.position)
   const orderTicket = ref(bridgeResult?.order ?? bridgeResult?.ticket)
   const deal = ref(bridgeResult?.deal ?? bridgeResult?.deal_ticket)
-  const pending = intent.action === 'pending' ? orderTicket : null
-  const signalId = Number(intent.source_id) > 0 ? Number(intent.source_id) : null
+  const pending = (bridgeAction || intent.action) === 'pending' ? orderTicket : null
+  const sourceSignalId = String(intent.source_id || '').split(':', 1)[0]
+  const signalId = Number(sourceSignalId) > 0 ? Number(sourceSignalId) : null
   await run(`INSERT INTO signal_outcomes
     (signal_id, order_intent_id, user_id, trading_account_id, margin_mode, symbol,
      entry_order_ticket, entry_deal_ticket, pending_ticket, position_id, expected_volume,

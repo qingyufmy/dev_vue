@@ -215,7 +215,7 @@ async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, reque
 async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId, bridgeAction, bridgeParams) {
   return withTransaction(async run => {
     await lockAccountScope(run, userId, tradingAccountId)
-    const intent = await txOne(run, 'SELECT id, status, lease_token, trading_account_id FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.status !== 'prepared' || intent.lease_token !== leaseToken) throw new Error('order_intent_lease_lost')
     const bridgeRef = `AI-${Number(intentId).toString(36).toUpperCase()}`.slice(0, 24)
     const payload = { ...bridgeParams, comment: String(bridgeParams.comment || bridgeRef).slice(0, 31) }
@@ -239,7 +239,10 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
       ? bridgeResult
       : { ...bridgeResult, status: 'uncertain', message: bridgeResult?.message || bridgeResult?.error || '订单结果待确认，禁止自动重发' }
   await withTransaction(async run => {
-    const intent = await txOne(run, 'SELECT id, status, lease_token, trading_account_id FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
+    // Outcome creation needs the owning user, source and approved request too.
+    // Selecting only lifecycle fields made a successful MT5 order fail during
+    // post-send persistence with `signal_outcomes.user_id cannot be null`.
+    const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.status !== 'bridge_sending' || intent.lease_token !== leaseToken) return
     await run(
       `UPDATE order_intents SET status = ?, trade_ticket = ?, pending_ticket = ?, result_json = ?,
@@ -254,7 +257,7 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
     if (succeeded) {
       await run("UPDATE risk_reservations SET status = 'committed', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
       if (intent.trading_account_id) await recordSuccessfulOpenTx(run, intent.trading_account_id)
-      await createSignalOutcomeTx(run, intent, bridgeResult)
+      await createSignalOutcomeTx(run, intent, bridgeResult, bridgeAction)
     } else if (explicitReject) {
       await run("UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
     }

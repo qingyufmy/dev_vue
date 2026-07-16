@@ -2032,6 +2032,46 @@ const migrations = [
         await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
       }
     }
+  },
+  {
+    id: '081_execution_outcome_repair_and_direction_bias',
+    up: async () => {
+      const schemas = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      for (const row of schemas) {
+        let schema
+        try { schema = JSON.parse(row.schema_json || '{}') } catch { schema = {} }
+        schema.bullish_score = '0-100，市场偏多倾向分；必须与bearish_score合计为100，不代表胜率或执行概率'
+        schema.bearish_score = '0-100，市场偏空倾向分；必须与bullish_score合计为100，不代表胜率或执行概率'
+        await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
+      }
+
+      // Repair deliveries where MT5 accepted the order but outcome persistence
+      // previously failed after sending. The durable order intent is the source
+      // of truth and prevents users from submitting the same signal again.
+      await queryRun(`UPDATE auto_signal_deliveries d
+        JOIN order_intents oi ON oi.id = d.order_intent_id AND oi.status = 'succeeded'
+        SET d.execution_status = 'success',
+            d.pending_ticket = COALESCE(d.pending_ticket, oi.pending_ticket),
+            d.trade_ticket = COALESCE(d.trade_ticket, oi.trade_ticket),
+            d.pending_state = CASE WHEN COALESCE(d.pending_ticket, oi.pending_ticket) IS NOT NULL THEN 'pending' ELSE d.pending_state END,
+            d.is_executed = CASE WHEN COALESCE(d.trade_ticket, oi.trade_ticket) IS NOT NULL THEN 1 ELSE d.is_executed END,
+            d.execution_result = COALESCE(oi.result_json, d.execution_result)`)
+
+      await queryRun(`INSERT IGNORE INTO signal_outcomes
+        (signal_id, delivery_id, order_intent_id, user_id, trading_account_id, margin_mode, symbol,
+         entry_order_ticket, pending_ticket, expected_volume, status, attribution_status, created_at, updated_at)
+        SELECT CASE WHEN oi.source_id REGEXP '^[0-9]+' THEN CAST(SUBSTRING_INDEX(oi.source_id, ':', 1) AS UNSIGNED) ELSE NULL END,
+          d.id, oi.id, oi.user_id, oi.trading_account_id, COALESCE(ta.margin_mode, 'netting'),
+          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(COALESCE(oi.approved_order_json, oi.request_json), '$.symbol')), ''),
+          COALESCE(oi.pending_ticket, oi.trade_ticket), oi.pending_ticket,
+          COALESCE(JSON_EXTRACT(COALESCE(oi.approved_order_json, oi.request_json), '$.volume'), 0),
+          'open', 'pending', oi.created_at, NOW()
+        FROM order_intents oi
+        LEFT JOIN auto_signal_deliveries d ON d.order_intent_id = oi.id
+        LEFT JOIN trading_accounts ta ON ta.id = oi.trading_account_id
+        LEFT JOIN signal_outcomes so ON so.order_intent_id = oi.id
+        WHERE oi.status = 'succeeded' AND oi.user_id IS NOT NULL AND oi.trading_account_id IS NOT NULL AND so.id IS NULL`)
+    }
   }
 ]
 

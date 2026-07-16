@@ -1770,6 +1770,10 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await insertAudit(null, userId, 'ai_auto_execute', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, ticket, volume: order.volume, is_pending: isPending, tp_tier_requested: order.tp_tier_requested, tp_tier_used: order.tp_tier_used, normalization_info: order.normalization_info },
         { status: 'success', ticket, volume: order.volume, tp_tier_used: order.tp_tier_used }, 'success')
+      sendToBrowsers(userId, {
+        type: 'signal_execution_updated', signal_id: signalId, status: 'success',
+        pending_ticket: isPending ? String(ticket) : null, trade_ticket: isPending ? null : ticket,
+      })
     } else {
       const status = execResult.status === 'rejected' ? 'rejected' : execResult.status === 'uncertain' ? 'uncertain' : 'failed'
       await queryRun(
@@ -1779,6 +1783,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await insertAudit(null, userId, status === 'rejected' ? 'ai_auto_execute_rejected' : 'ai_auto_execute', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: execResult.message },
         execResult, status === 'rejected' ? 'warning' : 'error')
+      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signalId, status })
     }
   } catch (err) {
     l(`exception: ${err.message}`)
@@ -1788,6 +1793,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     await insertAudit(null, userId, 'ai_auto_execute', symbol,
       { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: err.message },
       { status: 'error', message: err.message }, 'error')
+    sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signalId, status: 'failed' })
   }
 }
 

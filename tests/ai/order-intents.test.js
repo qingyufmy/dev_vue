@@ -50,6 +50,10 @@ function makeRunner() {
       reservation = { order_intent_id: params[0], status: 'active', reserved_volume: params[4] }
       return [{ affectedRows: 1 }, []]
     }
+    if (sql.includes('INSERT INTO signal_outcomes')) {
+      if (params[2] == null) throw new Error("Column 'user_id' cannot be null")
+      return [{ affectedRows: 1 }, []]
+    }
     if (sql.includes("SET status = 'preparing'")) {
       intent.status = 'preparing'
       intent.lease_token = params[0]
@@ -155,7 +159,7 @@ describe('idempotency identity', () => {
 
 describe('prepareAndExecuteOrderIntent', () => {
   it('reserves risk, sends once outside the transaction and commits the ticket', async () => {
-    const result = await prepareAndExecuteOrderIntent(baseArgs())
+    const result = await prepareAndExecuteOrderIntent(baseArgs({ tradingAccountId: 1 }))
     expect(result.status).toBe('success')
     expect(result.order_intent_id).toBe(1)
     expect(intent.status).toBe('succeeded')
@@ -163,6 +167,7 @@ describe('prepareAndExecuteOrderIntent', () => {
     expect(reservation.status).toBe('committed')
     const openCall = mockBridge.mock.calls.find(call => call[1] === 'open')
     expect(openCall[2].comment).toMatch(/^AI-/)
+    expect(txRun.mock.calls.some(call => String(call[0]).includes('INSERT INTO signal_outcomes'))).toBe(true)
   })
 
   it('replays a completed result without a second provider order call', async () => {
@@ -170,6 +175,17 @@ describe('prepareAndExecuteOrderIntent', () => {
     const again = await prepareAndExecuteOrderIntent(baseArgs())
     expect(again.idempotent_replay).toBe(true)
     expect(mockBridge.mock.calls.filter(call => call[1] === 'open')).toHaveLength(1)
+  })
+
+  it('records a pending ticket in the outcome even when the business action is AI execution', async () => {
+    const result = await prepareAndExecuteOrderIntent(baseArgs({
+      tradingAccountId: 1,
+      action: 'ai_auto_execute',
+      buildBridgeCall: vi.fn(request => ({ bridgeAction: 'pending', bridgeParams: request })),
+    }))
+    expect(result.status).toBe('success')
+    const outcomeInsert = txRun.mock.calls.find(call => String(call[0]).includes('INSERT INTO signal_outcomes'))
+    expect(outcomeInsert?.[1]?.[8]).toBe('123')
   })
 
   it('returns a pre-send manual validation error without touching the bridge', async () => {
