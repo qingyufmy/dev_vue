@@ -1080,18 +1080,6 @@ const migrations = [
       `)
       console.log(`[Migrations] 055 moved ${result?.affectedRows || 0} existing video course(s) to morning category`)
     }
-  },
-  {
-    id: '057_restore_pending_order_schema',
-    up: async () => {
-      const row = await queryOne('SELECT id FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
-      if (!row) {
-        console.log('[Migrations] 057 no active schema found, skip')
-        return
-      }
-      await queryRun('DELETE FROM ai_signal_schema WHERE id = ?', [row.id])
-      console.log('[Migrations] 057 deleted active schema, will fall back to DEFAULT_OUTPUT_FORMAT with pending order fields')
-    }
   }
 ]
 
