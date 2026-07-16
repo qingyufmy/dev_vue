@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260715k" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260716a" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -102,11 +102,8 @@
 
         <div class="nav-group">
           <span class="nav-group-label">策略</span>
-          <button class="nav-item" data-tab="model-management" data-title="模型管理">
-            <i data-lucide="brain" size="16"></i>模型管理
-          </button>
-          <button class="nav-item" data-tab="ai-config" data-title="推理策略">
-            <i data-lucide="git-branch" size="16"></i>推理策略
+          <button class="nav-item" data-tab="model-strategy" data-title="模型策略">
+            <i data-lucide="brain-circuit" size="16"></i>模型策略
           </button>
           <button class="nav-item" data-tab="ai-analyze" data-title="手动推理">
             <i data-lucide="play-circle" size="16"></i>手动推理
@@ -365,7 +362,16 @@
           </div>
         </section>
 
-        <section id="model-management" class="tab-panel">
+        <section id="model-strategy" class="tab-panel">
+          <div class="model-strategy-shell">
+            <header class="model-strategy-header">
+              <div><h1>模型策略</h1><p>先定义模型能力，再决定推理策略如何使用模型、行情和执行约束。</p></div>
+              <div class="model-strategy-tabs" role="tablist" aria-label="模型策略设置">
+                <button id="modelStrategyStrategiesTab" class="model-strategy-tab active" type="button" role="tab" aria-controls="ai-config" aria-selected="true" data-model-strategy-tab="strategies"><i data-lucide="git-branch" size="16"></i>推理策略</button>
+                <button id="modelStrategyModelsTab" class="model-strategy-tab" type="button" role="tab" aria-controls="model-management" aria-selected="false" tabindex="-1" data-model-strategy-tab="models"><i data-lucide="brain" size="16"></i>模型管理</button>
+              </div>
+            </header>
+          <div id="model-management" class="model-strategy-panel" role="tabpanel" aria-labelledby="modelStrategyModelsTab" data-model-strategy-panel="models" hidden>
           <div class="workspace-page">
             <header class="workspace-header">
               <div><h1>模型管理</h1><p>一处配置，供手动推理、自动推理、复盘与记忆压缩按权限使用。</p></div>
@@ -393,9 +399,9 @@
               <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
             </section>
           </div>
-        </section>
+          </div>
 
-        <section id="ai-config" class="tab-panel">
+          <div id="ai-config" class="model-strategy-panel active" role="tabpanel" aria-labelledby="modelStrategyStrategiesTab" data-model-strategy-panel="strategies">
           <div class="card content-card">
             <div class="card-header">
               <span class="card-title">推理策略</span>
@@ -455,6 +461,8 @@
               </div>
             </div>
 
+          </div>
+          </div>
           </div>
         </section>
 
@@ -938,7 +946,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260715m"></script>
+    <script src="/ai/app.js?v=20260716a"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

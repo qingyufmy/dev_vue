@@ -508,6 +508,14 @@ async function _initBridge(ws, userId, user) {
   })
 
   initComplete = true
+  try {
+    const syncResult = await sendBridgeCommand(userId, 'toggle_trade', { enable: defaultTrade }, 5000, { noFallback: true })
+    if (syncResult?.status !== 'success') {
+      console.warn(`[BridgeWS] Failed to synchronize trade state user=${userId}:`, syncResult?.message || syncResult?.error || 'unknown_error')
+    }
+  } catch (error) {
+    console.warn(`[BridgeWS] Trade state synchronization failed user=${userId}:`, error.message)
+  }
 }
 
 // ============ Helpers ============
@@ -533,9 +541,16 @@ function sendToBrowsers(userId, data) {
     }
   }
   // If this is admin's bridge data, also forward to users without their own bridge
+  // Account, position and trade-switch fields are private. Observation users may
+  // receive only the administrator bridge's market quote and market state.
   // Throttle: max 4 broadcasts per second per user to prevent flooding browsers
   if (userId === adminUserId && data.type === 'data' && browsers.size > 0) {
-    const adminJson = JSON.stringify({ ...data, _source: 'admin_fallback' })
+    const adminJson = JSON.stringify({
+      type: 'data',
+      quote: data.quote || null,
+      trade_mode: typeof data.trade_mode === 'number' ? data.trade_mode : -1,
+      _source: 'admin_market_fallback',
+    })
     const now = Date.now()
     for (const [uid, browserSet] of browsers) {
       if (uid === adminUserId) continue
@@ -605,7 +620,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         const connected = !!(bridge && bridge.ws.readyState === 1)
         const alive = connected && (Date.now() - bridge.lastSeen < 20000)
-        const tradeEnabled = bridge ? (usingFallback ? (bridge.tradeEnabled !== false) : (alive && (bridge.tradeEnabled !== false))) : false
+        const tradeEnabled = !usingFallback && alive && bridge?.tradeEnabled !== false
         result = {
           status: 'success',
           gateway: {
@@ -622,8 +637,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         if (hasOwnBridge) {
           result = await ai.mt5Bridge(userId, 'account', {})
-        } else if (adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
-          result = await ai.mt5Bridge(adminUserId, 'account', {})
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
@@ -647,8 +660,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         if (hasOwnBridge) {
           result = await ai.mt5Bridge(userId, 'positions', {})
-        } else if (adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
-          result = await ai.mt5Bridge(adminUserId, 'positions', {})
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
@@ -708,12 +719,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'history': {
-        let bridgeOk = bridges.get(userId)?.ws?.readyState === 1
-        let historyUserId = userId
-        if (!bridgeOk && adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
-          bridgeOk = true
-          historyUserId = adminUserId
-        }
+        const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
         if (bridgeOk) {
           // 直接透传前端参数给桥接软件（含分页、过滤）
           const bridgeParams = {
@@ -725,22 +731,14 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (params.close_from) bridgeParams.date_from = params.close_from
           if (params.close_to) bridgeParams.date_to = params.close_to
 
-          result = await ai.mt5Bridge(historyUserId, 'history', bridgeParams)
-          if (result?.status !== 'success') {
-            result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 }, pagination: { current_page: 1, page_size: 20, total_count: 0, total_pages: 1 } }
-          }
+          result = await ai.mt5Bridge(userId, 'history', bridgeParams, { timeoutMs: 30000, noFallback: true })
         } else {
-          result = { status: 'success', orders: [], statistics: { total_profit: 0, credit: 0, deposit: 0, withdrawal: 0, net_result: 0 }, pagination: { current_page: 1, page_size: 20, total_count: 0, total_pages: 1 } }
+          result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
       case 'history_chart_data': {
-        let bridgeOk = bridges.get(userId)?.ws?.readyState === 1
-        let hcUserId = userId
-        if (!bridgeOk && adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
-          bridgeOk = true
-          hcUserId = adminUserId
-        }
+        const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
         if (bridgeOk) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
           const chartParams = {}
@@ -748,12 +746,9 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (params.close_to) chartParams.date_to = params.close_to
           if (params.direction) chartParams.direction = params.direction
           if (params.profit_filter) chartParams.profit_filter = params.profit_filter
-          result = await ai.mt5Bridge(hcUserId, 'chart_data', chartParams)
-          if (result?.status !== 'success') {
-            result = { status: 'success', daily: [], cumulative: [], drawdown: [], stats: { total_trades: 0, win_rate: 0, profit_factor: 0, max_drawdown: 0, gross_profit: 0, gross_loss: 0 } }
-          }
+          result = await ai.mt5Bridge(userId, 'chart_data', chartParams, { timeoutMs: 30000, noFallback: true })
         } else {
-          result = { status: 'success', daily: [], cumulative: [], drawdown: [], stats: { total_trades: 0, win_rate: 0, profit_factor: 0, max_drawdown: 0, gross_profit: 0, gross_loss: 0 } }
+          result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
@@ -1095,9 +1090,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'signal_tickets': {
         const ticketMap = {}
-        // In observation mode (no own bridge), use admin's signals
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const sigUserId = hasOwnBridge ? userId : (adminUserId || userId)
+        const sigUserId = userId
         // Old signals
         const oldRows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND (source = \'manual\' OR source IS NULL) ORDER BY id DESC LIMIT 200', [sigUserId])
         for (const row of oldRows) {
@@ -1144,34 +1137,26 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'get_close_config': {
-        // In observation mode, show admin's close config
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const closeUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
-        const cfg = await ai.getCloseConfig(closeUserId)
+        const cfg = await ai.getCloseConfig(userId)
         result = { status: 'success', config: cfg || { enabled: false, check_interval_seconds: 30, model_name: 'deepseek-chat' } }
         break
       }
       case 'close_status': {
         // Report smart close scheduler status including pause reasons
-        // In observation mode, show admin's close config
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const closeUserId = (!hasOwnBridge && adminUserId) ? adminUserId : userId
-        const closeCfg = await ai.getCloseConfig(closeUserId)
+        const closeCfg = await ai.getCloseConfig(userId)
         const enabled = !!(closeCfg?.enabled)
         const intervalSec = closeCfg?.check_interval_seconds || 30
         let paused = false
         let pauseReason = ''
 
         if (enabled) {
-          // Check market status — use closeUserId for bridge data in observation mode
-          const tradeMode = await getBridgeTradeMode(closeUserId)
+          const tradeMode = await getBridgeTradeMode(userId)
           if (tradeMode !== 4) {
             paused = true
             pauseReason = tradeMode === 0 ? 'market_closed' : 'market_unknown'
           } else {
-            // Check positions — use closeUserId's bridge
             try {
-              const posData = await sendBridgeCommand(closeUserId, 'positions', {})
+              const posData = await sendBridgeCommand(userId, 'positions', {}, 5000, { noFallback: true })
               const positions = posData?.positions || []
               if (positions.length === 0) {
                 paused = true
@@ -1191,29 +1176,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'close_signal_tickets': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const adminId = await getAdminUserId()
-        const closeTicketUserId = hasOwnBridge ? userId : (adminId || userId)
-        const map = await ai.getCloseSignalTickets(closeTicketUserId)
+        const map = await ai.getCloseSignalTickets(userId)
         result = { status: 'success', tickets: map }
         break
       }
       case 'pending_list': {
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         if (!hasOwnBridge) {
-          // In observation mode, fall back to admin's bridge
-          const adminId = await getAdminUserId()
-          if (adminId && bridges.has(adminId) && bridges.get(adminId).ws?.readyState === 1) {
-            try {
-              const symbol = params.symbol ? params.symbol : null
-              const listResult = await ai.mt5Bridge(adminId, 'pending_list', { symbol })
-              result = listResult
-            } catch (e) {
-              console.error('[BridgeWS] pending_list (admin fallback) error:', e.message)
-              result = { status: 'error', message: '获取挂单列表失败' }
-            }
-            break
-          }
           result = { status: 'error', message: '请先连接 MT5 桥接' }
           break
         }
@@ -1310,7 +1279,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           break
         }
         // Fetch all orders from MT5 bridge
-        const expRes = await ai.mt5Bridge(expUserId, 'history', { page: 1, page_size: 9999 })
+        const expRes = await ai.mt5Bridge(expUserId, 'history', { page: 1, page_size: 9999 }, { timeoutMs: 30000, noFallback: true })
         if (expRes?.status !== 'success' || !Array.isArray(expRes.orders)) {
           result = { status: 'error', message: '获取历史订单失败' }
           break
@@ -1774,7 +1743,7 @@ export function sendBridgeCommand(userId, action, params, timeoutMs = 5000, opti
 
     // Fall back to admin bridge for read operations (unless noFallback)
     if (!options.noFallback) {
-      const readActions = ['account', 'positions', 'rates', 'symbols', 'quote', 'pending_list']
+      const readActions = ['rates', 'symbols', 'quote']
       if ((!bridge || bridge.ws.readyState !== 1) && readActions.includes(action) && adminUserId) {
         bridge = bridges.get(adminUserId)
         usingFallback = true

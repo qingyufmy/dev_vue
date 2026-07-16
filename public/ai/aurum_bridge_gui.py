@@ -9,6 +9,7 @@ import os
 import ssl
 import json
 import time
+import math
 import asyncio
 import threading
 import ctypes
@@ -28,6 +29,7 @@ from PySide6.QtGui import (
 )
 
 APP_VERSION = "v2.3.9"
+FULL_HISTORY_START = datetime(2000, 1, 1)
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
 MAX_LOG_MESSAGE_CHARS = 1000
@@ -394,6 +396,10 @@ class BridgeWorker(QThread):
         self._ws = None
         self._acc_lost_warned = False
         self._manual_mt5_path = mt5_path
+        # MetaTrader5's Python extension is not thread-safe. Command handling
+        # and the one-second data publisher both use the executor, so all MT5
+        # calls must share one lock.
+        self._mt5_lock = threading.RLock()
 
     def check_plan(self):
         """Check plan status via auth/me. Returns (plan, expired, message)."""
@@ -464,6 +470,22 @@ class BridgeWorker(QThread):
         if not cands: cands = [self.mt5.ORDER_FILLING_IOC, self.mt5.ORDER_FILLING_RETURN]
         return cands[0]
 
+    @staticmethod
+    def _validate_order_volume(info, volume):
+        if not math.isfinite(volume) or volume <= 0:
+            return "volume must be a positive finite number"
+        volume_min = float(getattr(info, "volume_min", 0) or 0)
+        volume_max = float(getattr(info, "volume_max", 0) or 0)
+        volume_step = float(getattr(info, "volume_step", 0) or 0)
+        epsilon = max(1e-9, volume_step * 1e-6)
+        if volume_min > 0 and volume < volume_min - epsilon:
+            return f"volume {volume} is below broker minimum {volume_min}"
+        if volume_max > 0 and volume > volume_max + epsilon:
+            return f"volume {volume} exceeds broker maximum {volume_max}"
+        if volume_step > 0 and abs(round(volume / volume_step) * volume_step - volume) > epsilon:
+            return f"volume {volume} does not match broker step {volume_step}"
+        return None
+
     def _order_send_with_retry(self, symbol, build_req_fn):
         """带价格刷新重试的 order_send 包装器。
         build_req_fn(tick) → dict: 根据当前 tick 构建 req，返回 (req, price_for_log)
@@ -494,8 +516,8 @@ class BridgeWorker(QThread):
                 # Re-select symbol to keep it hot
                 try:
                     self.mt5.symbol_select(req["symbol"], True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.log_signal.emit(f"[Order] Failed to re-select symbol {req['symbol']}: {exc}")
                 continue
             return result, result.comment if result else "order_send failed"
         return None, "max retry exceeded"
@@ -519,9 +541,15 @@ class BridgeWorker(QThread):
         return None
 
     def _process_command(self, cmd):
+        with self._mt5_lock:
+            return self._process_command_locked(cmd)
+
+    def _process_command_locked(self, cmd):
         action = cmd.get("action"); params = cmd.get("params", {})
         try:
             if action == "open":
+                if not self._trade_enabled:
+                    return {"status": "rejected", "message": "trade sending is disabled"}
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
                 info = self.mt5.symbol_info(symbol)
@@ -533,6 +561,8 @@ class BridgeWorker(QThread):
                     return {"status": "error", "message": "order type is required (buy/sell)"}
                 ot = self.mt5.ORDER_TYPE_BUY if dir_str == "buy" else self.mt5.ORDER_TYPE_SELL
                 volume = float(params.get("lot") or params.get("volume") or 0.01)
+                volume_error = self._validate_order_volume(info, volume)
+                if volume_error: return {"status": "rejected", "message": volume_error}
                 sl = float(params["sl"]) if params.get("sl") else None
                 tp = float(params["tp"]) if params.get("tp") else None
                 base_req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
@@ -556,8 +586,8 @@ class BridgeWorker(QThread):
                         try:
                             result_deals = self.mt5.history_deals_get(ticket=deal_ticket)
                             if result_deals: position_id = getattr(result_deals[0], "position_id", 0) or 0
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            self.log_signal.emit(f"[Order] Failed to resolve position from deal {deal_ticket}: {exc}")
                     resp = {"status": "success", "order": result.order, "deal": deal_ticket,
                             "position_id": position_id or result.order, "price": result.price}
                     if comment: resp["warning"] = comment
@@ -812,11 +842,11 @@ class BridgeWorker(QThread):
                     date_to = datetime.utcnow() + timedelta(days=1)
                 if "date_from" in params:
                     try: date_from = datetime.strptime(params["date_from"][:10], "%Y-%m-%d")
-                    except (ValueError, KeyError, TypeError): date_from = datetime(1970, 1, 1)
+                    except (ValueError, KeyError, TypeError): date_from = FULL_HISTORY_START
                 else:
                     # Empty UI filters mean complete account history. A rolling
                     # default would undercount deposits, withdrawals and profit.
-                    date_from = datetime(1970, 1, 1)
+                    date_from = FULL_HISTORY_START
                 self.log_signal.emit(f"[History] date_from={date_from}, date_to={date_to}")
                 deals = self.mt5.history_deals_get(date_from, date_to)
                 self.log_signal.emit(f"[History] deals={len(deals) if deals else 'None'}")
@@ -943,16 +973,16 @@ class BridgeWorker(QThread):
                 # Date range
                 if "date_to" in params:
                     try: date_to = datetime.strptime(params["date_to"][:10], "%Y-%m-%d") + timedelta(days=1)
-                    except: date_to = datetime.utcnow() + timedelta(days=1)
+                    except (ValueError, KeyError, TypeError): date_to = datetime.utcnow() + timedelta(days=1)
                 else:
                     date_to = datetime.utcnow() + timedelta(days=1)
                 if "date_from" in params:
                     try: date_from = datetime.strptime(params["date_from"][:10], "%Y-%m-%d")
-                    except (ValueError, KeyError, TypeError): date_from = datetime(1970, 1, 1)
+                    except (ValueError, KeyError, TypeError): date_from = FULL_HISTORY_START
                 else:
                     # Keep chart totals consistent with the history table: an
                     # empty UI filter means the complete account history.
-                    date_from = datetime(1970, 1, 1)
+                    date_from = FULL_HISTORY_START
                 # Optional filters
                 direction_filter = params.get("direction", "")
                 profit_filter = params.get("profit_filter", "")
@@ -1055,6 +1085,8 @@ class BridgeWorker(QThread):
                 return {"status": "success", "symbol": self._resolved_symbol}
 
             elif action == "pending":
+                if not self._trade_enabled:
+                    return {"status": "rejected", "message": "trade sending is disabled"}
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
                 info = self.mt5.symbol_info(symbol)
@@ -1063,6 +1095,8 @@ class BridgeWorker(QThread):
                 dir_str = (params.get("type") or params.get("order_type") or "").strip().lower()
                 price = float(params["price"]) if params.get("price") else None
                 volume = float(params.get("lot") or params.get("volume") or 0.01)
+                volume_error = self._validate_order_volume(info, volume)
+                if volume_error: return {"status": "rejected", "message": volume_error}
                 sl = float(params["sl"]) if params.get("sl") else None
                 tp = float(params["tp"]) if params.get("tp") else None
 
@@ -1096,8 +1130,8 @@ class BridgeWorker(QThread):
                             exp_dt = datetime.strptime(str(expiration_val)[:19], "%Y-%m-%d %H:%M:%S")
                             exp_ts = int(exp_dt.timestamp())
                             type_time = self.mt5.ORDER_TIME_SPECIFIED
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError, OverflowError, OSError):
+                            return {"status": "error", "message": "invalid pending order expiration"}
 
                 req = {
                     "action": self.mt5.TRADE_ACTION_PENDING,
@@ -1159,7 +1193,7 @@ class BridgeWorker(QThread):
                 symbol = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
                 orders = self.mt5.orders_get(symbol=symbol) if symbol else self.mt5.orders_get()
                 if orders is None:
-                    return {"status": "success", "orders": []}
+                    return {"status": "error", "message": f"orders_get failed: {self.mt5.last_error()}"}
 
                 type_map = {
                     self.mt5.ORDER_TYPE_BUY_LIMIT: "buy_limit",
@@ -1188,7 +1222,7 @@ class BridgeWorker(QThread):
                         s = str(val)
                         if s == "0" or s == "None": return None
                         return s
-                    except:
+                    except (TypeError, ValueError, OverflowError, OSError):
                         return None
 
                 result_orders = []
@@ -1761,6 +1795,10 @@ class BridgeWorker(QThread):
                 break
 
     def _collect_mt5_data(self):
+        with self._mt5_lock:
+            return self._collect_mt5_data_locked()
+
+    def _collect_mt5_data_locked(self):
         """Collect MT5 data (synchronous, called from executor)."""
         acc = self.mt5.account_info()
         sym = self._resolved_symbol
@@ -1860,7 +1898,8 @@ class BridgeWorker(QThread):
                 loop = getattr(self, '_loop', None)
                 if loop and not loop.is_closed():
                     asyncio.run_coroutine_threadsafe(ws.close(), loop)
-            except: pass
+            except Exception:
+                pass
 
 # ══════════════════════════════════════════════════════════
 #  Update Downloader
@@ -2521,7 +2560,8 @@ class SettingsPage(QWidget):
         self.btn_check_update.setProperty("secondary", True)
         self.btn_check_update.style().polish(self.btn_check_update)
         try: self.btn_check_update.clicked.disconnect()
-        except: pass
+        except (TypeError, RuntimeError):
+            pass
         self.btn_check_update.clicked.connect(self._check_update)
 
     def load_settings(self):
@@ -2696,7 +2736,8 @@ class SettingsPage(QWidget):
                 self.btn_check_update.setProperty("secondary", False)
                 self.btn_check_update.style().polish(self.btn_check_update)
                 try: self.btn_check_update.clicked.disconnect()
-                except: pass
+                except (TypeError, RuntimeError):
+                    pass
                 self.btn_check_update.clicked.connect(self._do_update)
                 self.btn_retry_download.setVisible(False)
                 self._pending_update = data
@@ -2720,7 +2761,7 @@ class SettingsPage(QWidget):
         def parse(v):
             return [int(x) for x in v.replace("v", "").split(".") if x.isdigit()]
         try: return parse(remote) > parse(local)
-        except: return False
+        except (AttributeError, TypeError, ValueError): return False
 
     def _do_update(self):
         data = self._pending_update

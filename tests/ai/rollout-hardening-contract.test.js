@@ -58,6 +58,26 @@ describe('rollout hardening contract', () => {
     expect(config).toContain("upsertDefaultModelProfileFromLegacyInput(userId, 'user'")
   })
 
+  it('synchronizes the persisted trade switch into every newly connected Bridge', () => {
+    expect(bridge).toContain("sendBridgeCommand(userId, 'toggle_trade', { enable: defaultTrade }")
+    expect(bridge).toContain('Failed to synchronize trade state')
+  })
+
+  it('shares only market data from the administrator Bridge', () => {
+    expect(bridge).toContain("_source: 'admin_market_fallback'")
+    expect(bridge).toContain("const readActions = ['rates', 'symbols', 'quote']")
+    expect(bridge).not.toContain("ai.mt5Bridge(adminUserId, 'account'")
+    expect(bridge).not.toContain("ai.mt5Bridge(adminUserId, 'positions'")
+    expect(bridge).not.toContain("ai.mt5Bridge(adminId, 'pending_list'")
+    expect(bridge).toContain('const sigUserId = userId')
+    expect(bridge).toContain('getCloseSignalTickets(userId)')
+  })
+
+  it('gives complete history queries a queue-aware Bridge timeout', () => {
+    expect(bridge).toContain("'history', bridgeParams, { timeoutMs: 30000, noFallback: true }")
+    expect(bridge).toContain("'chart_data', chartParams, { timeoutMs: 30000, noFallback: true }")
+  })
+
   it('does not query review bodies or memory lesson text in administrator health metrics', () => {
     const health = rollout.slice(rollout.indexOf('export async function getAiRolloutHealth'))
     expect(health).not.toMatch(/content_json|evidence_json|lesson_text|api_key_encrypted/)

@@ -9,10 +9,16 @@ const profiles = readFileSync(new URL('../../server/routes/ai/model-profiles.js'
 
 describe('AI governance navigation and DOM contract', () => {
   it('provides the unified user and administrator information architecture', () => {
-    for (const tab of ['model-management', 'ai-config', 'trading', 'risk-center', 'history', 'review-memory']) {
+    for (const tab of ['model-strategy', 'trading', 'risk-center', 'history', 'review-memory']) {
       expect(html).toContain(`data-tab="${tab}"`)
       expect(html).toContain(`id="${tab}"`)
     }
+    expect(html).toContain('data-model-strategy-tab="strategies"')
+    expect(html).toContain('data-model-strategy-tab="models"')
+    expect(html).toContain('data-model-strategy-panel="strategies"')
+    expect(html).toContain('data-model-strategy-panel="models"')
+    expect(html).not.toContain('data-tab="model-management"')
+    expect(html).not.toContain('data-tab="ai-config"')
     for (const tab of ['global-risk', 'account-review', 'audit']) expect(html).toContain(`data-tab="${tab}"`)
   })
 
@@ -89,6 +95,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).not.toContain('id="promptTypeModal"')
     expect(app).not.toContain("wsApi('get_auto_config')")
     expect(app).not.toContain('wsApi("save_config"')
+    expect(app).not.toContain('initAutoSymbolsSelector')
   })
 
   it('has responsive behavior, loading skeletons and reduced-motion handling', () => {
@@ -100,6 +107,13 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('grid-template-columns: minmax(0, 1fr)')
     expect(css).toContain('max-width: 100vw')
     expect(app).toContain('state._lastGatewayLive !== true')
+  })
+
+  it('uses the same current cache key for the AI stylesheet and application script', () => {
+    const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z]+)/)?.[1]
+    const appVersion = html.match(/app\.js\?v=([0-9a-z]+)/)?.[1]
+    expect(stylesheetVersion).toBeTruthy()
+    expect(appVersion).toBe(stylesheetVersion)
   })
 })
 

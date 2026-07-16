@@ -7,7 +7,8 @@ describe('Python Bridge history contract', () => {
     const historyStart = source.indexOf('elif action == "history"')
     const chartStart = source.indexOf('elif action == "chart_data"', historyStart)
     const block = source.slice(historyStart, chartStart)
-    expect(block).toContain('date_from = datetime(1970, 1, 1)')
+    expect(source).toContain('FULL_HISTORY_START = datetime(2000, 1, 1)')
+    expect(block).toContain('date_from = FULL_HISTORY_START')
     expect(block).not.toContain('else: date_from = date_to - timedelta(days=31)')
   })
 
@@ -15,7 +16,7 @@ describe('Python Bridge history contract', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     const chartStart = source.indexOf('elif action == "chart_data"')
     const block = source.slice(chartStart)
-    expect(block).toContain('date_from = datetime(1970, 1, 1)')
+    expect(block).toContain('date_from = FULL_HISTORY_START')
     expect(block).not.toContain('date_from = date_to - timedelta(days=31)')
   })
 
@@ -38,5 +39,29 @@ describe('Python Bridge history contract', () => {
     for (const field of ['"position_id"', '"deal_ticket"', '"entry"', '"magic"', '"reason"', '"commission"', '"swap"', '"fee"']) {
       expect(block).toContain(field)
     }
+  })
+
+  it('enforces the server trade switch and broker volume constraints before opening exposure', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('def _validate_order_volume(info, volume):')
+    expect(source).toContain('if not self._trade_enabled:')
+    expect(source).toContain('volume_error = self._validate_order_volume(info, volume)')
+    expect(source).toContain('volume {volume} exceeds broker maximum')
+    expect(source).toContain('volume {volume} does not match broker step')
+  })
+
+  it('serializes command and publisher access to the non-thread-safe MT5 extension', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('self._mt5_lock = threading.RLock()')
+    expect(source).toContain('with self._mt5_lock:')
+    expect(source).toContain('return self._process_command_locked(cmd)')
+    expect(source).toContain('return self._collect_mt5_data_locked()')
+  })
+
+  it('rejects invalid pending expirations and reports MT5 pending-list failures', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('"message": "invalid pending order expiration"')
+    expect(source).toContain('"message": f"orders_get failed: {self.mt5.last_error()}"')
+    expect(source).not.toContain('except:')
   })
 })

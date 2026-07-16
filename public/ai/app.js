@@ -673,6 +673,19 @@ function clampPage(page, pageSize, total) {
   return Math.min(Math.max(1, Number(page) || 1), pages);
 }
 
+const API_ERROR_MESSAGES = {
+  encryption_master_key_missing: "服务器模型凭据加密密钥未正确配置，请联系管理员检查 32 字节 AES 密钥并重启服务",
+  no_model_configured: "尚未配置可用模型，请先在“模型策略 → 模型管理”中添加模型",
+  no_platform_model: "平台尚未配置默认模型",
+  bound_model_unavailable: "策略绑定的模型已停用或删除，请重新选择模型",
+  credential_decryption_failed: "模型凭据无法解密，请联系管理员检查密钥版本",
+  credential_not_encrypted: "检测到旧版明文凭据，请先完成凭据迁移",
+};
+
+function apiErrorMessage(code) {
+  return API_ERROR_MESSAGES[code] || code;
+}
+
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -686,7 +699,7 @@ async function api(path, options = {}) {
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
-    if (!response.ok) throw new Error(data.error || data.detail || data.message || `HTTP ${response.status}`);
+    if (!response.ok) throw new Error(apiErrorMessage(data.error || data.detail || data.message || `HTTP ${response.status}`));
     return data;
   } catch (err) {
     clearTimeout(timeoutId);
@@ -699,18 +712,20 @@ async function api(path, options = {}) {
 let _wsCmdId = 0;
 const _wsPending = new Map();
 
-function wsApi(action, params = {}) {
+function wsApi(action, params = {}, timeoutOverride) {
   return new Promise((resolve, reject) => {
     const ws = state.bridgeWs;
     if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
     const cmdId = `ws_${++_wsCmdId}`;
     // analyze/auto-inference may take 60-120s
-    const timeout = params._timeout || (action === 'analyze' ? 120000 : action === 'signals' || action === 'signal-pending-info' ? 30000 : 10000);
-    delete params._timeout;
+    const requestParams = { ...params };
+    const queuedDataAction = ['history', 'history_chart_data', 'rates'].includes(action);
+    const timeout = timeoutOverride || requestParams._timeout || (action === 'analyze' ? 120000 : action === 'signals' || action === 'signal-pending-info' ? 30000 : queuedDataAction ? 45000 : 10000);
+    delete requestParams._timeout;
     const timer = setTimeout(() => { _wsPending.delete(cmdId); reject(new Error('请求超时')); }, timeout);
     _wsPending.set(cmdId, { resolve, reject, timer });
     try {
-      ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }));
+      ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params: requestParams }));
     } catch (err) {
       clearTimeout(timer);
       _wsPending.delete(cmdId);
@@ -1513,6 +1528,8 @@ async function saveGlobalRisk() {
 }
 
 function setTab(tabId) {
+  const modelStrategyTarget = tabId === "model-management" ? "models" : tabId === "ai-config" ? "strategies" : null;
+  if (modelStrategyTarget) tabId = "model-strategy";
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabId);
   });
@@ -1521,8 +1538,25 @@ function setTab(tabId) {
   });
   const main = document.querySelector(".main");
   if (main) main.scrollTop = 0;
+  if (tabId === "model-strategy") setModelStrategySubtab(modelStrategyTarget || state.modelStrategySubtab || "strategies");
   initIcons();
   refreshTabData(tabId).catch((error) => toast(error.message, "error"));
+}
+
+function setModelStrategySubtab(target) {
+  const next = target === "models" ? "models" : "strategies";
+  state.modelStrategySubtab = next;
+  document.querySelectorAll("[data-model-strategy-tab]").forEach(button => {
+    const active = button.dataset.modelStrategyTab === next;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-model-strategy-panel]").forEach(panel => {
+    const active = panel.dataset.modelStrategyPanel === next;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
 }
 
 async function refreshTabData(tabId) {
@@ -1536,10 +1570,8 @@ async function refreshTabData(tabId) {
     await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
   } else if (tabId === "audit") {
     await loadAudit();
-  } else if (tabId === "ai-config") {
+  } else if (tabId === "model-strategy") {
     await Promise.allSettled([loadConfig(), loadStrategyCatalog(), loadModelManagement()]);
-  } else if (tabId === "model-management") {
-    await loadModelManagement();
   } else if (tabId === "risk-center") {
     await loadRiskCenter();
   } else if (tabId === "review-memory") {
@@ -1879,8 +1911,6 @@ async function loadSymbols() {
   if (preferred) setGlobalSymbol(preferred.name);
   // Don't call refreshQuote here — tick stream handles it at 1s
 
-  // Re-init auto symbol selector now that symbols are loaded
-  initAutoSymbolsSelector();
 }
 
 async function loadAccount() {
@@ -2291,7 +2321,7 @@ function applyRoleUI() {
 
   // === Plus users: observation-only mode ===
   // Hide model config tab
-  const modelTabs = document.querySelectorAll('.nav-item[data-tab="ai-config"], .nav-item[data-tab="model-management"]');
+  const modelTabs = document.querySelectorAll('.nav-item[data-tab="model-strategy"]');
   modelTabs.forEach(modelTab => { modelTab.style.display = isPlusReadOnly ? "none" : ""; });
 
   // Keep gateway badge clickable for all users — guards in click handlers block action
@@ -3356,6 +3386,7 @@ async function loadHistory(forceRefresh) {
       loadSignalTickets(),
       loadCloseSignalTickets(),
     ]);
+    if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史数据读取失败');
     _historyCache = { filters: filterKey, data };
     _applyHistoryData(data);
   } catch (e) { console.error("loadHistory:", e); }
@@ -3385,7 +3416,7 @@ function _applyHistoryData(data) {
   setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
 }
 
-// ---- Chart-only fetch: independent of table filters, defaults to 30 days ----
+// ---- Chart-only fetch: independent of table filters, empty dates mean full account history ----
 async function loadHistoryChart(forceRefresh) {
   try {
     const from = document.getElementById('chartDateFrom')?.value || '';
@@ -3401,11 +3432,10 @@ async function loadHistoryChart(forceRefresh) {
     }
 
     const data = await wsApi("history_chart_data", params);
-    if (data?.status === 'success') {
-      _historyChartCache = { filters: filterKey, data };
-      await ensureChartJs();
-      _renderHistoryChart(data);
-    }
+    if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史图表读取失败');
+    _historyChartCache = { filters: filterKey, data };
+    await ensureChartJs();
+    _renderHistoryChart(data);
   } catch (e) { console.error("loadHistoryChart:", e); }
 }
 
@@ -3993,6 +4023,21 @@ function bindEvents() {
     if (button.dataset.tab) {
       button.addEventListener("click", () => setTab(button.dataset.tab));
     }
+  });
+
+  document.querySelectorAll("[data-model-strategy-tab]").forEach(button => {
+    button.addEventListener("click", () => setModelStrategySubtab(button.dataset.modelStrategyTab));
+    button.addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = [...document.querySelectorAll("[data-model-strategy-tab]")];
+      const current = tabs.indexOf(button);
+      const target = event.key === "Home" ? 0
+        : event.key === "End" ? tabs.length - 1
+          : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      setModelStrategySubtab(tabs[target].dataset.modelStrategyTab);
+      tabs[target].focus();
+    });
   });
 
   document.body.addEventListener("click", async (event) => {

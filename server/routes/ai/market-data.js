@@ -762,7 +762,7 @@ export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFra
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
   const current = prev.then(async () => {
-    let result = await executeViaBridge(userId, action, params, undefined, options)
+    let result = await executeViaBridge(userId, action, params, options.timeoutMs, options)
     if (result?.status === 'error' && result.message?.includes('Symbol not found') && params.symbol) {
       let base = params.symbol
       const knownSuffixes = ['.s', '.c', 'm', '.pro', '.std', '.z', '.ecn', '_']
@@ -773,7 +773,7 @@ export async function mt5Bridge(userId, action, params = {}, options = {}) {
       let fallback_used = null
       for (const v of variants) {
         if (v === params.symbol) continue
-        result = await executeViaBridge(userId, action, { ...params, symbol: v }, undefined, options)
+        result = await executeViaBridge(userId, action, { ...params, symbol: v }, options.timeoutMs, options)
         if (result?.status !== 'error') { fallback_used = v; break }
       }
       if (fallback_used) {

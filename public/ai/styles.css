@@ -479,6 +479,92 @@ button {
   display: block;
 }
 
+.model-strategy-shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.model-strategy-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.model-strategy-header h1 {
+  font-size: 24px;
+  line-height: 1.25;
+  letter-spacing: -.02em;
+}
+
+.model-strategy-header p {
+  max-width: 68ch;
+  margin-top: 6px;
+  color: var(--text-secondary);
+}
+
+.model-strategy-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--bg-input-soft);
+  border-radius: var(--radius-md);
+}
+
+.model-strategy-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.model-strategy-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-card-hover);
+}
+
+.model-strategy-tab:focus-visible {
+  outline: 2px solid var(--gold-primary);
+  outline-offset: 2px;
+}
+
+.model-strategy-tab.active {
+  color: var(--text-inverse);
+  background: var(--gold-primary);
+  font-weight: 700;
+}
+
+.model-strategy-panel {
+  display: none;
+  min-width: 0;
+}
+
+.model-strategy-panel.active {
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .model-strategy-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-strategy-tabs,
+  .model-strategy-tab {
+    width: 100%;
+  }
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: 55fr 45fr;
