@@ -599,8 +599,8 @@ function setSignalFieldClass(id, className = "") {
 function signalCurrentPriceText(signal) {
   if (!signal || !state.lastQuote || state.lastQuote.symbol !== signal.symbol) return "--";
   const dir = signalType(signal.signal_type);
-  if (dir === "buy") return `买入成交参考 ${priceDisplay(state.lastQuote.ask)}`;
-  if (dir === "sell") return `卖出成交参考 ${priceDisplay(state.lastQuote.bid)}`;
+  if (dir === "buy") return priceDisplay(state.lastQuote.ask);
+  if (dir === "sell") return priceDisplay(state.lastQuote.bid);
   return `${priceDisplay(state.lastQuote.bid)} / ${priceDisplay(state.lastQuote.ask)}`;
 }
 
@@ -612,13 +612,15 @@ function signalTakeProfit(signal) {
 function updateSignalPriceFields(signal) {
   const dir = signalType(signal?.signal_type);
   const market = signal?.market_data || {};
+  const advice = signal ? signalExecutionAdvice(signal) : null;
   setText("sigReferencePrice", priceDisplay(market.latest_price));
   setText("sigCurrentPrice", signalCurrentPriceText(signal));
   setText("sigStopLoss", priceDisplay(signal?.stop_loss_price));
   setText("sigTakeProfit", priceDisplay(signalTakeProfit(signal)));
   setText("sigVolume", volumeText(signal?.recommended_volume));
-  setText("sigExecutionState", executionStatus(signal));
-  setSignalFieldClass("sigExecutionState", dir);
+  setText("sigExecutionState", advice?.title || executionStatus(signal) || "暂无信号");
+  setText("sigActionHint", advice?.description || "等待策略生成新的推理结果");
+  setSignalFieldClass("sigExecutionState", `signal-execution-state ${advice?.state || "empty"}`);
 }
 
 function toast(message, type = "info") {
@@ -1123,8 +1125,14 @@ function startUiTimer() {
       setText("signalFreshness", signalFreshness(s));
       setText("analysisValidity", signalFreshness(s));
       setSignalBadge(s);
+      const stale = signalIsStale(s) && !s.is_executed;
+      const signalCard = $("signalCard");
+      if (stale && signalCard?.dataset.status !== "expired") {
+        signalCard.dataset.status = "expired";
+        updateSignalPriceFields(s);
+      }
       const btn = $("executeSignalBtn");
-      if (btn && signalIsStale(s) && !s.is_executed) btn.disabled = true;
+      if (btn && stale) btn.disabled = true;
     }
     // Render auto badge with local countdown
     if (state.autoRuntime && state.autoRuntime.enabled) {
@@ -2948,8 +2956,8 @@ function updateSignalDisplay(signal) {
     card.style.setProperty("--signal-glow", "var(--signal-glow-hold)");
     setText("sigSymbol", "--");
     setText("sigTimeframe", "--");
-    setText("sigDirection", "HOLD");
-    setText("sigDirectionText", "观望");
+    setText("sigDirection", "--");
+    setText("sigDirectionText", "等待信号");
     $("sigDirection").className = "signal-direction hold";
     $("sigDirectionText").className = "signal-direction-text hold";
     setText("sigConfidence", "--");
@@ -2958,10 +2966,6 @@ function updateSignalDisplay(signal) {
     setText("sigTime", "等待新信号");
     setText("sigGeneratedAt", "--");
     setText("sigValidWindow", "--");
-    setText("lastSigDirection", "--");
-    setText("lastSigTimeframe", "--");
-    setText("lastSigConfidence", "--");
-    setText("lastSigTime", "--");
     $("executeSignalBtn").disabled = true;
     $("executeSignalBtn").title = "暂无可执行信号";
     return;
@@ -2980,7 +2984,7 @@ function updateSignalDisplay(signal) {
 
   card.dataset.direction = dir;
   const advice = signalExecutionAdvice(signal);
-  card.dataset.status = ["executed", "pending"].includes(advice.state) ? advice.state : signal.is_stale ? "expired" : "live";
+  card.dataset.status = ["executed", "pending"].includes(advice.state) ? advice.state : signalIsStale(signal) ? "expired" : "live";
   card.style.setProperty("--signal-border", colorMap[dir].border);
   card.style.setProperty("--signal-glow", colorMap[dir].glow);
   setText("sigSymbol", signal.symbol || "--");
@@ -2995,12 +2999,6 @@ function updateSignalDisplay(signal) {
   setText("sigTime", signalDisplayTime(signal));
   setText("sigGeneratedAt", signalDisplayTime(signal));
   setText("sigValidWindow", signalFreshness(signal));
-  setText("lastSigDirection", directionText(signal.signal_type));
-  setText("lastSigTimeframe", signal.timeframe || "--");
-  setText("lastSigConfidence", confidence.label);
-  setText("lastSigTime", signalDisplayTime(signal));
-  $("lastSigDirection").className = dir;
-
   const executable = advice.executable === true && dir !== "hold" && dir !== "close" && !signal.is_stale;
   $("executeSignalBtn").disabled = !executable;
   $("executeSignalBtn").title = executable
@@ -3091,9 +3089,9 @@ function renderDirectionBias(decision) {
 }
 
 function signalExecutionAdvice(signal) {
-  if (signal?.execution_advice) return signal.execution_advice;
   if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:"执行结果已记录。", executable:false };
-  if (signal?.is_stale) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
+  if (signalIsStale(signal)) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
+  if (signal?.execution_advice) return signal.execution_advice;
   if (signalType(signal?.signal_type) === "hold") return { state:"observe", title:"暂不执行", description:"等待市场条件改善。", executable:false };
   return { state:"review", title:"建议复核后执行", description:"执行前将获取最新报价并由风控计算最终手数。", executable:true };
 }

@@ -246,6 +246,19 @@ describe('AI governance navigation and DOM contract', () => {
     expect(loadRiskCenter).toContain('initIcons();')
     expect(loadRiskCenter.indexOf('initIcons();')).toBeGreaterThan(loadRiskCenter.indexOf('class="risk-status-icon"'))
   })
+
+  it('keeps the overview signal card focused on the current decision and execution summary', () => {
+    const start = html.indexOf('id="signalCard"')
+    const end = html.indexOf('class="card grid-area-positions"', start)
+    const signalCard = html.slice(start, end)
+    expect(signalCard).toContain('最新推理信号')
+    expect(signalCard).toContain('data-tab-jump="ai-analyze"')
+    expect(signalCard).toContain('class="signal-decision-panel"')
+    expect(signalCard).toContain('class="signal-execution-strip"')
+    expect(signalCard).toContain('id="sigActionHint"')
+    expect(signalCard).not.toContain('上次信号摘要')
+    expect(signalCard).not.toContain('data-tab-jump="signals"')
+  })
 })
 
 describe('route permissions and credential redaction', () => {
