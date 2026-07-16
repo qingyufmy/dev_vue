@@ -2953,25 +2953,25 @@ class MainWindow(QMainWindow):
 # ══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Single instance check
-    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\AURUM_Bridge_SingleInstance")
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        import ctypes.wintypes
-        # Find and activate existing window
-        EnumWindows = ctypes.windll.user32.EnumWindows
-        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-        def _activate_existing(hwnd, _):
-            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-            if length > 0:
-                buf = ctypes.create_unicode_buffer(length + 1)
-                ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-                if APP_NAME in buf.value:
-                    ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                    ctypes.windll.user32.SetForegroundWindow(hwnd)
-                    return False
-            return True
-        EnumWindows(WNDENUMPROC(_activate_existing), 0)
-        sys.exit(0)
+    # Single instance check (temporarily disabled to allow multiple Bridges).
+    # _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\AURUM_Bridge_SingleInstance")
+    # if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    #     import ctypes.wintypes
+    #     # Find and activate existing window
+    #     EnumWindows = ctypes.windll.user32.EnumWindows
+    #     WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    #     def _activate_existing(hwnd, _):
+    #         length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+    #         if length > 0:
+    #             buf = ctypes.create_unicode_buffer(length + 1)
+    #             ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+    #             if APP_NAME in buf.value:
+    #                 ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    #                 ctypes.windll.user32.SetForegroundWindow(hwnd)
+    #                 return False
+    #         return True
+    #     EnumWindows(WNDENUMPROC(_activate_existing), 0)
+    #     sys.exit(0)
 
     # DPI awareness
     try:
