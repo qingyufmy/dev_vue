@@ -945,7 +945,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'signals': {
         const offset = Number(params.offset) || 0
-        const limit = Math.min(Number(params.limit) || 6, 100)
+        const limit = Math.min(Number(params.limit) || 10, 100)
         // 观摩模式：始终用 admin 的信号
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         const adminId = await getAdminUserId()

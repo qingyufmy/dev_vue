@@ -3058,19 +3058,6 @@ input:checked + .slider::before { transform: translateX(18px); }
   transition: background var(--transition-fast);
 }
 
-.history-sentinel:hover {
-  background: var(--bg-card-hover);
-}
-
-.history-load-more {
-  width: 100%;
-  border: 0;
-  color: var(--text-secondary);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-
 .data-table tr[data-analysis-id] {
   cursor: pointer;
 }

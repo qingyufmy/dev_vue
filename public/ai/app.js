@@ -164,6 +164,8 @@ function openFormModal(editor) {
   requestAnimationFrame(() => editor.querySelector(".form-modal-dialog")?.focus());
 }
 
+const ANALYSIS_HISTORY_PAGE_SIZE = 10;
+
 function closeFormModal(editor, restoreFocus = true) {
   if (!editor) return;
   editor.classList.add("hidden");
@@ -1171,12 +1173,12 @@ async function _maybeRefreshSignal() {
       _historyChartCache = null;
     }
 
-    const fullData = await wsApi("signals", {});
+    const fullData = await wsApi("signals", { limit: ANALYSIS_HISTORY_PAGE_SIZE, offset: 0 });
     const signals = fullData.signals || [];
     state.signals = signals;
     state.selectedSignal = signals[0] || null;
     state.analysisHistoryOffset = signals.length;
-    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= 6;
+    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= ANALYSIS_HISTORY_PAGE_SIZE;
     renderAnalysisHistory(signals);
     loadSignalTable();
     if (state.selectedSignal) {
@@ -1195,12 +1197,12 @@ async function handleNewSignal(msg) {
   try {
     if (msg.signal_id != null) _lastSignalId = msg.signal_id;
     // Refresh signal list
-    const fullData = await wsApi("signals", {});
+    const fullData = await wsApi("signals", { limit: ANALYSIS_HISTORY_PAGE_SIZE, offset: 0 });
     const signals = fullData.signals || [];
     state.signals = signals;
     state.selectedSignal = signals[0] || null;
     state.analysisHistoryOffset = signals.length;
-    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= 6;
+    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= ANALYSIS_HISTORY_PAGE_SIZE;
     renderAnalysisHistory(signals);
     loadSignalTable();
 
@@ -3711,7 +3713,7 @@ function renderAnalysisHistory(signals, options = {}) {
     // Append new items to existing list (remove sentinel first if exists)
     const sentinel = host.querySelector(".history-sentinel");
     if (sentinel) sentinel.remove();
-    const limit = options.limit || 6;
+    const limit = options.limit || ANALYSIS_HISTORY_PAGE_SIZE;
     const fragment = signals.slice(-limit).map((signal) => buildHistoryItemHTML(signal)).join("");
     host.insertAdjacentHTML("beforeend", fragment);
   } else {
@@ -3722,7 +3724,7 @@ function renderAnalysisHistory(signals, options = {}) {
   if (state.analysisHistoryHasMore) {
     const existing = host.querySelector(".history-sentinel");
     if (!existing) {
-      host.insertAdjacentHTML("beforeend", `<div class="history-sentinel"><button type="button" class="history-load-more"><span class="history-sentinel-text">加载更多</span></button></div>`);
+      host.insertAdjacentHTML("beforeend", `<div class="history-sentinel" aria-live="polite"><span class="history-sentinel-text">继续向下滚动加载更多</span></div>`);
     }
   }
 }
@@ -3818,7 +3820,7 @@ function renderSignalRows() {
 }
 
 async function loadSignals(options = {}) {
-  const limit = options.limit || 6;
+  const limit = options.limit || ANALYSIS_HISTORY_PAGE_SIZE;
   const offset = options.offset || 0;
   const data = await wsApi("signals", { limit, offset });
   const signals = data.signals || [];
@@ -5055,7 +5057,7 @@ function initAnalysisHistoryScroll() {
     state.analysisHistoryLoading = true;
     const sentinelEl = list.querySelector(".history-sentinel-text");
     if (sentinelEl) sentinelEl.textContent = "加载中...";
-    loadSignals({ append: true, offset: state.analysisHistoryOffset, limit: 6 }).finally(() => {
+    loadSignals({ append: true, offset: state.analysisHistoryOffset, limit: ANALYSIS_HISTORY_PAGE_SIZE }).finally(() => {
       state.analysisHistoryLoading = false;
       if (!state.analysisHistoryHasMore) {
         const sentinel = list.querySelector(".history-sentinel");
@@ -5064,9 +5066,10 @@ function initAnalysisHistoryScroll() {
     });
   };
 
-  list.addEventListener("click", function(e) {
-    if (e.target.closest(".history-sentinel")) loadMore();
-  });
+  list.addEventListener("scroll", function() {
+    const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 80;
+    if (nearBottom) loadMore();
+  }, { passive: true });
 }
 
 // ============ Admin Data Dashboard ============

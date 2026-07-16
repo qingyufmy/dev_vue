@@ -16,8 +16,10 @@ describe('inference workspace V2 contract', () => {
     expect(html).toContain('历史推理')
     expect(html).not.toContain('analysis-history-panel quiet-disclosure')
     expect(html.indexOf('history-status-strip')).toBeLessThan(html.indexOf('analysisHistoryBody'))
-    expect(app).toContain('history-load-more')
-    expect(app).not.toContain('nearBottom = list.scrollTop')
+    expect(app).toContain('const ANALYSIS_HISTORY_PAGE_SIZE = 10')
+    expect(app).toContain('nearBottom = list.scrollTop')
+    expect(app).toContain('继续向下滚动加载更多')
+    expect(app).not.toContain('history-load-more')
   })
 
   it('does not expose a fake client-side cancellation control', () => {
