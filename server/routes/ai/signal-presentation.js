@@ -1,3 +1,5 @@
+import { auditValueLabel } from '../../audit-localization.js'
+
 const SIGNAL_SCHEMA_VERSION = 2
 
 function cleanText(value, maxLength = 240) {
@@ -24,6 +26,18 @@ function parseJson(value) {
   if (!value) return null
   if (typeof value === 'object') return value
   try { return JSON.parse(value) } catch { return null }
+}
+
+function executionDescription(execution, fallback) {
+  const rejectedRule = Array.isArray(execution?.details?.rules)
+    ? execution.details.rules.find(rule => rule?.outcome === 'reject')
+    : null
+  const raw = cleanText(rejectedRule?.code || execution?.message || execution?.reason || execution?.error, 240)
+  if (!raw) return fallback
+  const localized = auditValueLabel(raw)
+  if (localized !== raw) return localized
+  if (/^(?:R\d|PX\.)[A-Z0-9._-]+$/i.test(raw)) return '风控条件未满足'
+  return raw
 }
 
 export function normalizeDecisionFields(signal = {}) {
@@ -54,13 +68,13 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
   if (executed || pending) return {
     state: pending ? 'pending' : 'executed',
     title: pending ? '挂单已提交' : '订单已执行',
-    description: execution?.message || (pending ? '等待市场触发，系统会继续跟踪状态。' : '执行结果已记录，可前往交易或审计页面查看。'),
+    description: executionDescription(execution, pending ? '等待市场触发，系统会继续跟踪状态。' : '执行结果已记录，可前往交易或审计页面查看。'),
     executable: false,
   }
   if (execution && execution.status && execution.status !== 'success') return {
     state: execution.status === 'rejected' ? 'rejected' : 'failed',
     title: execution.status === 'rejected' ? '风控未放行' : '执行未完成',
-    description: cleanText(execution.message || execution.reason || execution.error, 240) || '请查看风控中心中的具体决策原因。',
+    description: executionDescription(execution, '请查看风控中心中的具体决策原因。'),
     executable: false,
   }
   if (stale) return { state: 'expired', title: '信号已过期', description: '请重新推理，过期信号不会发送到交易端。', executable: false }

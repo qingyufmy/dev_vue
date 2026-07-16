@@ -25,6 +25,17 @@ describe('signal presentation', () => {
     expect(advice.description).toContain('风险上限')
   })
 
+  it('shows a Chinese risk reason instead of exposing an internal rule code', () => {
+    const advice = buildExecutionAdvice({ signal_type: 'sell_stop', execution_result: JSON.stringify({ status: 'rejected', message: 'R1.7_PENDING_DEVIATION' }) })
+    expect(advice).toMatchObject({ state: 'rejected', description: '挂单价格偏离当前报价过大' })
+    expect(advice.description).not.toContain('R1.7')
+  })
+
+  it('hides unknown internal risk codes behind a safe Chinese fallback', () => {
+    const advice = buildExecutionAdvice({ signal_type: 'buy', execution_result: { status: 'rejected', message: 'R9_UNKNOWN_PRIVATE_RULE' } })
+    expect(advice.description).toBe('风控条件未满足')
+  })
+
   it('adapts legacy rows without a decision payload', () => {
     const result = attachSignalPresentation({ id: 1, signal_type: 'sell', entry_method: 'market' })
     expect(result.decision.schema_version).toBe(2)
