@@ -266,7 +266,8 @@ export async function updateSchedulerRedisState(key, state) {
       progress_percent: String(state.progressPercent || 0),
       progress_seq: String(state.progressSeq || 0),
       cycle_id: state.cycleId || '',
-      cycle_started_at: state.cycleStartedAt || ''
+      cycle_started_at: state.cycleStartedAt || '',
+      stage_updated_at: state.stageUpdatedAt || ''
     }
     if (state.marketState) {
       fields.market_reason = state.marketState.reason || ''
@@ -387,6 +388,7 @@ export async function getUserAutoRuntimeStatus(userId) {
         progress_percent: Number(st.progressPercent || 3),
         progress_seq: Number(st.progressSeq || 0),
         started_at: st.cycleStartedAt || '',
+        stage_updated_at: st.stageUpdatedAt || st.cycleStartedAt || '',
       })
     }
 
@@ -578,7 +580,9 @@ async function broadcastAutoProgress(promptTypeId, symbol, progress) {
   const key = buildSchedulerKey(promptTypeId, symbol)
   const st = autoSchedulerState[key]
   if (!st?.subscribers) return
-  st.stage = progress.stage || st.stage || 'running'
+  const nextStage = progress.stage || st.stage || 'running'
+  if (nextStage !== st.stage || !st.stageUpdatedAt) st.stageUpdatedAt = new Date().toISOString()
+  st.stage = nextStage
   st.stageLabel = progress.label || st.stageLabel || ''
   st.progressPercent = Math.max(Number(st.progressPercent || 0), Math.min(100, Number(progress.progress_percent || 0)))
   st.progressSeq = Number(st.progressSeq || 0) + 1
@@ -590,6 +594,7 @@ async function broadcastAutoProgress(promptTypeId, symbol, progress) {
     cycle_id: st.cycleId,
     seq: st.progressSeq,
     started_at: st.cycleStartedAt,
+    stage_updated_at: st.stageUpdatedAt,
     stage: st.stage,
     label: st.stageLabel,
     progress_percent: st.progressPercent,
@@ -747,6 +752,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     progressSeq: 0,
     cycleId: '',
     cycleStartedAt: '',
+    stageUpdatedAt: '',
     _waitCount: 0,
   }
 
@@ -893,6 +899,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.progressPercent = 2
     st.progressSeq = 0
     st.cycleStartedAt = new Date().toISOString()
+    st.stageUpdatedAt = st.cycleStartedAt
     st.cycleId = `${key}:${Date.now()}`
     st.lastError = ''
     st.waitReason = ''
@@ -960,6 +967,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.progressPercent = 0
       st.cycleId = ''
       st.cycleStartedAt = ''
+      st.stageUpdatedAt = ''
       await updateSchedulerRedisState(key, st)
     }
 

@@ -38,6 +38,7 @@ const state = {
   globalRiskSnapshot: null,
   autoProgressCycles: {},
   autoProgressFlash: null,
+  autoProgressVisual: {},
 };
 
 // ===== History Cache =====
@@ -521,6 +522,47 @@ function autoProgressElapsed(startedAt) {
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+const AUTO_PROGRESS_STAGE_LIMITS = {
+  starting: 5,
+  config: 14,
+  bridge: 29,
+  market: 44,
+  ai: 82,
+  persist: 91,
+  publish: 95,
+  delivery: 97,
+  verify: 99,
+  complete: 100,
+};
+
+function estimatedAutoProgress(cycle) {
+  const base = Math.max(0, Math.min(100, Number(cycle?.progress_percent || 0)));
+  const stage = cycle?.stage || 'starting';
+  if (stage === 'complete') return 100;
+  const limit = Math.max(base, Number(AUTO_PROGRESS_STAGE_LIMITS[stage] || base));
+  if (limit <= base) return base;
+  const updatedAt = Date.parse(cycle?.stage_updated_at || cycle?.received_at || cycle?.started_at || '');
+  const elapsedSeconds = Number.isFinite(updatedAt) ? Math.max(0, (Date.now() - updatedAt) / 1000) : 0;
+  const timeConstant = stage === 'ai' ? 18 : 5;
+  return Math.min(limit, base + (limit - base) * (1 - Math.exp(-elapsedSeconds / timeConstant)));
+}
+
+function displayedAutoProgress(cycle, final = false) {
+  const key = cycle?.cycle_id || 'runtime-fallback';
+  const target = final ? 100 : estimatedAutoProgress(cycle);
+  const now = Date.now();
+  const current = state.autoProgressVisual[key];
+  if (!current || target < current.value) {
+    state.autoProgressVisual[key] = { value: target, updatedAt: now };
+    return target;
+  }
+  const elapsedSeconds = Math.max(0.05, (now - current.updatedAt) / 1000);
+  const maxStep = (final ? 18 : 3.5) * elapsedSeconds;
+  current.value = Math.min(target, current.value + maxStep);
+  current.updatedAt = now;
+  return current.value;
+}
+
 function activeAutoProgressCycles(runtime) {
   const merged = new Map();
   for (const cycle of Array.isArray(runtime?.active_cycles) ? runtime.active_cycles : []) {
@@ -535,14 +577,14 @@ function activeAutoProgressCycles(runtime) {
 
 function renderAutoProgress(cycles, ptName) {
   const count = cycles.length;
-  const progress = Math.round(cycles.reduce((sum, cycle) => sum + Number(cycle.progress_percent || 0), 0) / Math.max(1, count));
   const primary = [...cycles].sort((a, b) => Number(b.progress_seq || 0) - Number(a.progress_seq || 0))[0];
+  const progress = Math.round(cycles.reduce((sum, cycle) => sum + displayedAutoProgress(cycle, cycle.stage === 'complete'), 0) / Math.max(1, count));
   const symbols = cycles.map(cycle => cycle.symbol).filter(Boolean);
   const label = count > 1 ? `${count} 个品种推理中` : `${primary?.symbol || '自动推理'} · ${primary?.stage_label || '正在处理'}`;
   const elapsed = autoProgressElapsed(primary?.started_at);
   const stage = count > 1
-    ? `${symbols.slice(0, 3).join(' · ')}${symbols.length > 3 ? ` 等 ${symbols.length} 项` : ''}`
-    : `自动推理${elapsed ? ` · 已用时 ${elapsed}` : ''}`;
+    ? `${symbols.slice(0, 3).join(' · ')}${symbols.length > 3 ? ` 等 ${symbols.length} 项` : ''}${elapsed ? ` · ${elapsed}` : ''}`
+    : `已用时 ${elapsed || '00:00'}`;
   const details = cycles.map(cycle => `${cycle.symbol || '未知品种'}：${cycle.stage_label || '正在处理'} ${Math.round(Number(cycle.progress_percent || 0))}%`).join('\n');
   const title = `策略：${ptName || '未选择'}\n状态：正在推理\n${details}\n点击可停止后续自动推理`;
   applyAutoBadge(label, 'running', title, { mode: primary?.stage === 'complete' ? 'complete' : 'running', stage, progress });
@@ -575,7 +617,11 @@ function renderAutoAnalyzeBadge(s) {
     applyAutoBadge(flashLabel, success ? 'running' : 'danger', flashStage, {
       mode: success ? 'complete' : 'error',
       stage: flashStage,
-      progress: success ? 100 : Number(flash.progress_percent || 0),
+      progress: success ? displayedAutoProgress({
+        cycle_id: flash.cycle_id || 'completed-cycle',
+        stage: 'complete',
+        progress_percent: Number(flash.progress_percent || 100),
+      }, true) : Number(flash.progress_percent || 0),
     });
     return;
   }
@@ -968,6 +1014,7 @@ function connectBridgeStatusWs(onReady) {
         if (!msg.enabled) {
           state.autoProgressCycles = {};
           state.autoProgressFlash = null;
+          state.autoProgressVisual = {};
         }
         if (msg.reason === 'user_bridge_offline') {
           if (msg.enabled) {
@@ -984,14 +1031,16 @@ function connectBridgeStatusWs(onReady) {
         renderAutoAnalyzeBadge(state.autoRuntime || { enabled: msg.enabled });
         loadStatus().catch(() => {});
       } else if (msg.type === 'auto_progress_done') {
+        const completedCycle = msg.cycle_id ? state.autoProgressCycles[msg.cycle_id] : null;
         if (msg.cycle_id) delete state.autoProgressCycles[msg.cycle_id];
         const remainingCycles = Object.values(state.autoProgressCycles);
         state.autoProgressFlash = remainingCycles.length ? null : {
           status: msg.status,
           reason: msg.reason || '',
           symbol: msg.symbol || '',
+          cycle_id: msg.cycle_id || completedCycle?.cycle_id || '',
           progress_percent: msg.progress_percent || 0,
-          expiresAt: Date.now() + (msg.status === 'success' ? 1600 : 3200),
+          expiresAt: Date.now() + (msg.status === 'success' ? 2800 : 3200),
         };
         if (state.autoRuntime) {
           state.autoRuntime.active_cycles = remainingCycles;
@@ -1006,9 +1055,10 @@ function connectBridgeStatusWs(onReady) {
         }
         renderAutoAnalyzeBadge(state.autoRuntime || { enabled: true });
         window.setTimeout(() => {
+          if (msg.cycle_id) delete state.autoProgressVisual[msg.cycle_id];
           if (state.autoProgressFlash?.expiresAt <= Date.now()) state.autoProgressFlash = null;
           loadStatus().catch(error => console.warn('[AutoProgress] 状态刷新失败:', error.message));
-        }, msg.status === 'success' ? 1700 : 3300);
+        }, msg.status === 'success' ? 2900 : 3300);
       } else if (msg.type === 'auto_progress') {
         const cycleId = msg.cycle_id || `${msg.prompt_type_id || 0}:${msg.symbol || 'unknown'}:running`;
         const existing = state.autoProgressCycles[cycleId];
@@ -1025,6 +1075,7 @@ function connectBridgeStatusWs(onReady) {
             progress_percent: Number(msg.progress_percent || 0),
             progress_seq: Number(msg.seq || 0),
             started_at: msg.started_at || new Date().toISOString(),
+            stage_updated_at: msg.stage_updated_at || (existing?.stage === msg.stage ? existing.stage_updated_at : new Date().toISOString()),
           };
         }
         state.autoProgressFlash = null;

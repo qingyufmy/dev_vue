@@ -312,10 +312,13 @@ button {
 
 .auto-runtime-control.clickable-badge {
   appearance: none;
-  font: inherit;
-  line-height: 1.2;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
   text-align: left;
-  transition: width 220ms cubic-bezier(.22, 1, .36, 1), min-height 220ms cubic-bezier(.22, 1, .36, 1), background-color 180ms ease, border-color 180ms ease;
+  transition: width 200ms cubic-bezier(.22, 1, .36, 1), background-color 180ms ease, border-color 180ms ease;
 }
 
 .auto-runtime-control:focus-visible {
@@ -330,6 +333,8 @@ button {
 .auto-runtime-control .badge-text {
   display: block;
   overflow: hidden;
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
 }
 
@@ -343,57 +348,47 @@ button {
   --auto-progress: 0%;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: 1fr;
-  column-gap: 9px;
-  width: clamp(232px, 23vw, 294px);
-  max-width: 294px;
-  min-height: 42px;
-  padding: 6px 12px 9px;
-  border-radius: 12px;
-  color: var(--text-primary);
-  background: linear-gradient(112deg, color-mix(in srgb, var(--gold-primary) 10%, var(--bg-input)), color-mix(in srgb, #10b981 8%, var(--bg-input)));
-  border-color: color-mix(in srgb, var(--gold-primary) 46%, var(--border-default));
-  box-shadow: 0 4px 8px rgba(0, 0, 0, .22);
-  isolation: isolate;
+  column-gap: 7px;
+  width: clamp(218px, 21vw, 270px);
+  max-width: 270px;
+  min-height: 26px;
+  padding: 3px 10px 5px;
+  border-radius: var(--radius-pill);
+  color: var(--gold-primary);
+  background: var(--gold-wash);
+  border-color: var(--border-gold);
 }
 
 .auto-runtime-control.is-progress .badge-dot {
-  width: 13px;
-  height: 13px;
-  background: radial-gradient(circle at 35% 30%, #fff7c2 0 12%, var(--gold-primary) 42%, #16a179 100%);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold-primary) 13%, transparent), 0 0 10px color-mix(in srgb, var(--gold-primary) 38%, transparent);
-  animation: auto-runtime-orbit 1.8s ease-in-out infinite;
+  width: 6px;
+  height: 6px;
+  background: var(--gold-primary);
+  box-shadow: none;
+  animation: none;
 }
 
 .auto-runtime-control.is-progress .auto-runtime-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: block;
+  min-width: 0;
 }
 
 .auto-runtime-control.is-progress .badge-text {
   font-size: 12px;
-  font-weight: 700;
-  color: var(--text-primary);
+  font-weight: 500;
+  color: var(--gold-primary);
 }
 
 .auto-runtime-control.is-progress .auto-runtime-stage {
-  display: block;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .auto-runtime-control.is-progress .auto-runtime-percent {
   display: block;
   align-self: center;
-  color: var(--gold-light);
-  font-family: 'JetBrains Mono', monospace;
+  color: var(--gold-primary);
+  font-family: var(--font-ui);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -401,44 +396,38 @@ button {
   display: block;
   position: absolute;
   right: 11px;
-  bottom: 4px;
+  bottom: 2px;
   left: 11px;
-  height: 3px;
+  height: 2px;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  background: color-mix(in srgb, var(--gold-primary) 16%, transparent);
 }
 
 .auto-runtime-fill {
   display: block;
-  position: relative;
   width: var(--auto-progress);
   height: 100%;
-  min-width: 3px;
+  min-width: 2px;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--gold-primary), var(--gold-light) 48%, #18b98a);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--gold-primary) 55%, transparent);
-  transition: width 520ms cubic-bezier(.22, 1, .36, 1);
-}
-
-.auto-runtime-fill::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  width: 42%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .82), transparent);
-  transform: translateX(-160%);
-  animation: auto-runtime-scan 1.65s ease-in-out infinite;
+  background: var(--gold-primary);
+  transition: width 900ms linear;
 }
 
 .auto-runtime-control.is-complete {
-  background: color-mix(in srgb, #10b981 12%, var(--bg-input));
-  border-color: color-mix(in srgb, #10b981 54%, var(--border-default));
+  color: var(--status-connected);
+  background: var(--status-connected-bg);
+  border-color: var(--status-connected-border);
 }
 
-.auto-runtime-control.is-complete .badge-dot {
+.auto-runtime-control.is-complete .badge-dot,
+.auto-runtime-control.is-complete .auto-runtime-fill {
   background: #10b981;
-  animation: none;
+}
+
+.auto-runtime-control.is-complete .badge-text,
+.auto-runtime-control.is-complete .auto-runtime-percent {
+  color: var(--status-connected);
 }
 
 .auto-runtime-control.is-error {
@@ -448,7 +437,6 @@ button {
 
 .auto-runtime-control.is-error .badge-dot {
   background: var(--status-danger);
-  animation: none;
 }
 
 .auto-runtime-control.is-progress.clickable-badge::after {
@@ -456,31 +444,16 @@ button {
 }
 
 .auto-runtime-control.is-progress:hover {
-  filter: brightness(1.06);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, .26);
+  background: color-mix(in srgb, var(--gold-primary) 11%, var(--bg-topbar));
 }
 
 .auto-runtime-control.is-error .auto-runtime-fill {
   background: var(--status-danger);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--status-danger) 48%, transparent);
-}
-
-@keyframes auto-runtime-orbit {
-  0%, 100% { transform: scale(.88); filter: saturate(.95); }
-  50% { transform: scale(1.08); filter: saturate(1.25); }
-}
-
-@keyframes auto-runtime-scan {
-  0%, 18% { transform: translateX(-160%); opacity: 0; }
-  35% { opacity: .9; }
-  72%, 100% { transform: translateX(310%); opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .auto-runtime-control,
   .auto-runtime-fill { transition-duration: 0ms; }
-  .auto-runtime-control.is-progress .badge-dot,
-  .auto-runtime-fill::after { animation: none; }
 }
 
 @keyframes pulse-dot-green {

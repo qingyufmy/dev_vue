@@ -16,13 +16,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("msg.type === 'auto_progress'")
     expect(app).toContain('activeAutoProgressCycles')
     expect(app).toContain('autoProgressElapsed')
+    expect(app).toContain('estimatedAutoProgress')
+    expect(app).toContain('displayedAutoProgress')
     expect(css).toContain('.auto-runtime-control.is-progress')
-    expect(css).toContain('@keyframes auto-runtime-scan')
+    expect(css).toContain('transition: width 900ms linear')
+    expect(css).not.toContain('@keyframes auto-runtime-scan')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
   it('publishes recoverable, ordered progress for every inference stage', () => {
-    for (const field of ['progress_percent', 'progress_seq', 'cycle_id', 'cycle_started_at']) {
+    for (const field of ['progress_percent', 'progress_seq', 'cycle_id', 'cycle_started_at', 'stage_updated_at']) {
       expect(scheduler).toContain(field)
     }
     for (const stage of ['config', 'bridge', 'market', 'ai', 'persist', 'publish', 'delivery', 'verify', 'complete']) {
