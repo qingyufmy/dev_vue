@@ -1,6 +1,6 @@
 // ai/config.js — 配置管理 + 风控 + 审计
 
-import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from '../../db.js'
 import { round2, round3, stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge, computeAtr14 } from './market-data.js'
@@ -12,6 +12,8 @@ import { evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy } fro
 import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
 import { getRiskRuleRolloutModes } from './rollout-governance.js'
 import { getInferencePreference } from './inference-preferences.js'
+import { parseStrategyPolicy } from './strategy-policy.js'
+import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subscription-schedule.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -57,6 +59,7 @@ export function buildBridgeOrderCall(request) {
     const {
       tp_tier_requested: _tpTierRequested,
       tp_tier_used: _tpTierUsed,
+      take_profit_candidates: _takeProfitCandidates,
       normalization_info: _normalizationInfo,
       ...bridgeParams
     } = request
@@ -104,9 +107,9 @@ export async function insertAudit(db, userId, action, symbol, request, result, s
   return true
 }
 
-export async function getAnalyzeApiKey(userId, sessionId) {
+export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
   if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
-  const resolved = await resolveAiTaskModel({ userId, strategyId: null, usage: 'manual' })
+  const resolved = await resolveAiTaskModel({ userId, strategyId, usage: 'manual' })
   if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || 'no_model_configured')
   const userConfig = await getInferencePreference(userId, sessionId)
 
@@ -119,7 +122,7 @@ export async function getAnalyzeApiKey(userId, sessionId) {
     selected_take_profit: userConfig.selected_take_profit,
     _userId: userId,
     _usage: 'manual',
-    _strategyId: null,
+    _strategyId: strategyId,
     _model_shared: resolved.credential_source === 'platform_shared',
     _model_profile_id: resolved.model_profile_id,
     _credential_source: resolved.credential_source,
@@ -193,6 +196,7 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
   const resolved = await resolveAiTaskModel({ userId: isPrivate ? ownerUserId : 0, strategyId: promptTypeId, usage })
   if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || (isPrivate ? 'no_model_configured' : 'no_platform_model'))
   const globalCfg = await getGlobalAutoConfig()
+  const policy = parseStrategyPolicy(pt)
   return {
     ...resolved.model,
     system_prompt: pt.system_prompt || '',
@@ -212,6 +216,9 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
     _strategy_scope: pt.scope || 'platform',
     _strategy_owner_user_id: ownerUserId,
     _strategy_version: Number(pt.version || 1),
+    _market_data_plan: policy.marketDataPlan,
+    _allowed_entry_methods: policy.entryMethods,
+    _use_chan_analysis: policy.useChanAnalysis,
     _ai_volume_min: 0.01,
     _ai_volume_max: Number(globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
     prompt_type_id: promptTypeId,
@@ -228,9 +235,13 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
     `SELECT s.user_id, s.selected_symbols_json, apt.symbols_json as strategy_symbols_json,
             apt.scope AS strategy_scope, apt.owner_user_id AS strategy_owner_user_id,
             s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
+            ss.id AS subscription_id, ss.schedule_enabled, ss.schedule_timezone,
+            ss.schedule_weekdays_json, ss.schedule_windows_json, ss.outside_window_behavior,
             u.plan, u.role
      FROM auto_scheduler s
      JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
+     JOIN strategy_subscriptions ss ON ss.user_id = s.user_id AND ss.strategy_id = s.prompt_type_id
+       AND ss.execution_enabled = 1 AND ss.is_deleted = 0
      JOIN users u ON u.id = s.user_id
      WHERE s.prompt_type_id = ? AND s.enabled = 1
        AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = s.user_id))
@@ -239,6 +250,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   )
   const filtered = rows.filter(r => {
     if (r.strategy_scope === 'private' && Number(r.strategy_owner_user_id) !== Number(r.user_id)) return false
+    if (!subscriptionAllowsInference(r)) return false
     // Determine user's effective symbols: selected_symbols_json ∩ strategy symbols
     let userSymbols = []
     try {
@@ -264,6 +276,23 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
     return filtered.filter(r => bridgeAliveCheck(r.user_id))
   }
   return filtered
+}
+
+export async function getDeliverySubscriptionRuntime(userId, promptTypeId, symbol) {
+  const rows = await queryAll(
+    `SELECT ss.*, apt.symbols_json AS strategy_symbols_json
+     FROM strategy_subscriptions ss
+     JOIN auto_prompt_types apt ON apt.id = ss.strategy_id AND apt.deleted_at IS NULL
+     WHERE ss.user_id = ? AND ss.strategy_id = ?
+       AND ss.execution_enabled = 1 AND ss.is_deleted = 0
+     ORDER BY ss.updated_at DESC, ss.id DESC`,
+    [userId, promptTypeId]
+  )
+  const wanted = stripBrokerSuffix(String(symbol || '').toUpperCase())
+  const subscription = rows.find(row => resolveEffectiveSymbols(row.symbols_json, row.strategy_symbols_json)
+    .some(item => stripBrokerSuffix(String(item).toUpperCase()) === wanted))
+  if (!subscription) return null
+  return { ...subscription, in_schedule: subscriptionAllowsExecution(subscription) }
 }
 
 // === Delivery Execute Risk Config ===
@@ -359,6 +388,10 @@ export function signalOrderPayload(signal, config, market, confirm) {
     tp: usedTier ? signal[`take_profit_${usedTier}_price`] : null,
     tp_tier_requested: requestedTier,
     tp_tier_used: usedTier,
+    take_profit_candidates: [1, 2, 3].map(tier => ({
+      tier,
+      price: Number(signal[`take_profit_${tier}_price`]),
+    })).filter(item => Number.isFinite(item.price) && item.price > 0),
     confirm: confirm,
     source: 'ai',
     signal_type: signal.signal_type,
@@ -419,6 +452,7 @@ export async function getCloseSignalTickets(userId) {
 }
 
 export async function executeOrderCore(userId, config, request, action, options = {}) {
+  options = { ...options, noFallback: true }
   const signalId = request.signal_id ?? options.signalId ?? null
   const sourceType = options.sourceType || (options.deliveryId ? 'auto_delivery' : signalId ? 'signal' : 'manual')
   const ruleModes = await getRiskRuleRolloutModes()
@@ -440,7 +474,8 @@ export async function executeOrderCore(userId, config, request, action, options 
         riskProfileId: options.riskProfileId ?? prepared.risk_profile_id ?? null,
         legacyConfig,
       })
-      const decision = evaluateCoreRisk({ request: prepared, account, quote: context.quote, instrument: context.instrument, policy: resolved.policy, ruleModes })
+      const decision = evaluateCoreRisk({ request: prepared, account, quote: context.quote, instrument: context.instrument,
+        brokerCalculation: context.broker_calculation, policy: resolved.policy, ruleModes })
       const decisionId = await persistRiskDecision(context.intentId, decision, resolved.policyVersionIds)
       if (decision.decision_status === 'reject') throw new RiskReject(decision.reject_code, { risk_decision_id: decisionId, rules: decision.rule_results })
       return {
@@ -465,30 +500,47 @@ export async function executeOrderCore(userId, config, request, action, options 
       snapshot: riskContext,
       ruleModes,
     }),
-    loadRiskContext: async ({ bridge, actorId, request: prepared, account, quote, bridgeOptions }) => {
-      const symbolsResult = await bridge(actorId, 'symbols', {}, bridgeOptions)
-      if (!symbolsResult || symbolsResult.status === 'error') throw new Error(symbolsResult?.message || 'symbol_metadata_failed')
-      const wanted = stripBrokerSuffix(prepared.symbol)
-      const instrument = (symbolsResult.symbols || []).find(item => String(item.name || '').toUpperCase() === String(prepared.symbol || '').toUpperCase())
-        || (symbolsResult.symbols || []).find(item => stripBrokerSuffix(item.name) === wanted)
-      if (!instrument) throw new Error('symbol_metadata_not_found')
+    loadRiskContext: async ({ bridge, actorId, tradingAccountId, request: prepared, account, quote, bridgeOptions }) => {
       if (!(Number(prepared.atr_anchor) > 0)) {
         const ratesResult = await bridge(actorId, 'rates', { symbol: prepared.symbol, timeframe: 'H1', count: 30 }, bridgeOptions)
         const atr = computeAtr14(ratesResult?.rates || [])
         if (atr > 0) prepared.atr_anchor = atr
       }
-      const today = beijingNow().slice(0, 10)
-      const [positionsResult, pendingResult, historyToday, historyAll] = await Promise.all([
-        bridge(actorId, 'positions', {}, bridgeOptions),
-        bridge(actorId, 'pending_list', {}, bridgeOptions),
-        bridge(actorId, 'history', { page: 1, page_size: 5000, date_from: today }, bridgeOptions),
-        bridge(actorId, 'history', { page: 1, page_size: 5000 }, bridgeOptions),
-      ])
-      const instruments = Object.fromEntries((symbolsResult.symbols || []).map(item => [stripBrokerSuffix(item.name), item]))
+      const stateCursor = await queryOne(`SELECT ras.last_deal_time_msc, ras.last_deal_ticket,
+          COALESCE(ras.last_risk_snapshot_at, ras.updated_at, ta.first_verified_at) AS incremental_baseline_at
+        FROM trading_accounts ta LEFT JOIN risk_account_state ras ON ras.trading_account_id = ta.id
+        WHERE ta.id = ? AND ta.user_id = ? AND ta.is_deleted = 0 LIMIT 1`, [tradingAccountId, actorId])
+      if (!stateCursor) throw new Error('trading_account_not_found')
+      const entryPrice = Number(prepared.limit_price || prepared.quote_price || prepared.reference_price || 0)
+      const snapshotOptions = { ...(bridgeOptions || {}), timeoutMs: Math.max(10_000, Number(bridgeOptions?.timeoutMs) || 0), noFallback: true }
+      const riskSnapshot = await bridge(actorId, 'risk_snapshot', {
+        symbol: prepared.symbol,
+        last_deal_time_msc: Number(stateCursor.last_deal_time_msc || 0),
+        last_deal_ticket: Number(stateCursor.last_deal_ticket || 0),
+        baseline_from_utc_msc: Number(stateCursor.last_deal_time_msc || 0) ? 0 : (parseBeijing(stateCursor.incremental_baseline_at)?.getTime() || Date.now()),
+        proposed_order: {
+          symbol: prepared.symbol, order_type: prepared.order_type, volume: Number(prepared.volume || 0),
+          entry_price: entryPrice, sl: Number(prepared.sl || 0),
+        },
+      }, snapshotOptions)
+      if (!riskSnapshot || riskSnapshot.status !== 'success') {
+        const message = String(riskSnapshot?.message || riskSnapshot?.error || '')
+        if (message.includes('Unknown action: risk_snapshot')) throw new Error('bridge_upgrade_required_for_incremental_risk')
+        throw new Error(message || 'risk_snapshot_failed')
+      }
+      const instruments = {}
+      for (const item of Object.values(riskSnapshot.instruments || {})) {
+        if (!item?.name) continue
+        instruments[stripBrokerSuffix(item.name)] = item
+      }
+      const wanted = stripBrokerSuffix(prepared.symbol)
+      const instrument = instruments[wanted]
+      if (!instrument) throw new Error('symbol_metadata_not_found')
       const fxRates = {}
       const accountCurrency = String(account?.currency || '').toUpperCase()
-      const quoteCurrencies = new Set([...(positionsResult?.positions || []), ...(pendingResult?.orders || []), prepared]
-        .map(item => stripBrokerSuffix(item.symbol)).filter(symbol => symbol.length >= 6).map(symbol => symbol.slice(3, 6)))
+      const quoteCurrencies = new Set([...(riskSnapshot.positions || []), ...(riskSnapshot.pending || []), prepared]
+        .map(item => instruments[stripBrokerSuffix(item.symbol)]?.currency_profit || stripBrokerSuffix(item.symbol).slice(3, 6))
+        .map(currency => String(currency || '').toUpperCase()).filter(Boolean))
       for (const currency of quoteCurrencies) {
         if (!currency || !accountCurrency || currency === accountCurrency) continue
         for (const pair of [`${currency}${accountCurrency}`, `${accountCurrency}${currency}`]) {
@@ -501,10 +553,13 @@ export async function executeOrderCore(userId, config, request, action, options 
       }
       return {
         account, quote, instrument, instruments, fxRates,
-        positions: positionsResult?.status === 'success' ? (positionsResult.positions || []) : [],
-        pending: pendingResult?.status === 'success' ? (pendingResult.orders || []) : [],
-        snapshot_complete: positionsResult?.status === 'success' && pendingResult?.status === 'success',
-        historyToday, historyAll,
+        positions: riskSnapshot.positions || [], pending: riskSnapshot.pending || [],
+        snapshot_complete: riskSnapshot.complete === true,
+        data_incomplete_reasons: riskSnapshot.incomplete_reasons || [],
+        risk_snapshot_version: Number(riskSnapshot.snapshot_version || 0),
+        businessDate: riskSnapshot.business_date,
+        increment: riskSnapshot.increment || {},
+        broker_calculation: riskSnapshot.broker_calculation || null,
       }
     },
     enrichRequest: ({ request: prepared, quote }) => {

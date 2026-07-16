@@ -4,6 +4,7 @@ import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount,
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
   mt5Bridge: (...args) => mockMt5Bridge(...args),
+  platformRates: (userId, params) => mockMt5Bridge(userId, 'rates', params),
   computeAtr14: vi.fn(() => 12),
   calculateMarketData: vi.fn((symbol, timeframe, rates, _account, _positions, options = {}) => ({
     symbol, timeframe,

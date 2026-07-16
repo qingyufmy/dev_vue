@@ -25,9 +25,10 @@ describe('rollout hardening contract', () => {
     const analyze = strategy.slice(strategy.indexOf('export async function handleAnalyze'))
     expect(analyze).toContain('await withTransaction(async run =>')
     expect(analyze).toContain('await persistInferenceSnapshotTx(run, {')
-    expect(analyze).toContain("strategyScope: 'manual'")
+    expect(analyze).toContain('strategyScope: strategy.scope')
+    expect(analyze).toContain('strategyId: Number(strategy.id)')
     expect(analyze).toContain('attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId)')
-    const paired = analyze.slice(analyze.indexOf('if (memory.pairedExperimentEnabled'))
+    const paired = analyze.slice(analyze.indexOf("if (strategy.scope === 'private' && memory.pairedExperimentEnabled"))
     expect(paired).toContain("_memoryContext: ''")
     expect(paired).toContain('recordPairedInferenceRun')
     expect(paired).not.toContain('executeOrder(')
@@ -76,6 +77,21 @@ describe('rollout hardening contract', () => {
   it('gives complete history queries a queue-aware Bridge timeout', () => {
     expect(bridge).toContain("'history', bridgeParams, { timeoutMs: 30000, noFallback: true }")
     expect(bridge).toContain("'chart_data', chartParams, { timeoutMs: 30000, noFallback: true }")
+  })
+
+  it('keeps full MT5 history out of the real-time risk path', () => {
+    const start = config.indexOf('loadRiskContext: async')
+    const end = config.indexOf('enrichRequest:', start)
+    const block = config.slice(start, end)
+    expect(migrations).toContain("id: '078_incremental_risk_snapshot'")
+    expect(migrations).toContain("id: '079_incremental_risk_snapshot_baseline'")
+    expect(migrations).toContain('SET last_risk_snapshot_at = updated_at')
+    expect(block).toContain("bridge(actorId, 'risk_snapshot'")
+    expect(block).toContain('last_deal_time_msc')
+    expect(block).toContain('COALESCE(ras.last_risk_snapshot_at, ras.updated_at, ta.first_verified_at)')
+    expect(block).not.toContain("bridge(actorId, 'history'")
+    expect(block).not.toContain("bridge(actorId, 'positions'")
+    expect(block).not.toContain("bridge(actorId, 'pending_list'")
   })
 
   it('does not query review bodies or memory lesson text in administrator health metrics', () => {

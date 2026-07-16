@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260716e" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260716v" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -105,8 +105,8 @@
           <button class="nav-item" data-tab="model-strategy" data-title="模型策略">
             <i data-lucide="brain-circuit" size="16"></i>模型策略
           </button>
-          <button class="nav-item" data-tab="ai-analyze" data-title="手动推理">
-            <i data-lucide="play-circle" size="16"></i>手动推理
+          <button class="nav-item" data-tab="ai-analyze" data-title="推理">
+            <i data-lucide="play-circle" size="16"></i>推理
           </button>
         </div>
 
@@ -247,6 +247,7 @@
                   <button class="kline-period-btn" data-tf="H4">H4</button>
                   <button class="kline-period-btn" data-tf="D1">D1</button>
                 </div>
+                <span id="klineDataSource" class="kline-source-badge" title="K 线数据来源">行情源校验中</span>
                 <span id="klineLastPrice" class="kline-last-price num">--</span>
               </div>
               <div id="klineChart" class="kline-chart-container"></div>
@@ -361,8 +362,8 @@
 
         <section id="model-strategy" class="tab-panel">
           <div class="model-strategy-shell">
-            <header class="model-strategy-header">
-              <div><h1>模型策略</h1><p>先定义模型能力，再决定推理策略如何使用模型、行情和执行约束。</p></div>
+            <header class="model-strategy-header calm-page-header">
+              <div class="model-strategy-heading"><span class="page-eyebrow">AI 交易控制台</span><h1>模型策略</h1><p>在一个地方管理分析方法、模型来源和自动运行方式。</p></div>
               <div class="model-strategy-tabs" role="tablist" aria-label="模型策略设置">
                 <button id="modelStrategyStrategiesTab" class="model-strategy-tab active" type="button" role="tab" aria-controls="ai-config" aria-selected="true" data-model-strategy-tab="strategies"><i data-lucide="git-branch" size="16"></i>推理策略</button>
                 <button id="modelStrategyModelsTab" class="model-strategy-tab" type="button" role="tab" aria-controls="model-management" aria-selected="false" tabindex="-1" data-model-strategy-tab="models"><i data-lucide="brain" size="16"></i>模型管理</button>
@@ -370,13 +371,19 @@
             </header>
           <div id="model-management" class="model-strategy-panel" role="tabpanel" aria-labelledby="modelStrategyModelsTab" data-model-strategy-panel="models" hidden>
           <div class="workspace-page">
-            <header class="workspace-header">
-              <div><h1>模型管理</h1><p>一处配置，供手动推理、自动推理、复盘与记忆压缩按权限使用。</p></div>
-              <button id="addModelProfileBtn" class="btn btn-primary"><i data-lucide="plus" size="16"></i>添加模型</button>
+            <header class="workspace-header model-strategy-toolbar compact-section-header">
+              <div><h2>模型管理</h2><p>手动推理、自动推理和复盘任务共用这里的模型解析规则。</p></div>
+              <div class="toolbar-actions"><span id="modelCatalogSummary" class="catalog-summary">正在加载模型…</span><button id="addModelProfileBtn" class="btn btn-primary"><i data-lucide="plus" size="16"></i>添加模型</button></div>
             </header>
-            <div id="modelSourceNotice" class="source-notice" role="status">正在解析当前模型来源…</div>
-            <section id="modelProfileEditor" class="workspace-panel hidden" aria-label="模型配置表单">
-              <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div></div>
+            <section class="insight-strip model-insight-strip" aria-label="模型概览">
+              <div class="insight-item primary"><span>当前生效模型</span><strong id="modelEffectiveSource">正在解析…</strong><small>由服务端按任务与权限确定</small></div>
+              <div class="insight-item"><span>已配置</span><strong id="modelCountStat" class="num">--</strong><small>模型总数</small></div>
+              <div class="insight-item"><span>连接可用</span><strong id="modelActiveStat" class="num">--</strong><small>可参与模型解析</small></div>
+            </section>
+            <div id="modelSourceNotice" class="source-notice compact-notice" role="status">正在解析当前模型来源…</div>
+            <div id="modelProfileEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="modelEditorTitle">
+            <section class="workspace-panel form-modal-dialog model-profile-dialog" tabindex="-1">
+              <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div><button id="cancelModelProfileBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="settings-grid">
                 <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="gpt">OpenAI compatible</option><option value="kimi">Kimi</option><option value="qwen">Qwen</option><option value="zhipu">智谱</option><option value="doubao">豆包</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option></select></label>
                 <label><span>模型名称</span><input id="profileModelName" value="deepseek-chat" autocomplete="off"></label>
@@ -385,8 +392,9 @@
                 <label><span>Temperature</span><input id="profileTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label>
                 <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="10000" step="100" value="2000"></label>
               </div>
-              <div class="form-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button><button id="cancelModelProfileBtn" class="btn btn-secondary">取消</button></div>
+              <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button></div>
             </section>
+            </div>
             <div id="modelProfilesList" class="workspace-list"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>
             <section id="platformModelPolicy" class="workspace-panel admin-only" style="display:none">
               <div class="section-heading"><div><h2>平台共享与配额</h2><p>共享凭据只用于已开启的用途，并受用户日配额限制。</p></div><button id="savePlatformPolicyBtn" class="btn btn-primary btn-sm">保存策略</button></div>
@@ -399,96 +407,113 @@
           </div>
 
           <div id="ai-config" class="model-strategy-panel active" role="tabpanel" aria-labelledby="modelStrategyStrategiesTab" data-model-strategy-panel="strategies">
-          <div class="card content-card">
-            <div class="card-header">
-              <span class="card-title">推理策略</span>
+          <div class="strategy-workspace">
+            <section class="workspace-panel strategy-command-panel" aria-labelledby="strategyWorkspaceTitle">
+              <header class="workspace-header model-strategy-toolbar strategy-control-header"><div><span class="section-kicker">当前工作区</span><h2 id="strategyWorkspaceTitle">推理策略</h2><p>一套策略统一行情、模型、入场方式与自动运行设置。</p></div><div class="toolbar-actions"><span id="strategyCatalogSummary" class="catalog-summary">正在加载策略…</span><button id="addPrivateStrategyBtn" class="btn btn-primary btn-sm"><i data-lucide="plus" size="15"></i>新建策略</button></div></header>
+              <div class="strategy-summary-panel" aria-label="策略概览">
+                <div class="strategy-summary-item"><span>全部策略</span><strong id="strategyTotalStat" class="num">--</strong><small>平台与我的策略</small></div>
+                <div class="strategy-summary-item"><span>当前可用</span><strong id="strategyAvailableStat" class="num">--</strong><small>可用于推理</small></div>
+                <div class="strategy-summary-item is-running"><span>自动运行</span><strong id="strategyRunningStat" class="num">--</strong><small>已启用的订阅</small></div>
+                <div class="strategy-model-summary"><div class="strategy-model-icon" aria-hidden="true"><i data-lucide="cpu" size="18"></i></div><div><span>当前推理模型</span><strong id="strategyModelSource">正在解析…</strong></div><button class="text-action" data-tab-jump="model-management">管理模型<i data-lucide="arrow-right" size="13"></i></button></div>
+              </div>
+            </section>
+            <div class="workspace-filter-bar" role="group" aria-label="筛选策略">
+              <button class="filter-pill active" type="button" data-strategy-filter="all">全部</button>
+              <button class="filter-pill" type="button" data-strategy-filter="platform">平台策略</button>
+              <button class="filter-pill" type="button" data-strategy-filter="private">我的策略</button>
+              <button class="filter-pill" type="button" data-strategy-filter="subscribed">已订阅</button>
             </div>
-            <div class="strategy-source-row"><div><strong>当前模型来源</strong><span id="strategyModelSource">正在解析…</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
-            <div class="form-actions"><button id="addPrivateStrategyBtn" class="btn btn-primary btn-sm">新建自定义策略</button></div>
-            <section id="strategyEditor" class="workspace-panel hidden">
-              <div class="section-heading"><div><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm">取消</button></div>
-              <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120"></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD"></label><label id="strategyScopeField" class="admin-only"><span>策略范围</span><select id="strategyScope"><option value="platform">平台全局策略</option><option value="private">管理员自己的私有策略</option></select></label><label id="strategyVisibilityField" class="admin-only"><span>平台可见状态</span><select id="strategyVisibility"><option value="active">上线</option><option value="draft">草稿</option><option value="archived">归档</option></select></label><label><span>绑定模型</span><select id="strategyModelProfile"><option value="">继承默认模型 / 平台自动共享</option></select></label><label><span>推理间隔（分钟）</span><input id="strategyInterval" type="number" min="1" value="5"></label></div>
-              <label><span>策略提示词</span><textarea id="strategyPrompt" rows="8"></textarea></label>
-              <div class="form-actions"><button id="saveStrategyBtn" class="btn btn-primary">保存策略</button></div>
-            </section>
-            <section id="subscriptionEditor" class="workspace-panel hidden">
-              <div class="section-heading"><div><h2>订阅与执行</h2><p id="subscriptionCostNotice">个人记忆会把平台共享策略转换为逐用户推理，可能使用你的模型或平台共享配额。</p></div><button id="cancelSubscriptionEditorBtn" class="btn btn-secondary btn-sm">取消</button></div>
-              <div class="settings-grid"><label><span>交易账户</span><select id="subscriptionAccount"></select></label><label><span>品种（留空表示策略全部品种）</span><input id="subscriptionSymbols"></label><label><span>记忆模式</span><select id="subscriptionMemoryMode"><option value="platform_only">仅平台策略</option><option value="personal">个人记忆（逐用户推理）</option><option value="shadow">只影子检索</option><option value="off">关闭记忆</option></select></label><label class="check-row"><input id="subscriptionExecutionEnabled" type="checkbox"><span>启用自动执行</span></label></div>
-              <div class="form-actions"><button id="saveSubscriptionBtn" class="btn btn-primary">保存订阅</button></div>
-            </section>
-            <div id="strategyCatalog" class="strategy-catalog"><div class="workspace-skeleton"></div></div>
-            <div id="manual-config">
-              <div class="strategy-source-row"><div><strong>推理模型</strong><span>手动与自动推理统一使用“模型管理”中的有效模型和共享策略；本页不保存凭据。</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
-              <div class="config-section">
-                <div class="config-section-title">交易约束</div>
-                <div class="config-grid">
-                  <label><span>风险等级</span><select id="riskLevel">
-                    <option value="low">低风险</option>
-                    <option value="medium" selected>中风险</option>
-                    <option value="high">高风险</option>
-                  </select></label>
-                  <label><span>单次最大手数</span><span class="unit-field"><input id="maxPositionSize" class="num" type="number" min="0.01" step="0.01" value="0.05" /><span class="input-unit">手</span></span></label>
-                  <label><span>默认止盈方案</span><select id="selectedTakeProfit">
-                    <option value="1">TP1 - 保守止盈</option>
-                    <option value="2" selected>TP2 - 标准止盈</option>
-                    <option value="3">TP3 - 激进止盈</option>
-                  </select></label>
-                  <div id="autoExecuteRow" class="auto-execute-row">
-                    <label class="check-row auto-execute-label"><input id="enableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
-                    <div id="autoExecuteWarning" class="auto-execute-warning">
-                      已开启自动执行：系统会按后台风控、信号有效期、最大手数和持仓约束判断是否发送交易。
-                    </div>
+            <div id="strategyEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="strategyEditorTitle">
+            <section class="workspace-panel form-modal-dialog strategy-editor-dialog" tabindex="-1">
+              <div class="section-heading"><div><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
+              <div class="strategy-editor-sections">
+                <fieldset class="strategy-form-section"><legend><span class="section-step">01</span>基本信息</legend><p>定义策略身份、可见范围和可分析品种。</p>
+                  <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label><label id="strategyScopeField" class="admin-only is-readonly"><span>策略范围</span><input id="strategyScope" value="platform" readonly aria-readonly="true"><small id="strategyScopeHelp" class="field-help">管理员只维护平台策略；管理员账户不建立私有策略或个人记忆。</small></label><label id="strategyVisibilityField" class="admin-only"><span>可见状态</span><select id="strategyVisibility"><option value="active">上线（可用于推理）</option><option value="draft">草稿（不可用于推理）</option><option value="archived">归档（不可用于推理）</option></select><small class="field-help">可见状态同时控制策略是否可用于手动和自动推理。</small></label></div>
+                </fieldset>
+                <fieldset class="strategy-form-section"><legend><span class="section-step">02</span>行情数据方案</legend><p>手动与自动推理共用这组周期和 K 线数量；主周期用于信号有效期和结果标识。</p>
+                  <div id="strategyMarketPlan" class="market-plan-grid">
+                    <div class="market-plan-head"><span>启用</span><span>周期</span><span>K 线数量</span><span>主周期</span></div>
+                    <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M1" aria-label="启用 M1"><strong>M1</strong><input type="number" data-strategy-kline="M1" min="10" max="500" step="10" value="100" aria-label="M1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M1" aria-label="将 M1 设为主周期"></div>
+                    <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M5" aria-label="启用 M5"><strong>M5</strong><input type="number" data-strategy-kline="M5" min="10" max="500" step="10" value="100" aria-label="M5 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M5" aria-label="将 M5 设为主周期"></div>
+                    <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M15" aria-label="启用 M15"><strong>M15</strong><input type="number" data-strategy-kline="M15" min="10" max="500" step="10" value="100" aria-label="M15 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M15" aria-label="将 M15 设为主周期"></div>
+                    <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M30" checked aria-label="启用 M30"><strong>M30</strong><input type="number" data-strategy-kline="M30" min="10" max="500" step="10" value="100" aria-label="M30 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M30" aria-label="将 M30 设为主周期" checked></div>
+                    <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="H1" aria-label="启用 H1"><strong>H1</strong><input type="number" data-strategy-kline="H1" min="10" max="500" step="10" value="100" aria-label="H1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="H1" aria-label="将 H1 设为主周期"></div>
+                    <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="H4" aria-label="启用 H4"><strong>H4</strong><input type="number" data-strategy-kline="H4" min="10" max="500" step="10" value="100" aria-label="H4 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="H4" aria-label="将 H4 设为主周期"></div>
+                    <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="D1" aria-label="启用 D1"><strong>D1</strong><input type="number" data-strategy-kline="D1" min="10" max="500" step="10" value="100" aria-label="D1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="D1" aria-label="将 D1 设为主周期"></div>
                   </div>
-                  <label class="check-row"><input id="enableFuturesTrading" type="checkbox" /><span>期货手数模式</span></label>
-
-                </div>
+                  <label class="strategy-capability-toggle" for="strategyUseChanAnalysis">
+                    <input id="strategyUseChanAnalysis" type="checkbox">
+                    <span><strong>启用缠论指标</strong><small>为已启用周期计算笔、线段和中枢，并将结构化结果提供给模型。需要更多历史 K 线，推理耗时可能增加。</small></span>
+                  </label>
+                </fieldset>
+                <fieldset class="strategy-form-section"><legend><span class="section-step">03</span>允许的入场方式</legend><p>未启用的方式会从模型输出格式中删除，后端也会拒绝模型越界输出。</p>
+                  <div class="entry-method-grid">
+                    <label><input type="checkbox" data-strategy-entry-method="market" checked><span><strong>市价入场</strong><small>立即按当前报价执行</small></span></label>
+                    <label><input type="checkbox" data-strategy-entry-method="limit" checked><span><strong>限价挂单</strong><small>等待回撤到目标价格</small></span></label>
+                    <label><input type="checkbox" data-strategy-entry-method="stop" checked><span><strong>突破挂单</strong><small>突破关键位后触发</small></span></label>
+                    <label><input type="checkbox" data-strategy-entry-method="stop_limit" checked><span><strong>突破限价</strong><small>突破触发后再挂限价单</small></span></label>
+                  </div>
+                </fieldset>
+                <fieldset class="strategy-form-section"><legend><span class="section-step">04</span>推理与模型</legend><p>提示词只描述分析方法，手数、点差、价格偏差等硬限制由风控中心负责。</p>
+                  <div class="settings-grid"><label><span>绑定模型</span><select id="strategyModelProfile"><option value="">按默认与共享规则解析</option></select><small id="strategyModelHelp" class="field-help">可绑定自己的模型；留空时按模型管理规则解析。</small></label><label><span>自动推理间隔（分钟）</span><input id="strategyInterval" type="number" min="1" value="5"></label></div>
+                  <label class="prompt-box"><span>策略提示词</span><textarea id="strategyPrompt" rows="10" spellcheck="false" placeholder="描述市场分析框架、信号判断方法和输出侧重点"></textarea></label>
+                </fieldset>
               </div>
-              <div class="config-section">
-                <div class="config-section-title">系统提示词</div>
-                <div class="tf-tag-hint" style="background:var(--color-warning-bg);border:1px solid var(--color-warning-border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.6">
-                  <div style="color:var(--color-warning);font-weight:600;margin-bottom:4px">📐 数据周期标签</div>
-                  <div>手动推理时，您选择的周期和 K 线数量会自动注入为 <code style="background:var(--color-surface-alt);padding:2px 6px;border-radius:4px;font-size:12px">{{MTF:M15:100}}</code> 标签，无需手动添加。</div>
-                  <div>如需额外周期数据，可在提示词中手动添加 <code style="background:var(--color-surface-alt);padding:2px 6px;border-radius:4px;font-size:12px">{{MTF:H4:50}}</code>，格式：<code style="background:var(--color-surface-alt);padding:2px 6px;border-radius:4px;font-size:12px">{{MTF:周期:数量}}</code></div>
-                </div>
-                <label class="prompt-box"><span>发送给 AI 模型的角色设定与风控规则 <button id="useTemplateBtn" class="btn btn-sm btn-outline" type="button"><i data-lucide="file-text" size="14"></i>使用模板</button></span><textarea id="systemPrompt" rows="11" spellcheck="false"></textarea></label>
-              </div>
-              <div id="configStatus" class="inline-status">正在读取配置</div>
-              <div class="config-actions">
-                <button id="saveConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
-              </div>
+              <div class="form-actions form-modal-actions"><button id="saveStrategyBtn" class="btn btn-primary">保存策略</button></div>
+            </section>
             </div>
-
+            <div id="subscriptionEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="subscriptionEditorTitle">
+            <section class="workspace-panel form-modal-dialog subscription-editor-dialog" tabindex="-1">
+              <div class="section-heading"><div><h2 id="subscriptionEditorTitle">订阅与执行</h2><p id="subscriptionCostNotice">个人记忆会把平台共享策略转换为逐用户推理，可能使用你的模型或平台共享配额。</p></div><button id="cancelSubscriptionEditorBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
+              <div class="settings-grid subscription-settings-grid"><label><span>交易账户</span><select id="subscriptionAccount"></select></label><div class="subscription-symbol-field"><span>订阅品种</span><details id="subscriptionSymbolsDropdown" class="multi-select-dropdown"><summary id="subscriptionSymbolsSummary">使用策略全部品种</summary><div id="subscriptionSymbolOptions" class="multi-select-options" role="group" aria-label="选择订阅品种"></div></details><small class="field-help">可多选；选择“全部品种”后自动跟随策略配置。</small></div><label id="subscriptionMemoryModeField"><span>个人记忆</span><select id="subscriptionMemoryMode"><option value="personal">启用个人记忆</option><option value="shadow">仅检索评估，不注入推理</option><option value="off">关闭个人记忆</option></select><small class="field-help">仅用户私有策略可配置。</small></label><div id="platformMemoryNotice" class="readonly-setting hidden"><span>平台经验</span><strong>由管理员统一维护</strong><small>平台策略不会读取你的个人记忆，也不会创建个人化副本。</small></div></div>
+              <section class="subscription-runtime-panel" aria-labelledby="subscriptionRuntimeTitle">
+                <div class="subscription-runtime-heading"><div><strong id="subscriptionRuntimeTitle">自动推理</strong><small>每个用户同一时间只能启用一个自动推理订阅。</small></div><label class="inline-check-card"><input id="subscriptionExecutionEnabled" type="checkbox"><span><strong>启用自动推理</strong><small>生成信号，并在通过风控后自动执行。</small></span></label></div>
+                <div class="subscription-schedule-toggle"><label class="inline-check"><input id="subscriptionScheduleEnabled" type="checkbox"><span>限制运行时间段</span></label><span>未开启时跟随市场交易时间运行</span></div>
+                <div id="subscriptionScheduleSettings" class="subscription-schedule-settings hidden">
+                  <div class="schedule-field"><span>运行星期</span><div class="weekday-options" role="group" aria-label="选择运行星期"><label><input type="checkbox" data-schedule-weekday="1"><span>一</span></label><label><input type="checkbox" data-schedule-weekday="2"><span>二</span></label><label><input type="checkbox" data-schedule-weekday="3"><span>三</span></label><label><input type="checkbox" data-schedule-weekday="4"><span>四</span></label><label><input type="checkbox" data-schedule-weekday="5"><span>五</span></label><label><input type="checkbox" data-schedule-weekday="6"><span>六</span></label><label><input type="checkbox" data-schedule-weekday="0"><span>日</span></label></div></div>
+                  <div class="schedule-field"><div class="schedule-field-heading"><span>每日时段</span><button id="addSubscriptionScheduleWindow" class="btn btn-secondary btn-sm" type="button"><i data-lucide="plus" size="14"></i>添加时段</button></div><div id="subscriptionScheduleWindows" class="schedule-window-list"></div><small class="field-help">支持跨夜时段，例如 22:00–02:00；最多添加 6 个时段。</small></div>
+                  <div class="schedule-options-grid"><label><span>时区</span><select id="subscriptionScheduleTimezone"><option value="Etc/GMT-3">MT5 服务器时间（UTC+3）</option><option value="Asia/Shanghai">北京时间（UTC+8）</option><option value="UTC">协调世界时（UTC+0）</option><option value="Europe/London">伦敦时间（UTC+0，夏令时 UTC+1）</option><option value="America/New_York">纽约时间（UTC-5，夏令时 UTC-4）</option></select><small class="field-help">新订阅默认使用 MT5 服务器时间；夏令时地区会自动切换偏移量。</small></label><label><span>时段外行为</span><select id="subscriptionOutsideWindowBehavior"><option value="pause_all">暂停推理，不生成信号</option><option value="signals_only">只生成信号，不自动执行</option></select></label></div>
+                </div>
+              </section>
+              <div class="form-actions form-modal-actions"><button id="saveSubscriptionBtn" class="btn btn-primary">保存订阅</button></div>
+            </section>
+            </div>
+            <div id="strategyCatalog" class="strategy-catalog"><div class="workspace-skeleton"></div></div>
           </div>
           </div>
           </div>
         </section>
 
         <section id="ai-analyze" class="tab-panel">
-          <div class="strategy-source-row"><div><strong>推理模型</strong><span>使用“模型管理”中的当前有效模型；页面不再保存 API Key。</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">查看模型来源</button></div>
-          <div class="analysis-grid">
-            <div class="card">
+          <div class="inference-workspace">
+          <div class="manual-inference-header calm-page-header"><div><span class="eyebrow">策略推理</span><h1>推理</h1><p>选择策略和品种，快速得到可理解、可复核的交易建议。</p></div><button class="btn btn-secondary" data-tab-jump="ai-config"><i data-lucide="settings-2" size="16"></i>管理策略</button></div>
+          <section class="card inference-command-card" aria-labelledby="inferenceCommandTitle">
               <div class="card-header">
-                <span class="card-title">信号生成</span>
-                <button id="runAnalysisBtn" class="btn btn-primary"><i data-lucide="play" size="16"></i>生成信号</button>
+                <div><span id="inferenceCommandTitle" class="card-title">开始一次推理</span><small>策略会自动确定行情周期、K 线数量和模型。</small></div>
+                <button id="runAnalysisBtn" class="btn btn-primary"><i data-lucide="play" size="16"></i>开始推理</button>
               </div>
-              <label><span>品种</span><input id="analyzeSymbol" /></label>
-              <div class="timeframe-grid">
-                <label><input type="checkbox" value="M1" /><span class="tf-card-code">M1</span><span class="tf-card-name">1分钟</span></label>
-                <label><input type="checkbox" value="M5" /><span class="tf-card-code">M5</span><span class="tf-card-name">5分钟</span></label>
-                <label><input type="checkbox" value="M15" checked /><span class="tf-card-code">M15</span><span class="tf-card-name">15分钟</span></label>
-                <label><input type="checkbox" value="M30" checked /><span class="tf-card-code">M30</span><span class="tf-card-name">30分钟</span></label>
-                <label><input type="checkbox" value="H1" /><span class="tf-card-code">H1</span><span class="tf-card-name">1小时</span></label>
-                <label><input type="checkbox" value="H4" /><span class="tf-card-code">H4</span><span class="tf-card-name">4小时</span></label>
-                <label><input type="checkbox" value="D1" /><span class="tf-card-code">D1</span><span class="tf-card-name">日线</span></label>
+              <div class="manual-run-fields"><label><span>推理策略</span><select id="analyzeStrategy" required><option value="">请选择策略</option></select><small class="field-help">只显示当前可用于推理的策略，每次推理运行一套策略。</small></label><label><span>分析品种</span><select id="analyzeSymbol" required disabled><option value="">请先选择策略</option></select><small class="field-help">只显示当前策略支持的品种</small></label></div>
+              <div id="manualStrategySummary" class="strategy-run-summary empty"><strong>尚未选择策略</strong><span>选择后显示行情周期、K 线数量、入场方式与模型来源。</span></div>
+              <div class="execution-mode-row"><div><strong>结果处理方式</strong><small>默认只生成信号，需要时再交给风控执行。</small></div><label id="manualAutoExecuteControl" class="manual-auto-execute"><input id="manualAutoExecute" type="checkbox"><span class="mode-option safe">只生成信号</span><span class="mode-option live">风控通过后自动执行</span></label></div>
+              <div id="manualAutoExecuteNotice" class="inline-alert danger hidden" role="alert"><i data-lucide="triangle-alert" size="18"></i><span>本次运行可能产生真实订单。开始前还会再次要求确认。</span></div>
+          </section>
+          <div class="analysis-grid calm-analysis-grid">
+            <div class="card analysis-result-card">
+              <div class="card-header">
+                <div><span class="card-title">推理结果</span><small>方向、手数与关键价格优先展示，详细分析按需展开。</small></div>
+                <button id="executeSignalBtn" class="btn btn-success" disabled><i data-lucide="send" size="16"></i>复核执行</button>
               </div>
-              <label><span>K线数量</span><input id="klineCount" type="number" value="100" min="10" max="500" step="10" /></label>
-              <div class="latency-box">
+              <div id="analysisResult" class="analysis-result muted-block">请选择策略和品种，然后开始推理</div>
+              <div class="latency-box result-meta-strip">
                 <div><span>最近耗时</span><strong id="analysisLatency" class="num">--</strong></div>
                 <div><span>信号状态</span><strong id="signalFreshness" class="num">--</strong></div>
               </div>
-              <div class="analysis-history-panel">
+            </div>
+            <details class="card analysis-history-panel quiet-disclosure">
+              <summary><span><i data-lucide="history" size="16"></i><strong>历史信号</strong><small>查看之前的推理结果</small></span><i data-lucide="chevron-down" size="16"></i></summary>
+              <div class="quiet-disclosure-body">
                 <div class="analysis-history-head">
-                  <span class="card-title">历史信号</span>
+                  <span class="card-title">最近推理</span>
                   <button class="card-action-btn" data-action="refresh-analysis-history">
                     <i data-lucide="refresh-cw" size="12"></i>刷新
                   </button>
@@ -496,15 +521,8 @@
                 <div id="analysisHistoryBody" class="analysis-history-list">
                   <div class="history-empty">暂无推理记录</div>
                 </div>
-              </div>
-            </div>
-            <div class="card analysis-result-card">
-              <div class="card-header">
-                <span class="card-title">推理结果</span>
-                <button id="executeSignalBtn" class="btn btn-success" disabled><i data-lucide="send" size="16"></i>复核执行</button>
-              </div>
-              <div id="analysisResult" class="analysis-result muted-block">选择品种和周期后生成信号</div>
-            </div>
+              </div></details>
+          </div>
           </div>
         </section>
 
@@ -620,34 +638,30 @@
         </section>
 
         <section id="risk-center" class="tab-panel">
-          <div class="workspace-page">
-            <header class="workspace-header"><div><h1>风控中心</h1><p>所有数值均由服务端计算。用户值不能放宽平台上限，最终有效值才会用于下单。</p></div><button class="btn btn-secondary" data-action="refresh-risk-center"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
-            <div class="risk-legend"><span><i class="legend-dot user"></i>用户设置</span><span><i class="legend-dot platform"></i>平台范围</span><span><i class="legend-dot effective"></i>最终有效</span><span><i class="legend-dot pending"></i>待生效</span></div>
-            <div id="riskAccountsList" class="workspace-list"><div class="workspace-skeleton"></div></div>
-            <section class="workspace-panel">
-              <div class="section-heading"><div><h2>价格与成交</h2><p>价格偏差由用户配置与平台限制共同约束，不由 AI 自行放宽。</p></div></div>
-              <div id="priceExecutionRules" class="metric-table empty-state">连接账户后显示市价漂移、挂单百分比、挂单 ATR、成交滑点、点差与报价年龄。</div>
-            </section>
-            <section class="workspace-panel">
-              <div class="section-heading"><div><h2>最近执行决策</h2><p>对照 AI 建议手数、风险上限、最终手数和实际成交偏差。</p></div></div>
+          <div class="workspace-page risk-workspace">
+            <header class="workspace-header calm-page-header"><div><span class="page-eyebrow">交易安全</span><h1>风控中心</h1><p>先确认账户是否可以交易，再按需查看规则和执行细节。</p></div><button class="btn btn-secondary" data-action="refresh-risk-center"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
+            <section id="riskOverview" class="insight-strip risk-overview-strip" aria-label="风险状态概览"><div class="workspace-skeleton"></div></section>
+            <div class="workspace-subtabs" role="tablist" aria-label="风控中心视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="risk" data-workspace-target="status"><i data-lucide="activity" size="15"></i>当前状态</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="rules"><i data-lucide="sliders-horizontal" size="15"></i>我的规则</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="decisions"><i data-lucide="list-checks" size="15"></i>执行记录</button></div>
+            <section class="workspace-subpanel active" data-workspace-panel="risk" data-workspace-view="status"><div id="riskStatusList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+            <section class="workspace-subpanel" data-workspace-panel="risk" data-workspace-view="rules" hidden><div class="risk-legend compact"><span><i class="legend-dot effective"></i>最终有效</span><span><i class="legend-dot user"></i>我的设置</span><span><i class="legend-dot platform"></i>平台边界</span><span><i class="legend-dot pending"></i>待生效</span></div><div id="riskAccountsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+            <section class="workspace-panel workspace-subpanel" data-workspace-panel="risk" data-workspace-view="decisions" hidden>
+              <div class="section-heading"><div><h2>最近执行决策</h2><p>优先显示风控结论和具体原因，计算明细按需查看。</p></div></div>
               <div id="executionDecisionList" class="workspace-list"><div class="workspace-skeleton"></div></div>
+              <div id="executionDecisionPager" class="pager" aria-label="执行决策分页"></div>
             </section>
           </div>
         </section>
 
         <section id="review-memory" class="tab-panel">
-          <div class="workspace-page">
-            <header class="workspace-header"><div><h1>复盘与记忆</h1><p>复盘证据只读，正文可修订；只有你确认准确的版本才会成为个人经验。</p></div><button class="btn btn-secondary" data-action="refresh-review-memory"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
+          <div class="workspace-page review-memory-workspace">
+            <header class="workspace-header calm-page-header"><div><span class="page-eyebrow">持续改进</span><h1>复盘与记忆</h1><p>先确认交易复盘，再把真正有价值的结论带入后续推理。</p></div><button class="btn btn-secondary" data-action="refresh-review-memory"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
+            <section class="insight-strip" aria-label="复盘与记忆概览"><div class="insight-item primary"><span>待我确认</span><strong id="reviewPendingStat" class="num">--</strong><small>需要阅读的复盘</small></div><div class="insight-item"><span>内容有问题</span><strong id="reviewIssueStat" class="num">--</strong><small>等待继续修改</small></div><div class="insight-item"><span id="memoryActiveLabel">有效记忆</span><strong id="memoryActiveStat" class="num">--</strong><small id="memoryActiveHelp">可用于后续推理</small></div></section>
             <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>个人灰度功能</h2><p>个人开关只能进一步关闭功能，不能绕过管理员的全局开关。启用付费配对实验后，每次符合条件的私有推理会额外调用一次无记忆对照模型；对照结果不会下单。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存个人开关</button></div><div class="policy-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span>只影子检索</span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span>付费配对实验（额外一次调用）</span></label></div></section>
-            <div class="review-status-tabs" role="tablist"><button class="active" data-review-filter="">全部</button><button data-review-filter="evidence_pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">内容有问题</button></div>
-            <div class="review-layout">
-              <div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div>
-              <aside id="reviewDetail" class="workspace-panel review-detail"><div class="empty-state"><strong>选择一条复盘</strong><span>查看证据、版本并确认内容。</span></div></aside>
-            </div>
-            <section class="workspace-panel memory-section">
-              <div class="section-heading"><div><h2>个人经验</h2><p>可以全局关闭或撤销单条经验；历史推理快照不会被改写。</p></div><label class="inline-switch"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div>
-              <div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div>
+            <div class="workspace-subtabs" role="tablist" aria-label="复盘与记忆视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="clipboard-check" size="15"></i>交易复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">我的记忆</span></button></div>
+            <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-status-tabs" role="tablist"><button class="active" data-review-filter="">全部</button><button data-review-filter="evidence_pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">内容有问题</button></div><div class="review-layout"><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div><aside id="reviewDetail" class="workspace-panel review-detail"><div class="empty-state"><strong>选择一条复盘</strong><span>查看结论、交易证据并确认内容。</span></div></aside></div></section>
+            <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
+              <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的经验，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+              <details class="workspace-panel quiet-disclosure settings-disclosure user-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、压缩与高级实验</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。高级效果对照会额外调用一次模型。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认经验用于后续推理</strong><small>只注入你确认过的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>自动压缩过长经验</strong><small>降低每次推理的上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span><strong>高级效果对照实验</strong><small>付费配对实验（额外一次调用）</small></span></label></div></div></details>
             </section>
           </div>
         </section>
@@ -662,7 +676,7 @@
             <div class="history-scope-bar">
               <label class="filter-field"><span class="filter-label">统计范围</span><select id="historyRangeMode" class="filter-select">
                 <option value="all">全账户历史</option>
-                <option value="platform">平台接入后</option>
+                <option value="platform" selected>平台接入后</option>
                 <option value="custom">自定义日期</option>
               </select></label>
               <div class="history-range-dates hidden" id="historyRangeDates">
@@ -723,16 +737,19 @@
         </section>
 
         <section id="global-risk" class="tab-panel admin-only" style="display:none">
-          <div class="workspace-page">
-            <header class="workspace-header"><div><h1>全局风控</h1><p>分别管理默认值、允许范围和锁定值；保存后创建不可变的新版本并立即生效。</p></div><button id="saveGlobalRiskBtn" class="btn btn-primary">保存全局风控</button></header>
-            <div class="admin-boundary-note"><i data-lucide="shield-check" size="18"></i><div><strong>管理员边界</strong><span>可管理平台规则、账户状态与恢复申请；不可查看用户复盘正文或个人记忆内容。</span></div></div>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>AI 功能灰度</h2><p>默认关闭生成与注入；经验先开启检索影子，再逐步进入实际注入。强制风控不受这些开关影响。配对实验只授权用户自愿双跑，不会替用户自动同意费用。</p></div><button id="saveGlobalFeatureFlagsBtn" class="btn btn-primary btn-sm">保存全局灰度</button></div><div class="policy-switches"><label><input id="globalReviewGenerationFlag" type="checkbox"><span>复盘生成</span></label><label><input id="globalExperienceMemoryFlag" type="checkbox"><span>经验记忆</span></label><label><input id="globalMemoryCompressionFlag" type="checkbox"><span>记忆压缩</span></label><label><input id="globalRetrievalShadowFlag" type="checkbox"><span>检索影子</span></label><label><input id="globalPairedExperimentFlag" type="checkbox"><span>允许用户付费配对实验</span></label></div><div id="rolloutHealthSummary" class="workspace-row-meta rollout-health-summary"></div></section>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>平台紧急停止</h2><p>开启后阻止所有新开仓。关闭时也必须填写原因，全部操作进入审计日志。</p></div><button id="globalKillSwitchBtn" class="btn btn-danger">正在读取…</button></div><div id="globalKillSwitchMeta" class="workspace-row-meta"></div></section>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>规则级灰度</h2><p>强制规则始终 Enforce；可调规则切到 Shadow 后只记录“本应拒绝”，不会拦截订单，适合上线观察。</p></div></div><div id="riskRuleRolloutList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-            <div id="globalRiskEditor" class="workspace-list"><div class="workspace-skeleton"></div></div>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>待审核恢复申请</h2><p>恢复账户前请核对停机原因、数据完整性与用户说明。</p></div></div><div id="adminRecoveryList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>异常账户</h2><p>普通账户由已认证 Bridge 自动验证；这里只显示重复绑定、身份冲突或管理员冻结的账户。</p></div></div><div id="accountExceptionList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-            <section class="workspace-panel"><div class="section-heading"><div><h2>用户风险状态</h2><p>Kill Switch、回撤、连亏和冷却状态均来自服务端。</p></div></div><div id="adminRiskAccounts" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+          <div class="workspace-page global-risk-workspace">
+            <header class="workspace-header calm-page-header"><div><span class="page-eyebrow">平台安全</span><h1>全局风控</h1><p>先处理平台异常，再按职责管理规则、发布方式和 AI 辅助功能。</p></div><button class="btn btn-secondary" data-action="refresh-global-risk"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
+            <section id="globalRiskOverview" class="insight-strip" aria-label="全局风控概览"><div class="workspace-skeleton"></div></section>
+            <div class="admin-boundary-note"><i data-lucide="shield-check" size="18"></i><div><strong>管理员边界</strong><span>可管理平台规则、紧急停止与异常账户；不可查看用户复盘正文或个人记忆内容。</span></div></div>
+            <div class="workspace-subtabs" role="tablist" aria-label="全局风控视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="global-risk" data-workspace-target="overview"><i data-lucide="layout-dashboard" size="15"></i>风控总览</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="global-risk" data-workspace-target="rules"><i data-lucide="sliders-horizontal" size="15"></i>风控规则</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="global-risk" data-workspace-target="rollout"><i data-lucide="send" size="15"></i>规则发布</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="global-risk" data-workspace-target="ai"><i data-lucide="sparkles" size="15"></i>AI 功能</button></div>
+            <section class="workspace-subpanel active" data-workspace-panel="global-risk" data-workspace-view="overview">
+              <section class="workspace-panel danger-zone"><div class="section-heading"><div><span class="section-kicker danger">紧急控制</span><h2>平台新开仓状态</h2><p>紧急停止会阻止全部新开仓，开启和解除都必须说明原因并进入审计。</p></div><button id="globalKillSwitchBtn" class="btn btn-danger">正在读取…</button></div><div id="globalKillSwitchMeta" class="workspace-row-meta"></div></section>
+              <section class="workspace-panel"><div class="section-heading"><div><h2>需要处理的账户</h2><p>只展示重复绑定、身份冲突、冻结或其他异常账户。</p></div></div><div id="accountExceptionList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+              <details class="workspace-panel quiet-disclosure"><summary><span><i data-lucide="users" size="16"></i><strong>全部用户风险状态</strong><small>按需查看回撤、连亏、冷却与数据完整性</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div id="adminRiskAccounts" class="workspace-list"><div class="workspace-skeleton"></div></div></div></details>
+            </section>
+            <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="rules" hidden><div class="section-heading panel-section-heading"><div><h2>平台风控规则</h2><p>默认值、用户允许范围和锁定值分组展示；保存后立即生成新版本。</p></div><button id="saveGlobalRiskBtn" class="btn btn-primary">保存并发布规则</button></div><div id="globalRiskEditor" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+            <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="rollout" hidden><section class="workspace-panel"><div class="section-heading"><div><h2>规则发布方式</h2><p>正式拦截会阻止违规订单；仅观察（仅记录不拦截）适合新规则上线前验证。系统强制规则不可调整。</p></div></div><div id="riskRuleRolloutList" class="workspace-list risk-rollout-list"><div class="workspace-skeleton"></div></div></section></section>
+            <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="ai" hidden><section class="workspace-panel"><div class="section-heading"><div><h2>AI 辅助功能</h2><p>复盘和记忆属于辅助能力，不会改变或绕过强制风控。高级对照实验仍需用户主动开启。</p></div><button id="saveGlobalFeatureFlagsBtn" class="btn btn-primary btn-sm">保存 AI 功能</button></div><div class="policy-switches setting-switches"><label><input id="globalReviewGenerationFlag" type="checkbox"><span><strong>允许生成交易复盘</strong><small>为符合条件的平仓订单生成复盘</small></span></label><label><input id="globalExperienceMemoryFlag" type="checkbox"><span><strong>允许使用确认经验</strong><small>用户仍可在个人设置中关闭</small></span></label><label><input id="globalMemoryCompressionFlag" type="checkbox"><span><strong>允许自动压缩记忆</strong><small>控制记忆上下文大小</small></span></label><label><input id="globalRetrievalShadowFlag" type="checkbox"><span><strong>启用安全试运行</strong><small>只记录检索效果，不注入推理</small></span></label><label><input id="globalPairedExperimentFlag" type="checkbox"><span><strong>允许高级对照实验</strong><small>用户开启后会额外调用一次模型</small></span></label></div><div id="rolloutHealthSummary" class="workspace-row-meta rollout-health-summary"></div></section></section>
           </div>
         </section>
 
@@ -904,11 +921,11 @@
       </div>
     </div>
 
-    <div id="genericConfirmModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true">
+    <div id="genericConfirmModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="genericConfirmTitle">
       <div class="order-confirm-dialog" style="width:min(420px,calc(100vw - 40px))">
         <div class="order-confirm-head">
           <strong id="genericConfirmTitle"></strong>
-          <button class="icon-btn" type="button" aria-label="关闭" onclick="document.getElementById('genericConfirmModal').classList.add('hidden')">
+          <button id="genericConfirmClose" class="icon-btn" type="button" aria-label="关闭">
             <i data-lucide="x" size="16"></i>
           </button>
         </div>
@@ -938,7 +955,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260716e"></script>
+    <script src="/ai/app.js?v=20260716v"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

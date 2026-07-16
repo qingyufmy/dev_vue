@@ -47,4 +47,11 @@ describe('audit localization', () => {
       status: 'error', message: 'Bridge command timeout',
     }, 'error').result.message).toBe('系统执行异常，详细原因请查看服务器运行日志')
   })
+
+  it('keeps known risk rejections specific instead of replacing them with a generic error', () => {
+    expect(prepareAuditRecord('ai_auto_execute_rejected', {}, {
+      status:'rejected', message:'R1.5_RR_TOO_LOW',
+      details:{ rules:[{ code:'R1.5_RR_TOO_LOW', outcome:'reject', details:{ rr:1.03, minimum:1.2 } }] },
+    }, 'warning').result.message).toBe('盈亏比低于最低要求')
+  })
 })

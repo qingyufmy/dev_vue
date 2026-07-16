@@ -10,7 +10,7 @@ vi.mock('../../server/db.js', () => db)
 import { DEFAULT_RISK_POLICY } from '../../server/routes/ai/risk-policy.js'
 import {
   aggregateClosedPositions, calculateAccountRiskMetrics, evaluateStatefulRiskTx,
-  reviewRiskRecovery, setGlobalKillSwitch, syncTradingAccountIdentity,
+  refreshRiskAccountState, setGlobalKillSwitch, syncTradingAccountIdentity,
 } from '../../server/routes/ai/risk-state.js'
 
 const accountRow = {
@@ -49,6 +49,23 @@ function runner({ state = stateRow, reserved = { volume: 0, daily_count: 0, noti
 }
 
 describe('account metrics', () => {
+  it('clears a stale incomplete-data halt after a complete incremental snapshot', async () => {
+    const updates = []
+    db.withTransaction.mockImplementation(async fn => fn(runner({
+      state: { ...stateRow, halt_status: 'halted', halt_reason: 'R3_RISK_DATA_INCOMPLETE', data_complete: 0 },
+      updates,
+    })))
+    const result = await refreshRiskAccountState(2, 4, {
+      account: { equity: 10000, currency: 'USD' }, positions: [], pending: [], instruments: {}, fxRates: {},
+      snapshot_complete: true, risk_snapshot_version: 1, businessDate: '2026-07-15',
+      increment: { requested_cursor: {}, through_cursor: {}, closed_positions: [], account_events: [] },
+    }, DEFAULT_RISK_POLICY)
+    expect(result).toMatchObject({ halt_status: 'active', halt_reason: null, data_complete: true })
+    const update = updates.find(item => item.sql.startsWith('UPDATE risk_account_state'))
+    expect(update.params).toContain('active')
+    expect(update.params).toContain(1)
+  })
+
   it('aggregates partial closes by complete position', () => {
     const result = aggregateClosedPositions([
       { position_id: 7, profit: -10, commission: -1, close_time: '2026-07-15 10:00:00' },
@@ -89,6 +106,50 @@ describe('account metrics', () => {
     const result = calculateAccountRiskMetrics({ ...snapshot({ historyAll: { ...history(), pagination: { total_count: 2 } } }), previousState: stateRow })
     expect(result.data_complete).toBe(false)
   })
+
+  it('applies only incremental MT5 events after the persisted cursor', () => {
+    const result = calculateAccountRiskMetrics({
+      risk_snapshot_version: 1,
+      account: { equity: 9920, currency: 'USD' },
+      positions: [{ symbol: 'XAUUSD', volume: 0.01, price_current: 2000, profit: -20 }],
+      pending: [], instruments: { XAUUSD: instrument }, fxRates: {}, snapshot_complete: true,
+      businessDate: '2026-07-15', previousState: {
+        ...stateRow, day_realized_net: -10, consecutive_losses: 1,
+        cumulative_cash_flow: 1000, last_deal_time_msc: 1000, last_deal_ticket: 10,
+      },
+      increment: {
+        requested_cursor: { time_msc: 1000, ticket: 10 },
+        through_cursor: { time_msc: 3000, ticket: 30 },
+        closed_positions: [
+          { position_id: 1, close_time_msc: 1000, close_deal_ticket: 10, business_date: '2026-07-15', net: -99 },
+          { position_id: 2, close_time_msc: 2000, close_deal_ticket: 20, business_date: '2026-07-15', net: -30 },
+        ],
+        account_events: [
+          { time_msc: 3000, ticket: 30, business_date: '2026-07-15', category: 'capital', amount: 500 },
+        ],
+      },
+    })
+    expect(result.realized).toBe(-40)
+    expect(result.consecutive_losses).toBe(2)
+    expect(result.cumulative_cash_flow).toBe(1500)
+    expect(result.last_deal_time_msc).toBe(3000)
+    expect(result.data_complete).toBe(true)
+  })
+
+  it('fails closed with a specific reason when the Bridge cursor skips ahead', () => {
+    const result = calculateAccountRiskMetrics({
+      risk_snapshot_version: 1, account: { equity: 10000, currency: 'USD' },
+      positions: [], pending: [], instruments: { XAUUSD: instrument }, fxRates: {},
+      snapshot_complete: true, businessDate: '2026-07-15',
+      previousState: { ...stateRow, last_deal_time_msc: 1000, last_deal_ticket: 10 },
+      increment: {
+        requested_cursor: { time_msc: 2000, ticket: 20 },
+        through_cursor: { time_msc: 2000, ticket: 20 }, closed_positions: [], account_events: [],
+      },
+    })
+    expect(result.data_complete).toBe(false)
+    expect(result.data_incomplete_reasons).toContain('deal_cursor_gap')
+  })
 })
 
 describe('stateful gate', () => {
@@ -116,11 +177,27 @@ describe('stateful gate', () => {
     expect(result.shadow_rules).toContainEqual(expect.objectContaining({ code: 'R2.3_DAILY_OPEN_COUNT', outcome: 'shadow_reject' }))
   })
 
-  it('uses persisted halt after a process restart', async () => {
-    const result = await evaluateStatefulRiskTx(runner({ state: { ...stateRow, halt_status: 'halted', halt_reason: 'R3.3_MAX_DRAWDOWN' } }), {
+  it('automatically clears a persisted halt after current risk conditions recover', async () => {
+    const updates = []
+    const result = await evaluateStatefulRiskTx(runner({ state: { ...stateRow, halt_status: 'halted', halt_reason: 'R3.3_MAX_DRAWDOWN' }, updates }), {
       userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
     })
-    expect(result.reject_code).toBe('R3_ACCOUNT_HALTED')
+    expect(result.reject_code).toBeUndefined()
+    expect(updates[0].params).toContain('active')
+  })
+
+  it('does not re-arm an expired consecutive-loss cooldown without a new threshold crossing', async () => {
+    const losses = [
+      { position_id: 3, profit: -1, close_time: '2026-07-15 12:00:00' },
+      { position_id: 2, profit: -1, close_time: '2026-07-15 11:00:00' },
+      { position_id: 1, profit: -1, close_time: '2026-07-15 10:00:00' },
+    ]
+    const result = await evaluateStatefulRiskTx(runner({ state: { ...stateRow, consecutive_losses: 3, cooldown_until: '2020-01-01 00:00:00' } }), {
+      userId: 2, accountId: 4, intentId: 9, request,
+      policy: { ...DEFAULT_RISK_POLICY, consecutive_loss_limit: 3 },
+      snapshot: snapshot({ historyAll: history(losses) }),
+    })
+    expect(result.reject_code).toBeUndefined()
   })
 
   it('persists a fail-closed halt when history is incomplete', async () => {
@@ -175,7 +252,7 @@ describe('stateful gate', () => {
   })
 })
 
-describe('identity and recovery permissions', () => {
+describe('identity and platform permissions', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('auto-verifies a Bridge account, starts observation and pauses old subscriptions on identity switch', async () => {
@@ -222,8 +299,7 @@ describe('identity and recovery permissions', () => {
     expect(accountUpdate.params[1]).toBe('frozen')
   })
 
-  it('only admins can approve recovery or clear the global kill switch', async () => {
-    await expect(reviewRiskRecovery(2, 'user', 1, true, 'ok')).rejects.toThrow('admin_required')
+  it('only admins can clear the global kill switch', async () => {
     await expect(setGlobalKillSwitch(2, 'user', false, 'ok')).rejects.toThrow('admin_required')
   })
 })

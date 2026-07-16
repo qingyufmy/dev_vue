@@ -2,6 +2,7 @@ import Redis from 'ioredis'
 
 let redis = null
 let _redisAvailable = false
+let redisInitialized = false
 
 /**
  * Get or create Redis client (singleton).
@@ -9,6 +10,8 @@ let _redisAvailable = false
  */
 export function getRedis() {
   if (redis) return redis
+  if (redisInitialized) return null
+  redisInitialized = true
 
   const host = process.env.REDIS_HOST
   if (!host) {

@@ -16,7 +16,8 @@ export function stripBrokerSuffix(sym) {
 const MTF_TAG_RE = /\{\{MTF:([A-Z]\d+):(\d+)\}\}/g
 const ATF_TAG_RE = /\{\{ATF:([A-Z]\d+):(\d+)\}\}/g
 const CTF_TAG_RE = /\{\{CTF:([A-Z]\d+):(\d+)\}\}/g
-const ALL_TF_TAG_RE = /\{\{[MAC]TF:([A-Z]\d+):(\d+)\}\}/g
+const ALL_TF_TAG_RE = /\{\{[MAC]TF:([A-Z]\d+):(\d+)\}\}/gi
+const USE_CHAN_TAG_RE = /\{\{USE_CHAN\}\}/gi
 
 export function parseTimeframeTags(prompt, mode = 'manual') {
   if (!prompt) return []
@@ -31,6 +32,35 @@ export function parseTimeframeTags(prompt, mode = 'manual') {
 
 export function stripTimeframeTags(prompt) {
   return prompt ? prompt.replace(ALL_TF_TAG_RE, '').replace(/\n{3,}/g, '\n\n').trim() : prompt
+}
+
+export function parseLegacyTimeframeTags(prompt) {
+  if (!prompt) return []
+  const tags = []
+  const seen = new Set()
+  const re = /\{\{[MAC]TF:([A-Z]\d+):(\d+)\}\}/gi
+  let match
+  while ((match = re.exec(String(prompt))) !== null) {
+    const tf = match[1].toUpperCase()
+    if (seen.has(tf)) continue
+    seen.add(tf)
+    tags.push({ tf, count: Math.min(Math.max(parseInt(match[2]) || 100, 10), 500) })
+  }
+  return tags
+}
+
+export function hasLegacyUseChanTag(prompt) {
+  return /\{\{USE_CHAN\}\}/i.test(String(prompt || ''))
+}
+
+export function stripStrategyControlTags(prompt) {
+  if (!prompt) return prompt
+  return String(prompt)
+    .replace(ALL_TF_TAG_RE, '')
+    .replace(USE_CHAN_TAG_RE, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 export function round2(v) { return Math.round(v * 100) / 100 }

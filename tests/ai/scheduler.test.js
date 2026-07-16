@@ -19,6 +19,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
 
 vi.mock('../../server/routes/ai/market-data.js', () => ({
   mt5Bridge: vi.fn(),
+  platformRates: vi.fn(),
   calculateMarketData: vi.fn(() => ({
     symbol: 'XAUUSD', timeframe: 'M5',
     latest_price: 2000, price_change: 10, price_change_pct: 0.5,

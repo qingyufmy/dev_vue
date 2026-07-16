@@ -29,6 +29,7 @@ const run = (overrides = {}) => evaluateCoreRisk({
   quote: { ...quote, ...(overrides.quote || {}) }, instrument: { ...instrument, ...(overrides.instrument || {}) },
   policy: { ...DEFAULT_RISK_POLICY, ...(overrides.policy || {}) }, nowMs: overrides.nowMs ?? nowMs,
   ruleModes: overrides.ruleModes || {},
+  brokerCalculation: overrides.brokerCalculation || null,
 })
 
 describe('L1/L4/L5 core risk gate', () => {
@@ -40,12 +41,54 @@ describe('L1/L4/L5 core risk gate', () => {
     expect(result.original_order).not.toHaveProperty('deviation')
   })
 
+  it('uses MT5 native loss calculation when it matches the final order', () => {
+    const result = run({ brokerCalculation: {
+      symbol: 'XAUUSD.a', order_type: 'buy', volume: 0.03,
+      entry_price: 2000.2, sl: 1990, loss_to_sl: 45,
+    } })
+    expect(result.rule_results).toContainEqual(expect.objectContaining({
+      code: 'R1.10_REAL_RISK',
+      details: expect.objectContaining({ calculation_source: 'mt5_order_calc_profit', risk_amount: 45 }),
+    }))
+  })
+
+  it('does not reuse MT5 native loss calculation after the gate changes SL', () => {
+    const result = run({ request: { sl: 1995 }, brokerCalculation: {
+      symbol: 'XAUUSD.a', order_type: 'buy', volume: 0.03,
+      entry_price: 2000.2, sl: 1995, loss_to_sl: 1,
+    } })
+    expect(result.rule_results).toContainEqual(expect.objectContaining({
+      code: 'R1.10_REAL_RISK',
+      details: expect.objectContaining({ calculation_source: 'symbol_tick_metadata' }),
+    }))
+  })
+
   it('widens a tight SL, scales volume down, and fully rechecks', () => {
     const result = run({ request: { sl: 1995 } })
     expect(result.decision_status).toBe('adjust')
     expect(result.approved_order.sl).toBe(1990.2)
     expect(result.approved_order.volume).toBe(0.01)
     expect(result.rule_results.some(item => item.code === 'R1.3_SL_WIDEN_VOLUME_DOWN')).toBe(true)
+  })
+
+  it('does not scale the minimum lot to zero for a sub-tick ATR rounding difference', () => {
+    const result = run({ request: {
+      signal_type: 'buy_limit', entry_method: 'limit', limit_price: 1998,
+      volume: 0.01, sl: 1988, tp: 2015, atr_anchor: 10.0005,
+    }, policy: { pending_price_deviation_pct: 1 } })
+    expect(result.decision_status).toBe('adjust')
+    expect(result.approved_order.volume).toBe(0.01)
+    expect(result.rule_results.some(item => item.code === 'R1.3_SL_WIDEN_VOLUME_DOWN')).toBe(false)
+  })
+
+  it('uses the nearest existing AI take-profit tier that satisfies minimum R:R', () => {
+    const result = run({ request: {
+      tp: 2008, tp_tier_used: 2,
+      take_profit_candidates: [{ tier:1, price:2005 }, { tier:2, price:2008 }, { tier:3, price:2013 }],
+    } })
+    expect(result.decision_status).toBe('adjust')
+    expect(result.approved_order).toMatchObject({ tp:2013, tp_tier_used:3 })
+    expect(result.rule_results).toContainEqual(expect.objectContaining({ code:'R1.5_TP_TIER_UPGRADED', outcome:'adjust' }))
   })
 
   it('never increases AI volume when risk arithmetic is below broker minimum', () => {
@@ -86,10 +129,18 @@ describe('L1/L4/L5 core risk gate', () => {
   })
 
   it('rejects stale quotes, expired signals, wide spread, and weekend opens', () => {
-    expect(run({ quote: { time_msc: nowMs - 11_000 } }).reject_code).toBe('R4.4_QUOTE_STALE')
+    const stale = run({ quote: { time_msc: nowMs - 11_000 } })
+    expect(stale.reject_code).toBe('R4.4_QUOTE_STALE')
+    expect(stale.rule_results.at(-1).details).toMatchObject({ quote_age_seconds:11, maximum_seconds:10 })
     expect(run({ request: { signal_created_at: '2026-07-15T12:40:00Z' } }).reject_code).toBe('R4.3_SIGNAL_EXPIRED')
     expect(run({ quote: { ask: 2001.1 } }).reject_code).toBe('R4.5_SPREAD_TOO_WIDE')
     expect(run({ nowMs: Date.parse('2026-07-18T02:00:00Z'), quote: { time_msc: Date.parse('2026-07-18T02:00:00Z') }, request: { signal_created_at: '2026-07-18T01:59:00Z' } }).reject_code).toBe('R4.2_WEEKEND_PROTECTION')
+  })
+
+  it('uses the bridge-normalized UTC timestamp before the raw MT5 wall-clock timestamp', () => {
+    const result = run({ quote: { time_msc: nowMs + 3 * 3600_000, time_utc_msc: nowMs } })
+    expect(result.decision_status).toBe('pass')
+    expect(result.rule_results.some(item => item.code === 'R4.4_QUOTE_STALE' && item.outcome === 'reject')).toBe(false)
   })
 
   it('records an adjustable shadow rejection but still enforces mandatory boundaries', () => {

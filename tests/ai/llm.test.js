@@ -1,5 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildStrategyOutputFormat } from '../../server/routes/ai/llm.js'
+
+describe('buildStrategyOutputFormat', () => {
+  it('removes all pending-order fields from a market-only strategy', () => {
+    const result = buildStrategyOutputFormat(null, ['market'])
+    const schema = JSON.parse(result.outputFormat)
+    expect(result.hasPending).toBe(false)
+    expect(schema.signal_type).toContain('buy | sell | hold')
+    expect(schema.signal_type).not.toContain('buy_limit')
+    expect(schema).not.toHaveProperty('limit_price')
+    expect(schema).not.toHaveProperty('stop_limit_price')
+    expect(schema).not.toHaveProperty('pending_valid_minutes')
+    expect(schema).not.toHaveProperty('cancel_pending')
+  })
+
+  it('keeps pending fields but removes stop-limit price when stop-limit is unsupported', () => {
+    const schema = JSON.parse(buildStrategyOutputFormat(null, ['limit']).outputFormat)
+    expect(schema.signal_type).toContain('buy_limit')
+    expect(schema.signal_type).not.toContain('buy_stop')
+    expect(schema).toHaveProperty('limit_price')
+    expect(schema).not.toHaveProperty('stop_limit_price')
+  })
+})
 
 // Mock fetch
 const mockFetch = vi.fn()
@@ -352,14 +374,14 @@ describe('maybeAiSignal', () => {
     expect(evidence.outputSchemaVersion).toMatch(/^[a-f0-9]{64}$/)
   })
 
-  it('有{{USE_CHAN}}时system prompt不包含原始标签', async () => {
+  it('结构化开关启用缠论时system prompt不需要控制标签', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ choices: [{ message: { content: '{"signal_type":"hold","confidence":0.5,"recommended_volume":0,"analysis":"t","reasoning":"t"}' } }] })
     })
     const config = {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
-      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}'
+      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场', _use_chan_analysis: true
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100, atr_anchor: 15, atr_anchor_tf: 'H1',
       strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
@@ -369,14 +391,14 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).not.toContain('{{USE_CHAN}}')
   })
 
-  it('有{{USE_CHAN}}时payload保留chan', async () => {
+  it('结构化开关启用时payload保留chan', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ choices: [{ message: { content: '{"signal_type":"hold","confidence":0.5,"recommended_volume":0,"analysis":"t","reasoning":"t"}' } }] })
     })
     const config = {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
-      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}'
+      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场', _use_chan_analysis: true
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100, atr_anchor: 15, atr_anchor_tf: 'H1',
       strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
@@ -395,13 +417,13 @@ describe('maybeAiSignal', () => {
     })
     const config = {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
-      temperature: 0.7, max_tokens: 2000, system_prompt: '数据库中的旧提示词'
+      temperature: 0.7, max_tokens: 2000, system_prompt: '数据库中的旧提示词', _use_chan_analysis: true
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
       strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
     }
 
-    await maybeAiSignal(null, config, market, '本次手动覆盖提示词 {{USE_CHAN}}')
+    await maybeAiSignal(null, config, market, '本次手动覆盖提示词')
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.messages[0].content).toContain('本次手动覆盖提示词')
@@ -410,14 +432,14 @@ describe('maybeAiSignal', () => {
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
   })
 
-  it('无{{USE_CHAN}}时payload剥离chan', async () => {
+  it('结构化开关关闭时即使遗留标签存在也剥离chan', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ choices: [{ message: { content: '{"signal_type":"hold","confidence":0.5,"recommended_volume":0,"analysis":"t","reasoning":"t"}' } }] })
     })
     const config = {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
-      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场'
+      temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}', _use_chan_analysis: false
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
       strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
@@ -536,6 +558,17 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2020,
     }, config, market)
     expect(result).toMatchObject({ signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, normalization_info: { type: 'l5_schema_hold' } })
+  })
+
+  it('degrades a model response that uses an entry method disabled by the strategy', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'buy_limit', entry_method: 'limit', confidence: 0.8,
+      recommended_volume: 0.02, limit_price: 1995, stop_loss_price: 1985, take_profit_1_price: 2015,
+    }, { ...config, _allowed_entry_methods: ['market'] }, market)
+    expect(result).toMatchObject({
+      signal_type: 'hold', entry_method: 'observe', recommended_volume: 0,
+      normalization_info: { type: 'l5_schema_hold', reason: 'entry_method_not_allowed_by_strategy' },
+    })
   })
 
   it('out-of-platform AI volume degrades to hold without clamping', () => {

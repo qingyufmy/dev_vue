@@ -3,18 +3,20 @@
 import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
-import { mt5Bridge, calculateMarketData } from './market-data.js'
+import { mt5Bridge, platformRates, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
-import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
+import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount } from './strategy.js'
-import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, parseTimeframeTags, stripBrokerSuffix } from './utils.js'
+import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, stripBrokerSuffix } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun } from './memory-system.js'
+import { retrievePlatformExperience } from './platform-experience.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 import { resolveAiTaskModel } from './model-profiles.js'
+import { isSubscriptionScheduleActive } from './subscription-schedule.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -382,7 +384,14 @@ export async function getUserAutoRuntimeStatus(userId) {
   if (isWeeklyFlattenWindow()) pausedReason = 'weekly_flatten_window'
   else if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
   else if (selectedSymbols.length === 0) pausedReason = 'no_symbols'
-  else if (activeKeys.length === 0) {
+  else {
+    const activeSubscription = await queryOne(`SELECT * FROM strategy_subscriptions
+      WHERE user_id = ? AND strategy_id = ? AND execution_enabled = 1 AND is_deleted = 0
+      ORDER BY updated_at DESC, id DESC LIMIT 1`, [userId, scheduler.prompt_type_id])
+    if (activeSubscription && !isSubscriptionScheduleActive(activeSubscription)
+      && activeSubscription.outside_window_behavior !== 'signals_only') pausedReason = 'outside_schedule'
+  }
+  if (!pausedReason && activeKeys.length === 0) {
     const userBridgeAlive = isBridgeAlive(userId)
     if (!userBridgeAlive) pausedReason = 'user_bridge_offline'
     else pausedReason = 'no_runtime_scheduler'
@@ -1049,44 +1058,25 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   // only uses the admin connection as a market-data transport.
   config._userId = isPrivate ? inferenceUserId : 0
 
-  const marketState = getOwnBridgeMarketState(inferenceUserId)
-  if (!marketState.isOpen) {
-    l(`BLOCKED: market not open (${marketState.reason}, tradeMode=${marketState.tradeMode}, tickAgeMs=${marketState.tickAgeMs})`)
-    return { status: 'blocked', reason: marketState.reason }
-  }
-
   try {
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: isPrivate ? '获取用户账户与行情数据...' : '获取平台行情数据...' })
     const t0 = Date.now()
     let account = null
     let positions = []
     let pendingOrders = []
-    if (isPrivate) {
-      const [accountData, positionsData, pendingData] = await Promise.all([
-        mt5Bridge(inferenceUserId, 'account', {}),
-        mt5Bridge(inferenceUserId, 'positions', { symbol }),
-        mt5Bridge(inferenceUserId, 'pending_list', { symbol }),
-      ])
-      const accountSnapshot = validateInferenceBridgeSnapshot(accountData, positionsData, pendingData)
-      if (!accountSnapshot.ok) {
-        l(`BLOCKED: inference bridge snapshot invalid (${accountSnapshot.reason})`)
-        return { status: 'blocked', reason: accountSnapshot.reason }
-      }
-      account = accountSnapshot.account
-      positions = accountSnapshot.positions
-      pendingOrders = accountSnapshot.pendingOrders
-    }
     l(`bridge done (${Date.now()-t0}ms, positions=${positions.length}, pending=${pendingOrders.length})`)
 
     const prompt = config.system_prompt || ''
-    const tags = parseTimeframeTags(prompt, 'auto')
+    const tags = Array.isArray(config._market_data_plan?.timeframes) && config._market_data_plan.timeframes.length
+      ? config._market_data_plan.timeframes.map(item => ({ tf: item.timeframe, count: item.kline_count }))
+      : [{ tf: 'M30', count: 100 }]
     const primaryTf = tags.length > 0 ? tags[0].tf : 'M5'
     const usedTimeframes = tags.length > 0 ? tags.map(t => t.tf) : ['M5']
     const primaryCount = tags.length > 0 ? tags[0].count : 100
-    const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
-    const primaryHistoryCount = resolveChanHistoryCount(inferenceUserId, symbol, primaryTf, primaryCount, hasUseChanTag)
+    const useChanAnalysis = Boolean(config._use_chan_analysis)
+    const primaryHistoryCount = resolveChanHistoryCount(inferenceUserId, symbol, primaryTf, primaryCount, useChanAnalysis)
     const t1 = Date.now()
-    const ratesResp = await mt5Bridge(inferenceUserId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
+    const ratesResp = await platformRates(inferenceUserId, { symbol, timeframe: primaryTf, count: primaryHistoryCount })
     if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return { status: 'blocked', reason: 'rates_failed' } }
     const rates = ratesResp.rates || []
     if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return { status: 'blocked', reason: 'rates_empty' } }
@@ -1095,21 +1085,20 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算技术指标...' })
     const t2 = Date.now()
     let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto')
-    if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
+    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis)
+    if (useChanAnalysis) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
     market.primary_timeframe = primaryTf
     await attachAtrAnchor(inferenceUserId, symbol, market, primaryTf)
     const actualUsedTimeframes = Object.keys(market.strategy_context?.timeframes || {})
     market.requested_timeframes = usedTimeframes
     market.used_timeframes = actualUsedTimeframes
     market.missing_timeframes = usedTimeframes.filter(tf => !actualUsedTimeframes.includes(tf))
-    if (!isPrivate) {
-      market = buildSharedMarketSnapshot(market, {
-        standardSymbol: symbol,
-        volumeMin: config._ai_volume_min,
-        volumeMax: config._ai_volume_max,
-      })
-    }
+    market = buildSharedMarketSnapshot(market, {
+      standardSymbol: symbol,
+      volumeMin: config._ai_volume_min,
+      volumeMax: config._ai_volume_max,
+      marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
+    })
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
     let memory = { promptBlock: '', mode: 'off', logId: null }
@@ -1121,6 +1110,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
         config._memoryMode = memory.mode
       } catch (error) {
         l(`personal memory unavailable; continuing without it (${error.message})`)
+      }
+    } else if (!isPrivate) {
+      try {
+        memory = await retrievePlatformExperience({ strategyId: promptTypeId, symbol, timeframe: primaryTf })
+        config._platformExperienceContext = memory.promptBlock
+        config._memoryMode = `platform_${memory.mode}`
+      } catch (error) {
+        l(`platform experience unavailable; continuing without it (${error.message})`)
       }
     }
 
@@ -1191,7 +1188,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
         strategyScope: pt.scope || 'platform',
         ownerUserId: isPrivate ? inferenceUserId : 0,
         standardSymbol: stripBrokerSuffix(symbol).toUpperCase(),
-        marketSource: isPrivate ? 'owner_mt5_bridge' : 'platform_market_bridge',
+        marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
         systemPrompt: renderedEvidence.systemPrompt,
         userPrompt: renderedEvidence.userPrompt,
         outputSchemaVersion: renderedEvidence.outputSchemaVersion,
@@ -1200,7 +1197,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
         provider: config.api_provider,
         modelName: config.model_name,
         credentialSource: config._credential_source,
-        memoryMode: isPrivate ? (memory.mode || 'off') : 'platform_only',
+        memoryMode: isPrivate ? (memory.mode || 'off') : `platform_${memory.mode || 'off'}`,
         createdAt,
       })
       const deliveryValues = []
@@ -1466,6 +1463,15 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     // Lock check before claiming (Fix 2)
     if (lockGuard && !(await lockGuard.assertOwned('delivery_claim'))) {
       l('skipped: lock lost before claim')
+      return
+    }
+    const subscriptionRuntime = await getDeliverySubscriptionRuntime(userId, promptTypeId, symbol)
+    if (!subscriptionRuntime) {
+      await setTerminalStatus('skipped', 'subscription_inactive')
+      return
+    }
+    if (!subscriptionRuntime.in_schedule) {
+      await setTerminalStatus('skipped', 'outside_schedule', { subscription_id: subscriptionRuntime.id })
       return
     }
     // Atomic delivery claiming: only one executor can proceed (Fix 3)

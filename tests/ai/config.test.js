@@ -137,6 +137,9 @@ describe('signalOrderPayload', () => {
     expect(result.tp).toBe(1980) // take_profit_2_price
     expect(result.tp_tier_requested).toBe(2)
     expect(result.tp_tier_used).toBe(2)
+    expect(result.take_profit_candidates).toEqual([
+      { tier:1, price:1990 }, { tier:2, price:1980 }, { tier:3, price:1970 },
+    ])
   })
 
   it('默认TP2缺失时回退到更近的TP1', () => {
@@ -169,6 +172,7 @@ describe('buildBridgeOrderCall', () => {
     const result = buildBridgeOrderCall({
       symbol: 'XAUUSD', order_type: 'buy', volume: 0.01,
       tp_tier_requested: 2, tp_tier_used: 1,
+      take_profit_candidates: [{ tier:1, price:2010 }],
       normalization_info: { sl_clamped: true },
     })
     expect(result.bridgeParams).toEqual({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.01 })

@@ -21,7 +21,7 @@ export const MAX_UPLOAD_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE || '10485760
 export const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '10mb'
 
 // Rate limiting
-export const API_RATE_LIMIT_MAX = parseInt(process.env.API_RATE_LIMIT_MAX || '200')
+export const API_RATE_LIMIT_MAX = parseInt(process.env.API_RATE_LIMIT_MAX || '2000')
 export const AUTH_RATE_LIMIT_MAX = parseInt(process.env.AUTH_RATE_LIMIT_MAX || '20')
 export const WRITE_RATE_LIMIT_MAX = parseInt(process.env.WRITE_RATE_LIMIT_MAX || '10')
 export const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000') // 15min

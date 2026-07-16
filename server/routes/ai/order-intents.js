@@ -348,7 +348,7 @@ export async function prepareAndExecuteOrderIntent({
       await enrichRequest({ request: preparedRequest, account, quote })
     }
     const riskContext = typeof loadRiskContext === 'function'
-      ? await loadRiskContext({ bridge, actorId, request: preparedRequest, account, quote, bridgeOptions: options, intentId })
+      ? await loadRiskContext({ bridge, actorId, tradingAccountId: accountId, request: preparedRequest, account, quote, bridgeOptions: options, intentId })
       : { quote, instrument: options.instrument || null }
     const risk = await validateRequest(config, account, preparedRequest, { ...riskContext, intentId, tradingAccountId: accountId })
     if (risk?.approved_order) Object.assign(preparedRequest, risk.approved_order)

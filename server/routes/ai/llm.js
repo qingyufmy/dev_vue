@@ -6,6 +6,7 @@ import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureH
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { beginModelUsage, finishModelUsage } from './model-profiles.js'
 import { sha256 } from './inference-snapshots.js'
+import { normalizeEntryMethods, signalTypesForEntryMethods } from './strategy-policy.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const SL_CLAMP = { K_MIN: 1.0, K_MAX: 3.0 }
@@ -34,6 +35,28 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   analysis: "中文，按以下顺序：1.当前趋势方向和强度 2.关键支撑/阻力位 3.当前价与均线关系 4.波动率状态 5.潜在催化剂或风险事件",
   reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：检查现有挂单状态，是否需要取消、是否已有同方向挂单"
 }, null, 2)
+
+export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods) {
+  const methods = normalizeEntryMethods(allowedEntryMethods)
+  let schema
+  try { schema = JSON.parse(baseFormat || DEFAULT_OUTPUT_FORMAT) } catch { schema = JSON.parse(DEFAULT_OUTPUT_FORMAT) }
+  if (!schema || Array.isArray(schema) || typeof schema !== 'object') schema = JSON.parse(DEFAULT_OUTPUT_FORMAT)
+  const signalTypes = signalTypesForEntryMethods(methods)
+  const labels = { market: '市价', limit: '限价挂单', stop: '突破挂单', stop_limit: '突破限价挂单' }
+  schema.signal_type = `仅允许 ${signalTypes.join(' | ')}。hold 表示观望；本策略支持的入场方式：${methods.map(item => labels[item]).join('、')}。禁止输出未列出的信号类型。`
+  schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。`
+  const hasPending = methods.some(item => item !== 'market')
+  if (!hasPending) {
+    delete schema.limit_price
+    delete schema.stop_limit_price
+    delete schema.pending_valid_minutes
+    delete schema.cancel_pending
+  } else if (!methods.includes('stop_limit')) {
+    delete schema.stop_limit_price
+  }
+  schema.reasoning = `中文，说明信号方向依据、为何从本策略允许的入场方式（${methods.map(item => labels[item]).join('、')}）中选择当前方式、风险评估与执行建议。${hasPending ? '如涉及挂单，再说明挂单管理。' : '本策略不支持挂单，不得提出挂单或取消挂单。'}`
+  return { outputFormat: JSON.stringify(schema, null, 2), hasPending }
+}
 
 function buildLlmRequestBody({ protocol, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort }) {
   if (protocol === 'responses') {
@@ -203,6 +226,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       }
     } catch (e) { console.warn('[LLM] Failed to load output schema from DB, using default:', e.message) }
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
+    const strategySchema = buildStrategyOutputFormat(outputFormat, config._allowed_entry_methods)
+    outputFormat = strategySchema.outputFormat
     console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
     const marketOnlyRule = config._market_only
@@ -212,12 +237,20 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     // Shared platform inference is market-only and is structurally barred from it.
     const personalMemory = !config._market_only && typeof config._memoryContext === 'string'
       ? config._memoryContext : ''
-    const fullPrompt = prompt + marketOnlyRule + personalMemory + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + '\n\n' + PENDING_LIFECYCLE_RULE
+    // Platform experience is a separately reviewed market/strategy corpus. It
+    // may be used by shared market-only inference but can never carry account
+    // state or override the system/output/risk boundaries above.
+    const platformExperience = config._market_only && typeof config._platformExperienceContext === 'string'
+      ? config._platformExperienceContext : ''
+    const pendingRule = strategySchema.hasPending ? `\n\n${PENDING_LIFECYCLE_RULE}` : ''
+    const fullPrompt = prompt + marketOnlyRule + platformExperience + personalMemory + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + pendingRule
 
     // Check if prompt wants Chan theory data
-    const useChan = /\{\{USE_CHAN\}\}/.test(effectivePrompt)
+    const useChan = config._use_chan_analysis === undefined
+      ? /\{\{USE_CHAN\}\}/.test(effectivePrompt)
+      : Boolean(config._use_chan_analysis)
     const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
-    console.log(`[LLM] USE_CHAN tag: ${useChan ? 'detected' : 'not found'}`)
+    console.log(`[LLM] Chan analysis: ${useChan ? 'enabled' : 'disabled'}`)
 
     const aiPayload = config._market_only ? { ...market } : {
       symbol: market.symbol, timeframe: market.timeframe, timestamp: market.timestamp,
@@ -232,7 +265,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     }
     if (market.strategy_context) {
       const ctx = { ...market.strategy_context }
-      // Strip chan data if prompt doesn't have {{USE_CHAN}}
+      // Strip Chan data when the strategy capability is disabled.
       if (!useChan && ctx.timeframes) {
         let stripped = 0
         for (const tf of Object.keys(ctx.timeframes)) {
@@ -243,7 +276,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
             stripped++
           }
         }
-        if (stripped > 0) console.log(`[LLM] Stripped chan from ${stripped} timeframe(s) (no {{USE_CHAN}} tag)`)
+        if (stripped > 0) console.log(`[LLM] Stripped Chan data from ${stripped} timeframe(s) (strategy disabled)`)
       }
       aiPayload.strategy_context = ctx
     }
@@ -325,6 +358,8 @@ export function normalizeAiSignal(parsed, config, market) {
     entryMethod = 'market'
   }
   if (strictInference && signalType !== 'hold' && entryMethod !== typeEntryMap[signalType]) return schemaHold('signal_entry_mismatch')
+  const allowedEntryMethods = new Set(normalizeEntryMethods(config?._allowed_entry_methods))
+  if (strictInference && signalType !== 'hold' && !allowedEntryMethods.has(entryMethod)) return schemaHold('entry_method_not_allowed_by_strategy')
   if (signalType === 'hold') entryMethod = 'observe'
   if (entryMethod === 'observe') { signalType = 'hold'; }
 

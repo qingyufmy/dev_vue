@@ -1691,6 +1691,322 @@ const migrations = [
         SET first_verified_at = identity_verified_at
         WHERE first_verified_at IS NULL AND identity_verified_at IS NOT NULL`)
     }
+  },
+  {
+    id: '070_strategy_market_plan_entry_methods',
+    up: async () => {
+      const columns = [
+        ['market_data_plan_json', 'TEXT DEFAULT NULL'],
+        ['entry_methods_json', `VARCHAR(255) NOT NULL DEFAULT '["market","limit","stop","stop_limit"]'`],
+      ]
+      for (const [name, definition] of columns) {
+        const rows = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types' AND COLUMN_NAME = ?", [name])
+        if (!rows.length) await queryRun(`ALTER TABLE auto_prompt_types ADD COLUMN ${name} ${definition}`)
+      }
+      const strategies = await queryAll('SELECT id, system_prompt, market_data_plan_json FROM auto_prompt_types')
+      for (const strategy of strategies) {
+        if (strategy.market_data_plan_json) continue
+        const timeframes = []
+        const seen = new Set()
+        const regex = /\{\{[MAC]TF:([A-Za-z0-9]+):(\d+)\}\}/gi
+        let match
+        while ((match = regex.exec(String(strategy.system_prompt || ''))) !== null) {
+          const timeframe = match[1].toUpperCase()
+          if (!['M1','M5','M15','M30','H1','H4','D1'].includes(timeframe) || seen.has(timeframe)) continue
+          seen.add(timeframe)
+          timeframes.push({ timeframe, kline_count: Math.min(500, Math.max(10, Number(match[2]) || 100)) })
+        }
+        if (!timeframes.length) timeframes.push({ timeframe: 'M30', kline_count: 100 })
+        await queryRun('UPDATE auto_prompt_types SET market_data_plan_json = ? WHERE id = ?', [
+          JSON.stringify({ primary_timeframe: timeframes[0].timeframe, timeframes }), strategy.id,
+        ])
+      }
+    }
+  },
+  {
+    id: '071_structured_strategy_control_tags',
+    up: async () => {
+      const chanColumn = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types' AND COLUMN_NAME = 'use_chan_analysis'")
+      if (!chanColumn.length) await queryRun('ALTER TABLE auto_prompt_types ADD COLUMN use_chan_analysis TINYINT NOT NULL DEFAULT 0')
+
+      const strategies = await queryAll('SELECT id, system_prompt, market_data_plan_json, use_chan_analysis FROM auto_prompt_types')
+      for (const strategy of strategies) {
+        const prompt = String(strategy.system_prompt || '')
+        const tags = []
+        const seen = new Set()
+        const regex = /\{\{[MAC]TF:([A-Za-z0-9]+):(\d+)\}\}/gi
+        let match
+        while ((match = regex.exec(prompt)) !== null) {
+          const timeframe = match[1].toUpperCase()
+          if (!['M1','M5','M15','M30','H1','H4','D1'].includes(timeframe) || seen.has(timeframe)) continue
+          seen.add(timeframe)
+          tags.push({ timeframe, kline_count: Math.min(500, Math.max(10, Number(match[2]) || 100)) })
+        }
+
+        let currentPlan = null
+        try { currentPlan = JSON.parse(strategy.market_data_plan_json || 'null') } catch {}
+        const currentRows = Array.isArray(currentPlan?.timeframes) ? currentPlan.timeframes : []
+        const looksLikeBadLegacyDefault = currentRows.length === 1
+          && currentRows[0]?.timeframe === 'M30' && Number(currentRows[0]?.kline_count) === 100
+          && currentPlan?.primary_timeframe === 'M30'
+        const migratedPlan = tags.length && (!currentRows.length || looksLikeBadLegacyDefault)
+          ? { primary_timeframe: tags[0].timeframe, timeframes: tags }
+          : currentPlan
+        const useChan = Number(strategy.use_chan_analysis) === 1 || /\{\{USE_CHAN\}\}/i.test(prompt)
+        const cleanPrompt = prompt
+          .replace(/\{\{[MAC]TF:[A-Za-z0-9]+:\d+\}\}/gi, '')
+          .replace(/\{\{USE_CHAN\}\}/gi, '')
+          .replace(/[ \t]+\n/g, '\n')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim()
+        await queryRun(
+          'UPDATE auto_prompt_types SET system_prompt = ?, market_data_plan_json = ?, use_chan_analysis = ? WHERE id = ?',
+          [cleanPrompt, migratedPlan ? JSON.stringify(migratedPlan) : strategy.market_data_plan_json, useChan ? 1 : 0, strategy.id],
+        )
+      }
+    }
+  },
+  {
+    id: '072_subscription_runtime_schedule',
+    up: async () => {
+      const columns = [
+        ['schedule_enabled', 'TINYINT NOT NULL DEFAULT 0'],
+        ['schedule_timezone', "VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai'"],
+        ['schedule_weekdays_json', "VARCHAR(64) NOT NULL DEFAULT '[1,2,3,4,5]'"],
+        ['schedule_windows_json', 'TEXT DEFAULT NULL'],
+        ['outside_window_behavior', "VARCHAR(24) NOT NULL DEFAULT 'pause_all'"],
+      ]
+      for (const [name, definition] of columns) {
+        const rows = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'strategy_subscriptions' AND COLUMN_NAME = ?", [name])
+        if (!rows.length) await queryRun(`ALTER TABLE strategy_subscriptions ADD COLUMN ${name} ${definition}`)
+      }
+      await queryRun(`UPDATE strategy_subscriptions
+        SET schedule_windows_json = '[{"start":"00:00","end":"23:59"}]'
+        WHERE schedule_windows_json IS NULL OR schedule_windows_json = ''`)
+
+      // The compatibility scheduler stores one active strategy per user. Keep
+      // the most recently edited subscription active and make the invariant
+      // explicit instead of silently ignoring older enabled subscriptions.
+      const duplicates = await queryAll(`SELECT user_id FROM strategy_subscriptions
+        WHERE execution_enabled = 1 AND is_deleted = 0
+        GROUP BY user_id HAVING COUNT(*) > 1`)
+      for (const row of duplicates) {
+        const active = await queryAll(`SELECT id, strategy_id, symbols_json FROM strategy_subscriptions
+          WHERE user_id = ? AND execution_enabled = 1 AND is_deleted = 0
+          ORDER BY updated_at DESC, id DESC`, [row.user_id])
+        if (active[0]) {
+          await queryRun(`UPDATE auto_scheduler SET enabled = 1, prompt_type_id = ?,
+            selected_symbols_json = ?, updated_at = NOW() WHERE user_id = ?`,
+          [active[0].strategy_id, active[0].symbols_json, row.user_id])
+        }
+        const disableIds = active.slice(1).map(item => Number(item.id))
+        if (disableIds.length) {
+          await queryRun(`UPDATE strategy_subscriptions SET execution_enabled = 0
+            WHERE id IN (${disableIds.map(() => '?').join(',')})`, disableIds)
+        }
+      }
+    }
+  },
+  {
+    id: '073_subscription_mt5_timezone_default',
+    up: async () => {
+      // Preserve every saved subscription value; this only changes the
+      // database fallback used by newly inserted rows.
+      await queryRun(`ALTER TABLE strategy_subscriptions
+        MODIFY COLUMN schedule_timezone VARCHAR(64) NOT NULL DEFAULT 'Etc/GMT-3'`)
+    }
+  },
+  {
+    id: '074_platform_market_data',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS market_data_sources (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        bridge_user_id BIGINT UNSIGNED NOT NULL,
+        broker_server VARCHAR(128) DEFAULT NULL,
+        timezone_offset_minutes SMALLINT DEFAULT NULL,
+        clock_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+        clock_residual_ms INT DEFAULT NULL,
+        last_calibrated_at DATETIME DEFAULT NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_market_source_bridge (bridge_user_id),
+        INDEX idx_market_source_status (clock_status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS market_clock_samples (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        source_id BIGINT UNSIGNED NOT NULL,
+        raw_tick_time_msc BIGINT DEFAULT NULL,
+        normalized_utc_msc BIGINT DEFAULT NULL,
+        timezone_offset_minutes SMALLINT DEFAULT NULL,
+        residual_ms INT DEFAULT NULL,
+        status VARCHAR(32) NOT NULL,
+        sampled_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_clock_source_time (source_id, sampled_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS market_candles (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        source_id BIGINT UNSIGNED NOT NULL,
+        broker_symbol VARCHAR(64) NOT NULL,
+        standard_symbol VARCHAR(64) NOT NULL,
+        timeframe VARCHAR(8) NOT NULL,
+        open_time_utc_msc BIGINT NOT NULL,
+        broker_time VARCHAR(32) NOT NULL,
+        open_price DECIMAL(24,10) NOT NULL,
+        high_price DECIMAL(24,10) NOT NULL,
+        low_price DECIMAL(24,10) NOT NULL,
+        close_price DECIMAL(24,10) NOT NULL,
+        tick_volume BIGINT NOT NULL DEFAULT 0,
+        spread INT NOT NULL DEFAULT 0,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_market_candle (source_id, broker_symbol, timeframe, open_time_utc_msc),
+        INDEX idx_market_candle_lookup (source_id, standard_symbol, timeframe, open_time_utc_msc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
+  },
+  {
+    id: '075_market_source_identity',
+    up: async () => {
+      const accountLoginColumn = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'market_data_sources' AND COLUMN_NAME = 'account_login'")
+      if (!accountLoginColumn.length) {
+        await queryRun('ALTER TABLE market_data_sources ADD COLUMN account_login BIGINT DEFAULT NULL AFTER broker_server')
+      }
+      const sourceKeyColumn = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'market_data_sources' AND COLUMN_NAME = 'source_key'")
+      if (!sourceKeyColumn.length) {
+        await queryRun("ALTER TABLE market_data_sources ADD COLUMN source_key VARCHAR(191) NOT NULL DEFAULT 'legacy' AFTER account_login")
+      }
+      await queryRun(`UPDATE market_data_sources
+        SET source_key = CONCAT(LOWER(COALESCE(NULLIF(broker_server, ''), 'unknown')), '|', COALESCE(account_login, 0))
+        WHERE source_key = 'legacy' OR source_key = ''`)
+      const oldIndex = await queryAll("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'market_data_sources' AND INDEX_NAME = 'uk_market_source_bridge'")
+      if (oldIndex.length) await queryRun('ALTER TABLE market_data_sources DROP INDEX uk_market_source_bridge')
+      const identityIndex = await queryAll("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'market_data_sources' AND INDEX_NAME = 'uk_market_source_identity'")
+      if (!identityIndex.length) {
+        await queryRun('ALTER TABLE market_data_sources ADD UNIQUE INDEX uk_market_source_identity (bridge_user_id, source_key)')
+      }
+    }
+  },
+  {
+    id: '076_remove_risk_recovery_workflow',
+    up: async () => {
+      await queryRun('DROP TABLE IF EXISTS risk_recovery_requests')
+    }
+  },
+  {
+    id: '077_platform_strategy_experience',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS platform_strategy_experience_items (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id BIGINT UNSIGNED NOT NULL,
+        review_case_id BIGINT UNSIGNED NOT NULL,
+        review_version_id BIGINT UNSIGNED NOT NULL,
+        source_admin_user_id BIGINT UNSIGNED NOT NULL,
+        lesson_text TEXT NOT NULL,
+        context_json TEXT DEFAULT NULL,
+        content_hash CHAR(64) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'candidate',
+        platform_version INT DEFAULT NULL,
+        published_by BIGINT UNSIGNED DEFAULT NULL,
+        published_at DATETIME DEFAULT NULL,
+        revoked_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_platform_experience_review_version (review_version_id),
+        INDEX idx_platform_experience_runtime (strategy_id, status, platform_version),
+        INDEX idx_platform_experience_updated (updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS platform_strategy_experience_policies (
+        strategy_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+        mode VARCHAR(16) NOT NULL DEFAULT 'shadow',
+        max_items SMALLINT NOT NULL DEFAULT 5,
+        runtime_token_budget SMALLINT NOT NULL DEFAULT 800,
+        policy_version INT NOT NULL DEFAULT 1,
+        updated_by BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS platform_strategy_experience_logs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id BIGINT UNSIGNED NOT NULL,
+        policy_mode VARCHAR(16) NOT NULL,
+        selected_item_ids_json TEXT DEFAULT NULL,
+        token_count INT NOT NULL DEFAULT 0,
+        symbol VARCHAR(64) DEFAULT NULL,
+        timeframe VARCHAR(16) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        INDEX idx_platform_experience_log_strategy (strategy_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // Platform subscriptions never own user memory. Legacy personal/shared
+      // values are collapsed to the fixed platform-managed runtime mode.
+      await queryRun(`UPDATE strategy_subscriptions ss
+        JOIN auto_prompt_types apt ON apt.id = ss.strategy_id
+        SET ss.memory_mode = 'platform_only'
+        WHERE apt.scope = 'platform' AND ss.memory_mode <> 'platform_only'`)
+      await queryRun(`UPDATE strategy_subscriptions ss
+        JOIN auto_prompt_types apt ON apt.id = ss.strategy_id
+        SET ss.memory_mode = 'personal'
+        WHERE apt.scope = 'private' AND ss.memory_mode NOT IN ('personal','shadow','off')`)
+
+      // The admin identity is an observation/platform-governance identity.
+      // Archive legacy admin-owned private strategies and stop their runtime.
+      await queryRun(`UPDATE auto_prompt_types apt
+        JOIN users u ON u.id = apt.owner_user_id
+        SET apt.visibility_status = 'archived', apt.is_active = 0, apt.deleted_at = COALESCE(apt.deleted_at, NOW())
+        WHERE apt.scope = 'private' AND u.role = 'admin'`)
+      await queryRun(`UPDATE strategy_subscriptions ss
+        JOIN auto_prompt_types apt ON apt.id = ss.strategy_id
+        JOIN users u ON u.id = apt.owner_user_id
+        SET ss.execution_enabled = 0, ss.updated_at = NOW()
+        WHERE apt.scope = 'private' AND u.role = 'admin' AND ss.is_deleted = 0`)
+      await queryRun(`UPDATE auto_scheduler scheduler
+        JOIN auto_prompt_types apt ON apt.id = scheduler.prompt_type_id
+        JOIN users u ON u.id = apt.owner_user_id
+        SET scheduler.enabled = 0, scheduler.updated_at = NOW()
+        WHERE apt.scope = 'private' AND u.role = 'admin'`)
+      await queryRun(`UPDATE user_bridge_settings ubs
+        JOIN users u ON u.id = ubs.user_id
+        SET ubs.auto_reasoning_enabled = 0, ubs.updated_at = NOW()
+        WHERE u.role = 'admin'
+          AND NOT EXISTS (SELECT 1 FROM strategy_subscriptions ss
+            WHERE ss.user_id = u.id AND ss.execution_enabled = 1 AND ss.is_deleted = 0)`)
+      await queryRun(`UPDATE user_memory_settings ums JOIN users u ON u.id = ums.user_id
+        SET ums.enabled = 0, ums.updated_at = NOW() WHERE u.role = 'admin'`)
+      await queryRun(`UPDATE experience_memory_items emi JOIN users u ON u.id = emi.user_id
+        SET emi.status = 'revoked', emi.revoked_at = COALESCE(emi.revoked_at, NOW()), emi.updated_at = NOW()
+        WHERE u.role = 'admin' AND emi.status <> 'revoked'`)
+      await queryRun(`UPDATE experience_memory_summaries ems JOIN users u ON u.id = ems.user_id
+        SET ems.status = 'stale', ems.invalidated_at = COALESCE(ems.invalidated_at, NOW())
+        WHERE u.role = 'admin' AND ems.status = 'active'`)
+      await queryRun(`UPDATE memory_compression_jobs mcj JOIN users u ON u.id = mcj.user_id
+        SET mcj.status = 'cancelled', mcj.lease_token = NULL, mcj.lease_expires_at = NULL, mcj.updated_at = NOW()
+        WHERE u.role = 'admin' AND mcj.status IN ('queued','leased')`)
+    }
+  },
+  {
+    id: '078_incremental_risk_snapshot',
+    up: async () => {
+      const additions = [
+        ['last_deal_time_msc', 'BIGINT NOT NULL DEFAULT 0'],
+        ['last_deal_ticket', 'BIGINT NOT NULL DEFAULT 0'],
+        ['last_risk_snapshot_at', 'DATETIME DEFAULT NULL'],
+        ['data_incomplete_reason', 'VARCHAR(255) DEFAULT NULL'],
+      ]
+      for (const [name, definition] of additions) {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'risk_account_state' AND COLUMN_NAME = ?`, [name])
+        if (!rows.length) await queryRun(`ALTER TABLE risk_account_state ADD COLUMN ${name} ${definition}`)
+      }
+    }
+  },
+  {
+    id: '079_incremental_risk_snapshot_baseline',
+    up: async () => {
+      // Existing rows already contain cumulative metrics built by the legacy
+      // history snapshot. Start their first cursor at that snapshot boundary
+      // so the incremental collector cannot count old deals a second time.
+      await queryRun(`UPDATE risk_account_state
+        SET last_risk_snapshot_at = updated_at
+        WHERE last_risk_snapshot_at IS NULL AND updated_at IS NOT NULL`)
+    }
   }
 ]
 

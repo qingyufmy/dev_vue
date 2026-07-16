@@ -13,7 +13,6 @@ const state = {
   backgroundSyncTimer: null,
   lastQuote: null,
   currentConfigHasApiKey: false,
-  systemPromptInherited: false,
   pendingManualOrder: null,
   accountBalance: 0,
   historyNetResult: 0,
@@ -24,13 +23,16 @@ const state = {
   signalFilters: { direction: "", timeframe: "", page: 1, pageSize: 20 },
   historyFilters: { page: 1, pageSize: 20 },
   auditFilters: { status: "", type: "", page: 1, pageSize: 25 },
+  executionFilters: { page: 1, pageSize: 5, total: 0 },
   signalTickets: {},
   closeSignalTickets: {},
   analysisHistoryOffset: 0,
   analysisHistoryHasMore: true,
   analysisHistoryLoading: false,
   modelProfiles: [],
+  strategyFilter: "all",
   reviewCases: [],
+  reviewOverview: { pending: 0, issues: 0 },
   reviewFilter: "",
   selectedReviewId: null,
   globalRiskSnapshot: null,
@@ -151,6 +153,41 @@ function createSymbolSelector(inputId, options, opts = {}) {
 }
 
 const $ = (id) => document.getElementById(id);
+let modalReturnFocus = null;
+
+function openFormModal(editor) {
+  if (!editor) return;
+  document.querySelectorAll(".form-modal:not(.hidden)").forEach(modal => modal.classList.add("hidden"));
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  editor.classList.remove("hidden");
+  document.body.classList.add("form-modal-open");
+  requestAnimationFrame(() => editor.querySelector(".form-modal-dialog")?.focus());
+}
+
+function closeFormModal(editor, restoreFocus = true) {
+  if (!editor) return;
+  editor.classList.add("hidden");
+  if (!document.querySelector(".form-modal:not(.hidden)")) document.body.classList.remove("form-modal-open");
+  if (restoreFocus && modalReturnFocus?.isConnected) modalReturnFocus.focus();
+  modalReturnFocus = null;
+}
+
+function handleFormModalKeydown(event) {
+  const modal = event.target.closest?.(".form-modal");
+  if (!modal) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeFormModal(modal);
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [...modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])')]
+    .filter(element => element.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
 
 const REASON_MAP = {
   skipped: "已跳过（未满足执行条件）",
@@ -169,6 +206,8 @@ const REASON_MAP = {
   volume_exceeds_config_limit: "手数超过配置上限，已拒绝",
   max_open_positions_reached: "持仓数量达到上限，已拒绝",
   signal_price_slippage_exceeded: "信号价与当前价滑点超限，已拒绝",
+  bridge_upgrade_required_for_incremental_risk: "桥接软件版本过旧，请从源码重启或升级到最新版后重试",
+  risk_snapshot_failed: "无法获取完整的 MT5 风险快照，已为安全起见阻止交易",
   confirmation_required: "需要人工确认",
   rejected: "风控拒绝",
   success: "成功",
@@ -346,7 +385,7 @@ function confidenceInfo(value) {
 
 function initIcons() {
   requestAnimationFrame(() => {
-    if (window.lucide) window.lucide.createIcons();
+    if (typeof lucide !== "undefined") lucide.createIcons();
   });
 }
 
@@ -381,6 +420,7 @@ const AUTO_REASON_LABELS = {
   strategy_disabled: '策略已停用',
   symbol_not_supported: '品种不支持',
   no_runtime_scheduler: '调度器未运行',
+  outside_schedule: '当前不在运行时段',
   no_online_subscribers: '无在线订阅用户',
   no_strategy: '未选择策略',
   no_symbols: '未选择品种',
@@ -589,31 +629,49 @@ function toast(message, type = "info") {
   setTimeout(() => node.remove(), 3600);
 }
 
-function showConfirm(title, message, { confirmText = "确认", cancelText = "取消", danger = false } = {}) {
+function showConfirm(title, message, {
+  confirmText = "确认", cancelText = "取消", danger = false,
+  requireText = "", requireTextLabel = "输入以下文字以确认", detailRows = [],
+} = {}) {
   return new Promise((resolve) => {
     const modal = $("genericConfirmModal");
     if (!modal) { resolve(false); return; }
     $("genericConfirmTitle").textContent = title;
-    $("genericConfirmBody").innerHTML = `<div>${escapeHtml(message)}</div>`;
+    const confirmationId = `destructiveConfirmText-${Date.now()}`;
+    const details = detailRows.length ? `<dl class="confirm-impact-list">${detailRows.map(([label, value, tone = ""]) => `<div class="confirm-impact-row ${escapeHtml(tone)}"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>` : "";
+    const textCheck = requireText ? `<div class="confirm-text-check"><label for="${confirmationId}">${escapeHtml(requireTextLabel)}</label><code>${escapeHtml(requireText)}</code><input id="${confirmationId}" class="form-input" type="text" autocomplete="off" spellcheck="false" aria-describedby="${confirmationId}-hint"><small id="${confirmationId}-hint">必须与策略名称完全一致</small></div>` : "";
+    $("genericConfirmBody").innerHTML = `<p class="confirm-message">${escapeHtml(message)}</p>${details}${textCheck}`;
     const okBtn = $("genericConfirmOk");
     const cancelBtn = $("genericConfirmCancel");
+    const closeBtn = $("genericConfirmClose");
+    const textInput = requireText ? $(confirmationId) : null;
     okBtn.textContent = confirmText;
     cancelBtn.textContent = cancelText;
     okBtn.className = danger ? "btn btn-danger" : "btn btn-primary";
+    okBtn.disabled = Boolean(requireText);
     modal.classList.remove("hidden");
     const cleanup = (val) => {
       modal.classList.add("hidden");
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
+      closeBtn?.removeEventListener("click", onCancel);
       modal.removeEventListener("click", onBg);
+      document.removeEventListener("keydown", onKeyDown);
+      textInput?.removeEventListener("input", onInput);
       resolve(val);
     };
     const onOk = () => cleanup(true);
     const onCancel = () => cleanup(false);
     const onBg = (e) => { if (e.target === modal) cleanup(false); };
+    const onKeyDown = (e) => { if (e.key === "Escape") cleanup(false); };
+    const onInput = () => { okBtn.disabled = textInput.value !== requireText; };
     okBtn.addEventListener("click", onOk);
     cancelBtn.addEventListener("click", onCancel);
+    closeBtn?.addEventListener("click", onCancel);
     modal.addEventListener("click", onBg);
+    document.addEventListener("keydown", onKeyDown);
+    textInput?.addEventListener("input", onInput);
+    requestAnimationFrame(() => (textInput || cancelBtn).focus());
   });
 }
 
@@ -680,9 +738,20 @@ const API_ERROR_MESSAGES = {
   bound_model_unavailable: "策略绑定的模型已停用或删除，请重新选择模型",
   credential_decryption_failed: "模型凭据无法解密，请联系管理员检查密钥版本",
   credential_not_encrypted: "检测到旧版明文凭据，请先完成凭据迁移",
+  invalid_schedule_timezone: "运行时区无效",
+  invalid_schedule_time: "运行时段格式无效",
+  schedule_weekdays_required: "启用运行时段后，请至少选择一个星期",
+  schedule_windows_required: "启用运行时段后，请至少添加一个时间段",
+  schedule_windows_limit_exceeded: "运行时段最多只能添加 6 个",
+  invalid_outside_window_behavior: "时段外行为无效",
+  strategy_delete_confirmation_mismatch: "输入的策略名称不一致，未执行删除",
+  strategy_delete_version_changed: "策略在确认期间已被修改，请重新检查后再删除",
+  strategy_delete_impact_changed: "策略订阅情况在确认期间发生变化，请重新确认影响范围",
+  strategy_delete_active_subscriptions_unconfirmed: "仍有运行中的订阅，必须明确确认停止后才能删除",
 };
 
 function apiErrorMessage(code) {
+  if (String(code).startsWith('active_subscription_conflict:')) return '已有其他策略启用自动推理，请先关闭原订阅或确认切换';
   return API_ERROR_MESSAGES[code] || code;
 }
 
@@ -782,7 +851,15 @@ function connectBridgeStatusWs(onReady) {
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'data') {
+      if (msg.type === 'platform_market_tick') {
+        const quote = msg.quote || {};
+        const selected = String($("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || getGlobalSymbol()).toUpperCase();
+        const brokerSymbol = String(quote.symbol || '').toUpperCase();
+        if (brokerSymbol && (brokerSymbol === selected || brokerSymbol.startsWith(selected)) &&
+            Number.isFinite(Number(quote.bid)) && Number.isFinite(Number(quote.ask))) {
+          updateKlineTick(Number(quote.bid), Number(quote.ask));
+        }
+      } else if (msg.type === 'data') {
         handleBridgeData(msg);
       } else if (msg.type === 'hb') {
         handleHeartbeat(msg);
@@ -1255,17 +1332,19 @@ const PROVIDER_PRESETS = {
 function renderModelProfiles() {
   const host = $("modelProfilesList");
   if (!host) return;
+  const summary = $("modelCatalogSummary");
+  const activeProfiles = state.modelProfiles.filter(profile => profile.status === "active");
+  if (summary) summary.textContent = `${state.modelProfiles.length} 个模型 · ${activeProfiles.length} 个可用`;
+  setText("modelCountStat", state.modelProfiles.length);
+  setText("modelActiveStat", activeProfiles.length);
   if (!state.modelProfiles.length) {
     host.innerHTML = '<div class="workspace-panel empty-state"><strong>还没有可用模型</strong><span>添加一个自己的模型；若管理员已开放共享，也可由系统按用途自动选用平台模型。</span></div>';
     return;
   }
   host.innerHTML = state.modelProfiles.map(profile => `
-    <article class="workspace-row" data-model-id="${Number(profile.id)}">
-      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)}
-        ${profile.is_default ? '<span class="status-chip success">默认</span>' : ''}
-        <span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${escapeHtml(profile.status || 'active')}</span>
-      </div><div class="workspace-row-meta"><span>${escapeHtml(profile.provider)}</span><span>${escapeHtml(profile.api_base_url || '默认 API 地址')}</span><span>${profile.has_api_key ? '凭据已加密保存' : '缺少凭据'}</span><span>最大 ${Number(profile.max_tokens || 0)} tokens</span></div></div>
-      <div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" data-model-action="default" ${profile.is_default ? 'disabled' : ''}>设为默认</button><button class="btn btn-secondary btn-sm" data-model-action="edit">编辑</button><button class="btn btn-danger btn-sm" data-model-action="delete">删除</button></div>
+    <article class="workspace-row model-profile-card" data-model-id="${Number(profile.id)}">
+      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span></div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(profile.provider)}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出 ${Number(profile.max_tokens || 0)} tokens</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span></div></details></div>
+      <div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" data-model-action="default" ${profile.is_default ? 'disabled' : ''}>设为默认</button><button class="btn btn-secondary btn-sm" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" data-model-action="delete" aria-label="删除 ${escapeHtml(profile.model_name)}"><i data-lucide="trash-2" size="14"></i></button></div>
     </article>`).join("");
   initIcons();
 }
@@ -1283,7 +1362,10 @@ async function loadModelManagement() {
   const source = sourceData.source || {};
   const notice = $("modelSourceNotice");
   const sourceLabel = ({ user:"自有加密凭据", platform_shared:"平台共享凭据", platform_primary:"平台主模型", none:"未配置" })[source.credential_source] || source.credential_source;
-  const sourceText = source.available ? `${source.provider} · ${source.model_name} · ${sourceLabel}` : `当前任务不可用 · ${source.error || '未配置模型'}`;
+  // Provider identifiers are implementation details. Keep the user-facing
+  // resolver summary focused on the model and where its credential comes from.
+  const sourceText = source.available ? `${source.model_name} · ${sourceLabel}` : `当前任务不可用 · ${source.error || '未配置模型'}`;
+  setText("modelEffectiveSource", source.available ? `${source.model_name} · ${sourceLabel}` : "当前不可用");
   if (notice) notice.innerHTML = `<span><strong>服务端实际解析来源：</strong> ${escapeHtml(sourceText)}</span>`;
   if ($("strategyModelSource")) $("strategyModelSource").textContent = sourceText;
   if (state.user?.role === "admin") await loadPlatformPolicy();
@@ -1292,7 +1374,6 @@ async function loadModelManagement() {
 function openModelEditor(profile = null) {
   const editor = $("modelProfileEditor");
   if (!editor) return;
-  editor.classList.remove("hidden");
   editor.dataset.modelId = profile?.id || "";
   $("modelEditorTitle").textContent = profile ? "编辑模型" : "添加模型";
   $("profileProvider").value = profile?.provider || "deepseek";
@@ -1301,7 +1382,7 @@ function openModelEditor(profile = null) {
   $("profileApiKey").value = "";
   $("profileTemperature").value = profile?.temperature ?? 0.3;
   $("profileMaxTokens").value = profile?.max_tokens ?? 2000;
-  editor.scrollIntoView({ behavior: "smooth", block: "start" });
+  openFormModal(editor);
 }
 
 async function saveModelProfile() {
@@ -1313,7 +1394,7 @@ async function saveModelProfile() {
   if (state.user?.role === "admin") body.scope = "platform";
   await api(id ? `/api/ai/model-profiles/${id}` : "/api/ai/model-profiles", { method: id ? "PUT" : "POST", body });
   $("profileApiKey").value = "";
-  editor.classList.add("hidden");
+  closeFormModal(editor, false);
   toast("模型已保存", "success");
   await loadModelManagement();
 }
@@ -1338,108 +1419,459 @@ async function loadStrategyCatalog() {
   const items = data.strategies || [];
   const subscriptions = data.subscriptions || [];
   state.strategies = items; state.strategySubscriptions = subscriptions; state.tradingAccounts = data.accounts || [];
-  host.innerHTML = items.length ? items.map(item => {
+  const summary = $("strategyCatalogSummary");
+  if (summary) {
+    const active = items.filter(item => item.visibility_status === "active" && Number(item.is_active)).length;
+    const privateCount = items.filter(item => item.scope === "private").length;
+    summary.textContent = `${items.length} 个策略 · ${active} 个可用${privateCount ? ` · ${privateCount} 个私有` : ""}`;
+  }
+  const activeCount = items.filter(item => item.visibility_status === "active" && Number(item.is_active)).length;
+  const runningCount = subscriptions.filter(item => Number(item.execution_enabled)).length;
+  setText("strategyTotalStat", items.length);
+  setText("strategyAvailableStat", activeCount);
+  setText("strategyRunningStat", runningCount);
+  const visibleItems = items.filter(item => {
+    if (state.strategyFilter === "platform") return item.scope === "platform";
+    if (state.strategyFilter === "private") return item.scope === "private" && Number(item.owner_user_id) === Number(state.user?.id);
+    if (state.strategyFilter === "subscribed") return subscriptions.some(sub => Number(sub.strategy_id) === Number(item.id));
+    return true;
+  });
+  host.innerHTML = visibleItems.length ? visibleItems.map(item => {
     const symbols = parseJsonField(item.symbols_json, []);
+    const plan = parseJsonField(item.market_data_plan_json, { timeframes:[] });
+    const entryMethods = parseJsonField(item.entry_methods_json, ["market","limit","stop","stop_limit"]);
+    const planText = (plan.timeframes || []).map(row => `${row.timeframe}×${row.kline_count}`).join(" · ") || "M30×100";
+    const entryText = entryMethods.map(method => ({market:"市价",limit:"限价",stop:"突破",stop_limit:"突破限价"}[method] || method)).join("、");
+    const chanText = Number(item.use_chan_analysis) ? "缠论已启用" : "常规行情指标";
     const source = item.model_profile_id ? `绑定模型 #${item.model_profile_id}` : "继承默认模型";
     const memory = item.scope === "private" ? "个人记忆可用" : "平台共享 · 禁止个人记忆";
     const linked = subscriptions.filter(sub => Number(sub.strategy_id) === Number(item.id));
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
     const memoryMode = linked.some(sub => sub.memory_mode === "disabled") ? "部分订阅关闭记忆" : memory;
     const canEdit = (item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id)) || (item.scope === 'platform' && state.user?.role === 'admin');
-    const subRows = linked.map(sub => `<div class="workspace-row-meta"><span>订阅 #${sub.id} · 账户 #${sub.trading_account_id} · ${sub.execution_enabled ? '执行中' : '未执行'} · ${escapeHtml(sub.memory_mode)}</span><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}">编辑订阅</button><button class="btn btn-secondary btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}">删除订阅</button></div>`).join("");
+    const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动推理已启用' : '自动推理未启用'} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
+    const primarySubscription = linked.find(sub => Number(sub.execution_enabled)) || linked[0];
+    const subscriptionButton = primarySubscription
+      ? `<button class="btn btn-primary btn-sm" data-subscription-action="edit" data-subscription-id="${primarySubscription.id}"><i data-lucide="settings-2" size="14"></i>编辑订阅</button>`
+      : '<button class="btn btn-primary btn-sm" data-strategy-action="subscribe"><i data-lucide="play" size="14"></i>订阅与运行</button>';
     const canSubscribe = item.scope === 'platform' || Number(item.owner_user_id) === Number(state.user?.id);
-    return `<article class="workspace-row" data-strategy-id="${Number(item.id)}"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '私有' : '平台'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(item.visibility_status)}</span></div><div class="workspace-row-meta"><span>所有者：${item.scope === 'private' ? escapeHtml(item.owner_nickname || `用户 #${item.owner_user_id}`) : '平台'}</span><span>${source}</span><span>${escapeHtml(memoryMode)}</span><span>执行：${escapeHtml(execution)}</span><span>品种：${symbols.map(escapeHtml).join('、') || '未设置'}</span><span>AI 手数受平台上下限与风控档案约束</span></div>${subRows}</div><div class="workspace-row-actions">${canSubscribe ? '<button class="btn btn-primary btn-sm" data-strategy-action="subscribe">订阅 / 执行</button>' : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit">编辑</button><button class="btn btn-danger btn-sm" data-strategy-action="delete">删除</button>' : ''}</div></article>`;
-  }).join("") : '<div class="empty-state"><strong>暂无可用策略</strong><span>用户仅能看到平台策略和自己创建的私有策略。</span></div>';
+    const visibilityLabel = ({ active:"上线", draft:"草稿", archived:"归档" })[item.visibility_status] || item.visibility_status;
+    const subscriptionsBlock = linked.length ? `<section class="strategy-subscriptions"><div class="strategy-subscriptions-head"><span><i data-lucide="radio-tower" size="15"></i>执行订阅</span><small>${linked.length} 个</small></div>${subRows}</section>` : '<div class="quiet-empty">还没有执行订阅</div>';
+    const description = item.description || (item.scope === "private" ? "我的自定义分析策略" : "平台提供的分析策略");
+    return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>技术分析</small><strong>${escapeHtml(chanText)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
+  }).join("") : '<div class="empty-state"><strong>当前筛选下没有策略</strong><span>切换筛选条件，或新建一套自己的推理策略。</span></div>';
+  populateManualStrategySelector();
+  initIcons();
+}
+
+function strategyMarketPlan(strategy) {
+  const fallback = { primary_timeframe:"M30", timeframes:[{ timeframe:"M30", kline_count:100 }] };
+  const plan = parseJsonField(strategy?.market_data_plan_json, fallback);
+  return Array.isArray(plan?.timeframes) && plan.timeframes.length ? plan : fallback;
+}
+
+function populateManualStrategySelector() {
+  const select = $("analyzeStrategy");
+  if (!select) return;
+  const current = Number(select.value || 0);
+  const canExecute = item => item.visibility_status === "active" && Number(item.is_active)
+    && (item.scope !== "private" || Number(item.owner_user_id) === Number(state.user?.id));
+  const available = (state.strategies || []).filter(canExecute);
+  select.innerHTML = '<option value="">请选择策略</option>' + available.map(item => `<option value="${Number(item.id)}">${escapeHtml(item.title)} · ${item.scope === "private" ? "私有" : "平台"}</option>`).join("");
+  if (available.some(item => Number(item.id) === current)) select.value = String(current);
+  else if (available.length === 1) select.value = String(available[0].id);
+  updateManualStrategySelection();
+}
+
+function updateManualStrategySelection() {
+  const strategy = (state.strategies || []).find(item => Number(item.id) === Number($("analyzeStrategy")?.value));
+  const symbolSelect = $("analyzeSymbol"), summary = $("manualStrategySummary");
+  if (!symbolSelect || !summary) return;
+  if (!strategy) {
+    symbolSelect.disabled = true; symbolSelect.innerHTML = '<option value="">请先选择策略</option>';
+    summary.className = "strategy-run-summary empty"; summary.innerHTML = "<strong>尚未选择策略</strong><span>选择后显示行情周期、K 线数量、入场方式与模型来源。</span>";
+    return;
+  }
+  const symbols = parseJsonField(strategy.symbols_json, []), previous = symbolSelect.value;
+  const resolvedSymbols = symbols.map(symbol => {
+    const base = String(symbol).toUpperCase();
+    const exact = state.symbols.find(item => String(item.name).toUpperCase() === base);
+    const brokerVariant = state.symbols.find(item => String(item.name).toUpperCase().startsWith(base));
+    return { strategySymbol:symbol, actualSymbol:(exact || brokerVariant)?.name || symbol };
+  });
+  symbolSelect.innerHTML = resolvedSymbols.map(item => `<option value="${escapeHtml(item.actualSymbol)}">${escapeHtml(item.actualSymbol)}${item.actualSymbol !== item.strategySymbol ? ` · ${escapeHtml(item.strategySymbol)}` : ""}</option>`).join("");
+  symbolSelect.disabled = false;
+  if (resolvedSymbols.some(item => item.actualSymbol === previous)) symbolSelect.value = previous;
+  const plan = strategyMarketPlan(strategy);
+  const methods = parseJsonField(strategy.entry_methods_json, ["market","limit","stop","stop_limit"]);
+  const methodLabels = { market:"市价", limit:"限价挂单", stop:"突破挂单", stop_limit:"突破限价" };
+  summary.className = "strategy-run-summary";
+  summary.innerHTML = `<div><span>行情计划</span><strong>${plan.timeframes.map(item => `${escapeHtml(item.timeframe)} × ${Number(item.kline_count)}`).join(" · ")}</strong></div><div><span>缠论指标</span><strong>${Number(strategy.use_chan_analysis) ? "已启用" : "未启用"}</strong></div><div><span>允许入场</span><strong>${methods.map(item => methodLabels[item] || item).map(escapeHtml).join("、")}</strong></div><div><span>模型</span><strong>${strategy.model_profile_id ? `绑定模型 #${Number(strategy.model_profile_id)}` : "按模型管理规则解析"}</strong></div>`;
+}
+
+function renderStrategyModelOptions(scope, selectedId = "") {
+  const select = $("strategyModelProfile");
+  if (!select) return;
+  const platform = scope === "platform";
+  const profiles = (state.modelProfiles || []).filter(item => item.status === "active" && item.scope === (platform ? "platform" : "user"));
+  const fallback = platform ? "使用平台默认模型" : "使用我的默认模型 / 平台自动共享";
+  select.innerHTML = `<option value="">${fallback}</option>` + profiles.map(profile => `<option value="${Number(profile.id)}">${escapeHtml(profile.model_name)}${profile.is_default ? " · 默认" : ""}</option>`).join("");
+  select.value = selectedId ? String(selectedId) : "";
+  if (selectedId && !select.value) select.insertAdjacentHTML("beforeend", `<option value="${Number(selectedId)}" selected>已绑定模型 #${Number(selectedId)}（当前不可用）</option>`);
+  const help = $("strategyModelHelp");
+  if (help) help.textContent = platform ? "可绑定一个平台模型用于自动推理；留空时使用平台默认模型。" : "可绑定自己的模型；留空时按模型管理中的默认与共享规则解析。";
 }
 
 function openStrategyEditor(strategy = null) {
-  const editor = $("strategyEditor"); editor.classList.remove("hidden"); editor.dataset.strategyId = strategy?.id || "";
+  const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || "";
   const admin = state.user?.role === "admin";
   $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (admin ? "新建策略" : "新建自定义策略");
   $("strategyEditorBoundary").textContent = admin ? "平台策略对所有合资格用户可见；他人私有策略只允许审计查看，不能代替用户修改或执行。" : "你创建的私有策略仅自己可见、可选和执行。";
   $("strategyTitle").value = strategy?.title || ""; $("strategySymbols").value = parseJsonField(strategy?.symbols_json, []).join(", ");
+  $("strategyDescription").value = strategy?.description || "";
   $("strategyPrompt").value = strategy?.system_prompt || ""; $("strategyInterval").value = strategy?.interval_minutes || 5;
+  const plan = strategyMarketPlan(strategy);
+  document.querySelectorAll("[data-strategy-timeframe]").forEach(input => { input.checked = plan.timeframes.some(item => item.timeframe === input.dataset.strategyTimeframe); });
+  document.querySelectorAll("[data-strategy-kline]").forEach(input => { const item = plan.timeframes.find(row => row.timeframe === input.dataset.strategyKline); input.value = item?.kline_count || 100; input.disabled = !item; });
+  document.querySelectorAll('input[name="strategyPrimaryTimeframe"]').forEach(input => { input.checked = input.value === plan.primary_timeframe; input.disabled = !plan.timeframes.some(item => item.timeframe === input.value); });
+  const entryMethods = new Set(parseJsonField(strategy?.entry_methods_json, ["market","limit","stop","stop_limit"]));
+  document.querySelectorAll("[data-strategy-entry-method]").forEach(input => { input.checked = entryMethods.has(input.dataset.strategyEntryMethod); });
+  $("strategyUseChanAnalysis").checked = Boolean(Number(strategy?.use_chan_analysis || 0));
   if (admin) {
-    $("strategyScope").value = strategy?.scope || "platform";
-    $("strategyScope").disabled = Boolean(strategy);
+    $("strategyScope").value = "platform";
+    $("strategyScopeField")?.classList.add("is-readonly");
+    const scopeHelp = $("strategyScopeHelp");
+    if (scopeHelp) scopeHelp.textContent = "管理员只维护平台策略；管理员账户不建立私有策略或个人记忆。";
     $("strategyVisibility").value = strategy?.visibility_status || "active";
-    $("strategyVisibilityField").style.display = $("strategyScope").value === "platform" ? "" : "none";
+    $("strategyVisibilityField").style.display = "";
   }
   const scope = strategy?.scope || (admin ? $("strategyScope").value : "private");
-  const profiles = (state.modelProfiles || []).filter(item => item.scope !== "platform");
-  $("strategyModelProfile").innerHTML = '<option value="">继承默认模型 / 平台自动共享</option>' + profiles.map(profile => `<option value="${Number(profile.id)}">${escapeHtml(profile.model_name)}</option>`).join("");
-  $("strategyModelProfile").value = strategy?.model_profile_id || "";
-  $("strategyModelProfile").disabled = scope === "platform";
-  editor.scrollIntoView({ behavior:"smooth", block:"start" });
+  renderStrategyModelOptions(scope, strategy?.model_profile_id || "");
+  openFormModal(editor);
 }
 
 async function saveStrategyEditor() {
   const id = Number($("strategyEditor").dataset.strategyId || 0);
+  const timeframes = [...document.querySelectorAll("[data-strategy-timeframe]:checked")].map(input => ({ timeframe:input.dataset.strategyTimeframe, kline_count:Number(document.querySelector(`[data-strategy-kline="${input.dataset.strategyTimeframe}"]`)?.value) || 100 }));
+  if (!timeframes.length) throw new Error("请至少启用一个行情周期");
+  const primary = document.querySelector('input[name="strategyPrimaryTimeframe"]:checked')?.value;
+  const primaryTimeframe = timeframes.some(item => item.timeframe === primary) ? primary : timeframes[0].timeframe;
+  const entryMethods = [...document.querySelectorAll("[data-strategy-entry-method]:checked")].map(input => input.dataset.strategyEntryMethod);
+  if (!entryMethods.length) throw new Error("请至少允许一种入场方式");
+  const scope = state.user?.role === "admin" ? "platform" : "private";
+  const visibilityStatus = state.user?.role === "admin" && scope === "platform" ? $("strategyVisibility").value : "active";
   const body = { title:$("strategyTitle").value.trim(), symbols:$("strategySymbols").value.split(",").map(value => value.trim()).filter(Boolean),
-    system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
+    description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
+    market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
+    use_chan_analysis:$("strategyUseChanAnalysis").checked,
+    is_active:visibilityStatus === "active",
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
-    scope:state.user?.role === "admin" ? $("strategyScope").value : "private",
-    visibility_status:state.user?.role === "admin" ? $("strategyVisibility").value : "active" };
+    scope,
+    visibility_status:visibilityStatus };
   await api(id ? `/api/ai/strategies/${id}` : "/api/ai/strategies", { method:id ? "PUT" : "POST", body });
-  $("strategyEditor").classList.add("hidden"); toast("策略已保存", "success"); await loadStrategyCatalog();
+  closeFormModal($("strategyEditor"), false); toast("策略已保存", "success"); await loadStrategyCatalog();
 }
 
 function openSubscriptionEditor(strategy, subscription = null) {
   if (!state.tradingAccounts?.length) { toast("请先连接交易桥并完成账户登记/审核", "warning"); return; }
-  const editor = $("subscriptionEditor"); editor.classList.remove("hidden"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
+  const editor = $("subscriptionEditor"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
   $("subscriptionAccount").innerHTML = state.tradingAccounts.map(account => `<option value="${Number(account.id)}">${escapeHtml(account.nickname || account.login_account)} · ${escapeHtml(account.broker_server)}</option>`).join("");
   $("subscriptionAccount").value = subscription?.trading_account_id || state.tradingAccounts[0].id;
-  $("subscriptionSymbols").value = parseJsonField(subscription?.symbols_json, []).join(", ");
-  $("subscriptionMemoryMode").value = subscription?.memory_mode || (strategy.scope === "private" ? "personal" : "platform_only");
-  $("subscriptionExecutionEnabled").checked = Boolean(subscription?.execution_enabled); editor.scrollIntoView({ behavior:"smooth", block:"start" });
+  populateSubscriptionSymbolOptions(strategy, subscription);
+  $("subscriptionSymbolsDropdown").open = false;
+  const isPrivate = strategy.scope === "private";
+  $("subscriptionMemoryModeField")?.classList.toggle("hidden", !isPrivate);
+  $("platformMemoryNotice")?.classList.toggle("hidden", isPrivate);
+  $("subscriptionMemoryMode").value = isPrivate ? (subscription?.memory_mode || "personal") : "personal";
+  $("subscriptionExecutionEnabled").checked = Boolean(subscription?.execution_enabled);
+  $("subscriptionScheduleEnabled").checked = Boolean(Number(subscription?.schedule_enabled || 0));
+  $("subscriptionScheduleTimezone").value = subscription?.schedule_timezone || "Etc/GMT-3";
+  $("subscriptionOutsideWindowBehavior").value = subscription?.outside_window_behavior || "pause_all";
+  const weekdays = new Set(parseJsonField(subscription?.schedule_weekdays_json, [1,2,3,4,5]).map(Number));
+  document.querySelectorAll("[data-schedule-weekday]").forEach(input => { input.checked = weekdays.has(Number(input.dataset.scheduleWeekday)); });
+  renderSubscriptionScheduleWindows(parseJsonField(subscription?.schedule_windows_json, [{ start:"00:00", end:"23:59" }]));
+  syncSubscriptionScheduleVisibility();
+  openFormModal(editor);
+}
+
+function subscriptionScheduleSummary(subscription) {
+  if (!Number(subscription?.schedule_enabled)) return "跟随市场时间";
+  const days = parseJsonField(subscription.schedule_weekdays_json, []).length;
+  const windows = parseJsonField(subscription.schedule_windows_json, []);
+  return `${days} 天 · ${windows.map(item => `${item.start}–${item.end}`).join("、") || "未设置时段"}`;
+}
+
+function subscriptionMemoryModeLabel(mode) {
+  return ({
+    platform_only: "平台统一经验",
+    personal: "使用个人记忆",
+    shadow: "仅检索个人记忆，不注入推理",
+    off: "关闭记忆",
+    disabled: "关闭记忆",
+  })[mode] || "未设置记忆方式";
+}
+
+function renderSubscriptionScheduleWindows(windows) {
+  const host = $("subscriptionScheduleWindows");
+  if (!host) return;
+  const rows = Array.isArray(windows) && windows.length ? windows.slice(0, 6) : [{ start:"00:00", end:"23:59" }];
+  host.innerHTML = rows.map((window, index) => `<div class="schedule-window-row" data-schedule-window-row><label><span>开始</span><input type="time" data-schedule-window-start value="${escapeHtml(window.start || "00:00")}"></label><span class="schedule-window-separator">至</span><label><span>结束</span><input type="time" data-schedule-window-end value="${escapeHtml(window.end || "23:59")}"></label><button class="btn btn-danger-ghost btn-sm" type="button" data-remove-schedule-window aria-label="删除第 ${index + 1} 个时段"><i data-lucide="trash-2" size="14"></i></button></div>`).join("");
+  initIcons();
+}
+
+function selectedSubscriptionScheduleWindows() {
+  return [...document.querySelectorAll("[data-schedule-window-row]")].map(row => ({
+    start:row.querySelector("[data-schedule-window-start]")?.value || "",
+    end:row.querySelector("[data-schedule-window-end]")?.value || "",
+  }));
+}
+
+function syncSubscriptionScheduleVisibility() {
+  $("subscriptionScheduleSettings")?.classList.toggle("hidden", !$("subscriptionScheduleEnabled")?.checked);
+}
+
+function populateSubscriptionSymbolOptions(strategy, subscription = null) {
+  const host = $("subscriptionSymbolOptions");
+  if (!host) return;
+  const supported = parseJsonField(strategy?.symbols_json, []);
+  const selected = new Set(parseJsonField(subscription?.symbols_json, []));
+  const useAll = selected.size === 0;
+  host.innerHTML = `<label class="multi-select-option all-option"><input type="checkbox" data-subscription-symbol-all ${useAll ? "checked" : ""}><span>全部品种 <small>自动跟随策略</small></span></label>`
+    + supported.map(symbol => `<label class="multi-select-option"><input type="checkbox" data-subscription-symbol="${escapeHtml(symbol)}" ${selected.has(symbol) ? "checked" : ""}><span>${escapeHtml(symbol)}</span></label>`).join("");
+  updateSubscriptionSymbolSummary();
+}
+
+function selectedSubscriptionSymbols() {
+  if ($("subscriptionSymbolOptions")?.querySelector("[data-subscription-symbol-all]")?.checked) return [];
+  return [...document.querySelectorAll("[data-subscription-symbol]:checked")].map(input => input.dataset.subscriptionSymbol);
+}
+
+function updateSubscriptionSymbolSummary() {
+  const summary = $("subscriptionSymbolsSummary");
+  if (!summary) return;
+  const all = $("subscriptionSymbolOptions")?.querySelector("[data-subscription-symbol-all]")?.checked;
+  const selected = selectedSubscriptionSymbols();
+  summary.textContent = all || !selected.length ? "使用策略全部品种" : selected.length <= 3 ? selected.join("、") : `已选择 ${selected.length} 个品种`;
 }
 
 async function saveSubscriptionEditor() {
   const editor = $("subscriptionEditor"), id = Number(editor.dataset.subscriptionId || 0);
+  const executionEnabled = $("subscriptionExecutionEnabled").checked;
+  const otherActive = (state.strategySubscriptions || []).find(item => Number(item.execution_enabled) && Number(item.id) !== id);
+  let replaceActive = false;
+  if (executionEnabled && otherActive) {
+    replaceActive = confirm(`当前已有“${otherActive.strategy_title || `订阅 #${otherActive.id}`}”在自动推理。是否关闭原订阅并切换到当前策略？`);
+    if (!replaceActive) return;
+  }
+  const strategy = (state.strategies || []).find(item => Number(item.id) === Number(editor.dataset.strategyId));
   const body = { trading_account_id:Number($("subscriptionAccount").value), strategy_id:Number(editor.dataset.strategyId),
-    symbols:$("subscriptionSymbols").value.split(",").map(value => value.trim()).filter(Boolean), memory_mode:$("subscriptionMemoryMode").value,
-    execution_enabled:$("subscriptionExecutionEnabled").checked };
+    symbols:selectedSubscriptionSymbols(), memory_mode:strategy?.scope === "platform" ? "platform_only" : $("subscriptionMemoryMode").value,
+    execution_enabled:executionEnabled, replace_active:replaceActive,
+    schedule_enabled:$("subscriptionScheduleEnabled").checked,
+    schedule_timezone:$("subscriptionScheduleTimezone").value,
+    schedule_weekdays:[...document.querySelectorAll("[data-schedule-weekday]:checked")].map(input => Number(input.dataset.scheduleWeekday)),
+    schedule_windows:selectedSubscriptionScheduleWindows(),
+    outside_window_behavior:$("subscriptionOutsideWindowBehavior").value };
   await api(id ? `/api/ai/subscriptions/${id}` : "/api/ai/subscriptions", { method:id ? "PUT" : "POST", body });
-  editor.classList.add("hidden"); toast("订阅已保存", "success"); await loadStrategyCatalog(); await loadStatus();
+  closeFormModal(editor, false); toast("订阅已保存", "success"); await loadStrategyCatalog(); await loadStatus();
 }
 
-const RISK_LABELS = { ai_volume_min:"AI 建议最小手数", ai_volume_max:"AI 建议最大手数", ai_volume_step:"AI 建议手数步进", max_position_size:"最终最大手数", market_signal_drift_atr:"市价漂移 ATR", pending_price_deviation_pct:"挂单偏差百分比", pending_price_deviation_atr:"挂单偏差 ATR", broker_slippage_points:"成交滑点", max_spread_points:"最大点差", max_quote_age_seconds:"报价年龄", max_daily_open_count:"每日交易数", max_directional_exposure_lots:"同向敞口", max_drawdown_pct:"最大回撤", consecutive_loss_limit:"连续亏损", daily_loss_limit_pct:"每日亏损", max_risk_per_trade_pct:"单笔风险" };
+const RISK_LABELS = {
+  allowed_symbols:"允许交易品种", require_stop_loss:"强制止损", sl_atr_min:"最小止损距离", sl_atr_max:"最大止损距离", min_rr:"最低盈亏比",
+  pending_price_deviation_pct:"挂单价格偏离百分比", pending_price_deviation_atr:"挂单价格偏离 ATR", pending_valid_minutes:"挂单有效期",
+  ai_volume_min:"AI 建议最小手数", ai_volume_max:"AI 建议最大手数", ai_volume_step:"AI 建议手数步进", max_position_size:"账户单笔最大手数", max_risk_per_trade_pct:"单笔最大风险",
+  signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", market_signal_drift_atr:"市价信号漂移", broker_slippage_points:"成交滑点", weekend_close_minutes:"周末保护提前量",
+  max_directional_exposure_lots:"同向最大敞口", min_open_interval_seconds:"最小开仓间隔", max_daily_open_count:"每日开仓次数", dedup_window_seconds:"重复订单时间窗", dedup_price_atr:"重复订单价格距离",
+  daily_loss_limit_pct:"每日最大亏损", consecutive_loss_limit:"连续亏损次数", loss_cooldown_minutes:"连续亏损冷却", max_drawdown_pct:"最大回撤", min_margin_level_pct:"最低保证金水平", max_notional_exposure_pct:"最大名义敞口",
+  observation_hours:"新账户观察期", observation_max_lot:"观察期最大手数",
+};
+const RISK_GROUPS = [
+  ["入场与止损", ["require_stop_loss","sl_atr_min","sl_atr_max","min_rr","pending_valid_minutes"]],
+  ["手数与单笔风险", ["ai_volume_min","ai_volume_max","ai_volume_step","max_position_size","max_risk_per_trade_pct","observation_max_lot"]],
+  ["价格与成交", ["pending_price_deviation_pct","pending_price_deviation_atr","market_signal_drift_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds","signal_ttl_seconds","weekend_close_minutes"]],
+  ["频率与敞口", ["max_directional_exposure_lots","min_open_interval_seconds","max_daily_open_count","dedup_window_seconds","dedup_price_atr"]],
+  ["亏损与账户保护", ["daily_loss_limit_pct","consecutive_loss_limit","loss_cooldown_minutes","max_drawdown_pct","min_margin_level_pct","max_notional_exposure_pct","observation_hours"]],
+];
+const RISK_SAFETY_LABELS = {
+  lower:"数值越低越严格", higher:"数值越高越严格", subset:"只能缩小允许范围",
+  locked:"系统锁定", locked_true:"系统强制开启",
+};
+const RISK_ROLLOUT_LABELS = {
+  ownership:"策略与账户归属校验", entitlement:"会员权限校验", account_review:"账户审核状态校验",
+  kill_switch:"紧急停止开关", data_complete:"风控数据完整性", idempotency:"重复下单幂等保护", volume_bounds:"下单手数硬边界",
+  "R1.1_SYMBOL_NOT_ALLOWED":"交易品种白名单", "R1.4_STOP_LOSS_TOO_FAR":"止损距离上限", "R1.5_RR_TOO_LOW":"最低盈亏比",
+  "R1.7_PENDING_DEVIATION":"挂单价格偏离", "R2.1_DIRECTIONAL_EXPOSURE":"同向持仓敞口", "R2.2_MIN_OPEN_INTERVAL":"最小开仓间隔",
+  "R2.3_DAILY_OPEN_COUNT":"每日开仓次数", "R2.4_PRICE_TIME_DUPLICATE":"重复价格与时间窗口", "R3.1_DAILY_LOSS_LIMIT":"每日亏损上限",
+  "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损冷却", "R3.2_LOSS_COOLDOWN":"亏损后冷却", "R3.3_MAX_DRAWDOWN":"最大回撤",
+  "R3.4_MARGIN_LEVEL":"最低保证金水平", "R3.4_NOTIONAL_EXPOSURE":"最大名义敞口", "R4.2_WEEKEND_PROTECTION":"周末保护",
+  "R4.3_SIGNAL_EXPIRED":"信号有效期", "R4.4_QUOTE_STALE":"报价时效", "R4.5_SPREAD_TOO_WIDE":"最大点差", "R4.6_MARKET_SIGNAL_DRIFT":"市价信号漂移",
+};
+function riskRolloutLabel(code) { return RISK_ROLLOUT_LABELS[code] || "未命名风控规则"; }
+
+const RISK_DECISION_LABELS = {
+  "R5_SCHEMA_SYMBOL":"缺少交易品种", "R5_SCHEMA_ORDER_TYPE":"订单方向无效", "R5_SCHEMA_ENTRY_METHOD":"入场方式无效",
+  "R5_SCHEMA_AI_REQUIRED":"AI 订单必要字段不完整", "R5_SCHEMA_PENDING_PRICE":"挂单价格无效",
+  "R1_INSTRUMENT_DATA_INCOMPLETE":"品种交易参数不完整", "R1_SYMBOL_TRADE_DISABLED":"品种当前禁止交易",
+  "R1.1_SYMBOL_NOT_ALLOWED":"品种不在允许范围", "R1.2_STOP_LOSS_REQUIRED":"缺少止损",
+  "R1.3_SL_WIDEN_VOLUME_DOWN":"扩大止损并同步降低手数", "R1.4_STOP_LOSS_TOO_FAR":"止损距离超过上限",
+  "R1.5_TAKE_PROFIT_REQUIRED":"缺少止盈", "R1.5_RR_TOO_LOW":"盈亏比低于最低要求",
+  "R1.5_TP_TIER_UPGRADED":"改用满足盈亏比要求的更远止盈档位", "R1.6_SL_TP_DIRECTION":"止损或止盈方向错误",
+  "R1.7_PENDING_DEVIATION":"挂单价格偏离当前报价过大", "R1.7_PENDING_DIRECTION":"挂单方向与当前价格关系错误",
+  "R1.8_PENDING_TTL_DEFAULT":"使用默认挂单有效期", "R1.9_AI_VOLUME_OUT_OF_RANGE":"AI 建议手数超出平台范围",
+  "R1.9_BELOW_MINIMUM_AFTER_RISK":"风险调整后手数低于最小可交易手数", "R1.9_VOLUME_INCREASE_FORBIDDEN":"风控禁止放大 AI 建议手数",
+  "R1.9_VOLUME_INVALID":"订单手数无效", "R1.10_RISK_DATA_INVALID":"账户或品种风险数据无效",
+  "R1.10_REAL_RISK":"单笔实际风险校验通过", "R4_QUOTE_INVALID":"当前报价无效",
+  "R4.2_WEEKEND_PROTECTION":"周末保护时段禁止开仓", "R4.3_SIGNAL_EXPIRED":"推理信号已过期",
+  "R4.4_QUOTE_STALE":"MT5 报价已过期或时间异常", "R4.5_SPREAD_TOO_WIDE":"当前点差超过上限",
+  "R4.6_MARKET_SIGNAL_DRIFT":"市价偏离推理参考价过大", "R2.1_DIRECTIONAL_EXPOSURE":"同方向持仓敞口超过上限",
+  "R2.2_MIN_OPEN_INTERVAL":"距离上次开仓时间过短", "R2.3_DAILY_OPEN_COUNT":"当日开仓次数达到上限",
+  "R2.4_PRICE_TIME_DUPLICATE":"检测到重复价格和时间窗口订单", "R3.1_DAILY_LOSS_LIMIT":"达到每日亏损上限",
+  "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损触发冷却", "R3.2_LOSS_COOLDOWN":"账户仍处于亏损冷却期",
+  "R3.3_MAX_DRAWDOWN":"达到最大回撤上限", "R3.4_MARGIN_LEVEL":"保证金水平低于要求",
+  "R3.4_NOTIONAL_DATA_INCOMPLETE":"名义敞口数据不完整", "R3.4_NOTIONAL_EXPOSURE":"名义敞口超过上限",
+  "R3_ACCOUNT_HALTED":"账户风控已暂停", "R3_RISK_DATA_INCOMPLETE":"账户风险数据不完整",
+  "R6_ACCOUNT_NOT_FOUND":"未找到交易账户", "R6_ACCOUNT_REVIEW_REQUIRED":"交易账户尚未通过审核",
+  "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
+  "R6_USER_KILL_SWITCH":"账户紧急停止已开启", "R6.4_OBSERVATION_BELOW_MINIMUM":"观察期手数低于最小可交易手数",
+  "PX.3_BROKER_SLIPPAGE":"已应用经纪商滑点上限",
+};
+
+function riskDecisionLabel(code) { return RISK_DECISION_LABELS[code] || localizeReason(code) || "未说明原因"; }
+const RISK_DATA_REASON_LABELS = {
+  risk_snapshot_incomplete:"Bridge 风控快照不完整",
+  deal_cursor_gap:"成交增量游标出现断层，需要补齐缺失区间",
+  position_history_unavailable:"部分已平仓持仓明细暂时无法读取",
+  legacy_history_incomplete:"旧版历史数据不完整",
+};
+function riskDataIncompleteText(value) {
+  const reasons = String(value || "").split(",").map(item => item.trim()).filter(Boolean);
+  if (!reasons.length) return "账户或行情数据尚未完整";
+  return reasons.map(reason => {
+    if (reason.startsWith("unknown_deal_type:")) return `发现尚未识别的 MT5 资金类型（${reason.split(":")[1]}）`;
+    if (reason.startsWith("symbol_info_unavailable:")) return `无法读取品种 ${reason.split(":").slice(1).join(":")} 的合约参数`;
+    return RISK_DATA_REASON_LABELS[reason] || reason;
+  }).join("；");
+}
+function displayRiskNumber(value, digits = 2) {
+  const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits).replace(/\.00$/, "") : "--";
+}
+function riskRuleDescription(code, details = {}) {
+  const label = riskDecisionLabel(code);
+  if (code === "R1.5_RR_TOO_LOW") return `${label}：当前 ${displayRiskNumber(details.rr)}，最低要求 ${displayRiskNumber(details.minimum)}`;
+  if (code === "R1.5_TP_TIER_UPGRADED") return `${label}：TP${details.from_tier ?? "?"} → TP${details.to_tier ?? "?"}，调整后盈亏比 ${displayRiskNumber(details.rr)}`;
+  if (code === "R1.9_BELOW_MINIMUM_AFTER_RISK") return `${label}：计算结果 ${displayRiskNumber(details.volume)} 手，最低 ${displayRiskNumber(details.minimum)} 手`;
+  if (code === "R4.4_QUOTE_STALE") return `${label}：报价年龄 ${displayRiskNumber(details.quote_age_seconds, 3)} 秒，允许上限 ${displayRiskNumber(details.maximum_seconds)} 秒`;
+  if (code === "R1.7_PENDING_DEVIATION") return `${label}：偏离 ${displayRiskNumber(details.deviation)}，允许上限 ${displayRiskNumber(details.maximum)}`;
+  if (code === "R1.3_SL_WIDEN_VOLUME_DOWN") return `${label}：止损 ${displayRiskNumber(details.from_sl)} → ${displayRiskNumber(details.to_sl)}，手数 ${displayRiskNumber(details.from_volume)} → ${displayRiskNumber(details.to_volume)}`;
+  return label;
+}
+function rejectionRule(rules = [], fallbackCode = "") {
+  return rules.find(rule => rule?.outcome === "reject") || (fallbackCode ? { code:fallbackCode, details:{} } : null);
+}
+function resultRiskReason(result = {}) {
+  const rules = Array.isArray(result?.details?.rules) ? result.details.rules : [];
+  const rule = rejectionRule(rules, result.reject_code || (/^(?:R|PX)[A-Z0-9._-]+$/.test(result.message || "") ? result.message : ""));
+  return rule ? riskRuleDescription(rule.code, rule.details || {}) : "";
+}
+function rolloutStatusLabel(value) { return ({ completed:"已完成", succeeded:"成功", failed:"失败", running:"执行中", pending:"等待中" })[value] || value || "未执行"; }
 function formatRiskValue(key, value) { if (value == null) return "--"; if (key.endsWith("_pct")) return `${Number(value)}%`; if (key.endsWith("_ms")) return `${Number(value)} ms`; return String(value); }
 
-async function loadRiskCenter() {
-  const [riskData, executionData] = await Promise.all([api("/api/ai/risk-center"), api("/api/ai/executions")]);
-  const host = $("riskAccountsList");
-  const rows = riskData.accounts || [];
-  host.innerHTML = rows.length ? rows.map(row => {
-    const p = row.effective?.policy || {};
-    const editable = ["max_position_size","max_risk_per_trade_pct","market_signal_drift_atr","pending_price_deviation_pct","pending_price_deviation_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds"];
-    const pending = (row.pending_changes || []).map(change => `${RISK_LABELS[change.field_code] || change.field_code} → ${parseJsonField(change.new_value_json,null)}（${change.effective_at}）`).join("；");
-    const stateInfo = row.risk_state || {}, killEnabled = Boolean(stateInfo.user_kill_switch);
-    return `<article class="workspace-panel" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · ${escapeHtml(row.account.margin_mode)} · 身份 ${escapeHtml(row.account.review_status)}</p></div><div class="workspace-row-actions"><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(stateInfo.halt_status || '未初始化')}</span><button class="btn ${killEnabled ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${killEnabled ? '0' : '1'}">${killEnabled ? '解除紧急停止' : '紧急停止新开仓'}</button>${stateInfo.halt_status && stateInfo.halt_status !== 'active' ? `<button class="btn btn-secondary btn-sm" data-risk-recovery="${row.account.id}">申请恢复</button>` : ''}</div></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(stateInfo.halt_reason)}</span></div>` : ''}${pending ? `<div class="source-notice"><span><strong>待生效：</strong>${escapeHtml(pending)}</span></div>` : ''}<div class="risk-value-grid">${Object.keys(RISK_LABELS).slice(0,10).map(key => `<div class="risk-value"><span>${RISK_LABELS[key]} · 最终有效</span><strong>${escapeHtml(formatRiskValue(key,p[key]))}</strong></div>`).join("")}</div><details class="risk-user-editor"><summary>修改我的自定义风控</summary><p class="field-help">收紧立即生效；放宽进入冷却倒计时。AI 建议手数范围属于平台强制边界，不能由用户放宽。</p><div class="settings-grid compact">${editable.map(key => `<label><span>${RISK_LABELS[key]}</span><input type="number" step="any" data-user-risk-field="${key}" value="${escapeHtml(p[key] ?? '')}"></label>`).join("")}</div><div class="form-actions"><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存用户风控</button></div></details></article>`;
-  }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>账户通过 Bridge 自动验证后，这里会显示最终有效风控。</span></div>';
-  const firstPolicy = rows[0]?.effective?.policy || {};
-  $("priceExecutionRules").classList.remove("empty-state");
-  $("priceExecutionRules").innerHTML = `<div class="risk-value-grid">${["market_signal_drift_atr","pending_price_deviation_pct","pending_price_deviation_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds"].map(key => `<div class="risk-value"><span>${RISK_LABELS[key]}</span><strong>${escapeHtml(formatRiskValue(key,firstPolicy[key]))}</strong></div>`).join("")}</div>`;
-  renderExecutionDecisions(executionData.executions || []);
+function riskBoundaryText(key, control) {
+  if (control?.locked_value != null) return `平台锁定：${formatRiskValue(key, control.locked_value)}`;
+  if (control?.user_editable === false) return "平台管理，不可修改";
+  if (control?.allowed_min != null || control?.allowed_max != null) return `${control.allowed_min ?? "−∞"} ～ ${control.allowed_max ?? "+∞"}`;
+  return "按平台规则约束";
 }
 
-function renderExecutionDecisions(rows) {
+function renderRiskPolicyGroup(title, keys, row, metadata) {
+  const policy = row.effective?.policy || {}, accountValues = row.effective?.accountValues || {};
+  const platform = row.effective?.platformPolicy || {}, controls = row.effective?.controls || {};
+  return `<details class="risk-policy-group"><summary><span><strong>${escapeHtml(title)}</strong><small>${keys.length} 项规则</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="risk-rule-table"><div class="risk-rule-row risk-rule-head"><span>规则</span><span>我的设置</span><span>平台边界</span><span>最终生效</span></div>${keys.map(key => {
+    const meta = metadata[key] || {}, control = controls[key] || {}, own = accountValues[key];
+    const editable = meta.type === "number" && control.user_editable !== false && control.locked_value == null;
+    const ownControl = editable
+      ? `<input type="number" step="any" data-user-risk-field="${key}" value="${own == null ? "" : escapeHtml(own)}" placeholder="继承 ${escapeHtml(formatRiskValue(key, platform[key]))}" aria-label="${escapeHtml(RISK_LABELS[key] || key)}的用户设置">`
+      : `<span class="risk-inherited">${own == null ? "不可修改" : escapeHtml(formatRiskValue(key, own))}</span>`;
+    const boundary = meta.locked ? `平台强制：${formatRiskValue(key, platform[key])}` : riskBoundaryText(key, control);
+    return `<div class="risk-rule-row"><span class="risk-rule-name"><strong>${escapeHtml(RISK_LABELS[key] || meta.label || key)}</strong><small>${escapeHtml(meta.code || "")}</small></span><span>${ownControl}</span><span class="risk-boundary">${escapeHtml(boundary)}</span><strong class="risk-effective">${escapeHtml(formatRiskValue(key, policy[key]))}</strong></div>`;
+  }).join("")}</div></details>`;
+}
+
+async function loadRiskCenter() {
+  const filters = state.executionFilters;
+  let riskData = await api("/api/ai/risk-center");
+  if ((riskData.accounts || []).some(row => row.risk_state?.data_complete === false || Number(row.risk_state?.data_complete) === 0)) {
+    const refreshed = await api("/api/ai/risk-center/refresh", { method:"POST", body:{} });
+    if (refreshed.refreshed > 0) riskData = await api("/api/ai/risk-center");
+  }
+  const executionData = await api(`/api/ai/executions?page=${filters.page}&page_size=${filters.pageSize}`);
+  const host = $("riskAccountsList");
+  const rows = riskData.accounts || [];
+  const haltedRows = rows.filter(row => row.risk_state?.halt_status !== "active");
+  const pendingCount = rows.reduce((sum, row) => sum + (row.pending_changes || []).length, 0);
+  const incompleteRows = rows.filter(row => row.risk_state?.data_complete === false || Number(row.risk_state?.data_complete) === 0);
+  const overview = $("riskOverview");
+  if (overview) overview.innerHTML = `<div class="insight-item ${haltedRows.length ? 'danger' : 'success'}"><span>交易状态</span><strong>${haltedRows.length ? `${haltedRows.length} 个账户暂停` : '可以交易'}</strong><small>${haltedRows.length ? '请查看下方具体原因' : '未发现账户级停止条件'}</small></div><div class="insight-item"><span>交易账户</span><strong class="num">${rows.length}</strong><small>已登记账户</small></div><div class="insight-item ${pendingCount ? 'warning' : ''}"><span>待生效设置</span><strong class="num">${pendingCount}</strong><small>${pendingCount ? '放宽设置正在冷却' : '没有等待中的修改'}</small></div><div class="insight-item ${incompleteRows.length ? 'warning' : ''}"><span>数据完整性</span><strong>${incompleteRows.length ? `${incompleteRows.length} 个异常` : '正常'}</strong><small>账户与行情风控数据</small></div>`;
+  const statusHost = $("riskStatusList");
+  if (statusHost) statusHost.innerHTML = rows.length ? rows.map(row => {
+    const stateInfo = row.risk_state || {}, active = stateInfo.halt_status === "active", dataComplete = !(stateInfo.data_complete === false || Number(stateInfo.data_complete) === 0);
+    const reason = stateInfo.halt_reason === "R3_RISK_DATA_INCOMPLETE"
+      ? `风控数据不完整：${riskDataIncompleteText(stateInfo.data_incomplete_reason)}`
+      : stateInfo.halt_reason || (!dataComplete ? riskDataIncompleteText(stateInfo.data_incomplete_reason) : "当前没有触发停止交易的条件");
+    return `<article class="workspace-panel risk-status-card ${active && dataComplete ? 'is-safe' : 'is-alert'}" data-risk-status-account="${row.account.id}"><div class="risk-status-icon"><i data-lucide="${active && dataComplete ? 'shield-check' : 'shield-alert'}" size="22"></i></div><div class="risk-status-main"><div class="workspace-row-title">${escapeHtml(row.account.nickname || row.account.login_account)} <span class="status-chip ${active && dataComplete ? 'success' : 'danger'}">${active && dataComplete ? '允许交易' : '已暂停新开仓'}</span></div><p>${escapeHtml(reason)}</p><div class="workspace-row-meta"><span>${escapeHtml(row.account.broker_server)}</span><span>数据${dataComplete ? '完整' : '不完整'}</span><span>回撤 ${escapeHtml(stateInfo.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(stateInfo.consecutive_losses ?? '--')}</span></div></div><div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" type="button" data-open-workspace-tab="risk" data-open-workspace-target="rules">查看规则</button><button class="btn ${stateInfo.user_kill_switch ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${stateInfo.user_kill_switch ? '0' : '1'}">${stateInfo.user_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></article>`;
+  }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>连接 Bridge 后会在这里显示账户交易状态。</span></div>';
+  host.innerHTML = rows.length ? rows.map(row => {
+    const pending = (row.pending_changes || []).map(change => `${RISK_LABELS[change.field_code] || change.field_code} → ${parseJsonField(change.new_value_json,null)}（${change.effective_at}）`).join("；");
+    const stateInfo = row.risk_state || {}, killEnabled = Boolean(stateInfo.user_kill_switch);
+    const haltText = stateInfo.halt_reason === "R3_RISK_DATA_INCOMPLETE" ? `风控数据不完整：${riskDataIncompleteText(stateInfo.data_incomplete_reason)}` : riskDecisionLabel(stateInfo.halt_reason);
+    return `<article class="workspace-panel risk-rule-account" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · 先查看最终有效值，需要调整时再展开对应规则组。</p></div><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${stateInfo.halt_status === 'active' ? '允许交易' : '已暂停'}</span></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(haltText)}；将在下一次完整风险快照校验通过后解除。</span></div>` : ''}${pending ? `<div class="source-notice"><span><strong>待生效：</strong>${escapeHtml(pending)}</span></div>` : ''}<div class="risk-policy-groups">${RISK_GROUPS.map(([title, keys]) => renderRiskPolicyGroup(title, keys, row, riskData.rule_metadata || {})).join("")}</div><div class="risk-save-bar"><p>留空表示继承平台值。收紧立即生效；放宽需经过冷却期。</p><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存我的规则</button></div></article>`;
+  }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>账户通过 Bridge 自动验证后，这里会显示最终有效风控。</span></div>';
+  renderExecutionDecisions(executionData.executions || [], executionData.pagination || {});
+}
+
+async function loadExecutionDecisions() {
+  const filters = state.executionFilters;
+  const data = await api(`/api/ai/executions?page=${filters.page}&page_size=${filters.pageSize}`);
+  renderExecutionDecisions(data.executions || [], data.pagination || {});
+}
+
+function renderExecutionDecisions(rows, pagination = {}) {
   const host = $("executionDecisionList"); if (!host) return;
-  host.innerHTML = rows.length ? rows.slice(0,20).map(row => {
+  state.executionFilters.page = Number(pagination.page || state.executionFilters.page || 1);
+  state.executionFilters.total = Number(pagination.total || rows.length);
+  host.innerHTML = rows.length ? rows.map(row => {
     const original = parseJsonField(row.original_order_json, {}), approved = parseJsonField(row.approved_order_json, {}), result = parseJsonField(row.result_json, {}), rules = parseJsonField(row.rule_results_json, []);
     const aiVolume = original.volume ?? original.lot ?? "--", finalVolume = approved.volume ?? approved.lot ?? "--";
     const refPrice = approved.reference_price ?? original.reference_price ?? original.price ?? "--", actual = result.price ?? result.price_open ?? "--";
-    const adjustments = rules.filter(rule => rule.outcome === "adjust" || rule.adjusted).map(rule => rule.code).join("、") || "无";
-    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">#${row.id} ${escapeHtml(row.symbol || '')} <span class="status-chip ${row.decision_status === 'approve' ? 'success' : 'danger'}">${escapeHtml(row.decision_status || row.status)}</span></div><div class="workspace-row-meta"><span>AI 建议 ${escapeHtml(aiVolume)} 手</span><span>风险上限 ${escapeHtml(approved.risk_volume_cap ?? '--')}</span><span>最终 ${escapeHtml(finalVolume)} 手</span><span>规则调整：${escapeHtml(adjustments)}</span><span>参考价 ${escapeHtml(refPrice)}</span><span>实际价 ${escapeHtml(actual)}</span></div></div></article>`;
+    const adjustmentRules = rules.filter(rule => rule.outcome === "adjust" || rule.adjusted);
+    const adjustments = adjustmentRules.map(rule => riskRuleDescription(rule.code, rule.details || {})).join("；") || "无";
+    const rejectedRule = rejectionRule(rules, row.reject_code || row.error_code || result.reject_code || "");
+    const reason = rejectedRule ? riskRuleDescription(rejectedRule.code, rejectedRule.details || {}) : riskDecisionLabel(result.error || result.message || "");
+    const riskPass = rules.find(rule => rule.code === "R1.10_REAL_RISK");
+    const riskCap = riskPass?.details?.risk_cap ?? approved.risk_volume_cap ?? "--";
+    const decision = row.decision_status || row.status || "unknown";
+    const decisionText = ({ pass:"通过", adjust:"调整后通过", reject:"拒绝", success:"执行成功", rejected:"拒绝", failed:"失败", uncertain:"待确认" })[decision] || "未完成";
+    const decisionClass = ["pass","adjust","success"].includes(decision) ? "success" : decision === "reject" || decision === "rejected" ? "danger" : "warning";
+    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">#${row.id} ${escapeHtml(row.symbol || '')} <span class="status-chip ${decisionClass}">${escapeHtml(decisionText)}</span></div>${reason && reason !== "未说明原因" ? `<div class="execution-reason">${escapeHtml(reason)}</div>` : ''}<div class="workspace-row-meta"><span>AI 建议 ${escapeHtml(aiVolume)} 手</span><span>风险上限 ${escapeHtml(riskCap)}</span><span>最终 ${escapeHtml(finalVolume)} 手</span><span>规则调整：${escapeHtml(adjustments)}</span><span>参考价 ${escapeHtml(refPrice)}</span><span>实际价 ${escapeHtml(actual)}</span></div></div></article>`;
   }).join("") : '<div class="empty-state"><strong>暂无执行决策</strong><span>通过风控闸门的下单请求会在这里留下完整对照。</span></div>';
+  renderPager("executionDecisionPager", state.executionFilters.page, state.executionFilters.pageSize, state.executionFilters.total, "executions");
 }
 
 function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", deferred:"稍后处理" })[value] || value; }
 async function loadReviewMemory() {
   const query = state.reviewFilter ? `?status=${encodeURIComponent(state.reviewFilter)}` : "";
-  const [reviewData, memoryData, profileData, featureData] = await Promise.all([api(`/api/ai/reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
+  const isAdmin = state.user?.role === "admin";
+  const [reviewData, memoryData, profileData, featureData] = isAdmin
+    ? await Promise.all([api(`/api/ai/reviews${query}`), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
+    : await Promise.all([api(`/api/ai/reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
   state.reviewCases = reviewData.cases || [];
-  $("sharedCredentialNotice")?.classList.toggle("hidden", (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
+  if (!state.reviewFilter) state.reviewOverview = {
+    pending: state.reviewCases.filter(item => ["draft","edited","evidence_pending","ready","generating"].includes(item.status)).length,
+    issues: state.reviewCases.filter(item => item.status === "needs_revision").length,
+  };
+  setText("reviewPendingStat", state.reviewOverview.pending);
+  setText("reviewIssueStat", state.reviewOverview.issues);
+  $("sharedCredentialNotice")?.classList.toggle("hidden", isAdmin || (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
   const userFlags = featureData.flags?.user || {};
   const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled", userPairedExperimentFlag:"paired_experiment_enabled" };
   for (const [id,key] of Object.entries(featureInputs)) if ($(id)) {
@@ -1447,7 +1879,9 @@ async function loadReviewMemory() {
     // silently become explicit user consent when this form is saved.
     $(id).checked = key === "paired_experiment_enabled" ? userFlags[key] === true : userFlags[key] ?? true;
   }
-  renderReviewCases(); renderMemoryItems(memoryData.items || [], memoryData.settings || {});
+  renderReviewCases();
+  if (isAdmin) renderPlatformExperience(memoryData.items || [], memoryData.policies || []);
+  else renderMemoryItems(memoryData.items || [], memoryData.settings || {});
 }
 
 async function saveUserFeatureFlags() {
@@ -1459,7 +1893,21 @@ async function saveUserFeatureFlags() {
 
 function renderReviewCases() {
   const host = $("reviewCaseList"); if (!host) return;
-  host.innerHTML = state.reviewCases.length ? state.reviewCases.map(item => `<button class="workspace-row review-case-button ${Number(item.id) === Number(state.selectedReviewId) ? 'selected' : ''}" data-review-id="${Number(item.id)}"><div class="workspace-row-main"><div class="workspace-row-title">复盘 #${item.id}<span class="status-chip ${item.status === 'approved' ? 'success' : item.status === 'failed' || item.status === 'incomplete' ? 'danger' : 'warning'}">${reviewStatusLabel(item.status)}</span></div><div class="workspace-row-meta"><span>信号 #${item.signal_id || '--'}</span><span>账户 #${item.trading_account_id}</span><span>版本 #${item.current_version_id || '--'}</span><span>流程问题：${escapeHtml(item.trade_process_issue_status)}</span></div></div></button>`).join("") : '<div class="workspace-panel empty-state"><strong>暂无复盘</strong><span>已平仓且证据完整的订单会自动进入复盘队列。</span></div>';
+  host.innerHTML = state.reviewCases.length ? state.reviewCases.map(item => `<button class="workspace-row review-case-button ${Number(item.id) === Number(state.selectedReviewId) ? 'selected' : ''}" data-review-id="${Number(item.id)}"><div class="review-case-leading"><i data-lucide="${item.status === 'approved' ? 'check-circle-2' : item.status === 'needs_revision' ? 'circle-alert' : 'clock-3'}" size="17"></i></div><div class="workspace-row-main"><div class="workspace-row-title">复盘 #${item.id}<span class="status-chip ${item.status === 'approved' ? 'success' : item.status === 'failed' || item.status === 'incomplete' ? 'danger' : 'warning'}">${reviewStatusLabel(item.status)}</span></div><div class="workspace-row-meta"><span>信号 #${item.signal_id || '--'}</span><span>账户 #${item.trading_account_id}</span><span>版本 #${item.current_version_id || '--'}</span></div></div><i data-lucide="chevron-right" size="16"></i></button>`).join("") : '<div class="workspace-panel empty-state"><strong>暂无复盘</strong><span>已平仓且证据完整的订单会自动进入复盘队列。</span></div>';
+  initIcons();
+}
+
+function syncReviewEditorFromFields() {
+  const editor = $("reviewContentEditor");
+  if (!editor) return;
+  const content = parseJsonField(editor.value, {});
+  document.querySelectorAll("[data-review-field]").forEach(input => {
+    const key = input.dataset.reviewField;
+    if (["strengths","lessons"].includes(key)) content[key] = input.value.split("\n").map(value => value.trim()).filter(Boolean);
+    else if (key === "confidence") content[key] = Number(input.value);
+    else content[key] = input.value;
+  });
+  editor.value = JSON.stringify(content, null, 2);
 }
 
 async function openReviewDetail(id) {
@@ -1469,40 +1917,63 @@ async function openReviewDetail(id) {
   const current = (review.versions || []).find(v => Number(v.id) === Number(review.current_version_id)) || review.versions?.at(-1);
   const evidence = review.evidence || {}, outcome = evidence.post_trade?.outcome || {}, snapshot = evidence.inference_time?.snapshot || {};
   const content = current?.content || {};
-  detail.innerHTML = `<div class="section-heading"><div><h2>复盘 #${review.id}</h2><p>证据只读 · 当前版本 ${current?.version_no || '--'} · ${reviewStatusLabel(review.status)}</p></div>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry">重试生成</button>' : ''}</div>
+  const issueSummary = (content.trade_process_issues || []).map(item => item.description || item.code).filter(Boolean);
+  const isAdmin = state.user?.role === "admin";
+  const lessonHelp = isAdmin ? "每行一条；确认后先进入平台经验候选区，发布后才用于平台策略" : "每行一条，将用于生成个人记忆";
+  const approveLabel = isAdmin ? "内容准确并加入平台经验候选" : "内容准确并加入记忆";
+  detail.innerHTML = `<div class="section-heading"><div><h2>复盘 #${review.id}</h2><p>当前版本 ${current?.version_no || '--'} · ${reviewStatusLabel(review.status)}</p></div>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry">重试生成</button>' : ''}</div>
     ${review.evidence_status !== 'complete' ? `<div class="source-notice"><span><strong>证据缺失：</strong>${escapeHtml(review.evidence_reason || '关键证据不完整')}</span></div>` : ''}
-    <div class="review-evidence"><div><span>信号 / 策略</span><strong>#${review.signal_id || '--'} / #${snapshot.strategy_id || '--'}</strong></div><div><span>模型来源</span><strong>${escapeHtml(snapshot.credential_source || '--')} · ${escapeHtml(snapshot.model_name || '--')}</strong></div><div><span>交易结果</span><strong>净利润 ${escapeHtml(outcome.net_profit ?? '--')} · 手数 ${escapeHtml(outcome.closed_volume ?? '--')}</strong></div><div><span>证据哈希</span><strong>${escapeHtml(snapshot.content_hash || '--')}</strong></div></div>
-    <label><span>复盘正文（结构化 JSON）</span><textarea id="reviewContentEditor" class="review-editor" ${current ? '' : 'disabled'}>${escapeHtml(JSON.stringify(content,null,2))}</textarea></label>
-    <div class="workspace-row-meta"><span>交易流程问题：${escapeHtml(review.trade_process_issue_status)}</span><span>复盘内容确认：${escapeHtml(review.review_content_status)}</span><span>Token 由模型使用日志记录</span></div>
-    ${current ? `<div class="form-actions"><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}">内容准确并加入记忆</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">内容有问题，继续修改</button><button class="btn btn-secondary" data-review-action="defer" data-version-id="${current.id}">稍后处理</button></div>` : ''}`;
+    <div class="review-highlight"><span>交易结果</span><strong>净利润 ${escapeHtml(outcome.net_profit ?? '--')} · ${escapeHtml(outcome.closed_volume ?? '--')} 手</strong><small>盈利与否不直接代表决策质量</small></div>
+    <div class="review-structured-form"><label><span>复盘结论</span><textarea data-review-field="summary" rows="3" ${current ? '' : 'disabled'}>${escapeHtml(content.summary || '')}</textarea></label><div class="settings-grid compact"><label><span>决策质量</span><select data-review-field="decision_quality" ${current ? '' : 'disabled'}><option value="good" ${content.decision_quality === 'good' ? 'selected' : ''}>良好</option><option value="mixed" ${content.decision_quality === 'mixed' ? 'selected' : ''}>有得有失</option><option value="poor" ${content.decision_quality === 'poor' ? 'selected' : ''}>需要改进</option><option value="insufficient_evidence" ${content.decision_quality === 'insufficient_evidence' ? 'selected' : ''}>证据不足</option></select></label><label><span>结论置信度</span><input data-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${current ? '' : 'disabled'}></label></div><label><span>交易结果说明</span><textarea data-review-field="outcome_summary" rows="2" ${current ? '' : 'disabled'}>${escapeHtml(content.outcome_summary || '')}</textarea></label>${issueSummary.length ? `<div class="review-issues"><span>发现的问题</span>${issueSummary.map(item => `<p><i data-lucide="circle-alert" size="14"></i>${escapeHtml(item)}</p>`).join('')}</div>` : '<div class="review-issues is-clear"><span>发现的问题</span><p><i data-lucide="check" size="14"></i>未记录明确的交易流程问题</p></div>'}<div class="review-form-columns"><label><span>做得好的地方</span><textarea data-review-field="strengths" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.strengths || []).join('\n'))}</textarea><small>每行一条</small></label><label><span>后续经验</span><textarea data-review-field="lessons" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.lessons || []).join('\n'))}</textarea><small>${escapeHtml(lessonHelp)}</small></label></div></div>
+    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="file-search" size="15"></i><strong>查看推理证据与原始数据</strong><small>证据只读，原始 JSON 仅供高级检查</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>信号 / 策略</span><strong>#${review.signal_id || '--'} / #${snapshot.strategy_id || '--'}</strong></div><div><span>模型来源</span><strong>${escapeHtml(snapshot.credential_source || '--')} · ${escapeHtml(snapshot.model_name || '--')}</strong></div><div><span>交易结果</span><strong>净利润 ${escapeHtml(outcome.net_profit ?? '--')} · 手数 ${escapeHtml(outcome.closed_volume ?? '--')}</strong></div><div><span>证据哈希</span><strong>${escapeHtml(snapshot.content_hash || '--')}</strong></div></div><div class="workspace-row-meta"><span>交易流程问题：${escapeHtml(review.trade_process_issue_status)}</span><span>复盘内容确认：${escapeHtml(review.review_content_status)}</span></div><label><span>原始结构化内容</span><textarea id="reviewContentEditor" class="review-editor compact" readonly>${escapeHtml(JSON.stringify(content,null,2))}</textarea></label></div></details>
+    ${current ? `<div class="form-actions review-actions"><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}">${escapeHtml(approveLabel)}</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">内容有问题，继续修改</button><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button></div>` : ''}`;
+  initIcons();
 }
 
 function renderMemoryItems(items, settings) {
   if ($("memoryEnabled")) $("memoryEnabled").checked = settings.enabled !== false;
+  setText("memoryActiveStat", items.filter(item => item.status === "active").length);
   const host = $("memoryItemsList"); if (!host) return;
-  host.innerHTML = items.length ? items.map(item => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.symbol || '通用经验')} · ${escapeHtml(item.timeframe || '全周期')} <span class="status-chip ${item.status === 'active' ? 'success' : 'warning'}">${escapeHtml(item.status)}</span></div><div class="workspace-row-meta"><span>${escapeHtml(item.lesson_text)}</span><span>${Number(item.token_count)} tokens</span><span>来源复盘版本 #${item.review_version_id}</span></div></div><div class="workspace-row-actions">${item.status === 'duplicate_candidate' ? `<button class="btn btn-secondary btn-sm" data-memory-action="activate" data-memory-id="${item.id}">确认启用</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}">撤销</button>` : ''}</div></article>`).join("") : '<div class="empty-state"><strong>还没有确认的经验</strong><span>确认一条复盘后，系统会生成可撤销的个人经验。</span></div>';
+  const statusLabels = { active:"正在使用", duplicate_candidate:"待确认", revoked:"已撤销", stale:"待更新" };
+  host.innerHTML = items.length ? items.map(item => `<article class="workspace-row memory-card"><div class="memory-card-icon"><i data-lucide="lightbulb" size="17"></i></div><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.symbol || '通用经验')} · ${escapeHtml(item.timeframe || '全周期')} <span class="status-chip ${item.status === 'active' ? 'success' : 'warning'}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div><p class="memory-lesson">${escapeHtml(item.lesson_text)}</p><div class="workspace-row-meta"><span>${Number(item.token_count)} tokens</span><span>来源复盘版本 #${item.review_version_id}</span></div></div><div class="workspace-row-actions">${item.status === 'duplicate_candidate' ? `<button class="btn btn-secondary btn-sm" data-memory-action="activate" data-memory-id="${item.id}">确认启用</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}">撤销</button>` : ''}</div></article>`).join("") : '<div class="empty-state"><strong>还没有确认的经验</strong><span>确认一条复盘后，系统会生成可撤销的个人经验。</span></div>';
+  initIcons();
+}
+
+function renderPlatformExperience(items, policies) {
+  setText("memoryActiveStat", items.filter(item => item.status === "active").length);
+  const policyHost = $("platformExperiencePolicies");
+  if (policyHost) policyHost.innerHTML = policies.length ? policies.map(policy => `<article class="platform-experience-policy" data-platform-policy-strategy="${Number(policy.strategy_id)}"><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>策略经验模式 · 版本 ${Number(policy.policy_version || 1)}</small></div><select aria-label="${escapeHtml(policy.strategy_title)}的平台经验模式" data-platform-policy-mode><option value="off" ${policy.mode === 'off' ? 'selected' : ''}>关闭</option><option value="shadow" ${policy.mode === 'shadow' ? 'selected' : ''}>影子评估</option><option value="active" ${policy.mode === 'active' ? 'selected' : ''}>正式启用</option></select><button class="btn btn-secondary btn-sm" data-platform-policy-save>保存</button></article>`).join("") : '<div class="empty-state"><strong>暂无平台策略</strong><span>创建平台策略后可在这里配置统一经验。</span></div>';
+  const host = $("memoryItemsList"); if (!host) return;
+  const labels = { candidate:"待发布", active:"已发布", revoked:"已撤销" };
+  host.innerHTML = items.length ? items.map(item => `<article class="workspace-row memory-card"><div class="memory-card-icon"><i data-lucide="library-big" size="17"></i></div><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} <span class="status-chip ${item.status === 'active' ? 'success' : item.status === 'revoked' ? 'danger' : 'warning'}">${escapeHtml(labels[item.status] || item.status)}</span></div><p class="memory-lesson">${escapeHtml(item.lesson_text)}</p><div class="workspace-row-meta"><span>来源复盘版本 #${item.review_version_id}</span>${item.platform_version ? `<span>平台版本 ${Number(item.platform_version)}</span>` : ''}</div></div><div class="workspace-row-actions">${item.status === 'candidate' ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}">发布</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}">撤销</button>` : ''}</div></article>`).join("") : '<div class="empty-state"><strong>暂无平台经验候选</strong><span>管理员确认平台策略复盘后，市场相关经验会先进入候选区。</span></div>';
+  initIcons();
 }
 
 async function loadAdminRiskCenter() {
   const [data, rolloutData] = await Promise.all([api("/api/ai/admin/risk-center"), api("/api/ai/admin/rollout-health")]); state.globalRiskSnapshot = data;
   const raw = parseJsonField(data.platform_policy_version?.config_json, {}), current = { ...(data.defaults || {}), ...(raw.values || raw.defaults || raw) }, controls = raw.controls || {}, meta = data.rule_metadata || {};
   const editable = Object.keys(data.defaults || {}).filter(key => typeof data.defaults[key] === "number");
-  $("globalRiskEditor").innerHTML = `<section class="workspace-panel">${editable.map(key => { const control = controls[key] || {}; return `<div class="global-risk-row"><div><strong>${escapeHtml(RISK_LABELS[key] || key)}</strong><div class="workspace-row-meta">${escapeHtml(meta[key]?.safety_direction || '平台规则')} · ${meta[key]?.locked ? '系统强制锁定' : '管理员可控'}</div></div><label>默认值<input data-global-risk-field="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(current[key])}"></label><label>范围下限<input data-global-risk-min="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_min ?? meta[key]?.allowed_min ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label>范围上限<input data-global-risk-max="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_max ?? meta[key]?.allowed_max ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label>锁定值<input data-global-risk-lock="${escapeHtml(key)}" type="number" step="any" placeholder="不锁定" value="${escapeHtml(control.locked_value ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label></div>`; }).join("")}</section>`;
-  $("adminRiskAccounts").innerHTML = (data.accounts || []).map(account => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.nickname || account.login_account)} <span class="status-chip ${account.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(account.halt_status || '未初始化')}</span></div><div class="workspace-row-meta"><span>回撤 ${escapeHtml(account.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(account.consecutive_losses ?? '--')}</span><span>冷却至 ${escapeHtml(account.cooldown_until || '--')}</span><span>Kill Switch ${account.user_kill_switch ? '开启' : '关闭'}</span><span>数据 ${account.data_complete ? '完整' : '不完整'}</span></div></div></article>`).join("") || '<div class="empty-state">暂无账户风险状态</div>';
+  const renderGlobalRiskRow = key => { const control = controls[key] || {}, direction = RISK_SAFETY_LABELS[meta[key]?.safety_direction] || "平台规则"; return `<details class="global-risk-row"><summary><span class="global-risk-name"><strong>${escapeHtml(RISK_LABELS[key] || key)}</strong><small>${escapeHtml(direction)} · ${meta[key]?.locked ? '系统强制，不可放宽' : `当前默认 ${escapeHtml(current[key])}`}</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="global-risk-fields"><label><span>平台默认值</span><input data-global-risk-field="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(current[key])}"></label><label><span>用户允许的最小值</span><input data-global-risk-min="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_min ?? meta[key]?.allowed_min ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label><span>用户允许的最大值</span><input data-global-risk-max="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_max ?? meta[key]?.allowed_max ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label><span>平台锁定值</span><input data-global-risk-lock="${escapeHtml(key)}" type="number" step="any" placeholder="不锁定" value="${escapeHtml(control.locked_value ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label></div></details>`; };
+  $("globalRiskEditor").innerHTML = `<div class="global-risk-groups">${RISK_GROUPS.map(([title, keys], index) => { const rows = keys.filter(key => editable.includes(key)); return rows.length ? `<details class="workspace-panel global-risk-group" ${index === 0 ? 'open' : ''}><summary><span><strong>${escapeHtml(title)}</strong><small>${rows.length} 项平台规则</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="global-risk-group-body">${rows.map(renderGlobalRiskRow).join("")}</div></details>` : ""; }).join("")}</div>`;
+  $("adminRiskAccounts").innerHTML = (data.accounts || []).map(account => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.nickname || account.login_account)} <span class="status-chip ${account.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(account.halt_status || '未初始化')}</span></div><div class="workspace-row-meta"><span>回撤 ${escapeHtml(account.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(account.consecutive_losses ?? '--')}</span><span>冷却至 ${escapeHtml(account.cooldown_until || '--')}</span><span>Kill Switch ${account.user_kill_switch ? '开启' : '关闭'}</span><span>数据 ${account.data_complete ? '完整' : `不完整：${escapeHtml(riskDataIncompleteText(account.data_incomplete_reason))}`}</span></div></div></article>`).join("") || '<div class="empty-state">暂无账户风险状态</div>';
   const global = data.global_control || {}, globalEnabled = Boolean(global.global_kill_switch);
   $("globalKillSwitchBtn").textContent = globalEnabled ? "解除平台紧急停止" : "紧急停止所有新开仓";
   $("globalKillSwitchBtn").dataset.enabled = globalEnabled ? "0" : "1";
   $("globalKillSwitchBtn").classList.toggle("btn-danger", !globalEnabled);
   $("globalKillSwitchMeta").innerHTML = `<span>当前：${globalEnabled ? '已停止新开仓' : '正常'}</span><span>原因：${escapeHtml(global.reason || '--')}</span><span>更新时间：${escapeHtml(global.updated_at || '--')}</span>`;
-  $("adminRecoveryList").innerHTML = (data.recoveries || []).map(item => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.user_nickname || item.user_email || `用户 #${item.user_id}`)} · ${escapeHtml(item.account_nickname || item.login_account)}</div><div class="workspace-row-meta"><span>申请时间 ${escapeHtml(item.created_at)}</span><span>说明：${escapeHtml(item.reason)}</span></div></div><div class="workspace-row-actions"><button class="btn btn-primary btn-sm" data-recovery-review="approve" data-recovery-id="${item.id}">批准恢复</button><button class="btn btn-danger btn-sm" data-recovery-review="reject" data-recovery-id="${item.id}">拒绝</button></div></article>`).join("") || '<div class="empty-state">暂无待审核恢复申请</div>';
   const health = rolloutData.health || {}, globalFlags = (health.feature_flags || []).find(item => item.scope === "global") || {};
   const globalInputs = { globalReviewGenerationFlag:"review_generation_enabled", globalExperienceMemoryFlag:"experience_memory_enabled", globalMemoryCompressionFlag:"memory_compression_enabled", globalRetrievalShadowFlag:"retrieval_shadow_enabled", globalPairedExperimentFlag:"paired_experiment_enabled" };
   for (const [id,key] of Object.entries(globalInputs)) if ($(id)) $(id).checked = Boolean(globalFlags[key]);
   const metrics = health.metrics || {};
-  $("rolloutHealthSummary").innerHTML = `<span>告警 ${Number(health.alerts?.length || 0)}</span><span>不确定订单 ${Number(metrics.uncertain?.count || 0)}</span><span>最老不确定 ${Number(metrics.uncertain?.oldest_seconds || 0)} 秒</span><span>Outcome 积压 ${Number(metrics.outcome_backlog?.backlog || 0)}</span><span>凭据迁移 ${escapeHtml(health.credential_migration?.status || '未执行')}</span>`;
+  const globalOverview = $("globalRiskOverview");
+  const exceptionCount = Number((data.exceptions || []).length);
+  const haltedCount = (data.accounts || []).filter(account => account.halt_status !== "active").length;
+  if (globalOverview) globalOverview.innerHTML = `<div class="insight-item ${globalEnabled ? 'danger' : 'success'}"><span>平台新开仓</span><strong>${globalEnabled ? '已紧急停止' : '正常运行'}</strong><small>${globalEnabled ? escapeHtml(global.reason || '管理员已停止全部新开仓') : '全局紧急停止未开启'}</small></div><div class="insight-item ${exceptionCount ? 'warning' : ''}"><span>异常账户</span><strong class="num">${exceptionCount}</strong><small>${exceptionCount ? '需要管理员处理' : '没有身份或绑定异常'}</small></div><div class="insight-item ${haltedCount ? 'warning' : ''}"><span>账户级暂停</span><strong class="num">${haltedCount}</strong><small>由账户风控状态决定</small></div><div class="insight-item ${Number(health.alerts?.length || 0) ? 'danger' : ''}"><span>系统告警</span><strong class="num">${Number(health.alerts?.length || 0)}</strong><small>风控与任务运行健康度</small></div>`;
+  $("rolloutHealthSummary").innerHTML = `<span>告警 ${Number(health.alerts?.length || 0)}</span><span>不确定订单 ${Number(metrics.uncertain?.count || 0)}</span><span>最老不确定 ${Number(metrics.uncertain?.oldest_seconds || 0)} 秒</span><span>结果归因积压 ${Number(metrics.outcome_backlog?.backlog || 0)}</span><span>凭据迁移 ${escapeHtml(rolloutStatusLabel(health.credential_migration?.status))}</span>`;
   const rolloutHost = $("riskRuleRolloutList");
-  if (rolloutHost) rolloutHost.innerHTML = (health.risk_rule_rollouts || []).map(rule => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(rule.rule_code)} ${rule.forced_enforce ? '<span class="status-chip danger">强制</span>' : '<span class="status-chip info">可调</span>'}</div><div class="workspace-row-meta"><span>${rule.forced_enforce ? '系统安全边界，不允许影子放行' : 'Shadow 仅记录，Enforce 正式拦截'}</span><span>更新 ${escapeHtml(rule.updated_at || '--')}</span></div></div><div class="workspace-row-actions"><select data-risk-rollout="${escapeHtml(rule.rule_code)}" ${rule.forced_enforce ? 'disabled' : ''}><option value="enforce" ${rule.mode === 'enforce' ? 'selected' : ''}>Enforce</option><option value="shadow" ${rule.mode === 'shadow' ? 'selected' : ''}>Shadow</option></select></div></article>`).join("") || '<div class="empty-state">暂无规则灰度数据</div>';
+  if (rolloutHost) rolloutHost.innerHTML = (health.risk_rule_rollouts || []).map(rule => `<article class="workspace-row risk-rollout-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(riskRolloutLabel(rule.rule_code))} ${rule.forced_enforce ? '<span class="status-chip danger">强制规则</span>' : '<span class="status-chip info">可调规则</span>'}</div><div class="workspace-row-meta"><span>${rule.forced_enforce ? '系统安全边界，必须正式拦截' : '可在正式拦截与仅观察之间切换'}</span><span class="internal-rule-code">内部编号 ${escapeHtml(rule.rule_code)}</span><span>更新 ${escapeHtml(rule.updated_at || '--')}</span></div></div><div class="workspace-row-actions"><select aria-label="${escapeHtml(riskRolloutLabel(rule.rule_code))}的运行模式" data-risk-rollout="${escapeHtml(rule.rule_code)}" ${rule.forced_enforce ? 'disabled' : ''}><option value="enforce" ${rule.mode === 'enforce' ? 'selected' : ''}>正式拦截</option><option value="shadow" ${rule.mode === 'shadow' ? 'selected' : ''}>仅观察，不拦截</option></select></div></article>`).join("") || '<div class="empty-state">暂无规则灰度数据</div>';
   renderAccountExceptions(data.exceptions || []);
+  initIcons();
 }
 
 async function saveGlobalFeatureFlags() {
@@ -1563,6 +2034,21 @@ function setModelStrategySubtab(target) {
   });
 }
 
+function setWorkspaceSubtab(group, target) {
+  document.querySelectorAll(`[data-workspace-tab="${group}"]`).forEach(button => {
+    const active = button.dataset.workspaceTarget === target;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll(`[data-workspace-panel="${group}"]`).forEach(panel => {
+    const active = panel.dataset.workspaceView === target;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  initIcons();
+}
+
 async function refreshTabData(tabId) {
   if (!state.token) return;
   if (tabId === "trading") {
@@ -1575,7 +2061,9 @@ async function refreshTabData(tabId) {
   } else if (tabId === "audit") {
     await loadAudit();
   } else if (tabId === "model-strategy") {
-    await Promise.allSettled([loadConfig(), loadStrategyCatalog(), loadModelManagement()]);
+    await Promise.allSettled([loadStrategyCatalog(), loadModelManagement()]);
+  } else if (tabId === "ai-analyze") {
+    await Promise.allSettled([loadStrategyCatalog(), loadSignals({ skipResultRender:true })]);
   } else if (tabId === "risk-center") {
     await loadRiskCenter();
   } else if (tabId === "review-memory") {
@@ -1721,7 +2209,7 @@ async function refreshAll() {
       loadSymbols(),
       loadAccount(),
       loadPositions(),
-      loadConfig(),
+      loadStrategyCatalog(),
       loadSignals(),
       loadHistory(),
       loadHistoryChart(),
@@ -1907,12 +2395,13 @@ async function loadSymbols() {
     || state.symbols.find((symbol) => String(symbol.name).toUpperCase().includes("XAU"))
     || state.symbols[0];
 
-  for (const id of ["quoteSymbolSelect", "analyzeSymbol", "tradeSymbolSelect"]) {
+  for (const id of ["quoteSymbolSelect", "tradeSymbolSelect"]) {
     createSymbolSelector(id, symbolNames);
   }
 
   // Set initial value
   if (preferred) setGlobalSymbol(preferred.name);
+  updateManualStrategySelection();
   // Don't call refreshQuote here — tick stream handles it at 1s
 
 }
@@ -1997,6 +2486,7 @@ let _klineSeries = null;
 let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
+let _klineTimezoneOffsetMinutes = 180;
 let _klineVolRefreshTimer = null;
 let _klineMutationObserver = null;
 let _klineResizeObserver = null;
@@ -2127,24 +2617,42 @@ async function loadKlineData() {
   try {
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
+    const sourceBadge = $('klineDataSource');
+    if (sourceBadge) {
+      const meta = data.market_meta || {};
+      const offset = Number.isFinite(Number(meta.timezone_offset_minutes))
+        ? `UTC${Number(meta.timezone_offset_minutes) >= 0 ? '+' : ''}${Number(meta.timezone_offset_minutes) / 60}` : '时区待校验';
+      const platform = meta.source === 'platform_admin_bridge';
+      sourceBadge.textContent = `${platform ? '平台行情' : '本人行情'} · ${offset}`;
+      sourceBadge.classList.toggle('is-platform', platform);
+      sourceBadge.classList.toggle('is-fallback', !platform);
+      if (Number.isFinite(Number(meta.timezone_offset_minutes))) _klineTimezoneOffsetMinutes = Number(meta.timezone_offset_minutes);
+      sourceBadge.title = `品种：${meta.broker_symbol || symbol}；时钟：${meta.clock_status || 'unknown'}；当前 K 线实时获取，不写入缓存`;
+    }
 
     // Display MT5 time directly — parse as raw values, no timezone conversion
     const mt5ToDisplay = (mt5Str) => {
-      const p = mt5Str.replace(' ', 'T').split(/[-T:]/);
-      return Math.floor(Date.UTC(+p[0], +p[1]-1, +p[2], +p[3]||0, +p[4]||0, +p[5]||0) / 1000);
+      if (typeof mt5Str !== 'string' || !mt5Str.trim()) return null;
+      const p = mt5Str.replace(' ', 'T').split(/[-T:]/).map(Number);
+      if (p.length < 3 || p.slice(0, 3).some(v => !Number.isFinite(v))) return null;
+      const seconds = Math.floor(Date.UTC(p[0], p[1] - 1, p[2], p[3] || 0, p[4] || 0, p[5] || 0) / 1000);
+      return Number.isFinite(seconds) ? seconds : null;
     };
-    const candles = data.rates.map(b => ({
-      time: mt5ToDisplay(b.time),
-      open: Number(b.open),
-      high: Number(b.high),
-      low: Number(b.low),
-      close: Number(b.close),
-    }));
-
-    const volumes = data.rates.map(b => ({
-      time: mt5ToDisplay(b.time),
-      value: Number(b.tick_volume || b.volume || 0),
-      color: Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
+    const cleanRows = new Map();
+    for (const row of data.rates) {
+      const time = mt5ToDisplay(row?.time);
+      const open = Number(row?.open), high = Number(row?.high), low = Number(row?.low), close = Number(row?.close);
+      if (!Number.isFinite(time) || ![open, high, low, close].every(Number.isFinite)) continue;
+      if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || high < low) continue;
+      cleanRows.set(time, { row, candle: { time, open, high, low, close } });
+    }
+    const normalized = [...cleanRows.values()].sort((a, b) => a.candle.time - b.candle.time);
+    const candles = normalized.map(item => item.candle);
+    if (!candles.length) throw new Error('no_valid_kline_ohlc');
+    const volumes = normalized.map(({ row, candle }) => ({
+      time: candle.time,
+      value: Math.max(0, Number(row.tick_volume || row.volume || 0) || 0),
+      color: candle.close >= candle.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
 
     _klineSeries.setData(candles);
@@ -2152,8 +2660,7 @@ async function loadKlineData() {
     _klineLastBar = candles[candles.length - 1];
 
     // Update last price display
-    const last = data.rates[data.rates.length - 1];
-    setText('klineLastPrice', Number(last.close).toFixed(2));
+    setText('klineLastPrice', candles.at(-1).close.toFixed(2));
 
     _klineChart.timeScale().fitContent();
   } catch (e) {
@@ -2171,7 +2678,7 @@ async function refreshKlineVolume() {
   try {
     const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 1 });
     if (data && data.status === 'success' && Array.isArray(data.rates) && data.rates.length) {
-      const b = data.rates[0];
+      const b = data.rates.at(-1);
       const vol = Number(b.tick_volume || b.volume || 0);
       const color = Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)';
       _klineVolumeSeries.update({ time: _klineLastBar.time, value: vol, color: color });
@@ -2182,9 +2689,10 @@ async function refreshKlineVolume() {
 function updateKlineTick(bid, ask) {
   if (!_klineSeries || state.marketTradeMode === 0) return;
   const price = Number(bid);
+  if (!Number.isFinite(price) || price <= 0) return;
   // MT5 broker time = UTC+3; convert current time to MT5 display
   // MT5 broker time — treat display as raw UTC (chart shows MT5 time directly)
-  const nowMt5Sec = Math.floor(Date.now() / 1000) + 3 * 3600;
+  const nowMt5Sec = Math.floor(Date.now() / 1000) + _klineTimezoneOffsetMinutes * 60;
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
   const barTime = Math.floor(nowMt5Sec / tfSeconds) * tfSeconds;
 
@@ -2312,6 +2820,16 @@ function applyRoleUI() {
   document.querySelectorAll('.admin-only').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
   });
+  document.querySelectorAll('.user-only').forEach(el => {
+    el.style.display = isAdmin ? 'none' : '';
+  });
+  setText("memoryTabLabel", isAdmin ? "平台经验" : "我的记忆");
+  setText("memoryActiveLabel", isAdmin ? "已发布经验" : "有效记忆");
+  setText("memoryActiveHelp", isAdmin ? "可用于平台策略" : "可用于后续推理");
+  setText("memorySectionTitle", isAdmin ? "平台策略经验" : "我的交易记忆");
+  setText("memorySectionDescription", isAdmin
+    ? "来自观摩账户复盘的市场经验先进入候选区，经发布后才会用于平台策略。"
+    : "这里只保留你已经确认的经验，可以随时暂停或撤销。");
   if ($("addPrivateStrategyBtn")) $("addPrivateStrategyBtn").textContent = isAdmin ? "新建策略" : "新建自定义策略";
 
   // 管理分组：仅桥接已连接时显示
@@ -2407,50 +2925,6 @@ function applyRoleUI() {
   if (gatewayBadge3) { gatewayBadge3.classList.add("clickable-badge"); gatewayBadge3.title = ""; }
   // Show model tab
   modelTabs.forEach(modelTab => { modelTab.style.display = ""; });
-}
-
-async function loadConfig() {
-  const data = await api("/api/ai/inference-preferences?session_id=default");
-  const cfg = data.preference;
-  const defaultPrompt = cfg.default_prompt || "";
-  state.defaultSystemPrompt = defaultPrompt;
-
-  $("riskLevel").value = cfg.risk_level || "medium";
-  const configuredMaxPosition = Number(cfg.max_position_size ?? 0.05);
-  $("maxPositionSize").value = (Number.isFinite(configuredMaxPosition) ? configuredMaxPosition : 0.05).toFixed(2);
-  $("selectedTakeProfit").value = String(cfg.selected_take_profit || 1);
-  $("enableAutoTrade").checked = Boolean(cfg.enable_auto_trade);
-  $("enableFuturesTrading").checked = Boolean(cfg.enable_futures_trading);
-  setText("configStatus", "推理模型由“模型管理”统一解析；此处只保存提示词和交易约束");
-
-  state.systemPromptInherited = state.user?.role !== "admin" && Boolean(cfg._system_prompt_inherited);
-  $("systemPrompt").value = cfg.system_prompt || defaultPrompt;
-}
-
-async function saveConfig() {
-  const body = {
-    session_id: "default",
-    enable_auto_trade: $("enableAutoTrade").checked,
-    enable_futures_trading: $("enableFuturesTrading").checked,
-    risk_level: $("riskLevel").value,
-    max_position_size: Number($("maxPositionSize").value) || 0.05,
-    selected_take_profit: Number($("selectedTakeProfit").value),
-    system_prompt: state.user?.role !== "admin" && state.systemPromptInherited
-      ? null
-      : ($("systemPrompt").value.trim() || null),
-  };
-
-  try {
-    await api("/api/ai/inference-preferences", { method: "PUT", body });
-    await loadConfig();
-    toast("推理配置已保存", "success");
-  } catch (error) {
-    toast(error.message, "error");
-  }
-}
-
-function selectedTimeframes() {
-  return [...document.querySelectorAll(".timeframe-grid input:checked")].map((node) => node.value).slice(0, 8);
 }
 
 // [disabled] 智能平仓
@@ -2703,9 +3177,15 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
 
 async function runAnalysis() {
   const symbol = $("analyzeSymbol").value;
-  const frames = selectedTimeframes();
-  if (!frames.length) {
-    toast("请至少选择一个周期", "warning");
+  const strategyId = Number($("analyzeStrategy")?.value || 0);
+  const autoExecute = Boolean($("manualAutoExecute")?.checked);
+  if (!strategyId) {
+    toast("请选择推理策略", "warning");
+    $("analyzeStrategy")?.focus();
+    return;
+  }
+  if (!symbol) {
+    toast("请选择策略支持的品种", "warning");
     return;
   }
 
@@ -2714,10 +3194,7 @@ async function runAnalysis() {
     return;
   }
 
-  if (!state.currentConfigHasApiKey && !state._isUsingSharedModel) {
-    toast("请先在模型设置中配置 API Key，或联系管理员开启模型共享", "warning");
-    return;
-  }
+  if (autoExecute && !await showConfirm("确认本次自动执行", `策略生成的非观望信号将立即经过风控并尝试下单。\n\n策略：${$("analyzeStrategy").selectedOptions[0]?.textContent || strategyId}\n品种：${symbol}`, { confirmText:"确认推理并自动执行", danger:true })) return;
 
   $("runAnalysisBtn").disabled = true;
   $("executeSignalBtn").disabled = true;
@@ -2761,21 +3238,12 @@ async function runAnalysis() {
   }, 3000);
 
   try {
-    const klineCount = Number($("klineCount").value) || 100;
-    const results = await Promise.all(frames.map((timeframe) => {
-      const tag = `{{MTF:${timeframe.toUpperCase()}:${klineCount}}}`;
-      const basePrompt = $("systemPrompt")?.value?.trim() || "";
-      const promptWithTag = tag + (basePrompt ? "\n" + basePrompt : "");
-      return wsApi("analyze", {
-        session_id: "default", symbol, timeframe,
-        kline_count: klineCount, include_positions: true,
-        prompt_override: state.systemPromptInherited ? undefined : promptWithTag,
-        _timeout: 120000,
-      });
-    }));
+    const result = await wsApi("analyze", {
+      session_id: "default", strategy_id:strategyId, symbol,
+      include_positions: true, auto_execute:autoExecute, _timeout:120000,
+    });
     if (window._analysisCancelled) { toast("已取消推理", "info"); return; }
-    const best = results.map((item) => item.signal).filter(Boolean)
-      .sort((a, b) => Number(b.confidence) - Number(a.confidence))[0];
+    const best = result?.signal;
     if (!best) throw new Error("未返回有效信号");
     const elapsed = Math.round(performance.now() - started);
     renderSignal(best, elapsed);
@@ -2783,7 +3251,8 @@ async function runAnalysis() {
     await loadSignals({ skipResultRender: true });
     const firstItem = document.querySelector(".analysis-history-item");
     if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    toast(`已生成 ${results.length} 个周期信号，耗时 ${(elapsed/1000).toFixed(1)}s`, "success");
+    if (autoExecute && best.signal_type !== "hold" && !best.auto_executed) toast("信号已生成，但自动执行未完成；请查看风控决策与拒绝原因", "warning");
+    else toast(autoExecute && best.auto_executed ? `信号已生成并通过风控执行，耗时 ${(elapsed/1000).toFixed(1)}s` : `信号已生成，耗时 ${(elapsed/1000).toFixed(1)}s`, "success");
   } catch (error) {
     resultEl.className = "analysis-result muted-block";
     resultEl.textContent = error.message;
@@ -3360,7 +3829,7 @@ function setHistoryZeroClass(id, value) {
 }
 
 function getHistoryRangeParams() {
-  const scope = $("historyRangeMode")?.value || "all";
+  const scope = $("historyRangeMode")?.value || "platform";
   const params = { history_scope: scope };
   if (scope === "custom") {
     const from = $("historyRangeFrom")?.value || "";
@@ -3374,7 +3843,7 @@ function getHistoryRangeParams() {
 }
 
 function updateHistoryRangeUI() {
-  const scope = $("historyRangeMode")?.value || "all";
+  const scope = $("historyRangeMode")?.value || "platform";
   const custom = scope === "custom";
   $("historyRangeDates")?.classList.toggle("hidden", !custom);
   if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
@@ -3868,7 +4337,7 @@ function auditReasonLabel(reason) {
 
 function auditResultText(row) {
   const result = row.result || {};
-  const reasonText = auditReasonLabel(result.reason || "");
+  const reasonText = resultRiskReason(result) || auditReasonLabel(result.reason || "");
   const message = result.message || result.status || "";
   const statusText = auditStatusLabel(message);
   const messageText = statusText !== message ? statusText : auditReasonLabel(message);
@@ -3893,8 +4362,9 @@ function renderAuditRows() {
   setText("auditCount", `显示 ${filtered.length} / ${state.auditRows.length} 条`);
   body.innerHTML = pageRows.length ? pageRows.map((row) => {
     const result = row.result || {};
-    const rawReason = result.reason || result.message || result.status || "";
-    const reasonText = auditReasonLabel(rawReason) || "--";
+    const riskReason = resultRiskReason(result);
+    const rawReason = riskReason || result.reason || result.message || result.status || "";
+    const reasonText = riskReason || auditReasonLabel(rawReason) || "--";
     const status = row.status_code || row.status || "";
     const statusClass = status || "unknown";
     const actionType = auditActionType(row.action_code || row.action);
@@ -3923,23 +4393,35 @@ function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
   $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
-  $("saveConfigBtn").addEventListener("click", saveConfig);
-  $("useTemplateBtn")?.addEventListener("click", async () => {
-    try {
-      if (state.defaultSystemPrompt) {
-        $("systemPrompt").value = state.defaultSystemPrompt;
-        state.systemPromptInherited = state.user?.role !== "admin";
-        toast("已填入管理员模板", "success");
-      } else {
-        toast("暂无可用模板", "warning");
-      }
-    } catch (e) {
-      toast("获取模板失败", "error");
+  $("analyzeStrategy")?.addEventListener("change", updateManualStrategySelection);
+  $("subscriptionSymbolOptions")?.addEventListener("change", event => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const allInput = $("subscriptionSymbolOptions").querySelector("[data-subscription-symbol-all]");
+    const symbolInputs = [...$("subscriptionSymbolOptions").querySelectorAll("[data-subscription-symbol]")];
+    if (target.hasAttribute("data-subscription-symbol-all") && target.checked) {
+      symbolInputs.forEach(input => { input.checked = false; });
+    } else if (target.hasAttribute("data-subscription-symbol")) {
+      allInput.checked = false;
+      if (!symbolInputs.some(input => input.checked)) allInput.checked = true;
     }
+    updateSubscriptionSymbolSummary();
   });
-  $("systemPrompt")?.addEventListener("input", () => {
-    if (state.user?.role !== "admin") state.systemPromptInherited = false;
+  $("manualAutoExecute")?.addEventListener("change", event => {
+    $("manualAutoExecuteNotice")?.classList.toggle("hidden", !event.target.checked);
   });
+  document.querySelectorAll("[data-strategy-timeframe]").forEach(input => input.addEventListener("change", () => {
+    const tf = input.dataset.strategyTimeframe;
+    const countInput = document.querySelector(`[data-strategy-kline="${tf}"]`);
+    const primaryInput = document.querySelector(`input[name="strategyPrimaryTimeframe"][value="${tf}"]`);
+    if (countInput) countInput.disabled = !input.checked;
+    if (primaryInput) primaryInput.disabled = !input.checked;
+    if (!input.checked && primaryInput?.checked) {
+      const next = document.querySelector("[data-strategy-timeframe]:checked");
+      const nextPrimary = next && document.querySelector(`input[name="strategyPrimaryTimeframe"][value="${next.dataset.strategyTimeframe}"]`);
+      if (nextPrimary) nextPrimary.checked = true;
+    }
+  }));
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
   $("buyBtn").addEventListener("click", () => openManual("buy"));
@@ -3998,16 +4480,31 @@ function bindEvents() {
   $("addPrivateStrategyBtn")?.addEventListener("click", () => openStrategyEditor());
   $("strategyScope")?.addEventListener("change", event => {
     const platform = event.target.value === "platform";
-    $("strategyModelProfile").disabled = platform;
-    if (platform) $("strategyModelProfile").value = "";
+    renderStrategyModelOptions(event.target.value);
     $("strategyVisibilityField").style.display = platform ? "" : "none";
   });
-  $("cancelStrategyEditorBtn")?.addEventListener("click", () => $("strategyEditor")?.classList.add("hidden"));
+  $("cancelStrategyEditorBtn")?.addEventListener("click", () => closeFormModal($("strategyEditor")));
   $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => toast(error.message, "error")));
-  $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => $("subscriptionEditor")?.classList.add("hidden"));
+  $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => closeFormModal($("subscriptionEditor")));
   $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
+  $("subscriptionScheduleEnabled")?.addEventListener("change", syncSubscriptionScheduleVisibility);
+  $("addSubscriptionScheduleWindow")?.addEventListener("click", () => {
+    const windows = selectedSubscriptionScheduleWindows();
+    if (windows.length >= 6) { toast("最多添加 6 个运行时段", "warning"); return; }
+    renderSubscriptionScheduleWindows([...windows, { start:"09:00", end:"17:00" }]);
+  });
+  $("subscriptionScheduleWindows")?.addEventListener("click", event => {
+    const button = event.target.closest("[data-remove-schedule-window]");
+    if (!button) return;
+    const rows = selectedSubscriptionScheduleWindows();
+    const row = button.closest("[data-schedule-window-row]");
+    const allRows = [...$("subscriptionScheduleWindows").querySelectorAll("[data-schedule-window-row]")];
+    const index = allRows.indexOf(row);
+    rows.splice(index, 1);
+    renderSubscriptionScheduleWindows(rows);
+  });
   $("addModelProfileBtn")?.addEventListener("click", () => openModelEditor());
-  $("cancelModelProfileBtn")?.addEventListener("click", () => $("modelProfileEditor")?.classList.add("hidden"));
+  $("cancelModelProfileBtn")?.addEventListener("click", () => closeFormModal($("modelProfileEditor")));
   $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(error.message, "error")));
   $("savePlatformPolicyBtn")?.addEventListener("click", () => savePlatformPolicy().catch(error => toast(error.message, "error")));
   $("saveGlobalRiskBtn")?.addEventListener("click", () => saveGlobalRisk().catch(error => toast(error.message, "error")));
@@ -4028,10 +4525,34 @@ function bindEvents() {
     const preset = PROVIDER_PRESETS[event.target.value]; if (!preset) return;
     $("profileBaseUrl").value = preset.url; if (preset.models?.[0]) $("profileModelName").value = preset.models[0];
   });
+  document.querySelectorAll(".form-modal").forEach(modal => {
+    modal.addEventListener("keydown", handleFormModalKeydown);
+    modal.addEventListener("click", event => { if (event.target === modal) closeFormModal(modal); });
+  });
   document.querySelectorAll("[data-review-filter]").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll("[data-review-filter]").forEach(item => item.classList.toggle("active", item === button));
     state.reviewFilter = button.dataset.reviewFilter; loadReviewMemory().catch(error => toast(error.message,"error"));
   }));
+  document.querySelectorAll("[data-strategy-filter]").forEach(button => button.addEventListener("click", () => {
+    state.strategyFilter = button.dataset.strategyFilter || "all";
+    document.querySelectorAll("[data-strategy-filter]").forEach(item => item.classList.toggle("active", item === button));
+    loadStrategyCatalog().catch(error => toast(error.message, "error"));
+  }));
+  document.querySelectorAll("[data-workspace-tab]").forEach(button => {
+    button.addEventListener("click", () => setWorkspaceSubtab(button.dataset.workspaceTab, button.dataset.workspaceTarget));
+    button.addEventListener("keydown", event => {
+      if (!["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = [...document.querySelectorAll(`[data-workspace-tab="${button.dataset.workspaceTab}"]`)];
+      const current = tabs.indexOf(button);
+      const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      setWorkspaceSubtab(tabs[index].dataset.workspaceTab, tabs[index].dataset.workspaceTarget);
+      tabs[index].focus();
+    });
+  });
+  document.body.addEventListener("input", event => {
+    if (event.target.closest("[data-review-field]")) syncReviewEditorFromFields();
+  });
   document.body.addEventListener("change", async event => {
     const riskRollout = event.target.closest("[data-risk-rollout]");
     if (!riskRollout) return;
@@ -4073,13 +4594,19 @@ function bindEvents() {
     const reviewCase = event.target.closest("[data-review-id]");
     const reviewAction = event.target.closest("[data-review-action]");
     const memoryAction = event.target.closest("[data-memory-action]");
+    const platformExperienceAction = event.target.closest("[data-platform-experience-action]");
+    const platformPolicySave = event.target.closest("[data-platform-policy-save]");
     const accountReview = event.target.closest("[data-account-review]");
     const riskSave = event.target.closest("[data-risk-save]");
     const killSwitch = event.target.closest("[data-kill-switch]");
-    const riskRecovery = event.target.closest("[data-risk-recovery]");
-    const recoveryReview = event.target.closest("[data-recovery-review]");
     const strategyAction = event.target.closest("[data-strategy-action]");
     const subscriptionAction = event.target.closest("[data-subscription-action]");
+    const openWorkspaceTab = event.target.closest("[data-open-workspace-tab]");
+
+    if (openWorkspaceTab) {
+      setWorkspaceSubtab(openWorkspaceTab.dataset.openWorkspaceTab, openWorkspaceTab.dataset.openWorkspaceTarget);
+      return;
+    }
 
     if (strategyAction) {
       const row = strategyAction.closest("[data-strategy-id]"), strategy = (state.strategies || []).find(item => Number(item.id) === Number(row?.dataset.strategyId));
@@ -4087,7 +4614,32 @@ function bindEvents() {
       try {
         if (strategyAction.dataset.strategyAction === "edit") openStrategyEditor(strategy);
         else if (strategyAction.dataset.strategyAction === "subscribe") openSubscriptionEditor(strategy);
-        else if (strategyAction.dataset.strategyAction === "delete" && confirm("确认删除这个策略？现有订阅将停止执行。")) { await api(`/api/ai/strategies/${strategy.id}`, { method:"DELETE" }); toast("策略已删除", "success"); await loadStrategyCatalog(); }
+        else if (strategyAction.dataset.strategyAction === "delete") {
+          const { preview } = await api(`/api/ai/strategies/${strategy.id}/delete-preview`);
+          const confirmed = await showConfirm(
+            "删除策略",
+            "删除后，策略将从可用列表移除，所有关联订阅都会停止执行。此操作只能由管理员通过数据恢复。",
+            {
+              confirmText:"删除策略", danger:true, requireText:preview.title,
+              requireTextLabel:"请输入策略名称，确认你删除的是正确策略",
+              detailRows:[
+                ["策略范围", preview.scope === "platform" ? "平台策略" : "我的策略"],
+                ["关联订阅", `${preview.subscription_count} 个`],
+                ["正在运行", `${preview.active_subscription_count} 个`, preview.active_subscription_count ? "danger" : ""],
+                ["受影响用户", `${preview.affected_user_count} 人`],
+              ],
+            }
+          );
+          if (!confirmed) return;
+          await api(`/api/ai/strategies/${strategy.id}`, { method:"DELETE", body:{
+            confirm_title:preview.title,
+            confirm_version:preview.version,
+            expected_active_subscriptions:preview.active_subscription_count,
+            confirm_stop_subscriptions:true,
+          } });
+          toast("策略已删除，关联订阅已停止", "success");
+          await Promise.all([loadStrategyCatalog(), loadStatus()]);
+        }
       } catch (error) { toast(error.message, "error"); }
       return;
     }
@@ -4097,7 +4649,16 @@ function bindEvents() {
       if (!subscription) return;
       try {
         if (subscriptionAction.dataset.subscriptionAction === "edit") openSubscriptionEditor(strategy || { id:subscription.strategy_id, scope:subscription.strategy_scope }, subscription);
-        else if (subscriptionAction.dataset.subscriptionAction === "delete" && confirm("确认删除这个订阅？自动执行会同步关闭。")) { await api(`/api/ai/subscriptions/${subscription.id}`, { method:"DELETE" }); toast("订阅已删除", "success"); await loadStrategyCatalog(); await loadStatus(); }
+        else if (subscriptionAction.dataset.subscriptionAction === "delete" && confirm("确认删除这个订阅？如果这是最后一个有效订阅，自动推理会同步关闭。")) {
+          const deleted = await api(`/api/ai/subscriptions/${subscription.id}`, { method:"DELETE" });
+          if (deleted.scheduler) {
+            state.autoEnabled = Boolean(deleted.scheduler.enabled);
+            state.autoRuntime = deleted.scheduler;
+            renderAutoAnalyzeBadge(deleted.scheduler);
+          }
+          toast("订阅已删除", "success");
+          await Promise.all([loadStrategyCatalog(), loadStatus()]);
+        }
       } catch (error) { toast(error.message, "error"); }
       return;
     }
@@ -4117,7 +4678,7 @@ function bindEvents() {
       const caseId = state.selectedReviewId, versionId = Number(reviewAction.dataset.versionId || 0), action = reviewAction.dataset.reviewAction;
       try {
         if (action === "retry") await api(`/api/ai/reviews/${caseId}/retry`, { method:"POST" });
-        else if (action === "save") { const content = JSON.parse($("reviewContentEditor").value); const saved = await api(`/api/ai/reviews/${caseId}/edit`, { method:"POST", body:{ content, expected_version_id:versionId, change_note:"用户在复盘页面修改" } }); toast(`已保存为新版本 #${saved.versionNo}`,"success"); }
+        else if (action === "save") { syncReviewEditorFromFields(); const content = JSON.parse($("reviewContentEditor").value); const saved = await api(`/api/ai/reviews/${caseId}/edit`, { method:"POST", body:{ content, expected_version_id:versionId, change_note:"用户在复盘页面修改" } }); toast(`已保存为新版本 #${saved.versionNo}`,"success"); }
         else await api(`/api/ai/reviews/${caseId}/confirm`, { method:"POST", body:{ version_id:versionId, action, trade_process_issue_status: action === "approve" ? "no_issue" : "uncertain" } });
         await loadReviewMemory(); await openReviewDetail(caseId);
       } catch (error) { toast(error.message,"error"); }
@@ -4127,15 +4688,25 @@ function bindEvents() {
       try { await api(`/api/ai/memory/${Number(memoryAction.dataset.memoryId)}/${memoryAction.dataset.memoryAction}`, { method:"POST" }); await loadReviewMemory(); }
       catch (error) { toast(error.message,"error"); } return;
     }
+    if (platformExperienceAction) {
+      try {
+        await api(`/api/ai/admin/platform-experience/${Number(platformExperienceAction.dataset.platformExperienceId)}/${platformExperienceAction.dataset.platformExperienceAction}`, { method:"POST" });
+        toast(platformExperienceAction.dataset.platformExperienceAction === "publish" ? "平台经验已发布" : "平台经验已撤销", "success");
+        await loadReviewMemory();
+      } catch (error) { toast(error.message,"error"); }
+      return;
+    }
+    if (platformPolicySave) {
+      const row = platformPolicySave.closest("[data-platform-policy-strategy]");
+      try {
+        await api(`/api/ai/admin/platform-experience/policies/${Number(row.dataset.platformPolicyStrategy)}`, { method:"PUT", body:{ mode:row.querySelector("[data-platform-policy-mode]").value } });
+        toast("平台经验模式已保存", "success"); await loadReviewMemory();
+      } catch (error) { toast(error.message,"error"); }
+      return;
+    }
     if (accountReview) {
       const approved = accountReview.dataset.accountReview === "approve"; const reason = prompt(approved ? "请输入解除账户异常的依据" : "请输入冻结账户的原因"); if (!reason) return;
       try { await api(`/api/ai/admin/accounts/${Number(accountReview.dataset.accountId)}/review`, { method:"POST", body:{ approved, reason } }); toast(approved ? "账户异常已解除" : "账户已冻结","success"); await loadAdminRiskCenter(); }
-      catch (error) { toast(error.message,"error"); } return;
-    }
-    if (recoveryReview) {
-      const approve = recoveryReview.dataset.recoveryReview === "approve";
-      const reason = prompt(approve ? "请输入批准恢复的审核理由" : "请输入拒绝恢复的审核理由"); if (!reason) return;
-      try { await api(`/api/ai/admin/recoveries/${Number(recoveryReview.dataset.recoveryId)}/review`, { method:"POST", body:{ approve, reason } }); toast("恢复申请已审核", "success"); await loadAdminRiskCenter(); }
       catch (error) { toast(error.message,"error"); } return;
     }
     if (killSwitch) {
@@ -4144,14 +4715,12 @@ function bindEvents() {
       try { await api(`/api/ai/risk-center/${Number(killSwitch.dataset.killSwitch)}/kill-switch`, { method:"POST", body:{ enabled, reason } }); toast("账户 Kill Switch 已更新", "success"); await loadRiskCenter(); }
       catch (error) { toast(error.message,"error"); } return;
     }
-    if (riskRecovery) {
-      const reason = prompt("请说明申请恢复账户交易的原因"); if (!reason) return;
-      try { await api(`/api/ai/risk-center/${Number(riskRecovery.dataset.riskRecovery)}/recovery`, { method:"POST", body:{ reason } }); toast("恢复申请已提交，等待管理员审核", "success"); }
-      catch (error) { toast(error.message,"error"); } return;
-    }
     if (riskSave) {
       const panel = riskSave.closest("[data-risk-account]"), changes = {};
-      panel?.querySelectorAll("[data-user-risk-field]").forEach(input => { changes[input.dataset.userRiskField] = Number(input.value); });
+      panel?.querySelectorAll("[data-user-risk-field]").forEach(input => {
+        if (input.value.trim() !== "") changes[input.dataset.userRiskField] = Number(input.value);
+      });
+      if (!Object.keys(changes).length) { toast("没有需要保存的自定义风控", "warning"); return; }
       try { const data = await api(`/api/ai/risk-center/${Number(riskSave.dataset.riskSave)}`, { method:"PUT", body:{ changes, reason:"用户从风控中心更新" } }); const pending = data.result?.pending_fields || []; toast(pending.length ? `已保存，${pending.length} 项放宽设置等待冷却生效` : "用户风控已生效", "success"); await loadRiskCenter(); }
       catch (error) { toast(error.message,"error"); } return;
     }
@@ -4172,6 +4741,9 @@ function bindEvents() {
       } else if (pagerButton.dataset.pager === "history") {
         state.historyFilters.page = page;
         loadHistory();
+      } else if (pagerButton.dataset.pager === "executions") {
+        state.executionFilters.page = page;
+        loadExecutionDecisions().catch(error => toast(error.message, "error"));
       }
       return;
     }
@@ -4197,6 +4769,7 @@ function bindEvents() {
         "refresh-audit": loadAudit,
         "refresh-risk-center": loadRiskCenter,
         "refresh-review-memory": loadReviewMemory,
+        "refresh-global-risk": loadAdminRiskCenter,
       };
       if (tasks[action]) {
         withBusy(actionButton, tasks[action]).catch((error) => toast(error.message, "error"));

@@ -2,6 +2,20 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 describe('Python Bridge history contract', () => {
+  it('provides a compact incremental risk snapshot without full-history export', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const start = source.indexOf('def _risk_snapshot')
+    const end = source.indexOf('def _process_command', start)
+    const block = source.slice(start, end)
+    expect(block).toContain('history_deals_get(date_from, date_to)')
+    expect(block).toContain('history_deals_get(position=position_id)')
+    expect(block).toContain('requested_cursor')
+    expect(block).toContain('closed_positions')
+    expect(block).toContain('account_events')
+    expect(block).toContain('order_calc_profit')
+    expect(block).toContain('order_calc_margin')
+    expect(block).not.toContain('FULL_HISTORY_START')
+  })
   it('reads the profile account creation time and both expiry field styles', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     expect(source).toContain('userData.get("planExpiresAt") or userData.get("plan_expires_at", "")')
@@ -63,6 +77,15 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('with self._mt5_lock:')
     expect(source).toContain('return self._process_command_locked(cmd)')
     expect(source).toContain('return self._collect_mt5_data_locked()')
+  })
+
+  it('normalizes broker wall-clock timestamps while retaining the raw MT5 timestamp', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('def _calibrate_mt5_clock(self, tick, force=False):')
+    expect(source).toContain('now - self._mt5_clock_checked_at < 300')
+    expect(source).toContain('"time_utc_msc": raw_ms - offset * 60000')
+    expect(source).toContain('"timezone_offset_minutes": offset')
+    expect(source).toContain('"clock_status": self._mt5_clock_status')
   })
 
   it('rejects invalid pending expirations and reports MT5 pending-list failures', () => {

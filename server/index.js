@@ -73,11 +73,26 @@ app.use(express.urlencoded({ extended: true }))
 app.use(securityHeaders)
 
 // Rate limiting — prevent brute force and DoS
+const AUTH_RATE_LIMIT_PATHS = new Set([
+  '/api/login',
+  '/api/register',
+  '/api/send-code',
+  '/api/verify-code',
+  '/api/reset-password',
+  '/api/send-bind-code',
+  '/api/bind-phone',
+  '/api/bind-email'
+])
+
 const apiLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   max: API_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  // Authentication has its own stricter limiter below. If it also consumes
+  // the general API quota, background requests from the trading dashboard can
+  // make login and account recovery unavailable for the rest of the window.
+  skip: req => AUTH_RATE_LIMIT_PATHS.has(req.originalUrl.split('?')[0]),
   message: { ok: false, error: '请求过于频繁，请稍后再试' }
 })
 const authLimiter = rateLimit({

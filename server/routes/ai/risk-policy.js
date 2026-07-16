@@ -139,7 +139,7 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
     : await queryOne("SELECT * FROM risk_policy_sets WHERE scope = 'account' AND owner_user_id = ? AND trading_account_id IS NULL AND status = 'active' ORDER BY id DESC LIMIT 1", [userId])
   let policy = { ...DEFAULT_RISK_POLICY }
   const policyVersionIds = []
-  let platformRaw = {}, controls = buildPlatformControls()
+  let platformRaw = {}, controls = buildPlatformControls(), platformPolicy = { ...policy }, accountValues = {}
   if (platform) {
     const version = await queryOne('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= ? ORDER BY version_no DESC LIMIT 1', [platform.id, now])
     if (version) {
@@ -149,10 +149,12 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
       policyVersionIds.push(version.id)
     }
   }
+  platformPolicy = { ...policy }
   if (account) {
     const version = await queryOne('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= ? ORDER BY version_no DESC LIMIT 1', [account.id, now])
     if (version) {
-      policy = applyAccountConfig(policy, parseJson(version.config_json), controls)
+      accountValues = parseJson(version.config_json)
+      policy = applyAccountConfig(policy, accountValues, controls)
       policyVersionIds.push(version.id)
     }
     const due = await queryAll("SELECT * FROM risk_policy_change_items WHERE policy_set_id = ? AND status = 'pending' AND effective_at <= ? ORDER BY id", [account.id, now])
@@ -168,7 +170,7 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
     const profileConfig = mergeKnown({}, parseJson(profile.config_json))
     for (const [key, value] of Object.entries(profileConfig)) policy[key] = stricter(key, policy[key], value)
   }
-  return { policy, policyVersionIds }
+  return { policy, policyVersionIds, platformPolicy, accountValues: accountValues.values || accountValues, controls }
 }
 
 export async function submitRiskPolicyChanges({ policySetId, actorId, changes, reason = '', cooldownHours = 2 } = {}) {
@@ -222,7 +224,7 @@ function weekendProtected(nowMs, minutes) {
   return day === 0 || day === 6 || minute >= 6 * 1440 - minutes
 }
 
-export function evaluateCoreRisk({ request, account, quote, instrument, policy = DEFAULT_RISK_POLICY, ruleModes = {}, nowMs = Date.now() }) {
+export function evaluateCoreRisk({ request, account, quote, instrument, brokerCalculation = null, policy = DEFAULT_RISK_POLICY, ruleModes = {}, nowMs = Date.now() }) {
   const original = structuredClone(request || {}), approved = structuredClone(request || {}), rules = []
   const fail = (code, details) => ({ ...rejection(rules, code, details), original_order: original })
   const rolloutReject = (code, details = {}) => {
@@ -261,8 +263,12 @@ export function evaluateCoreRisk({ request, account, quote, instrument, policy =
   if (!(volume > 0)) return fail('R1.9_VOLUME_INVALID')
   if (ai && (volume < policy.ai_volume_min || volume > policy.ai_volume_max || !aligned(volume, policy.ai_volume_step, policy.ai_volume_min))) return fail('R1.9_AI_VOLUME_OUT_OF_RANGE', { volume })
   const originalDistance = Math.abs(entry - sl), minDistance = atr * policy.sl_atr_min
+  const priceTolerance = Math.max(Number(instrument.tick_size) || 0, Number(instrument.point) || 0)
   let adjusted = false
-  if (originalDistance < minDistance) {
+  // Broker prices are rounded to their minimum tick. A sub-tick difference
+  // must not scale 0.01 lots down to zero merely because of floating-point
+  // arithmetic (for example 16.22 vs 16.220714 on a 0.01-tick symbol).
+  if (originalDistance + priceTolerance < minDistance) {
     approved.sl = Number((side === 'buy' ? entry - minDistance : entry + minDistance).toFixed(Number(instrument.digits)))
     volume = floorStep(volume * originalDistance / minDistance, Number(instrument.volume_step))
     approved.volume = volume; adjusted = true
@@ -272,12 +278,52 @@ export function evaluateCoreRisk({ request, account, quote, instrument, policy =
   if (finalDistance > atr * policy.sl_atr_max + Number(instrument.tick_size)) {
     const rejected = rolloutReject('R1.4_STOP_LOSS_TOO_FAR'); if (rejected) return rejected
   }
-  const rr = Math.abs(tp - entry) / finalDistance
+  let effectiveTp = tp
+  let rr = Math.abs(effectiveTp - entry) / finalDistance
   if (rr + 1e-9 < policy.min_rr) {
-    const rejected = rolloutReject('R1.5_RR_TOO_LOW', { rr, minimum: policy.min_rr }); if (rejected) return rejected
+    // The model may provide TP1/TP2/TP3 while the user-selected tier is too
+    // close after the final entry/SL calculation. Prefer the nearest existing
+    // AI target that satisfies minimum R:R; never invent a target price.
+    const candidates = (Array.isArray(approved.take_profit_candidates) ? approved.take_profit_candidates : [])
+      .map(item => ({ tier: Number(item?.tier), price: finite(item?.price) }))
+      .filter(item => [1, 2, 3].includes(item.tier) && item.price > 0
+        && (side === 'buy' ? item.price > entry : item.price < entry))
+      .map(item => ({ ...item, rr: Math.abs(item.price - entry) / finalDistance }))
+      .filter(item => item.rr + 1e-9 >= policy.min_rr)
+      .sort((a, b) => Math.abs(a.price - entry) - Math.abs(b.price - entry))
+    if (candidates[0]) {
+      const chosen = candidates[0]
+      approved.tp = chosen.price
+      approved.tp_tier_used = chosen.tier
+      effectiveTp = chosen.price
+      rr = chosen.rr
+      adjusted = true
+      rules.push({ code: 'R1.5_TP_TIER_UPGRADED', outcome: 'adjust', details: {
+        from_tp: tp, to_tp: chosen.price, from_tier: original.tp_tier_used ?? null,
+        to_tier: chosen.tier, rr, minimum: policy.min_rr,
+      } })
+    } else {
+      const rejected = rolloutReject('R1.5_RR_TOO_LOW', { rr, minimum: policy.min_rr }); if (rejected) return rejected
+    }
   }
   volume = floorStep(Math.min(volume, policy.max_position_size, Number(instrument.volume_max)), Number(instrument.volume_step))
-  const riskPerLot = finalDistance / Number(instrument.tick_size) * Number(instrument.tick_value), equity = finite(account?.equity)
+  const brokerVolume = finite(brokerCalculation?.volume)
+  const brokerLoss = finite(brokerCalculation?.loss_to_sl)
+  const brokerPriceTolerance = Math.max(Number(instrument.tick_size), Number(instrument.point)) + 1e-9
+  const brokerCalculationMatches = brokerVolume > 0 && brokerLoss > 0
+    && String(brokerCalculation?.symbol || '').toUpperCase() === symbol
+    && String(brokerCalculation?.order_type || '').toLowerCase() === side
+    && Math.abs(finite(brokerCalculation?.entry_price) - entry) <= brokerPriceTolerance
+    && Math.abs(finite(brokerCalculation?.sl) - Number(approved.sl)) <= brokerPriceTolerance
+  // MT5 order_calc_profit understands the broker's contract/currency rules.
+  // Only reuse it when it describes the final approved entry and SL; if the
+  // gate widened SL, the snapshot's calculation is stale and we fall back to
+  // symbol tick metadata instead of understating risk.
+  const calculationSource = brokerCalculationMatches ? 'mt5_order_calc_profit' : 'symbol_tick_metadata'
+  const riskPerLot = brokerCalculationMatches
+    ? brokerLoss / brokerVolume
+    : finalDistance / Number(instrument.tick_size) * Number(instrument.tick_value)
+  const equity = finite(account?.equity)
   if (!(equity > 0) || !(riskPerLot > 0)) return fail('R1.10_RISK_DATA_INVALID')
   const riskCap = equity * policy.max_risk_per_trade_pct / 100
   volume = floorStep(Math.min(volume, riskCap / riskPerLot), Number(instrument.volume_step))
@@ -286,7 +332,7 @@ export function evaluateCoreRisk({ request, account, quote, instrument, policy =
   if (volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN')
   if (volume !== Number(approved.volume)) adjusted = true
   approved.volume = volume
-  pass(rules, 'R1.10_REAL_RISK', { risk_amount: Number((riskPerLot * volume).toFixed(8)), risk_cap: riskCap })
+  pass(rules, 'R1.10_REAL_RISK', { risk_amount: Number((riskPerLot * volume).toFixed(8)), risk_cap: riskCap, calculation_source: calculationSource })
   if (method !== 'market') {
     const current = side === 'buy' ? ask : bid, deviation = Math.abs(entry - current)
     const maximum = Math.min(current * policy.pending_price_deviation_pct / 100, atr * policy.pending_price_deviation_atr)
@@ -301,9 +347,14 @@ export function evaluateCoreRisk({ request, account, quote, instrument, policy =
   } else if (ai && Math.abs(entry - Number(approved.reference_price)) > atr * policy.market_signal_drift_atr) {
     const rejected = rolloutReject('R4.6_MARKET_SIGNAL_DRIFT'); if (rejected) return rejected
   }
-  const quoteTime = quoteEpoch(quote?.time_msc ?? quote?.time)
-  if (quoteTime == null || nowMs - quoteTime > policy.max_quote_age_seconds * 1000 || nowMs < quoteTime - 5000) {
-    const rejected = rolloutReject('R4.4_QUOTE_STALE'); if (rejected) return rejected
+  const quoteTime = quoteEpoch(quote?.time_utc_msc ?? quote?.time_msc ?? quote?.time)
+  const quoteAgeMs = quoteTime == null ? null : nowMs - quoteTime
+  if (quoteTime == null || quoteAgeMs > policy.max_quote_age_seconds * 1000 || quoteAgeMs < -5000) {
+    const rejected = rolloutReject('R4.4_QUOTE_STALE', {
+      quote_time: quoteTime == null ? null : new Date(quoteTime).toISOString(),
+      quote_age_seconds: quoteAgeMs == null ? null : Number((quoteAgeMs / 1000).toFixed(3)),
+      maximum_seconds: policy.max_quote_age_seconds,
+    }); if (rejected) return rejected
   }
   const spreadPoints = Math.abs(ask - bid) / Number(instrument.point)
   if (!Number.isFinite(spreadPoints) || spreadPoints > policy.max_spread_points) {

@@ -38,8 +38,13 @@ public/ai/AURUM_Bridge.exe
 public/ai/AURUM_Bridge
 public/ai/aurum_updater.exe
 .mimocode/
+.codebase-memory/
+.mcp.json
 coverage/
 uploads/
+icon.o
+icon.rc
+test-mcp.js
 *.pem
 *.key
 *.bak

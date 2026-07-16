@@ -1,13 +1,16 @@
 // ai/strategy.js — 策略上下文 + 执行 + 分析
 
-import { queryRun, beijingNow, withTransaction } from '../../db.js'
+import { queryOne, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds, stripBrokerSuffix } from './utils.js'
-import { mt5Bridge, calculateMarketData, computeAtr14 } from './market-data.js'
+import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT } from './config.js'
+import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT, parsePromptSymbols } from './config.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun } from './memory-system.js'
+import { retrievePlatformExperience } from './platform-experience.js'
 import { persistInferenceSnapshotTx } from './inference-snapshots.js'
+import { getStrategyById } from './strategy-ownership.js'
+import { parseStrategyPolicy } from './strategy-policy.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
@@ -51,7 +54,7 @@ export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) 
   }
 
   try {
-    const response = await mt5Bridge(userId, 'rates', { symbol, timeframe: 'H1', count: 50 })
+    const response = await platformRates(userId, { symbol, timeframe: 'H1', count: 50 })
     const rates = response?.rates || []
     const closedRates = rates.length > 1 ? rates.slice(0, -1) : []
     const atr = closedRates.length >= 15 ? computeAtr14(closedRates) : 0
@@ -77,7 +80,7 @@ export async function buildStrategyContext(userId, symbol, account, positions, p
     if (tf === primaryTimeframe.toUpperCase() && primaryRates.length >= count) {
       rates = primaryRates
     } else {
-      const resp = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count })
+      const resp = await platformRates(userId, { symbol, timeframe: tf, count })
       rates = (resp && resp.rates) ? resp.rates : []
     }
     const summary = calculateMarketData(symbol, tf, rates, account, positions, { computeChan: false })
@@ -92,37 +95,39 @@ export async function buildStrategyContext(userId, symbol, account, positions, p
   }
 }
 
-export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual') {
-  let tags = parseTimeframeTags(prompt, mode)
+export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual', marketDataPlan = null, useChanAnalysis = null) {
+  let tags = Array.isArray(marketDataPlan?.timeframes)
+    ? marketDataPlan.timeframes.map(item => ({ tf: String(item.timeframe || '').toUpperCase(), count: Number(item.kline_count) || 100 }))
+    : parseTimeframeTags(prompt, mode)
   if (tags.length === 0) {
     const tf = (fallbackTimeframe || 'M30').toUpperCase()
     const count = STRATEGY_TIMEFRAME_COUNTS[tf] || 100
     tags = [{ tf, count }]
   }
-  const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
+  const useChan = useChanAnalysis == null ? /\{\{USE_CHAN\}\}/.test(prompt) : Boolean(useChanAnalysis)
   const timeframes = {}
   for (const { tf, count } of tags) {
     const historyHintKey = chanHistoryHintKey(userId, symbol, tf)
-    const historyCount = resolveChanHistoryCount(userId, symbol, tf, count, hasUseChanTag)
+    const historyCount = resolveChanHistoryCount(userId, symbol, tf, count, useChan)
     let rates
     if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
       rates = fallbackRates
     } else {
-      const resp = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count: historyCount })
+      const resp = await platformRates(userId, { symbol, timeframe: tf, count: historyCount })
       rates = (resp && resp.rates) ? resp.rates : []
     }
     if (rates.length === 0) continue
     let visibleRates = rates.slice(-count)
     let summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
-      computeChan: hasUseChanTag,
+      computeChan: useChan,
       chanRates: rates,
       requestedChanHistoryCount: historyCount,
     })
     const chanNeedsMoreHistory = summary.chan && (summary.chan.segment_count === 0 || summary.chan.center_count === 0)
-    if (hasUseChanTag && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || chanNeedsMoreHistory)) {
+    if (useChan && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || chanNeedsMoreHistory)) {
       rememberChanMaxHistory(historyHintKey)
       if (rates.length < CHAN_MAX_HISTORY_COUNT) {
-        const retry = await mt5Bridge(userId, 'rates', { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
+        const retry = await platformRates(userId, { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
         const retryRates = retry?.rates || []
         if (retryRates.length > rates.length) {
           rates = retryRates
@@ -150,41 +155,55 @@ export async function executeOrder(userId, config, request, action, options = {}
 }
 
 export async function handleAnalyze(userId, params) {
-  const { session_id = 'default', symbol, timeframe = 'M30', kline_count = 100, include_positions = true, prompt_override } = params
+  const { session_id = 'default', symbol, include_positions = true, strategy_id, auto_execute = false } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
+  if (!strategy_id) return { status: 'error', message: 'strategy required' }
 
-  const config = await getAnalyzeApiKey(userId, session_id)
-  const prompt = prompt_override || config?.system_prompt || ''
-  const tags = parseTimeframeTags(prompt)
+  const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+  const strategy = await getStrategyById(Number(strategy_id), userId, user?.role || 'user', { forExecution: true })
+  if (!strategy) return { status: 'error', message: 'strategy_not_available' }
+  const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
+  if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
+  const policy = parseStrategyPolicy(strategy)
+  const config = await getAnalyzeApiKey(userId, session_id, Number(strategy.id))
+  config._allowed_entry_methods = policy.entryMethods
+  config._market_data_plan = policy.marketDataPlan
+  config._use_chan_analysis = policy.useChanAnalysis
+  config.enable_auto_trade = Boolean(auto_execute)
+  const prompt = strategy.system_prompt || ''
+  const tags = policy.marketDataPlan.timeframes.map(item => ({ tf: item.timeframe, count: item.kline_count }))
 
-  const account = await mt5Bridge(userId, 'account', {})
-  const positionsData = include_positions ? await mt5Bridge(userId, 'positions', { symbol }) : { positions: [] }
-  const positions = positionsData.positions || []
-  const pendingData = await mt5Bridge(userId, 'pending_list', { symbol }).catch(() => ({ orders: [] }))
-  const pendingOrders = pendingData.orders || pendingData.pending_list || []
+  const account = null
+  const positions = []
+  const pendingOrders = []
 
-  const primaryTf = tags.length > 0 ? tags[0].tf : timeframe.toUpperCase()
-  const primaryCount = tags.length > 0 ? tags[0].count : kline_count
-  const hasUseChanTag = /\{\{USE_CHAN\}\}/.test(prompt)
-  const primaryHistoryCount = resolveChanHistoryCount(userId, symbol, primaryTf, primaryCount, hasUseChanTag)
-  const ratesResp = await mt5Bridge(userId, 'rates', { symbol, timeframe: primaryTf, count: primaryHistoryCount })
+  const primaryTf = policy.marketDataPlan.primary_timeframe || tags[0]?.tf || 'M30'
+  const primaryTag = tags.find(item => item.tf === primaryTf) || tags[0]
+  const primaryCount = primaryTag?.count || 100
+  const primaryHistoryCount = resolveChanHistoryCount(userId, symbol, primaryTf, primaryCount, policy.useChanAnalysis)
+  const ratesResp = await platformRates(userId, { symbol, timeframe: primaryTf, count: primaryHistoryCount })
   if (!ratesResp || ratesResp.status === 'error') return { status: 'error', message: 'Failed to get rates' }
   const rates = ratesResp.rates || []
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual')
-  if (hasUseChanTag) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis)
+  if (policy.useChanAnalysis) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
   await attachAtrAnchor(userId, symbol, market, primaryTf)
   let memory = { promptBlock: '', mode: 'off', logId: null }
   try {
-    memory = await retrievePersonalMemory({ userId, symbol, timeframe: primaryTf, mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
+    if (strategy.scope === 'platform') {
+      memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), symbol, timeframe: primaryTf })
+    } else {
+      memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), symbol, timeframe: primaryTf, mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
+    }
   } catch (error) {
-    console.error('[Analyze] Personal memory retrieval failed; continuing without memory:', error.message)
+    console.error('[Analyze] Experience retrieval failed; continuing without it:', error.message)
   }
   if (config) {
-    config._memoryContext = memory.promptBlock
-    config._memoryMode = memory.mode || 'off'
+    if (strategy.scope === 'platform') config._platformExperienceContext = memory.promptBlock
+    else config._memoryContext = memory.promptBlock
+    config._memoryMode = strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off')
   }
   let renderedEvidence = null
   if (config) config._onInferencePrepared = evidence => { renderedEvidence = evidence }
@@ -213,20 +232,22 @@ export async function handleAnalyze(userId, params) {
         marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
         signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null])
     const snapshotId = await persistInferenceSnapshotTx(run, {
-      signalId: result.insertId, strategyId: null, strategyVersion: 1, strategyScope: 'manual', ownerUserId: userId,
-      standardSymbol: stripBrokerSuffix(symbol).toUpperCase(), marketSource: 'owner_mt5_bridge',
+      signalId: result.insertId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1), strategyScope: strategy.scope, ownerUserId: Number(strategy.owner_user_id || 0),
+      standardSymbol: stripBrokerSuffix(symbol).toUpperCase(), marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
       systemPrompt: renderedEvidence.systemPrompt, userPrompt: renderedEvidence.userPrompt,
       outputSchemaVersion: renderedEvidence.outputSchemaVersion, marketSnapshot: market,
       modelProfileId: config?._model_profile_id, provider: config?.api_provider,
       modelName: config?.model_name, credentialSource: config?._credential_source,
-      memoryMode: memory.mode || 'off', createdAt,
+      memoryMode: strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off'), createdAt,
     })
     return { signalId: result.insertId, snapshotId }
   })
 
   signal.id = persisted.signalId
-  try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId) }
-  catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
+  if (strategy.scope === 'private' && memory.logId) {
+    try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId) }
+    catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
+  }
   signal.symbol = symbol
   signal.timeframe = primaryTf
   signal.created_at = createdAt
@@ -282,7 +303,7 @@ export async function handleAnalyze(userId, params) {
     }
   }
 
-  if (memory.pairedExperimentEnabled && memory.mode === 'active' && memory.promptBlock) {
+  if (strategy.scope === 'private' && memory.pairedExperimentEnabled && memory.mode === 'active' && memory.promptBlock) {
     let control = null
     let pairStatus = 'failed'
     let pairError = null
@@ -298,7 +319,7 @@ export async function handleAnalyze(userId, params) {
       pairError = error.message || 'paired_control_failed'
     }
     try {
-      await recordPairedInferenceRun({ userId, strategyId: null, signalId: signal.id,
+      await recordPairedInferenceRun({ userId, strategyId: Number(strategy.id), signalId: signal.id,
         memoryLogId: memory.logId, treatment: signal, control, status: pairStatus, errorCode: pairError })
     } catch (error) {
       console.error('[Analyze] Paired inference evidence write failed:', error.message)

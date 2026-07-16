@@ -791,6 +791,11 @@ export async function executeViaBridge(userId, action, params, timeoutMs = 10000
   return sendBridgeCommand(userId, action, params, timeoutMs, options)
 }
 
+export async function platformRates(userId, params = {}) {
+  const { getPlatformRates } = await import('./platform-market-data.js')
+  return getPlatformRates(userId, params)
+}
+
 export function calculateMarketData(symbol, timeframe, rates, account, positions, options = {}) {
   if (!rates || rates.length === 0) {
     return { symbol, timeframe, latest_price: 0, strategy_score: { trend_strength: 0, data_confidence: 0.1 }, error: 'no_rates' }

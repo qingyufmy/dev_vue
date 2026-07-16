@@ -3,13 +3,13 @@
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, logAudit } from '../../db.js'
 import { parsePromptSymbols } from './config.js'
 import { getModelProfileById } from './model-profiles.js'
-import { stripBrokerSuffix } from './utils.js'
+import { stripBrokerSuffix, stripStrategyControlTags } from './utils.js'
+import { normalizeEntryMethods, normalizeMarketDataPlan, normalizeUseChanAnalysis } from './strategy-policy.js'
+import { normalizeSubscriptionSchedule } from './subscription-schedule.js'
 
 const VALID_SCOPES = new Set(['platform', 'private'])
 const VALID_VISIBILITY = new Set(['active', 'draft', 'archived'])
-// shared/isolated remain accepted for existing rows; personal/platform_only/off
-// are the explicit runtime modes used by the personal-memory subsystem.
-const VALID_MEMORY_MODES = new Set(['shared', 'isolated', 'personal', 'platform_only', 'off', 'shadow'])
+const PRIVATE_MEMORY_MODES = new Set(['personal', 'off', 'shadow'])
 const VALID_MARGIN_MODES = new Set(['unknown', 'netting', 'hedging'])
 
 function toId(value, field = 'id') {
@@ -95,8 +95,16 @@ async function assertTxProAccess(run, userId, userRole) {
 
 async function validateModelBinding(scope, ownerUserId, modelProfileId) {
   if (scope === 'platform') {
-    if (modelProfileId != null) throw new Error('platform_strategy_uses_platform_default_model')
-    return { modelProfileId: null, inferenceMode: 'platform_model' }
+    if (modelProfileId == null || modelProfileId === '') {
+      return { modelProfileId: null, inferenceMode: 'platform_model' }
+    }
+    const id = toId(modelProfileId, 'model_profile_id')
+    const profile = await getModelProfileById(id)
+    if (!profile || profile.status !== 'active') throw new Error('model_profile_not_found_or_inactive')
+    if (profile.scope !== 'platform' || Number(profile.owner_user_id || 0) !== 0) {
+      throw new Error('model_profile_access_denied')
+    }
+    return { modelProfileId: id, inferenceMode: 'platform_bound_model' }
   }
   if (modelProfileId == null || modelProfileId === '') {
     return { modelProfileId: null, inferenceMode: 'user_default' }
@@ -178,23 +186,30 @@ export async function createStrategy(userId, userRole, payload = {}) {
   const scope = payload.scope || 'private'
   if (!VALID_SCOPES.has(scope)) throw new Error('invalid_scope')
   if (scope === 'platform' && !isAdmin(userRole)) throw new Error('platform_requires_admin')
+  if (scope === 'private' && isAdmin(userRole)) throw new Error('admin_private_strategy_disabled')
   const visibility = payload.visibility_status || 'active'
   if (!VALID_VISIBILITY.has(visibility)) throw new Error('invalid_visibility_status')
   const symbols = [...new Set((Array.isArray(payload.symbols) ? payload.symbols : []).map(normalizeSymbol).filter(Boolean))]
   if (!symbols.length) throw new Error('symbols_required')
+  const rawPrompt = payload.system_prompt || ''
+  const marketDataPlan = normalizeMarketDataPlan(payload.market_data_plan, { prompt: rawPrompt })
+  const entryMethods = normalizeEntryMethods(payload.entry_methods)
+  const useChanAnalysis = normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
+  const systemPrompt = stripStrategyControlTags(rawPrompt)
   const ownerUserId = scope === 'platform' ? 0 : actorId
   const binding = await validateModelBinding(scope, ownerUserId, payload.model_profile_id)
   const now = beijingNow()
   const result = await queryRun(
     `INSERT INTO auto_prompt_types
-      (title, description, system_prompt, symbols_json, interval_minutes, is_active, sort_order,
+      (title, description, system_prompt, symbols_json, market_data_plan_json, entry_methods_json, use_chan_analysis, interval_minutes, is_active, sort_order,
        created_by, scope, owner_user_id, model_profile_id, inference_mode, visibility_status,
        version, version_label, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     [
-      payload.title || '未命名策略', payload.description || '', payload.system_prompt || '',
-      JSON.stringify(symbols), Math.max(1, Number(payload.interval_minutes) || 5),
-      payload.is_active === false ? 0 : 1, Number(payload.sort_order) || 0, actorId,
+      payload.title || '未命名策略', payload.description || '', systemPrompt,
+      JSON.stringify(symbols), JSON.stringify(marketDataPlan), JSON.stringify(entryMethods), useChanAnalysis ? 1 : 0,
+      Math.max(1, Number(payload.interval_minutes) || 5),
+      visibility === 'active' ? 1 : 0, Number(payload.sort_order) || 0, actorId,
       scope, ownerUserId, binding.modelProfileId, binding.inferenceMode, visibility,
       payload.version_label || '', now, now,
     ]
@@ -225,21 +240,35 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
     if (!symbols.length) throw new Error('symbols_required')
     symbolsJson = JSON.stringify(symbols)
   }
+  const marketDataPlan = payload.market_data_plan !== undefined
+    ? normalizeMarketDataPlan(payload.market_data_plan, { prompt: payload.system_prompt ?? existing.system_prompt })
+    : normalizeMarketDataPlan(existing.market_data_plan_json, { prompt: existing.system_prompt })
+  const entryMethods = payload.entry_methods !== undefined
+    ? normalizeEntryMethods(payload.entry_methods)
+    : normalizeEntryMethods(existing.entry_methods_json)
+  const rawPrompt = payload.system_prompt ?? existing.system_prompt
+  const systemPrompt = stripStrategyControlTags(rawPrompt)
+  const useChanAnalysis = payload.use_chan_analysis !== undefined
+    ? normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
+    : normalizeUseChanAnalysis(existing.use_chan_analysis, { prompt: existing.system_prompt })
   const requestedModelId = payload.model_profile_id !== undefined ? payload.model_profile_id : existing.model_profile_id
   const binding = await validateModelBinding(existing.scope, Number(existing.owner_user_id), requestedModelId)
   const contentChanged = payload.title !== undefined || payload.system_prompt !== undefined || payload.symbols !== undefined
+    || payload.market_data_plan !== undefined || payload.entry_methods !== undefined || payload.use_chan_analysis !== undefined
   const version = contentChanged ? Number(existing.version || 1) + 1 : Number(existing.version || 1)
   const now = beijingNow()
   await queryRun(
     `UPDATE auto_prompt_types SET title = ?, description = ?, system_prompt = ?, symbols_json = ?,
+       market_data_plan_json = ?, entry_methods_json = ?, use_chan_analysis = ?,
        interval_minutes = ?, is_active = ?, sort_order = ?, model_profile_id = ?, inference_mode = ?,
        visibility_status = ?, version = ?, version_label = ?, updated_at = ?
      WHERE id = ? AND deleted_at IS NULL`,
     [
       payload.title ?? existing.title, payload.description ?? existing.description,
-      payload.system_prompt ?? existing.system_prompt, symbolsJson,
+      systemPrompt, symbolsJson,
+      JSON.stringify(marketDataPlan), JSON.stringify(entryMethods), useChanAnalysis ? 1 : 0,
       payload.interval_minutes != null ? Math.max(1, Number(payload.interval_minutes) || 1) : existing.interval_minutes,
-      payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : existing.is_active,
+      visibility === 'active' ? 1 : 0,
       payload.sort_order != null ? Number(payload.sort_order) || 0 : existing.sort_order,
       binding.modelProfileId, binding.inferenceMode, visibility, version,
       payload.version_label ?? existing.version_label, now, id,
@@ -248,19 +277,46 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
   return getStrategyById(id, actorId, userRole)
 }
 
-export async function deleteStrategy(strategyId, userId, userRole) {
+export async function getStrategyDeletionPreview(strategyId, userId, userRole) {
   const id = toId(strategyId, 'strategy_id')
   const actorId = toId(userId, 'user_id')
-  await withTransaction(async run => {
+  const existing = await queryOne('SELECT * FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [id])
+  if (!existing) throw new Error('strategy_not_found')
+  if (existing.scope === 'platform' ? !isAdmin(userRole) : Number(existing.owner_user_id) !== actorId) throw new Error('access_denied')
+  const impact = await queryOne(`SELECT COUNT(*) AS subscription_count,
+      COALESCE(SUM(CASE WHEN execution_enabled = 1 THEN 1 ELSE 0 END), 0) AS active_subscription_count,
+      COUNT(DISTINCT user_id) AS affected_user_count
+    FROM strategy_subscriptions WHERE strategy_id = ? AND is_deleted = 0`, [id])
+  return {
+    id, title: existing.title, scope: existing.scope, version: Number(existing.version || 1),
+    subscription_count: Number(impact?.subscription_count || 0),
+    active_subscription_count: Number(impact?.active_subscription_count || 0),
+    affected_user_count: Number(impact?.affected_user_count || 0),
+  }
+}
+
+export async function deleteStrategy(strategyId, userId, userRole, confirmation = {}) {
+  const id = toId(strategyId, 'strategy_id')
+  const actorId = toId(userId, 'user_id')
+  const deleted = await withTransaction(async run => {
     const existing = await txOne(run, 'SELECT * FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL FOR UPDATE', [id])
     if (!existing) throw new Error('strategy_not_found')
     if (existing.scope === 'platform' ? !isAdmin(userRole) : Number(existing.owner_user_id) !== actorId) throw new Error('access_denied')
-    const affected = await txAll(run, `SELECT DISTINCT user_id FROM strategy_subscriptions
-      WHERE strategy_id = ? AND is_deleted = 0 AND execution_enabled = 1 FOR UPDATE`, [id])
+    if (String(confirmation.confirm_title || '') !== String(existing.title || '')) throw new Error('strategy_delete_confirmation_mismatch')
+    if (Number(confirmation.confirm_version) !== Number(existing.version || 1)) throw new Error('strategy_delete_version_changed')
+    const subscriptions = await txAll(run, `SELECT id, user_id, execution_enabled FROM strategy_subscriptions
+      WHERE strategy_id = ? AND is_deleted = 0 FOR UPDATE`, [id])
+    const active = subscriptions.filter(row => Number(row.execution_enabled) === 1)
+    if (Number(confirmation.expected_active_subscriptions) !== active.length) throw new Error('strategy_delete_impact_changed')
+    if (active.length > 0 && confirmation.confirm_stop_subscriptions !== true) throw new Error('strategy_delete_active_subscriptions_unconfirmed')
+    const affected = [...new Set(active.map(row => Number(row.user_id)))].map(user_id => ({ user_id }))
     await run("UPDATE auto_prompt_types SET deleted_at = ?, is_active = 0, visibility_status = 'archived' WHERE id = ?", [beijingNow(), id])
     await run('UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE strategy_id = ? AND is_deleted = 0', [beijingNow(), id])
     for (const row of affected) await syncLegacySchedulerTx(run, Number(row.user_id))
+    return { title: existing.title, scope: existing.scope, version: Number(existing.version || 1), active_subscription_count: active.length, affected_user_count: affected.length }
   })
+  await logAudit({ userId: actorId, action: 'strategy_deleted', targetType: 'strategy', targetId: id, detail: JSON.stringify(deleted) })
+  return deleted
 }
 
 // ─── Trading accounts ───
@@ -378,25 +434,14 @@ async function loadExecutableStrategyTx(run, strategyId, userId) {
   return strategy
 }
 
-async function ensurePersonalStrategyTx(run, strategy, userId) {
-  if (strategy.scope !== 'platform') return strategy
-  const versionLabel = `personalized_from:${strategy.id}`
-  const existing = await txOne(run, `SELECT * FROM auto_prompt_types
-    WHERE scope = 'private' AND owner_user_id = ? AND version_label = ?
-      AND deleted_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE`, [userId, versionLabel])
-  if (existing) return existing
-  const now = beijingNow()
-  const [insert] = await run(`INSERT INTO auto_prompt_types
-    (title, description, system_prompt, symbols_json, interval_minutes, is_active, sort_order,
-     created_by, scope, owner_user_id, model_profile_id, inference_mode, visibility_status,
-     version, version_label, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'private', ?, NULL, 'user_default', 'active', ?, ?, ?, ?)`, [
-    `${strategy.title} · 个人记忆`, strategy.description || '', strategy.system_prompt || '',
-    strategy.symbols_json || '[]', strategy.interval_minutes || 5, strategy.sort_order || 0,
-    userId, userId, Number(strategy.version || 1), versionLabel, now, now,
-  ])
-  return { ...strategy, id: insert.insertId, title: `${strategy.title} · 个人记忆`, scope: 'private',
-    owner_user_id: userId, model_profile_id: null, inference_mode: 'user_default', version_label: versionLabel }
+function normalizeMemoryMode(strategy, requestedMode) {
+  if (strategy.scope === 'platform') {
+    if (requestedMode != null && requestedMode !== 'platform_only') throw new Error('platform_strategy_memory_managed_by_admin')
+    return 'platform_only'
+  }
+  const mode = requestedMode == null || ['shared', 'isolated'].includes(requestedMode) ? 'personal' : requestedMode
+  if (!PRIVATE_MEMORY_MODES.has(mode)) throw new Error('invalid_private_memory_mode')
+  return mode
 }
 
 async function assertNoExecutionConflictTx(run, accountId, symbols, excludeSubscriptionId = null) {
@@ -415,6 +460,24 @@ async function assertNoExecutionConflictTx(run, accountId, symbols, excludeSubsc
     const overlap = effectiveSymbols(row.symbols_json, row.strategy_symbols_json).filter(symbol => wanted.has(symbol))
     if (overlap.length) throw new Error(`execution_conflict:${row.id}:${overlap.join(',')}`)
   }
+}
+
+async function enforceSingleActiveSubscriptionTx(run, userId, excludeSubscriptionId, replaceActive) {
+  const params = [userId]
+  let exclusion = ''
+  if (excludeSubscriptionId != null) {
+    exclusion = ' AND id <> ?'
+    params.push(excludeSubscriptionId)
+  }
+  const active = await txAll(run, `SELECT id FROM strategy_subscriptions
+    WHERE user_id = ? AND execution_enabled = 1 AND is_deleted = 0${exclusion}
+    ORDER BY updated_at DESC, id DESC FOR UPDATE`, params)
+  if (!active.length) return []
+  if (!replaceActive) throw new Error(`active_subscription_conflict:${active[0].id}`)
+  const ids = active.map(row => Number(row.id))
+  await run(`UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ?
+    WHERE id IN (${ids.map(() => '?').join(',')})`, [beijingNow(), ...ids])
+  return ids
 }
 
 // During the V1 compatibility window the unified scheduler still reads one
@@ -456,31 +519,32 @@ export async function createSubscription(userId, userRole, payload = {}) {
   if (payload.trading_account_id == null) throw new Error('trading_account_id_required')
   if (payload.strategy_id == null) throw new Error('strategy_id_required')
   const accountId = toId(payload.trading_account_id, 'trading_account_id')
-  let strategyId = toId(payload.strategy_id, 'strategy_id')
-  const memoryMode = payload.memory_mode || 'isolated'
-  if (!VALID_MEMORY_MODES.has(memoryMode)) throw new Error('invalid_memory_mode')
+  const strategyId = toId(payload.strategy_id, 'strategy_id')
   const result = await withTransaction(async run => {
     await assertTxProAccess(run, actorId, userRole)
     const account = await txOne(run, 'SELECT * FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [accountId, actorId])
     if (!account) throw new Error('account_not_found')
-    let strategy = await loadExecutableStrategyTx(run, strategyId, actorId)
-    if (memoryMode === 'personal' && strategy.scope === 'platform') {
-      strategy = await ensurePersonalStrategyTx(run, strategy, actorId)
-      strategyId = Number(strategy.id)
-    }
+    const strategy = await loadExecutableStrategyTx(run, strategyId, actorId)
+    const memoryMode = normalizeMemoryMode(strategy, payload.memory_mode)
     const symbolsJson = normalizeRequestedSymbols(payload.symbols, strategy.symbols_json)
     const executionEnabled = payload.execution_enabled ? 1 : 0
+    const schedule = normalizeSubscriptionSchedule(payload)
     if (executionEnabled) {
+      await enforceSingleActiveSubscriptionTx(run, actorId, null, Boolean(payload.replace_active))
       await assertNoExecutionConflictTx(run, accountId, effectiveSymbols(symbolsJson, strategy.symbols_json))
     }
     const [insert] = await run(
       `INSERT INTO strategy_subscriptions
         (user_id, trading_account_id, strategy_id, risk_profile_id, symbols_json,
-         execution_enabled, memory_mode, conflicting_strategy_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         execution_enabled, memory_mode, conflicting_strategy_id, schedule_enabled,
+         schedule_timezone, schedule_weekdays_json, schedule_windows_json,
+         outside_window_behavior, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         actorId, accountId, strategyId, payload.risk_profile_id || null, symbolsJson,
-        executionEnabled, memoryMode, payload.conflicting_strategy_id || null, beijingNow(), beijingNow(),
+        executionEnabled, memoryMode, payload.conflicting_strategy_id || null,
+        schedule.enabled ? 1 : 0, schedule.timezone, JSON.stringify(schedule.weekdays),
+        JSON.stringify(schedule.windows), schedule.outsideBehavior, beijingNow(), beijingNow(),
       ]
     )
     if (executionEnabled) {
@@ -505,28 +569,28 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
     if (!account) throw new Error('account_not_found')
     const existing = await txOne(run, 'SELECT * FROM strategy_subscriptions WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [id, actorId])
     if (!existing) throw new Error('subscription_not_found')
-    let strategy = await loadExecutableStrategyTx(run, Number(existing.strategy_id), actorId)
+    const strategy = await loadExecutableStrategyTx(run, Number(existing.strategy_id), actorId)
     const symbolsJson = payload.symbols === undefined
       ? existing.symbols_json
       : normalizeRequestedSymbols(payload.symbols, strategy.symbols_json)
     const executionEnabled = payload.execution_enabled === undefined ? Number(existing.execution_enabled) : (payload.execution_enabled ? 1 : 0)
-    const memoryMode = payload.memory_mode ?? existing.memory_mode
-    if (!VALID_MEMORY_MODES.has(memoryMode)) throw new Error('invalid_memory_mode')
-    if (memoryMode === 'personal' && strategy.scope === 'platform') {
-      strategy = await ensurePersonalStrategyTx(run, strategy, actorId)
-    }
+    const memoryMode = normalizeMemoryMode(strategy, payload.memory_mode ?? existing.memory_mode)
+    const schedule = normalizeSubscriptionSchedule(payload, existing)
     if (executionEnabled) {
+      await enforceSingleActiveSubscriptionTx(run, actorId, id, Boolean(payload.replace_active))
       await assertNoExecutionConflictTx(run, accountId, effectiveSymbols(symbolsJson, strategy.symbols_json), id)
     }
     await run(
       `UPDATE strategy_subscriptions SET strategy_id = ?, risk_profile_id = ?, symbols_json = ?, execution_enabled = ?,
-         memory_mode = ?, conflicting_strategy_id = ?, updated_at = ?
+         memory_mode = ?, conflicting_strategy_id = ?, schedule_enabled = ?, schedule_timezone = ?,
+         schedule_weekdays_json = ?, schedule_windows_json = ?, outside_window_behavior = ?, updated_at = ?
        WHERE id = ? AND user_id = ? AND is_deleted = 0`,
       [
         Number(strategy.id), payload.risk_profile_id !== undefined ? payload.risk_profile_id : existing.risk_profile_id,
         symbolsJson, executionEnabled, memoryMode,
         payload.conflicting_strategy_id !== undefined ? payload.conflicting_strategy_id : existing.conflicting_strategy_id,
-        beijingNow(), id, actorId,
+        schedule.enabled ? 1 : 0, schedule.timezone, JSON.stringify(schedule.weekdays),
+        JSON.stringify(schedule.windows), schedule.outsideBehavior, beijingNow(), id, actorId,
       ]
     )
     await syncLegacySchedulerTx(run, actorId, executionEnabled ? {

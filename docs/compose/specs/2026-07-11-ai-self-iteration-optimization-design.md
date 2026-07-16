@@ -1,6 +1,8 @@
 # AI 自迭代优化设计方案
 
-> 状态：待实施 | 创建：2026-07-11 | 等待用户覆盖线上版本后开始
+> 状态：部分被新方案取代 | 创建：2026-07-11
+> 最新整合方案：`docs/compose/specs/2026-07-15-private-strategy-shared-signal-risk-gate-design.md`
+> 保留参考：signal_outcomes、平仓监控、性能聚合、Kill Switch、影子模式。S7/S8 的直接自动注入与自适应权重不再作为 V1 实施基线，先采用“用户确认复盘 → 个人经验记忆 → 受控注入”。
 
 ## [S1] 背景与目标
 

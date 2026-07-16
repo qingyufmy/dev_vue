@@ -163,6 +163,25 @@ describe('resolveAiTaskModel', () => {
     expect(result.credential_source).toBe('platform_primary')
   })
 
+  it('uses an explicit active platform model bound to a platform strategy', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 12, scope: 'platform', model_profile_id: 88, visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(profile({ id: 88, owner_user_id: 0, scope: 'platform' }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 12, usage: 'auto_platform' })
+    expect(result.reason).toBe('strategy_binding')
+    expect(result.model_profile_id).toBe(88)
+    expect(result.strategy_id).toBe(12)
+  })
+
+  it('does not hide an unavailable bound platform model behind the default', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 12, scope: 'platform', model_profile_id: 88, visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(null)
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 12, usage: 'auto_platform' })
+    expect(result.error).toBe('bound_model_unavailable')
+    expect(mockQueryOne).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects unknown usages', async () => {
     await expect(resolveAiTaskModel({ userId: 1, usage: 'invalid' })).rejects.toThrow('invalid_usage:invalid')
   })

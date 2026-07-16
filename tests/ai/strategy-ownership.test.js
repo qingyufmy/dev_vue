@@ -6,6 +6,7 @@ vi.mock('../../server/db.js', () => ({
   queryRun: vi.fn(),
   withTransaction: vi.fn(),
   beijingNow: vi.fn(() => '2026-07-15 12:00:00'),
+  logAudit: vi.fn(),
 }))
 
 vi.mock('../../server/routes/ai/config.js', () => ({
@@ -29,6 +30,7 @@ import {
   createTradingAccount,
   deleteStrategy,
   deleteSubscription,
+  getStrategyDeletionPreview,
   getStrategyById,
   getSubscriptionWithContext,
   listStrategies,
@@ -138,15 +140,50 @@ describe('strategy visibility and mutation permissions', () => {
     expect(params).not.toContain(99)
   })
 
+  it('does not create administrator private strategies', async () => {
+    await expect(createStrategy(1, 'admin', { scope: 'private', title: 'legacy admin private', symbols: ['XAUUSD'] }))
+      .rejects.toThrow('admin_private_strategy_disabled')
+    expect(db.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('derives the executable flag from the strategy visibility state', async () => {
+    await createStrategy(1, 'admin', { scope: 'platform', visibility_status: 'draft', is_active: true, symbols: ['XAUUSD'] })
+    expect(db.queryRun.mock.calls[0][1][8]).toBe(0)
+
+    db.queryRun.mockClear()
+    db.queryOne.mockImplementation(sql => sql.includes('FROM users') ? PRO : { ...PLATFORM, is_active: 0, visibility_status: 'draft' })
+    await updateStrategy(1, 1, 'admin', { visibility_status: 'active', is_active: false })
+    expect(db.queryRun.mock.calls[0][1][8]).toBe(1)
+  })
+
+  it('imports legacy prompt controls into structured fields and stores a clean prompt', async () => {
+    await createStrategy(2, 'user', {
+      scope: 'private', title: 'Legacy', symbols: ['XAUUSD'],
+      system_prompt: '分析黄金 {{ATF:H1:80}} {{ATF:H4:50}} {{USE_CHAN}}',
+    })
+    const params = db.queryRun.mock.calls[0][1]
+    expect(params[2]).toBe('分析黄金')
+    expect(JSON.parse(params[4])).toEqual({
+      primary_timeframe: 'H1',
+      timeframes: [{ timeframe: 'H1', kline_count: 80 }, { timeframe: 'H4', kline_count: 50 }],
+    })
+    expect(params[6]).toBe(1)
+  })
+
   it('allows only an active model owned by the private strategy creator', async () => {
     models.getModelProfileById.mockResolvedValue({ id: 8, scope: 'user', owner_user_id: 9, status: 'active' })
     await expect(createStrategy(2, 'user', { scope: 'private', model_profile_id: 8, symbols: ['XAUUSD'] }))
       .rejects.toThrow('model_profile_access_denied')
   })
 
-  it('forces platform strategy model semantics and rejects explicit user binding', async () => {
-    await expect(createStrategy(1, 'admin', { scope: 'platform', model_profile_id: 8, symbols: ['XAUUSD'] }))
-      .rejects.toThrow('platform_strategy_uses_platform_default_model')
+  it('allows an active platform model binding and rejects user models on platform strategies', async () => {
+    models.getModelProfileById.mockResolvedValueOnce({ id: 8, scope: 'platform', owner_user_id: 0, status: 'active' })
+    await expect(createStrategy(1, 'admin', { scope: 'platform', model_profile_id: 8, symbols: ['XAUUSD'] })).resolves.toBeTruthy()
+    expect(db.queryRun.mock.calls[0][1]).toContain('platform_bound_model')
+
+    models.getModelProfileById.mockResolvedValueOnce({ id: 9, scope: 'user', owner_user_id: 1, status: 'active' })
+    await expect(createStrategy(1, 'admin', { scope: 'platform', model_profile_id: 9, symbols: ['XAUUSD'] }))
+      .rejects.toThrow('model_profile_access_denied')
     await expect(createStrategy(2, 'user', { scope: 'platform', symbols: ['XAUUSD'] }))
       .rejects.toThrow('platform_requires_admin')
   })
@@ -155,6 +192,53 @@ describe('strategy visibility and mutation permissions', () => {
     db.queryOne.mockResolvedValue(PRIVATE)
     await expect(updateStrategy(2, 1, 'admin', { title: '越权' })).rejects.toThrow('access_denied')
     await expect(deleteStrategy(2, 1, 'admin')).rejects.toThrow('access_denied')
+  })
+
+  it('previews the authoritative subscription impact before deletion', async () => {
+    db.queryOne.mockImplementation(sql => {
+      if (sql.includes('COUNT(*) AS subscription_count')) return { subscription_count: 4, active_subscription_count: 2, affected_user_count: 2 }
+      return defaultQueryOne(sql)
+    })
+    await expect(getStrategyDeletionPreview(2, 2, 'user')).resolves.toMatchObject({
+      id: 2, title: PRIVATE.title, version: 1,
+      subscription_count: 4, active_subscription_count: 2, affected_user_count: 2,
+    })
+  })
+
+  it('requires the exact title and current impact before deleting a strategy', async () => {
+    await expect(deleteStrategy(2, 2, 'user', {
+      confirm_title: 'wrong title', confirm_version: 1,
+      expected_active_subscriptions: 0, confirm_stop_subscriptions: true,
+    })).rejects.toThrow('strategy_delete_confirmation_mismatch')
+    expect(txRun.mock.calls.some(([sql]) => sql.startsWith('UPDATE auto_prompt_types'))).toBe(false)
+
+    txRun = vi.fn(sql => {
+      if (sql.includes('FROM auto_prompt_types')) return [[PRIVATE], []]
+      if (sql.includes('FROM strategy_subscriptions') && sql.includes('FOR UPDATE')) return [[{ id:20, user_id:2, execution_enabled:1 }], []]
+      if (sql.includes('FROM users')) return [[PRO], []]
+      return [{ affectedRows: 1 }, []]
+    })
+    db.withTransaction.mockImplementation(fn => fn(txRun))
+    await expect(deleteStrategy(2, 2, 'user', {
+      confirm_title: PRIVATE.title, confirm_version: 1,
+      expected_active_subscriptions: 0, confirm_stop_subscriptions: true,
+    })).rejects.toThrow('strategy_delete_impact_changed')
+  })
+
+  it('soft deletes only after typed confirmation and records an audit event', async () => {
+    txRun = vi.fn(sql => {
+      if (sql.includes('FROM auto_prompt_types')) return [[PRIVATE], []]
+      if (sql.includes('FROM strategy_subscriptions') && sql.includes('FOR UPDATE')) return [[{ id:20, user_id:2, execution_enabled:1 }], []]
+      if (sql.includes('FROM users')) return [[PRO], []]
+      return [{ affectedRows: 1 }, []]
+    })
+    db.withTransaction.mockImplementation(fn => fn(txRun))
+    await expect(deleteStrategy(2, 2, 'user', {
+      confirm_title: PRIVATE.title, confirm_version: 1,
+      expected_active_subscriptions: 1, confirm_stop_subscriptions: true,
+    })).resolves.toMatchObject({ active_subscription_count: 1 })
+    expect(txRun.mock.calls.some(([sql]) => sql.includes("visibility_status = 'archived'"))).toBe(true)
+    expect(db.logAudit).toHaveBeenCalledWith(expect.objectContaining({ action:'strategy_deleted', targetId:2 }))
   })
 
   it('owner can update private strategy and content changes bump the version', async () => {
@@ -218,6 +302,34 @@ describe('subscription transaction and V1 execution constraint', () => {
     expect(sql.some(value => value.includes('INSERT INTO user_bridge_settings'))).toBe(true)
   })
 
+  it('requires an explicit switch before replacing another active auto-inference subscription', async () => {
+    txRun.mockImplementation(sql => {
+      if (sql.includes('SELECT id FROM strategy_subscriptions')) return [[{ id: 19 }], []]
+      return defaultTx(sql)
+    })
+    await expect(createSubscription(2, 'user', {
+      trading_account_id:10, strategy_id:2, execution_enabled:true,
+    })).rejects.toThrow('active_subscription_conflict:19')
+
+    await expect(createSubscription(2, 'user', {
+      trading_account_id:10, strategy_id:2, execution_enabled:true, replace_active:true,
+    })).resolves.toMatchObject({ id:20 })
+    expect(txRun.mock.calls.some(([sql]) => sql.includes('UPDATE strategy_subscriptions SET execution_enabled = 0'))).toBe(true)
+  })
+
+  it('persists the normalized subscription schedule', async () => {
+    await createSubscription(2, 'user', {
+      trading_account_id:10, strategy_id:2, schedule_enabled:true,
+      schedule_timezone:'UTC', schedule_weekdays:[1,3,5],
+      schedule_windows:[{ start:'09:00', end:'12:00' }], outside_window_behavior:'signals_only',
+    })
+    const insert = txRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
+    expect(insert[1]).toContain('UTC')
+    expect(insert[1]).toContain('[1,3,5]')
+    expect(insert[1]).toContain('[{"start":"09:00","end":"12:00"}]')
+    expect(insert[1]).toContain('signals_only')
+  })
+
   it('treats broker suffix variants as the same standard symbol', async () => {
     txRun.mockImplementation(sql => {
       if (sql.includes('FROM strategy_subscriptions ss')) {
@@ -267,20 +379,20 @@ describe('subscription transaction and V1 execution constraint', () => {
       .rejects.toThrow('strategy_not_selectable')
   })
 
-  it('converts platform personal-memory subscriptions into owner-only inference', async () => {
+  it('keeps platform strategy memory admin-managed and never creates a private copy', async () => {
     txRun.mockImplementation(sql => {
-      if (sql.includes('FROM auto_prompt_types') && !sql.includes("scope = 'private'")) return [[PLATFORM], []]
-      if (sql.includes("scope = 'private'") && sql.includes('version_label')) return [[], []]
-      if (sql.startsWith('INSERT INTO auto_prompt_types')) return [{ insertId: 77 }, []]
+      if (sql.includes('FROM auto_prompt_types')) return [[PLATFORM], []]
       return defaultTx(sql)
     })
-    await createSubscription(2, 'user', { trading_account_id: 10, strategy_id: 1, memory_mode: 'personal', execution_enabled: true })
+    await expect(createSubscription(2, 'user', { trading_account_id: 10, strategy_id: 1, memory_mode: 'personal' }))
+      .rejects.toThrow('platform_strategy_memory_managed_by_admin')
+    await createSubscription(2, 'user', { trading_account_id: 10, strategy_id: 1, memory_mode: 'platform_only', execution_enabled: true })
     const calls = txRun.mock.calls
-    expect(calls.some(([sql]) => sql.startsWith('INSERT INTO auto_prompt_types'))).toBe(true)
+    expect(calls.some(([sql]) => sql.startsWith('INSERT INTO auto_prompt_types'))).toBe(false)
     const subscriptionInsert = calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
-    expect(subscriptionInsert[1]).toContain(77)
+    expect(subscriptionInsert[1]).toContain('platform_only')
     const schedulerWrite = calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
-    expect(schedulerWrite[1]).toContain(77)
+    expect(schedulerWrite[1]).toContain(1)
   })
 
   it('soft-deletes only the owner subscription and detects missing rows', async () => {

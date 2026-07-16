@@ -4,26 +4,29 @@ import { Router } from 'express'
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
+import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { authMiddleware } from '../../middleware/auth.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
-import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle } from './scheduler.js'
+import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { createMemoryFromApprovedReview, listMemoryItems, revokeMemoryItem, activateDuplicateMemory,
   getMemorySettings, setMemorySettings, rollbackMemorySummary } from './memory-system.js'
+import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
+  listPlatformExperience, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
-import { listStrategies, getStrategyById, createStrategy, updateStrategy, deleteStrategy,
+import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription,
   adminReviewTradingAccount } from './strategy-ownership.js'
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
-import { requestRiskRecovery, reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
+import { setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
+import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 import { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
@@ -38,7 +41,7 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: BRIDGE_VERSION,
     build_date: new Date().toISOString().slice(0, 10),
-    changelog: `${BRIDGE_VERSION}: 安装包+配置目录+接口统一`,
+    changelog: `${BRIDGE_VERSION}: 增量风险快照，实时风控不再传输全量历史`,
     updater_url: `https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_${BRIDGE_VERSION}.exe`,
     full_url: `https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_${BRIDGE_VERSION}.exe`,
     file_size: 0,
@@ -234,8 +237,13 @@ router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/strategies/:id/delete-preview', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, preview:await getStrategyDeletionPreview(Number(req.params.id), req.user.id, req.user.role) }) }
+  catch (error) { reviewError(res, error) }
+})
+
 router.delete('/ai/strategies/:id', authMiddleware, async (req, res) => {
-  try { await deleteStrategy(Number(req.params.id), req.user.id, req.user.role); await reconcileAutoSchedulers(); res.json({ ok:true }) }
+  try { const deleted = await deleteStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {}); await reconcileAutoSchedulers(); res.json({ ok:true, deleted }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -278,7 +286,13 @@ router.put('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
 })
 
 router.delete('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
-  try { await deleteSubscription(Number(req.params.id), req.user.id); await reconcileAutoSchedulers(); res.json({ ok:true }) }
+  try {
+    await deleteSubscription(Number(req.params.id), req.user.id)
+    const scheduler = await getUserAutoRuntimeStatus(req.user.id)
+    if (!scheduler.enabled) await removeUserRuntimeAutoSubscription(req.user.id)
+    await reconcileAutoSchedulers()
+    res.json({ ok:true, scheduler })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -292,11 +306,17 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
         FROM risk_policy_change_items rpci JOIN risk_policy_sets rps ON rps.id = rpci.policy_set_id
         WHERE rps.scope = 'account' AND rps.owner_user_id = ? AND rps.trading_account_id = ? AND rpci.status = 'pending'
         ORDER BY rpci.effective_at`, [req.user.id, account.id])
-      const riskState = await queryAll('SELECT halt_status, halt_reason, cooldown_until, user_kill_switch, data_complete FROM risk_account_state WHERE trading_account_id = ? LIMIT 1', [account.id])
+      const riskState = await queryAll(`SELECT halt_status, halt_reason, cooldown_until, user_kill_switch, data_complete,
+        data_incomplete_reason, last_risk_snapshot_at FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id])
       rows.push({ account, risk_state: riskState[0] || null, effective: await resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }), pending_changes: pending, subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) })
     }
     res.json({ ok: true, accounts: rows, rule_metadata: RISK_RULES })
   } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/risk-center/refresh', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await refreshIncompleteRiskAccounts(req.user.id)) }) }
+  catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/risk-center/:accountId/kill-switch', authMiddleware, async (req, res) => {
@@ -304,11 +324,6 @@ router.post('/ai/risk-center/:accountId/kill-switch', authMiddleware, async (req
     await setUserKillSwitch(req.user.id, Number(req.params.accountId), Boolean(req.body?.enabled), req.body?.reason)
     res.json({ ok: true })
   } catch (error) { reviewError(res, error) }
-})
-
-router.post('/ai/risk-center/:accountId/recovery', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, request_id: await requestRiskRecovery(req.user.id, Number(req.params.accountId), req.body?.reason) }) }
-  catch (error) { reviewError(res, error) }
 })
 
 router.put('/ai/risk-center/:accountId', authMiddleware, async (req, res) => {
@@ -328,12 +343,19 @@ router.put('/ai/risk-center/:accountId', authMiddleware, async (req, res) => {
 
 router.get('/ai/executions', authMiddleware, async (req, res) => {
   try {
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+    const pageSize = Math.min(50, Math.max(1, Number.parseInt(req.query.page_size, 10) || 5))
+    const totalRow = await queryOne('SELECT COUNT(*) AS total FROM order_intents WHERE user_id = ?', [req.user.id])
+    const total = Number(totalRow?.total || 0)
+    const pages = Math.max(1, Math.ceil(total / pageSize))
+    const safePage = Math.min(page, pages)
+    const offset = (safePage - 1) * pageSize
     const rows = await queryAll(`SELECT oi.id, oi.source_type, oi.source_id, oi.action, oi.symbol, oi.status,
       oi.original_order_json, oi.approved_order_json, oi.result_json, oi.error_code, oi.created_at, oi.completed_at,
       rd.policy_version_ids_json, rd.rule_results_json, rd.decision_status, rd.reject_code
       FROM order_intents oi LEFT JOIN risk_decisions rd ON rd.order_intent_id = oi.id
-      WHERE oi.user_id = ? ORDER BY oi.id DESC LIMIT 100`, [req.user.id])
-    res.json({ ok: true, executions: rows })
+      WHERE oi.user_id = ? ORDER BY oi.id DESC LIMIT ? OFFSET ?`, [req.user.id, pageSize, offset])
+    res.json({ ok: true, executions: rows, pagination: { page: safePage, page_size: pageSize, total, pages } })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -342,12 +364,9 @@ router.get('/ai/admin/risk-center', authMiddleware, async (req, res) => {
   try {
     const accounts = await queryAll(`SELECT ta.*, u.nickname AS user_nickname, u.email AS user_email,
       ras.halt_status, ras.halt_reason, ras.drawdown_pct, ras.consecutive_losses, ras.cooldown_until,
-      ras.user_kill_switch, ras.data_complete FROM trading_accounts ta
+      ras.user_kill_switch, ras.data_complete, ras.data_incomplete_reason, ras.last_risk_snapshot_at FROM trading_accounts ta
       JOIN users u ON u.id = ta.user_id LEFT JOIN risk_account_state ras ON ras.trading_account_id = ta.id
       WHERE ta.is_deleted = 0 ORDER BY ta.updated_at DESC LIMIT 500`)
-    const recoveries = await queryAll(`SELECT rr.*, ta.login_account, ta.nickname AS account_nickname, u.nickname AS user_nickname, u.email AS user_email
-      FROM risk_recovery_requests rr JOIN trading_accounts ta ON ta.id = rr.trading_account_id JOIN users u ON u.id = rr.user_id
-      WHERE rr.status = 'pending' ORDER BY rr.created_at`)
     const exceptions = await queryAll(`SELECT ta.*, u.nickname AS user_nickname, u.email AS user_email
       FROM trading_accounts ta JOIN users u ON u.id = ta.user_id
       WHERE ta.is_deleted = 0 AND (
@@ -358,17 +377,12 @@ router.get('/ai/admin/risk-center', authMiddleware, async (req, res) => {
     let set = await queryAll("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")
     let platform = null
     if (set[0]) platform = await queryAll('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1', [set[0].id])
-    res.json({ ok: true, accounts, exceptions, recoveries, global_control: global[0] || null, platform_policy_set: set[0] || null, platform_policy_version: platform?.[0] || null, defaults: DEFAULT_RISK_POLICY, rule_metadata: RISK_RULES })
+    res.json({ ok: true, accounts, exceptions, global_control: global[0] || null, platform_policy_set: set[0] || null, platform_policy_version: platform?.[0] || null, defaults: DEFAULT_RISK_POLICY, rule_metadata: RISK_RULES })
   } catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/admin/risk-center/kill-switch', authMiddleware, async (req, res) => {
   try { await setGlobalKillSwitch(req.user.id, req.user.role, Boolean(req.body?.enabled), req.body?.reason); res.json({ ok: true }) }
-  catch (error) { reviewError(res, error) }
-})
-
-router.post('/ai/admin/recoveries/:id/review', authMiddleware, async (req, res) => {
-  try { await reviewRiskRecovery(req.user.id, req.user.role, Number(req.params.id), Boolean(req.body?.approve), req.body?.reason); res.json({ ok: true }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -447,8 +461,15 @@ router.post('/ai/reviews/:id/confirm', authMiddleware, async (req, res) => {
     const caseId = Number(req.params.id)
     const result = await confirmReviewCase({ caseId, userId: req.user.id, versionId: req.body?.version_id, action: req.body?.action, tradeProcessIssueStatus: req.body?.trade_process_issue_status })
     let memory = null
-    if (req.body?.action === 'approve') memory = await createMemoryFromApprovedReview(caseId, req.user.id)
-    res.json({ ok: true, ...result, memory })
+    let platformExperience = null
+    if (req.body?.action === 'approve') {
+      if (req.user.role === 'admin') {
+        platformExperience = await createPlatformExperienceCandidateFromApprovedReview(caseId, req.user.id)
+      } else {
+        memory = await createMemoryFromApprovedReview(caseId, req.user.id)
+      }
+    }
+    res.json({ ok: true, ...result, memory, platform_experience: platformExperience })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -465,33 +486,63 @@ router.get('/ai/admin/reviews/health', authMiddleware, async (req, res) => {
 })
 
 router.get('/ai/memory', authMiddleware, async (req, res) => {
+  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, items: await listMemoryItems(req.user.id, req.query), settings: await getMemorySettings(req.user.id) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.put('/ai/memory/settings', authMiddleware, async (req, res) => {
+  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, settings: await setMemorySettings(req.user.id, req.body || {}) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/:id/revoke', authMiddleware, async (req, res) => {
+  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, ...(await revokeMemoryItem(Number(req.params.id), req.user.id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/:id/activate', authMiddleware, async (req, res) => {
+  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, item: await activateDuplicateMemory(Number(req.params.id), req.user.id) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/summaries/:id/rollback', authMiddleware, async (req, res) => {
+  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, ...(await rollbackMemorySummary(Number(req.params.id), req.user.id)) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/platform-experience', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  try {
+    const [items, policies] = await Promise.all([
+      listPlatformExperience(req.query), getPlatformExperiencePolicies(),
+    ])
+    res.json({ ok: true, items, policies })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/platform-experience/policies/:strategyId', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  try { res.json({ ok: true, policy: await updatePlatformExperiencePolicy(Number(req.params.strategyId), req.user.id, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/admin/platform-experience/:id/:action', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  const status = req.params.action === 'publish' ? 'active' : req.params.action === 'revoke' ? 'revoked' : null
+  if (!status) return res.status(400).json({ ok: false, error: 'invalid_platform_experience_action' })
+  try { res.json({ ok: true, item: await updatePlatformExperienceItem(Number(req.params.id), req.user.id, status) }) }
   catch (error) { reviewError(res, error) }
 })
 
 export { initAutoSchedulers }
 
-export { mt5Bridge } from './market-data.js'
+export { mt5Bridge, platformRates } from './market-data.js'
+export { getPlatformMarketStatus } from './platform-market-data.js'
 export { isBridgeAlive, getAllBridges, getBridgeTradeMode } from '../../bridge-ws.js'
 
 export { handleAnalyze } from './strategy.js'
@@ -525,7 +576,7 @@ export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   runSmartCloseCycle, syncUserRedisSubscription, removeUserRuntimeAutoSubscription,
   getUserAutoRuntimeStatus } from './scheduler.js'
 
-export { listStrategies, getStrategyById, createStrategy, updateStrategy, deleteStrategy,
+export { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, getTradingAccountById, createTradingAccount, updateTradingAccount, deleteTradingAccount,
   adminReviewTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription,
@@ -533,8 +584,8 @@ export { listStrategies, getStrategyById, createStrategy, updateStrategy, delete
 
 export { RISK_RULES, DEFAULT_RISK_POLICY, resolveEffectiveRiskPolicy, submitRiskPolicyChanges,
   evaluateCoreRisk } from './risk-policy.js'
-export { calculateAccountRiskMetrics, aggregateClosedPositions, requestRiskRecovery,
-  reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch, syncTradingAccountIdentity } from './risk-state.js'
+export { calculateAccountRiskMetrics, aggregateClosedPositions,
+  setUserKillSwitch, setGlobalKillSwitch, syncTradingAccountIdentity } from './risk-state.js'
 export { analyzeOutcomeAttribution, resolveOutcomeClosureTransition,
   reconcileSignalOutcomes, startOutcomeMonitor, stopOutcomeMonitor } from './signal-outcomes.js'
 export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome,
@@ -546,6 +597,9 @@ export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
   revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
   maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,
   startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
+export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
+  listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,
+  updatePlatformExperienceItem, retrievePlatformExperience } from './platform-experience.js'
 
 export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatureFlags,
   updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'

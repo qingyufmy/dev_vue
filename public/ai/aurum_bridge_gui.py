@@ -28,7 +28,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.3.9"
+APP_VERSION = "v2.4.0"
 FULL_HISTORY_START = datetime(2000, 1, 1)
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
@@ -397,6 +397,10 @@ class BridgeWorker(QThread):
         self._acc_lost_warned = False
         self._manual_mt5_path = mt5_path
         self.account_created_at = ""
+        self._mt5_timezone_offset_minutes = None
+        self._mt5_clock_status = "unknown"
+        self._mt5_clock_residual_ms = None
+        self._mt5_clock_checked_at = 0.0
         # MetaTrader5's Python extension is not thread-safe. Command handling
         # and the one-second data publisher both use the executor, so all MT5
         # calls must share one lock.
@@ -433,6 +437,37 @@ class BridgeWorker(QThread):
     def _mt5_time(self, ts):
         if not ts: return ''
         return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
+
+    def _calibrate_mt5_clock(self, tick, force=False):
+        now = time.time()
+        if not force and now - self._mt5_clock_checked_at < 300:
+            return
+        self._mt5_clock_checked_at = now
+        raw_ms = int(getattr(tick, "time_msc", 0) or int(getattr(tick, "time", 0) or 0) * 1000)
+        if raw_ms <= 0:
+            self._mt5_clock_status = "unavailable"
+            return
+        host_ms = int(now * 1000)
+        candidate = int(round((raw_ms - host_ms) / 900000.0) * 15)
+        residual = raw_ms - candidate * 60000 - host_ms
+        self._mt5_clock_residual_ms = int(residual)
+        if abs(residual) <= 30000:
+            self._mt5_timezone_offset_minutes = candidate
+            self._mt5_clock_status = "verified"
+        elif self._mt5_timezone_offset_minutes is None:
+            self._mt5_clock_status = "stale_or_unverified"
+
+    def _clock_fields(self, raw_time_msc):
+        raw_ms = int(raw_time_msc or 0)
+        offset = self._mt5_timezone_offset_minutes
+        return {
+            "time_msc": raw_ms or None,
+            "time_utc_msc": raw_ms - offset * 60000 if raw_ms and offset is not None else None,
+            "timezone_offset_minutes": offset,
+            "clock_status": self._mt5_clock_status,
+            "clock_residual_ms": self._mt5_clock_residual_ms,
+            "captured_at_utc_msc": int(time.time() * 1000),
+        }
 
     def _resolve_symbol(self, symbol):
         if symbol is None:
@@ -523,6 +558,199 @@ class BridgeWorker(QThread):
                     self.log_signal.emit(f"[Order] Failed to re-select symbol {req['symbol']}: {exc}")
                 continue
             return result, result.comment if result else "order_send failed"
+
+    def _risk_snapshot(self, params):
+        """Build a compact, incremental risk snapshot without exporting account history."""
+        acc = self.mt5.account_info()
+        if not acc:
+            return {"status": "error", "message": "risk snapshot account_info failed"}
+        tick = self.mt5.symbol_info_tick(params.get("symbol")) if params.get("symbol") else None
+        if tick:
+            self._calibrate_mt5_clock(tick)
+
+        positions = self.mt5.positions_get()
+        pending = self.mt5.orders_get()
+        if positions is None:
+            return {"status": "error", "message": f"risk snapshot positions_get failed: {self.mt5.last_error()}"}
+        if pending is None:
+            return {"status": "error", "message": f"risk snapshot orders_get failed: {self.mt5.last_error()}"}
+
+        position_rows = [{
+            "ticket": int(p.ticket), "identifier": int(getattr(p, "identifier", p.ticket) or p.ticket),
+            "symbol": p.symbol, "type": "buy" if p.type == self.mt5.POSITION_TYPE_BUY else "sell",
+            "volume": float(p.volume), "price_open": float(p.price_open),
+            "price_current": float(p.price_current), "profit": float(p.profit),
+            "swap": float(getattr(p, "swap", 0) or 0),
+        } for p in positions]
+        pending_type_names = {
+            getattr(self.mt5, "ORDER_TYPE_BUY_LIMIT", 2): "buy_limit",
+            getattr(self.mt5, "ORDER_TYPE_SELL_LIMIT", 3): "sell_limit",
+            getattr(self.mt5, "ORDER_TYPE_BUY_STOP", 4): "buy_stop",
+            getattr(self.mt5, "ORDER_TYPE_SELL_STOP", 5): "sell_stop",
+            getattr(self.mt5, "ORDER_TYPE_BUY_STOP_LIMIT", 6): "buy_stop_limit",
+            getattr(self.mt5, "ORDER_TYPE_SELL_STOP_LIMIT", 7): "sell_stop_limit",
+        }
+        pending_rows = [{
+            "ticket": int(o.ticket), "symbol": o.symbol,
+            "type": pending_type_names.get(o.type, str(o.type)),
+            "volume": float(getattr(o, "volume_current", 0) or getattr(o, "volume_initial", 0) or 0),
+            "volume_current": float(getattr(o, "volume_current", 0) or 0),
+            "volume_initial": float(getattr(o, "volume_initial", 0) or 0),
+            "price": float(getattr(o, "price_open", 0) or 0),
+        } for o in pending]
+
+        requested_cursor_ms = max(0, int(params.get("last_deal_time_msc") or 0))
+        requested_cursor_ticket = max(0, int(params.get("last_deal_ticket") or 0))
+        baseline_utc_ms = max(0, int(params.get("baseline_from_utc_msc") or 0))
+        offset_minutes = int(self._mt5_timezone_offset_minutes or 0)
+        if requested_cursor_ms:
+            raw_start_ms = requested_cursor_ms
+        elif baseline_utc_ms:
+            raw_start_ms = baseline_utc_ms + offset_minutes * 60000
+        else:
+            raw_start_ms = int(time.time() * 1000) + offset_minutes * 60000
+        # Query a small overlap, then apply the exact (time_msc, ticket) cursor locally.
+        date_from = datetime.utcfromtimestamp(max(0, raw_start_ms - 300000) / 1000.0)
+        date_to = datetime.utcnow() + timedelta(days=1)
+        deals = self.mt5.history_deals_get(date_from, date_to)
+        if deals is None:
+            return {"status": "error", "message": f"risk snapshot history_deals_get failed: {self.mt5.last_error()}"}
+        deal_rows = [d._asdict() for d in deals]
+        deal_rows.sort(key=lambda d: (int(d.get("time_msc") or int(d.get("time") or 0) * 1000), int(d.get("ticket") or 0)))
+        cursor_pair = (requested_cursor_ms or raw_start_ms, requested_cursor_ticket)
+        new_deals = [d for d in deal_rows if (
+            int(d.get("time_msc") or int(d.get("time") or 0) * 1000), int(d.get("ticket") or 0)
+        ) > cursor_pair]
+
+        buy_type = getattr(self.mt5, "DEAL_TYPE_BUY", 0)
+        sell_type = getattr(self.mt5, "DEAL_TYPE_SELL", 1)
+        trade_types = {buy_type, sell_type}
+        capital_types = {
+            getattr(self.mt5, "DEAL_TYPE_BALANCE", 2), getattr(self.mt5, "DEAL_TYPE_CREDIT", 3),
+            getattr(self.mt5, "DEAL_TYPE_CORRECTION", 5), getattr(self.mt5, "DEAL_TYPE_BONUS", 6),
+        }
+        pnl_adjustment_types = {
+            getattr(self.mt5, "DEAL_TYPE_CHARGE", 4), getattr(self.mt5, "DEAL_TYPE_COMMISSION", 7),
+            getattr(self.mt5, "DEAL_TYPE_COMMISSION_DAILY", 8), getattr(self.mt5, "DEAL_TYPE_COMMISSION_MONTHLY", 9),
+            getattr(self.mt5, "DEAL_TYPE_COMMISSION_AGENT_DAILY", 10), getattr(self.mt5, "DEAL_TYPE_COMMISSION_AGENT_MONTHLY", 11),
+            getattr(self.mt5, "DEAL_TYPE_INTEREST", 12), getattr(self.mt5, "DEAL_TYPE_DIVIDEND", 15),
+            getattr(self.mt5, "DEAL_TYPE_DIVIDEND_FRANKED", 16), getattr(self.mt5, "DEAL_TYPE_TAX", 17),
+        }
+        exit_entries = {
+            getattr(self.mt5, "DEAL_ENTRY_OUT", 1), getattr(self.mt5, "DEAL_ENTRY_INOUT", 2),
+            getattr(self.mt5, "DEAL_ENTRY_OUT_BY", 3),
+        }
+        active_position_ids = {int(getattr(p, "identifier", p.ticket) or p.ticket) for p in positions}
+        closed_positions = []
+        seen_positions = set()
+        incomplete_reasons = []
+        for d in new_deals:
+            if d.get("type") not in trade_types or d.get("entry") not in exit_entries:
+                continue
+            position_id = int(d.get("position_id") or 0)
+            if not position_id or position_id in active_position_ids or position_id in seen_positions:
+                continue
+            seen_positions.add(position_id)
+            position_deals = self.mt5.history_deals_get(position=position_id)
+            if position_deals is None:
+                incomplete_reasons.append("position_history_unavailable")
+                continue
+            net = sum(float(getattr(item, "profit", 0) or 0) + float(getattr(item, "commission", 0) or 0)
+                + float(getattr(item, "swap", 0) or 0) + float(getattr(item, "fee", 0) or 0) for item in position_deals)
+            close_ms = int(d.get("time_msc") or int(d.get("time") or 0) * 1000)
+            closed_positions.append({
+                "position_id": position_id, "close_time_msc": close_ms,
+                "close_deal_ticket": int(d.get("ticket") or 0),
+                "business_date": self._mt5_time(close_ms // 1000)[:10], "net": round(net, 8),
+            })
+        closed_positions.sort(key=lambda row: (row["close_time_msc"], row["close_deal_ticket"]))
+
+        account_events = []
+        known_nontrade = capital_types | pnl_adjustment_types
+        for d in new_deals:
+            deal_type = int(d.get("type") if d.get("type") is not None else -1)
+            if deal_type in trade_types:
+                continue
+            amount = sum(float(d.get(key) or 0) for key in ("profit", "commission", "swap", "fee"))
+            event_ms = int(d.get("time_msc") or int(d.get("time") or 0) * 1000)
+            category = "capital" if deal_type in capital_types else "pnl_adjustment" if deal_type in pnl_adjustment_types else "unknown"
+            if deal_type not in known_nontrade:
+                incomplete_reasons.append(f"unknown_deal_type:{deal_type}")
+            account_events.append({
+                "ticket": int(d.get("ticket") or 0), "time_msc": event_ms,
+                "business_date": self._mt5_time(event_ms // 1000)[:10],
+                "deal_type": deal_type, "category": category, "amount": round(amount, 8),
+            })
+
+        relevant_symbols = {row["symbol"] for row in position_rows + pending_rows if row.get("symbol")}
+        if params.get("symbol"):
+            try: relevant_symbols.add(self._resolve_symbol(params.get("symbol")))
+            except Exception: relevant_symbols.add(str(params.get("symbol")))
+        instruments = {}
+        for symbol in relevant_symbols:
+            info = self.mt5.symbol_info(symbol)
+            if not info:
+                incomplete_reasons.append(f"symbol_info_unavailable:{symbol}")
+                continue
+            instruments[symbol] = {
+                "name": info.name, "digits": int(info.digits), "trade_mode": int(info.trade_mode),
+                "point": float(info.point), "tick_size": float(getattr(info, "trade_tick_size", 0) or 0),
+                "tick_value": float(getattr(info, "trade_tick_value", 0) or 0),
+                "contract_size": float(getattr(info, "trade_contract_size", 0) or 0),
+                "volume_min": float(getattr(info, "volume_min", 0) or 0),
+                "volume_max": float(getattr(info, "volume_max", 0) or 0),
+                "volume_step": float(getattr(info, "volume_step", 0) or 0),
+                "currency_profit": str(getattr(info, "currency_profit", "") or ""),
+            }
+
+        broker_calculation = None
+        warnings = []
+        proposed = params.get("proposed_order") or {}
+        try:
+            proposed_symbol = self._resolve_symbol(proposed.get("symbol"))
+            side = str(proposed.get("order_type") or "").lower()
+            order_type = self.mt5.ORDER_TYPE_BUY if side == "buy" else self.mt5.ORDER_TYPE_SELL
+            volume = float(proposed.get("volume") or 0)
+            entry = float(proposed.get("entry_price") or 0)
+            stop_loss = float(proposed.get("sl") or 0)
+            loss = self.mt5.order_calc_profit(order_type, proposed_symbol, volume, entry, stop_loss)
+            margin = self.mt5.order_calc_margin(order_type, proposed_symbol, volume, entry)
+            if loss is not None and margin is not None:
+                broker_calculation = {
+                    "symbol": proposed_symbol, "order_type": side, "volume": volume,
+                    "entry_price": entry, "sl": stop_loss,
+                    "loss_to_sl": round(abs(float(loss)), 8), "required_margin": round(float(margin), 8),
+                }
+        except Exception as exc:
+            warnings.append(f"broker_calculation_unavailable:{type(exc).__name__}")
+
+        through_ms, through_ticket = cursor_pair
+        if new_deals:
+            last = new_deals[-1]
+            through_ms = int(last.get("time_msc") or int(last.get("time") or 0) * 1000)
+            through_ticket = int(last.get("ticket") or 0)
+        raw_now_ms = int(getattr(tick, "time_msc", 0) or (time.time() * 1000 + offset_minutes * 60000))
+        return {
+            "status": "success", "snapshot_version": 1,
+            "complete": not incomplete_reasons, "incomplete_reasons": sorted(set(incomplete_reasons)),
+            "warnings": sorted(set(warnings)),
+            "business_date": self._mt5_time(raw_now_ms // 1000)[:10],
+            "mt5_time_msc": raw_now_ms, **self._clock_fields(raw_now_ms),
+            "account": {
+                "login": int(acc.login), "server": acc.server, "currency": acc.currency,
+                "balance": float(acc.balance), "equity": float(acc.equity), "credit": float(acc.credit),
+                "profit": float(acc.profit), "margin": float(acc.margin), "margin_free": float(acc.margin_free),
+                "margin_level": float(getattr(acc, "margin_level", 0) or 0),
+            },
+            "positions": position_rows, "pending": pending_rows, "instruments": instruments,
+            "increment": {
+                "requested_cursor": {"time_msc": requested_cursor_ms, "ticket": requested_cursor_ticket},
+                "through_cursor": {"time_msc": through_ms, "ticket": through_ticket},
+                "closed_positions": closed_positions, "account_events": account_events,
+                "scanned_deal_count": len(deal_rows), "new_deal_count": len(new_deals),
+            },
+            "broker_calculation": broker_calculation,
+        }
         return None, "max retry exceeded"
 
     def _order_send_simple_retry(self, req, ct_map=None):
@@ -673,7 +901,9 @@ class BridgeWorker(QThread):
                 tf = tf_map.get(params.get("timeframe", "M30"), self.mt5.TIMEFRAME_M30)
                 rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, int(params.get("count", 100)))
                 if rates is not None and len(rates) > 0:
-                    out = [{"time": self._mt5_time(int(r[0])), "open": float(r[1]), "high": float(r[2]),
+                    tick = self.mt5.symbol_info_tick(symbol)
+                    if tick: self._calibrate_mt5_clock(tick)
+                    out = [{"time": self._mt5_time(int(r[0])), **self._clock_fields(int(r[0]) * 1000), "open": float(r[1]), "high": float(r[2]),
                             "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]),
                             "spread": int(r[6]) if len(r) > 6 else 0} for r in rates]
                     return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe","M30"),
@@ -684,9 +914,10 @@ class BridgeWorker(QThread):
                 self.mt5.symbol_select(symbol, True)
                 tick = self.mt5.symbol_info_tick(symbol); info = self.mt5.symbol_info(symbol)
                 if not tick: return {"status": "error", "message": f"MT5 quote failed for {symbol}"}
+                self._calibrate_mt5_clock(tick)
                 return {"status": "success", "symbol": symbol, "bid": tick.bid, "ask": tick.ask,
                         "spread": round(info.spread * info.point, info.digits) if info else 0,
-                        "time": self._mt5_time(tick.time), "time_msc": getattr(tick, "time_msc", tick.time * 1000),
+                        "time": self._mt5_time(tick.time), **self._clock_fields(getattr(tick, "time_msc", tick.time * 1000)),
                         "digits": info.digits if info else 2,
                         "point": info.point if info else 0.01, "source": "mt5"}
             elif action == "positions":
@@ -827,6 +1058,8 @@ class BridgeWorker(QThread):
                         "account_trade_allowed": acc.trade_allowed, "account_trade_expert": acc.trade_expert,
                         "login": acc.login, "server": acc.server, "balance": acc.balance, "equity": acc.equity}
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
+            elif action == "risk_snapshot":
+                return self._risk_snapshot(params)
             elif action == "history":
                 import math
                 self.log_signal.emit(f"[History] called with params={params}")
@@ -1822,6 +2055,7 @@ class BridgeWorker(QThread):
         if not acc:
             return None
         tick = self.mt5.symbol_info_tick(sym)
+        if tick: self._calibrate_mt5_clock(tick)
         positions = self.mt5.positions_get() or []
         bar_vol = 0
         try:
@@ -1830,6 +2064,7 @@ class BridgeWorker(QThread):
                 bar_vol = int(rates[0][5])
         except Exception:
             pass
+        clock_fields = self._clock_fields(getattr(tick, "time_msc", tick.time * 1000)) if tick else self._clock_fields(0)
         return {"type": "data", "account": {
             "login": acc.login, "balance": round(acc.balance, 2),
             "equity": round(acc.equity, 2), "margin": round(acc.margin, 2),
@@ -1838,7 +2073,7 @@ class BridgeWorker(QThread):
             "bid": round(tick.bid, 5) if tick else None, "ask": round(tick.ask, 5) if tick else None,
             "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in sym else 0.001), 1) if tick else None,
             "time": self._mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
-            "volume": bar_vol},
+            "volume": bar_vol, **clock_fields},
             "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type == 0 else "sell",
                 "volume": p.volume, "price_open": p.price_open, "price_current": p.price_current,
                 "time": self._mt5_time(p.time) if p.time else '', "time_update": self._mt5_time(p.time_update) if getattr(p, 'time_update', None) else '',
@@ -1894,6 +2129,9 @@ class BridgeWorker(QThread):
                     "mt5_collect_timeout_count": getattr(self, '_mt5_timeout_count', 0),
                     "last_data_sent_age_sec": int(time.time() - getattr(self, '_last_data_sent_at', 0)) if getattr(self, '_last_data_sent_at', 0) else -1,
                     "last_quote_time": getattr(self, '_last_quote_time', None),
+                    "timezone_offset_minutes": self._mt5_timezone_offset_minutes,
+                    "clock_status": self._mt5_clock_status,
+                    "clock_residual_ms": self._mt5_clock_residual_ms,
                 }
                 await ws.send(json.dumps(hb))
             except (websockets.ConnectionClosed, OSError):

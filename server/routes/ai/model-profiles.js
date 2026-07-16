@@ -331,10 +331,35 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   if (!USAGES.includes(usage)) throw new Error(`invalid_usage:${usage}`)
 
   if (usage === 'auto_platform') {
+    if (strategyId) {
+      const strategy = await queryOne(
+        `SELECT id, scope, model_profile_id, visibility_status, is_active
+         FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL`,
+        [strategyId]
+      )
+      if (!strategy || strategy.scope !== 'platform') {
+        return { model: null, credential_source: 'none', error: 'strategy_access_denied', usage, strategy_id: strategyId }
+      }
+      if (strategy.visibility_status !== 'active' || !Number(strategy.is_active)) {
+        return { model: null, credential_source: 'none', error: 'platform_strategy_not_active', usage, strategy_id: strategyId }
+      }
+      if (strategy.model_profile_id) {
+        const bound = await queryOne(
+          `SELECT * FROM ai_model_profiles
+           WHERE id = ? AND scope = 'platform' AND owner_user_id = 0
+             AND status = 'active' AND deleted_at IS NULL`,
+          [strategy.model_profile_id]
+        )
+        if (!bound || !bound.api_key_encrypted) {
+          return { model: null, credential_source: 'none', error: 'bound_model_unavailable', usage, strategy_id: strategyId, model_profile_id: strategy.model_profile_id }
+        }
+        return { ...buildResult(bound, 'platform_primary', usage, 'strategy_binding'), strategy_id: strategyId }
+      }
+    }
     return await resolvePlatformModel()
   }
 
-  if (usage === 'auto_private') {
+  if (usage === 'auto_private' || (usage === 'manual' && strategyId)) {
     if (!strategyId) {
       return { model: null, credential_source: 'none', error: 'strategy_id_required', usage }
     }
@@ -343,13 +368,14 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
        FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL`,
       [strategyId]
     )
-    if (!strategy || strategy.scope !== 'private' || Number(strategy.owner_user_id) !== Number(userId)) {
-      return { model: null, credential_source: 'none', error: 'private_strategy_access_denied', usage, strategy_id: strategyId }
+    if (!strategy || (usage === 'auto_private' && strategy.scope !== 'private')
+      || (strategy.scope === 'private' && Number(strategy.owner_user_id) !== Number(userId))) {
+      return { model: null, credential_source: 'none', error: usage === 'auto_private' ? 'private_strategy_access_denied' : 'strategy_access_denied', usage, strategy_id: strategyId }
     }
     if (strategy.visibility_status !== 'active' || !Number(strategy.is_active)) {
       return { model: null, credential_source: 'none', error: 'private_strategy_not_active', usage, strategy_id: strategyId }
     }
-    if (strategy.model_profile_id) {
+    if (strategy.scope === 'private' && strategy.model_profile_id) {
       const bound = await queryOne(
         `SELECT * FROM ai_model_profiles
          WHERE id = ? AND scope = 'user' AND owner_user_id = ?

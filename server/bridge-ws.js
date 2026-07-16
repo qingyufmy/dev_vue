@@ -86,10 +86,38 @@ setInterval(() => {
 async function getAdminUserId() {
   const now = Date.now()
   if ((now - adminUserIdLastCheck) < ADMIN_CACHE_TTL) return adminUserId
-  const row = await queryOne('SELECT id FROM users WHERE role = ? LIMIT 1', ['admin'])
+  const row = await queryOne('SELECT id FROM users WHERE role = ? ORDER BY id LIMIT 1', ['admin'])
   adminUserId = row?.id || null
   adminUserIdLastCheck = now
   return adminUserId
+}
+
+export async function getActivePlatformBridgeUserId() {
+  const configured = await queryOne(`SELECT value FROM system_config
+    WHERE category = 'market_data' AND \`key\` = 'platform_market_bridge_user_id' LIMIT 1`).catch(() => null)
+  const configuredId = Number(configured?.value)
+  if (configuredId > 0 && bridges.get(configuredId)?.ws?.readyState === 1) return configuredId
+  const cachedAdminId = await getAdminUserId()
+  if (cachedAdminId && bridges.get(cachedAdminId)?.ws?.readyState === 1) return cachedAdminId
+  const connectedIds = [...bridges.entries()].filter(([, bridge]) => bridge.ws?.readyState === 1).map(([id]) => Number(id))
+  if (!connectedIds.length) return null
+  const rows = await queryAll(`SELECT id FROM users WHERE role = 'admin' AND id IN (${connectedIds.map(() => '?').join(',')}) ORDER BY id`, connectedIds)
+  return rows[0]?.id || null
+}
+
+export function getPlatformMarketClockState(userId) {
+  const bridge = bridges.get(Number(userId))
+  const hb = bridge?._clientHeartbeat || {}
+  return {
+    bridge_user_id: Number(userId) || null,
+    connected: bridge?.ws?.readyState === 1,
+    timezone_offset_minutes: bridge?.timezoneOffsetMinutes ?? hb.timezone_offset_minutes ?? null,
+    clock_status: bridge?.clockStatus || hb.clock_status || 'unknown',
+    clock_residual_ms: bridge?.clockResidualMs ?? hb.clock_residual_ms ?? null,
+    last_seen_at_utc_msc: bridge?.lastSeen || null,
+    broker_server: bridge?.brokerServer || null,
+    account_login: bridge?.accountLogin || null,
+  }
 }
 
 
@@ -455,11 +483,21 @@ async function _initBridge(ws, userId, user) {
         mt5_collect_timeout_count: msg.mt5_collect_timeout_count || 0,
         last_data_sent_age_sec: msg.last_data_sent_age_sec ?? -1,
         last_quote_time: msg.last_quote_time || null,
+        timezone_offset_minutes: msg.timezone_offset_minutes ?? null,
+        clock_status: msg.clock_status || 'unknown',
+        clock_residual_ms: msg.clock_residual_ms ?? null,
         receivedAt: Date.now(),
       }
     }
 
     if (msg.type === 'data') {
+      if (bridge && msg.quote) {
+        bridge.timezoneOffsetMinutes = msg.quote.timezone_offset_minutes ?? bridge.timezoneOffsetMinutes ?? null
+        bridge.clockStatus = msg.quote.clock_status || bridge.clockStatus || 'unknown'
+        bridge.clockResidualMs = msg.quote.clock_residual_ms ?? bridge.clockResidualMs ?? null
+        bridge.brokerServer = msg.account?.server || bridge.brokerServer || null
+        bridge.accountLogin = msg.account?.login || bridge.accountLogin || null
+      }
       if (bridge && msg.quote && typeof msg.quote.time === 'string') {
         const now = Date.now()
         bridge.lastTickMs = now
@@ -519,6 +557,10 @@ async function _initBridge(ws, userId, user) {
   try {
     const account = await sendBridgeCommand(userId, 'account', {}, 5000, { noFallback: true })
     if (account?.status === 'success' && account.server && account.login !== undefined) {
+      if (bridge) {
+        bridge.brokerServer = account.server
+        bridge.accountLogin = account.login
+      }
       const ai = await import('./routes/ai/index.js')
       await ai.syncTradingAccountIdentity(userId, account)
     } else {
@@ -572,7 +614,7 @@ function sendToBrowsers(userId, data) {
       }
     }
   }
-  // If this is admin's bridge data, also forward to users without their own bridge
+  // If this is admin's bridge data, also forward to users without their own bridge.
   // Account, position and trade-switch fields are private. Observation users may
   // receive only the administrator bridge's market quote and market state.
   // Throttle: max 4 broadcasts per second per user to prevent flooding browsers
@@ -586,13 +628,18 @@ function sendToBrowsers(userId, data) {
     const now = Date.now()
     for (const [uid, browserSet] of browsers) {
       if (uid === adminUserId) continue
-      if (bridges.has(uid)) continue // user has their own bridge
       const last = _broadcastThrottle.get(uid) || 0
       if (now - last < 250) continue // skip if < 250ms since last broadcast
       _broadcastThrottle.set(uid, now)
+      // Users without a bridge need the regular quote message for the complete
+      // observation UI. Connected users keep their private account/quote feed,
+      // but their chart receives the platform feed through a dedicated message.
+      const payload = bridges.has(uid)
+        ? JSON.stringify({ type: 'platform_market_tick', quote: data.quote || null, _source: 'platform_admin_bridge' })
+        : adminJson
       for (const ws of browserSet) {
         if (ws.readyState === 1) {
-          try { ws.send(adminJson) } catch (e) { console.error('[BridgeWS] admin broadcast send failed:', uid, e.message) }
+          try { ws.send(payload) } catch (e) { console.error('[BridgeWS] admin broadcast send failed:', uid, e.message) }
         } else {
           browserSet.delete(ws)
         }
@@ -791,7 +838,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'rates':
-        result = await ai.mt5Bridge(userId, 'rates', { symbol: params.symbol, timeframe: params.timeframe || 'M30', count: params.count || 100 })
+        result = await ai.platformRates(userId, { symbol: params.symbol, timeframe: params.timeframe || 'M30', count: params.count || 100 })
         break
       case 'diagnostics':
         result = await ai.mt5Bridge(userId, 'diagnostics', {})
@@ -1063,11 +1110,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'auto_status': {
-        // 观摩模式：用 admin 的自动推理状态
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const adminId = await getAdminUserId()
-        const autoQueryUserId = hasOwnBridge ? userId : (adminId || userId)
-        const runtimeStatus = await ai.getUserAutoRuntimeStatus(autoQueryUserId)
+        // The switch is user-owned control state. Observation mode may reuse
+        // platform market data, but must never expose the administrator's
+        // scheduler state as the current user's switch state.
+        const runtimeStatus = await ai.getUserAutoRuntimeStatus(userId)
         result = { status: 'success', scheduler: runtimeStatus }
         break
       }

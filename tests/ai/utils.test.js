@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   round2, round3, round5, clamp,
-  parseTimeframeTags, stripTimeframeTags,
+  parseTimeframeTags, parseLegacyTimeframeTags, stripTimeframeTags, stripStrategyControlTags,
   signalTtlSeconds, signalAgeSeconds, attachSignalTiming,
   timeframeIntervalMs,
   compactRates, utcToMt5Time,
@@ -76,6 +76,19 @@ describe('stripTimeframeTags', () => {
   it('空输入返回原值', () => {
     expect(stripTimeframeTags('')).toBe('')
     expect(stripTimeframeTags(null)).toBe(null)
+  })
+})
+
+describe('legacy strategy control tags', () => {
+  it('imports mixed MTF/ATF/CTF tags in prompt order and deduplicates timeframes', () => {
+    expect(parseLegacyTimeframeTags('{{ATF:H1:80}} {{MTF:H4:50}} {{CTF:H1:120}}')).toEqual([
+      { tf: 'H1', count: 80 },
+      { tf: 'H4', count: 50 },
+    ])
+  })
+
+  it('removes timeframe and Chan control tags from stored prompts', () => {
+    expect(stripStrategyControlTags('分析行情\n{{ATF:H1:80}} {{USE_CHAN}}\n输出信号')).toBe('分析行情\n\n输出信号')
   })
 })
 

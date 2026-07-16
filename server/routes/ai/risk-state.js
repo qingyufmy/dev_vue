@@ -1,6 +1,6 @@
 // Stateful L2/L3/L6 risk governance. Database locks are the safety boundary.
 
-import { queryOne, queryRun, withTransaction, beijingNow, logAudit, parseBeijing } from '../../db.js'
+import { queryRun, withTransaction, beijingNow, logAudit, parseBeijing } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
 import { riskRuleIsEnforced } from './rollout-governance.js'
 
@@ -43,6 +43,55 @@ function historyComplete(history) {
   return expected <= (history.orders || []).length
 }
 
+function cursorOf(value = {}, timeKey = 'time_msc', ticketKey = 'ticket') {
+  return [Math.max(0, Number(value?.[timeKey]) || 0), Math.max(0, Number(value?.[ticketKey]) || 0)]
+}
+
+function compareCursor(left, right) {
+  return left[0] === right[0] ? left[1] - right[1] : left[0] - right[0]
+}
+
+function calculateIncrementalMetrics({ account, positions = [], pending = [], instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true, data_incomplete_reasons = [], increment = {} }) {
+  const stateCursor = [Math.max(0, Number(previousState.last_deal_time_msc) || 0), Math.max(0, Number(previousState.last_deal_ticket) || 0)]
+  const requestedCursor = cursorOf(increment.requested_cursor)
+  const throughCursor = cursorOf(increment.through_cursor)
+  const reasons = [...new Set((data_incomplete_reasons || []).map(String).filter(Boolean))]
+  if (!snapshot_complete && reasons.length === 0) reasons.push('risk_snapshot_incomplete')
+  if (stateCursor[0] > 0 && compareCursor(requestedCursor, stateCursor) > 0) reasons.push('deal_cursor_gap')
+  const afterState = item => compareCursor(cursorOf(item, item.close_time_msc != null ? 'close_time_msc' : 'time_msc', item.close_deal_ticket != null ? 'close_deal_ticket' : 'ticket'), stateCursor) > 0
+  const closed = (increment.closed_positions || []).filter(afterState)
+    .sort((a, b) => compareCursor(cursorOf(a, 'close_time_msc', 'close_deal_ticket'), cursorOf(b, 'close_time_msc', 'close_deal_ticket')))
+  const accountEvents = (increment.account_events || []).filter(afterState)
+  const newDay = String(previousState.business_date || '') !== String(businessDate || '')
+  const currentClosedNet = closed.filter(item => item.business_date === businessDate).reduce((sum, item) => sum + toNumber(item.net), 0)
+  const currentPnlAdjustments = accountEvents.filter(item => item.category === 'pnl_adjustment' && item.business_date === businessDate).reduce((sum, item) => sum + toNumber(item.amount), 0)
+  const currentCapitalDelta = accountEvents.filter(item => item.category === 'capital' && item.business_date === businessDate).reduce((sum, item) => sum + toNumber(item.amount), 0)
+  const capitalDelta = accountEvents.filter(item => item.category === 'capital').reduce((sum, item) => sum + toNumber(item.amount), 0)
+  const realized = (newDay ? 0 : toNumber(previousState.day_realized_net)) + currentClosedNet + currentPnlAdjustments
+  const floating = positions.reduce((sum, item) => sum + toNumber(item.profit) + toNumber(item.swap), 0)
+  const equity = toNumber(account?.equity)
+  const dayStartEquity = newDay || !(toNumber(previousState.day_start_equity) > 0)
+    ? equity - realized - floating - currentCapitalDelta : toNumber(previousState.day_start_equity)
+  const dailyPnl = realized + Math.min(0, floating)
+  const dailyLossPct = dayStartEquity > 0 ? Math.max(0, -dailyPnl / dayStartEquity * 100) : null
+  const cumulativeCashFlow = toNumber(previousState.cumulative_cash_flow) + capitalDelta
+  const oldHigh = toNumber(previousState.equity_high_water) || equity
+  const correctedHigh = oldHigh + capitalDelta
+  const highWater = Math.max(equity, correctedHigh)
+  const drawdownPct = highWater > 0 ? Math.max(0, (highWater - equity) / highWater * 100) : null
+  let consecutiveLosses = toNumber(previousState.consecutive_losses)
+  for (const position of closed) consecutiveLosses = toNumber(position.net) < 0 ? consecutiveLosses + 1 : 0
+  const notional = exposureNotional([...positions, ...pending], instruments, account?.currency, fxRates)
+  const dataComplete = snapshot_complete && reasons.length === 0 && equity > 0 && notional != null && dailyLossPct != null && drawdownPct != null
+  const nextCursor = compareCursor(throughCursor, stateCursor) >= 0 ? throughCursor : stateCursor
+  return {
+    business_date: businessDate, equity, realized, floating, day_start_equity: dayStartEquity,
+    daily_loss_pct: dailyLossPct, cumulative_cash_flow: cumulativeCashFlow, equity_high_water: highWater,
+    drawdown_pct: drawdownPct, consecutive_losses: consecutiveLosses, notional, data_complete: dataComplete,
+    data_incomplete_reasons: reasons, last_deal_time_msc: nextCursor[0], last_deal_ticket: nextCursor[1],
+  }
+}
+
 function exposureNotional(items, instruments, accountCurrency, fxRates = {}) {
   let total = 0
   for (const item of items || []) {
@@ -53,7 +102,7 @@ function exposureNotional(items, instruments, accountCurrency, fxRates = {}) {
     const contract = toNumber(instrument?.contract_size)
     if (!(volume > 0 && price > 0 && contract > 0)) return null
     let value = volume * contract * price
-    const quoteCurrency = symbol.length >= 6 ? symbol.slice(3, 6) : accountCurrency
+    const quoteCurrency = String(instrument?.currency_profit || (symbol.length >= 6 ? symbol.slice(3, 6) : accountCurrency) || '').toUpperCase()
     if (quoteCurrency && accountCurrency && quoteCurrency !== accountCurrency) {
       const direct = toNumber(fxRates[`${quoteCurrency}${accountCurrency}`])
       const inverse = toNumber(fxRates[`${accountCurrency}${quoteCurrency}`])
@@ -66,7 +115,9 @@ function exposureNotional(items, instruments, accountCurrency, fxRates = {}) {
   return total
 }
 
-export function calculateAccountRiskMetrics({ account, positions = [], pending = [], historyToday, historyAll, instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true }) {
+export function calculateAccountRiskMetrics(input = {}) {
+  if (input.risk_snapshot_version >= 1) return calculateIncrementalMetrics(input)
+  const { account, positions = [], pending = [], historyToday, historyAll, instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true } = input
   const todayOrders = historyToday?.orders || []
   const realized = todayOrders.reduce((sum, item) => sum + toNumber(item.profit) + toNumber(item.commission) + toNumber(item.swap) + toNumber(item.fee), 0)
   const floating = positions.reduce((sum, item) => sum + toNumber(item.profit) + toNumber(item.swap), 0)
@@ -98,7 +149,39 @@ export function calculateAccountRiskMetrics({ account, positions = [], pending =
     business_date: businessDate, equity, realized, floating, day_start_equity: dayStartEquity,
     daily_loss_pct: dailyLossPct, cumulative_cash_flow: allCash, equity_high_water: highWater,
     drawdown_pct: drawdownPct, consecutive_losses: consecutiveLosses, notional, data_complete: dataComplete,
+    data_incomplete_reasons: dataComplete ? [] : ['legacy_history_incomplete'],
+    last_deal_time_msc: toNumber(previousState.last_deal_time_msc), last_deal_ticket: toNumber(previousState.last_deal_ticket),
   }
+}
+
+export async function refreshRiskAccountState(userId, accountId, snapshot, policy) {
+  return withTransaction(async run => {
+    const state = await txOne(run, 'SELECT * FROM risk_account_state WHERE trading_account_id = ? AND user_id = ? FOR UPDATE', [accountId, userId])
+    if (!state) throw new Error('risk_account_state_not_found')
+    const metrics = calculateAccountRiskMetrics({ ...snapshot, previousState: state })
+    let haltReason = null
+    if (!metrics.data_complete) haltReason = 'R3_RISK_DATA_INCOMPLETE'
+    else if (metrics.daily_loss_pct >= policy.daily_loss_limit_pct) haltReason = 'R3.1_DAILY_LOSS_LIMIT'
+    else if (metrics.drawdown_pct >= policy.max_drawdown_pct) haltReason = 'R3.3_MAX_DRAWDOWN'
+
+    const previousLosses = toNumber(state.consecutive_losses)
+    let cooldownUntil = state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now() ? state.cooldown_until : null
+    if (!cooldownUntil && metrics.consecutive_losses >= policy.consecutive_loss_limit && previousLosses < policy.consecutive_loss_limit) {
+      cooldownUntil = new Date(Date.now() + policy.loss_cooldown_minutes * 60_000).toISOString().replace('T', ' ').slice(0, 19)
+    }
+    if (!haltReason && cooldownUntil) haltReason = 'R3.2_CONSECUTIVE_LOSS_COOLDOWN'
+    const now = beijingNow()
+    await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
+      cumulative_cash_flow = ?, equity_high_water = ?, drawdown_pct = ?, consecutive_losses = ?, cooldown_until = ?,
+      halt_status = ?, halt_reason = ?, data_complete = ?, data_incomplete_reason = ?, last_deal_time_msc = ?,
+      last_deal_ticket = ?, last_risk_snapshot_at = ?, updated_at = ? WHERE trading_account_id = ? AND user_id = ?`,
+    [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.floating, metrics.cumulative_cash_flow,
+      metrics.equity_high_water, metrics.drawdown_pct, metrics.consecutive_losses, cooldownUntil,
+      haltReason ? 'halted' : 'active', haltReason, metrics.data_complete ? 1 : 0,
+      (metrics.data_incomplete_reasons || []).join(',').slice(0, 255) || null,
+      metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, now, now, accountId, userId])
+    return { ...metrics, halt_status: haltReason ? 'halted' : 'active', halt_reason: haltReason, cooldown_until: cooldownUntil }
+  })
 }
 
 export async function syncTradingAccountIdentity(userId, snapshot, requestedAccountId = null) {
@@ -187,7 +270,6 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   if (accountRow.review_status !== 'approved') return blocked('R6_ACCOUNT_REVIEW_REQUIRED')
   if (['paused', 'switched', 'frozen'].includes(accountRow.observe_status)) return blocked('R6_ACCOUNT_PAUSED')
   if (state.user_kill_switch) return blocked('R6_USER_KILL_SWITCH')
-  if (state.halt_status !== 'active') return blocked('R3_ACCOUNT_HALTED', { reason: state.halt_reason })
   if (state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now()) {
     const rejected = rolloutBlock('R3.2_LOSS_COOLDOWN', { until: state.cooldown_until }); if (rejected) return rejected
   }
@@ -202,7 +284,11 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
     shadowRules.push({ code: proposedHalt, outcome: 'shadow_reject', details: metrics })
     haltReason = null
   }
-  let cooldownUntil = metrics.consecutive_losses >= policy.consecutive_loss_limit
+  // A recovered account is evaluated from current facts on every attempt.
+  // Consecutive-loss cooldown is armed only when the threshold is crossed;
+  // otherwise an expired cooldown would recreate itself forever.
+  const previousLosses = toNumber(state.consecutive_losses)
+  let cooldownUntil = metrics.consecutive_losses >= policy.consecutive_loss_limit && previousLosses < policy.consecutive_loss_limit
     ? new Date(Date.now() + policy.loss_cooldown_minutes * 60_000).toISOString().replace('T', ' ').slice(0, 19) : null
   if (cooldownUntil && !riskRuleIsEnforced('R3.2_CONSECUTIVE_LOSS_COOLDOWN', ruleModes)) {
     shadowRules.push({ code: 'R3.2_CONSECUTIVE_LOSS_COOLDOWN', outcome: 'shadow_reject', details: { until: cooldownUntil } })
@@ -210,10 +296,13 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   }
   await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
     cumulative_cash_flow = ?, equity_high_water = ?, drawdown_pct = ?, consecutive_losses = ?, cooldown_until = ?,
-    halt_status = ?, halt_reason = ?, data_complete = ?, updated_at = ? WHERE trading_account_id = ?`,
+    halt_status = ?, halt_reason = ?, data_complete = ?, data_incomplete_reason = ?, last_deal_time_msc = ?,
+    last_deal_ticket = ?, last_risk_snapshot_at = ?, updated_at = ? WHERE trading_account_id = ?`,
   [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.floating, metrics.cumulative_cash_flow,
     metrics.equity_high_water, metrics.drawdown_pct, metrics.consecutive_losses, cooldownUntil,
-    haltReason ? 'halted' : 'active', haltReason, metrics.data_complete ? 1 : 0, beijingNow(), accountId])
+    haltReason ? 'halted' : 'active', haltReason, metrics.data_complete ? 1 : 0,
+    (metrics.data_incomplete_reasons || []).join(',').slice(0, 255) || null,
+    metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, beijingNow(), beijingNow(), accountId])
   if (haltReason) return blocked(haltReason, metrics)
   if (cooldownUntil) return blocked('R3.2_CONSECUTIVE_LOSS_COOLDOWN', { until: cooldownUntil })
 
@@ -272,31 +361,6 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
 
 export async function recordSuccessfulOpenTx(run, accountId) {
   await run('UPDATE risk_account_state SET last_success_open_at = ?, updated_at = ? WHERE trading_account_id = ?', [beijingNow(), beijingNow(), accountId])
-}
-
-export async function requestRiskRecovery(userId, accountId, reason) {
-  if (!String(reason || '').trim()) throw new Error('recovery_reason_required')
-  const account = await queryOne('SELECT id FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0', [accountId, userId])
-  if (!account) throw new Error('account_not_found')
-  const result = await queryRun(`INSERT INTO risk_recovery_requests
-    (trading_account_id, user_id, request_type, reason, status, requested_by, created_at)
-    VALUES (?, ?, 'account_halt', ?, 'pending', ?, ?)`, [accountId, userId, String(reason).trim(), userId, beijingNow()])
-  await logAudit({ userId, action: 'risk_recovery_requested', targetType: 'trading_account', targetId: accountId, detail: JSON.stringify({ request_id: result.insertId, reason }) })
-  return result.insertId
-}
-
-export async function reviewRiskRecovery(adminId, adminRole, requestId, approve, reason) {
-  if (adminRole !== 'admin') throw new Error('admin_required')
-  if (!String(reason || '').trim()) throw new Error('review_reason_required')
-  const request = await queryOne("SELECT * FROM risk_recovery_requests WHERE id = ? AND status = 'pending'", [requestId])
-  if (!request) throw new Error('recovery_request_not_found')
-  await withTransaction(async run => {
-    const locked = await txOne(run, "SELECT * FROM risk_recovery_requests WHERE id = ? AND status = 'pending' FOR UPDATE", [requestId])
-    if (!locked) throw new Error('recovery_request_not_found')
-    await run('UPDATE risk_recovery_requests SET status = ?, reviewed_by = ?, review_reason = ?, reviewed_at = ? WHERE id = ?', [approve ? 'approved' : 'rejected', adminId, reason, beijingNow(), requestId])
-    if (approve) await run("UPDATE risk_account_state SET halt_status = 'active', halt_reason = NULL, cooldown_until = NULL, updated_at = ? WHERE trading_account_id = ?", [beijingNow(), locked.trading_account_id])
-  })
-  await logAudit({ userId: adminId, action: approve ? 'risk_recovery_approved' : 'risk_recovery_rejected', targetType: 'risk_recovery_request', targetId: requestId, detail: JSON.stringify({ reason }) })
 }
 
 export async function setUserKillSwitch(userId, accountId, enabled, reason) {
