@@ -774,7 +774,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             profit_filter: params.profit_filter || ''
           }
           bridgeParams.date_from = params.close_from || '2000-01-01'
-          bridgeParams.date_to = params.close_to || new Date().toISOString().slice(0, 10)
+          bridgeParams.date_to = params.close_to || new Date(Date.now() + 86400000).toISOString().slice(0, 10)
 
           result = await ai.mt5Bridge(historyUserId, 'history', bridgeParams)
           if (result?.status !== 'success') {
@@ -796,7 +796,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
           const chartParams = {}
           chartParams.date_from = params.close_from || '2000-01-01'
-          chartParams.date_to = params.close_to || new Date().toISOString().slice(0, 10)
+          chartParams.date_to = params.close_to || new Date(Date.now() + 86400000).toISOString().slice(0, 10)
           if (params.direction) chartParams.direction = params.direction
           if (params.profit_filter) chartParams.profit_filter = params.profit_filter
           result = await ai.mt5Bridge(hcUserId, 'chart_data', chartParams)
