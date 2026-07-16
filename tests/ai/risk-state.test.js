@@ -178,17 +178,48 @@ describe('stateful gate', () => {
 describe('identity and recovery permissions', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('creates a pending observed account and pauses subscriptions on identity switch', async () => {
+  it('auto-verifies a Bridge account, starts observation and pauses old subscriptions on identity switch', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
       if (sql.startsWith('SELECT * FROM trading_accounts')) return [[{ id: 1, broker_server: 'Old', login_account: '1', is_deleted: 0 }], []]
+      if (sql.includes('user_id <>')) return [[], []]
       writes.push(sql)
       if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 2 }, []]
       return [{ affectedRows: 1 }, []]
     }))
     const result = await syncTradingAccountIdentity(2, { server: 'New', login: 9 }, 1)
-    expect(result).toEqual({ accountId: 2, switched: true })
+    expect(result).toEqual({ accountId: 2, switched: true, verified: true, anomalyCode: null })
     expect(writes.some(sql => sql.includes('strategy_subscriptions SET execution_enabled = 0'))).toBe(true)
+    expect(writes.some(sql => sql.includes('INSERT INTO trading_accounts') && sql.includes('first_verified_at'))).toBe(true)
+  })
+
+  it('freezes a duplicate account identity for administrator handling', async () => {
+    db.withTransaction.mockImplementation(async fn => fn(async sql => {
+      if (sql.startsWith('SELECT * FROM trading_accounts')) return [[], []]
+      if (sql.includes('user_id <>')) return [[{ id: 99, user_id: 8 }], []]
+      if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 3 }, []]
+      return [{ affectedRows: 1 }, []]
+    }))
+    const result = await syncTradingAccountIdentity(2, { server: 'Demo', login: 123 })
+    expect(result).toEqual({ accountId: 3, switched: false, verified: false, anomalyCode: 'duplicate_account_binding' })
+  })
+
+  it('does not let a Bridge reconnect clear an administrator rejection', async () => {
+    const writes = []
+    db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
+      if (sql.startsWith('SELECT * FROM trading_accounts')) return [[{
+        id: 7, broker_server: 'Demo', login_account: '123', is_deleted: 0,
+        review_status: 'rejected', observe_status: 'frozen', anomaly_code: 'admin_rejected',
+      }], []]
+      if (sql.includes('user_id <>')) return [[], []]
+      writes.push({ sql, params })
+      return [{ affectedRows: 1 }, []]
+    }))
+    const result = await syncTradingAccountIdentity(2, { server: 'Demo', login: 123 })
+    expect(result).toEqual({ accountId: 7, switched: false, verified: false, anomalyCode: 'admin_rejected' })
+    const accountUpdate = writes.find(write => write.sql.includes('first_verified_at = COALESCE'))
+    expect(accountUpdate.params[0]).toBe('rejected')
+    expect(accountUpdate.params[1]).toBe('frozen')
   })
 
   it('only admins can approve recovery or clear the global kill switch', async () => {

@@ -105,37 +105,59 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
   const server = String(snapshot?.server || '').trim(), login = String(snapshot?.login || '').trim()
   if (!server || !login) throw new Error('trading_account_identity_incomplete')
   return withTransaction(async run => {
+    const now = beijingNow()
     const rows = (await run('SELECT * FROM trading_accounts WHERE user_id = ? FOR UPDATE', [userId]))[0]
     const serverKey = server.toUpperCase()
     let matched = rows.find(row => String(row.broker_server).toUpperCase() === serverKey && String(row.login_account) === login)
     const activeDifferent = rows.filter(row => !row.is_deleted && (String(row.broker_server).toUpperCase() !== serverKey || String(row.login_account) !== login))
+    const conflicts = (await run(`SELECT id, user_id FROM trading_accounts
+      WHERE user_id <> ? AND UPPER(broker_server) = ? AND login_account = ? AND is_deleted = 0 FOR UPDATE`,
+    [userId, serverKey, login]))[0]
+    const adminRejected = matched?.review_status === 'rejected' || matched?.anomaly_code === 'admin_rejected'
+    const adminPaused = !adminRejected && matched?.observe_status === 'paused'
+    const anomalyCode = adminRejected ? 'admin_rejected' : conflicts.length ? 'duplicate_account_binding'
+      : adminPaused ? (matched.anomaly_code || 'account_paused') : null
+    const reviewStatus = adminRejected ? 'rejected' : conflicts.length ? 'pending' : 'approved'
+    const observeStatus = adminRejected || conflicts.length ? 'frozen' : adminPaused ? 'paused' : 'observing'
     if (!matched) {
       const [insert] = await run(`INSERT INTO trading_accounts
         (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status,
-         observed_until, identity_verified_at, is_deleted, created_at, updated_at)
-        VALUES (?, ?, ?, '', 'netting', 'pending', 'observing', DATE_ADD(NOW(), INTERVAL 72 HOUR), ?, 0, ?, ?)`,
-      [userId, server, login, beijingNow(), beijingNow(), beijingNow()])
-      matched = { id: insert.insertId, user_id: userId, broker_server: server, login_account: login, review_status: 'pending', observe_status: 'observing' }
+         observed_until, first_verified_at, identity_verified_at, anomaly_code, is_deleted, created_at, updated_at)
+        VALUES (?, ?, ?, '', 'netting', ?, ?, DATE_ADD(NOW(), INTERVAL 72 HOUR), ?, ?, ?, 0, ?, ?)`,
+      [userId, server, login, reviewStatus, observeStatus, now, now, anomalyCode, now, now])
+      matched = { id: insert.insertId, user_id: userId, broker_server: server, login_account: login, review_status: reviewStatus, observe_status: observeStatus }
     } else if (matched.is_deleted) {
-      await run(`UPDATE trading_accounts SET is_deleted = 0, review_status = 'pending', observe_status = 'observing',
-        observed_until = DATE_ADD(NOW(), INTERVAL 72 HOUR), identity_verified_at = ?, updated_at = ? WHERE id = ?`,
-      [beijingNow(), beijingNow(), matched.id])
-      matched = { ...matched, is_deleted: 0, review_status: 'pending', observe_status: 'observing' }
+      await run(`UPDATE trading_accounts SET is_deleted = 0, review_status = ?, observe_status = ?,
+        observed_until = DATE_ADD(NOW(), INTERVAL 72 HOUR), first_verified_at = COALESCE(first_verified_at, ?),
+        identity_verified_at = ?, anomaly_code = ?, updated_at = ? WHERE id = ?`,
+      [reviewStatus, observeStatus, now, now, anomalyCode, now, matched.id])
+      matched = { ...matched, is_deleted: 0, review_status: reviewStatus, observe_status: observeStatus }
     } else {
-      await run('UPDATE trading_accounts SET identity_verified_at = ?, updated_at = ? WHERE id = ?', [beijingNow(), beijingNow(), matched.id])
+      await run(`UPDATE trading_accounts SET review_status = ?,
+        observe_status = CASE WHEN ? = 'frozen' THEN 'frozen' WHEN ? = 'paused' THEN 'paused'
+          WHEN observed_until > NOW() THEN 'observing' ELSE 'active' END,
+        first_verified_at = COALESCE(first_verified_at, ?), identity_verified_at = ?, anomaly_code = ?, updated_at = ? WHERE id = ?`,
+      [reviewStatus, observeStatus, observeStatus, now, now, anomalyCode, now, matched.id])
+      matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
     }
     if (activeDifferent.length) {
       const ids = activeDifferent.map(row => Number(row.id))
-      await run(`UPDATE trading_accounts SET observe_status = 'switched', updated_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [beijingNow(), ...ids])
-      await run(`UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE trading_account_id IN (${ids.map(() => '?').join(',')})`, [beijingNow(), ...ids])
-      await run(`UPDATE trading_accounts SET review_status = 'pending', observe_status = 'observing',
-        observed_until = DATE_ADD(NOW(), INTERVAL 72 HOUR), updated_at = ? WHERE id = ?`, [beijingNow(), matched.id])
-      matched = { ...matched, review_status: 'pending', observe_status: 'observing' }
+      await run(`UPDATE trading_accounts SET observe_status = 'switched', updated_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [now, ...ids])
+      await run(`UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE trading_account_id IN (${ids.map(() => '?').join(',')})`, [now, ...ids])
+      await run(`UPDATE trading_accounts SET review_status = ?, observe_status = ?,
+        observed_until = DATE_ADD(NOW(), INTERVAL 72 HOUR), anomaly_code = ?, updated_at = ? WHERE id = ?`,
+      [reviewStatus, observeStatus, anomalyCode, now, matched.id])
+      matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
     }
     await run(`INSERT INTO risk_account_state (trading_account_id, user_id, halt_status, data_complete, created_at, updated_at)
       VALUES (?, ?, 'active', 0, ?, ?) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), updated_at = VALUES(updated_at)`,
-    [matched.id, userId, beijingNow(), beijingNow()])
-    return { accountId: Number(matched.id), switched: activeDifferent.length > 0 || (requestedAccountId && Number(requestedAccountId) !== Number(matched.id)) }
+    [matched.id, userId, now, now])
+    return {
+      accountId: Number(matched.id),
+      switched: activeDifferent.length > 0 || Boolean(requestedAccountId && Number(requestedAccountId) !== Number(matched.id)),
+      verified: !anomalyCode,
+      anomalyCode,
+    }
   })
 }
 

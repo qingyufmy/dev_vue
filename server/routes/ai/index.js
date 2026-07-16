@@ -348,11 +348,17 @@ router.get('/ai/admin/risk-center', authMiddleware, async (req, res) => {
     const recoveries = await queryAll(`SELECT rr.*, ta.login_account, ta.nickname AS account_nickname, u.nickname AS user_nickname, u.email AS user_email
       FROM risk_recovery_requests rr JOIN trading_accounts ta ON ta.id = rr.trading_account_id JOIN users u ON u.id = rr.user_id
       WHERE rr.status = 'pending' ORDER BY rr.created_at`)
+    const exceptions = await queryAll(`SELECT ta.*, u.nickname AS user_nickname, u.email AS user_email
+      FROM trading_accounts ta JOIN users u ON u.id = ta.user_id
+      WHERE ta.is_deleted = 0 AND (
+        ta.anomaly_code IN ('duplicate_account_binding', 'admin_rejected')
+        OR ta.review_status = 'rejected' OR ta.observe_status IN ('frozen', 'paused')
+      ) ORDER BY ta.updated_at DESC LIMIT 500`)
     const global = await queryAll('SELECT global_kill_switch, reason, changed_by, updated_at FROM global_risk_control WHERE id = 1 LIMIT 1')
     let set = await queryAll("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")
     let platform = null
     if (set[0]) platform = await queryAll('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1', [set[0].id])
-    res.json({ ok: true, accounts, recoveries, global_control: global[0] || null, platform_policy_set: set[0] || null, platform_policy_version: platform?.[0] || null, defaults: DEFAULT_RISK_POLICY, rule_metadata: RISK_RULES })
+    res.json({ ok: true, accounts, exceptions, recoveries, global_control: global[0] || null, platform_policy_set: set[0] || null, platform_policy_version: platform?.[0] || null, defaults: DEFAULT_RISK_POLICY, rule_metadata: RISK_RULES })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -528,7 +534,7 @@ export { listStrategies, getStrategyById, createStrategy, updateStrategy, delete
 export { RISK_RULES, DEFAULT_RISK_POLICY, resolveEffectiveRiskPolicy, submitRiskPolicyChanges,
   evaluateCoreRisk } from './risk-policy.js'
 export { calculateAccountRiskMetrics, aggregateClosedPositions, requestRiskRecovery,
-  reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
+  reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch, syncTradingAccountIdentity } from './risk-state.js'
 export { analyzeOutcomeAttribution, resolveOutcomeClosureTransition,
   reconcileSignalOutcomes, startOutcomeMonitor, stopOutcomeMonitor } from './signal-outcomes.js'
 export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome,

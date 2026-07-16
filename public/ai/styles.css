@@ -1753,6 +1753,48 @@ textarea:focus {
 }
 
 /* History profit chart */
+.history-scope-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.history-scope-bar .filter-field,
+.history-range-dates {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  width: auto;
+}
+.history-scope-bar > .filter-field { flex-direction: row; }
+.history-scope-bar .filter-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.history-scope-bar .filter-select,
+.history-scope-bar .filter-date {
+  min-height: 30px;
+  padding: 4px 9px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color-scheme: dark;
+}
+.history-scope-bar .filter-select { width: 150px; }
+.history-scope-bar .filter-date { width: 132px; }
+.history-scope-bar .filter-date:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.history-scope-bar .field-help {
+  flex: 1 1 260px;
+  margin: 0;
+}
 .history-chart-wrap {
   position: relative;
   padding: var(--space-2) 0 var(--space-3);

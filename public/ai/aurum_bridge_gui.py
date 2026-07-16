@@ -937,6 +937,12 @@ class BridgeWorker(QThread):
                     rows = [r for r in rows if float(r.get("profit") or 0) > 0]
                 elif profit_filter == "loss":
                     rows = [r for r in rows if float(r.get("profit") or 0) < 0]
+                entry_from = str(params.get("entry_from") or "")[:10]
+                entry_to = str(params.get("entry_to") or "")[:10]
+                if entry_from:
+                    rows = [r for r in rows if str(r.get("entry_time") or "")[:10] >= entry_from]
+                if entry_to:
+                    rows = [r for r in rows if str(r.get("entry_time") or "")[:10] <= entry_to]
                 total = len(rows); si = max(page-1,0)*page_size
                 pr = rows[si:si+page_size]
                 tp = sum(float(r.get("net_profit") or 0) for r in rows)

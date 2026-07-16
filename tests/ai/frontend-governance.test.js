@@ -19,7 +19,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('data-model-strategy-panel="models"')
     expect(html).not.toContain('data-tab="model-management"')
     expect(html).not.toContain('data-tab="ai-config"')
-    for (const tab of ['global-risk', 'account-review', 'audit']) expect(html).toContain(`data-tab="${tab}"`)
+    for (const tab of ['global-risk', 'audit']) expect(html).toContain(`data-tab="${tab}"`)
+    expect(html).not.toContain('data-tab="account-review"')
   })
 
   it('accepts a token handoff before the early authentication redirect', () => {
@@ -30,7 +31,8 @@ describe('AI governance navigation and DOM contract', () => {
 
   it('marks administrator controls and keeps private review and memory pages user-scoped', () => {
     expect(html).toContain('id="global-risk" class="tab-panel admin-only"')
-    expect(html).toContain('id="account-review" class="tab-panel admin-only"')
+    expect(html).toContain('id="accountExceptionList"')
+    expect(html).not.toContain('id="account-review"')
     expect(app).toContain('api(`/api/ai/reviews${query}`)')
     expect(app).toContain('api("/api/ai/memory")')
     expect(routes).toContain("WHERE id = ? AND user_id = ?")
@@ -63,6 +65,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('data-risk-recovery=')
     expect(routes).toContain("'/ai/admin/recoveries/:id/review'")
     expect(routes).toContain("'/ai/admin/risk-center/kill-switch'")
+  })
+
+  it('uses an explicit shared history scope and keeps the platform start server-owned', () => {
+    expect(html).toContain('id="historyRangeMode"')
+    expect(html).toContain('<option value="all">全账户历史</option>')
+    expect(html).toContain('<option value="platform">平台接入后</option>')
+    expect(html).toContain('<option value="custom">自定义日期</option>')
+    expect(app).toContain('history_scope: scope')
+    expect(html).not.toContain('id="filterCloseFrom"')
+    expect(html).not.toContain('id="chartDateFrom"')
   })
 
   it('lets administrators operate adjustable rule rollouts while forced rules stay disabled', () => {

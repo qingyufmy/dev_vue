@@ -1415,8 +1415,8 @@ async function loadRiskCenter() {
     const editable = ["max_position_size","max_risk_per_trade_pct","market_signal_drift_atr","pending_price_deviation_pct","pending_price_deviation_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds"];
     const pending = (row.pending_changes || []).map(change => `${RISK_LABELS[change.field_code] || change.field_code} → ${parseJsonField(change.new_value_json,null)}（${change.effective_at}）`).join("；");
     const stateInfo = row.risk_state || {}, killEnabled = Boolean(stateInfo.user_kill_switch);
-    return `<article class="workspace-panel" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · ${escapeHtml(row.account.margin_mode)} · 审核 ${escapeHtml(row.account.review_status)}</p></div><div class="workspace-row-actions"><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(stateInfo.halt_status || '未初始化')}</span><button class="btn ${killEnabled ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${killEnabled ? '0' : '1'}">${killEnabled ? '解除紧急停止' : '紧急停止新开仓'}</button>${stateInfo.halt_status && stateInfo.halt_status !== 'active' ? `<button class="btn btn-secondary btn-sm" data-risk-recovery="${row.account.id}">申请恢复</button>` : ''}</div></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(stateInfo.halt_reason)}</span></div>` : ''}${pending ? `<div class="source-notice"><span><strong>待生效：</strong>${escapeHtml(pending)}</span></div>` : ''}<div class="risk-value-grid">${Object.keys(RISK_LABELS).slice(0,10).map(key => `<div class="risk-value"><span>${RISK_LABELS[key]} · 最终有效</span><strong>${escapeHtml(formatRiskValue(key,p[key]))}</strong></div>`).join("")}</div><details class="risk-user-editor"><summary>修改我的自定义风控</summary><p class="field-help">收紧立即生效；放宽进入冷却倒计时。AI 建议手数范围属于平台强制边界，不能由用户放宽。</p><div class="settings-grid compact">${editable.map(key => `<label><span>${RISK_LABELS[key]}</span><input type="number" step="any" data-user-risk-field="${key}" value="${escapeHtml(p[key] ?? '')}"></label>`).join("")}</div><div class="form-actions"><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存用户风控</button></div></details></article>`;
-  }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>账户接入并通过服务端审核后，这里会显示最终有效风控。</span></div>';
+    return `<article class="workspace-panel" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · ${escapeHtml(row.account.margin_mode)} · 身份 ${escapeHtml(row.account.review_status)}</p></div><div class="workspace-row-actions"><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(stateInfo.halt_status || '未初始化')}</span><button class="btn ${killEnabled ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${killEnabled ? '0' : '1'}">${killEnabled ? '解除紧急停止' : '紧急停止新开仓'}</button>${stateInfo.halt_status && stateInfo.halt_status !== 'active' ? `<button class="btn btn-secondary btn-sm" data-risk-recovery="${row.account.id}">申请恢复</button>` : ''}</div></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(stateInfo.halt_reason)}</span></div>` : ''}${pending ? `<div class="source-notice"><span><strong>待生效：</strong>${escapeHtml(pending)}</span></div>` : ''}<div class="risk-value-grid">${Object.keys(RISK_LABELS).slice(0,10).map(key => `<div class="risk-value"><span>${RISK_LABELS[key]} · 最终有效</span><strong>${escapeHtml(formatRiskValue(key,p[key]))}</strong></div>`).join("")}</div><details class="risk-user-editor"><summary>修改我的自定义风控</summary><p class="field-help">收紧立即生效；放宽进入冷却倒计时。AI 建议手数范围属于平台强制边界，不能由用户放宽。</p><div class="settings-grid compact">${editable.map(key => `<label><span>${RISK_LABELS[key]}</span><input type="number" step="any" data-user-risk-field="${key}" value="${escapeHtml(p[key] ?? '')}"></label>`).join("")}</div><div class="form-actions"><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存用户风控</button></div></details></article>`;
+  }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>账户通过 Bridge 自动验证后，这里会显示最终有效风控。</span></div>';
   const firstPolicy = rows[0]?.effective?.policy || {};
   $("priceExecutionRules").classList.remove("empty-state");
   $("priceExecutionRules").innerHTML = `<div class="risk-value-grid">${["market_signal_drift_atr","pending_price_deviation_pct","pending_price_deviation_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds"].map(key => `<div class="risk-value"><span>${RISK_LABELS[key]}</span><strong>${escapeHtml(formatRiskValue(key,firstPolicy[key]))}</strong></div>`).join("")}</div>`;
@@ -1502,7 +1502,7 @@ async function loadAdminRiskCenter() {
   $("rolloutHealthSummary").innerHTML = `<span>告警 ${Number(health.alerts?.length || 0)}</span><span>不确定订单 ${Number(metrics.uncertain?.count || 0)}</span><span>最老不确定 ${Number(metrics.uncertain?.oldest_seconds || 0)} 秒</span><span>Outcome 积压 ${Number(metrics.outcome_backlog?.backlog || 0)}</span><span>凭据迁移 ${escapeHtml(health.credential_migration?.status || '未执行')}</span>`;
   const rolloutHost = $("riskRuleRolloutList");
   if (rolloutHost) rolloutHost.innerHTML = (health.risk_rule_rollouts || []).map(rule => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(rule.rule_code)} ${rule.forced_enforce ? '<span class="status-chip danger">强制</span>' : '<span class="status-chip info">可调</span>'}</div><div class="workspace-row-meta"><span>${rule.forced_enforce ? '系统安全边界，不允许影子放行' : 'Shadow 仅记录，Enforce 正式拦截'}</span><span>更新 ${escapeHtml(rule.updated_at || '--')}</span></div></div><div class="workspace-row-actions"><select data-risk-rollout="${escapeHtml(rule.rule_code)}" ${rule.forced_enforce ? 'disabled' : ''}><option value="enforce" ${rule.mode === 'enforce' ? 'selected' : ''}>Enforce</option><option value="shadow" ${rule.mode === 'shadow' ? 'selected' : ''}>Shadow</option></select></div></article>`).join("") || '<div class="empty-state">暂无规则灰度数据</div>';
-  renderAccountReviews(data.accounts || []);
+  renderAccountExceptions(data.exceptions || []);
 }
 
 async function saveGlobalFeatureFlags() {
@@ -1512,9 +1512,13 @@ async function saveGlobalFeatureFlags() {
   toast("全局灰度开关已保存", "success"); await loadAdminRiskCenter();
 }
 
-function renderAccountReviews(accounts) {
-  const host = $("accountReviewList"); if (!host) return;
-  host.innerHTML = accounts.length ? accounts.map(account => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.login_account)} <span class="status-chip ${account.review_status === 'approved' ? 'success' : 'warning'}">${escapeHtml(account.review_status)}</span></div><div class="workspace-row-meta"><span>${escapeHtml(account.broker_server)}</span><span>${escapeHtml(account.margin_mode)}</span><span>观察：${escapeHtml(account.observe_status)}</span><span>截止：${escapeHtml(account.observed_until || '--')}</span></div></div><div class="workspace-row-actions"><button class="btn btn-primary btn-sm" data-account-review="approve" data-account-id="${account.id}">通过</button><button class="btn btn-danger btn-sm" data-account-review="reject" data-account-id="${account.id}">拒绝</button></div></article>`).join("") : '<div class="workspace-panel empty-state">暂无待审核账户</div>';
+function renderAccountExceptions(accounts) {
+  const host = $("accountExceptionList"); if (!host) return;
+  const reasonLabels = { duplicate_account_binding:"同一交易账户已绑定其他用户", admin_rejected:"管理员已冻结", frozen:"账户已冻结", paused:"账户已暂停" };
+  host.innerHTML = accounts.length ? accounts.map(account => {
+    const reason = reasonLabels[account.anomaly_code] || reasonLabels[account.observe_status] || account.anomaly_code || "身份状态异常";
+    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.login_account)} <span class="status-chip danger">${escapeHtml(reason)}</span></div><div class="workspace-row-meta"><span>${escapeHtml(account.broker_server)}</span><span>验证：${escapeHtml(account.review_status)}</span><span>账户状态：${escapeHtml(account.observe_status)}</span><span>首次验证：${escapeHtml(account.first_verified_at || '--')}</span></div></div><div class="workspace-row-actions"><button class="btn btn-primary btn-sm" data-account-review="approve" data-account-id="${account.id}">解除异常</button><button class="btn btn-danger btn-sm" data-account-review="reject" data-account-id="${account.id}">冻结账户</button></div></article>`;
+  }).join("") : '<div class="empty-state"><strong>没有异常账户</strong><span>普通账户已由 Bridge 自动完成身份验证。</span></div>';
 }
 
 async function saveGlobalRisk() {
@@ -1576,7 +1580,7 @@ async function refreshTabData(tabId) {
     await loadRiskCenter();
   } else if (tabId === "review-memory") {
     await loadReviewMemory();
-  } else if (tabId === "global-risk" || tabId === "account-review") {
+  } else if (tabId === "global-risk") {
     await loadAdminRiskCenter();
   }
 }
@@ -3355,20 +3359,44 @@ function setHistoryZeroClass(id, value) {
   el.parentElement.classList.toggle("zero-value", Number.isFinite(num) && num === 0);
 }
 
+function getHistoryRangeParams() {
+  const scope = $("historyRangeMode")?.value || "all";
+  const params = { history_scope: scope };
+  if (scope === "custom") {
+    const from = $("historyRangeFrom")?.value || "";
+    const to = $("historyRangeTo")?.value || "";
+    if (!from && !to) throw new Error("请选择自定义历史日期");
+    if (from && to && from > to) throw new Error("历史开始日期不能晚于结束日期");
+    if (from) params.close_from = from;
+    if (to) params.close_to = to;
+  }
+  return params;
+}
+
+function updateHistoryRangeUI() {
+  const scope = $("historyRangeMode")?.value || "all";
+  const custom = scope === "custom";
+  $("historyRangeDates")?.classList.toggle("hidden", !custom);
+  if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
+  if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
+  const hints = {
+    all: "包含该 MT5 账户的完整交易、入金、提款和信用记录。",
+    platform: "从当前 MT5 账户首次通过 Bridge 身份验证之日开始。",
+    custom: "按平仓日期统计；入金、提款和信用也按同一日期范围计算。",
+  };
+  setText("historyRangeHint", hints[scope] || hints.all);
+}
+
 async function loadHistory(forceRefresh) {
   try {
     const filters = state.historyFilters;
     const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
     const entryTo = document.getElementById('filterEntryTo')?.value || '';
-    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
-    const closeTo = document.getElementById('filterCloseTo')?.value || '';
     const direction = document.getElementById('filterDirection')?.value || '';
     const profit = document.getElementById('filterProfit')?.value || '';
-    const filterParams = {};
+    const filterParams = getHistoryRangeParams();
     if (entryFrom) filterParams.entry_from = entryFrom;
     if (entryTo) filterParams.entry_to = entryTo;
-    if (closeFrom) filterParams.close_from = closeFrom;
-    if (closeTo) filterParams.close_to = closeTo;
     if (direction) filterParams.direction = direction;
     if (profit) filterParams.profit_filter = profit;
 
@@ -3389,7 +3417,7 @@ async function loadHistory(forceRefresh) {
     if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史数据读取失败');
     _historyCache = { filters: filterKey, data };
     _applyHistoryData(data);
-  } catch (e) { console.error("loadHistory:", e); }
+  } catch (e) { console.error("loadHistory:", e); toast(e.message || "历史数据读取失败", "error"); }
 }
 
 function _applyHistoryData(data) {
@@ -3416,14 +3444,10 @@ function _applyHistoryData(data) {
   setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
 }
 
-// ---- Chart-only fetch: independent of table filters, empty dates mean full account history ----
+// Chart and summary use the same explicit history scope as the table.
 async function loadHistoryChart(forceRefresh) {
   try {
-    const from = document.getElementById('chartDateFrom')?.value || '';
-    const to = document.getElementById('chartDateTo')?.value || '';
-    const params = {};
-    if (from) params.close_from = from;
-    if (to) params.close_to = to;
+    const params = getHistoryRangeParams();
 
     const filterKey = JSON.stringify(params);
     if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
@@ -3605,12 +3629,15 @@ function _renderHistoryChart(data) {
         const idx = elements[0].index;
         const date = daily[idx]?.date;
         if (!date) return;
-        // Set TABLE close-date filter, reload table only — chart stays unchanged
-        document.getElementById('filterCloseFrom') && (document.getElementById('filterCloseFrom').value = date);
-        document.getElementById('filterCloseTo') && (document.getElementById('filterCloseTo').value = date);
+        // Drill into the selected day using the shared explicit range.
+        if ($('historyRangeMode')) $('historyRangeMode').value = 'custom';
+        if ($('historyRangeFrom')) $('historyRangeFrom').value = date;
+        if ($('historyRangeTo')) $('historyRangeTo').value = date;
+        updateHistoryRangeUI();
         state.historyFilters.page = 1;
         _historyCache = null;
-        loadHistory(true);
+        _historyChartCache = null;
+        Promise.allSettled([loadHistory(true), loadHistoryChart(true)]);
       },
       plugins: {
         legend: { display: false },
@@ -3681,17 +3708,13 @@ async function exportHistory() {
   }
   try {
     // Gather current filters
-    const filterParams = {};
+    const filterParams = getHistoryRangeParams();
     const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
     const entryTo = document.getElementById('filterEntryTo')?.value || '';
-    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
-    const closeTo = document.getElementById('filterCloseTo')?.value || '';
     const direction = document.getElementById('filterDirection')?.value || '';
     const profit = document.getElementById('filterProfit')?.value || '';
     if (entryFrom) filterParams.entry_from = entryFrom;
     if (entryTo) filterParams.entry_to = entryTo;
-    if (closeFrom) filterParams.close_from = closeFrom;
-    if (closeTo) filterParams.close_to = closeTo;
     if (direction) filterParams.direction = direction;
     if (profit) filterParams.profit_filter = profit;
 
@@ -4105,8 +4128,8 @@ function bindEvents() {
       catch (error) { toast(error.message,"error"); } return;
     }
     if (accountReview) {
-      const approved = accountReview.dataset.accountReview === "approve"; const reason = prompt(approved ? "请输入通过理由" : "请输入拒绝理由"); if (!reason) return;
-      try { await api(`/api/ai/admin/accounts/${Number(accountReview.dataset.accountId)}/review`, { method:"POST", body:{ approved, reason } }); toast("账户审核已提交","success"); await loadAdminRiskCenter(); }
+      const approved = accountReview.dataset.accountReview === "approve"; const reason = prompt(approved ? "请输入解除账户异常的依据" : "请输入冻结账户的原因"); if (!reason) return;
+      try { await api(`/api/ai/admin/accounts/${Number(accountReview.dataset.accountId)}/review`, { method:"POST", body:{ approved, reason } }); toast(approved ? "账户异常已解除" : "账户已冻结","success"); await loadAdminRiskCenter(); }
       catch (error) { toast(error.message,"error"); } return;
     }
     if (recoveryReview) {
@@ -4174,7 +4197,6 @@ function bindEvents() {
         "refresh-audit": loadAudit,
         "refresh-risk-center": loadRiskCenter,
         "refresh-review-memory": loadReviewMemory,
-        "refresh-account-review": loadAdminRiskCenter,
       };
       if (tasks[action]) {
         withBusy(actionButton, tasks[action]).catch((error) => toast(error.message, "error"));
@@ -4187,31 +4209,29 @@ function bindEvents() {
     if (closeButton) closePosition(closeButton.dataset.closeTicket);
   });
 
-  // History table filter buttons (only affect table, not chart)
+  // History scope drives the table, summary and chart together.
+  document.getElementById('historyRangeMode')?.addEventListener('change', updateHistoryRangeUI);
+  document.getElementById('historyRangeApply')?.addEventListener('click', () => {
+    try { getHistoryRangeParams(); }
+    catch (error) { toast(error.message, 'error'); return; }
+    state.historyFilters.page = 1;
+    _historyCache = null;
+    _historyChartCache = null;
+    Promise.allSettled([loadHistory(true), loadHistoryChart(true)]);
+  });
+  updateHistoryRangeUI();
+  // Table filters further narrow trade rows inside the selected history scope.
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     state.historyFilters.page = 1;
     _historyCache = null;
     loadHistory(true);
   });
   document.getElementById('historyFilterReset')?.addEventListener('click', () => {
-    ['filterEntryFrom','filterEntryTo','filterCloseFrom','filterCloseTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['filterEntryFrom','filterEntryTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
     _historyCache = null;
     loadHistory(true);
-  });
-  // Chart date range filter (only affects chart, not table)
-  document.getElementById('chartDateApply')?.addEventListener('click', () => {
-    _historyChartCache = null;
-    loadHistoryChart(true);
-  });
-  document.getElementById('chartDateReset')?.addEventListener('click', () => {
-    const ef = document.getElementById('chartDateFrom');
-    const et = document.getElementById('chartDateTo');
-    if (ef) ef.value = '';
-    if (et) et.value = '';
-    _historyChartCache = null;
-    loadHistoryChart(true);
   });
 }
 

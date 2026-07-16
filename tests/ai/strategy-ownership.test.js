@@ -23,6 +23,7 @@ import * as models from '../../server/routes/ai/model-profiles.js'
 import {
   adminListUserStrategies,
   adminListUserSubscriptions,
+  adminReviewTradingAccount,
   createStrategy,
   createSubscription,
   createTradingAccount,
@@ -170,7 +171,8 @@ describe('trading account control fields', () => {
       review_status: 'approved', observe_status: 'paused',
     })
     const [sql, params] = db.queryRun.mock.calls[0]
-    expect(sql).toContain("'pending', 'observing'")
+    expect(sql).toContain("'pending', 'unverified'")
+    expect(sql).toContain("'awaiting_bridge_verification'")
     expect(params).not.toContain('approved')
     expect(params).not.toContain('paused')
     expect(params).toContain('hedging')
@@ -184,6 +186,19 @@ describe('trading account control fields', () => {
   it('rejects unknown margin modes', async () => {
     await expect(createTradingAccount(2, { broker_server: 'Demo', login_account: '123', margin_mode: 'magic' }))
       .rejects.toThrow('invalid_margin_mode')
+  })
+
+  it('requires Bridge identity before an administrator can release an account', async () => {
+    db.queryOne.mockResolvedValue({ ...ACCOUNT, review_status: 'pending', identity_verified_at: null })
+    await expect(adminReviewTradingAccount(10, 1, 'admin', { approved: true, reason: 'manual check' }))
+      .rejects.toThrow('bridge_identity_verification_required')
+  })
+
+  it('does not release an unresolved duplicate binding', async () => {
+    db.queryOne.mockImplementationOnce(() => ({ ...ACCOUNT, review_status: 'pending', identity_verified_at: '2026-07-15 12:00:00' }))
+      .mockImplementationOnce(() => ({ id: 11 }))
+    await expect(adminReviewTradingAccount(10, 1, 'admin', { approved: true, reason: 'manual check' }))
+      .rejects.toThrow('duplicate_account_binding_unresolved')
   })
 })
 

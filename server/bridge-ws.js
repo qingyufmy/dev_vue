@@ -516,9 +516,42 @@ async function _initBridge(ws, userId, user) {
   } catch (error) {
     console.warn(`[BridgeWS] Trade state synchronization failed user=${userId}:`, error.message)
   }
+  try {
+    const account = await sendBridgeCommand(userId, 'account', {}, 5000, { noFallback: true })
+    if (account?.status === 'success' && account.server && account.login !== undefined) {
+      const ai = await import('./routes/ai/index.js')
+      await ai.syncTradingAccountIdentity(userId, account)
+    } else {
+      console.warn(`[BridgeWS] Account identity synchronization skipped user=${userId}:`, account?.message || account?.error || 'identity_unavailable')
+    }
+  } catch (error) {
+    console.warn(`[BridgeWS] Account identity synchronization failed user=${userId}:`, error.message)
+  }
 }
 
 // ============ Helpers ============
+
+function validHistoryDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))
+}
+
+async function resolveHistoryRange(userId, params = {}) {
+  const scope = ['all', 'platform', 'custom'].includes(params.history_scope) ? params.history_scope : 'all'
+  if (scope === 'all') return { scope, date_from: null, date_to: null }
+  if (scope === 'custom') {
+    const dateFrom = validHistoryDate(params.close_from) ? params.close_from : null
+    const dateTo = validHistoryDate(params.close_to) ? params.close_to : null
+    if (!dateFrom && !dateTo) throw new Error('custom_history_range_required')
+    if (dateFrom && dateTo && dateFrom > dateTo) throw new Error('invalid_history_range')
+    return { scope, date_from: dateFrom, date_to: dateTo }
+  }
+  const account = await queryOne(`SELECT DATE_FORMAT(first_verified_at, '%Y-%m-%d') AS first_verified_date FROM trading_accounts
+    WHERE user_id = ? AND is_deleted = 0 AND first_verified_at IS NOT NULL
+    ORDER BY identity_verified_at DESC, id DESC LIMIT 1`, [userId])
+  if (!account?.first_verified_date) throw new Error('platform_history_start_unavailable')
+  const dateFrom = account.first_verified_date
+  return { scope, date_from: dateFrom, date_to: null }
+}
 
 function sendToBrowsers(userId, data) {
   // Admin market status override: if admin is closed, force all users to closed
@@ -728,10 +761,14 @@ async function handleBrowserCommand(ws, userId, msg) {
             direction: params.direction || '',
             profit_filter: params.profit_filter || ''
           }
-          if (params.close_from) bridgeParams.date_from = params.close_from
-          if (params.close_to) bridgeParams.date_to = params.close_to
+          if (validHistoryDate(params.entry_from)) bridgeParams.entry_from = params.entry_from
+          if (validHistoryDate(params.entry_to)) bridgeParams.entry_to = params.entry_to
+          const range = await resolveHistoryRange(userId, params)
+          if (range.date_from) bridgeParams.date_from = range.date_from
+          if (range.date_to) bridgeParams.date_to = range.date_to
 
           result = await ai.mt5Bridge(userId, 'history', bridgeParams, { timeoutMs: 30000, noFallback: true })
+          if (result && typeof result === 'object') result.history_range = range
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
@@ -742,11 +779,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (bridgeOk) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
           const chartParams = {}
-          if (params.close_from) chartParams.date_from = params.close_from
-          if (params.close_to) chartParams.date_to = params.close_to
+          const range = await resolveHistoryRange(userId, params)
+          if (range.date_from) chartParams.date_from = range.date_from
+          if (range.date_to) chartParams.date_to = range.date_to
           if (params.direction) chartParams.direction = params.direction
           if (params.profit_filter) chartParams.profit_filter = params.profit_filter
           result = await ai.mt5Bridge(userId, 'chart_data', chartParams, { timeoutMs: 30000, noFallback: true })
+          if (result && typeof result === 'object') result.history_range = range
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
@@ -1279,7 +1318,11 @@ async function handleBrowserCommand(ws, userId, msg) {
           break
         }
         // Fetch all orders from MT5 bridge
-        const expRes = await ai.mt5Bridge(expUserId, 'history', { page: 1, page_size: 9999 }, { timeoutMs: 30000, noFallback: true })
+        const exportRange = await resolveHistoryRange(expUserId, params)
+        const exportBridgeParams = { page: 1, page_size: 9999 }
+        if (exportRange.date_from) exportBridgeParams.date_from = exportRange.date_from
+        if (exportRange.date_to) exportBridgeParams.date_to = exportRange.date_to
+        const expRes = await ai.mt5Bridge(expUserId, 'history', exportBridgeParams, { timeoutMs: 30000, noFallback: true })
         if (expRes?.status !== 'success' || !Array.isArray(expRes.orders)) {
           result = { status: 'error', message: '获取历史订单失败' }
           break

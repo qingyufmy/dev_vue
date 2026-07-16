@@ -1675,6 +1675,22 @@ const migrations = [
           FROM ai_configs WHERE is_active = 1 GROUP BY user_id, session_id
         ) latest ON latest.id = c.id`, [beijingNow(), beijingNow()])
     }
+  },
+  {
+    id: '069_trading_account_identity_lifecycle',
+    up: async () => {
+      const columns = [
+        ['first_verified_at', 'DATETIME DEFAULT NULL'],
+        ['anomaly_code', 'VARCHAR(64) DEFAULT NULL'],
+      ]
+      for (const [name, definition] of columns) {
+        const rows = await queryAll("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trading_accounts' AND COLUMN_NAME = ?", [name])
+        if (!rows.length) await queryRun(`ALTER TABLE trading_accounts ADD COLUMN ${name} ${definition}`)
+      }
+      await queryRun(`UPDATE trading_accounts
+        SET first_verified_at = identity_verified_at
+        WHERE first_verified_at IS NULL AND identity_verified_at IS NOT NULL`)
+    }
   }
 ]
 
