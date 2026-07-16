@@ -2007,6 +2007,31 @@ const migrations = [
         SET last_risk_snapshot_at = updated_at
         WHERE last_risk_snapshot_at IS NULL AND updated_at IS NOT NULL`)
     }
+  },
+  {
+    id: '080_signal_presentation_v2',
+    up: async () => {
+      const additions = [
+        ['schema_version', 'SMALLINT NOT NULL DEFAULT 1'],
+        ['decision_json', 'TEXT DEFAULT NULL'],
+      ]
+      for (const [name, definition] of additions) {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = ?`, [name])
+        if (!rows.length) await queryRun(`ALTER TABLE ai_signals ADD COLUMN ${name} ${definition}`)
+      }
+      const schemas = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      for (const row of schemas) {
+        let schema
+        try { schema = JSON.parse(row.schema_json || '{}') } catch { schema = {} }
+        schema.decision_summary = '必填，中文，一句话给出结论，不超过80字；观望时说明为什么暂不执行'
+        schema.trigger_condition = '中文，说明建议成立或挂单触发需要满足的市场条件；没有则返回空字符串'
+        schema.invalidation_condition = '中文，说明什么市场变化会使建议失效；观望时可说明重新评估条件'
+        schema.key_reasons = ['2至4条关键行情依据，每条不超过60字，不包含账户、持仓或风控结论']
+        schema.risk_factors = ['0至4条市场层面的不利因素，每条不超过60字，不包含账户或仓位信息']
+        await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
+      }
+    }
   }
 ]
 

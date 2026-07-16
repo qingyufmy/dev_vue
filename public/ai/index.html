@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260716v" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260716w" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -486,24 +486,14 @@
 
         <section id="ai-analyze" class="tab-panel">
           <div class="inference-workspace">
-          <div class="manual-inference-header calm-page-header"><div><span class="eyebrow">策略推理</span><h1>推理</h1><p>选择策略和品种，快速得到可理解、可复核的交易建议。</p></div><button class="btn btn-secondary" data-tab-jump="ai-config"><i data-lucide="settings-2" size="16"></i>管理策略</button></div>
-          <section class="card inference-command-card" aria-labelledby="inferenceCommandTitle">
-              <div class="card-header">
-                <div><span id="inferenceCommandTitle" class="card-title">开始一次推理</span><small>策略会自动确定行情周期、K 线数量和模型。</small></div>
-                <button id="runAnalysisBtn" class="btn btn-primary"><i data-lucide="play" size="16"></i>开始推理</button>
-              </div>
-              <div class="manual-run-fields"><label><span>推理策略</span><select id="analyzeStrategy" required><option value="">请选择策略</option></select><small class="field-help">只显示当前可用于推理的策略，每次推理运行一套策略。</small></label><label><span>分析品种</span><select id="analyzeSymbol" required disabled><option value="">请先选择策略</option></select><small class="field-help">只显示当前策略支持的品种</small></label></div>
-              <div id="manualStrategySummary" class="strategy-run-summary empty"><strong>尚未选择策略</strong><span>选择后显示行情周期、K 线数量、入场方式与模型来源。</span></div>
-              <div class="execution-mode-row"><div><strong>结果处理方式</strong><small>默认只生成信号，需要时再交给风控执行。</small></div><label id="manualAutoExecuteControl" class="manual-auto-execute"><input id="manualAutoExecute" type="checkbox"><span class="mode-option safe">只生成信号</span><span class="mode-option live">风控通过后自动执行</span></label></div>
-              <div id="manualAutoExecuteNotice" class="inline-alert danger hidden" role="alert"><i data-lucide="triangle-alert" size="18"></i><span>本次运行可能产生真实订单。开始前还会再次要求确认。</span></div>
-          </section>
+          <div class="manual-inference-header calm-page-header"><div><span class="eyebrow">策略推理</span><h1>推理</h1><p>先看结论，再决定是否交给风控执行。</p></div><div class="inference-header-actions"><button class="btn btn-secondary" data-tab-jump="ai-config"><i data-lucide="settings-2" size="16"></i>管理策略</button><button id="openManualInferenceBtn" class="btn btn-primary"><i data-lucide="sparkles" size="16"></i>手动推理</button></div></div>
           <div class="analysis-grid calm-analysis-grid">
             <div class="card analysis-result-card">
               <div class="card-header">
-                <div><span class="card-title">推理结果</span><small>方向、手数与关键价格优先展示，详细分析按需展开。</small></div>
+                <div><span class="card-title">最新执行建议</span><small>结论由模型生成，最终手数和是否放行由风控决定。</small></div>
                 <button id="executeSignalBtn" class="btn btn-success" disabled><i data-lucide="send" size="16"></i>复核执行</button>
               </div>
-              <div id="analysisResult" class="analysis-result muted-block">请选择策略和品种，然后开始推理</div>
+              <div id="analysisResult" class="analysis-result muted-block">暂无推理结果。点击右上角“手动推理”开始分析。</div>
               <div class="latency-box result-meta-strip">
                 <div><span>最近耗时</span><strong id="analysisLatency" class="num">--</strong></div>
                 <div><span>信号状态</span><strong id="signalFreshness" class="num">--</strong></div>
@@ -921,6 +911,26 @@
       </div>
     </div>
 
+    <div id="manualInferenceModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="manualInferenceTitle">
+      <div class="order-confirm-dialog manual-inference-dialog">
+        <div class="order-confirm-head">
+          <div><strong id="manualInferenceTitle">开始手动推理</strong><small>策略会自动确定周期、K 线数量和模型</small></div>
+          <button id="manualInferenceClose" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x" size="16"></i></button>
+        </div>
+        <div class="manual-inference-body">
+          <div class="manual-run-fields"><label><span>推理策略</span><select id="analyzeStrategy" required><option value="">请选择策略</option></select><small class="field-help">只显示当前可用于推理的策略</small></label><label><span>分析品种</span><select id="analyzeSymbol" required disabled><option value="">请先选择策略</option></select><small class="field-help">只显示当前策略支持的品种</small></label></div>
+          <div id="manualStrategySummary" class="strategy-run-summary empty"><strong>尚未选择策略</strong><span>选择后显示行情计划、入场方式与模型来源。</span></div>
+          <div class="execution-mode-row"><div><strong>结果处理方式</strong><small>建议先查看结果，再手动复核执行。</small></div><label id="manualAutoExecuteControl" class="manual-auto-execute"><input id="manualAutoExecute" type="checkbox"><span class="mode-option safe">只生成建议</span><span class="mode-option live">风控通过后自动执行</span></label></div>
+          <div id="manualAutoExecuteNotice" class="inline-alert danger hidden" role="alert"><i data-lucide="triangle-alert" size="18"></i><span>本次推理可能产生真实订单，提交前会再次确认。</span></div>
+          <div id="manualInferenceStatus" class="manual-inference-status hidden" role="status"><span class="status-spinner" aria-hidden="true"></span><div><strong>正在生成交易建议</strong><small>正在获取行情、计算指标并调用模型，请保持页面打开。</small></div></div>
+        </div>
+        <div class="order-confirm-actions">
+          <button id="manualInferenceCancel" class="btn" type="button">关闭</button>
+          <button id="runAnalysisBtn" class="btn btn-primary" type="button"><i data-lucide="play" size="16"></i>开始推理</button>
+        </div>
+      </div>
+    </div>
+
     <div id="genericConfirmModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="genericConfirmTitle">
       <div class="order-confirm-dialog" style="width:min(420px,calc(100vw - 40px))">
         <div class="order-confirm-head">
@@ -955,7 +965,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260716v"></script>
+    <script src="/ai/app.js?v=20260716w"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

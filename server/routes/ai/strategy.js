@@ -11,6 +11,7 @@ import { retrievePlatformExperience } from './platform-experience.js'
 import { persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
+import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
@@ -218,19 +219,22 @@ export async function handleAnalyze(userId, params) {
 
   const createdAt = beijingNow()
   const marketJson = JSON.stringify(market)
+  const decision = normalizeDecisionFields(signal)
+  const decisionJson = JSON.stringify(decision)
   const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
   if (!renderedEvidence) throw new Error('inference_evidence_missing')
   const persisted = await withTransaction(async run => {
     const [result] = await run(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
       analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
-      entry_method, limit_price, stop_limit_price, pending_valid_until)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
         signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
         marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
-        signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null])
+        signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null,
+        SIGNAL_SCHEMA_VERSION, decisionJson])
     const snapshotId = await persistInferenceSnapshotTx(run, {
       signalId: result.insertId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1), strategyScope: strategy.scope, ownerUserId: Number(strategy.owner_user_id || 0),
       standardSymbol: stripBrokerSuffix(symbol).toUpperCase(), marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
@@ -254,6 +258,7 @@ export async function handleAnalyze(userId, params) {
   signal.market_data = market
   signal.is_executed = false
   attachSignalTiming(signal)
+  signal = attachSignalPresentation({ ...signal, ...decision, decision_json: decisionJson })
 
   // Push new signal notification to browser
   sendToBrowsers(userId, {
@@ -270,6 +275,8 @@ export async function handleAnalyze(userId, params) {
     if (!isTradeEnabled(userId)) {
       console.log(`[Analyze] Auto-execute blocked: trade_send_enabled=0`)
       await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', reason: 'trade_send_disabled' }, { status: 'rejected', message: '交易发送已关闭' }, 'rejected')
+      signal.execution_result = { status: 'rejected', message: '交易发送已关闭' }
+      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
     } else {
     try {
       const riskCfg = {
@@ -280,13 +287,16 @@ export async function handleAnalyze(userId, params) {
       const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
 
       const execResult = await executeOrder(userId, riskCfg, orderPayload, 'ai_execute', { sourceType: 'manual_ai' })
+      signal.execution_result = execResult
+      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(execResult || {}), signal.id])
       if (execResult && execResult.status === 'success') {
         const isPending = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
         const ticket = execResult.order || execResult.ticket || null
         if (isPending) {
-          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = NOW(), pending_ticket = ?, pending_state = ? WHERE id = ?',
+          await queryRun('UPDATE ai_signals SET pending_ticket = ?, pending_state = ? WHERE id = ?',
             [String(ticket), 'pending', signal.id])
           signal.pending_ticket = String(ticket)
+          signal.pending_state = 'pending'
         } else {
           await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
             [beijingNow(), ticket, signal.id])
@@ -299,6 +309,8 @@ export async function handleAnalyze(userId, params) {
       await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', tp_tier_requested: orderPayload.tp_tier_requested, tp_tier_used: orderPayload.tp_tier_used, normalization_info: orderPayload.normalization_info }, execResult, execResult?.status || 'error')
     } catch (e) {
       console.error('[Analyze] Auto-execute failed:', e.message)
+      signal.execution_result = { status: 'error', message: e.message || '自动执行失败' }
+      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
     }
     }
   }
@@ -326,5 +338,6 @@ export async function handleAnalyze(userId, params) {
     }
   }
 
+  signal = attachSignalPresentation(signal)
   return { status: 'success', signal, market }
 }

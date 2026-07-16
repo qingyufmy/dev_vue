@@ -479,6 +479,57 @@ button {
   display: block;
 }
 
+/* Inference workspace V2: conclusion first, configuration on demand. */
+.inference-header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.calm-analysis-grid { grid-template-columns:minmax(0,1fr); max-width:1120px; }
+.analysis-result-card { overflow:hidden; }
+.manual-inference-dialog { width:min(720px,calc(100vw - 32px)); max-height:min(820px,calc(100vh - 32px)); overflow:auto; }
+.manual-inference-dialog .order-confirm-head > div { display:flex; flex-direction:column; gap:4px; }
+.manual-inference-dialog .order-confirm-head small { color:var(--text-secondary); font-size:12px; font-weight:400; }
+.manual-inference-body { display:grid; gap:14px; padding:18px 20px 4px; }
+.manual-inference-status { display:flex; align-items:center; gap:12px; padding:14px; border:1px solid color-mix(in srgb,var(--gold-primary) 35%,var(--border-default)); border-radius:12px; background:color-mix(in srgb,var(--gold-primary) 6%,var(--bg-card)); }
+.manual-inference-status > div { display:flex; flex-direction:column; gap:3px; }
+.manual-inference-status small { color:var(--text-secondary); line-height:1.45; }
+.status-spinner { width:20px; height:20px; flex:0 0 auto; border:2px solid color-mix(in srgb,var(--gold-primary) 24%,transparent); border-top-color:var(--gold-primary); border-radius:50%; animation:inference-spin .8s linear infinite; }
+@keyframes inference-spin { to { transform:rotate(360deg); } }
+
+.execution-advice-hero { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:13px; margin:16px 0 12px; padding:16px; border:1px solid var(--border-default); border-radius:14px; background:var(--bg-input-soft); }
+.execution-advice-hero.review { border-color:color-mix(in srgb,var(--gold-primary) 45%,var(--border-default)); background:color-mix(in srgb,var(--gold-primary) 7%,var(--bg-input-soft)); }
+.execution-advice-hero.rejected,.execution-advice-hero.failed,.execution-advice-hero.expired { border-color:color-mix(in srgb,var(--status-danger) 45%,var(--border-default)); background:var(--status-danger-bg); }
+.execution-advice-hero.executed,.execution-advice-hero.pending { border-color:color-mix(in srgb,var(--status-connected) 40%,var(--border-default)); background:var(--status-connected-bg); }
+.execution-advice-icon { display:grid; place-items:center; width:40px; height:40px; border-radius:11px; color:var(--gold-primary); background:color-mix(in srgb,var(--gold-primary) 13%,transparent); }
+.execution-advice-hero > div:nth-child(2) { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.execution-advice-hero span { color:var(--text-secondary); font-size:12px; }
+.execution-advice-hero strong { color:var(--text-primary); font-size:18px; line-height:1.3; }
+.execution-advice-hero p { margin:0; color:var(--text-secondary); font-size:13px; line-height:1.5; }
+.decision-summary { display:grid; grid-template-columns:94px minmax(0,1fr); gap:12px; align-items:start; padding:14px 16px; border-radius:12px; background:color-mix(in srgb,var(--bg-input-soft) 82%,transparent); }
+.decision-summary span { color:var(--text-secondary); font-size:12px; padding-top:3px; }
+.decision-summary strong { color:var(--text-primary); font-size:15px; line-height:1.55; }
+.execution-prices { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.decision-evidence-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px; }
+.decision-evidence-grid > section { min-height:116px; padding:14px; border:1px solid var(--border-default); border-radius:12px; background:var(--bg-input-soft); }
+.decision-evidence-grid ul { display:grid; gap:7px; margin:10px 0 0; padding-left:18px; color:var(--text-primary); font-size:13px; line-height:1.5; }
+.decision-empty { margin:10px 0 0; color:var(--text-muted); font-size:13px; }
+.decision-conditions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px; }
+.decision-conditions > div { display:flex; flex-direction:column; gap:5px; padding:12px 14px; border-left:2px solid var(--gold-primary); background:var(--bg-input-soft); }
+.decision-conditions span { color:var(--text-secondary); font-size:12px; }
+.decision-conditions strong { color:var(--text-primary); font-size:13px; line-height:1.5; }
+.analysis-history-panel { max-width:1120px; }
+
+@media (max-width: 760px) {
+  .inference-header-actions { width:100%; }
+  .inference-header-actions .btn { flex:1; }
+  .execution-advice-hero { grid-template-columns:auto minmax(0,1fr); }
+  .execution-advice-hero > .analysis-direction-badge { grid-column:2; justify-self:start; }
+  .execution-prices,.decision-evidence-grid,.decision-conditions { grid-template-columns:1fr 1fr; }
+  .decision-summary { grid-template-columns:1fr; gap:4px; }
+}
+@media (max-width: 480px) {
+  .manual-inference-dialog { width:calc(100vw - 16px); max-height:calc(100vh - 16px); }
+  .execution-prices,.decision-evidence-grid,.decision-conditions { grid-template-columns:1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .status-spinner { animation-duration:1.8s; } }
+
 .model-strategy-shell {
   display: flex;
   flex-direction: column;
@@ -2727,7 +2778,7 @@ input:checked + .slider::before { transform: translateX(18px); }
 
 .analysis-status-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }

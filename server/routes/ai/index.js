@@ -606,5 +606,6 @@ export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatur
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, timeframeIntervalMs } from './utils.js'
+export { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields } from './signal-presentation.js'
 
 export default router

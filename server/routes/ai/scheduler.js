@@ -17,6 +17,7 @@ import { retrievePlatformExperience } from './platform-experience.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { isSubscriptionScheduleActive } from './subscription-schedule.js'
+import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -1126,7 +1127,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     l(`calling AI (model=${config.model_name}, thinking=${config.thinking_enabled !== false}, effort=${config.reasoning_effort || 'max'})...`)
     let renderedEvidence = null
     config._onInferencePrepared = evidence => { renderedEvidence = evidence }
-    const signal = await maybeAiSignal(null, config, market)
+    let signal = await maybeAiSignal(null, config, market)
     delete config._onInferencePrepared
     market.inference_source = signal._inference_source || 'unknown'
     const aiSource = signal._inference_source
@@ -1163,21 +1164,24 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     }
     const createdAt = beijingNow()
     const marketJson = JSON.stringify(market)
+    const decision = normalizeDecisionFields(signal)
+    const decisionJson = JSON.stringify(decision)
     const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
     const signalId = await withTransaction(async run => {
       const [signalResult] = await run(`
         INSERT INTO ai_signals(user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
           recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
           take_profit_2_price, take_profit_3_price, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at,
-          entry_method, limit_price, stop_limit_price, pending_valid_until)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+          entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
       `, [
         isPrivate ? inferenceUserId : 0, 0, promptTypeId, signalSource, signalSource, symbol, primaryTf,
         signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price,
         signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
         marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
-        signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null
+        signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null,
+        SIGNAL_SCHEMA_VERSION, decisionJson
       ])
       const insertedSignalId = signalResult.insertId
       if (!renderedEvidence) throw new Error('inference_evidence_missing')
@@ -1228,6 +1232,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     signal.config_id = 0
     signal.session_id = signalSource
     signal.source = signalSource
+    signal = attachSignalPresentation({ ...signal, ...decision, decision_json: decisionJson })
     signal.prompt_type_id = promptTypeId
     signal.ai_model = config.model_name || 'deepseek-chat'
     attachSignalTiming(signal)

@@ -32,6 +32,11 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   take_profit_2_price: "止盈-标准(第二目标位)，数字，buy/sell/挂单必须给出，hold可为null。距离应大于tp1，R:R建议1:1.5-1:2",
   take_profit_3_price: "止盈-激进(第三目标位)，数字，可选。距离应大于tp2，R:R建议1:2-1:3。仅在趋势明确且有延续依据时提供",
   cancel_pending: "必须字段（条件触发）。挂单有效期、过期识别和到期取消由MT5与后端负责，禁止比较时间字符串判断过期，禁止以过期、超时或有效期为理由取消挂单。仅当价格条件明显失效、市场结构破坏或方向逻辑反转时，才输出取消条件；否则返回空数组[]。每个元素：symbol(必填), pending_type(可选), max_price(可选), min_price(可选), cancel_all(可选bool), reason(必填且必须是非时间原因)",
+  decision_summary: "必填，中文，一句话给出用户最关心的结论；不超过80字。观望时明确说明为什么暂不执行",
+  trigger_condition: "中文，说明该建议成立或挂单触发需要满足的市场条件；没有额外条件时返回空字符串",
+  invalidation_condition: "中文，说明什么市场变化会使当前建议失效；hold时可说明重新评估条件",
+  key_reasons: ["2至4条关键行情依据，每条不超过60字，不包含账户、持仓或风控结论"],
+  risk_factors: ["0至4条市场层面的不利因素，每条不超过60字，不包含账户或仓位信息"],
   analysis: "中文，按以下顺序：1.当前趋势方向和强度 2.关键支撑/阻力位 3.当前价与均线关系 4.波动率状态 5.潜在催化剂或风险事件",
   reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：检查现有挂单状态，是否需要取消、是否已有同方向挂单"
 }, null, 2)
@@ -330,6 +335,15 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
 
 export function normalizeAiSignal(parsed, config, market) {
   const strictInference = parsed?._inference_source === 'ai'
+  const cleanText = (value, maxLength) => typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
+  const cleanList = value => Array.isArray(value)
+    ? value.map(item => cleanText(item, 160)).filter(Boolean).slice(0, 4)
+    : []
+  parsed.decision_summary = cleanText(parsed.decision_summary, 200)
+  parsed.trigger_condition = cleanText(parsed.trigger_condition, 240)
+  parsed.invalidation_condition = cleanText(parsed.invalidation_condition, 240)
+  parsed.key_reasons = cleanList(parsed.key_reasons)
+  parsed.risk_factors = cleanList(parsed.risk_factors)
   const schemaHold = reason => ({
     ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe',
     recommended_volume: 0, limit_price: null, stop_limit_price: null,

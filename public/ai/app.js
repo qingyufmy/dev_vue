@@ -3049,6 +3049,34 @@ function renderPendingSignalInfo(signal, market) {
   return `<div class="signal-pending-info">${rows}</div>`
 }
 
+function signalDecision(signal) {
+  let stored = signal?.decision || signal?.decision_json || {};
+  if (typeof stored === "string") { try { stored = JSON.parse(stored); } catch { stored = {}; } }
+  const dir = signalType(signal?.signal_type);
+  const sourceReasons = signal?.key_reasons || stored.key_reasons;
+  const sourceRisks = signal?.risk_factors || stored.risk_factors;
+  return {
+    summary: signal?.decision_summary || stored.decision_summary || (dir === "hold" ? "当前条件不足，建议继续观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待风控复核。`),
+    trigger: signal?.trigger_condition || stored.trigger_condition || "",
+    invalidation: signal?.invalidation_condition || stored.invalidation_condition || "",
+    reasons: Array.isArray(sourceReasons) ? sourceReasons.slice(0, 4) : [],
+    risks: Array.isArray(sourceRisks) ? sourceRisks.slice(0, 4) : [],
+  };
+}
+
+function signalExecutionAdvice(signal) {
+  if (signal?.execution_advice) return signal.execution_advice;
+  if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:"执行结果已记录。", executable:false };
+  if (signal?.is_stale) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
+  if (signalType(signal?.signal_type) === "hold") return { state:"observe", title:"暂不执行", description:"等待市场条件改善。", executable:false };
+  return { state:"review", title:"建议复核后执行", description:"执行前将获取最新报价并由风控计算最终手数。", executable:true };
+}
+
+function renderDecisionList(items, emptyText) {
+  if (!items?.length) return `<p class="decision-empty">${escapeHtml(emptyText)}</p>`;
+  return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+}
+
 function renderSignal(signal, elapsedMs = null, options = {}) {
   if (!signal) {
     updateSignalDisplay(null);
@@ -3065,6 +3093,11 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   setText("signalFreshness", signalFreshness(signal));
   const confidence = confidenceInfo(signal.confidence);
   const dir = signalType(signal.signal_type);
+  const decision = signalDecision(signal);
+  const advice = signalExecutionAdvice(signal);
+  let executionPayload = signal.execution_result || {};
+  if (typeof executionPayload === "string") { try { executionPayload = JSON.parse(executionPayload); } catch { executionPayload = {}; } }
+  const finalVolume = executionPayload?.risk?.approved_order?.volume ?? executionPayload?.approved_order?.volume ?? null;
   const rawMarket = signal.market_data || {};
   // CLOSE signals: market data nested in timeframes.X.summary
   const closeSummary = rawMarket.timeframes ? Object.values(rawMarket.timeframes)[0]?.summary || {} : {};
@@ -3123,19 +3156,31 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       </div>
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
     </div>
+    <section class="execution-advice-hero ${escapeHtml(advice.state || "review")}">
+      <div class="execution-advice-icon"><i data-lucide="${advice.executable ? "send" : dir === "hold" ? "pause" : "shield-check"}" size="20"></i></div>
+      <div><span>执行建议</span><strong>${escapeHtml(advice.title || executionStatus(signal))}</strong><p>${escapeHtml(advice.description || "")}</p></div>
+      <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
+    </section>
+    <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
     <div class="analysis-status-strip">
       <div><span>置信度</span><strong>${confidence.label}</strong></div>
-      <div><span>建议手数</span><strong>${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
+      <div><span>AI 建议手数</span><strong>${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
+      <div><span>风控最终手数</span><strong>${finalVolume == null ? "待执行时计算" : escapeHtml(volumeText(finalVolume))}</strong></div>
       <div><span>有效期</span><strong id="analysisValidity" class="status-tag ${freshnessClass}">${escapeHtml(signalFreshness(signal))}</strong></div>
       <div><span>执行状态</span><strong class="status-tag ${freshnessClass}">${escapeHtml(executionStatus(signal))}</strong></div>
     </div>
     ${renderPendingSignalInfo(signal, market)}
-    <div class="signal-detail-grid">
+    <div class="signal-detail-grid execution-prices">
+      <div><span>${signal.entry_method === "market" ? "参考市价" : "计划入场"}</span><strong>${escapeHtml(signal.limit_price || market.latest_price || "--")}</strong></div>
       <div><span>止损</span><strong>${escapeHtml(signal.stop_loss_price || "--")}</strong></div>
       <div><span>TP1</span><strong>${escapeHtml(signal.take_profit_1_price || "--")}</strong></div>
       <div><span>TP2 / TP3</span><strong>${escapeHtml(signal.take_profit_2_price || "--")} / ${escapeHtml(signal.take_profit_3_price || "--")}</strong></div>
-      <div><span>数据源</span><strong>${escapeHtml(market.symbol ? "MT5 行情" : "历史信号")}</strong></div>
     </div>
+    <div class="decision-evidence-grid">
+      <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
+      <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
+    </div>
+    ${(decision.trigger || decision.invalidation) ? `<div class="decision-conditions">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</div>` : ""}
     <div class="analysis-section">
       <div class="analysis-section-title"><i data-lucide="activity" size="14"></i>行情快照</div>
       <div class="analysis-market-grid grouped">
@@ -3154,13 +3199,6 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
             <div><span>涨跌幅 <em class="market-unit">%</em></span><strong>${Number.isFinite(Number(market.price_change_pct)) ? signedText(market.price_change_pct, 3, "%") : "--"}</strong></div>
           </div>
         </div>
-        <div class="market-group">
-          <span class="market-group-title">账户</span>
-          <div class="market-group-cells">
-            <div><span>当前持仓数 <em class="market-unit">笔</em></span><strong>${escapeHtml(positions.total_positions ?? "--")}</strong></div>
-            <div><span>同品种持仓 <em class="market-unit">笔</em></span><strong>${escapeHtml(positions.symbol_positions ?? "--")}</strong></div>
-          </div>
-        </div>
       </div>
     </div>
     <div class="analysis-section">
@@ -3173,6 +3211,14 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   `;
   highlightActiveAnalysis(signal.id);
   initIcons();
+}
+
+function setManualInferenceModal(open) {
+  const modal = $("manualInferenceModal");
+  if (!modal) return;
+  modal.classList.toggle("hidden", !open);
+  document.body.classList.toggle("modal-open", open);
+  if (open) setTimeout(() => $("analyzeStrategy")?.focus(), 0);
 }
 
 async function runAnalysis() {
@@ -3198,55 +3244,24 @@ async function runAnalysis() {
 
   $("runAnalysisBtn").disabled = true;
   $("executeSignalBtn").disabled = true;
-  const resultEl = $("analysisResult");
-  resultEl.className = "analysis-result";
-  resultEl.innerHTML = `
-    <div class="analysis-progress">
-      <div class="analysis-progress-bar"><div class="analysis-progress-fill" id="analysisProgressFill"></div></div>
-      <div class="analysis-progress-text">
-        <span id="analysisProgressLabel">正在获取行情数据...</span>
-        <span id="analysisProgressTime"></span>
-      </div>
-      <button class="btn btn-sm btn-danger" id="analysisCancelBtn" onclick="window._analysisCancelled=true">取消</button>
-    </div>`;
+  const statusEl = $("manualInferenceStatus");
+  statusEl?.classList.remove("hidden");
+  $("manualInferenceClose").disabled = true;
+  $("manualInferenceCancel").disabled = true;
   setText("analysisLatency", "推理中");
   setText("signalFreshness", "等待结果");
   const started = performance.now();
-  window._analysisCancelled = false;
-
-  const stages = [
-    { pct: 10, label: "获取行情数据..." },
-    { pct: 30, label: "计算技术指标..." },
-    { pct: 50, label: "AI 模型推理中..." },
-    { pct: 80, label: "生成交易信号..." },
-    { pct: 95, label: "保存结果..." },
-  ];
-  let stageIdx = 0;
-  const progressTimer = setInterval(() => {
-    if (window._analysisCancelled || stageIdx >= stages.length) { clearInterval(progressTimer); return; }
-    const s = stages[stageIdx++];
-    const fill = document.getElementById("analysisProgressFill");
-    const label = document.getElementById("analysisProgressLabel");
-    const time = document.getElementById("analysisProgressTime");
-    if (fill) fill.style.width = s.pct + "%";
-    if (label) label.textContent = s.label;
-    if (time) {
-      const elapsed = ((performance.now() - started) / 1000).toFixed(1);
-      const remaining = Math.max(0, ((100 - s.pct) / s.pct) * (performance.now() - started) / 1000).toFixed(0);
-      time.textContent = `${elapsed}s / 预计 ${remaining}s`;
-    }
-  }, 3000);
 
   try {
     const result = await wsApi("analyze", {
       session_id: "default", strategy_id:strategyId, symbol,
-      include_positions: true, auto_execute:autoExecute, _timeout:120000,
+      include_positions: false, auto_execute:autoExecute, _timeout:120000,
     });
-    if (window._analysisCancelled) { toast("已取消推理", "info"); return; }
     const best = result?.signal;
     if (!best) throw new Error("未返回有效信号");
     const elapsed = Math.round(performance.now() - started);
     renderSignal(best, elapsed);
+    setManualInferenceModal(false);
     showSignalNotification(best);
     await loadSignals({ skipResultRender: true });
     const firstItem = document.querySelector(".analysis-history-item");
@@ -3254,13 +3269,13 @@ async function runAnalysis() {
     if (autoExecute && best.signal_type !== "hold" && !best.auto_executed) toast("信号已生成，但自动执行未完成；请查看风控决策与拒绝原因", "warning");
     else toast(autoExecute && best.auto_executed ? `信号已生成并通过风控执行，耗时 ${(elapsed/1000).toFixed(1)}s` : `信号已生成，耗时 ${(elapsed/1000).toFixed(1)}s`, "success");
   } catch (error) {
-    resultEl.className = "analysis-result muted-block";
-    resultEl.textContent = error.message;
     setText("analysisLatency", "--");
     setText("signalFreshness", "--");
     toast(error.message, "error");
   } finally {
-    clearInterval(progressTimer);
+    statusEl?.classList.add("hidden");
+    $("manualInferenceClose").disabled = false;
+    $("manualInferenceCancel").disabled = false;
     $("runAnalysisBtn").disabled = false;
     initIcons();
   }
@@ -3279,6 +3294,15 @@ async function executeSignal() {
 
   try {
     const result = await wsApi("execute", { session_id: "default", signal_id: state.selectedSignal.id, confirm: true });
+    state.selectedSignal.execution_result = result;
+    state.selectedSignal.execution_advice = {
+      state: result.status === "success" ? (state.selectedSignal.entry_method === "market" ? "executed" : "pending") : (result.status === "rejected" ? "rejected" : "failed"),
+      title: result.status === "success" ? (state.selectedSignal.entry_method === "market" ? "订单已执行" : "挂单已提交") : (result.status === "rejected" ? "风控未放行" : "执行未完成"),
+      description: result.message || (result.status === "success" ? "执行结果已记录。" : "请查看风控中心中的具体原因。"),
+      executable: false,
+    };
+    if (result.status === "success") state.selectedSignal.is_executed = state.selectedSignal.entry_method === "market";
+    renderSignal(state.selectedSignal, null, { keepLatency:true });
     toast(result.message || (result.status === "success" ? "执行请求已处理" : `结果：${result.status}`), result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadSignals(), loadAudit()]);
   } catch (error) {
@@ -4409,6 +4433,12 @@ function bindEvents() {
   });
   $("manualAutoExecute")?.addEventListener("change", event => {
     $("manualAutoExecuteNotice")?.classList.toggle("hidden", !event.target.checked);
+  });
+  $("openManualInferenceBtn")?.addEventListener("click", () => setManualInferenceModal(true));
+  $("manualInferenceClose")?.addEventListener("click", () => setManualInferenceModal(false));
+  $("manualInferenceCancel")?.addEventListener("click", () => setManualInferenceModal(false));
+  $("manualInferenceModal")?.addEventListener("click", event => {
+    if (event.target === $("manualInferenceModal") && !$("runAnalysisBtn")?.disabled) setManualInferenceModal(false);
   });
   document.querySelectorAll("[data-strategy-timeframe]").forEach(input => input.addEventListener("change", () => {
     const tf = input.dataset.strategyTimeframe;

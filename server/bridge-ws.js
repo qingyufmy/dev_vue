@@ -920,6 +920,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.prompt_type_id = delivery.prompt_type_id
             item.source = 'auto_shared'
             ai.attachSignalTiming(item)
+            Object.assign(item, ai.attachSignalPresentation(item))
             result = { status: 'success', signal: item }
           } else {
             result = { status: 'error', message: 'signal not found' }
@@ -935,6 +936,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           delete item.market_data_json
           item.is_executed = !!item.is_executed
           ai.attachSignalTiming(item)
+          Object.assign(item, ai.attachSignalPresentation(item))
           result = { status: 'success', signal: item }
         } else {
           result = { status: 'error', message: 'signal not found' }
@@ -977,9 +979,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         const countOldSub = `(SELECT ${countColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const countDelivSub = `(SELECT ${countColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         // Full subquery for data (exclude market_data_json TEXT for performance)
-        const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, created_at, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, order_state'
-        const selectColsOld = 's.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, s.created_at, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.order_state'
-        const selectColsDeliv = 's.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, s.created_at, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, d.pending_ticket, s.order_state'
+        const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, created_at, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, order_state, schema_version, decision_json'
+        const selectColsOld = 's.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, s.created_at, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.order_state, s.schema_version, s.decision_json'
+        const selectColsDeliv = 's.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, s.created_at, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, d.pending_ticket, s.order_state, s.schema_version, s.decision_json'
         const dataOldSub = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const dataDelivSub = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const oldParams = [queryUserId, ...oldSessionParam, ...sharedParams]
@@ -1009,7 +1011,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           delete item.delivery_id
           item.is_executed = !!item.is_executed
           ai.attachSignalTiming(item)
-          return item
+          return ai.attachSignalPresentation(item)
         })
         result = { status: 'success', signals, has_more: hasMore, total_count: totalCount }
 
@@ -1092,10 +1094,10 @@ async function handleBrowserCommand(ws, userId, msg) {
           } else {
             if (isPending) {
               // Fix 6: use pending_state instead of order_state, keep is_executed=0 for pending
-              await queryRun('UPDATE ai_signals SET pending_ticket = ?, pending_state = ?, pending_valid_until = ? WHERE id = ?',
-                [String(orderTicket), 'pending', signal.pending_valid_until || null, signal.id])
+              await queryRun('UPDATE ai_signals SET pending_ticket = ?, pending_state = ?, pending_valid_until = ?, execution_result = ? WHERE id = ?',
+                [String(orderTicket), 'pending', signal.pending_valid_until || null, JSON.stringify(result), signal.id])
             } else {
-              await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?', [beijingNow(), orderTicket, signal.id])
+              await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ?, execution_result = ? WHERE id = ?', [beijingNow(), orderTicket, JSON.stringify(result), signal.id])
             }
           }
         } else {
@@ -1105,6 +1107,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             await queryRun(
               'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE id = ?',
               [status, JSON.stringify(result), delivery.id])
+          } else {
+            await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(result || {}), signal.id])
           }
         }
         break
