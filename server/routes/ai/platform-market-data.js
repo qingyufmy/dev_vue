@@ -122,7 +122,7 @@ async function loadClosedCandles(sourceId, standardSymbol, timeframe, count) {
   const key = cacheKey(sourceId, standardSymbol, timeframe)
   const hot = await cacheGetJSON(key)
   const required = Math.max(1, count - 1)
-  if (Array.isArray(hot) && hot.length >= required) return { rates: hot.slice(-count), layer: 'redis' }
+  if (Array.isArray(hot) && hot.length) return { rates: hot.slice(-count), layer: hot.length >= required ? 'redis' : 'redis_partial' }
   const rows = await queryAll(`SELECT broker_symbol, broker_time AS time, open_time_utc_msc AS time_utc_msc,
     open_price AS open, high_price AS high, low_price AS low, close_price AS close,
     tick_volume, spread FROM market_candles
@@ -157,6 +157,12 @@ function mergeRates(closed, live, count) {
   return [...merged.values()].sort((a, b) => sortTime(a) - sortTime(b)).slice(-count)
 }
 
+function ratesOverlap(left, right) {
+  if (!left.length || !right.length) return false
+  const timestamps = new Set(left.map(rate => Number(rate?.time_utc_msc)).filter(Number.isFinite))
+  return right.some(rate => timestamps.has(Number(rate?.time_utc_msc)))
+}
+
 async function maybeCleanupMarketData() {
   const now = Date.now()
   if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return
@@ -176,22 +182,39 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     const clock = getPlatformMarketClockState(platformUserId)
     const source = await findSource(platformUserId, clock).catch(() => ({ id: null }))
     const cachedResult = await loadClosedCandles(source.id, stripBrokerSuffix(symbol), timeframe, count).catch(() => ({ rates: [], layer: 'cold' }))
-    const fetchCount = cachedResult.rates.length >= count - 1 ? 3 : count + 1
-    const response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: fetchCount }, { timeoutMs: 15000, noFallback: true })
+    const probeOnly = cachedResult.rates.length >= count - 1
+    const fetchCount = probeOnly ? 3 : count + 1
+    let response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: fetchCount }, { timeoutMs: 15000, noFallback: true })
     if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
-      const rates = response.rates
-      const effectiveClock = {
+      let rates = response.rates
+      let effectiveClock = {
         ...clock,
         timezone_offset_minutes: rates.at(-1)?.timezone_offset_minutes ?? clock.timezone_offset_minutes,
         clock_status: rates.at(-1)?.clock_status || clock.clock_status,
         clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
       }
+      let closedRates = normalizeClosedRates(rates, effectiveClock.timezone_offset_minutes)
+      const gapDetected = probeOnly && !ratesOverlap(cachedResult.rates, closedRates)
+      if (gapDetected) {
+        const refill = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: count + 1 }, { timeoutMs: 15000, noFallback: true })
+        if (refill?.status !== 'success' || !Array.isArray(refill.rates) || !refill.rates.length) {
+          return { status: 'error', error: 'rates_gap_refill_failed', message: refill?.message || refill?.error || 'K 线缓存缺口补齐失败' }
+        }
+        response = refill
+        rates = refill.rates
+        effectiveClock = {
+          ...clock,
+          timezone_offset_minutes: rates.at(-1)?.timezone_offset_minutes ?? clock.timezone_offset_minutes,
+          clock_status: rates.at(-1)?.clock_status || clock.clock_status,
+          clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
+        }
+        closedRates = normalizeClosedRates(rates, effectiveClock.timezone_offset_minutes)
+      }
       const sourceId = await ensureSource(platformUserId, effectiveClock, rates.at(-1))
       const brokerSymbol = response.symbol || symbol
       const standardSymbol = stripBrokerSuffix(brokerSymbol)
-      const closedRates = normalizeClosedRates(rates, effectiveClock.timezone_offset_minutes)
       const persistedCount = await persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates)
-      const stored = mergeRates(cachedResult.rates, closedRates, CACHE_LIMIT)
+      const stored = mergeRates(gapDetected ? [] : cachedResult.rates, closedRates, CACHE_LIMIT)
       await saveClosedCache(sourceId, standardSymbol, timeframe, stored)
       return {
         ...response,
@@ -204,6 +227,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           closed_candles_persisted: stored.length,
           closed_candles_written: persistedCount,
           cache_layer: cachedResult.layer,
+          cache_gap_refilled: gapDetected,
           live_candle_cached: false,
         },
       }

@@ -67,6 +67,31 @@ describe('platform market data', () => {
     expect(result.rates.at(-1).close).toBe(2003)
   })
 
+  it('refills the requested window when a reconnect probe no longer overlaps the cache', async () => {
+    redis.get.mockResolvedValue([rate(0, 2000), rate(1, 2001)])
+    mt5Bridge
+      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(8, 2008), rate(9, 2009), rate(10, 2010)] })
+      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(7, 2007), rate(8, 2008), rate(9, 2009), rate(10, 2010)] })
+    const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 3 })
+    expect(mt5Bridge).toHaveBeenCalledTimes(2)
+    expect(mt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ count: 3 }), expect.any(Object))
+    expect(mt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ count: 4 }), expect.any(Object))
+    expect(result.rates.map(item => item.close)).toEqual([2008, 2009, 2010])
+    expect(result.market_meta).toMatchObject({ cache_gap_refilled: true, closed_candles_written: 3 })
+    const saved = redis.set.mock.calls.at(-1)[1]
+    expect(saved.map(item => item.close)).toEqual([2007, 2008, 2009])
+  })
+
+  it('uses a partial hot cache as the baseline and refreshes the full window', async () => {
+    redis.get.mockResolvedValue([rate(0, 2000)])
+    mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(1, 2001), rate(2, 2002), rate(3, 2003), rate(4, 2004)] })
+    const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 3 })
+    expect(db.queryAll.mock.calls.some(([sql]) => sql.includes('FROM market_candles'))).toBe(false)
+    expect(mt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ count: 4 }), expect.any(Object))
+    expect(result.market_meta.cache_layer).toBe('redis_partial')
+    expect(result.rates.map(item => item.close)).toEqual([2002, 2003, 2004])
+  })
+
   it('falls back to the requesting user only when no administrator market bridge is active', async () => {
     bridge.activeId.mockResolvedValue(null)
     mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'EURUSD', rates: [rate(0, 1.1)] })
