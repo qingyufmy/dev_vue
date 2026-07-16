@@ -7,8 +7,30 @@ const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url),
 const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
 const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const profiles = readFileSync(new URL('../../server/routes/ai/model-profiles.js', import.meta.url), 'utf8')
+const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
 
 describe('AI governance navigation and DOM contract', () => {
+  it('renders automatic inference as an accessible live progress control', () => {
+    expect(html).toContain('class="status-badge status-neutral clickable-badge auto-runtime-control"')
+    expect(html).toContain('role="progressbar"')
+    expect(app).toContain("msg.type === 'auto_progress'")
+    expect(app).toContain('activeAutoProgressCycles')
+    expect(app).toContain('autoProgressElapsed')
+    expect(css).toContain('.auto-runtime-control.is-progress')
+    expect(css).toContain('@keyframes auto-runtime-scan')
+    expect(css).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
+  it('publishes recoverable, ordered progress for every inference stage', () => {
+    for (const field of ['progress_percent', 'progress_seq', 'cycle_id', 'cycle_started_at']) {
+      expect(scheduler).toContain(field)
+    }
+    for (const stage of ['config', 'bridge', 'market', 'ai', 'persist', 'publish', 'delivery', 'verify', 'complete']) {
+      expect(scheduler).toContain(`stage: '${stage}'`)
+    }
+    expect(scheduler).toContain('active_cycles: activeCycles')
+    expect(scheduler).toContain("type: 'auto_progress_done'")
+  })
   it('keeps platform chart ticks separate from private account quote state', () => {
     expect(bridgeWs).toContain("type: 'platform_market_tick'")
     expect(app).toContain("msg.type === 'platform_market_tick'")

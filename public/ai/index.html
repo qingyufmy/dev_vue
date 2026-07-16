@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260716zb" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260717a" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -59,9 +59,12 @@
           <span id="tradeMode" class="status-badge status-neutral clickable-badge" title="点击切换交易发送">
             <span class="badge-dot"></span>交易发送 --
           </span>
-          <span id="autoAnalyzeMode" class="status-badge status-neutral clickable-badge" title="点击配置自动推理">
-            <span class="badge-dot"></span>自动推理 --
-          </span>
+          <button id="autoAnalyzeMode" type="button" class="status-badge status-neutral clickable-badge auto-runtime-control" title="点击配置自动推理">
+            <span class="badge-dot" aria-hidden="true"></span>
+            <span class="auto-runtime-copy"><span class="badge-text">自动推理 --</span><span class="auto-runtime-stage"></span></span>
+            <span class="auto-runtime-percent" aria-hidden="true"></span>
+            <span class="auto-runtime-track" role="progressbar" aria-label="自动推理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="auto-runtime-fill"></span></span>
+          </button>
           <span id="marketStatus" class="status-badge status-neutral" title="市场状态：未知">
             <span class="badge-dot"></span>市场 --
           </span>
@@ -946,7 +949,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260716zb"></script>
+    <script src="/ai/app.js?v=20260717a"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

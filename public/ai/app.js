@@ -36,6 +36,8 @@ const state = {
   reviewFilter: "",
   selectedReviewId: null,
   globalRiskSnapshot: null,
+  autoProgressCycles: {},
+  autoProgressFlash: null,
 };
 
 // ===== History Cache =====
@@ -452,30 +454,98 @@ let _autoBadgeHovering = false;
 function setAutoBadgeText(el, label) {
   let textSpan = el.querySelector('.badge-text');
   if (!textSpan) {
-    el.innerHTML = '<span class="badge-dot"></span><span class="badge-text"></span>';
-    textSpan = el.querySelector('.badge-text');
+    el.replaceChildren();
+    const dot = document.createElement('span');
+    dot.className = 'badge-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const copy = document.createElement('span');
+    copy.className = 'auto-runtime-copy';
+    textSpan = document.createElement('span');
+    textSpan.className = 'badge-text';
+    const stage = document.createElement('span');
+    stage.className = 'auto-runtime-stage';
+    copy.append(textSpan, stage);
+    const percent = document.createElement('span');
+    percent.className = 'auto-runtime-percent';
+    percent.setAttribute('aria-hidden', 'true');
+    const track = document.createElement('span');
+    track.className = 'auto-runtime-track';
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-label', '自动推理进度');
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+    track.setAttribute('aria-valuenow', '0');
+    const fill = document.createElement('span');
+    fill.className = 'auto-runtime-fill';
+    track.appendChild(fill);
+    el.append(dot, copy, percent, track);
   }
   if (textSpan.textContent !== label) textSpan.textContent = label;
 }
 
-function applyAutoBadge(label, type, title) {
+function applyAutoBadge(label, type, title, visual = {}) {
   const el = $('autoAnalyzeMode');
   if (!el) return;
 
-  // Update className only if changed
-  const newClass = `status-badge status-${type} clickable-badge`;
+  const modeClass = visual.mode ? ` is-progress is-${visual.mode}` : '';
+  const newClass = `status-badge status-${type} clickable-badge auto-runtime-control${modeClass}`;
   if (el.className !== newClass) el.className = newClass;
-
-  // Update text only if changed (avoids innerHTML flicker)
   setAutoBadgeText(el, label);
+  const stage = el.querySelector('.auto-runtime-stage');
+  const percent = el.querySelector('.auto-runtime-percent');
+  const track = el.querySelector('.auto-runtime-track');
+  const progress = Math.max(0, Math.min(100, Math.round(Number(visual.progress || 0))));
+  if (stage) stage.textContent = visual.stage || '';
+  if (percent) percent.textContent = visual.mode ? `${progress}%` : '';
+  if (track) {
+    track.setAttribute('aria-valuenow', String(progress));
+    track.setAttribute('aria-valuetext', visual.stage ? `${visual.stage}，${progress}%` : `${progress}%`);
+  }
+  el.style.setProperty('--auto-progress', `${progress}%`);
+  el.setAttribute('aria-label', visual.mode ? `${label}，${visual.stage || ''}，${progress}%` : label);
 
-  // Update title: skip if hovering, buffer for later
   if (!_autoBadgeHovering) {
     if (el.title !== title) el.title = title;
     _autoBadgeCache.title = title;
   } else {
     _autoBadgeCache.pendingTitle = title;
   }
+}
+
+function autoProgressElapsed(startedAt) {
+  const started = Date.parse(startedAt || '');
+  if (!Number.isFinite(started)) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  const min = Math.floor(seconds / 60);
+  const sec = seconds % 60;
+  return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function activeAutoProgressCycles(runtime) {
+  const merged = new Map();
+  for (const cycle of Array.isArray(runtime?.active_cycles) ? runtime.active_cycles : []) {
+    if (cycle?.cycle_id) merged.set(cycle.cycle_id, cycle);
+  }
+  for (const cycle of Object.values(state.autoProgressCycles || {})) {
+    if (cycle?.cycle_id) merged.set(cycle.cycle_id, cycle);
+  }
+  return [...merged.values()].filter(cycle => cycle && cycle.progress_percent >= 0)
+    .sort((a, b) => String(a.symbol || '').localeCompare(String(b.symbol || '')));
+}
+
+function renderAutoProgress(cycles, ptName) {
+  const count = cycles.length;
+  const progress = Math.round(cycles.reduce((sum, cycle) => sum + Number(cycle.progress_percent || 0), 0) / Math.max(1, count));
+  const primary = [...cycles].sort((a, b) => Number(b.progress_seq || 0) - Number(a.progress_seq || 0))[0];
+  const symbols = cycles.map(cycle => cycle.symbol).filter(Boolean);
+  const label = count > 1 ? `${count} 个品种推理中` : `${primary?.symbol || '自动推理'} · ${primary?.stage_label || '正在处理'}`;
+  const elapsed = autoProgressElapsed(primary?.started_at);
+  const stage = count > 1
+    ? `${symbols.slice(0, 3).join(' · ')}${symbols.length > 3 ? ` 等 ${symbols.length} 项` : ''}`
+    : `自动推理${elapsed ? ` · 已用时 ${elapsed}` : ''}`;
+  const details = cycles.map(cycle => `${cycle.symbol || '未知品种'}：${cycle.stage_label || '正在处理'} ${Math.round(Number(cycle.progress_percent || 0))}%`).join('\n');
+  const title = `策略：${ptName || '未选择'}\n状态：正在推理\n${details}\n点击可停止后续自动推理`;
+  applyAutoBadge(label, 'running', title, { mode: primary?.stage === 'complete' ? 'complete' : 'running', stage, progress });
 }
 
 function renderAutoAnalyzeBadge(s) {
@@ -491,6 +561,24 @@ function renderAutoAnalyzeBadge(s) {
   }
 
   let label, type, title;
+  const cycles = activeAutoProgressCycles(s);
+  if (cycles.length > 0) {
+    renderAutoProgress(cycles, ptName);
+    return;
+  }
+
+  const flash = state.autoProgressFlash;
+  if (flash && flash.expiresAt > Date.now()) {
+    const success = flash.status === 'success';
+    const flashLabel = success ? `${flash.symbol || '自动推理'} · 推理完成` : `${flash.symbol || '自动推理'} · 推理未完成`;
+    const flashStage = success ? '信号与执行建议已更新' : autoReasonText(flash.reason || 'exception');
+    applyAutoBadge(flashLabel, success ? 'running' : 'danger', flashStage, {
+      mode: success ? 'complete' : 'error',
+      stage: flashStage,
+      progress: success ? 100 : Number(flash.progress_percent || 0),
+    });
+    return;
+  }
 
   if (!s.enabled) {
     label = '自动推理关闭';
@@ -501,10 +589,13 @@ function renderAutoAnalyzeBadge(s) {
     type = 'warning';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：周末清仓期间暂停`;
   } else if (s.in_flight) {
-    label = '自动推理中';
-    type = 'running';
     const stageLabel = s.stage_label || (s.stage === 'running' ? '正在推理' : '调度中');
-    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：正在推理\n阶段：${stageLabel}`;
+    renderAutoProgress([{
+      cycle_id: 'runtime-fallback', symbol: symbols[0] || '', stage: s.stage || 'running',
+      stage_label: stageLabel, progress_percent: Number(s.progress_percent || 46),
+      progress_seq: 0, started_at: s.cycle_started_at || '',
+    }], ptName);
+    return;
   } else if (s.paused_reason && isMarketClosedReason(s.paused_reason)) {
     label = '自动推理暂停 · 休市';
     type = 'warning';
@@ -874,6 +965,10 @@ function connectBridgeStatusWs(onReady) {
         handleDisconnect(msg);
       } else if (msg.type === 'auto_state') {
         state.autoEnabled = !!msg.enabled;
+        if (!msg.enabled) {
+          state.autoProgressCycles = {};
+          state.autoProgressFlash = null;
+        }
         if (msg.reason === 'user_bridge_offline') {
           if (msg.enabled) {
             toast('MT5桥接断开，等待连接后自动恢复订阅', 'warning');
@@ -889,27 +984,57 @@ function connectBridgeStatusWs(onReady) {
         renderAutoAnalyzeBadge(state.autoRuntime || { enabled: msg.enabled });
         loadStatus().catch(() => {});
       } else if (msg.type === 'auto_progress_done') {
-        // Cycle finished — clear in_flight state
+        if (msg.cycle_id) delete state.autoProgressCycles[msg.cycle_id];
+        const remainingCycles = Object.values(state.autoProgressCycles);
+        state.autoProgressFlash = remainingCycles.length ? null : {
+          status: msg.status,
+          reason: msg.reason || '',
+          symbol: msg.symbol || '',
+          progress_percent: msg.progress_percent || 0,
+          expiresAt: Date.now() + (msg.status === 'success' ? 1600 : 3200),
+        };
         if (state.autoRuntime) {
-          state.autoRuntime.in_flight = false;
-          state.autoRuntime.stage = 'idle';
-          state.autoRuntime.stage_label = '';
-          if (msg.status === 'blocked' || msg.status === 'error') {
+          state.autoRuntime.active_cycles = remainingCycles;
+          state.autoRuntime.in_flight = remainingCycles.length > 0;
+          state.autoRuntime.stage = remainingCycles.length ? 'running' : 'idle';
+          state.autoRuntime.stage_label = remainingCycles[0]?.stage_label || '';
+          if (!remainingCycles.length && (msg.status === 'blocked' || msg.status === 'error')) {
             state.autoRuntime.paused_reason = msg.reason || '';
-          } else {
+          } else if (!remainingCycles.length) {
             state.autoRuntime.paused_reason = '';
           }
         }
         renderAutoAnalyzeBadge(state.autoRuntime || { enabled: true });
-        loadStatus().catch(() => {});
+        window.setTimeout(() => {
+          if (state.autoProgressFlash?.expiresAt <= Date.now()) state.autoProgressFlash = null;
+          loadStatus().catch(error => console.warn('[AutoProgress] 状态刷新失败:', error.message));
+        }, msg.status === 'success' ? 1700 : 3300);
       } else if (msg.type === 'auto_progress') {
-        // Update runtime state and render badge
-        if (state.autoRuntime) {
-          state.autoRuntime.in_flight = true;
-          state.autoRuntime.stage = msg.stage || 'running';
-          state.autoRuntime.stage_label = msg.label || '推理中';
+        const cycleId = msg.cycle_id || `${msg.prompt_type_id || 0}:${msg.symbol || 'unknown'}:running`;
+        const existing = state.autoProgressCycles[cycleId];
+        if (!existing || Number(msg.seq || 0) > Number(existing.progress_seq || 0)) {
+          for (const [id, cycle] of Object.entries(state.autoProgressCycles)) {
+            if (id !== cycleId && cycle.prompt_type_id === msg.prompt_type_id && cycle.symbol === msg.symbol) delete state.autoProgressCycles[id];
+          }
+          state.autoProgressCycles[cycleId] = {
+            cycle_id: cycleId,
+            prompt_type_id: msg.prompt_type_id,
+            symbol: msg.symbol || '',
+            stage: msg.stage || 'running',
+            stage_label: msg.label || '推理中',
+            progress_percent: Number(msg.progress_percent || 0),
+            progress_seq: Number(msg.seq || 0),
+            started_at: msg.started_at || new Date().toISOString(),
+          };
         }
-        renderAutoAnalyzeBadge(state.autoRuntime || { enabled: true, in_flight: true, stage: 'running', stage_label: msg.label || '推理中' });
+        state.autoProgressFlash = null;
+        if (!state.autoRuntime) state.autoRuntime = { enabled: true, selected_symbols: [] };
+        state.autoRuntime.in_flight = true;
+        state.autoRuntime.stage = msg.stage || 'running';
+        state.autoRuntime.stage_label = msg.label || '推理中';
+        state.autoRuntime.progress_percent = Number(msg.progress_percent || 0);
+        state.autoRuntime.active_cycles = Object.values(state.autoProgressCycles);
+        renderAutoAnalyzeBadge(state.autoRuntime);
       } else if (msg.type === 'new_signal') {
         // New signal pushed — refresh status and signal list
         handleNewSignal(msg);
@@ -2286,6 +2411,13 @@ async function loadStatus() {
   try {
     const auto = await wsApi('auto_status');
     const scheduler = auto.scheduler || {};
+    if (Array.isArray(scheduler.active_cycles)) {
+      state.autoProgressCycles = Object.fromEntries(scheduler.active_cycles
+        .filter(cycle => cycle?.cycle_id)
+        .map(cycle => [cycle.cycle_id, cycle]));
+    } else if (!scheduler.in_flight) {
+      state.autoProgressCycles = {};
+    }
 
     // Store runtime state for local countdown
     state.autoRuntime = {
@@ -2385,8 +2517,12 @@ async function handleAutoToggle() {
   if (_autoToggleLock) return;
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
-  // Turning OFF requires confirmation
-  if (state.autoEnabled && !await showConfirm("关闭自动推理", "确认关闭自动推理？关闭后将停止自动 AI 分析和信号推送。", { confirmText: "关闭", danger: true })) return;
+  const activeCycles = activeAutoProgressCycles(state.autoRuntime);
+  const closeTitle = activeCycles.length ? "停止后续自动推理" : "关闭自动推理";
+  const closeMessage = activeCycles.length
+    ? `当前有 ${activeCycles.length} 个品种正在推理。关闭后不会再开始新任务，已经提交给模型的任务仍会安全完成。`
+    : "确认关闭自动推理？关闭后将停止自动 AI 分析和信号推送。";
+  if (state.autoEnabled && !await showConfirm(closeTitle, closeMessage, { confirmText: activeCycles.length ? "停止后续任务" : "关闭", danger: true })) return;
   _autoToggleLock = true;
   try {
     const result = await wsApi('toggle_auto');

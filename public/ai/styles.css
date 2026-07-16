@@ -310,6 +310,179 @@ button {
   animation: pulse-dot-green 1s ease-in-out infinite;
 }
 
+.auto-runtime-control.clickable-badge {
+  appearance: none;
+  font: inherit;
+  line-height: 1.2;
+  text-align: left;
+  transition: width 220ms cubic-bezier(.22, 1, .36, 1), min-height 220ms cubic-bezier(.22, 1, .36, 1), background-color 180ms ease, border-color 180ms ease;
+}
+
+.auto-runtime-control:focus-visible {
+  outline: 2px solid var(--gold-primary);
+  outline-offset: 2px;
+}
+
+.auto-runtime-copy {
+  min-width: 0;
+}
+
+.auto-runtime-control .badge-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auto-runtime-stage,
+.auto-runtime-percent,
+.auto-runtime-track {
+  display: none;
+}
+
+.auto-runtime-control.is-progress {
+  --auto-progress: 0%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: 1fr;
+  column-gap: 9px;
+  width: clamp(232px, 23vw, 294px);
+  max-width: 294px;
+  min-height: 42px;
+  padding: 6px 12px 9px;
+  border-radius: 12px;
+  color: var(--text-primary);
+  background: linear-gradient(112deg, color-mix(in srgb, var(--gold-primary) 10%, var(--bg-input)), color-mix(in srgb, #10b981 8%, var(--bg-input)));
+  border-color: color-mix(in srgb, var(--gold-primary) 46%, var(--border-default));
+  box-shadow: 0 4px 8px rgba(0, 0, 0, .22);
+  isolation: isolate;
+}
+
+.auto-runtime-control.is-progress .badge-dot {
+  width: 13px;
+  height: 13px;
+  background: radial-gradient(circle at 35% 30%, #fff7c2 0 12%, var(--gold-primary) 42%, #16a179 100%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold-primary) 13%, transparent), 0 0 10px color-mix(in srgb, var(--gold-primary) 38%, transparent);
+  animation: auto-runtime-orbit 1.8s ease-in-out infinite;
+}
+
+.auto-runtime-control.is-progress .auto-runtime-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.auto-runtime-control.is-progress .badge-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.auto-runtime-control.is-progress .auto-runtime-stage {
+  display: block;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auto-runtime-control.is-progress .auto-runtime-percent {
+  display: block;
+  align-self: center;
+  color: var(--gold-light);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.auto-runtime-control.is-progress .auto-runtime-track {
+  display: block;
+  position: absolute;
+  right: 11px;
+  bottom: 4px;
+  left: 11px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+
+.auto-runtime-fill {
+  display: block;
+  position: relative;
+  width: var(--auto-progress);
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--gold-primary), var(--gold-light) 48%, #18b98a);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--gold-primary) 55%, transparent);
+  transition: width 520ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.auto-runtime-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .82), transparent);
+  transform: translateX(-160%);
+  animation: auto-runtime-scan 1.65s ease-in-out infinite;
+}
+
+.auto-runtime-control.is-complete {
+  background: color-mix(in srgb, #10b981 12%, var(--bg-input));
+  border-color: color-mix(in srgb, #10b981 54%, var(--border-default));
+}
+
+.auto-runtime-control.is-complete .badge-dot {
+  background: #10b981;
+  animation: none;
+}
+
+.auto-runtime-control.is-error {
+  background: color-mix(in srgb, var(--status-danger) 10%, var(--bg-input));
+  border-color: color-mix(in srgb, var(--status-danger) 48%, var(--border-default));
+}
+
+.auto-runtime-control.is-error .badge-dot {
+  background: var(--status-danger);
+  animation: none;
+}
+
+.auto-runtime-control.is-progress.clickable-badge::after {
+  display: none;
+}
+
+.auto-runtime-control.is-progress:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, .26);
+}
+
+.auto-runtime-control.is-error .auto-runtime-fill {
+  background: var(--status-danger);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--status-danger) 48%, transparent);
+}
+
+@keyframes auto-runtime-orbit {
+  0%, 100% { transform: scale(.88); filter: saturate(.95); }
+  50% { transform: scale(1.08); filter: saturate(1.25); }
+}
+
+@keyframes auto-runtime-scan {
+  0%, 18% { transform: translateX(-160%); opacity: 0; }
+  35% { opacity: .9; }
+  72%, 100% { transform: translateX(310%); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-runtime-control,
+  .auto-runtime-fill { transition-duration: 0ms; }
+  .auto-runtime-control.is-progress .badge-dot,
+  .auto-runtime-fill::after { animation: none; }
+}
+
 @keyframes pulse-dot-green {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

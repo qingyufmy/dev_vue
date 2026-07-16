@@ -260,7 +260,13 @@ export async function updateSchedulerRedisState(key, state) {
       last_error: state.lastError || '',
       wait_reason: state.waitReason || '',
       next_run_in_seconds: String(state.nextRunInSeconds || 0),
-      last_run_at: state.lastRunAt || ''
+      last_run_at: state.lastRunAt || '',
+      stage: state.stage || 'idle',
+      stage_label: state.stageLabel || '',
+      progress_percent: String(state.progressPercent || 0),
+      progress_seq: String(state.progressSeq || 0),
+      cycle_id: state.cycleId || '',
+      cycle_started_at: state.cycleStartedAt || ''
     }
     if (state.marketState) {
       fields.market_reason = state.marketState.reason || ''
@@ -324,7 +330,7 @@ export async function removeUserRuntimeAutoSubscription(userId) {
 export async function getUserAutoRuntimeStatus(userId) {
   const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
   if (!scheduler || !scheduler.enabled) {
-    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, stage: 'idle', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'idle', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
   }
 
   let selectedSymbols = []
@@ -356,6 +362,7 @@ export async function getUserAutoRuntimeStatus(userId) {
   let overallLastRunAt = ''
   let overallLastSignalId = null
   let totalSubscribers = 0
+  const activeCycles = []
 
   for (const sym of selectedSymbols) {
     const key = buildSchedulerKey(scheduler.prompt_type_id, sym)
@@ -370,6 +377,18 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (st.waitReason && !overallWaitReason) overallWaitReason = st.waitReason
     if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
     if (st.lastSignalId) overallLastSignalId = st.lastSignalId
+    if (st.inFlight) {
+      activeCycles.push({
+        cycle_id: st.cycleId || `${key}:running`,
+        prompt_type_id: st.promptTypeId,
+        symbol: st.symbol,
+        stage: st.stage || 'running',
+        stage_label: st.stageLabel || '正在准备推理',
+        progress_percent: Number(st.progressPercent || 3),
+        progress_seq: Number(st.progressSeq || 0),
+        started_at: st.cycleStartedAt || '',
+      })
+    }
 
     // Check cooldown TTL
     if (redis) {
@@ -414,6 +433,7 @@ export async function getUserAutoRuntimeStatus(userId) {
     active_scheduler_keys: activeKeys,
     subscriber_count: totalSubscribers,
     in_flight: anyInFlight,
+    active_cycles: activeCycles,
     stage: anyInFlight ? 'running' : (pausedReason ? 'paused' : 'idle'),
     last_error: overallLastError,
     wait_reason: overallWaitReason,
@@ -554,19 +574,32 @@ async function getActiveAdminBridgeUserId() {
 }
 
 // === Broadcast progress to all subscribers ===
-function broadcastAutoProgress(promptTypeId, symbol, progress) {
-  for (const key in autoSchedulerState) {
-    const st = autoSchedulerState[key]
-    if (st.promptTypeId === promptTypeId && st.symbol === symbol && st.subscribers) {
-      for (const uid of st.subscribers) {
-        try { sendToBrowsers(uid, { type: 'auto_progress', ...progress }) } catch (e) { console.warn('[Scheduler] Failed to send progress to browser:', e.message) }
-      }
-      break
-    }
+async function broadcastAutoProgress(promptTypeId, symbol, progress) {
+  const key = buildSchedulerKey(promptTypeId, symbol)
+  const st = autoSchedulerState[key]
+  if (!st?.subscribers) return
+  st.stage = progress.stage || st.stage || 'running'
+  st.stageLabel = progress.label || st.stageLabel || ''
+  st.progressPercent = Math.max(Number(st.progressPercent || 0), Math.min(100, Number(progress.progress_percent || 0)))
+  st.progressSeq = Number(st.progressSeq || 0) + 1
+  await updateSchedulerRedisState(key, st)
+  const payload = {
+    type: 'auto_progress',
+    prompt_type_id: promptTypeId,
+    symbol,
+    cycle_id: st.cycleId,
+    seq: st.progressSeq,
+    started_at: st.cycleStartedAt,
+    stage: st.stage,
+    label: st.stageLabel,
+    progress_percent: st.progressPercent,
+  }
+  for (const uid of st.subscribers) {
+    try { sendToBrowsers(uid, payload) } catch (e) { console.warn('[Scheduler] Failed to send progress to browser:', e.message) }
   }
 }
 
-function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, schedulerState) {
+function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSnapshot) {
   for (const key in autoSchedulerState) {
     const st = autoSchedulerState[key]
     if (st.promptTypeId === promptTypeId && st.symbol === symbol && st.subscribers) {
@@ -578,6 +611,9 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, schedul
             reason,
             prompt_type_id: promptTypeId,
             symbol,
+            cycle_id: cycleSnapshot?.cycleId || '',
+            seq: Number(cycleSnapshot?.progressSeq || 0) + 1,
+            progress_percent: status === 'success' ? 100 : Number(cycleSnapshot?.progressPercent || 0),
             next_run_in_seconds: status === 'success' ? (st.intervalMinutes || 5) * 60 : Math.round(retryDelayMs(reason) / 1000),
           })
         } catch (e) { console.warn('[Scheduler] Failed to send progress_done to browser:', e.message) }
@@ -705,6 +741,12 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     nextRunInSeconds: 0,
     subscriberCount: subSet.size,
     subscribers: subSet,
+    stage: 'idle',
+    stageLabel: '',
+    progressPercent: 0,
+    progressSeq: 0,
+    cycleId: '',
+    cycleStartedAt: '',
     _waitCount: 0,
   }
 
@@ -846,7 +888,12 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
     st.inFlight = true
     st._lockToken = lockToken
-    st.stage = 'running'
+    st.stage = 'starting'
+    st.stageLabel = '正在启动推理'
+    st.progressPercent = 2
+    st.progressSeq = 0
+    st.cycleStartedAt = new Date().toISOString()
+    st.cycleId = `${key}:${Date.now()}`
     st.lastError = ''
     st.waitReason = ''
 
@@ -865,6 +912,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
 
     let cycleStatus = 'error'
     let cycleReason = 'exception'
+    let cycleSnapshot = null
     try {
       if (lockGuard.lost) { cycleReason = 'lock_lost'; throw new Error('lock lost during renewal') }
       const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol, lockGuard)
@@ -901,13 +949,22 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       }
       st._lockToken = null
       st._lockGuard = null
+      cycleSnapshot = {
+        cycleId: st.cycleId,
+        progressSeq: st.progressSeq,
+        progressPercent: st.progressPercent,
+      }
       st.inFlight = false
       st.stage = 'idle'
+      st.stageLabel = ''
+      st.progressPercent = 0
+      st.cycleId = ''
+      st.cycleStartedAt = ''
       await updateSchedulerRedisState(key, st)
     }
 
     // Broadcast progress done
-    broadcastAutoProgressDone(promptTypeId, symbol, cycleStatus, cycleReason, st)
+    broadcastAutoProgressDone(promptTypeId, symbol, cycleStatus, cycleReason, cycleSnapshot)
 
     // Schedule next tick (Fix 1+3: finalize failure → recovery, not blind retry)
     if (autoSchedulerState[key]?.running) {
@@ -1021,7 +1078,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   if (isWeeklyFlattenWindow()) return { status: 'blocked', reason: 'weekly_flatten_window' }
 
   l('>>> cycle start')
-  broadcastAutoProgress(promptTypeId, symbol, { stage: 'config', label: '检查配置...' })
+  await broadcastAutoProgress(promptTypeId, symbol, { stage: 'config', label: '检查策略与模型', progress_percent: 6 })
 
   // 1. Read prompt type
   const pt = await getAutoPromptTypeById(promptTypeId)
@@ -1060,7 +1117,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   config._userId = isPrivate ? inferenceUserId : 0
 
   try {
-    broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: isPrivate ? '获取用户账户与行情数据...' : '获取平台行情数据...' })
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: isPrivate ? '获取账户与行情数据' : '获取平台行情数据', progress_percent: 16 })
     const t0 = Date.now()
     let account = null
     let positions = []
@@ -1083,7 +1140,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return { status: 'blocked', reason: 'rates_empty' } }
     l(`rates done (${Date.now()-t1}ms, bars=${rates.length}, tf=${primaryTf})`)
 
-    broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算技术指标...' })
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算指标与市场结构', progress_percent: 31 })
     const t2 = Date.now()
     let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
     market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis)
@@ -1122,7 +1179,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       }
     }
 
-    broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型推理中...' })
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型深度推理', progress_percent: 46 })
     const t3 = Date.now()
     l(`calling AI (model=${config.model_name}, thinking=${config.thinking_enabled !== false}, effort=${config.reasoning_effort || 'max'})...`)
     let renderedEvidence = null
@@ -1167,6 +1224,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     const decision = normalizeDecisionFields(signal)
     const decisionJson = JSON.stringify(decision)
     const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'persist', label: '校验并保存推理结果', progress_percent: 84 })
     const signalId = await withTransaction(async run => {
       const [signalResult] = await run(`
         INSERT INTO ai_signals(user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
@@ -1244,6 +1302,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       return { status: 'blocked', reason: 'weekly_flatten_window' }
     }
 
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'publish', label: '发布信号与执行建议', progress_percent: 94 })
     // 7. Notify online subscribers
     for (const uid of onlineSubscribers) {
       if (isWeeklyFlattenWindow()) {
@@ -1262,6 +1321,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
         prompt_type_id: promptTypeId,
       })
     }
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'delivery', label: '同步信号与执行状态', progress_percent: 96 })
 
     // 7.5 AI cancel_pending: cancel matching pending orders for eligible subscribers only (lock check)
     if (isWeeklyFlattenWindow()) {
@@ -1412,6 +1472,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     // control run never enters delivery/execution and runs only after the
     // treatment signal has completed its normal trading path.
     if (isPrivate && memory.pairedExperimentEnabled && memory.mode === 'active' && memory.promptBlock) {
+      await broadcastAutoProgress(promptTypeId, symbol, { stage: 'verify', label: '完成记忆效果评估', progress_percent: 98 })
       let control = null
       let pairStatus = 'failed'
       let pairError = null
@@ -1444,6 +1505,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
         subscriber_count: onlineSubscribers.size, inference_source: aiSource,
       }, 'success')
     }
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'complete', label: '推理结果已生成', progress_percent: 100 })
     l(`<<< cycle complete (signal=#${signalId}, subscribers=${onlineSubscribers.size})`)
     return { status: 'success', signalId, subscriberCount: onlineSubscribers.size, createdAt }
   } catch (err) {
