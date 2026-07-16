@@ -1080,6 +1080,50 @@ const migrations = [
       `)
       console.log(`[Migrations] 055 moved ${result?.affectedRows || 0} existing video course(s) to morning category`)
     }
+  },
+  {
+    id: '056_disable_pending_orders_in_schema',
+    up: async () => {
+      const rows = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      if (!rows.length) {
+        console.log('[Migrations] 056 no active schema found, skip')
+        return
+      }
+      let updatedCount = 0
+      for (const row of rows) {
+        const schema = JSON.parse(row.schema_json)
+        if (!schema || typeof schema !== 'object' || Array.isArray(schema)) continue
+        // 移除挂单相关字段
+        delete schema.limit_price
+        delete schema.stop_limit_price
+        delete schema.pending_valid_minutes
+        delete schema.cancel_pending
+        // signal_type 只保留 buy/sell/hold
+        if (schema.signal_type) {
+          schema.signal_type = 'buy | sell | hold。禁止其他值。buy/sell=市价立即执行。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold'
+        }
+        // 更新 stop_loss_price 描述去掉挂单
+        if (schema.stop_loss_price) {
+          schema.stop_loss_price = '数字，buy/sell必须给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价。最小距离由风险等级决定：low=2倍ATR(14), medium=1.5倍, high=1倍，过近会被系统自动修正。止损位必须参考M15 K线的关键支撑/阻力位（support_resistance.s1/s2/r1/r2），设在M15级别关键位外侧，给足波动空间'
+        }
+        // 更新 take_profit 描述去掉挂单
+        for (const key of ['take_profit_1_price', 'take_profit_2_price']) {
+          if (schema[key]) {
+            schema[key] = schema[key].replace(/buy\/sell\/挂单/g, 'buy/sell')
+          }
+        }
+        // 更新 reasoning 去掉挂单管理
+        if (schema.reasoning) {
+          schema.reasoning = '中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.风险评估（潜在不利因素） 3.执行建议（为什么可以执行或为什么观望）'
+        }
+        await queryRun(
+          'UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?',
+          [JSON.stringify(schema, null, 2), row.id]
+        )
+        updatedCount++
+      }
+      console.log(`[Migrations] 056 removed pending order fields from ${updatedCount} active schema(s)`)
+    }
   }
 ]
 
