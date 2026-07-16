@@ -11,6 +11,12 @@ describe('inference workspace V2 contract', () => {
     expect(html).toContain('id="runAnalysisBtn"')
   })
 
+  it('keeps history as a dedicated navigation rail beside the result', () => {
+    expect(html).toContain('<aside class="card analysis-history-panel"')
+    expect(html).toContain('历史推理')
+    expect(html).not.toContain('analysis-history-panel quiet-disclosure')
+  })
+
   it('does not expose a fake client-side cancellation control', () => {
     expect(html).not.toContain('analysisCancelBtn')
     expect(app).not.toContain('_analysisCancelled')

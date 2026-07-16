@@ -481,7 +481,7 @@ button {
 
 /* Inference workspace V2: conclusion first, configuration on demand. */
 .inference-header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-.calm-analysis-grid { grid-template-columns:minmax(0,1fr); max-width:1120px; }
+.calm-analysis-grid { max-width:1440px; }
 .analysis-result-card { overflow:hidden; }
 .manual-inference-dialog { width:min(720px,calc(100vw - 32px)); max-height:min(820px,calc(100vh - 32px)); overflow:auto; }
 .manual-inference-dialog .order-confirm-head > div { display:flex; flex-direction:column; gap:4px; }
@@ -514,7 +514,7 @@ button {
 .decision-conditions > div { display:flex; flex-direction:column; gap:5px; padding:12px 14px; border-left:2px solid var(--gold-primary); background:var(--bg-input-soft); }
 .decision-conditions span { color:var(--text-secondary); font-size:12px; }
 .decision-conditions strong { color:var(--text-primary); font-size:13px; line-height:1.5; }
-.analysis-history-panel { max-width:1120px; }
+.analysis-history-panel { max-width:none; }
 
 @media (max-width: 760px) {
   .inference-header-actions { width:100%; }
@@ -6018,11 +6018,14 @@ a.signal-link:hover {
 
 .calm-analysis-grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+  grid-template-areas: "history main";
+  align-items: start;
+  gap: var(--space-4);
 }
 
 .analysis-result-card {
+  grid-area: main;
   min-height: 360px;
   padding: 18px;
   border-color: var(--calm-border);
@@ -6063,8 +6066,70 @@ a.signal-link:hover {
 }
 
 .analysis-history-panel {
+  grid-area: history;
+  position: sticky;
+  top: var(--space-4);
+  min-width: 0;
   margin: 0;
-  border-top: 1px solid var(--calm-border);
+  padding: var(--space-4);
+  border-color: var(--calm-border);
+  background: var(--calm-surface);
+}
+
+.analysis-history-panel .analysis-history-head {
+  align-items: flex-start;
+  margin-bottom: var(--space-3);
+}
+
+.analysis-history-panel .analysis-history-head > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.analysis-history-panel .analysis-history-head .card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.analysis-history-panel .analysis-history-head small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.analysis-history-panel .analysis-history-list {
+  gap: var(--space-2);
+  max-height: min(640px, calc(100vh - 260px));
+  padding-right: var(--space-1);
+}
+
+.analysis-history-panel .analysis-history-item {
+  gap: var(--space-1);
+  padding: var(--space-3);
+}
+
+.analysis-history-panel .history-item-text {
+  display: none;
+}
+
+.analysis-history-panel .history-item-meta {
+  gap: var(--space-2);
+}
+
+@media (max-width: 980px) {
+  .calm-analysis-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main" "history";
+  }
+
+  .analysis-history-panel {
+    position: static;
+  }
+
+  .analysis-history-panel .analysis-history-list {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    max-height: 360px;
+  }
 }
 
 .risk-overview-strip {

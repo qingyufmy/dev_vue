@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260716w" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260716x" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -499,19 +499,17 @@
                 <div><span>信号状态</span><strong id="signalFreshness" class="num">--</strong></div>
               </div>
             </div>
-            <details class="card analysis-history-panel quiet-disclosure">
-              <summary><span><i data-lucide="history" size="16"></i><strong>历史信号</strong><small>查看之前的推理结果</small></span><i data-lucide="chevron-down" size="16"></i></summary>
-              <div class="quiet-disclosure-body">
-                <div class="analysis-history-head">
-                  <span class="card-title">最近推理</span>
-                  <button class="card-action-btn" data-action="refresh-analysis-history">
-                    <i data-lucide="refresh-cw" size="12"></i>刷新
-                  </button>
-                </div>
-                <div id="analysisHistoryBody" class="analysis-history-list">
-                  <div class="history-empty">暂无推理记录</div>
-                </div>
-              </div></details>
+            <aside class="card analysis-history-panel" aria-labelledby="analysisHistoryTitle">
+              <div class="analysis-history-head">
+                <div><span id="analysisHistoryTitle" class="card-title"><i data-lucide="history" size="16"></i>历史推理</span><small>选择一条记录查看完整建议</small></div>
+                <button class="card-action-btn" data-action="refresh-analysis-history" aria-label="刷新历史推理">
+                  <i data-lucide="refresh-cw" size="14"></i>
+                </button>
+              </div>
+              <div id="analysisHistoryBody" class="analysis-history-list">
+                <div class="history-empty">暂无推理记录</div>
+              </div>
+            </aside>
           </div>
           </div>
         </section>
