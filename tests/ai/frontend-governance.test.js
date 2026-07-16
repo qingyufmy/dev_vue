@@ -293,6 +293,16 @@ describe('AI governance navigation and DOM contract', () => {
   })
 })
 
+describe('take-profit execution clarity', () => {
+  it('exposes subscription exit preference and separates the executed target from AI candidates', () => {
+    expect(html).toContain('id="subscriptionTakeProfitMode"')
+    expect(html).toContain('value="ai_recommended"')
+    expect(app).toContain('signalTakeProfitSelection')
+    expect(app).toContain('实际执行止盈')
+    expect(app).toContain('AI 止盈候选')
+  })
+})
+
 describe('route permissions and credential redaction', () => {
   it('requires authentication on every new route and an admin role on global controls', () => {
     for (const path of ['/ai/model-profiles', '/ai/strategies', '/ai/risk-center', '/ai/executions']) {

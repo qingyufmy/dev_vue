@@ -330,6 +330,17 @@ describe('subscription transaction and V1 execution constraint', () => {
     expect(insert[1]).toContain('signals_only')
   })
 
+  it('persists a validated subscription take-profit mode', async () => {
+    await createSubscription(2, 'user', {
+      trading_account_id:10, strategy_id:2, take_profit_mode:'trend',
+    })
+    const insert = txRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
+    expect(insert[1]).toContain('trend')
+    await expect(createSubscription(2, 'user', {
+      trading_account_id:10, strategy_id:2, take_profit_mode:'unknown',
+    })).rejects.toThrow('invalid_take_profit_mode')
+  })
+
   it('treats broker suffix variants as the same standard symbol', async () => {
     txRun.mockImplementation(sql => {
       if (sql.includes('FROM strategy_subscriptions ss')) {

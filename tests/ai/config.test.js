@@ -128,9 +128,10 @@ describe('signalOrderPayload', () => {
       take_profit_1_price: 1990,
       take_profit_2_price: 1980,
       take_profit_3_price: 1970,
+      recommended_take_profit_tier: 2,
       id: 456
     }
-    const config = { selected_take_profit: 2 }
+    const config = { take_profit_mode: 'ai_recommended' }
     const market = { latest_price: 2000 }
 
     const result = signalOrderPayload(signal, config, market, false)
@@ -142,21 +143,21 @@ describe('signalOrderPayload', () => {
     ])
   })
 
-  it('默认TP2缺失时回退到更近的TP1', () => {
+  it('旧信号未记录推荐档位时兼容使用TP1', () => {
     const signal = { symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2010 }
     const result = signalOrderPayload(signal, {}, { latest_price: 2000 }, true)
-    expect(result).toMatchObject({ tp: 2010, tp_tier_requested: 2, tp_tier_used: 1 })
+    expect(result).toMatchObject({ tp: 2010, tp_tier_requested: 1, tp_tier_used: 1, tp_selection_source: 'legacy_tp1_fallback' })
   })
 
-  it('TP3缺失时按3到2到1回退', () => {
+  it('固定趋势目标缺失时失败关闭而不是静默降档', () => {
     const signal = { symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2010, take_profit_2_price: 2020 }
-    const result = signalOrderPayload(signal, { selected_take_profit: 3 }, { latest_price: 2000 }, true)
-    expect(result).toMatchObject({ tp: 2020, tp_tier_requested: 3, tp_tier_used: 2 })
+    const result = signalOrderPayload(signal, { take_profit_mode: 'trend' }, { latest_price: 2000 }, true)
+    expect(result).toMatchObject({ tp: null, tp_tier_requested: 3, tp_tier_used: null, tp_selection_source: 'subscription_preference' })
   })
 
   it('选择TP1时缺失不会改用更远目标', () => {
     const signal = { symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.02, stop_loss_price: 1990, take_profit_2_price: 2020 }
-    const result = signalOrderPayload(signal, { selected_take_profit: 1 }, { latest_price: 2000 }, true)
+    const result = signalOrderPayload(signal, { take_profit_mode: 'conservative' }, { latest_price: 2000 }, true)
     expect(result).toMatchObject({ tp: null, tp_tier_requested: 1, tp_tier_used: null })
   })
 })

@@ -33,6 +33,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   take_profit_1_price: "止盈-保守(第一目标位)，数字，buy/sell/挂单必须给出，hold可为null。买单止盈须高于入场价，卖单止盈须低于入场价。建议设在最近的支撑/阻力位，R:R至少1:1",
   take_profit_2_price: "止盈-标准(第二目标位)，数字，buy/sell/挂单必须给出，hold可为null。距离应大于tp1，R:R建议1:1.5-1:2",
   take_profit_3_price: "止盈-激进(第三目标位)，数字，可选。距离应大于tp2，R:R建议1:2-1:3。仅在趋势明确且有延续依据时提供",
+  recommended_take_profit_tier: "必须字段。非hold仅允许1、2、3，表示AI综合行情后建议实际执行的止盈目标档位，并且对应目标价格必须存在；hold返回null。reasoning中必须说明选择该档位的行情依据",
   cancel_pending: "必须字段（条件触发）。挂单有效期、过期识别和到期取消由MT5与后端负责，禁止比较时间字符串判断过期，禁止以过期、超时或有效期为理由取消挂单。仅当价格条件明显失效、市场结构破坏或方向逻辑反转时，才输出取消条件；否则返回空数组[]。每个元素：symbol(必填), pending_type(可选), max_price(可选), min_price(可选), cancel_all(可选bool), reason(必填且必须是非时间原因)",
   decision_summary: "必填，中文，一句话给出用户最关心的结论；不超过80字。观望时明确说明为什么暂不执行",
   trigger_condition: "中文，说明该建议成立或挂单触发需要满足的市场条件；没有额外条件时返回空字符串",
@@ -359,6 +360,7 @@ export function normalizeAiSignal(parsed, config, market) {
   const schemaHold = reason => ({
     ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe',
     recommended_volume: 0, limit_price: null, stop_limit_price: null,
+    recommended_take_profit_tier: null,
     pending_valid_minutes: 0, pending_valid_until: null,
     normalization_info: { type: 'l5_schema_hold', reason },
   })
@@ -558,6 +560,14 @@ export function normalizeAiSignal(parsed, config, market) {
       console.log(`[LLM] Missing SL/TP for ${signalType} (atr=${atr}), rejecting`)
       return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_until: null, recommended_volume: 0 }
     }
+    const recommendedTier = Number(parsed.recommended_take_profit_tier || (strictInference ? 0 : 1))
+    if (![1, 2, 3].includes(recommendedTier) || !parsed[`take_profit_${recommendedTier}_price`]) {
+      console.log(`[LLM] Invalid recommended TP tier ${parsed.recommended_take_profit_tier} for ${signalType}, rejecting`)
+      return schemaHold('invalid_recommended_take_profit_tier')
+    }
+    parsed.recommended_take_profit_tier = recommendedTier
+  } else {
+    parsed.recommended_take_profit_tier = null
   }
 
   // Attach pending order fields

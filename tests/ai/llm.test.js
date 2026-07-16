@@ -320,6 +320,7 @@ describe('maybeAiSignal', () => {
               take_profit_1_price: 2010,
               take_profit_2_price: 2020,
               take_profit_3_price: 2030,
+              recommended_take_profit_tier: 2,
               analysis: 'test analysis',
               reasoning: 'test reasoning'
             })
@@ -590,5 +591,16 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       recommended_volume: 0.06, stop_loss_price: 1990, take_profit_1_price: 2020,
     }, config, market)
     expect(result).toMatchObject({ signal_type: 'hold', recommended_volume: 0, normalization_info: { reason: 'ai_volume_out_of_platform_range' } })
+  })
+
+  it('requires an explicit AI take-profit recommendation for executable signals', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2020,
+    }, config, market)
+    expect(result).toMatchObject({
+      signal_type: 'hold', recommended_volume: 0,
+      normalization_info: { type: 'l5_schema_hold', reason: 'invalid_recommended_take_profit_tier' },
+    })
   })
 })

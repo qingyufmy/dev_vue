@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260717c" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260717d" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -452,6 +452,9 @@
             <section class="workspace-panel form-modal-dialog subscription-editor-dialog" tabindex="-1">
               <div class="section-heading"><div><h2 id="subscriptionEditorTitle">订阅与执行</h2><p id="subscriptionCostNotice">个人记忆会把平台共享策略转换为逐用户推理，可能使用你的模型或平台共享配额。</p></div><button id="cancelSubscriptionEditorBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="settings-grid subscription-settings-grid"><label><span>交易账户</span><select id="subscriptionAccount"></select></label><div class="subscription-symbol-field"><span>订阅品种</span><details id="subscriptionSymbolsDropdown" class="multi-select-dropdown"><summary id="subscriptionSymbolsSummary">使用策略全部品种</summary><div id="subscriptionSymbolOptions" class="multi-select-options" role="group" aria-label="选择订阅品种"></div></details><small class="field-help">可多选；选择“全部品种”后自动跟随策略配置。</small></div><label id="subscriptionMemoryModeField"><span>个人记忆</span><select id="subscriptionMemoryMode"><option value="personal">启用个人记忆</option><option value="shadow">仅检索评估，不注入推理</option><option value="off">关闭个人记忆</option></select><small class="field-help">仅用户私有策略可配置。</small></label><div id="platformMemoryNotice" class="readonly-setting hidden"><span>平台经验</span><strong>由管理员统一维护</strong><small>平台策略不会读取你的个人记忆，也不会创建个人化副本。</small></div></div>
+              <div class="subscription-exit-setting">
+                <label><span>止盈执行方式</span><select id="subscriptionTakeProfitMode"><option value="ai_recommended">跟随 AI 推荐</option><option value="conservative">保守目标（TP1）</option><option value="standard">标准目标（TP2）</option><option value="trend">趋势目标（TP3）</option></select><small class="field-help">默认由 AI 根据本次行情选择。固定档位仅覆盖自动执行目标，风控仍会校验方向与最低盈亏比。</small></label>
+              </div>
               <section class="subscription-runtime-panel" aria-labelledby="subscriptionRuntimeTitle">
                 <div class="subscription-runtime-heading"><div><strong id="subscriptionRuntimeTitle">自动推理</strong><small>每个用户同一时间只能启用一个自动推理订阅。</small></div><label class="inline-check-card"><input id="subscriptionExecutionEnabled" type="checkbox"><span><strong>启用自动推理</strong><small>生成信号，并在通过风控后自动执行。</small></span></label></div>
                 <div class="subscription-schedule-toggle"><label class="inline-check"><input id="subscriptionScheduleEnabled" type="checkbox"><span>限制运行时间段</span></label><span>未开启时跟随市场交易时间运行</span></div>
@@ -949,7 +952,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260717c"></script>
+    <script src="/ai/app.js?v=20260717d"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

@@ -748,7 +748,28 @@ function signalCurrentPriceText(signal) {
 
 function signalTakeProfit(signal) {
   if (!signal) return null;
-  return signal.take_profit_2_price || signal.take_profit_1_price || signal.take_profit_3_price || null;
+  return signalTakeProfitSelection(signal).price || signal.take_profit_1_price || signal.take_profit_2_price || signal.take_profit_3_price || null;
+}
+
+function signalTakeProfitSelection(signal) {
+  let execution = parseJsonField(signal?.execution_result, {});
+  const approvedFromDelivery = parseJsonField(signal?.approved_order_json, {});
+  const approved = execution?.risk?.approved_order || execution?.approved_order || approvedFromDelivery || {};
+  const recommendedTier = [1, 2, 3].includes(Number(signal?.recommended_take_profit_tier)) ? Number(signal.recommended_take_profit_tier) : null;
+  const usedTier = [1, 2, 3].includes(Number(approved.tp_tier_used)) ? Number(approved.tp_tier_used) : null;
+  const requestedTier = [1, 2, 3].includes(Number(approved.tp_tier_requested)) ? Number(approved.tp_tier_requested) : null;
+  const price = Number(approved.tp) > 0 ? approved.tp : null;
+  const tier = usedTier || requestedTier || recommendedTier || (Number(signal?.take_profit_1_price) > 0 ? 1 : null);
+  const source = approved.tp_selection_source || (price ? "executed" : recommendedTier ? "ai_recommended" : "legacy");
+  const labels = {
+    ai_recommended: "AI 推荐",
+    subscription_preference: "订阅偏好",
+    risk_adjusted: "风控调整",
+    legacy_tp1_fallback: "旧信号兼容",
+    executed: "实际执行",
+    legacy: "未记录",
+  };
+  return { price, tier, recommendedTier, source, sourceLabel: labels[source] || "实际执行" };
 }
 
 function updateSignalPriceFields(signal) {
@@ -1644,7 +1665,7 @@ async function loadStrategyCatalog() {
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
     const memoryMode = linked.some(sub => sub.memory_mode === "disabled") ? "部分订阅关闭记忆" : memory;
     const canEdit = (item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id)) || (item.scope === 'platform' && state.user?.role === 'admin');
-    const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动推理已启用' : '自动推理未启用'} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
+    const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动推理已启用' : '自动推理未启用'} · ${escapeHtml(subscriptionTakeProfitModeLabel(sub.take_profit_mode))} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
     const primarySubscription = linked.find(sub => Number(sub.execution_enabled)) || linked[0];
     const subscriptionButton = primarySubscription
       ? `<button class="btn btn-primary btn-sm" data-subscription-action="edit" data-subscription-id="${primarySubscription.id}"><i data-lucide="settings-2" size="14"></i>编辑订阅</button>`
@@ -1779,6 +1800,7 @@ function openSubscriptionEditor(strategy, subscription = null) {
   $("platformMemoryNotice")?.classList.toggle("hidden", isPrivate);
   $("subscriptionMemoryMode").value = isPrivate ? (subscription?.memory_mode || "personal") : "personal";
   $("subscriptionExecutionEnabled").checked = Boolean(subscription?.execution_enabled);
+  $("subscriptionTakeProfitMode").value = subscription?.take_profit_mode || "ai_recommended";
   $("subscriptionScheduleEnabled").checked = Boolean(Number(subscription?.schedule_enabled || 0));
   $("subscriptionScheduleTimezone").value = subscription?.schedule_timezone || "Etc/GMT-3";
   $("subscriptionOutsideWindowBehavior").value = subscription?.outside_window_behavior || "pause_all";
@@ -1804,6 +1826,15 @@ function subscriptionMemoryModeLabel(mode) {
     off: "关闭记忆",
     disabled: "关闭记忆",
   })[mode] || "未设置记忆方式";
+}
+
+function subscriptionTakeProfitModeLabel(mode) {
+  return ({
+    ai_recommended: "止盈跟随 AI",
+    conservative: "固定保守目标 TP1",
+    standard: "固定标准目标 TP2",
+    trend: "固定趋势目标 TP3",
+  })[mode] || "止盈跟随 AI";
 }
 
 function renderSubscriptionScheduleWindows(windows) {
@@ -1862,6 +1893,7 @@ async function saveSubscriptionEditor() {
   const body = { trading_account_id:Number($("subscriptionAccount").value), strategy_id:Number(editor.dataset.strategyId),
     symbols:selectedSubscriptionSymbols(), memory_mode:strategy?.scope === "platform" ? "platform_only" : $("subscriptionMemoryMode").value,
     execution_enabled:executionEnabled, replace_active:replaceActive,
+    take_profit_mode:$("subscriptionTakeProfitMode").value,
     schedule_enabled:$("subscriptionScheduleEnabled").checked,
     schedule_timezone:$("subscriptionScheduleTimezone").value,
     schedule_weekdays:[...document.querySelectorAll("[data-schedule-weekday]:checked")].map(input => Number(input.dataset.scheduleWeekday)),
@@ -3318,6 +3350,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   let executionPayload = signal.execution_result || {};
   if (typeof executionPayload === "string") { try { executionPayload = JSON.parse(executionPayload); } catch { executionPayload = {}; } }
   const finalVolume = executionPayload?.risk?.approved_order?.volume ?? executionPayload?.approved_order?.volume ?? null;
+  const takeProfitSelection = signalTakeProfitSelection(signal);
   const rawMarket = signal.market_data || {};
   // CLOSE signals: market data nested in timeframes.X.summary
   const closeSummary = rawMarket.timeframes ? Object.values(rawMarket.timeframes)[0]?.summary || {} : {};
@@ -3391,11 +3424,11 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div><span>执行状态</span><strong class="status-tag ${freshnessClass}">${escapeHtml(executionStatus(signal))}</strong></div>
     </div>
     ${renderPendingSignalInfo(signal, market)}
-    <div class="signal-detail-grid execution-prices">
+    <div class="signal-detail-grid execution-prices execution-targets">
       <div><span>${signal.entry_method === "market" ? "参考市价" : "计划入场"}</span><strong>${escapeHtml(signal.limit_price || market.latest_price || "--")}</strong></div>
       <div><span>止损</span><strong>${escapeHtml(signal.stop_loss_price || "--")}</strong></div>
-      <div><span>TP1</span><strong>${escapeHtml(signal.take_profit_1_price || "--")}</strong></div>
-      <div><span>TP2 / TP3</span><strong>${escapeHtml(signal.take_profit_2_price || "--")} / ${escapeHtml(signal.take_profit_3_price || "--")}</strong></div>
+      <div class="execution-target-primary"><span>${takeProfitSelection.price ? "实际执行止盈" : "计划执行止盈"}</span><strong>${escapeHtml(takeProfitSelection.price || (takeProfitSelection.tier ? signal[`take_profit_${takeProfitSelection.tier}_price`] : null) || "--")}</strong><small>${escapeHtml(takeProfitSelection.sourceLabel)}${takeProfitSelection.tier ? ` · TP${takeProfitSelection.tier}` : ""}</small></div>
+      <div class="take-profit-candidates"><span>AI 止盈候选</span><div>${[1,2,3].map(tier => `<span class="take-profit-chip ${takeProfitSelection.tier === tier ? "selected" : ""} ${takeProfitSelection.recommendedTier === tier ? "recommended" : ""}"><b>TP${tier}</b>${escapeHtml(signal[`take_profit_${tier}_price`] || "--")}</span>`).join("")}</div></div>
     </div>
     <div class="decision-evidence-grid">
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>

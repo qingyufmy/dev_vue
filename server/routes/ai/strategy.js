@@ -5,7 +5,7 @@ import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds, stripBrokerSuffix } from './utils.js'
 import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
-import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT, parsePromptSymbols } from './config.js'
+import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun } from './memory-system.js'
 import { retrievePlatformExperience } from './platform-experience.js'
 import { persistInferenceSnapshotTx } from './inference-snapshots.js'
@@ -225,13 +225,14 @@ export async function handleAnalyze(userId, params) {
   if (!renderedEvidence) throw new Error('inference_evidence_missing')
   const persisted = await withTransaction(async run => {
     const [result] = await run(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
-      analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price,
+      analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier,
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
       entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
         signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
+        signal.recommended_take_profit_tier || null,
         marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
         signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null,
         SIGNAL_SCHEMA_VERSION, decisionJson])
@@ -281,7 +282,7 @@ export async function handleAnalyze(userId, params) {
     try {
       const riskCfg = {
         enable_auto_trade: true,
-        selected_take_profit: config.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+        take_profit_mode: 'ai_recommended',
         max_position_size: config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
       }
       const orderPayload = signalOrderPayload(signal, riskCfg, market, true)

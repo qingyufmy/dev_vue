@@ -11,6 +11,7 @@ const VALID_SCOPES = new Set(['platform', 'private'])
 const VALID_VISIBILITY = new Set(['active', 'draft', 'archived'])
 const PRIVATE_MEMORY_MODES = new Set(['personal', 'off', 'shadow'])
 const VALID_MARGIN_MODES = new Set(['unknown', 'netting', 'hedging'])
+const VALID_TAKE_PROFIT_MODES = new Set(['ai_recommended', 'conservative', 'standard', 'trend'])
 
 function toId(value, field = 'id') {
   const id = Number(value)
@@ -27,6 +28,12 @@ function normalizeMarginMode(value) {
   const normalized = mode === 'hedge' ? 'hedging' : mode
   if (!VALID_MARGIN_MODES.has(normalized)) throw new Error('invalid_margin_mode')
   return normalized
+}
+
+function normalizeTakeProfitMode(value) {
+  const mode = String(value || 'ai_recommended').trim().toLowerCase()
+  if (!VALID_TAKE_PROFIT_MODES.has(mode)) throw new Error('invalid_take_profit_mode')
+  return mode
 }
 
 function normalizeSymbol(value) {
@@ -528,6 +535,7 @@ export async function createSubscription(userId, userRole, payload = {}) {
     const memoryMode = normalizeMemoryMode(strategy, payload.memory_mode)
     const symbolsJson = normalizeRequestedSymbols(payload.symbols, strategy.symbols_json)
     const executionEnabled = payload.execution_enabled ? 1 : 0
+    const takeProfitMode = normalizeTakeProfitMode(payload.take_profit_mode)
     const schedule = normalizeSubscriptionSchedule(payload)
     if (executionEnabled) {
       await enforceSingleActiveSubscriptionTx(run, actorId, null, Boolean(payload.replace_active))
@@ -538,13 +546,13 @@ export async function createSubscription(userId, userRole, payload = {}) {
         (user_id, trading_account_id, strategy_id, risk_profile_id, symbols_json,
          execution_enabled, memory_mode, conflicting_strategy_id, schedule_enabled,
          schedule_timezone, schedule_weekdays_json, schedule_windows_json,
-         outside_window_behavior, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         outside_window_behavior, take_profit_mode, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         actorId, accountId, strategyId, payload.risk_profile_id || null, symbolsJson,
         executionEnabled, memoryMode, payload.conflicting_strategy_id || null,
         schedule.enabled ? 1 : 0, schedule.timezone, JSON.stringify(schedule.weekdays),
-        JSON.stringify(schedule.windows), schedule.outsideBehavior, beijingNow(), beijingNow(),
+        JSON.stringify(schedule.windows), schedule.outsideBehavior, takeProfitMode, beijingNow(), beijingNow(),
       ]
     )
     if (executionEnabled) {
@@ -576,6 +584,7 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
     const executionEnabled = payload.execution_enabled === undefined ? Number(existing.execution_enabled) : (payload.execution_enabled ? 1 : 0)
     const memoryMode = normalizeMemoryMode(strategy, payload.memory_mode ?? existing.memory_mode)
     const schedule = normalizeSubscriptionSchedule(payload, existing)
+    const takeProfitMode = normalizeTakeProfitMode(payload.take_profit_mode ?? existing.take_profit_mode)
     if (executionEnabled) {
       await enforceSingleActiveSubscriptionTx(run, actorId, id, Boolean(payload.replace_active))
       await assertNoExecutionConflictTx(run, accountId, effectiveSymbols(symbolsJson, strategy.symbols_json), id)
@@ -583,14 +592,14 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
     await run(
       `UPDATE strategy_subscriptions SET strategy_id = ?, risk_profile_id = ?, symbols_json = ?, execution_enabled = ?,
          memory_mode = ?, conflicting_strategy_id = ?, schedule_enabled = ?, schedule_timezone = ?,
-         schedule_weekdays_json = ?, schedule_windows_json = ?, outside_window_behavior = ?, updated_at = ?
+         schedule_weekdays_json = ?, schedule_windows_json = ?, outside_window_behavior = ?, take_profit_mode = ?, updated_at = ?
        WHERE id = ? AND user_id = ? AND is_deleted = 0`,
       [
         Number(strategy.id), payload.risk_profile_id !== undefined ? payload.risk_profile_id : existing.risk_profile_id,
         symbolsJson, executionEnabled, memoryMode,
         payload.conflicting_strategy_id !== undefined ? payload.conflicting_strategy_id : existing.conflicting_strategy_id,
         schedule.enabled ? 1 : 0, schedule.timezone, JSON.stringify(schedule.weekdays),
-        JSON.stringify(schedule.windows), schedule.outsideBehavior, beijingNow(), id, actorId,
+        JSON.stringify(schedule.windows), schedule.outsideBehavior, takeProfitMode, beijingNow(), id, actorId,
       ]
     )
     await syncLegacySchedulerTx(run, actorId, executionEnabled ? {

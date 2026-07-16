@@ -17,6 +17,7 @@ import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subs
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
+export const DEFAULT_TAKE_PROFIT_MODE = 'ai_recommended'
 export const DEFAULT_TEMPERATURE = 0.3
 export const DEFAULT_MAX_TOKENS = 2000
 
@@ -59,6 +60,9 @@ export function buildBridgeOrderCall(request) {
     const {
       tp_tier_requested: _tpTierRequested,
       tp_tier_used: _tpTierUsed,
+      tp_tier_recommended: _tpTierRecommended,
+      tp_selection_mode: _tpSelectionMode,
+      tp_selection_source: _tpSelectionSource,
       take_profit_candidates: _takeProfitCandidates,
       normalization_info: _normalizationInfo,
       ...bridgeParams
@@ -164,14 +168,19 @@ export async function getGlobalAutoConfig() {
 export async function getExecuteRiskConfig(userId, signal) {
   const isAuto = (signal.config_id === 0 && signal.source !== 'auto_shared')
   if (isAuto || signal.source === 'auto_shared') {
-    return getDeliveryExecuteRiskConfig(userId)
+    const riskConfig = await getDeliveryExecuteRiskConfig(userId)
+    if (!riskConfig) return null
+    const subscription = signal.prompt_type_id
+      ? await getDeliverySubscriptionRuntime(userId, signal.prompt_type_id, signal.symbol)
+      : null
+    return { ...riskConfig, take_profit_mode: subscription?.take_profit_mode || DEFAULT_TAKE_PROFIT_MODE }
   }
 
   const sessionId = signal.session_id || 'default'
   const manualCfg = await getInferencePreference(userId, sessionId)
   return {
     enable_auto_trade: manualCfg.enable_auto_trade,
-    selected_take_profit: manualCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+    take_profit_mode: DEFAULT_TAKE_PROFIT_MODE,
     max_position_size: manualCfg.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
   }
 }
@@ -374,14 +383,27 @@ export function validateTradeRequest(config, account, request) {
   return { symbol, order_type: orderType, volume, max_position_size: maxPosition, account_equity: equity }
 }
 
+const TAKE_PROFIT_MODE_TIERS = Object.freeze({ conservative: 1, standard: 2, trend: 3 })
+
+export function normalizeTakeProfitMode(value) {
+  const mode = String(value || DEFAULT_TAKE_PROFIT_MODE).trim().toLowerCase()
+  return mode === DEFAULT_TAKE_PROFIT_MODE || Object.hasOwn(TAKE_PROFIT_MODE_TIERS, mode)
+    ? mode
+    : DEFAULT_TAKE_PROFIT_MODE
+}
+
 export function signalOrderPayload(signal, config, market, confirm) {
-  const configuredTier = Number((config || {}).selected_take_profit || DEFAULT_SELECTED_TAKE_PROFIT)
-  const requestedTier = [1, 2, 3].includes(configuredTier) ? configuredTier : DEFAULT_SELECTED_TAKE_PROFIT
-  const fallbackTiers = requestedTier === 3 ? [3, 2, 1] : requestedTier === 2 ? [2, 1] : [1]
-  const usedTier = fallbackTiers.find(tier => {
-    const value = Number(signal[`take_profit_${tier}_price`])
-    return Number.isFinite(value) && value > 0
-  }) || null
+  const takeProfitMode = normalizeTakeProfitMode(config?.take_profit_mode)
+  const recommendedTierValue = Number(signal.recommended_take_profit_tier)
+  const recommendedTier = [1, 2, 3].includes(recommendedTierValue) ? recommendedTierValue : null
+  const requestedTier = takeProfitMode === DEFAULT_TAKE_PROFIT_MODE
+    ? (recommendedTier || 1)
+    : TAKE_PROFIT_MODE_TIERS[takeProfitMode]
+  const requestedPrice = Number(signal[`take_profit_${requestedTier}_price`])
+  const usedTier = Number.isFinite(requestedPrice) && requestedPrice > 0 ? requestedTier : null
+  const selectionSource = takeProfitMode === DEFAULT_TAKE_PROFIT_MODE
+    ? (recommendedTier ? 'ai_recommended' : 'legacy_tp1_fallback')
+    : 'subscription_preference'
 
   // Extract base order_type from signal_type (buy_limit → buy, sell_stop → sell)
   const st = String(signal.signal_type || '').toLowerCase()
@@ -393,7 +415,10 @@ export function signalOrderPayload(signal, config, market, confirm) {
     order_type: baseOrderType,
     volume: parseFloat(signal.recommended_volume),
     sl: signal.stop_loss_price,
-    tp: usedTier ? signal[`take_profit_${usedTier}_price`] : null,
+    tp: usedTier ? requestedPrice : null,
+    tp_selection_mode: takeProfitMode,
+    tp_selection_source: selectionSource,
+    tp_tier_recommended: recommendedTier,
     tp_tier_requested: requestedTier,
     tp_tier_used: usedTier,
     take_profit_candidates: [1, 2, 3].map(tier => ({

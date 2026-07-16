@@ -663,6 +663,14 @@ button {
 .direction-bias-track .bullish { background:var(--color-positive); }
 .direction-bias-track .bearish { background:var(--color-negative); }
 .execution-prices { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.execution-targets { grid-template-columns:minmax(120px,.8fr) minmax(120px,.8fr) minmax(170px,1fr) minmax(300px,1.8fr); }
+.execution-target-primary { border-color:color-mix(in srgb,var(--gold-primary) 42%,var(--border-default)) !important; background:var(--gold-wash) !important; }
+.execution-target-primary small { margin-top:5px; color:var(--gold-primary); font-size:11px; font-weight:700; }
+.take-profit-candidates > div { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.take-profit-chip { display:inline-flex !important; align-items:center; gap:6px; min-height:30px; padding:4px 8px; border:1px solid var(--border-default); border-radius:var(--radius-sm); background:var(--bg-input); color:var(--text-secondary) !important; font-family:var(--font-mono); font-size:11px !important; }
+.take-profit-chip b { color:var(--text-muted); font-family:var(--font-sans); font-size:10px; }
+.take-profit-chip.recommended { border-style:dashed; }
+.take-profit-chip.selected { border-color:var(--gold-primary); background:var(--gold-wash); color:var(--text-primary) !important; }
 .decision-evidence-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px; }
 .decision-evidence-grid > section { min-height:116px; padding:14px; border:1px solid var(--border-default); border-radius:12px; background:var(--bg-input-soft); }
 .decision-evidence-grid ul { display:grid; gap:7px; margin:10px 0 0; padding-left:18px; color:var(--text-primary); font-size:13px; line-height:1.5; }
@@ -674,6 +682,7 @@ button {
 .analysis-history-panel { max-width:none; }
 
 @media (max-width: 760px) {
+  .subscription-exit-setting label { grid-template-columns:1fr; }
   .inference-header-actions { width:100%; }
   .inference-header-actions .btn { flex:1; }
   .execution-advice-hero { grid-template-columns:auto minmax(0,1fr); }
@@ -4092,6 +4101,9 @@ body.form-modal-open .content-card { animation:none !important; transform:none !
 .multi-select-option small { color:var(--text-muted); }
 .multi-select-option.all-option { margin-bottom:4px; border-bottom:1px solid var(--border-subtle); border-radius:var(--radius-sm) var(--radius-sm) 0 0; }
 .subscription-runtime-panel { margin-top:14px; overflow:hidden; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-input-softer); }
+.subscription-exit-setting { margin-top:14px; padding:12px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-input-softer); }
+.subscription-exit-setting label { display:grid; grid-template-columns:130px minmax(190px,240px) minmax(0,1fr); align-items:center; gap:10px; color:var(--text-secondary); font-size:12px; }
+.subscription-exit-setting .field-help { margin:0; line-height:1.5; }
 .subscription-runtime-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px; }
 .subscription-runtime-heading > div { display:grid; gap:3px; }
 .subscription-runtime-heading > div > strong { color:var(--text-primary); font-size:14px; }

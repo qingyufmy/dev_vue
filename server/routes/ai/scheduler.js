@@ -1237,14 +1237,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       const [signalResult] = await run(`
         INSERT INTO ai_signals(user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
           recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
-          take_profit_2_price, take_profit_3_price, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at,
+          take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at,
           entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
       `, [
         isPrivate ? inferenceUserId : 0, 0, promptTypeId, signalSource, signalSource, symbol, primaryTf,
         signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price,
-        signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price,
+        signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price, signal.recommended_take_profit_tier || null,
         marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
         signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null,
         SIGNAL_SCHEMA_VERSION, decisionJson
@@ -1560,6 +1560,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     }
 
     const riskConfig = await getDeliveryExecuteRiskConfig(userId)
+    if (riskConfig) riskConfig.take_profit_mode = subscriptionRuntime.take_profit_mode || 'ai_recommended'
     if (!riskConfig?.enable_auto_trade) {
       l('skipped: enable_auto_trade=false')
       await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
@@ -1653,12 +1654,12 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     // Selected TP must exist and be valid
     const tpVal = order.tp != null ? parseFloat(order.tp) : null
     if (tpVal == null || !Number.isFinite(tpVal) || tpVal <= 0) {
-      l(`rejected: selected_take_profit_missing tp=${order.tp} selected=${riskConfig.selected_take_profit}`)
+      l(`rejected: take_profit_target_missing tp=${order.tp} mode=${order.tp_selection_mode} tier=${order.tp_tier_requested}`)
       await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
         ['rejected', signalId, userId])
       await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'selected_take_profit_missing', tp: order.tp, selected: riskConfig.selected_take_profit },
-        { status: 'rejected', message: 'selected_take_profit_missing' }, 'warning')
+        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'take_profit_target_missing', tp: order.tp, mode: order.tp_selection_mode, tier: order.tp_tier_requested },
+        { status: 'rejected', message: 'take_profit_target_missing' }, 'warning')
       return
     }
     // TP direction

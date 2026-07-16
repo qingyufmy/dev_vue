@@ -87,7 +87,7 @@ describe('L1/L4/L5 core risk gate', () => {
       take_profit_candidates: [{ tier:1, price:2005 }, { tier:2, price:2008 }, { tier:3, price:2013 }],
     } })
     expect(result.decision_status).toBe('adjust')
-    expect(result.approved_order).toMatchObject({ tp:2013, tp_tier_used:3 })
+    expect(result.approved_order).toMatchObject({ tp:2013, tp_tier_used:3, tp_selection_source:'risk_adjusted' })
     expect(result.rule_results).toContainEqual(expect.objectContaining({ code:'R1.5_TP_TIER_UPGRADED', outcome:'adjust' }))
   })
 

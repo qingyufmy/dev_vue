@@ -2108,6 +2108,31 @@ const migrations = [
             oi.completed_at = COALESCE(oi.completed_at, NOW()), oi.updated_at = NOW()
         WHERE oi.status = 'uncertain' AND oi.trade_ticket IS NULL AND oi.pending_ticket IS NULL AND ${deterministicWhere}`)
     }
+  },
+  {
+    id: '084_explicit_take_profit_selection',
+    up: async () => {
+      const hasColumn = async (table, column) => {
+        const rows = await queryAll(
+          'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+          [table, column]
+        )
+        return rows.length > 0
+      }
+      if (!await hasColumn('strategy_subscriptions', 'take_profit_mode')) {
+        await queryRun("ALTER TABLE strategy_subscriptions ADD COLUMN take_profit_mode VARCHAR(24) NOT NULL DEFAULT 'ai_recommended' AFTER outside_window_behavior")
+      }
+      if (!await hasColumn('ai_signals', 'recommended_take_profit_tier')) {
+        await queryRun('ALTER TABLE ai_signals ADD COLUMN recommended_take_profit_tier TINYINT DEFAULT NULL AFTER take_profit_3_price')
+      }
+      const schemas = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      for (const row of schemas) {
+        let schema
+        try { schema = JSON.parse(row.schema_json || '{}') } catch { schema = {} }
+        schema.recommended_take_profit_tier = '必须字段。非hold仅允许1、2、3，表示AI建议实际执行的止盈目标档位，对应目标价格必须存在；hold返回null。'
+        await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
+      }
+    }
   }
 ]
 

@@ -296,6 +296,7 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
       const chosen = candidates[0]
       approved.tp = chosen.price
       approved.tp_tier_used = chosen.tier
+      approved.tp_selection_source = 'risk_adjusted'
       effectiveTp = chosen.price
       rr = chosen.rr
       adjusted = true
