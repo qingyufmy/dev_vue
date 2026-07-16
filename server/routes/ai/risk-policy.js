@@ -241,6 +241,7 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
     const expected = method === 'market' ? side : `${side}_${method}`
     if (String(approved.signal_type || '').toLowerCase() !== expected || !Number.isFinite(Number(approved.volume)) || !(finite(approved.reference_price) > 0)) return fail('R5_SCHEMA_AI_REQUIRED')
     if (method !== 'market' && !(finite(approved.limit_price) > 0)) return fail('R5_SCHEMA_PENDING_PRICE')
+    if (method === 'stop_limit' && !(finite(approved.stop_limit_price) > 0)) return fail('R5_SCHEMA_STOP_LIMIT_PRICE')
   }
   pass(rules, 'R5_SCHEMA')
   const standard = stripBrokerSuffix(symbol)
@@ -339,7 +340,11 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
     if (deviation > maximum + Number(instrument.tick_size)) {
       const rejected = rolloutReject('R1.7_PENDING_DEVIATION', { deviation, maximum }); if (rejected) return rejected
     }
-    if ((method === 'limit' && ((side === 'buy' && entry >= current) || (side === 'sell' && entry <= current))) || (method === 'stop' && ((side === 'buy' && entry <= current) || (side === 'sell' && entry >= current)))) return fail('R1.7_PENDING_DIRECTION')
+    if ((method === 'limit' && ((side === 'buy' && entry >= current) || (side === 'sell' && entry <= current))) || (['stop', 'stop_limit'].includes(method) && ((side === 'buy' && entry <= current) || (side === 'sell' && entry >= current)))) return fail('R1.7_PENDING_DIRECTION', { entry_method: method, trigger_price: entry, current_price: current })
+    if (method === 'stop_limit') {
+      const stopLimit = finite(approved.stop_limit_price)
+      if (!(stopLimit > 0) || (side === 'buy' ? stopLimit > entry : stopLimit < entry)) return fail('R1.7_STOP_LIMIT_RELATION', { side, trigger_price: entry, stop_limit_price: stopLimit })
+    }
     if (!approved.pending_valid_until && !approved.pending_valid_minutes) {
       approved.pending_valid_minutes = policy.pending_valid_minutes; adjusted = true
       rules.push({ code: 'R1.8_PENDING_TTL_DEFAULT', outcome: 'default', details: { minutes: policy.pending_valid_minutes } })

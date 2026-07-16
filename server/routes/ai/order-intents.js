@@ -7,6 +7,7 @@ import { StatefulRiskReject, recordSuccessfulOpenTx } from './risk-state.js'
 import { createSignalOutcomeTx } from './signal-outcomes.js'
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'rejected', 'failed'])
+const DETERMINISTIC_BROKER_RETCODES = new Set([10013, 10014, 10015, 10016, 10017, 10018, 10019, 10022, 10030, 10035, 10038])
 const LEASE_SECONDS = 30
 const RESERVATION_SECONDS = 10 * 60
 const RECONCILE_INTERVAL_MS = 30_000
@@ -29,6 +30,15 @@ function ticketFromResult(result) {
 
 function isPendingAction(action) {
   return action === 'pending'
+}
+
+function isDeterministicBrokerReject(result) {
+  if (result?.status === 'rejected') return true
+  const retcode = Number(result?.retcode)
+  if (Number.isInteger(retcode) && DETERMINISTIC_BROKER_RETCODES.has(retcode)) return true
+  const message = String(result?.message || result?.error || '').trim().toLowerCase()
+  return ['invalid price', 'invalid stops', 'invalid volume', 'invalid expiration', 'invalid order', 'market closed', 'trade disabled', 'not enough money']
+    .some(pattern => message.includes(pattern))
 }
 
 function leaseIsActive(row) {
@@ -231,12 +241,12 @@ async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId,
 async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeResult) {
   const ticket = ticketFromResult(bridgeResult)
   const succeeded = bridgeResult?.status === 'success' && ticket != null
-  const explicitReject = bridgeResult?.status === 'rejected'
+  const explicitReject = isDeterministicBrokerReject(bridgeResult)
   const status = succeeded ? 'succeeded' : explicitReject ? 'rejected' : 'uncertain'
   const result = succeeded
     ? bridgeResult
     : explicitReject
-      ? bridgeResult
+      ? { ...bridgeResult, status: 'rejected' }
       : { ...bridgeResult, status: 'uncertain', message: bridgeResult?.message || bridgeResult?.error || '订单结果待确认，禁止自动重发' }
   await withTransaction(async run => {
     // Outcome creation needs the owning user, source and approved request too.

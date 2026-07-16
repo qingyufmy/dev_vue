@@ -24,6 +24,13 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
+  it('shows execution outcome before the independent risk-gate result', () => {
+    expect(app).toContain('const executionStatus = row.status || "unknown"')
+    expect(app).toContain('const riskStatus = row.decision_status || "unknown"')
+    expect(app.indexOf('const executionStatus = row.status || "unknown"')).toBeLessThan(app.indexOf('const riskStatus = row.decision_status || "unknown"'))
+    expect(app).toContain('MT5 拒绝挂单：挂单价格无效')
+  })
+
   it('publishes recoverable, ordered progress for every inference stage', () => {
     for (const field of ['progress_percent', 'progress_seq', 'cycle_id', 'cycle_started_at', 'stage_updated_at']) {
       expect(scheduler).toContain(field)

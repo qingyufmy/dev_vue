@@ -2081,6 +2081,33 @@ const migrations = [
       // persisting ai_signals, before it could reach the execution pipeline.
       await queryRun("ALTER TABLE ai_signals MODIFY COLUMN entry_method VARCHAR(20) DEFAULT 'market'")
     }
+  },
+  {
+    id: '083_reject_deterministic_mt5_errors',
+    up: async () => {
+      const deterministicWhere = `LOWER(COALESCE(oi.error_code, '')) IN
+        ('invalid price','invalid stops','invalid volume','invalid expiration','invalid order','market closed','trade disabled','not enough money')`
+      await queryRun(`UPDATE auto_signal_deliveries d
+        JOIN order_intents oi ON oi.id = d.order_intent_id
+        SET d.execution_status = 'rejected',
+            d.execution_result = CASE
+              WHEN JSON_VALID(d.execution_result) THEN JSON_SET(d.execution_result, '$.status', 'rejected')
+              ELSE JSON_OBJECT('status', 'rejected', 'message', oi.error_code)
+            END
+        WHERE oi.status = 'uncertain' AND oi.trade_ticket IS NULL AND oi.pending_ticket IS NULL AND ${deterministicWhere}`)
+      await queryRun(`UPDATE risk_reservations rr
+        JOIN order_intents oi ON oi.id = rr.order_intent_id
+        SET rr.status = 'released', rr.updated_at = NOW()
+        WHERE rr.status = 'active' AND oi.status = 'uncertain' AND oi.trade_ticket IS NULL AND oi.pending_ticket IS NULL AND ${deterministicWhere}`)
+      await queryRun(`UPDATE order_intents oi
+        SET oi.status = 'rejected',
+            oi.result_json = CASE
+              WHEN JSON_VALID(oi.result_json) THEN JSON_SET(oi.result_json, '$.status', 'rejected')
+              ELSE JSON_OBJECT('status', 'rejected', 'message', oi.error_code)
+            END,
+            oi.completed_at = COALESCE(oi.completed_at, NOW()), oi.updated_at = NOW()
+        WHERE oi.status = 'uncertain' AND oi.trade_ticket IS NULL AND oi.pending_ticket IS NULL AND ${deterministicWhere}`)
+    }
   }
 ]
 

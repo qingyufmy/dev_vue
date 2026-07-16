@@ -198,6 +198,8 @@ const REASON_MAP = {
   skipped: "已跳过（未满足执行条件）",
   "Request executed": "MT5 已执行",
   "Unsupported filling mode": "MT5 不支持当前成交模式，已自动适配",
+  "Invalid price": "MT5 拒绝挂单：挂单价格无效",
+  "Invalid stops": "MT5 拒绝挂单：止损或止盈价格无效",
   "AutoTrading disabled by client": "MT5 客户端关闭了自动交易",
   mt5_terminal_autotrading_disabled: "MT5 终端自动交易关闭",
   mt5_account_trade_disabled: "MT5 账户禁止交易",
@@ -1904,12 +1906,14 @@ function riskRolloutLabel(code) { return RISK_ROLLOUT_LABELS[code] || "未命名
 const RISK_DECISION_LABELS = {
   "R5_SCHEMA_SYMBOL":"缺少交易品种", "R5_SCHEMA_ORDER_TYPE":"订单方向无效", "R5_SCHEMA_ENTRY_METHOD":"入场方式无效",
   "R5_SCHEMA_AI_REQUIRED":"AI 订单必要字段不完整", "R5_SCHEMA_PENDING_PRICE":"挂单价格无效",
+  "R5_SCHEMA_STOP_LIMIT_PRICE":"Stop Limit 触发后限价无效",
   "R1_INSTRUMENT_DATA_INCOMPLETE":"品种交易参数不完整", "R1_SYMBOL_TRADE_DISABLED":"品种当前禁止交易",
   "R1.1_SYMBOL_NOT_ALLOWED":"品种不在允许范围", "R1.2_STOP_LOSS_REQUIRED":"缺少止损",
   "R1.3_SL_WIDEN_VOLUME_DOWN":"扩大止损并同步降低手数", "R1.4_STOP_LOSS_TOO_FAR":"止损距离超过上限",
   "R1.5_TAKE_PROFIT_REQUIRED":"缺少止盈", "R1.5_RR_TOO_LOW":"盈亏比低于最低要求",
   "R1.5_TP_TIER_UPGRADED":"改用满足盈亏比要求的更远止盈档位", "R1.6_SL_TP_DIRECTION":"止损或止盈方向错误",
-  "R1.7_PENDING_DEVIATION":"挂单价格偏离当前报价过大", "R1.7_PENDING_DIRECTION":"挂单方向与当前价格关系错误",
+  "R1.7_PENDING_DEVIATION":"挂单价格偏离当前报价过大", "R1.7_PENDING_DIRECTION":"挂单触发价方向与当前价格关系错误",
+  "R1.7_STOP_LIMIT_RELATION":"Stop Limit 触发价与触发后限价关系错误",
   "R1.8_PENDING_TTL_DEFAULT":"使用默认挂单有效期", "R1.9_AI_VOLUME_OUT_OF_RANGE":"AI 建议手数超出平台范围",
   "R1.9_BELOW_MINIMUM_AFTER_RISK":"风险调整后手数低于最小可交易手数", "R1.9_VOLUME_INCREASE_FORBIDDEN":"风控禁止放大 AI 建议手数",
   "R1.9_VOLUME_INVALID":"订单手数无效", "R1.10_RISK_DATA_INVALID":"账户或品种风险数据无效",
@@ -2043,10 +2047,12 @@ function renderExecutionDecisions(rows, pagination = {}) {
     const reason = rejectedRule ? riskRuleDescription(rejectedRule.code, rejectedRule.details || {}) : riskDecisionLabel(result.error || result.message || "");
     const riskPass = rules.find(rule => rule.code === "R1.10_REAL_RISK");
     const riskCap = riskPass?.details?.risk_cap ?? approved.risk_volume_cap ?? "--";
-    const decision = row.decision_status || row.status || "unknown";
-    const decisionText = ({ pass:"通过", adjust:"调整后通过", reject:"拒绝", success:"执行成功", rejected:"拒绝", failed:"失败", uncertain:"待确认" })[decision] || "未完成";
-    const decisionClass = ["pass","adjust","success"].includes(decision) ? "success" : decision === "reject" || decision === "rejected" ? "danger" : "warning";
-    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">#${row.id} ${escapeHtml(row.symbol || '')} <span class="status-chip ${decisionClass}">${escapeHtml(decisionText)}</span></div>${reason && reason !== "未说明原因" ? `<div class="execution-reason">${escapeHtml(reason)}</div>` : ''}<div class="workspace-row-meta"><span>AI 建议 ${escapeHtml(aiVolume)} 手</span><span>风险上限 ${escapeHtml(riskCap)}</span><span>最终 ${escapeHtml(finalVolume)} 手</span><span>规则调整：${escapeHtml(adjustments)}</span><span>参考价 ${escapeHtml(refPrice)}</span><span>实际价 ${escapeHtml(actual)}</span></div></div></article>`;
+    const executionStatus = row.status || "unknown";
+    const riskStatus = row.decision_status || "unknown";
+    const decisionText = ({ succeeded:"执行成功", rejected:"执行被拒绝", failed:"执行失败", uncertain:"执行待确认", awaiting_confirmation:"等待确认", preparing:"准备执行", prepared:"等待发送", bridge_sending:"正在发送" })[executionStatus] || "未完成";
+    const decisionClass = executionStatus === "succeeded" ? "success" : ["rejected","failed"].includes(executionStatus) ? "danger" : "warning";
+    const riskText = ({ pass:"通过", adjust:"调整后通过", reject:"拒绝" })[riskStatus] || "未完成";
+    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">#${row.id} ${escapeHtml(row.symbol || '')} <span class="status-chip ${decisionClass}">${escapeHtml(decisionText)}</span></div>${reason && reason !== "未说明原因" ? `<div class="execution-reason">${escapeHtml(reason)}</div>` : ''}<div class="workspace-row-meta"><span>风控 ${escapeHtml(riskText)}</span><span>AI 建议 ${escapeHtml(aiVolume)} 手</span><span>风险上限 ${escapeHtml(riskCap)}</span><span>最终 ${escapeHtml(finalVolume)} 手</span><span>规则调整：${escapeHtml(adjustments)}</span><span>参考价 ${escapeHtml(refPrice)}</span><span>实际价 ${escapeHtml(actual)}</span></div></div></article>`;
   }).join("") : '<div class="empty-state"><strong>暂无执行决策</strong><span>通过风控闸门的下单请求会在这里留下完整对照。</span></div>';
   renderPager("executionDecisionPager", state.executionFilters.page, state.executionFilters.pageSize, state.executionFilters.total, "executions");
 }

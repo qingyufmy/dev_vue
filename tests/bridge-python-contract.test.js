@@ -94,4 +94,15 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('"message": f"orders_get failed: {self.mt5.last_error()}"')
     expect(source).not.toContain('except:')
   })
+
+  it('prechecks stop-limit orders and uses the official MT5 request field', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const pendingStart = source.indexOf('elif action == "pending"')
+    const cancelStart = source.indexOf('elif action == "cancel_pending"', pendingStart)
+    const block = source.slice(pendingStart, cancelStart)
+    expect(block).toContain('req["stoplimit"] = float(stoplimit_price)')
+    expect(block).toContain('check = self.mt5.order_check(req)')
+    expect(block).toContain('"status": "rejected"')
+    expect(block).toContain('"retcode": result.retcode')
+  })
 })

@@ -106,6 +106,10 @@ const VALUE_LABELS = {
   'Request executed': 'MT5 已执行请求',
   'AutoTrading disabled by client': 'MT5 客户端已关闭自动交易',
   'Unsupported filling mode': 'MT5 不支持当前成交模式',
+  'Invalid price': 'MT5 挂单价格无效',
+  'Invalid stops': 'MT5 止损或止盈价格无效',
+  'R5_SCHEMA_STOP_LIMIT_PRICE': 'Stop Limit 触发后限价无效',
+  'R1.7_STOP_LIMIT_RELATION': 'Stop Limit 触发价与触发后限价关系错误',
 }
 
 const ACTION_CODES = new Map(Object.entries(ACTION_LABELS).map(([code, label]) => [label, code]))

@@ -360,6 +360,14 @@ export function validateTradeRequest(config, account, request) {
       if (entryMethod === 'limit' && orderType === 'sell' && lp <= ref) throw new RiskReject('sell_limit_price_too_low', { limit_price: lp, reference: ref })
       if (entryMethod === 'stop' && orderType === 'buy' && lp <= ref) throw new RiskReject('buy_stop_price_too_low', { limit_price: lp, reference: ref })
       if (entryMethod === 'stop' && orderType === 'sell' && lp >= ref) throw new RiskReject('sell_stop_price_too_high', { limit_price: lp, reference: ref })
+      if (entryMethod === 'stop_limit') {
+        const stopLimit = parseFloat(request.stop_limit_price || 0)
+        if (!(stopLimit > 0)) throw new RiskReject('stop_limit_price_required')
+        if (orderType === 'buy' && lp <= ref) throw new RiskReject('buy_stop_limit_trigger_too_low', { trigger_price: lp, reference: ref })
+        if (orderType === 'sell' && lp >= ref) throw new RiskReject('sell_stop_limit_trigger_too_high', { trigger_price: lp, reference: ref })
+        if (orderType === 'buy' && stopLimit > lp) throw new RiskReject('buy_stop_limit_price_above_trigger', { trigger_price: lp, stop_limit_price: stopLimit })
+        if (orderType === 'sell' && stopLimit < lp) throw new RiskReject('sell_stop_limit_price_below_trigger', { trigger_price: lp, stop_limit_price: stopLimit })
+      }
     }
   }
 

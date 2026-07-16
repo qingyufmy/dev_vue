@@ -232,6 +232,18 @@ describe('prepareAndExecuteOrderIntent', () => {
     expect(result.status).toBe('rejected')
     expect(reservation.status).toBe('released')
   })
+
+  it('treats deterministic MT5 invalid-price errors as rejection', async () => {
+    mockBridge.mockImplementation(async (_userId, action) => {
+      if (action === 'account') return { status: 'success', equity: 1000 }
+      if (action === 'quote') return { status: 'success', bid: 1, ask: 2 }
+      return { status: 'error', message: 'Invalid price', retcode: 10015 }
+    })
+    const result = await prepareAndExecuteOrderIntent(baseArgs())
+    expect(result).toMatchObject({ status: 'rejected', message: 'Invalid price', retcode:10015 })
+    expect(intent.status).toBe('rejected')
+    expect(reservation.status).toBe('released')
+  })
 })
 
 describe('recovery and reconciliation', () => {

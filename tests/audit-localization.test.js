@@ -54,4 +54,10 @@ describe('audit localization', () => {
       details:{ rules:[{ code:'R1.5_RR_TOO_LOW', outcome:'reject', details:{ rr:1.03, minimum:1.2 } }] },
     }, 'warning').result.message).toBe('盈亏比低于最低要求')
   })
+
+  it('localizes deterministic MT5 price rejections', () => {
+    expect(prepareAuditRecord('ai_auto_execute_rejected', {}, {
+      status:'rejected', message:'Invalid price', retcode:10015,
+    }, 'rejected').result.message).toBe('MT5 挂单价格无效')
+  })
 })

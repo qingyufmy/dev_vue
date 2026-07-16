@@ -1390,18 +1390,30 @@ class BridgeWorker(QThread):
                     req["deviation"] = max(0, int(params.get("deviation") or 0))
                 stoplimit_price = params.get("stoplimit_price")
                 if stoplimit_price and ot in (self.mt5.ORDER_TYPE_BUY_STOP_LIMIT, self.mt5.ORDER_TYPE_SELL_STOP_LIMIT):
-                    req["stoplimit_price"] = float(stoplimit_price)
+                    req["stoplimit"] = float(stoplimit_price)
 
                 self.log_signal.emit(f"[Pending] type_filling=RETURN type_time={type_time} exp_ts={exp_ts}")
+                check = self.mt5.order_check(req)
+                if check is None:
+                    err = self.mt5.last_error()
+                    self.log_signal.emit(f"[Pending] order_check returned None, last_error={err}")
+                    return {"status": "rejected", "message": f"pending order check failed: {err}", "retcode": -1}
+                check_retcode = int(getattr(check, "retcode", -1))
+                if check_retcode not in (0, self.mt5.TRADE_RETCODE_DONE, getattr(self.mt5, "TRADE_RETCODE_PLACED", 10008)):
+                    check_comment = getattr(check, "comment", "pending order check failed")
+                    self.log_signal.emit(f"[Pending] order_check rejected: retcode={check_retcode} comment={check_comment}")
+                    return {"status": "rejected", "message": check_comment, "retcode": check_retcode}
                 result = self.mt5.order_send(req)
                 if result is None:
                     err = self.mt5.last_error()
                     self.log_signal.emit(f"[Pending] order_send returned None, last_error={err}")
                     return {"status": "error", "message": f"pending order failed: {err}"}
                 self.log_signal.emit(f"[Pending] retcode={result.retcode} comment={result.comment} order={result.order}")
-                if result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                    return {"status": "success", "order": result.order, "price": result.price}
-                return {"status": "error", "message": result.comment if result else "pending order failed"}
+                if result.retcode in (self.mt5.TRADE_RETCODE_DONE, getattr(self.mt5, "TRADE_RETCODE_PLACED", 10008)) and result.order:
+                    return {"status": "success", "order": result.order, "price": result.price, "retcode": result.retcode}
+                if result.retcode == getattr(self.mt5, "TRADE_RETCODE_TIMEOUT", 10012):
+                    return {"status": "uncertain", "message": result.comment or "pending order result uncertain", "retcode": result.retcode}
+                return {"status": "rejected", "message": result.comment if result else "pending order failed", "retcode": result.retcode}
 
             elif action == "cancel_pending":
                 ticket = params.get("ticket")

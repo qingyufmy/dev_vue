@@ -128,6 +128,26 @@ describe('L1/L4/L5 core risk gate', () => {
     expect(result.approved_order).toMatchObject({ entry_method: 'limit', pending_valid_minutes: 240 })
   })
 
+  it('enforces stop-limit trigger direction and post-trigger limit relation', () => {
+    const wrongTrigger = run({ request: {
+      order_type: 'sell', signal_type: 'sell_stop_limit', entry_method: 'stop_limit',
+      limit_price: 2001, stop_limit_price: 2002, sl: 2012, tp: 1980,
+    }, policy: { pending_price_deviation_pct: 1 } })
+    expect(wrongTrigger.reject_code).toBe('R1.7_PENDING_DIRECTION')
+
+    const wrongLimit = run({ request: {
+      order_type: 'sell', signal_type: 'sell_stop_limit', entry_method: 'stop_limit',
+      limit_price: 1999, stop_limit_price: 1998, sl: 2012, tp: 1980,
+    }, policy: { pending_price_deviation_pct: 1 } })
+    expect(wrongLimit.reject_code).toBe('R1.7_STOP_LIMIT_RELATION')
+
+    const valid = run({ request: {
+      order_type: 'sell', signal_type: 'sell_stop_limit', entry_method: 'stop_limit',
+      limit_price: 1999, stop_limit_price: 2000, sl: 2012, tp: 1980,
+    }, policy: { pending_price_deviation_pct: 1 } })
+    expect(valid.decision_status).not.toBe('reject')
+  })
+
   it('rejects stale quotes, expired signals, wide spread, and weekend opens', () => {
     const stale = run({ quote: { time_msc: nowMs - 11_000 } })
     expect(stale.reject_code).toBe('R4.4_QUOTE_STALE')

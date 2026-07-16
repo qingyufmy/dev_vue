@@ -201,6 +201,14 @@ describe('buildBridgeOrderCall', () => {
     expect(result.bridgeParams.expiration).toBeGreaterThan(Math.floor(Date.now() / 1000) + 10800)
   })
 
+  it('stop limit 请求保留触发价与触发后限价', () => {
+    const result = buildBridgeOrderCall({
+      symbol: 'XAUUSD', entry_method: 'stop_limit', order_type: 'sell',
+      limit_price: 3990, stop_limit_price: 3995, volume: 0.01,
+    })
+    expect(result.bridgeParams).toMatchObject({ order_type: 'sell_stop_limit', price: 3990, stoplimit_price: 3995 })
+  })
+
   it('无 pending_valid_until 时 fallback 240 分钟', () => {
     const before = Math.floor(Date.now() / 1000) + 10800 + 240 * 60
     const result = buildBridgeOrderCall({
@@ -237,5 +245,15 @@ describe('validateTradeRequest - slippage skip for pending', () => {
     }
     expect(() => validateTradeRequest(baseConfig, baseAccount, request))
       .not.toThrow()
+  })
+
+  it('拒绝方向错误或第二价格缺失的 sell stop limit', () => {
+    const base = {
+      symbol: 'XAUUSD', order_type: 'sell', volume: 0.01, source: 'ai',
+      entry_method: 'stop_limit', limit_price: 4010, stop_limit_price: 4015,
+      reference_price: 4000, confirm: true,
+    }
+    expect(() => validateTradeRequest(baseConfig, baseAccount, base)).toThrow('sell_stop_limit_trigger_too_high')
+    expect(() => validateTradeRequest(baseConfig, baseAccount, { ...base, limit_price:3990, stop_limit_price:null })).toThrow('stop_limit_price_required')
   })
 })

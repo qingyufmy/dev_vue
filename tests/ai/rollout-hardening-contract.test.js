@@ -18,6 +18,12 @@ describe('rollout hardening contract', () => {
     expect(migrations).toContain("MODIFY COLUMN entry_method VARCHAR(20) DEFAULT 'market'")
     expect(db).toContain("entry_method VARCHAR(20) DEFAULT 'market'")
   })
+  it('repairs deterministic MT5 rejections without inventing order tickets', () => {
+    expect(migrations).toContain("id: '083_reject_deterministic_mt5_errors'")
+    expect(migrations).toContain("oi.trade_ticket IS NULL AND oi.pending_ticket IS NULL")
+    expect(migrations).toContain("rr.status = 'released'")
+    expect(migrations).toContain("d.execution_status = 'rejected'")
+  })
   it('adds the readiness-tracked rollout migration and defaults generative features off', () => {
     expect(migrations).toContain("id: '065_ai_rollout_governance'")
     expect(migrations).toContain("VALUES ('global', 0, 0, 0, 0, 1, 0")
