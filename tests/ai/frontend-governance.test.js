@@ -81,6 +81,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('仅审计可见')
   })
 
+  it('uses one strategy control plane and a credential-free preference endpoint', () => {
+    expect(app).toContain('/api/ai/inference-preferences')
+    expect(routes).toContain("router.get('/ai/inference-preferences', authMiddleware")
+    expect(routes).toContain("router.put('/ai/inference-preferences', authMiddleware")
+    expect(html).not.toContain('id="auto-config"')
+    expect(html).not.toContain('id="promptTypeModal"')
+    expect(app).not.toContain("wsApi('get_auto_config')")
+    expect(app).not.toContain('wsApi("save_config"')
+  })
+
   it('has responsive behavior, loading skeletons and reduced-motion handling', () => {
     expect(css).toContain('@media (max-width:900px)')
     expect(css).toContain('@media (max-width:600px)')

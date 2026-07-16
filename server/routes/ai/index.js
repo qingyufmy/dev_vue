@@ -6,10 +6,8 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { authMiddleware } from '../../middleware/auth.js'
-import { attachSignalTiming, configPublic, timeframeIntervalMs, STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags } from './utils.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
-import { getActiveConfig, getAnalyzeApiKey, getAutoConfig, getGlobalAutoConfig, saveGlobalAutoConfig, upsertAutoConfig, insertAudit, getAutoPromptTypes, getAutoPromptTypeById, saveAutoPromptType, disableAutoPromptType, getUserAutoConfig, saveUserAutoConfig, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig } from './config.js'
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
@@ -28,6 +26,7 @@ import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, RISK_RULES, DEFAUL
 import { requestRiskRecovery, reviewRiskRecovery, setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
+import { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
 
 const router = Router()
 
@@ -76,6 +75,16 @@ const modelProviderDefaults = {
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1', zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   doubao: 'https://ark.cn-beijing.volces.com/api/v3', volcengine_agent_plan: 'https://ark.cn-beijing.volces.com/api/plan/v3',
 }
+
+router.get('/ai/inference-preferences', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, preference: await getInferencePreference(req.user.id, req.query.session_id || 'default') }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/inference-preferences', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, preference: await saveInferencePreference(req.user.id, req.body?.session_id || 'default', req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
 
 router.get('/ai/model-profiles', authMiddleware, async (req, res) => {
   try {
@@ -217,12 +226,16 @@ router.post('/ai/strategies', authMiddleware, async (req, res) => {
 })
 
 router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, strategy:await updateStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {}) }) }
+  try {
+    const strategy = await updateStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {})
+    await reconcileAutoSchedulers()
+    res.json({ ok:true, strategy })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.delete('/ai/strategies/:id', authMiddleware, async (req, res) => {
-  try { await deleteStrategy(Number(req.params.id), req.user.id, req.user.role); res.json({ ok:true }) }
+  try { await deleteStrategy(Number(req.params.id), req.user.id, req.user.role); await reconcileAutoSchedulers(); res.json({ ok:true }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -242,22 +255,30 @@ router.put('/ai/trading-accounts/:id', authMiddleware, async (req, res) => {
 })
 
 router.delete('/ai/trading-accounts/:id', authMiddleware, async (req, res) => {
-  try { await deleteTradingAccount(Number(req.params.id), req.user.id); res.json({ ok:true }) }
+  try { await deleteTradingAccount(Number(req.params.id), req.user.id); await reconcileAutoSchedulers(); res.json({ ok:true }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/subscriptions', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, subscription:await createSubscription(req.user.id, req.user.role, req.body || {}) }) }
+  try {
+    const subscription = await createSubscription(req.user.id, req.user.role, req.body || {})
+    await reconcileAutoSchedulers()
+    res.json({ ok:true, subscription })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.put('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, subscription:await updateSubscription(Number(req.params.id), req.user.id, req.user.role, req.body || {}) }) }
+  try {
+    const subscription = await updateSubscription(Number(req.params.id), req.user.id, req.user.role, req.body || {})
+    await reconcileAutoSchedulers()
+    res.json({ ok:true, subscription })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.delete('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
-  try { await deleteSubscription(Number(req.params.id), req.user.id); res.json({ ok:true }) }
+  try { await deleteSubscription(Number(req.params.id), req.user.id); await reconcileAutoSchedulers(); res.json({ ok:true }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -384,7 +405,11 @@ router.put('/ai/admin/risk-center', authMiddleware, async (req, res) => {
 })
 
 router.post('/ai/admin/accounts/:id/review', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, account: await adminReviewTradingAccount(Number(req.params.id), req.user.id, req.user.role, req.body || {}) }) }
+  try {
+    const account = await adminReviewTradingAccount(Number(req.params.id), req.user.id, req.user.role, req.body || {})
+    await reconcileAutoSchedulers()
+    res.json({ ok: true, account })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -467,13 +492,14 @@ export { handleAnalyze } from './strategy.js'
 
 export { maybeAiSignal } from './llm.js'
 
-export { insertAudit, getActiveConfig, getAnalyzeApiKey,
-  getAutoConfig, upsertAutoConfig, signalOrderPayload, executeOrderCore,
-  getGlobalAutoConfig, saveGlobalAutoConfig,
+export { insertAudit, getAnalyzeApiKey,
+  getAutoConfig, signalOrderPayload, executeOrderCore,
+  getGlobalAutoConfig,
   getExecuteRiskConfig, getAutoPromptTypes, getAutoPromptTypeById,
-  saveAutoPromptType, disableAutoPromptType, getUserAutoConfig,
-  saveUserAutoConfig, getUnifiedAutoInferenceConfig,
+  getUnifiedAutoInferenceConfig,
   getCloseConfig, saveCloseConfig, getCloseSignalTickets } from './config.js'
+
+export { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
 
 export { resolveAiTaskModel, logModelUsage, beginModelUsage, finishModelUsage, checkPlatformQuota,
   assertModelProfileSchemaReady,
@@ -519,6 +545,6 @@ export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatur
   updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
-  attachSignalTiming, configPublic, timeframeIntervalMs } from './utils.js'
+  attachSignalTiming, timeframeIntervalMs } from './utils.js'
 
 export default router

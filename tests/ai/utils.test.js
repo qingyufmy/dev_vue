@@ -3,7 +3,7 @@ import {
   round2, round3, round5, clamp,
   parseTimeframeTags, stripTimeframeTags,
   signalTtlSeconds, signalAgeSeconds, attachSignalTiming,
-  configPublic, timeframeIntervalMs,
+  timeframeIntervalMs,
   compactRates, utcToMt5Time,
   aiFailureHold, parseJsonObject,
   DEFAULT_PROMPT, STRATEGY_TIMEFRAME_COUNTS
@@ -120,27 +120,6 @@ describe('attachSignalTiming', () => {
     expect(result.ttl_seconds).toBe(45)
     expect(result.is_stale).toBe(false)
     expect(result.created_at_mt5).toBeTruthy()
-  })
-})
-
-describe('configPublic', () => {
-  it('隐藏 API key', () => {
-    const row = { id: 1, api_key_encrypted: 'sk-123', model_name: 'deepseek' }
-    const result = configPublic(row)
-    expect(result.has_api_key).toBe(true)
-    expect(result.masked_api_key).toBe('****')
-    expect(result.api_key_encrypted).toBeUndefined()
-  })
-
-  it('无 API key', () => {
-    const row = { id: 1, api_key_encrypted: null }
-    const result = configPublic(row)
-    expect(result.has_api_key).toBe(false)
-    expect(result.masked_api_key).toBe(null)
-  })
-
-  it('null 输入返回 null', () => {
-    expect(configPublic(null)).toBe(null)
   })
 })
 

@@ -298,8 +298,17 @@ export async function adminReviewTradingAccount(accountId, adminId, adminRole, {
   const id = toId(accountId, 'account_id')
   const existing = await queryOne('SELECT * FROM trading_accounts WHERE id = ? AND is_deleted = 0', [id])
   if (!existing) throw new Error('account_not_found')
-  await queryRun(`UPDATE trading_accounts SET review_status = ?, observe_status = ?, updated_at = ? WHERE id = ?`,
-    [approved ? 'approved' : 'rejected', approved ? (existing.observed_until ? 'observing' : 'active') : 'frozen', beijingNow(), id])
+  const now = beijingNow()
+  if (approved) {
+    await queryRun(`UPDATE trading_accounts SET review_status = 'approved', observe_status = ?, updated_at = ? WHERE id = ?`,
+      [existing.observed_until ? 'observing' : 'active', now, id])
+  } else {
+    await withTransaction(async run => {
+      await run("UPDATE trading_accounts SET review_status = 'rejected', observe_status = 'frozen', updated_at = ? WHERE id = ?", [now, id])
+      await run('UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE trading_account_id = ? AND is_deleted = 0', [now, id])
+      await syncLegacySchedulerTx(run, Number(existing.user_id))
+    })
+  }
   await logAudit({ userId: adminId, action: approved ? 'trading_account_approved' : 'trading_account_rejected', targetType: 'trading_account', targetId: id, detail: JSON.stringify({ reason }) })
   return queryOne('SELECT * FROM trading_accounts WHERE id = ?', [id])
 }
@@ -333,6 +342,7 @@ export async function deleteTradingAccount(accountId, userId) {
   await withTransaction(async run => {
     await run('UPDATE trading_accounts SET is_deleted = 1, updated_at = ? WHERE id = ? AND user_id = ?', [now, id, actorId])
     await run('UPDATE strategy_subscriptions SET is_deleted = 1, execution_enabled = 0, updated_at = ? WHERE trading_account_id = ?', [now, id])
+    await syncLegacySchedulerTx(run, actorId)
   })
 }
 

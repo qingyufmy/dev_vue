@@ -1644,6 +1644,37 @@ const migrations = [
       await queryRun('ALTER TABLE inference_snapshots MODIFY strategy_id INT DEFAULT NULL')
       await queryRun('ALTER TABLE ai_paired_inference_runs MODIFY strategy_id INT DEFAULT NULL')
     }
+  },
+  {
+    id: '068_inference_preferences',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_inference_preferences (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        session_id VARCHAR(100) NOT NULL DEFAULT 'default',
+        system_prompt LONGTEXT DEFAULT NULL,
+        enable_auto_trade TINYINT NOT NULL DEFAULT 0,
+        enable_futures_trading TINYINT NOT NULL DEFAULT 0,
+        risk_level VARCHAR(16) NOT NULL DEFAULT 'medium',
+        max_position_size DECIMAL(12,4) NOT NULL DEFAULT 0.05,
+        selected_take_profit TINYINT NOT NULL DEFAULT 2,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_inference_preference_user_session (user_id, session_id),
+        INDEX idx_inference_preference_updated (user_id, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`INSERT IGNORE INTO ai_inference_preferences
+        (user_id, session_id, system_prompt, enable_auto_trade, enable_futures_trading,
+         risk_level, max_position_size, selected_take_profit, created_at, updated_at)
+        SELECT c.user_id, c.session_id, c.system_prompt, c.enable_auto_trade, c.enable_futures_trading,
+          COALESCE(c.risk_level, 'medium'), COALESCE(c.max_position_size, 0.05),
+          COALESCE(c.selected_take_profit, 2), COALESCE(c.created_at, ?), COALESCE(c.updated_at, ?)
+        FROM ai_configs c
+        INNER JOIN (
+          SELECT user_id, session_id, MAX(id) AS id
+          FROM ai_configs WHERE is_active = 1 GROUP BY user_id, session_id
+        ) latest ON latest.id = c.id`, [beijingNow(), beijingNow()])
+    }
   }
 ]
 

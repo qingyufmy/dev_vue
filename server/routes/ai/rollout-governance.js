@@ -25,7 +25,7 @@ const REQUIRED_MIGRATIONS = [
   '056_model_profiles_tables', '057_strategy_ownership', '058_order_intent_gateway', '059_core_risk_policy',
   '060_stateful_risk_governance', '061_inference_snapshots', '062_signal_outcomes',
   '063_trade_review_workflow', '064_personal_experience_memory', '065_ai_rollout_governance',
-  '066_paired_inference_evidence', '067_manual_inference_snapshots',
+  '066_paired_inference_evidence', '067_manual_inference_snapshots', '068_inference_preferences',
 ]
 
 const REQUIRED_TABLES = [
@@ -34,7 +34,7 @@ const REQUIRED_TABLES = [
   'risk_policy_versions', 'risk_decisions', 'risk_account_state', 'inference_snapshots', 'signal_outcomes',
   'trade_review_cases', 'trade_review_jobs', 'experience_memory_items', 'memory_compression_jobs',
   'memory_injection_logs', 'ai_feature_flags', 'risk_rule_rollouts', 'credential_migration_runs',
-  'ai_paired_inference_runs',
+  'ai_paired_inference_runs', 'ai_inference_preferences',
 ]
 
 const REQUIRED_COLUMNS = {
@@ -47,6 +47,7 @@ const REQUIRED_COLUMNS = {
   trade_review_cases: ['evidence_json','current_version_id','approved_version_id'],
   experience_memory_items: ['review_version_id','content_hash','status','token_count'],
   users: ['deletion_status','deleted_at'],
+  ai_inference_preferences: ['user_id','session_id','system_prompt','max_position_size'],
 }
 
 const REQUIRED_INDEXES = [
@@ -55,6 +56,7 @@ const REQUIRED_INDEXES = [
   ['trade_review_jobs','idx_trade_review_job_claim'], ['memory_compression_jobs','idx_memory_compression_claim'],
   ['memory_injection_logs','idx_memory_injection_user'], ['users','idx_users_deletion_status'],
   ['ai_paired_inference_runs','idx_paired_inference_status'],
+  ['ai_inference_preferences','uk_inference_preference_user_session'],
 ]
 
 export async function assertAiGovernanceSchemaReady() {

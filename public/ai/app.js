@@ -1385,7 +1385,7 @@ async function saveSubscriptionEditor() {
     symbols:$("subscriptionSymbols").value.split(",").map(value => value.trim()).filter(Boolean), memory_mode:$("subscriptionMemoryMode").value,
     execution_enabled:$("subscriptionExecutionEnabled").checked };
   await api(id ? `/api/ai/subscriptions/${id}` : "/api/ai/subscriptions", { method:id ? "PUT" : "POST", body });
-  editor.classList.add("hidden"); toast("订阅已保存", "success"); await loadStrategyCatalog(); await loadAutoConfig();
+  editor.classList.add("hidden"); toast("订阅已保存", "success"); await loadStrategyCatalog(); await loadStatus();
 }
 
 const RISK_LABELS = { ai_volume_min:"AI 建议最小手数", ai_volume_max:"AI 建议最大手数", ai_volume_step:"AI 建议手数步进", max_position_size:"最终最大手数", market_signal_drift_atr:"市价漂移 ATR", pending_price_deviation_pct:"挂单偏差百分比", pending_price_deviation_atr:"挂单偏差 ATR", broker_slippage_points:"成交滑点", max_spread_points:"最大点差", max_quote_age_seconds:"报价年龄", max_daily_open_count:"每日交易数", max_directional_exposure_lots:"同向敞口", max_drawdown_pct:"最大回撤", consecutive_loss_limit:"连续亏损", daily_loss_limit_pct:"每日亏损", max_risk_per_trade_pct:"单笔风险" };
@@ -1537,7 +1537,7 @@ async function refreshTabData(tabId) {
   } else if (tabId === "audit") {
     await loadAudit();
   } else if (tabId === "ai-config") {
-    await Promise.allSettled([loadAutoConfig(), loadStrategyCatalog(), loadModelManagement()]);
+    await Promise.allSettled([loadConfig(), loadStrategyCatalog(), loadModelManagement()]);
   } else if (tabId === "model-management") {
     await loadModelManagement();
   } else if (tabId === "risk-center") {
@@ -1848,7 +1848,6 @@ async function handleAutoToggle() {
   _autoToggleLock = true;
   try {
     const result = await wsApi('toggle_auto');
-    await loadAutoConfig();
     await loadStatus();
     toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
   } catch (e) {
@@ -2295,14 +2294,6 @@ function applyRoleUI() {
   const modelTabs = document.querySelectorAll('.nav-item[data-tab="ai-config"], .nav-item[data-tab="model-management"]');
   modelTabs.forEach(modelTab => { modelTab.style.display = isPlusReadOnly ? "none" : ""; });
 
-  // Show auto config sub-tab for admin and pro users
-  const autoTab = document.querySelector('.config-sub-tab[data-config-tab="auto-config"]');
-  if (autoTab) autoTab.style.display = (isAdmin || isPro) ? "" : "none";
-  if (!isAdmin && !isPro || isPlusReadOnly) {
-    const manualTab = document.querySelector('.config-sub-tab[data-config-tab="manual-config"]');
-    if (manualTab) manualTab.click();
-  }
-
   // Keep gateway badge clickable for all users — guards in click handlers block action
   const gatewayBadge = document.getElementById("gatewayMode");
   if (gatewayBadge) {
@@ -2385,15 +2376,10 @@ function applyRoleUI() {
 }
 
 async function loadConfig() {
-  const data = await wsApi("ai_config");
-  const cfg = data.config;
-  const defaultPrompt = data.default_prompt || "";
-  if (!cfg) {
-    state.systemPromptInherited = state.user?.role !== "admin";
-    $("systemPrompt").value = defaultPrompt;
-    setText("configStatus", "交易约束尚未保存；推理模型请在“模型管理”配置");
-    return;
-  }
+  const data = await api("/api/ai/inference-preferences?session_id=default");
+  const cfg = data.preference;
+  const defaultPrompt = cfg.default_prompt || "";
+  state.defaultSystemPrompt = defaultPrompt;
 
   $("riskLevel").value = cfg.risk_level || "medium";
   const configuredMaxPosition = Number(cfg.max_position_size ?? 0.05);
@@ -2403,43 +2389,25 @@ async function loadConfig() {
   $("enableFuturesTrading").checked = Boolean(cfg.enable_futures_trading);
   setText("configStatus", "推理模型由“模型管理”统一解析；此处只保存提示词和交易约束");
 
-  // Non-admin users without an override inherit the administrator's live prompt.
   state.systemPromptInherited = state.user?.role !== "admin" && Boolean(cfg._system_prompt_inherited);
   $("systemPrompt").value = cfg.system_prompt || defaultPrompt;
-
-  const isAdmin = state.user?.role === "admin";
-  // Restore per-user auto symbol + interval (backend fills defaults from global auto config)
-  if ($("overrideSymbolSelect")) $("overrideSymbolSelect").value = cfg.auto_symbols;
-  if ($("overrideIntervalMin")) $("overrideIntervalMin").value = cfg.auto_interval_minutes;
 }
 
 async function saveConfig() {
   const body = {
     session_id: "default",
-    config: {
-      enable_auto_trade: $("enableAutoTrade").checked,
-      enable_futures_trading: $("enableFuturesTrading").checked,
-      risk_level: $("riskLevel").value,
-      max_position_size: Number($("maxPositionSize").value) || 0.05,
-      selected_take_profit: Number($("selectedTakeProfit").value),
-      system_prompt: state.user?.role !== "admin" && state.systemPromptInherited
-        ? null
-        : ($("systemPrompt").value.trim() || null),
-    },
+    enable_auto_trade: $("enableAutoTrade").checked,
+    enable_futures_trading: $("enableFuturesTrading").checked,
+    risk_level: $("riskLevel").value,
+    max_position_size: Number($("maxPositionSize").value) || 0.05,
+    selected_take_profit: Number($("selectedTakeProfit").value),
+    system_prompt: state.user?.role !== "admin" && state.systemPromptInherited
+      ? null
+      : ($("systemPrompt").value.trim() || null),
   };
 
   try {
-    const configPayload = { ...body.config };
-    // Always save auto symbol + interval from override section (preserves values when switch is off)
-    {
-      const osym = $("overrideSymbolSelect")?.value?.trim();
-      const oiv = parseInt($("overrideIntervalMin")?.value) || 5;
-      if (osym) {
-        configPayload.auto_symbols = osym;
-        configPayload.auto_interval_minutes = oiv;
-      }
-    }
-    await wsApi("save_config", { config: configPayload, session_id: body.session_id });
+    await api("/api/ai/inference-preferences", { method: "PUT", body });
     await loadConfig();
     toast("推理配置已保存", "success");
   } catch (error) {
@@ -2449,327 +2417,6 @@ async function saveConfig() {
 
 function selectedTimeframes() {
   return [...document.querySelectorAll(".timeframe-grid input:checked")].map((node) => node.value).slice(0, 8);
-}
-
-// ============ Config Sub-Tab Switching ============
-function initConfigSubTabs() {
-  document.querySelectorAll('.config-sub-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.config-sub-tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.config-sub-panel').forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      const target = tab.dataset.configTab;
-      const panel = document.getElementById(target);
-      if (panel) panel.classList.add('active');
-      if (target === 'auto-config') loadAutoConfig();
-      // if (target === 'close-config') loadCloseConfig();
-    });
-  });
-}
-
-// ============ Auto Config ============
-async function loadAutoConfig() {
-  const autoPanel = document.getElementById('auto-config');
-  if (autoPanel) autoPanel.style.display = '';
-  const isAdmin = state.user?.role === 'admin';
-
-  try {
-    const data = await wsApi('get_auto_config');
-    if (data.status !== 'success') { toast(data.message || '加载失败', 'error'); return; }
-    const cfg = data.config;
-    const promptTypes = data.prompt_types || [];
-    window._loadedPromptTypes = promptTypes;
-
-    // Show/hide admin sections
-    const adminSections = document.querySelectorAll('.admin-only-auto-config');
-    adminSections.forEach(el => { el.style.display = isAdmin ? '' : 'none'; });
-
-    // User config section - custom prompt type dropdown (only active)
-    const activePts = promptTypes.filter(pt => pt.is_active);
-    renderPromptTypeDropdown(activePts, cfg.prompt_type_id);
-    // Render symbols chips for selected strategy
-    const selectedPt = activePts.find(pt => pt.id === cfg.prompt_type_id);
-    if (selectedPt) {
-      renderSymbolsChips(selectedPt.symbols || [], cfg.selected_symbols || []);
-    } else {
-      renderSymbolsChips(null, []);
-    }
-
-    document.getElementById('autoRiskLevel').value = cfg.risk_level || 'medium';
-    document.getElementById('autoMaxPositionSize').value = (Number(cfg.max_position_size) || 0.05).toFixed(2);
-    document.getElementById('autoSelectedTakeProfit').value = String(cfg.selected_take_profit || 2);
-    document.getElementById('autoEnableAutoTrade').checked = Boolean(cfg.enable_auto_trade);
-
-    // Admin strategy maintenance remains here. Models and global risk have
-    // dedicated pages and are deliberately not duplicated in this form.
-    if (isAdmin && data.admin) {
-      renderPromptTypeTable(data.prompt_types || [], cfg.prompt_type_id);
-    }
-  } catch (e) {
-    console.error('[loadAutoConfig]', e);
-  }
-}
-
-function renderPromptTypeTable(pts, activePtId) {
-  const container = document.getElementById('adminPromptTypeList');
-  if (!container) return;
-  if (!pts.length) {
-    container.innerHTML = '<div style="color:var(--color-text-muted);padding:12px 0">暂无策略，点击上方按钮新建</div>';
-    return;
-  }
-  let html = `<table style="width:100%;border-collapse:collapse;font-size:13px">
-    <thead><tr style="border-bottom:1px solid var(--color-border)">
-      <th style="text-align:left;padding:8px 12px">标题</th>
-      <th style="text-align:left;padding:8px 12px">品种</th>
-      <th style="text-align:center;padding:8px 12px">间隔</th>
-      <th style="text-align:center;padding:8px 12px">状态</th>
-      <th style="text-align:center;padding:8px 12px">操作</th>
-    </tr></thead><tbody>`;
-  for (const pt of pts) {
-    const isActive = pt.id === activePtId;
-    const symbols = (pt.symbols || []).join(', ');
-    const safeTitle = escapeHtml(pt.title || '未命名');
-    const safeSymbols = escapeHtml(symbols || '-');
-    const safeDesc = escapeHtml(pt.description || '');
-    const descTip = pt.description ? ` title="${safeDesc}"` : '';
-    html += `<tr style="border-bottom:1px solid var(--color-border);${isActive ? 'background:var(--color-primary-bg)' : ''}">
-      <td style="padding:8px 12px;font-weight:${isActive ? '600' : '400'}"${descTip}>${safeTitle}</td>
-      <td style="padding:8px 12px;color:var(--color-text-secondary)">${safeSymbols}</td>
-      <td style="padding:8px 12px;text-align:center">${pt.interval_minutes || 5}分钟</td>
-      <td style="padding:8px 12px;text-align:center"><span style="color:${pt.is_active !== false ? 'var(--color-success)' : 'var(--color-text-muted)'}">${pt.is_active !== false ? '启用' : '禁用'}</span></td>
-      <td style="padding:8px 12px;text-align:center"><button class="btn btn-secondary btn-sm" onclick="openPromptTypeModal(${pt.id})">编辑</button></td>
-    </tr>`;
-  }
-  html += '</tbody></table>';
-  container.innerHTML = html;
-}
-
-function renderPromptTypeDropdown(pts, selectedId) {
-  const hidden = document.getElementById('autoPromptTypeSelect');
-  const trigger = document.getElementById('autoPromptTypeTrigger');
-  const dropdown = document.getElementById('autoPromptTypeDropdown');
-  const wrap = document.getElementById('autoPromptTypeWrap');
-  if (!hidden || !trigger || !dropdown || !wrap) return;
-
-  // populate hidden select for form submission
-  hidden.innerHTML = '<option value="">选择策略...</option>';
-  for (const pt of pts) {
-    const opt = document.createElement('option');
-    opt.value = pt.id;
-    opt.textContent = pt.title || '未命名';
-    if (pt.id === selectedId) opt.selected = true;
-    hidden.appendChild(opt);
-  }
-
-  // single tooltip element
-  wrap.querySelectorAll('.custom-pt-tooltip').forEach(t => t.remove());
-  const tooltip = document.createElement('div');
-  tooltip.className = 'custom-pt-tooltip';
-  wrap.appendChild(tooltip);
-
-  // render dropdown options
-  dropdown.innerHTML = '';
-  const placeholder = document.createElement('div');
-  placeholder.className = 'custom-pt-option' + (!selectedId ? ' selected' : '');
-  placeholder.textContent = '选择策略...';
-  placeholder.onclick = (e) => { e.stopPropagation(); selectPt(null); };
-  dropdown.appendChild(placeholder);
-
-  for (const pt of pts) {
-    const div = document.createElement('div');
-    div.className = 'custom-pt-option' + (pt.id === selectedId ? ' selected' : '');
-    div.dataset.id = pt.id;
-
-    const titleSpan = document.createElement('span');
-    titleSpan.className = 'custom-pt-option-title';
-    titleSpan.textContent = pt.title || '未命名';
-    div.appendChild(titleSpan);
-
-    div.onmouseenter = () => {
-      tooltip.innerHTML = `<strong>${escapeHtml(pt.title || '未命名')}</strong>` +
-        `<div class="pt-desc-line" style="margin-bottom:4px">品种: ${escapeHtml((pt.symbols || []).join(', ') || '-')} &nbsp;·&nbsp; 间隔: ${pt.interval_minutes || 5}分钟</div>` +
-        `<div class="pt-desc-line">${escapeHtml(pt.description || '无描述')}</div>`;
-      const dr = div.getBoundingClientRect();
-      const wr = wrap.getBoundingClientRect();
-      tooltip.style.top = (dr.top - wr.top) + 'px';
-      tooltip.style.display = 'block';
-    };
-    div.onmouseleave = () => { tooltip.style.display = ''; };
-
-    div.onclick = (e) => { e.stopPropagation(); selectPt(pt.id); };
-    dropdown.appendChild(div);
-  }
-
-  function selectPt(id) {
-    hidden.value = id || '';
-    if (id) {
-      const pt = pts.find(p => p.id === id);
-      trigger.textContent = pt ? (pt.title || '未命名') : '选择策略...';
-      // Update symbols chips
-      if (pt) renderSymbolsChips(pt.symbols || [], pt.symbols || []);
-    } else {
-      trigger.textContent = '选择策略...';
-      renderSymbolsChips(null, []);
-    }
-    dropdown.querySelectorAll('.custom-pt-option').forEach(o => {
-      const oId = o.dataset.id ? parseInt(o.dataset.id) : null;
-      o.classList.toggle('selected', oId === id);
-    });
-    dropdown.classList.remove('open');
-  }
-
-  // set trigger text
-  if (selectedId) {
-    const selected = pts.find(p => p.id === selectedId);
-    trigger.textContent = selected ? (selected.title || '未命名') : '选择策略...';
-  } else {
-    trigger.textContent = '选择策略...';
-  }
-
-  // toggle dropdown — only bind once
-  trigger.onclick = (e) => { e.stopPropagation(); dropdown.classList.toggle('open'); };
-  if (!dropdown._docBound) {
-    document.addEventListener('click', () => dropdown.classList.remove('open'));
-    dropdown._docBound = true;
-  }
-}
-
-// --- Symbols chips multi-select ---
-function renderSymbolsChips(strategySymbols, selectedSymbols) {
-  const field = document.getElementById('autoSymbolsField');
-  const container = document.getElementById('autoSymbolsChips');
-  if (!field || !container) return;
-
-  if (!strategySymbols || strategySymbols.length <= 1) {
-    field.style.display = 'none';
-    // Single symbol: auto-select it
-    if (strategySymbols && strategySymbols.length === 1) {
-      container._selected = [strategySymbols[0]];
-    }
-    return;
-  }
-
-  field.style.display = '';
-  container.innerHTML = '';
-  container._selected = [...selectedSymbols];
-
-  for (const sym of strategySymbols) {
-    const chip = document.createElement('span');
-    chip.className = 'symbol-chip' + (container._selected.includes(sym) ? ' active' : '');
-    chip.innerHTML = `<span class="chip-check">✓</span>${escapeHtml(sym)}`;
-    chip.onclick = () => {
-      const idx = container._selected.indexOf(sym);
-      if (idx >= 0) {
-        container._selected.splice(idx, 1);
-      } else {
-        container._selected.push(sym);
-      }
-      chip.classList.toggle('active');
-    };
-    container.appendChild(chip);
-  }
-}
-
-function getSelectedSymbols() {
-  const container = document.getElementById('autoSymbolsChips');
-  if (container && container._selected) return container._selected;
-  // Fallback: try hidden select value to find strategy symbols
-  const ptVal = document.getElementById('autoPromptTypeSelect')?.value;
-  if (ptVal) {
-    const pts = window._loadedPromptTypes || [];
-    const pt = pts.find(p => p.id === parseInt(ptVal));
-    if (pt && pt.symbols) return [...pt.symbols];
-  }
-  return [];
-}
-
-function openPromptTypeModal(ptId) {
-  const modal = document.getElementById('promptTypeModal');
-  const title = document.getElementById('promptTypeModalTitle');
-  if (ptId) {
-    // Edit mode - find prompt type from loaded data
-    const pts = window._loadedPromptTypes || [];
-    const pt = pts.find(p => p.id === ptId);
-    if (!pt) return;
-    title.textContent = '编辑策略';
-    document.getElementById('adminPtId').value = pt.id;
-    document.getElementById('adminPtTitle').value = pt.title || '';
-    document.getElementById('adminPtDescription').value = pt.description || '';
-    document.getElementById('adminPtSymbols').value = (pt.symbols || []).join(', ');
-    document.getElementById('adminPtInterval').value = pt.interval_minutes || 5;
-    document.getElementById('adminPtPrompt').value = pt.system_prompt || '';
-    document.getElementById('adminPtSortOrder').value = pt.sort_order || 0;
-    document.getElementById('adminPtActive').checked = pt.is_active !== false;
-  } else {
-    // Create mode
-    title.textContent = '新建策略';
-    document.getElementById('adminPtId').value = '';
-    document.getElementById('adminPtTitle').value = '';
-    document.getElementById('adminPtDescription').value = '';
-    document.getElementById('adminPtSymbols').value = 'XAUUSD';
-    document.getElementById('adminPtInterval').value = '5';
-    document.getElementById('adminPtPrompt').value = '';
-    document.getElementById('adminPtSortOrder').value = '0';
-    document.getElementById('adminPtActive').checked = true;
-  }
-  modal.style.display = 'flex';
-  requestAnimationFrame(() => modal.classList.add('active'));
-}
-
-function closePromptTypeModal() {
-  const modal = document.getElementById('promptTypeModal');
-  modal.classList.remove('active');
-  setTimeout(() => { modal.style.display = 'none'; }, 250);
-}
-
-function initAutoSymbolsSelector() {
-  const input = document.getElementById('autoSymbolSelect');
-  if (!input) return;
-  // Skip if already wrapped
-  if (input.closest('.sym-selector')) return;
-  const symbolNames = (state.symbols || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
-  if (!symbolNames.length) return; // will retry when loadSymbols completes
-  createSymbolSelector('autoSymbolSelect', symbolNames, { noGlobalSync: true });
-}
-
-async function saveAutoConfig() {
-  try {
-    // Save user config (all users)
-    const ptVal = document.getElementById('autoPromptTypeSelect')?.value;
-    const selectedSymbols = getSelectedSymbols();
-    const userPayload = {
-      prompt_type_id: ptVal ? parseInt(ptVal) : null,
-      selected_symbols: selectedSymbols,
-      risk_level: document.getElementById('autoRiskLevel').value,
-      max_position_size: parseFloat(document.getElementById('autoMaxPositionSize').value) || 0.05,
-      selected_take_profit: parseInt(document.getElementById('autoSelectedTakeProfit').value) || 2,
-      enable_auto_trade: document.getElementById('autoEnableAutoTrade').checked,
-    };
-    await wsApi('save_user_auto_config', userPayload);
-
-    toast('配置已保存', 'success');
-    await loadAutoConfig();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
-async function saveAdminPromptType() {
-  try {
-    const idVal = document.getElementById('adminPtId')?.value;
-    const payload = {
-      id: idVal ? parseInt(idVal) : undefined,
-      title: document.getElementById('adminPtTitle').value,
-      description: document.getElementById('adminPtDescription').value,
-      symbols: document.getElementById('adminPtSymbols').value.split(',').map(s => s.trim()).filter(Boolean),
-      interval_minutes: parseInt(document.getElementById('adminPtInterval').value) || 5,
-      system_prompt: document.getElementById('adminPtPrompt').value,
-      is_active: document.getElementById('adminPtActive').checked,
-      sort_order: parseInt(document.getElementById('adminPtSortOrder').value) || 0,
-    };
-    const res = await wsApi('admin_save_auto_prompt_type', payload);
-    toast('策略已保存', 'success');
-    closePromptTypeModal();
-    await loadAutoConfig();
-  } catch (e) { console.error('[saveAdminPromptType] error:', e); toast(e.message, 'error'); }
 }
 
 // [disabled] 智能平仓
@@ -4226,9 +3873,8 @@ function bindEvents() {
   $("saveConfigBtn").addEventListener("click", saveConfig);
   $("useTemplateBtn")?.addEventListener("click", async () => {
     try {
-      const data = await wsApi("get_default_prompt");
-      if (data.status === "success" && data.prompt) {
-        $("systemPrompt").value = data.prompt;
+      if (state.defaultSystemPrompt) {
+        $("systemPrompt").value = state.defaultSystemPrompt;
         state.systemPromptInherited = state.user?.role !== "admin";
         toast("已填入管理员模板", "success");
       } else {
@@ -4296,10 +3942,6 @@ function bindEvents() {
     });
   }
 
-  // Config sub-tabs
-  initConfigSubTabs();
-  initAutoSymbolsSelector();
-  $("saveAutoConfigBtn")?.addEventListener("click", saveAutoConfig);
   $("addPrivateStrategyBtn")?.addEventListener("click", () => openStrategyEditor());
   $("strategyScope")?.addEventListener("change", event => {
     const platform = event.target.value === "platform";
@@ -4387,7 +4029,7 @@ function bindEvents() {
       if (!subscription) return;
       try {
         if (subscriptionAction.dataset.subscriptionAction === "edit") openSubscriptionEditor(strategy || { id:subscription.strategy_id, scope:subscription.strategy_scope }, subscription);
-        else if (subscriptionAction.dataset.subscriptionAction === "delete" && confirm("确认删除这个订阅？自动执行会同步关闭。")) { await api(`/api/ai/subscriptions/${subscription.id}`, { method:"DELETE" }); toast("订阅已删除", "success"); await loadStrategyCatalog(); await loadAutoConfig(); }
+        else if (subscriptionAction.dataset.subscriptionAction === "delete" && confirm("确认删除这个订阅？自动执行会同步关闭。")) { await api(`/api/ai/subscriptions/${subscription.id}`, { method:"DELETE" }); toast("订阅已删除", "success"); await loadStrategyCatalog(); await loadStatus(); }
       } catch (error) { toast(error.message, "error"); }
       return;
     }

@@ -88,16 +88,6 @@ export function attachSignalTiming(signal) {
   return signal
 }
 
-export function configPublic(row) {
-  if (!row) return null
-  const data = { ...row }
-  const hasApiKey = !!data.api_key_encrypted
-  data.has_api_key = hasApiKey
-  data.masked_api_key = hasApiKey ? '****' : null
-  delete data.api_key_encrypted
-  return data
-}
-
 export function timeframeIntervalMs(tf) {
   const map = { 'M1': 60_000, 'M5': 300_000, 'M15': 900_000, 'M30': 1_800_000, 'H1': 3_600_000, 'H4': 14_400_000, 'D1': 86_400_000 }
   return map[String(tf).toUpperCase()] || 900_000

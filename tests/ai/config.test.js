@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { RiskReject, validateTradeRequest, signalOrderPayload, buildBridgeOrderCall } from '../../server/routes/ai/config.js'
-import { configPublic } from '../../server/routes/ai/utils.js'
 
 describe('RiskReject', () => {
   it('创建风险拒绝错误', () => {
@@ -156,40 +155,6 @@ describe('signalOrderPayload', () => {
     const signal = { symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.02, stop_loss_price: 1990, take_profit_2_price: 2020 }
     const result = signalOrderPayload(signal, { selected_take_profit: 1 }, { latest_price: 2000 }, true)
     expect(result).toMatchObject({ tp: null, tp_tier_requested: 1, tp_tier_used: null })
-  })
-})
-
-describe('configPublic', () => {
-  it('隐藏敏感字段', () => {
-    const row = {
-      id: 1,
-      api_key_encrypted: 'sk-secret-key',
-      model_name: 'deepseek-chat',
-      temperature: 0.7
-    }
-    const result = configPublic(row)
-    expect(result.has_api_key).toBe(true)
-    expect(result.masked_api_key).toBe('****')
-    expect(result.api_key_encrypted).toBeUndefined()
-    expect(result.model_name).toBe('deepseek-chat')
-  })
-
-  it('无 API key', () => {
-    const row = { id: 1, api_key_encrypted: null }
-    const result = configPublic(row)
-    expect(result.has_api_key).toBe(false)
-    expect(result.masked_api_key).toBe(null)
-  })
-
-  it('null 返回 null', () => {
-    expect(configPublic(null)).toBe(null)
-  })
-
-  it('不修改原始对象', () => {
-    const row = { id: 1, api_key_encrypted: 'key' }
-    const original = { ...row }
-    configPublic(row)
-    expect(row).toEqual(original)
   })
 })
 

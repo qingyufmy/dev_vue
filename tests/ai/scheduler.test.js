@@ -41,12 +41,10 @@ vi.mock('../../server/routes/ai/llm.js', () => ({
 vi.mock('../../server/routes/ai/config.js', () => ({
   getAutoConfig: vi.fn(() => ({ enabled: true, symbols: 'XAUUSD' })),
   getGlobalAutoConfig: vi.fn(() => ({ symbols: 'XAUUSD', interval_minutes: 5 })),
-  upsertAutoConfig: vi.fn(),
   getCloseConfig: vi.fn(() => ({ enabled: false })),
   saveCloseConfig: vi.fn(),
   insertAudit: vi.fn(),
   signalOrderPayload: vi.fn(() => ({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.03 })),
-  getActiveConfig: vi.fn(() => ({ api_key_encrypted: 'test-key' })),
   getExecuteRiskConfig: vi.fn(() => ({})),
   getDeliveryExecuteRiskConfig: vi.fn(() => ({})),
   validateTradeRequest: vi.fn(),

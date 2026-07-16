@@ -9,6 +9,7 @@ const config = readFileSync(new URL('../../server/routes/ai/config.js', import.m
 const rollout = readFileSync(new URL('../../server/routes/ai/rollout-governance.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
 const strategy = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+const preferences = readFileSync(new URL('../../server/routes/ai/inference-preferences.js', import.meta.url), 'utf8')
 
 describe('rollout hardening contract', () => {
   it('adds the readiness-tracked rollout migration and defaults generative features off', () => {
@@ -17,6 +18,7 @@ describe('rollout hardening contract', () => {
     expect(rollout).toContain('065_ai_rollout_governance')
     expect(rollout).toContain('066_paired_inference_evidence')
     expect(rollout).toContain('067_manual_inference_snapshots')
+    expect(rollout).toContain('068_inference_preferences')
   })
 
   it('persists manual inference evidence atomically and keeps paired control outside execution', () => {
@@ -47,9 +49,12 @@ describe('rollout hardening contract', () => {
     expect(auth).toContain("deletion_status = 'active'")
   })
 
-  it('routes legacy key writes into encrypted profiles and disables implicit fallback by default', () => {
-    expect(bridge).toContain('upsertDefaultModelProfileFromLegacyInput')
-    expect(config).toContain("AI_LEGACY_CREDENTIAL_READ_ENABLED !== 'true'")
+  it('separates inference preferences from credentials and removes legacy websocket writes', () => {
+    expect(preferences).toContain('INSERT INTO ai_inference_preferences')
+    expect(preferences).not.toContain('api_key')
+    expect(bridge).not.toContain("case 'save_config'")
+    expect(bridge).not.toContain("case 'get_auto_config'")
+    expect(bridge).not.toContain('UPDATE ai_configs SET session_id = session_id')
     expect(config).toContain("upsertDefaultModelProfileFromLegacyInput(userId, 'user'")
   })
 

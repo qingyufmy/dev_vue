@@ -1,11 +1,11 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from './db.js'
-import { DEFAULT_API_BASE_URL, ADMIN_CACHE_TTL_MS } from './config.js'
+import { ADMIN_CACHE_TTL_MS } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 import { autoSchedulerState } from './routes/ai/scheduler.js'
 import { utcToMt5Time } from './routes/ai/utils.js'
-import { DEFAULT_MAX_POSITION_SIZE, DEFAULT_SELECTED_TAKE_PROFIT, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from './routes/ai/config.js'
+import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/config.js'
 import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 
@@ -73,21 +73,6 @@ export function buildSignalRefIndex(rows, toSignal = row => row) {
   return index
 }
 
-export function buildAdminGlobalAutoConfig(globalCfg) {
-  return {
-    api_provider: globalCfg?.api_provider || 'deepseek',
-    model_name: globalCfg?.model_name || 'deepseek-chat',
-    has_api_key: !!globalCfg?.api_key_encrypted,
-    api_base_url: globalCfg?.api_base_url || DEFAULT_API_BASE_URL,
-    temperature: globalCfg?.temperature ?? DEFAULT_TEMPERATURE,
-    max_tokens: globalCfg?.max_tokens ?? DEFAULT_MAX_TOKENS,
-    risk_level: globalCfg?.risk_level || 'medium',
-    max_position_size: globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-    selected_take_profit: globalCfg?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
-    thinking_enabled: Number(globalCfg?.thinking_enabled ?? 1) === 0 ? 0 : 1,
-    reasoning_effort: globalCfg?.reasoning_effort || 'max',
-  }
-}
 const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
 
 // 每 10 分钟清理超过 30 秒未使用的广播节流条目
@@ -588,7 +573,7 @@ async function handleBrowserCommand(ws, userId, msg) {
     if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
 
     // Plus users: read-only, block write operations + analyze (API cost)
-    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'save_config', 'save_user_auto_config', 'toggle_auto', 'admin_save_auto_global_config', 'admin_save_auto_prompt_type', 'admin_disable_auto_prompt_type', 'set_quote_symbol', 'save_close_config', 'run_close_now']
+    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'toggle_auto', 'set_quote_symbol', 'save_close_config', 'run_close_now']
     if (!isPro && writeActions.includes(action)) {
       return reply({ status: 'error', message: '升级会员即可解锁交易功能' })
     }
@@ -677,7 +662,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, 'rejected')
           break
         }
-        const manualConfig = await ai.getActiveConfig(null, userId, params.session_id || 'default') || {}
+        const manualConfig = await ai.getInferencePreference(userId, params.session_id || 'default')
         result = await ai.executeOrderCore(userId, {
           ...manualConfig,
           max_position_size: manualConfig.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
@@ -715,8 +700,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(userId, 'set_quote_symbol', { symbol })
         // Persist to user config so bridge reconnects with this symbol
         if (result.status === 'success') {
-          await queryRun('UPDATE ai_configs SET session_id = session_id WHERE user_id = ?', [userId]) // touch config
-          // Store in system_config for this user
           const key = `quote_symbol_${userId}`
           const existing = await queryOne('SELECT id FROM system_config WHERE `key` = ?', [key])
           if (existing) await queryRun('UPDATE system_config SET `value` = ? WHERE `key` = ?', [symbol, key])
@@ -783,89 +766,6 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'analyze':
         result = await ai.handleAnalyze(userId, params)
         break
-      case 'ai_config': {
-        const configUser = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
-        const isConfigAdmin = configUser?.role === 'admin'
-        const adminPromptRow = await queryOne(
-          "SELECT system_prompt FROM ai_configs WHERE is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') ORDER BY updated_at DESC LIMIT 1"
-        )
-        const defaultPrompt = adminPromptRow?.system_prompt || ''
-        // Keep model credentials user-scoped; only the administrator's manual
-        // prompt is exposed as the inheritable default.
-        const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', null, { skipFallbacks: true })
-        const cfg = ai.configPublic(row)
-        if (cfg && !isConfigAdmin && !cfg.system_prompt) {
-          cfg.system_prompt = defaultPrompt
-          cfg._system_prompt_inherited = true
-        }
-        // If user has no own API key but admin has model_sharing, attach sharing indicator
-        if (!cfg || !cfg.has_api_key) {
-          const sharedRow = await queryOne(
-            "SELECT api_provider, model_name FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1"
-          )
-          if (sharedRow) {
-            // Read user's auto_scheduler for enable_auto_trade default
-            const userScheduler = await queryOne('SELECT enable_auto_trade, selected_take_profit, max_position_size, risk_level FROM auto_scheduler WHERE user_id = ?', [userId])
-            if (cfg) {
-              cfg._model_shared = true
-            }
-            result = {
-              status: 'success',
-              default_prompt: defaultPrompt,
-              config: cfg || {
-                _model_shared: true,
-                _system_prompt_inherited: !isConfigAdmin,
-                system_prompt: defaultPrompt,
-                api_provider: sharedRow.api_provider,
-                model_name: sharedRow.model_name,
-                enable_auto_trade: userScheduler ? !!userScheduler.enable_auto_trade : true,
-                max_position_size: userScheduler?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-                selected_take_profit: userScheduler?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
-                risk_level: userScheduler?.risk_level || 'medium',
-              }
-            }
-            break
-          }
-        }
-        result = { status: 'success', config: cfg, default_prompt: defaultPrompt }
-        break
-      }
-      case 'save_config': {
-        const cfg = params.config
-        if (!cfg) return reply({ status: 'error', message: 'config required' })
-        if (cfg.api_key) {
-          const actor = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
-          const scope = actor?.role === 'admin' ? 'platform' : 'user'
-          await ai.upsertDefaultModelProfileFromLegacyInput(userId, actor?.role || 'user', cfg, scope)
-        }
-        const hasSystemPrompt = Object.prototype.hasOwnProperty.call(cfg, 'system_prompt')
-        const now = beijingNow()
-        const sid = params.session_id || 'default'
-        await withTransaction(async (run) => {
-          await run('UPDATE ai_configs SET is_active = 0 WHERE user_id = ? AND session_id = ?', [userId, sid])
-          await run(`INSERT INTO ai_configs(user_id, session_id, api_provider, api_key_encrypted, api_base_url, model_name,
-            temperature, max_tokens, enable_auto_trade, enable_futures_trading, risk_level,
-            max_position_size, selected_take_profit, model_sharing_enabled, system_prompt, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-            ON DUPLICATE KEY UPDATE
-              api_key_encrypted = CASE WHEN VALUES(api_key_encrypted) IS NOT NULL THEN VALUES(api_key_encrypted) ELSE ai_configs.api_key_encrypted END,
-              api_base_url = VALUES(api_base_url), model_name = VALUES(model_name), temperature = VALUES(temperature),
-              max_tokens = VALUES(max_tokens), enable_auto_trade = VALUES(enable_auto_trade),
-              enable_futures_trading = VALUES(enable_futures_trading), risk_level = VALUES(risk_level),
-              max_position_size = VALUES(max_position_size), selected_take_profit = VALUES(selected_take_profit),
-              model_sharing_enabled = VALUES(model_sharing_enabled),
-              system_prompt = CASE WHEN ? = 1 THEN VALUES(system_prompt) ELSE ai_configs.system_prompt END,
-              is_active = 1, updated_at = VALUES(updated_at)`,
-            [userId, sid, cfg.api_provider || 'deepseek', null,
-              cfg.api_base_url || null, cfg.model_name || 'deepseek-chat', cfg.temperature ?? DEFAULT_TEMPERATURE, cfg.max_tokens || DEFAULT_MAX_TOKENS,
-              cfg.enable_auto_trade ? 1 : 0, cfg.enable_futures_trading ? 1 : 0, cfg.risk_level || 'medium',
-              cfg.max_position_size || DEFAULT_MAX_POSITION_SIZE, cfg.selected_take_profit || DEFAULT_SELECTED_TAKE_PROFIT, cfg.model_sharing_enabled ? 1 : 0,
-              cfg.system_prompt || null, now, now, hasSystemPrompt ? 1 : 0])
-        })
-        const row = await ai.getActiveConfig(null, userId, params.session_id || 'default', cfg.api_provider)
-        result = { status: 'success', config: ai.configPublic(row) }
-        break
-      }
       case 'signals_latest_id': {
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
         const sessionParam = params.session_id ? [params.session_id] : []
@@ -1151,47 +1051,19 @@ async function handleBrowserCommand(ws, userId, msg) {
           }
         }
 
-        if (newEnabled) {
-          // Ensure user has a prompt_type_id and selected_symbols
-          const pt = await ai.getAutoPromptTypes()
-          if (!pt || pt.length === 0) {
-            result = { status: 'error', message: '暂无可用策略，请联系管理员' }
-            break
-          }
-          const userCfg = cfg || {}
-          if (!userCfg.prompt_type_id) {
-            const firstPt = pt[0]
-            let symbols = []
-            try { symbols = JSON.parse(firstPt.symbols_json || '[]') } catch (e) { console.warn('[BridgeWS] Failed to parse prompt type symbols_json:', e.message) }
-            await ai.saveUserAutoConfig(userId, { prompt_type_id: firstPt.id, selected_symbols: symbols })
-          } else if (userCfg.selected_symbols_json == null) {
-            const ptRow = await ai.getAutoPromptTypeById(userCfg.prompt_type_id)
-            if (ptRow) {
-              let symbols = []
-              try { symbols = JSON.parse(ptRow.symbols_json || '[]') } catch (e) { console.warn('[BridgeWS] Failed to parse prompt type symbols_json:', e.message) }
-              await ai.saveUserAutoConfig(userId, { prompt_type_id: userCfg.prompt_type_id, selected_symbols: symbols })
-            }
-          } else if (!userCfg.selected_symbols || userCfg.selected_symbols.length === 0) {
-            result = { status: 'error', message: '请先在自动推理配置中至少选择一个品种' }
-            break
-          }
+        const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+        const subscriptions = newEnabled
+          ? [await queryOne(`SELECT id FROM strategy_subscriptions
+              WHERE user_id = ? AND is_deleted = 0 ORDER BY updated_at DESC, id DESC LIMIT 1`, [userId])].filter(Boolean)
+          : await queryAll(`SELECT id FROM strategy_subscriptions
+              WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 ORDER BY updated_at DESC, id DESC`, [userId])
+        if (!subscriptions.length) {
+          result = { status: 'error', message: '请先在“推理策略”中创建订阅，再开启自动推理' }
+          break
         }
-
-        // Unified UPSERT for enabled state — preserve existing prompt_type_id
-        await queryRun(
-          `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, created_at, updated_at)
-           VALUES (?, ?, ?, NOW(), NOW())
-           ON DUPLICATE KEY UPDATE enabled = ?, updated_at = NOW()`,
-          [userId, newEnabled ? 1 : 0, cfg?.prompt_type_id || null, newEnabled ? 1 : 0]
-        )
-
-        // Sync user_bridge_settings
-        try {
-          await queryRun(
-            'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = NOW()',
-            [userId, newEnabled ? 1 : 0, newEnabled ? 1 : 0]
-          )
-        } catch (e) { console.error('[BridgeWS] Failed to persist auto_reasoning_enabled:', e.message) }
+        for (const subscription of subscriptions) {
+          await ai.updateSubscription(subscription.id, userId, user?.role || 'user', { execution_enabled: newEnabled })
+        }
         // Update in-memory bridge state
         const bridgeAuto = bridges.get(userId)
         if (bridgeAuto) bridgeAuto.autoReasoningEnabled = newEnabled
@@ -1204,150 +1076,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         await ai.reconcileAutoSchedulers()
         result = { status: 'success', enabled: newEnabled, message: newEnabled ? '自动推理已开启' : '自动推理已关闭' }
-        break
-      }
-      case 'get_default_prompt': {
-        // Get admin's system prompt as default template
-        const adminRow = await queryOne('SELECT system_prompt FROM ai_configs WHERE user_id = (SELECT id FROM users WHERE role = ? LIMIT 1) AND is_active = 1', ['admin'])
-        result = { status: 'success', prompt: adminRow?.system_prompt || '' }
-        break
-      }
-      case 'get_auto_config': {
-        const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
-        const isAdmin = user?.role === 'admin'
-        const userAuto = await ai.getUserAutoConfig(userId)
-        const running = ai.isAutoSchedulerRunning(userId)
-
-        const config = {
-          enabled: !!userAuto.scheduler?.enabled,
-          prompt_type_id: userAuto.scheduler?.prompt_type_id || null,
-          risk_level: userAuto.scheduler?.risk_level || 'medium',
-          max_position_size: userAuto.scheduler?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-          selected_take_profit: userAuto.scheduler?.selected_take_profit ?? 2,
-          enable_auto_trade: !!userAuto.scheduler?.enable_auto_trade,
-          selected_symbols: userAuto.scheduler?.selected_symbols || [],
-          running,
-          paused_reason: userAuto.pausedReason || '',
-        }
-
-        const promptTypes = await ai.getAutoPromptTypes({ includeInactive: isAdmin })
-
-        if (isAdmin) {
-          const globalCfg = await ai.getGlobalAutoConfig()
-          const { autoSchedulerState } = await import('./routes/ai/scheduler.js')
-          const schedulerStates = Object.values(autoSchedulerState).map(s => ({
-            key: s.key, promptTypeId: s.promptTypeId, symbol: s.symbol,
-            running: s.running, subscriberCount: s.subscriberCount, lastError: s.lastError,
-          }))
-          result = {
-            status: 'success',
-            config,
-            prompt_types: promptTypes.map(pt => ({
-              id: pt.id, title: pt.title, description: pt.description,
-              system_prompt: pt.system_prompt, symbols: JSON.parse(pt.symbols_json || '[]'),
-              interval_minutes: pt.interval_minutes, is_active: !!pt.is_active, sort_order: pt.sort_order,
-            })),
-            admin: {
-              global_config: buildAdminGlobalAutoConfig(globalCfg),
-              scheduler_states: schedulerStates,
-            },
-          }
-        } else {
-          result = {
-            status: 'success',
-            config,
-            prompt_types: promptTypes.map(pt => ({
-              id: pt.id, title: pt.title, description: pt.description,
-              symbols: JSON.parse(pt.symbols_json || '[]'),
-              interval_minutes: pt.interval_minutes,
-              is_active: !!pt.is_active,
-            })),
-          }
-        }
-        break
-      }
-      case 'save_user_auto_config': {
-        try {
-          await ai.saveUserAutoConfig(userId, params)
-          // Sync Redis only if enabled AND bridge is online
-          const savedCfg = await ai.getAutoConfig(null, userId)
-          const bridgeOnline = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-          if (savedCfg?.enabled && bridgeOnline) {
-            await ai.syncUserRedisSubscription(userId, savedCfg.prompt_type_id, savedCfg.selected_symbols || [], true)
-          } else if (!savedCfg?.enabled) {
-            await ai.syncUserRedisSubscription(userId, null, [], false)
-          }
-          await ai.reconcileAutoSchedulers()
-          result = { status: 'success', message: '配置已保存' }
-        } catch (e) {
-          console.error('[BridgeWS] save_auto_config error:', e.message)
-          result = { status: 'error', message: '保存配置失败，请重试' }
-        }
-        break
-      }
-      case 'admin_save_auto_global_config': {
-        const user2 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
-        if (user2?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
-        const existing = await ai.getGlobalAutoConfig()
-        if (params.api_key) await ai.upsertDefaultModelProfileFromLegacyInput(userId, 'admin', params, 'platform')
-        const newCfg = {
-          interval_minutes: existing?.interval_minutes || 5,
-          api_provider: params.api_provider ?? existing?.api_provider ?? 'deepseek',
-          model_name: params.model_name ?? existing?.model_name ?? 'deepseek-chat',
-          api_key_encrypted: existing?.api_key_encrypted || null,
-          api_base_url: params.api_base_url ?? existing?.api_base_url ?? DEFAULT_API_BASE_URL,
-          temperature: params.temperature ?? existing?.temperature ?? DEFAULT_TEMPERATURE,
-          max_tokens: params.max_tokens ?? existing?.max_tokens ?? DEFAULT_MAX_TOKENS,
-          risk_level: params.risk_level ?? existing?.risk_level ?? 'medium',
-          max_position_size: params.max_position_size ?? existing?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-          selected_take_profit: params.selected_take_profit ?? existing?.selected_take_profit ?? 2,
-          enable_auto_trade: params.enable_auto_trade ?? existing?.enable_auto_trade ?? 0,
-          thinking_enabled: params.thinking_enabled ?? existing?.thinking_enabled ?? 1,
-          reasoning_effort: params.reasoning_effort ?? existing?.reasoning_effort ?? 'max',
-        }
-        await ai.saveGlobalAutoConfig(newCfg)
-        await ai.reconcileAutoSchedulers()
-        result = { status: 'success', message: '全局配置已保存' }
-        break
-      }
-      case 'admin_save_auto_prompt_type': {
-        const user3 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
-        if (user3?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
-        try {
-          const saved = await ai.saveAutoPromptType(userId, params)
-          await ai.reconcileAutoSchedulers()
-          result = { status: 'success', prompt_type: saved }
-        } catch (e) {
-          console.error('[BridgeWS] save_auto_prompt_type error:', e.message)
-          result = { status: 'error', message: '保存策略失败，请重试' }
-        }
-        break
-      }
-      case 'admin_disable_auto_prompt_type': {
-        const user4 = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
-        if (user4?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
-        if (!params.id) { result = { status: 'error', message: 'id required' }; break }
-        await ai.disableAutoPromptType(userId, params.id)
-        await ai.reconcileAutoSchedulers()
-        result = { status: 'success', message: '策略已禁用' }
-        break
-      }
-      case 'save_auto': {
-        // Legacy: save per-user auto scheduler settings
-        const { symbol = 'XAUUSD' } = params
-        const symbols = [symbol]
-        const enabled = !!params.enabled
-        await ai.upsertAutoConfig(null, userId, symbols, enabled)
-        await ai.stopAutoScheduler(userId)
-        if (enabled) await ai.startAutoScheduler(userId)
-        // Sync user_bridge_settings so _initBridge can see it on reconnect
-        try {
-          await queryRun(
-            'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled) VALUES (?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = NOW()',
-            [userId, enabled ? 1 : 0, enabled ? 1 : 0]
-          )
-        } catch (e) { console.error('[BridgeWS] Failed to sync auto_reasoning_enabled from save_auto:', e.message) }
-        result = { status: 'success', message: enabled ? '自动推理已开启' : '自动推理已关闭', enabled, symbols }
         break
       }
       case 'audit_logs': {

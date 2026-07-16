@@ -41,7 +41,6 @@ vi.mock('../../server/routes/ai/config.js', () => ({
   saveCloseConfig: vi.fn(),
   insertAudit: vi.fn(),
   signalOrderPayload: vi.fn(() => ({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.03, sl: 1990, tp: 2010 })),
-  getActiveConfig: vi.fn(() => ({ api_key_encrypted: 'test-key' })),
   getExecuteRiskConfig: vi.fn(() => ({})),
   getDeliveryExecuteRiskConfig: vi.fn(() => ({ enable_auto_trade: true, selected_take_profit: 1, max_position_size: 0.05 })),
   validateTradeRequest: vi.fn(),

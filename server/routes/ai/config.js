@@ -11,6 +11,7 @@ import { prepareAndExecuteOrderIntent } from './order-intents.js'
 import { evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy } from './risk-policy.js'
 import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
 import { getRiskRuleRolloutModes } from './rollout-governance.js'
+import { getInferencePreference } from './inference-preferences.js'
 
 export const DEFAULT_MAX_POSITION_SIZE = 0.05
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -103,94 +104,19 @@ export async function insertAudit(db, userId, action, symbol, request, result, s
   return true
 }
 
-export async function getActiveConfig(db, userId, sessionId = 'default', provider = null, opts = {}) {
-  let row
-  if (provider) {
-    row = await queryOne('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND api_provider = ?', [userId, sessionId, provider])
-  } else {
-    row = await queryOne('SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1', [userId, sessionId])
-  }
-
-  if (opts.skipFallbacks) return row
-
-  // Emergency rollback only. Runtime inference uses resolveAiTaskModel(); the
-  // legacy credential chain is disabled by default so plaintext fields cannot
-  // silently become an active credential source again.
-  if (process.env.AI_LEGACY_CREDENTIAL_READ_ENABLED !== 'true') {
-    if (row) row.api_key_encrypted = null
-    return row
-  }
-
-  const userHasOwnConfig = row && row.api_key_encrypted
-  if (!userHasOwnConfig) {
-    const adminConfig = await queryOne("SELECT * FROM ai_configs WHERE model_sharing_enabled = 1 AND is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') LIMIT 1")
-    if (adminConfig) {
-      if (!row) row = {}
-      row.api_provider = row.api_provider || adminConfig.api_provider
-      row.model_name = row.model_name || adminConfig.model_name
-      row.api_base_url = row.api_base_url || adminConfig.api_base_url
-      row.temperature = row.temperature ?? adminConfig.temperature
-      row.max_tokens = row.max_tokens ?? adminConfig.max_tokens
-      row.model_sharing_enabled = adminConfig.model_sharing_enabled
-      if (!row.api_key_encrypted && adminConfig.api_key_encrypted) row.api_key_encrypted = adminConfig.api_key_encrypted
-      row._model_shared = true
-    }
-  }
-
-  if (!row || !row.api_key_encrypted) {
-    const cfg = {}
-    try {
-      const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''")
-      for (const r of rows) cfg[r.key] = r.value
-    } catch (e) { console.error('[AI] Failed to load system_config:', e.message) }
-    const sysKey = cfg.deepseek_api_key || cfg.openai_api_key
-    if (sysKey) {
-      if (!row) row = {}
-      row.api_key_encrypted = sysKey
-      row.api_provider = row.api_provider || (cfg.deepseek_api_key ? 'deepseek' : 'openai')
-      row.api_base_url = row.api_base_url || (cfg.deepseek_base_url || cfg.openai_base_url || null)
-      row.model_name = row.model_name || (cfg.deepseek_model || cfg.openai_model || 'deepseek-chat')
-    }
-  }
-
-  if (!row || !row.api_key_encrypted) {
-    const globalCfg = await queryOne('SELECT * FROM global_auto_config WHERE id = 1')
-    if (globalCfg && globalCfg.api_key_encrypted) {
-      if (!row) row = {}
-      row.api_key_encrypted = globalCfg.api_key_encrypted
-      row.api_provider = row.api_provider || globalCfg.api_provider || 'deepseek'
-      row.api_base_url = row.api_base_url || globalCfg.api_base_url || null
-      row.model_name = row.model_name || globalCfg.model_name || 'deepseek-chat'
-      row.temperature = row.temperature ?? globalCfg.temperature
-      row.max_tokens = row.max_tokens ?? globalCfg.max_tokens
-    }
-  }
-
-  return row
-}
-
 export async function getAnalyzeApiKey(userId, sessionId) {
   if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
   const resolved = await resolveAiTaskModel({ userId, strategyId: null, usage: 'manual' })
   if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || 'no_model_configured')
-  const userConfig = await queryOne(
-    `SELECT system_prompt, enable_auto_trade, risk_level, max_position_size, selected_take_profit
-     FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1
-     ORDER BY updated_at DESC LIMIT 1`,
-    [userId, sessionId]
-  )
-  const adminPromptConfig = await queryOne(
-    "SELECT system_prompt FROM ai_configs WHERE is_active = 1 AND user_id IN (SELECT id FROM users WHERE role = 'admin') ORDER BY updated_at DESC LIMIT 1"
-  )
-  const effectivePrompt = userConfig?.system_prompt || adminPromptConfig?.system_prompt || ''
+  const userConfig = await getInferencePreference(userId, sessionId)
 
   return {
     ...resolved.model,
-    system_prompt: effectivePrompt,
-    enable_auto_trade: !!userConfig?.enable_auto_trade,
-    risk_level: userConfig?.risk_level || 'medium',
-    max_position_size: userConfig?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-    selected_take_profit: userConfig?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
+    system_prompt: userConfig.system_prompt,
+    enable_auto_trade: userConfig.enable_auto_trade,
+    risk_level: userConfig.risk_level,
+    max_position_size: userConfig.max_position_size,
+    selected_take_profit: userConfig.selected_take_profit,
     _userId: userId,
     _usage: 'manual',
     _strategyId: null,
@@ -232,34 +158,6 @@ export async function getGlobalAutoConfig() {
   return await queryOne('SELECT * FROM global_auto_config WHERE id = 1')
 }
 
-export async function saveGlobalAutoConfig(cfg) {
-  const now = beijingNow()
-  const supportedProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao', 'volcengine_agent_plan'])
-  if (cfg.api_provider && !supportedProviders.has(cfg.api_provider)) {
-    throw new Error(`unsupported_ai_provider:${cfg.api_provider}`)
-  }
-  await queryRun(`
-    UPDATE global_auto_config SET
-      interval_minutes = ?,
-      api_provider = ?, model_name = ?, api_key_encrypted = ?, api_base_url = ?,
-      temperature = ?, max_tokens = ?,
-      risk_level = ?, max_position_size = ?, selected_take_profit = ?,
-      enable_auto_trade = ?,
-      thinking_enabled = ?, reasoning_effort = ?,
-      updated_at = ?
-    WHERE id = 1
-  `, [
-    cfg.interval_minutes || 5,
-    cfg.api_provider || null, cfg.model_name || null, cfg.api_key_encrypted || null, cfg.api_base_url || null,
-    cfg.temperature ?? null, cfg.max_tokens ?? null,
-    cfg.risk_level || null, cfg.max_position_size ?? null, cfg.selected_take_profit ?? null,
-    cfg.enable_auto_trade ? 1 : 0,
-    cfg.thinking_enabled !== undefined ? (cfg.thinking_enabled ? 1 : 0) : 1,
-    cfg.reasoning_effort || 'max',
-    now
-  ])
-}
-
 export async function getExecuteRiskConfig(userId, signal) {
   const isAuto = (signal.config_id === 0 && signal.source !== 'auto_shared')
   if (isAuto || signal.source === 'auto_shared') {
@@ -267,37 +165,13 @@ export async function getExecuteRiskConfig(userId, signal) {
   }
 
   const sessionId = signal.session_id || 'default'
-  const manualCfg = await queryOne(
-    'SELECT * FROM ai_configs WHERE user_id = ? AND session_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1',
-    [userId, sessionId]
-  )
-  if (!manualCfg) return null
+  const manualCfg = await getInferencePreference(userId, sessionId)
   return {
-    enable_auto_trade: !!manualCfg.enable_auto_trade,
+    enable_auto_trade: manualCfg.enable_auto_trade,
     selected_take_profit: manualCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
     max_position_size: manualCfg.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
   }
 }
-
-export async function upsertAutoConfig(db, userId, symbols, enabled, promptTypeId = null) {
-  const now = beijingNow()
-  await withTransaction(async (run) => {
-    await run(`
-      INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        enabled = VALUES(enabled),
-        prompt_type_id = COALESCE(VALUES(prompt_type_id), prompt_type_id),
-        updated_at = VALUES(updated_at)
-    `, [userId, enabled ? 1 : 0, promptTypeId, now, now])
-    await run(
-      'INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = ?, updated_at = ?',
-      [userId, enabled ? 1 : 0, now, enabled ? 1 : 0, now]
-    )
-  })
-}
-
-// === Auto Prompt Types (admin-managed strategies) ===
 
 export async function getAutoPromptTypes({ includeInactive = false } = {}) {
   const where = includeInactive ? 'deleted_at IS NULL' : 'is_active = 1 AND deleted_at IS NULL'
@@ -307,161 +181,6 @@ export async function getAutoPromptTypes({ includeInactive = false } = {}) {
 export async function getAutoPromptTypeById(promptTypeId) {
   return await queryOne('SELECT * FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [promptTypeId])
 }
-
-export async function saveAutoPromptType(adminUserId, payload) {
-  const now = beijingNow()
-  let symbols = Array.isArray(payload.symbols) ? payload.symbols : []
-  symbols = symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean)
-  const uniqueSymbols = [...new Set(symbols)]
-  if (uniqueSymbols.length === 0) throw new Error('策略品种不能为空')
-  const intervalMinutes = Math.max(1, Number(payload.interval_minutes) || 5)
-
-  if (payload.id) {
-    await queryRun(
-      `UPDATE auto_prompt_types SET title = ?, description = ?, system_prompt = ?, symbols_json = ?,
-       interval_minutes = ?, is_active = ?, sort_order = ?, updated_at = ?
-       WHERE id = ? AND deleted_at IS NULL`,
-      [payload.title || '未命名策略', payload.description || '', payload.system_prompt || '',
-       JSON.stringify(uniqueSymbols), intervalMinutes,
-       payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : 1,
-       payload.sort_order || 0, now, payload.id]
-    )
-    return await getAutoPromptTypeById(payload.id)
-  }
-
-  const result = await queryRun(
-    `INSERT INTO auto_prompt_types (title, description, system_prompt, symbols_json, interval_minutes, is_active, sort_order, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [payload.title || '未命名策略', payload.description || '', payload.system_prompt || '',
-     JSON.stringify(uniqueSymbols), intervalMinutes,
-     payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : 1,
-     payload.sort_order || 0, adminUserId, now, now]
-  )
-  return await getAutoPromptTypeById(result.insertId)
-}
-
-export async function disableAutoPromptType(adminUserId, promptTypeId) {
-  const now = beijingNow()
-  await queryRun(
-    'UPDATE auto_prompt_types SET is_active = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
-    [now, promptTypeId]
-  )
-}
-
-// === User Auto Config (user-facing settings) ===
-
-export async function getUserAutoConfig(userId) {
-  let scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
-  if (!scheduler) {
-    const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
-    scheduler = {
-      user_id: userId,
-      enabled: 0,
-      prompt_type_id: firstPt?.id || null,
-      risk_level: 'medium',
-      max_position_size: DEFAULT_MAX_POSITION_SIZE,
-      selected_take_profit: DEFAULT_SELECTED_TAKE_PROFIT,
-      enable_auto_trade: 1,
-    }
-  } else if (!scheduler.prompt_type_id) {
-    const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
-    if (firstPt) scheduler.prompt_type_id = firstPt.id
-  }
-  // Populate selected_symbols using resolveEffectiveSymbols (Fix 3)
-  scheduler.selected_symbols = []
-  if (scheduler.prompt_type_id) {
-    const pt = await queryOne('SELECT symbols_json FROM auto_prompt_types WHERE id = ?', [scheduler.prompt_type_id])
-    scheduler.selected_symbols = resolveEffectiveSymbols(scheduler.selected_symbols_json, pt?.symbols_json || '[]')
-  }
-  let pausedReason = ''
-  if (scheduler.enabled) {
-    if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
-    else {
-      const pt = await getAutoPromptTypeById(scheduler.prompt_type_id)
-      if (!pt || !pt.is_active) pausedReason = 'prompt_disabled'
-      else if (pt.scope === 'private') {
-        try { await getUnifiedAutoInferenceConfig(pt.id, userId) }
-        catch (error) { pausedReason = error.message || 'no_model_configured' }
-      }
-    }
-  }
-  return { scheduler, running: false, pausedReason }
-}
-
-export async function saveUserAutoConfig(userId, payload) {
-  const now = beijingNow()
-
-  const existing = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
-
-  if (payload.prompt_type_id !== undefined && payload.prompt_type_id !== null) {
-    const pt = await getAutoPromptTypeById(payload.prompt_type_id)
-    if (!pt || !pt.is_active) throw new Error('策略不存在或已禁用')
-  }
-
-  if (payload.selected_take_profit !== undefined) {
-    const tp = Number(payload.selected_take_profit)
-    if (![1, 2, 3].includes(tp)) throw new Error('止盈档位只能是 1、2 或 3')
-  }
-
-  if (payload.max_position_size !== undefined) {
-    const mps = parseFloat(payload.max_position_size)
-    if (isNaN(mps) || mps <= 0) throw new Error('最大手数必须大于 0')
-  }
-
-  // Validate selected_symbols if provided
-  let selectedSymbols = null
-  if (payload.selected_symbols !== undefined) {
-    if (!Array.isArray(payload.selected_symbols)) {
-      throw new Error('selected_symbols 必须是数组')
-    }
-    if (payload.selected_symbols.length === 0) {
-      selectedSymbols = []
-    } else {
-      const normalized = [...new Set(payload.selected_symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
-      if (normalized.length === 0) throw new Error('selected_symbols 不能为空')
-
-      const promptTypeId = payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null)
-      if (promptTypeId) {
-        const pt = await getAutoPromptTypeById(promptTypeId)
-        if (pt) {
-          const strategySymbols = parsePromptSymbols(pt.symbols_json || '[]')
-          const invalid = normalized.filter(s => !strategySymbols.includes(s))
-          if (invalid.length > 0) {
-            throw new Error(`品种 ${invalid.join(', ')} 不在策略支持列表中`)
-          }
-        }
-      }
-      selectedSymbols = normalized
-    }
-  }
-
-  const next = {
-    prompt_type_id: payload.prompt_type_id !== undefined ? (payload.prompt_type_id || null) : (existing?.prompt_type_id ?? null),
-    risk_level: payload.risk_level !== undefined ? payload.risk_level : (existing?.risk_level ?? 'medium'),
-    max_position_size: payload.max_position_size !== undefined ? Number(payload.max_position_size) : (existing?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
-    selected_take_profit: payload.selected_take_profit !== undefined ? Number(payload.selected_take_profit) : (existing?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT),
-    enable_auto_trade: payload.enable_auto_trade !== undefined ? (payload.enable_auto_trade ? 1 : 0) : (existing?.enable_auto_trade ?? 1),
-    selected_symbols_json: selectedSymbols !== null ? JSON.stringify(selectedSymbols) : (existing?.selected_symbols_json ?? null),
-  }
-  // INSERT enabled=0 is correct: first save means user hasn't toggled auto yet.
-  // ON DUPLICATE KEY UPDATE preserves existing enabled value.
-  await queryRun(
-    `INSERT INTO auto_scheduler (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, selected_symbols_json, created_at, updated_at)
-     VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       prompt_type_id = VALUES(prompt_type_id),
-       risk_level = VALUES(risk_level),
-       max_position_size = VALUES(max_position_size),
-       selected_take_profit = VALUES(selected_take_profit),
-       enable_auto_trade = VALUES(enable_auto_trade),
-       selected_symbols_json = VALUES(selected_symbols_json),
-       updated_at = VALUES(updated_at)`,
-    [userId, next.prompt_type_id, next.risk_level, next.max_position_size, next.selected_take_profit,
-     next.enable_auto_trade, next.selected_symbols_json, now, now]
-  )
-}
-
-// === Unified Auto Inference Config (for signal generation) ===
 
 export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserId = null) {
   if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')

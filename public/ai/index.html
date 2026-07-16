@@ -414,13 +414,7 @@
               <div class="form-actions"><button id="saveSubscriptionBtn" class="btn btn-primary">保存订阅</button></div>
             </section>
             <div id="strategyCatalog" class="strategy-catalog"><div class="workspace-skeleton"></div></div>
-            <div class="config-sub-tabs">
-              <button class="config-sub-tab active" data-config-tab="manual-config">手动推理配置</button>
-              <button class="config-sub-tab" data-config-tab="auto-config">自动推理配置</button>
-            </div>
-
-            <!-- 手动推理配置 -->
-            <div id="manual-config" class="config-sub-panel active">
+            <div id="manual-config">
               <div class="strategy-source-row"><div><strong>推理模型</strong><span>手动与自动推理统一使用“模型管理”中的有效模型和共享策略；本页不保存凭据。</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
               <div class="config-section">
                 <div class="config-section-title">交易约束</div>
@@ -446,14 +440,6 @@
 
                 </div>
               </div>
-              <!-- 自动推理品种与循环间隔（仅 override 开启时显示） -->
-              <div id="autoConfigOverrideSection" class="config-section" style="display:none">
-                <div class="config-section-title">自动推理品种与循环间隔</div>
-                <div class="config-grid">
-                  <label><span>品种</span><input id="overrideSymbolSelect" class="instrument-select" placeholder="搜索品种..." /></label>
-                  <label><span>循环间隔</span><span class="unit-field"><input id="overrideIntervalMin" class="num" type="number" min="1" max="1440" step="1" value="5" /><span class="input-unit">分钟</span></span><small class="field-help">自动推理固定使用 M5 周期，每隔多久执行一次</small></label>
-                </div>
-              </div>
               <div class="config-section">
                 <div class="config-section-title">系统提示词</div>
                 <div class="tf-tag-hint" style="background:var(--color-warning-bg);border:1px solid var(--color-warning-border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.6">
@@ -469,60 +455,6 @@
               </div>
             </div>
 
-            <!-- 自动推理配置 -->
-            <div id="auto-config" class="config-sub-panel">
-              <div class="config-section">
-                <div class="config-section-title">自动推理策略</div>
-                <div class="config-grid">
-                  <div class="config-field">
-                    <span class="config-field-label">选择策略</span>
-                    <div class="custom-pt-select" id="autoPromptTypeWrap">
-                      <select id="autoPromptTypeSelect" style="display:none"><option value="">选择策略...</option></select>
-                      <div class="custom-pt-trigger" id="autoPromptTypeTrigger">选择策略...</div>
-                      <div class="custom-pt-dropdown" id="autoPromptTypeDropdown"></div>
-                    </div>
-                  </div>
-                  <div class="config-field" id="autoSymbolsField" style="display:none">
-                    <span class="config-field-label">订阅品种</span>
-                    <div class="symbols-chips" id="autoSymbolsChips"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="config-section">
-                <div class="config-section-title">交易约束</div>
-                <div class="config-grid">
-                  <label><span>风险等级</span><select id="autoRiskLevel">
-                    <option value="low">低风险</option>
-                    <option value="medium" selected>中风险</option>
-                    <option value="high">高风险</option>
-                  </select></label>
-                  <label><span>单次最大手数</span><span class="unit-field"><input id="autoMaxPositionSize" class="num" type="number" min="0.01" step="0.01" value="0.05" /><span class="input-unit">手</span></span></label>
-                  <label><span>默认止盈方案</span><select id="autoSelectedTakeProfit">
-                    <option value="1">TP1 - 保守止盈</option>
-                    <option value="2" selected>TP2 - 标准止盈</option>
-                    <option value="3">TP3 - 激进止盈</option>
-                  </select></label>
-                  <label class="check-row auto-execute-label"><input id="autoEnableAutoTrade" type="checkbox" /><span>自动执行信号</span></label>
-                </div>
-              </div>
-
-              <!-- Admin-only: Global model/API config + Prompt types -->
-              <div class="admin-only-auto-config" style="display:none">
-                <div class="strategy-source-row"><div><strong>平台自动推理模型</strong><span>平台默认模型、共享范围和配额统一在“模型管理”维护。</span></div><button class="btn btn-secondary btn-sm" data-tab-jump="model-management">前往模型管理</button></div>
-
-                <div class="config-section">
-                  <div class="config-section-title" style="display:flex;justify-content:space-between;align-items:center">
-                    <span>提示词策略管理</span>
-                    <button class="btn btn-primary btn-sm" onclick="openPromptTypeModal()">+ 新建策略</button>
-                  </div>
-                  <div id="adminPromptTypeList" style="margin-top:12px"></div>
-                </div>
-              </div>
-
-              <div class="config-actions">
-                <button id="saveAutoConfigBtn" class="btn btn-primary"><i data-lucide="save" size="16"></i>保存配置</button>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -989,30 +921,6 @@
     </div>
 
     <div id="toastHost" class="toast-host"></div>
-
-    <!-- Prompt Type Modal -->
-    <div id="promptTypeModal" class="modal-overlay" style="display:none">
-      <div class="modal" style="max-width:560px">
-        <button class="modal-close" onclick="closePromptTypeModal()">&times;</button>
-        <div class="modal-header">
-          <h2 id="promptTypeModalTitle">新建策略</h2>
-        </div>
-        <div class="modal-body">
-          <input id="adminPtId" type="hidden" value="" />
-          <label><span>策略标题</span><input id="adminPtTitle" placeholder="如: 黄金5分钟趋势" /></label>
-          <label><span>描述</span><textarea id="adminPtDescription" rows="3" placeholder="策略说明，支持多行" spellcheck="false"></textarea></label>
-          <label><span>绑定品种 (逗号分隔)</span><input id="adminPtSymbols" placeholder="XAUUSD, EURUSD" /></label>
-          <label><span>循环间隔 (分钟)</span><input id="adminPtInterval" type="number" min="1" value="5" /></label>
-          <label><span>系统提示词</span><textarea id="adminPtPrompt" rows="6" spellcheck="false" placeholder="输入提示词..."></textarea></label>
-          <label><span>排序</span><input id="adminPtSortOrder" type="number" value="0" /></label>
-          <label class="check-row"><input id="adminPtActive" type="checkbox" checked /><span>启用</span></label>
-          <div class="config-actions" style="margin-top:16px">
-            <button class="btn btn-primary" onclick="saveAdminPromptType()">保存策略</button>
-            <button class="btn btn-secondary" onclick="closePromptTypeModal()">取消</button>
-          </div>
-        </div>
-      </div>
-    </div>
 
     <script src="lucide.js?v=20260709f"></script>
     <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260709f"></script>

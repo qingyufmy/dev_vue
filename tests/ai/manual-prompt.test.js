@@ -37,7 +37,7 @@ describe('manual inference prompt inheritance', () => {
       if (sql.includes('user_id = ? AND session_id = ?')) {
         return { system_prompt: null }
       }
-      if (sql.includes('SELECT system_prompt')) return { system_prompt: '管理员最新提示词' }
+      if (sql.includes('SELECT p.system_prompt')) return { system_prompt: '管理员最新提示词' }
       return null
     })
 
@@ -51,7 +51,7 @@ describe('manual inference prompt inheritance', () => {
       if (sql.includes('user_id = ? AND session_id = ?')) {
         return { system_prompt: '用户自定义提示词' }
       }
-      if (sql.includes('SELECT system_prompt')) return { system_prompt: '管理员最新提示词' }
+      if (sql.includes('SELECT p.system_prompt')) return { system_prompt: '管理员最新提示词' }
       return null
     })
 
