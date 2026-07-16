@@ -2,6 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 describe('Python Bridge history contract', () => {
+  it('reads the profile account creation time and both expiry field styles', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('userData.get("planExpiresAt") or userData.get("plan_expires_at", "")')
+    expect(source).toContain('userData.get("accountCreatedAt")')
+    expect(source).toContain('self.account_created_at =')
+  })
+
   it('treats an empty date filter as full account history', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     const historyStart = source.indexOf('elif action == "history"')

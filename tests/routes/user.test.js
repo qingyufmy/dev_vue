@@ -50,7 +50,7 @@ describe('user.js — GET /profile', () => {
       id: 1, uid: 'WS000001', email: 'test@example.com', phone: '13800138000',
       nickname: '测试用户', avatar: '', role: 'user', plan: 'free', plan_period: '',
       plan_expires_at: '', phone_verified: 1, email_verified: 0, auth_method: 'phone',
-      telegram_id: null, telegram_username: null, telegram_name: null,
+      telegram_id: null, telegram_username: null, telegram_name: null, created_at: '2026-01-02 03:04:05',
     })
 
     const body = await httpReq(makeApp(), 'GET', '/api/profile')
@@ -60,6 +60,7 @@ describe('user.js — GET /profile', () => {
     expect(body.user.phoneVerified).toBe(true)
     expect(body.user.emailVerified).toBe(false)
     expect(body.user.authMethod).toBe('phone')
+    expect(body.user.accountCreatedAt).toBe('2026-01-02 03:04:05')
     expect(body.user.telegramBinding).toBeNull()
   })
 

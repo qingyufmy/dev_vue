@@ -396,6 +396,7 @@ class BridgeWorker(QThread):
         self._ws = None
         self._acc_lost_warned = False
         self._manual_mt5_path = mt5_path
+        self.account_created_at = ""
         # MetaTrader5's Python extension is not thread-safe. Command handling
         # and the one-second data publisher both use the executor, so all MT5
         # calls must share one lock.
@@ -415,7 +416,9 @@ class BridgeWorker(QThread):
             # Profile wraps user data: { ok: true, user: { plan: "pro", ... } }
             userData = data.get("user", {})
             plan = userData.get("plan", "free")
-            expires_at = userData.get("plan_expires_at", "")
+            expires_at = userData.get("planExpiresAt") or userData.get("plan_expires_at", "")
+            self.account_created_at = (userData.get("accountCreatedAt")
+                or userData.get("account_created_at") or userData.get("createdAt") or "")
             if plan in ("free", "plus"):
                 return plan, True, f"当前会员等级: {plan.upper()}，桥接功能仅限 Pro 会员"
             if expires_at:
@@ -1452,6 +1455,8 @@ class BridgeWorker(QThread):
             self.mt5.shutdown()
             return
         self.log_signal.emit(f"会员等级: {plan.upper()}，开始连接...")
+        if self.account_created_at:
+            self.log_signal.emit(f"账户创建时间: {self.account_created_at[:10]}")
 
         try:
             self._resolved_symbol = self._resolve_symbol("XAUUSD")

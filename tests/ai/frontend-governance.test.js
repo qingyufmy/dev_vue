@@ -5,6 +5,7 @@ const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url)
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
+const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const profiles = readFileSync(new URL('../../server/routes/ai/model-profiles.js', import.meta.url), 'utf8')
 
 describe('AI governance navigation and DOM contract', () => {
@@ -73,6 +74,10 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('<option value="platform">平台接入后</option>')
     expect(html).toContain('<option value="custom">自定义日期</option>')
     expect(app).toContain('history_scope: scope')
+    expect(app).toContain('从当前会员账户在平台注册之日开始。')
+    expect(bridgeWs).toContain("DATE_FORMAT(created_at, '%Y-%m-%d') AS account_created_date")
+    expect(bridgeWs).toContain('FROM users WHERE id = ? LIMIT 1')
+    expect(bridgeWs).not.toContain('AS first_verified_date')
     expect(html).not.toContain('id="filterCloseFrom"')
     expect(html).not.toContain('id="chartDateFrom"')
   })

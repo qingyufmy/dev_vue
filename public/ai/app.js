@@ -3381,7 +3381,7 @@ function updateHistoryRangeUI() {
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
     all: "包含该 MT5 账户的完整交易、入金、提款和信用记录。",
-    platform: "从当前 MT5 账户首次通过 Bridge 身份验证之日开始。",
+    platform: "从当前会员账户在平台注册之日开始。",
     custom: "按平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
   setText("historyRangeHint", hints[scope] || hints.all);

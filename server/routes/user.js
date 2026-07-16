@@ -9,7 +9,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
     const row = await queryOne(`
       SELECT id, uid, email, phone, nickname, avatar, role, plan, plan_period, plan_expires_at, plan_source,
              phone_verified, email_verified, auth_method,
-             telegram_id, telegram_username, telegram_name
+             telegram_id, telegram_username, telegram_name, created_at
       FROM users WHERE id = ?
     `, [req.user.id])
 
@@ -28,6 +28,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
       planPeriod: row.plan_period || '',
       planExpiresAt: row.plan_expires_at || '',
       planSource: row.plan_source || null,
+      accountCreatedAt: row.created_at || '',
       phoneVerified: !!row.phone_verified,
       emailVerified: !!row.email_verified,
       authMethod: row.auth_method || 'email',

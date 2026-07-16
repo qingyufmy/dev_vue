@@ -545,11 +545,10 @@ async function resolveHistoryRange(userId, params = {}) {
     if (dateFrom && dateTo && dateFrom > dateTo) throw new Error('invalid_history_range')
     return { scope, date_from: dateFrom, date_to: dateTo }
   }
-  const account = await queryOne(`SELECT DATE_FORMAT(first_verified_at, '%Y-%m-%d') AS first_verified_date FROM trading_accounts
-    WHERE user_id = ? AND is_deleted = 0 AND first_verified_at IS NOT NULL
-    ORDER BY identity_verified_at DESC, id DESC LIMIT 1`, [userId])
-  if (!account?.first_verified_date) throw new Error('platform_history_start_unavailable')
-  const dateFrom = account.first_verified_date
+  const account = await queryOne(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS account_created_date
+    FROM users WHERE id = ? LIMIT 1`, [userId])
+  if (!account?.account_created_date) throw new Error('account_creation_time_unavailable')
+  const dateFrom = account.account_created_date
   return { scope, date_from: dateFrom, date_to: null }
 }
 
