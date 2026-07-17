@@ -1220,7 +1220,7 @@ const migrations = [
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         idempotency_key VARCHAR(191) NOT NULL,
         user_id INT NOT NULL,
-        trading_account_id INT DEFAULT NULL,
+        trading_account_id INT NOT NULL DEFAULT 0,
         source_type VARCHAR(32) NOT NULL,
         source_id VARCHAR(64) DEFAULT NULL,
         client_request_id VARCHAR(128) DEFAULT NULL,
@@ -2239,6 +2239,82 @@ const migrations = [
       await addColumn('memory_injection_logs', 'selected_long_memory_ids_json', 'selected_long_memory_ids_json TEXT DEFAULT NULL AFTER selected_summary_ids_json')
       await queryRun(`UPDATE experience_memory_items SET memory_tier = 'short', strategy_version = COALESCE(strategy_version, 1)
         WHERE memory_tier IS NULL OR memory_tier = '' OR strategy_version IS NULL`)
+    }
+  },
+  {
+    id: '089_period_review_foundation',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_cases (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        period_type VARCHAR(16) NOT NULL,
+        period_key VARCHAR(16) NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT DEFAULT NULL,
+        strategy_id INT NOT NULL,
+        strategy_version INT NOT NULL DEFAULT 1,
+        strategy_scope VARCHAR(20) NOT NULL,
+        timezone_offset_minutes SMALLINT NOT NULL,
+        period_start_utc_msc BIGINT NOT NULL,
+        period_end_utc_msc BIGINT NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'evidence_pending',
+        evidence_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        evidence_reason VARCHAR(255) DEFAULT NULL,
+        evidence_json LONGTEXT DEFAULT NULL,
+        evidence_hash CHAR(64) DEFAULT NULL,
+        source_count INT NOT NULL DEFAULT 0,
+        current_version_id BIGINT DEFAULT NULL,
+        approved_version_id BIGINT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_period_review_scope (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version),
+        INDEX idx_period_review_owner (user_id, period_type, status, period_key),
+        INDEX idx_period_review_jobs_source (period_type, evidence_status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_sources (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        period_case_id BIGINT NOT NULL,
+        outcome_id BIGINT NOT NULL,
+        trade_review_case_id BIGINT DEFAULT NULL,
+        source_hash CHAR(64) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_period_review_source (period_case_id, outcome_id),
+        INDEX idx_period_review_source_outcome (outcome_id),
+        INDEX idx_period_review_source_trade_case (trade_review_case_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_versions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        period_case_id BIGINT NOT NULL,
+        version_no INT NOT NULL,
+        parent_version_id BIGINT DEFAULT NULL,
+        author_type VARCHAR(16) NOT NULL,
+        author_user_id INT DEFAULT NULL,
+        content_json LONGTEXT NOT NULL,
+        content_hash CHAR(64) NOT NULL,
+        change_note VARCHAR(500) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_period_review_version (period_case_id, version_no),
+        INDEX idx_period_review_version_case (period_case_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_jobs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        period_case_id BIGINT NOT NULL,
+        job_type VARCHAR(24) NOT NULL,
+        idempotency_key VARCHAR(191) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3,
+        lease_token CHAR(36) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        model_profile_id INT DEFAULT NULL,
+        credential_source VARCHAR(32) DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_period_review_job_key (idempotency_key),
+        INDEX idx_period_review_job_claim (job_type, status, lease_expires_at, updated_at),
+        INDEX idx_period_review_job_case (period_case_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
   }
 ]

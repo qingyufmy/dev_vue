@@ -165,7 +165,7 @@ async function loadEvidence(outcomeId) {
   return { row, assessment, bundle, evidenceHash: sha256(json(bundle)) }
 }
 
-export async function ensureReviewCaseForOutcome(outcomeId) {
+export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration = true } = {}) {
   const evidence = await loadEvidence(outcomeId)
   const eligibility = assessReviewStrategyEligibility(evidence.row)
   if (!eligibility.eligible) return { skipped: true, reason: eligibility.reason, outcome_id: Number(outcomeId) }
@@ -186,7 +186,7 @@ export async function ensureReviewCaseForOutcome(outcomeId) {
   ])
   const reviewCase = await queryOne('SELECT * FROM trade_review_cases WHERE outcome_id = ?', [outcomeId])
   const generationEnabled = evidence.assessment.complete && await isAiFeatureEnabled('review_generation_enabled', evidence.row.user_id)
-  if (generationEnabled && !reviewCase.current_version_id && !['approved', 'deferred'].includes(reviewCase.status)) {
+  if (queueGeneration && generationEnabled && !reviewCase.current_version_id && !['approved', 'deferred'].includes(reviewCase.status)) {
     await queryRun(`INSERT IGNORE INTO trade_review_jobs
       (case_id, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
       VALUES (?, ?, 'queued', 0, 3, ?, ?)`, [reviewCase.id, `review:${reviewCase.id}:${evidence.evidenceHash}`, now, now])

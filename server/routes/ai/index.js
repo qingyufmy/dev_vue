@@ -32,6 +32,7 @@ import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 import { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
+import { prepareEligibleDailyReviews, runDailyReviewWorkerOnce } from './period-review.js'
 
 const router = Router()
 
@@ -605,6 +606,7 @@ export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
   revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
   maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,
   startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
+export { prepareEligibleDailyReviews, runDailyReviewWorkerOnce } from './period-review.js'
 export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
   listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,
   updatePlatformExperienceItem, retrievePlatformExperience } from './platform-experience.js'

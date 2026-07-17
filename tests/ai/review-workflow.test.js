@@ -96,6 +96,11 @@ describe('review durability and privacy guards', () => {
     expect(service).toContain('platform_strategy_user_review_disabled')
   })
 
+  it('allows period reviews to prepare immutable trade evidence without queueing a legacy model job', () => {
+    expect(service).toContain('ensureReviewCaseForOutcome(outcomeId, { queueGeneration = true } = {})')
+    expect(service).toContain('if (queueGeneration && generationEnabled')
+  })
+
   it('binds approval to the exact current version and retries model failures without touching trading', () => {
     expect(service).toContain('Number(reviewCase.current_version_id) !== Number(versionId)')
     expect(service).toContain("approved_version_id = ?")
