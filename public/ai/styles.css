@@ -3139,87 +3139,6 @@ input:checked + .slider::before { transform: translateX(18px); }
   font-weight: 800;
 }
 
-.analysis-market-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.analysis-market-grid.grouped {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.market-group {
-  min-width: 0;
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input-softer);
-}
-
-.market-group-title {
-  display: block;
-  margin-bottom: var(--space-2);
-  color: var(--gold-primary);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.market-group-cells {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-2);
-}
-
-.market-group-cells div {
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.analysis-market-grid div {
-  min-width: 0;
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input-softer);
-}
-
-.analysis-market-grid span {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.analysis-market-grid strong {
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 14px;
-}
-
-.market-unit {
-  color: var(--text-muted);
-  font-family: var(--font-ui);
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 700;
-}
-
-.analysis-market-grid.grouped .market-group-cells,
-.analysis-market-grid.grouped .market-group-cells div {
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.analysis-market-grid .market-group-title {
-  margin-bottom: var(--space-2);
-  color: var(--gold-primary);
-  font-size: 11px;
-}
-
 .analysis-history-panel {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
@@ -4463,7 +4382,6 @@ body.form-modal-open .content-card { animation:none !important; transform:none !
   .history-stats,
   .signal-detail-grid,
   .analysis-status-strip,
-  .analysis-market-grid,
   .analysis-history-list,
   .account-stats-row,
   .latency-box,

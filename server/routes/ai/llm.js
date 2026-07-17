@@ -17,7 +17,7 @@ const PENDING_LIFECYCLE_RULE = `
 
 const CHAN_DIVERGENCE_RULE = `
 ## 缠论背驰使用规则
-chan.divergence 仅表示最新确认线段的背驰判断；只有 type 为 top 或 bottom、state 为 confirmed 且 confirmed=true 时，才能称为“已确认背驰段”。chan.forming_divergence 仅表示候选线段背驰，不得当作已确认反转或单独作为执行依据。chan.recent_divergences 是当前稳定历史结构内最近的已确认背驰段，entry_segment 与 departure_segment 给出进入段、离开段的 UTC 时间、经纪商时间和价格。area_ratio 与 peak_ratio 越小表示力度衰减越明显。chan.trend_state 区分趋势、盘整、突破和衰竭；衰竭只表示反转风险上升。chan.entry_candidates 中的一二三类买卖点均为候选证据，只有 usable_for_entry=true 才可参与入场论证，也不得单独构成执行指令。strategy_context.chan_timeframe_alignment 用于检查大小周期方向是否一致；agreement=mixed、alignment_with_higher=conflict、status=partial 时必须降低结论强度或选择观望。必须先检查 strategy_context.context_status、missing_timeframes，以及 chan.status、reliability、window_stable、time_location_reliable 和 warnings；结构或时间定位不可靠时应降低该证据权重。所有缠论结果都是行情证据，不等同于交易已经确认，也不直接构成交易指令。
+chan.divergence 仅表示最新确认线段的背驰判断；只有 type 为 top 或 bottom、state 为 confirmed 且 confirmed=true 时，才能称为“已确认背驰段”。chan.forming_divergence 仅表示候选线段背驰，不得当作已确认反转或单独作为执行依据。chan.recent_divergences 是当前稳定历史结构内最近的已确认背驰段，entry_segment 与 departure_segment 给出进入段、离开段的 UTC 时间、经纪商时间和价格。area_ratio 与 peak_ratio 越小表示力度衰减越明显。chan.trend_state 区分趋势、盘整、突破候选、确认突破和衰竭；upward_breakout_pending/downward_breakout_pending 只表示价格已经离开尚未闭合的旧中枢，方向仍未由新确认线段证实，不得描述为已确认突破；衰竭也只表示反转风险上升。chan.entry_candidates 中的一二三类买卖点均为候选证据，只有 usable_for_entry=true 才可参与入场论证，也不得单独构成执行指令。strategy_context.chan_timeframe_alignment 用于检查大小周期方向是否一致；agreement=mixed、alignment_with_higher=conflict、status=partial 时必须降低结论强度或选择观望。必须先检查 strategy_context.context_status、missing_timeframes，以及 chan.status、reliability、window_stable、time_location_reliable 和 warnings；出现 confirmed_structure_stale 表示最近确认结构距当前行情过远，不得把旧中枢描述为当前盘整区。结构或时间定位不可靠时应降低该证据权重。所有缠论结果都是行情证据，不等同于交易已经确认，也不直接构成交易指令。
 `
 
 let _schemaCache = null

@@ -776,6 +776,19 @@ describe('advanced Chan structure evidence', () => {
     })
   })
 
+  it('does not label price outside an unclosed old center as consolidation', () => {
+    const segments = [segment(1, 'up', 90, 110), segment(2, 'down', 95, 115), segment(3, 'up', 100, 120)]
+    const center = [{ id: 1, zl: 100, zh: 110, status: 'extended', closed_by_segment_id: null }]
+    expect(classifyChanTrend(segments, center, 82, { type: 'none' }, 'high')).toMatchObject({
+      state: 'downward_breakout_pending', direction: 'down', phase: 'breakout_candidate',
+      confidence: 'low', reason: 'price_below_unclosed_center',
+    })
+    expect(classifyChanTrend(segments, center, 128, { type: 'none' }, 'high')).toMatchObject({
+      state: 'upward_breakout_pending', direction: 'up', phase: 'breakout_candidate',
+      confidence: 'low', reason: 'price_above_unclosed_center',
+    })
+  })
+
   it('emits first-buy evidence but disables it when structure reliability is low', () => {
     const segments = [segment(1, 'up', 95, 125), segment(2, 'down', 85, 118)]
     const candidates = detectChanEntryCandidates(segments, [{ id: 3, zl: 95, zh: 105 }], {

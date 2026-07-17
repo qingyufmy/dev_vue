@@ -3264,11 +3264,6 @@ function executionStatus(signal) {
   return "可复核";
 }
 
-function marketValue(market, key, digits = 2) {
-  if (!market || market[key] === undefined || market[key] === null) return "--";
-  return fmt(market[key], digits);
-}
-
 function renderPendingSignalInfo(signal, market) {
   const em = signal.entry_method || 'market'
   if (em === 'market' || em === 'observe' || !em) return ''
@@ -3412,14 +3407,19 @@ function inferenceChartShell(signal) {
     state.inferenceChartTimeframe = available.includes(preferred) ? preferred : available[0];
   }
   const snapshotStatus = context.snapshot?.evidence_status;
-  const sourceLabel = context.snapshot?.market_source === "platform_market_bridge" ? "平台行情快照" : "推理行情快照";
-  const evidenceLabel = snapshotStatus === "incomplete" ? "部分证据已压缩" : "证据完整";
+  const sourceLabel = ["platform_market_bridge", "platform_admin_bridge"].includes(context.snapshot?.market_source)
+    ? "平台 MT5 行情"
+    : "推理时行情";
+  const visibleCount = Array.isArray(context.klines[state.inferenceChartTimeframe])
+    ? context.klines[state.inferenceChartTimeframe].length
+    : 0;
+  const evidenceLabel = snapshotStatus === "incomplete" ? `保留最近 ${visibleCount} 根` : `${visibleCount} 根证据完整`;
   const layerButtons = [
     ["segments", "线段"], ["centers", "中枢"], ["divergence", "背驰"], ["entries", "买卖点"], ["levels", "执行价位"],
   ].map(([key, label]) => `<button type="button" class="inference-layer-btn ${state.inferenceChartLayers[key] ? "active" : ""}" data-inference-layer="${key}" aria-pressed="${state.inferenceChartLayers[key]}">${label}</button>`).join("");
   return `<section id="inferenceChartPanel" class="inference-chart-panel" aria-labelledby="inferenceChartTitle">
     <div class="inference-chart-header">
-      <div><span class="analysis-section-title"><i data-lucide="candlestick-chart" size="15"></i><strong id="inferenceChartTitle">K 线与结构证据</strong></span><small>${escapeHtml(sourceLabel)} · ${escapeHtml(evidenceLabel)} · 仅展示推理发生时的数据</small></div>
+      <div><span class="analysis-section-title"><i data-lucide="candlestick-chart" size="15"></i><strong id="inferenceChartTitle">K 线与结构证据</strong></span><small>${escapeHtml(sourceLabel)} · ${escapeHtml(evidenceLabel)} · 仅展示推理发生时的数据 · MT5 时间 · 最后一根为推理时未收盘 K 线</small></div>
       <button id="inferenceChartFullscreen" type="button" class="chart-icon-btn" aria-label="全屏查看 K 线图" title="全屏查看"><i data-lucide="maximize-2" size="15"></i></button>
     </div>
     <div class="inference-chart-toolbar">
@@ -3658,10 +3658,6 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     : (market.positions || {});
   const result = $("analysisResult");
   const freshnessClass = signal.is_stale ? "expired" : signal.is_executed ? "executed" : "live";
-  const latestPrice = Number(market.latest_price);
-  const sma20 = Number(market.sma_20);
-  const smaDeviation = Number.isFinite(latestPrice) && Number.isFinite(sma20) ? signedText(latestPrice - sma20, 2) : "--";
-  const atrValue = market.atr_14 ?? market.atr ?? market.avg_volatility;
   const reasoningText = String(signal.reasoning || "").trim();
   // Try to parse structured positions data (CLOSE signals store JSON array)
   let closePositions = null;
@@ -3727,32 +3723,12 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div class="execution-target-primary"><span>${takeProfitSelection.price ? "实际执行止盈" : "计划执行止盈"}</span><strong>${escapeHtml(takeProfitSelection.price || (takeProfitSelection.tier ? signal[`take_profit_${takeProfitSelection.tier}_price`] : null) || "--")}</strong><small>${escapeHtml(takeProfitSelection.sourceLabel)}${takeProfitSelection.tier ? ` · TP${takeProfitSelection.tier}` : ""}</small></div>
       <div class="take-profit-candidates"><span class="take-profit-heading">止盈候选 <small><i></i>AI 推荐</small></span><div>${[1,2,3].map(tier => `<span class="take-profit-chip ${takeProfitSelection.tier === tier ? "selected" : ""} ${takeProfitSelection.recommendedTier === tier ? "recommended" : ""}"><b>TP${tier}</b><strong>${escapeHtml(signal[`take_profit_${tier}_price`] || "--")}</strong></span>`).join("")}</div></div>
     </div>
-    ${inferenceChartShell(signal)}
     <div class="decision-evidence-grid">
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
       <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
     </div>
     ${(decision.trigger || decision.invalidation) ? `<div class="decision-conditions">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</div>` : ""}
-    <div class="analysis-section">
-      <div class="analysis-section-title"><i data-lucide="activity" size="14"></i>行情快照</div>
-      <div class="analysis-market-grid grouped">
-        <div class="market-group">
-          <span class="market-group-title">行情</span>
-          <div class="market-group-cells">
-            <div><span>最新价 <em class="market-unit">USD/oz</em></span><strong>${marketValue(market, "latest_price", 2)}</strong></div>
-            <div><span>SMA20 <em class="market-unit">USD/oz</em></span><strong>${marketValue(market, "sma_20", 2)}</strong></div>
-            <div><span>偏离 SMA20 <em class="market-unit">USD</em></span><strong>${escapeHtml(smaDeviation)}</strong></div>
-          </div>
-        </div>
-        <div class="market-group">
-          <span class="market-group-title">波动</span>
-          <div class="market-group-cells">
-            <div><span>ATR <em class="market-unit">USD</em></span><strong>${Number.isFinite(Number(atrValue)) ? fmt(atrValue, 2) : "--"}</strong></div>
-            <div><span>涨跌幅 <em class="market-unit">%</em></span><strong>${Number.isFinite(Number(market.price_change_pct)) ? signedText(market.price_change_pct, 3, "%") : "--"}</strong></div>
-          </div>
-        </div>
-      </div>
-    </div>
+    ${inferenceChartShell(signal)}
     <div class="analysis-section">
       <div class="analysis-section-title"><i data-lucide="file-text" size="14"></i>分析正文</div>
     </div>

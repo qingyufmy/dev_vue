@@ -30,6 +30,7 @@ const DIVERGENCE_MIN_AREA_RATIO = 0.85
 const DIVERGENCE_MIN_PEAK_RATIO = 0.95
 const MACD_WARMUP_BARS = 40
 const CHAN_ENTRY_MAX_AGE_BARS = 20
+const CHAN_STRUCTURE_MAX_AGE_BARS = 120
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
 // === MACD Series Calculation ===
@@ -834,6 +835,20 @@ function classifyChanTrend(segments, centers, latestPrice, divergence, reliabili
         center_id: latestCenter.id, segment_id: breakoutSegment.id,
       }
     }
+    if (latestCenter.status !== 'closed' && Number(latestPrice) > latestCenter.zh) {
+      return {
+        state: 'upward_breakout_pending', direction: 'up', phase: 'breakout_candidate', reversal_bias: 'none',
+        confidence: 'low', reason: 'price_above_unclosed_center',
+        center_id: latestCenter.id, segment_id: latestSegment.id,
+      }
+    }
+    if (latestCenter.status !== 'closed' && Number(latestPrice) < latestCenter.zl) {
+      return {
+        state: 'downward_breakout_pending', direction: 'down', phase: 'breakout_candidate', reversal_bias: 'none',
+        confidence: 'low', reason: 'price_below_unclosed_center',
+        center_id: latestCenter.id, segment_id: latestSegment.id,
+      }
+    }
     return {
       state: 'consolidation', direction: 'neutral', phase: 'range', reversal_bias: 'none',
       confidence: capStructureConfidence(reliability), reason: latestCenter.status === 'closed' ? 'price_returned_to_center' : 'center_active',
@@ -1068,10 +1083,20 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   const centers = buildCenters(validSegs)
   if (centers.length === 0) warnings.push('no_valid_center')
   const latestCenter = centers.length > 0 ? centers[centers.length - 1] : null
-  const activeCenter = latestCenter?.status === 'closed' ? null : latestCenter
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
   const lastBi = allBis[allBis.length - 1]
   const latest = parseFloat(rates[rates.length - 1].close)
+  const activeCenter = latestCenter && latestCenter.status !== 'closed' && latest >= latestCenter.zl && latest <= latestCenter.zh
+    ? latestCenter
+    : null
+  const lastSegmentEndIndex = Number(lastSeg?.raw_end_idx)
+  const confirmedStructureAgeBars = Number.isFinite(lastSegmentEndIndex)
+    ? Math.max(0, closedRates.length - 1 - lastSegmentEndIndex)
+    : null
+  const confirmedStructureStale = confirmedStructureAgeBars != null && confirmedStructureAgeBars > CHAN_STRUCTURE_MAX_AGE_BARS
+  if (confirmedStructureStale) {
+    warnings.push('confirmed_structure_stale')
+  }
   let priceVsCenter = 'none'
   if (latestCenter) {
     if (latest > latestCenter.zh) priceVsCenter = 'above'
@@ -1103,7 +1128,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   }
 
   let reliability = 'low'
-  if (historySufficient && closedHistorySufficient && timeLocationReliable && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
+  if (confirmedStructureStale) reliability = 'low'
+  else if (historySufficient && closedHistorySufficient && timeLocationReliable && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
   else if (historySufficient && closedHistorySufficient && validSegs.length > 0) reliability = 'medium'
 
   let status = 'ok'
@@ -1140,6 +1166,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     },
     raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
     fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
+    confirmed_structure_age_bars: confirmedStructureAgeBars,
+    confirmed_structure_max_age_bars: CHAN_STRUCTURE_MAX_AGE_BARS,
     historical_segment_run_count: historicalSegmentRuns.length,
     historical_segment_count: historicalSegmentRuns.reduce((sum, run) => sum + run.length, 0),
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
