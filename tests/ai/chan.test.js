@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 
-const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, computeChan } = __chanTest
+const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, computeChan } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -469,7 +469,7 @@ describe('buildCenters', () => {
 describe('Chan payload summaries', () => {
   it('线段摘要包含比较三类买卖点所需字段', () => {
     const summary = summarizeSegment({ id: 2, dir: 'down', start_price: 120, end_price: 90, high: 122, low: 88, bi_ids: [4, 5, 6], ended_reason: 'broken', broken: true })
-    expect(summary).toEqual({ id: 2, dir: 'down', start_price: 120, end_price: 90, high: 122, low: 88, bi_count: 3, ended_reason: 'broken', broken: true })
+    expect(summary).toMatchObject({ id: 2, dir: 'down', start_price: 120, end_price: 90, high: 122, low: 88, bi_count: 3, ended_reason: 'broken', broken: true })
     expect(summarizeSegment(undefined)).toBeNull()
   })
 
@@ -674,6 +674,58 @@ describe('detectDivergence', () => {
     const hist = [...Array(40).fill(0), 5, 5, 5, 5, 1, 1]
     const result = detectDivergence(segs, bis, hist, [{ start_segment_id: 2, end_segment_id: 4 }])
     expect(result).toMatchObject({ type: 'top', strength: 'weak', reason: 'macd_area_divergence_only', peak_prev: 5, peak_cur: 5 })
+  })
+})
+
+describe('divergence segment locator', () => {
+  function divergenceFixture() {
+    const segments = [
+      { id: 1, dir: 'down', bi_ids: [1, 2, 3], weak: false, high: 120, low: 90 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, start_price: 95, end_price: 125, high: 125, low: 95 },
+      { id: 3, dir: 'down', bi_ids: [7, 8, 9], weak: false, high: 118, low: 95 },
+      { id: 4, dir: 'up', bi_ids: [10, 11, 12], weak: false, start_price: 100, end_price: 130, high: 130, low: 100 },
+    ]
+    const bis = [
+      { id: 4, raw_start_idx: 40, raw_end_idx: 40 }, { id: 5, raw_start_idx: 41, raw_end_idx: 41 }, { id: 6, raw_start_idx: 42, raw_end_idx: 42 },
+      { id: 10, raw_start_idx: 46, raw_end_idx: 46, high: 110, low: 100 },
+      { id: 11, raw_start_idx: 47, raw_end_idx: 47, high: 122, low: 105 },
+      { id: 12, raw_start_idx: 48, raw_end_idx: 48, high: 130, low: 110 },
+    ]
+    const hist = Array(60).fill(0)
+    hist[40] = 5; hist[41] = 5; hist[42] = 5
+    hist[46] = 1; hist[47] = 1; hist[48] = 1
+    const centers = [{ id: 7, status: 'closed', start_segment_id: 3, end_segment_id: 3 }]
+    const rates = Array.from({ length: 60 }, (_, index) => ({ time: `t${index}` }))
+    return { segments, bis, hist, centers, rates }
+  }
+
+  it('为确认背驰段返回进入段、离开段和时间范围', () => {
+    const { segments, bis, hist, centers, rates } = divergenceFixture()
+    const result = detectDivergence(segments, bis, hist, centers, rates)
+    expect(result).toMatchObject({
+      type: 'top', state: 'confirmed', confirmed: true,
+      center_id: 7, entry_segment_id: 2, departure_segment_id: 4,
+      entry_segment: { start_time: 't40', end_time: 't42' },
+      departure_segment: { start_time: 't46', end_time: 't48' },
+    })
+  })
+
+  it('历史列表只保留已确认背驰并携带定位信息', () => {
+    const { segments, bis, hist, centers, rates } = divergenceFixture()
+    const history = detectDivergenceHistory(segments, bis, hist, centers, rates)
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({ type: 'top', state: 'confirmed', departure_segment_id: 4 })
+  })
+
+  it('形成中的候选背驰明确标记为未确认', () => {
+    const { segments, bis, hist, centers, rates } = divergenceFixture()
+    const candidate = { dir: 'up', bi_ids: [10, 11, 12], start_price: 100, end_price: 130 }
+    const result = detectFormingDivergence(candidate, segments.slice(0, 3), bis, hist, centers, rates)
+    expect(result).toMatchObject({
+      type: 'top', state: 'forming', confirmed: false,
+      entry_segment_id: 2, departure_segment_id: 4,
+      departure_segment: { start_time: 't46', end_time: 't48' },
+    })
   })
 })
 

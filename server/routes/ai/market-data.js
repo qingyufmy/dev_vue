@@ -23,6 +23,7 @@ const _bridgeLocks = new Map()
 const MIN_BARS_PER_BI = 5
 const MIN_BIS_PER_SEGMENT = 3
 const FEED_LAST_N_BIS = 6
+const FEED_LAST_N_DIVERGENCES = 6
 const ENABLE_DIVERGENCE = true
 const MIN_KLINES_FOR_CHAN = 30
 const DIVERGENCE_MIN_AREA_RATIO = 0.85
@@ -356,6 +357,8 @@ function buildSegmentsFromAnchor(confirmedBis, options = {}) {
     segments.push({
       id: segments.length + 1,
       dir,
+      raw_start_idx: Math.min(...segBis.map(b => b.raw_start_idx)),
+      raw_end_idx: Math.max(...segBis.map(b => b.raw_end_idx)),
       start_price: startPrice,
       end_price: endPrice,
       high: Math.max(...segBis.map(b => b.high)),
@@ -496,11 +499,47 @@ function buildCenters(components) {
 }
 
 // === Chan Theory: Divergence Detection (conservative) ===
-function detectDivergence(segments, bis, macdHist, centers = []) {
-  const emptyResult = reason => ({ type: 'none', strength: 'none', reason, area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0, price_extreme_cur: 0, price_extreme_prev: 0 })
+function divergenceResult(reason, overrides = {}) {
+  return {
+    type: 'none', state: 'unavailable', confirmed: false, segment_confirmed: false, strength: 'none', reason,
+    category: null, center_id: null, entry_segment_id: null, departure_segment_id: null,
+    entry_segment: null, departure_segment: null,
+    area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0,
+    price_extreme_cur: 0, price_extreme_prev: 0,
+    ...overrides,
+  }
+}
+
+function segmentLocation(segment, bis, rates = []) {
+  if (!segment) return null
+  const price = value => Number.isFinite(Number(value)) ? round5(Number(value)) : null
+  const segmentBis = (segment.bi_ids || []).map(id => bis.find(b => b.id === id)).filter(Boolean)
+  const startIndex = Number.isFinite(Number(segment.raw_start_idx))
+    ? Number(segment.raw_start_idx)
+    : segmentBis.length ? Math.min(...segmentBis.map(b => Number(b.raw_start_idx))) : null
+  const endIndex = Number.isFinite(Number(segment.raw_end_idx))
+    ? Number(segment.raw_end_idx)
+    : segmentBis.length ? Math.max(...segmentBis.map(b => Number(b.raw_end_idx))) : null
+  return {
+    id: segment.id ?? null,
+    dir: segment.dir || null,
+    start_index: startIndex,
+    end_index: endIndex,
+    start_time: startIndex != null ? rates[startIndex]?.time ?? null : null,
+    end_time: endIndex != null ? rates[endIndex]?.time ?? null : null,
+    start_price: price(segment.start_price),
+    end_price: price(segment.end_price),
+    high: price(segment.high),
+    low: price(segment.low),
+  }
+}
+
+function evaluateDivergence(current, segments, bis, macdHist, centers = [], rates = [], state = 'confirmed') {
+  const emptyResult = reason => divergenceResult(reason, { state: state === 'forming' ? 'forming' : 'unavailable' })
   if (!ENABLE_DIVERGENCE || !macdHist || macdHist.length === 0) return emptyResult('no_macd_data')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
-  if (validSegs.length < 2) return emptyResult('insufficient_valid_segments')
+  if (!current || !Array.isArray(current.bi_ids) || current.bi_ids.length < MIN_BIS_PER_SEGMENT) return emptyResult('insufficient_valid_segments')
+  if (validSegs.length < (state === 'forming' ? 1 : 2)) return emptyResult('insufficient_valid_segments')
   if (centers.length === 0) return emptyResult('no_valid_center')
 
   function calcMacdStats(biIds, dir) {
@@ -530,19 +569,29 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
   // Compare the latest departure segment with the same-direction segment that
   // entered the same center. This prevents unrelated historical segments from
   // being paired solely because their direction matches.
-  const current = validSegs[validSegs.length - 1]
   const eligibleCenters = centers.filter(c => current.id === (c.end_segment_id || 0) + 1)
   if (eligibleCenters.length === 0) return emptyResult('not_after_center')
   const lastCenter = eligibleCenters[eligibleCenters.length - 1]
   const prev = validSegs.find(s => s.id === lastCenter.start_segment_id - 1)
   if (!prev || prev.dir !== current.dir) return emptyResult('no_entry_segment')
   const cur = current
+  const context = {
+    state,
+    confirmed: false,
+    segment_confirmed: state === 'confirmed',
+    category: 'center_departure',
+    center_id: lastCenter.id ?? null,
+    entry_segment_id: prev.id ?? null,
+    departure_segment_id: cur.id ?? null,
+    entry_segment: segmentLocation(prev, bis, rates),
+    departure_segment: segmentLocation(cur, bis, rates),
+  }
 
   const comparisonBis = [...prev.bi_ids, ...cur.bi_ids]
     .map(id => bis.find(b => b.id === id))
     .filter(Boolean)
   if (comparisonBis.some(b => Number(b.raw_start_idx) < MACD_WARMUP_BARS)) {
-    return emptyResult('macd_warmup_overlap')
+    return divergenceResult('macd_warmup_overlap', context)
   }
 
   const prevMacd = calcMacdStats(prev.bi_ids, cur.dir)
@@ -552,7 +601,7 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
   const peakPrev = prevMacd.peak
   const peakCur = curMacd.peak
 
-  if (areaCur === 0 || areaPrev === 0) return { type: 'none', strength: 'none', reason: 'invalid_macd_area', area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev), price_extreme_cur: 0, price_extreme_prev: 0 }
+  if (areaCur === 0 || areaPrev === 0) return divergenceResult('invalid_macd_area', { ...context, area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev) })
 
   const areaDiverged = areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO
   const heightDiverged = peakCur < peakPrev
@@ -567,18 +616,55 @@ function detectDivergence(segments, bis, macdHist, centers = []) {
   const macdFields = { area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev) }
 
   if (cur.dir === 'up') {
-    if (cur.high <= prev.high) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    if (areaDiverged || heightDiverged) return { type: 'top', category: 'center_departure', trend_confirmed: false, strength, reason, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
-    return { type: 'none', strength: 'none', reason, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) }
+    if (cur.high <= prev.high) return divergenceResult('no_price_extreme_break', { ...context, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) })
+    if (areaDiverged || heightDiverged) return divergenceResult(reason, { ...context, type: 'top', confirmed: state === 'confirmed', trend_confirmed: false, strength, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) })
+    return divergenceResult(reason, { ...context, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) })
   } else {
-    if (cur.low >= prev.low) return { type: 'none', strength: 'none', reason: 'no_price_extreme_break', ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    if (areaDiverged || heightDiverged) return { type: 'bottom', category: 'center_departure', trend_confirmed: false, strength, reason, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
-    return { type: 'none', strength: 'none', reason, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) }
+    if (cur.low >= prev.low) return divergenceResult('no_price_extreme_break', { ...context, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) })
+    if (areaDiverged || heightDiverged) return divergenceResult(reason, { ...context, type: 'bottom', confirmed: state === 'confirmed', trend_confirmed: false, strength, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) })
+    return divergenceResult(reason, { ...context, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) })
   }
 }
 
-function summarizeSegment(segment) {
+function detectDivergence(segments, bis, macdHist, centers = [], rates = []) {
+  const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
+  return evaluateDivergence(validSegs[validSegs.length - 1], validSegs, bis, macdHist, centers, rates, 'confirmed')
+}
+
+function detectDivergenceHistory(segments, bis, macdHist, centers = [], rates = []) {
+  const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
+  return validSegs
+    .map(segment => evaluateDivergence(segment, validSegs, bis, macdHist, centers, rates, 'confirmed'))
+    .filter(result => result.type === 'top' || result.type === 'bottom')
+    .slice(-FEED_LAST_N_DIVERGENCES)
+}
+
+function buildFormingSegment(candidate, bis, nextId) {
+  if (!candidate || !Array.isArray(candidate.bi_ids) || candidate.bi_ids.length < MIN_BIS_PER_SEGMENT) return null
+  const candidateBis = candidate.bi_ids.map(id => bis.find(b => b.id === id)).filter(Boolean)
+  if (candidateBis.length < MIN_BIS_PER_SEGMENT) return null
+  return {
+    ...candidate,
+    id: nextId,
+    high: Math.max(...candidateBis.map(b => b.high)),
+    low: Math.min(...candidateBis.map(b => b.low)),
+    raw_start_idx: Math.min(...candidateBis.map(b => b.raw_start_idx)),
+    raw_end_idx: Math.max(...candidateBis.map(b => b.raw_end_idx)),
+    weak: false,
+  }
+}
+
+function detectFormingDivergence(candidate, segments, bis, macdHist, centers = [], rates = []) {
+  const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
+  const formingSegment = buildFormingSegment(candidate, bis, (validSegs[validSegs.length - 1]?.id || 0) + 1)
+  return formingSegment
+    ? evaluateDivergence(formingSegment, validSegs, bis, macdHist, centers, rates, 'forming')
+    : emptyDivergence('no_forming_segment')
+}
+
+function summarizeSegment(segment, bis = [], rates = []) {
   if (!segment) return null
+  const location = segmentLocation(segment, bis, rates)
   return {
     id: segment.id,
     dir: segment.dir,
@@ -589,6 +675,10 @@ function summarizeSegment(segment) {
     bi_count: segment.bi_ids.length,
     ended_reason: segment.ended_reason,
     broken: segment.broken,
+    start_index: location?.start_index ?? null,
+    end_index: location?.end_index ?? null,
+    start_time: location?.start_time ?? null,
+    end_time: location?.end_time ?? null,
   }
 }
 
@@ -611,11 +701,7 @@ function summarizeCenter(center, timeframe) {
 }
 
 function emptyDivergence(reason = 'structure_unavailable') {
-  return {
-    type: 'none', strength: 'none', reason,
-    area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0,
-    price_extreme_cur: 0, price_extreme_prev: 0,
-  }
+  return divergenceResult(reason)
 }
 
 function emptyChanResult(overrides = {}) {
@@ -645,6 +731,8 @@ function emptyChanResult(overrides = {}) {
     latest_center: null,
     price_vs_center: 'none',
     divergence: emptyDivergence(),
+    forming_divergence: emptyDivergence('no_forming_segment'),
+    recent_divergences: [],
     warnings: [],
     ...overrides,
   }
@@ -715,7 +803,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     else if (latest < latestCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
   }
-  const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers)
+  const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers, closedRates)
+  const recentDivergences = detectDivergenceHistory(validSegs, allBis, closedMacdHist, centers, closedRates)
+  const formingSegment = buildFormingSegment(candidate, allBis, (lastSeg?.id || 0) + 1)
+  const formingDivergence = detectFormingDivergence(candidate, validSegs, allBis, closedMacdHist, centers, closedRates)
   if (divergence.type !== 'none') {
     // ok
   } else if (divergence.reason === 'invalid_macd_area' || divergence.reason === 'no_macd_data') {
@@ -744,20 +835,22 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
     developing_bi: developingBi,
     recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
-    current_segment: summarizeSegment(lastSeg),
-    prev_segment: summarizeSegment(validSegs[validSegs.length - 2]),
-    candidate_segment: candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price) } : null,
+    current_segment: summarizeSegment(lastSeg, allBis, closedRates),
+    prev_segment: summarizeSegment(validSegs[validSegs.length - 2], allBis, closedRates),
+    candidate_segment: formingSegment ? { ...summarizeSegment(formingSegment, allBis, closedRates), confirmed: false } : candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price), confirmed: false } : null,
     current_center: summarizeCenter(latestCenter, timeframe),
     active_center: summarizeCenter(activeCenter, timeframe),
     latest_center: summarizeCenter(latestCenter, timeframe),
     price_vs_center: priceVsCenter,
     divergence,
+    forming_divergence: formingDivergence,
+    recent_divergences: recentDivergences,
     warnings,
   }
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()

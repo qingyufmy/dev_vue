@@ -15,6 +15,11 @@ const PENDING_LIFECYCLE_RULE = `
 ## 挂单生命周期硬性规则
 挂单有效期、过期识别和到期取消由 MT5 与后端协调器负责。禁止比较任何时间字符串来判断挂单是否过期；禁止在 analysis 或 reasoning 中声称某挂单“已过期”“超时失效”“已自动取消”；禁止仅以时间、有效期或过期为理由输出 cancel_pending。cancel_pending 只能用于价格条件已明显失效、市场结构已破坏或方向逻辑已反转等非时间原因。是否存在挂单只能依据 pending_orders 当前数组；数组中不存在时只能表述“当前输入未包含该挂单”，不得推断其已过期或已取消。`
 
+const CHAN_DIVERGENCE_RULE = `
+## 缠论背驰使用规则
+chan.divergence 仅表示最新确认线段的背驰判断；只有 type 为 top 或 bottom、state 为 confirmed 且 confirmed=true 时，才能称为“已确认背驰段”。chan.forming_divergence 仅表示形成中的候选背驰，不得当作已确认反转或单独作为执行依据。chan.recent_divergences 是当前历史窗口内最近的已确认背驰段，entry_segment 与 departure_segment 给出进入段、离开段的起止时间和价格。必须先检查 chan.status、reliability、window_stable 和 warnings；结构不可靠时应降低该证据权重。背驰是行情证据，不等同于反转已经确认，也不直接构成交易指令。
+`
+
 let _schemaCache = null
 let _schemaCacheTs = 0
 const SCHEMA_CACHE_TTL = 300_000 // 5 minutes
@@ -257,7 +262,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const useChan = config._use_chan_analysis === undefined
       ? /\{\{USE_CHAN\}\}/.test(effectivePrompt)
       : Boolean(config._use_chan_analysis)
-    const cleanPrompt = fullPrompt.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
+    const promptWithChanRules = useChan ? `${fullPrompt}\n\n${CHAN_DIVERGENCE_RULE}` : fullPrompt
+    const cleanPrompt = promptWithChanRules.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
     console.log(`[LLM] Chan analysis: ${useChan ? 'enabled' : 'disabled'}`)
 
     const aiPayload = config._market_only ? { ...market } : {

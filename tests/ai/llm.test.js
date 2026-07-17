@@ -392,6 +392,8 @@ describe('maybeAiSignal', () => {
     await maybeAiSignal(null, config, market)
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.messages[0].content).not.toContain('{{USE_CHAN}}')
+    expect(body.messages[0].content).toContain('缠论背驰使用规则')
+    expect(body.messages[0].content).toContain('forming_divergence')
   })
 
   it('结构化开关启用时payload保留chan', async () => {

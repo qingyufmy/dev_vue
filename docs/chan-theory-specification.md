@@ -384,3 +384,26 @@ DEBUG_LLM_PAYLOAD=1  # 打印 AI payload 截断
 | early return warnings | 1 | 多 warning 同时保留 |
 
 测试数量会随功能持续增长，以实际执行 `vitest run` 的结果为准，不在本文维护固定数量。
+
+---
+
+## 13. 背驰段定位输出
+
+背驰定位以原始 K 线索引为坐标，不使用包含处理后的临时索引。每个确认线段增加：
+
+- `start_index` / `end_index`：线段覆盖的原始 K 线下标。
+- `start_time` / `end_time`：对应桥接行情中的原始时间值。
+- `start_price` / `end_price` / `high` / `low`：用于图表定位和审计的价格范围。
+
+`divergence` 表示最新确认线段的背驰结果。确认背驰同时携带：
+
+- `state: confirmed`、`confirmed: true`。
+- `center_id`：对应中枢。
+- `entry_segment_id` / `departure_segment_id`：同一中枢的直接进入段和直接离开段。
+- `entry_segment` / `departure_segment`：两段完整的时间、索引和价格定位信息。
+
+`recent_divergences` 保存当前 300/500 根历史窗口内最近 6 个已确认背驰段，只收录 `top` 或 `bottom`，不收录普通的“无背驰”结果。
+
+`forming_divergence` 对尚未确认的候选线段执行相同力度比较，但始终输出 `state: forming`、`confirmed: false`。它只能作为观察证据，不能称为已确认背驰，也不能单独触发交易。
+
+AI 系统提示会强制区分确认背驰和形成中背驰，并要求先检查 `status`、`reliability`、`window_stable` 与 `warnings`。背驰仍只是行情结构证据，不等同于反转已经确认。
