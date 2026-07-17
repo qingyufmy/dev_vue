@@ -2297,7 +2297,10 @@ async function openPeriodReviewDetail(id) {
       ["risk_observations", "风险观察"], ["chan_issue_summary", "缠论结构问题"], ["next_month_actions", "下月行动"]]
     : [["repeated_issues", "重复出现的问题"], ["strengths", "做得好的地方"], ["daily_lessons", "当日经验"], ["risk_observations", "风险观察"]];
   const assessments = isMonthly ? (content.daily_assessments || []) : (content.trade_assessments || []);
-  const diagnostics = isMonthly ? [] : (content.chan_diagnoses || []);
+  const diagnostics = isMonthly ? [] : [
+    ...(content.period_chan_assessment ? [{ ...content.period_chan_assessment, explanation:`整日结构：${content.period_chan_assessment.explanation || '无补充说明'}` }] : []),
+    ...(content.chan_diagnoses || []),
+  ];
   detail.innerHTML = `<header class="period-review-detail-header">
       <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · 策略版本 v${Number(review.strategy_version || 1)}</p></div>
       <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>

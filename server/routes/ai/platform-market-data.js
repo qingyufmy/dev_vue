@@ -180,7 +180,8 @@ async function maybeCleanupMarketData() {
 async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   const symbol = String(params.symbol || '').trim()
   const timeframe = String(params.timeframe || 'M30').toUpperCase()
-  const count = Math.min(1000, Math.max(2, Number(params.count) || 100))
+  const countLimit = params.review_window === true ? 5000 : 1000
+  const count = Math.min(countLimit, Math.max(2, Number(params.count) || 100))
   if (platformUserId) {
     const clock = getPlatformMarketClockState(platformUserId)
     const source = await findSource(platformUserId, clock).catch(() => ({ id: null }))

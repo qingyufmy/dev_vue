@@ -144,7 +144,8 @@ async function createShortMemoryFromApprovedDailyReview(periodCaseId, userId) {
   const scope = { strategy_id: Number(reviewCase.strategy_id), strategy_version: Number(reviewCase.strategy_version || 1),
     symbol: null, timeframe: null, source_period: reviewCase.period_key }
   const conditions = { decision_quality: content.decision_quality || 'insufficient_evidence',
-    chan_diagnoses: Array.isArray(content.chan_diagnoses) ? content.chan_diagnoses.map(item => ({ status: item.status, issue_source: item.issue_source, impact_on_decision: item.impact_on_decision })) : [] }
+    chan_diagnoses: Array.isArray(content.chan_diagnoses) ? content.chan_diagnoses.map(item => ({ status: item.status, issue_source: item.issue_source, impact_on_decision: item.impact_on_decision })) : [],
+    period_chan_assessment:content.period_chan_assessment || null }
   const canonical = { scope, conditions, lesson, anti_pattern: antiPattern }
   const now = beijingNow()
   await queryRun(`INSERT IGNORE INTO experience_memory_items

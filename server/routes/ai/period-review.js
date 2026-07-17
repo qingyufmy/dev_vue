@@ -5,6 +5,7 @@ import { ensureReviewCaseForOutcome } from './review-workflow.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
+import { buildDailyPeriodMarketEvidence, monthlyPeriodMarketDigest } from './period-market-evidence.js'
 
 const DAY_MS = 86400000
 const DEFAULT_MT5_OFFSET_MINUTES = 180
@@ -153,7 +154,7 @@ const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_int
 
 export function validateDailyReviewContent(input, outcomeIds = []) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_daily_review_content')
-  const allowed = new Set(['period_summary', 'decision_quality', 'trade_assessments', 'repeated_issues', 'strengths', 'daily_lessons', 'risk_observations', 'chan_diagnoses', 'confidence'])
+  const allowed = new Set(['period_summary', 'decision_quality', 'trade_assessments', 'repeated_issues', 'strengths', 'daily_lessons', 'risk_observations', 'chan_diagnoses', 'period_chan_assessment', 'confidence'])
   if (Object.keys(input).some(key => !allowed.has(key))) throw new Error('unknown_daily_review_field')
   if (!String(input.period_summary || '').trim()) throw new Error('daily_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_daily_review_decision')
@@ -173,10 +174,17 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
       impact_on_decision: String(item.impact_on_decision || 'unknown'), explanation: String(item.explanation || '').trim(), confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
   })
   if (new Set(chanDiagnoses.map(item => item.outcome_id)).size !== known.size) throw new Error('daily_review_chan_coverage_incomplete')
+  const periodChan = input.period_chan_assessment && typeof input.period_chan_assessment === 'object'
+    ? input.period_chan_assessment : { status:'insufficient_evidence', issue_source:'unknown', explanation:'', affected_outcome_ids:[], confidence:0 }
+  const affectedOutcomeIds = [...new Set((Array.isArray(periodChan.affected_outcome_ids) ? periodChan.affected_outcome_ids : []).map(Number))]
+  if (!CHAN_SOURCES.has(periodChan.issue_source) || affectedOutcomeIds.some(id => !known.has(id))) throw new Error('invalid_daily_period_chan_assessment')
   return {
     period_summary: String(input.period_summary).trim(), decision_quality: input.decision_quality, trade_assessments: assessments,
     repeated_issues: input.repeated_issues.map(String), strengths: input.strengths.map(String), daily_lessons: input.daily_lessons.map(String),
-    risk_observations: input.risk_observations.map(String), chan_diagnoses: chanDiagnoses, confidence: Number(input.confidence),
+    risk_observations: input.risk_observations.map(String), chan_diagnoses: chanDiagnoses,
+    period_chan_assessment:{ status:String(periodChan.status || 'insufficient_evidence'), issue_source:periodChan.issue_source,
+      explanation:String(periodChan.explanation || '').trim(), affected_outcome_ids:affectedOutcomeIds,
+      confidence:Math.min(1, Math.max(0, Number(periodChan.confidence || 0))) }, confidence: Number(input.confidence),
   }
 }
 
@@ -247,7 +255,9 @@ async function upsertDailyGroup(group, clock) {
   if (existingCase) {
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
-    if (existingCase.current_version_id || existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
+    const existingEvidence = parse(existingCase.evidence_json, {}) || {}
+    const needsPeriodMarketUpgrade = !existingEvidence.period_market
+    if (existingCase.current_version_id || (existingJob && !needsPeriodMarketUpgrade)) return { id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
   }
   const prepared = []
@@ -264,6 +274,11 @@ async function upsertDailyGroup(group, clock) {
     statistics: dailyReviewStatistics(group.outcomes),
     sources,
   }
+  evidence.period_market = await buildDailyPeriodMarketEvidence({ userId:group.userId, strategyId:group.strategyId,
+    symbols:group.outcomes.map(item => item.symbol), startUtcMs:group.startUtcMs, endUtcMs:group.endUtcMs, sources })
+  evidence.source_quality = { complete:complete && evidence.period_market.status === 'complete',
+    trade_evidence_complete:complete, period_market_status:evidence.period_market.status,
+    period_market_reason:evidence.period_market.reason || null }
   const evidenceHash = sha256(JSON.stringify(evidence))
   const now = beijingNow()
   await queryRun(`INSERT INTO period_review_cases
@@ -327,6 +342,7 @@ async function upsertMonthlyGroup(group, clock) {
     trading_account_id: Number(row.trading_account_id || 0), review_status: row.status,
     evidence_hash: row.evidence_hash, content_hash: row.current_content_hash,
     statistics: parse(row.evidence_json, {})?.statistics || {}, review: parse(row.current_content_json, {}) }))
+  const periodMarketDigest = monthlyPeriodMarketDigest(group.dailyCases)
   const evidence = {
     schema_version: 1,
     period: { type: 'monthly', key: group.periodKey, timezone_offset_minutes: group.offsetMinutes,
@@ -334,7 +350,10 @@ async function upsertMonthlyGroup(group, clock) {
     strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope },
     statistics: monthlyReviewStatistics(group.dailyCases),
     source_quality: { approved_days: sources.filter(item => item.review_status === 'approved').length,
-      unconfirmed_days: sources.filter(item => item.review_status !== 'approved').length },
+      unconfirmed_days: sources.filter(item => item.review_status !== 'approved').length,
+      market_complete_days:periodMarketDigest.filter(item => item.status === 'complete').length,
+      market_partial_days:periodMarketDigest.filter(item => item.status !== 'complete').length },
+    period_market_digest: periodMarketDigest,
     sources,
   }
   const evidenceHash = sha256(JSON.stringify(evidence))
@@ -415,12 +434,15 @@ async function generateDailyReview(job, requestModel) {
     trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
     repeated_issues: ['string'], strengths: ['string'], daily_lessons: ['string'], risk_observations: ['string'],
     chan_diagnoses: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, status: 'normal|suspected_issue|confirmed_issue|insufficient_evidence', issue_source: 'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown', impact_on_decision: 'none|minor|material|unknown', explanation: 'string', confidence: 0.5 })), confidence: 0.5 }
+  shape.period_chan_assessment = { status:'normal|suspected_issue|confirmed_issue|insufficient_evidence',
+    issue_source:'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown',
+    explanation:'string', affected_outcome_ids:outcomeIds, confidence:0.5 }
   const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
     model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
     maxTokens: Number(resolved.model.max_tokens || 3000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     messages: [
-      { role: 'system', content: '你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。只返回 JSON。' },
+      { role: 'system', content: '你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。只返回 JSON。' },
       { role: 'user', content: JSON.stringify({ output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
@@ -508,7 +530,7 @@ async function generateMonthlyReview(job, requestModel) {
     maxTokens: Number(resolved.model.max_tokens || 4000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     messages: [
-      { role: 'system', content: '你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。只能从日复盘证据中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。只返回 JSON。' },
+      { role: 'system', content: '你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。period_market_digest 是各个交易日使用完整日内 K 线计算后的行情与缠论结构摘要，只能从日复盘和这些摘要中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。只返回 JSON。' },
       { role: 'user', content: JSON.stringify({ output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },

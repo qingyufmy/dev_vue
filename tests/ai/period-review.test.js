@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+import { monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
   it('uses the calibrated MT5 offset for daily boundaries', () => {
@@ -144,5 +145,21 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('093_period_review_single_job_slot')
     expect(migration).toContain('uk_period_review_case_job_slot')
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
+  })
+})
+
+describe('period market evidence', () => {
+  it('requests the complete day plus Chan lookback without exceeding the review ceiling', () => {
+    const start = Date.parse('2026-07-16T21:00:00Z')
+    const end = Date.parse('2026-07-17T21:00:00Z')
+    expect(requiredReviewCandleCount(start, end, 'M1')).toBe(1642)
+    expect(requiredReviewCandleCount(start, end, 'M5')).toBe(490)
+    expect(requiredReviewCandleCount(start, end, 'H1')).toBe(226)
+  })
+
+  it('removes raw daily candles from the monthly digest but preserves structural conclusions', () => {
+    const digest = monthlyPeriodMarketDigest([{ id:4, period_key:'2026-07-16', evidence_json:JSON.stringify({ period_market:{ status:'complete', symbols:{ XAUUSD:{ M15:{ status:'complete', candle_count:96, expected_candle_count:96, first_time_utc_msc:1, last_time_utc_msc:2, full_period_candles:[{ t:1 }], summary:{ chan:{ status:'ok', segment_count:3 } } } } } } }) }])
+    expect(digest[0].symbols.XAUUSD.M15.summary.chan.segment_count).toBe(3)
+    expect(digest[0].symbols.XAUUSD.M15).not.toHaveProperty('full_period_candles')
   })
 })
