@@ -101,6 +101,20 @@ describe('memory persistence, invalidation and inference boundaries', () => {
     expect(memory).not.toContain('mt5Bridge')
   })
 
+  it('binds short memory to approved daily reviews and monthly compression to approved sources', () => {
+    expect(memory).toContain('createMemoryFromApprovedPeriodReview')
+    expect(memory).toContain("reviewCase.period_type !== 'daily'")
+    expect(memory).toContain("reviewCase.period_type !== 'monthly'")
+    expect(memory).toContain('monthly_memory_has_no_approved_daily_sources')
+    expect(memory).toContain("source: 'approved_monthly_review'")
+    expect(memory).toContain("reviewCase.status !== 'approved'")
+    expect(memory).toContain("status = 'compressed'")
+    expect(memory).toContain("status IN ('active','compressed')")
+    expect(migration).toContain('period_review_version_id')
+    expect(migration).toContain('uk_memory_period_review_version')
+    expect(migration).toContain('uk_memory_summary_period_review')
+  })
+
   it('stores only paired decision digests and hashes, never review bodies', () => {
     const result = pairedInferenceDigest({ signal_type: 'buy', entry_method: 'market', confidence: 0.8,
       recommended_volume: 0.01, analysis: 'private analysis body', reasoning: 'private reasoning body' })

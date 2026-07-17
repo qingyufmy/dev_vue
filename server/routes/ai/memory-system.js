@@ -123,6 +123,127 @@ export async function createMemoryFromApprovedReview(caseId, userId) {
   return item
 }
 
+async function approvedPeriodReview(periodCaseId, userId) {
+  const reviewCase = await queryOne(`SELECT cases.*, u.role AS user_role FROM period_review_cases cases
+    JOIN users u ON u.id = cases.user_id WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
+  if (!reviewCase || reviewCase.status !== 'approved' || !reviewCase.approved_version_id) throw new Error('approved_period_review_required')
+  if (reviewCase.strategy_scope !== 'private' || reviewCase.user_role === 'admin') throw new Error('personal_memory_requires_private_period_review')
+  const version = await queryOne('SELECT * FROM period_review_versions WHERE id = ? AND period_case_id = ?', [reviewCase.approved_version_id, periodCaseId])
+  if (!version) throw new Error('approved_period_review_version_missing')
+  return { reviewCase, version, content: parse(version.content_json, {}) }
+}
+
+async function createShortMemoryFromApprovedDailyReview(periodCaseId, userId) {
+  const { reviewCase, version, content } = await approvedPeriodReview(periodCaseId, userId)
+  if (reviewCase.period_type !== 'daily') throw new Error('daily_period_review_required')
+  const existing = await queryOne('SELECT * FROM experience_memory_items WHERE period_review_version_id = ?', [version.id])
+  if (existing) return existing
+  const lesson = sanitizeMemoryText([...(content.daily_lessons || []), ...(content.strengths || [])].join('；') || content.period_summary, 4000)
+  if (!lesson) throw new Error('approved_daily_review_has_no_lesson')
+  const antiPattern = sanitizeMemoryText([...(content.repeated_issues || []), ...(content.risk_observations || [])].join('；'), 4000)
+  const scope = { strategy_id: Number(reviewCase.strategy_id), strategy_version: Number(reviewCase.strategy_version || 1),
+    symbol: null, timeframe: null, source_period: reviewCase.period_key }
+  const conditions = { decision_quality: content.decision_quality || 'insufficient_evidence',
+    chan_diagnoses: Array.isArray(content.chan_diagnoses) ? content.chan_diagnoses.map(item => ({ status: item.status, issue_source: item.issue_source, impact_on_decision: item.impact_on_decision })) : [] }
+  const canonical = { scope, conditions, lesson, anti_pattern: antiPattern }
+  const now = beijingNow()
+  await queryRun(`INSERT IGNORE INTO experience_memory_items
+    (user_id, review_case_id, review_version_id, period_review_case_id, period_review_version_id, period_key,
+     strategy_id, strategy_version, memory_tier, symbol, timeframe, direction, entry_method, market_regime,
+     scope_json, conditions_json, lesson_text, anti_pattern_text, evidence_refs_json, ancestor_memory_ids_json,
+     content_hash, token_count, confidence, status, confirmed_at, expires_at, created_at, updated_at)
+    VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, 'short', NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'active', ?, ?, ?, ?)`, [
+    userId, reviewCase.id, version.id, reviewCase.period_key, reviewCase.strategy_id, Number(reviewCase.strategy_version || 1),
+    JSON.stringify(scope), JSON.stringify(conditions), lesson, antiPattern || null,
+    JSON.stringify([`period_review:${reviewCase.id}`, `period_review_version:${version.id}`]),
+    sha256(JSON.stringify(canonical)), tokenCount(`${lesson}\n${antiPattern}`), Number(content.confidence || 0.5),
+    now, afterDays(SHORT_MEMORY_TTL_DAYS), now, now,
+  ])
+  return queryOne('SELECT * FROM experience_memory_items WHERE period_review_version_id = ?', [version.id])
+}
+
+async function createMonthlyMemoryFromApprovedReview(periodCaseId, userId) {
+  const { reviewCase, version, content } = await approvedPeriodReview(periodCaseId, userId)
+  if (reviewCase.period_type !== 'monthly') throw new Error('monthly_period_review_required')
+  const existing = await queryOne('SELECT * FROM experience_memory_summaries WHERE period_review_version_id = ?', [version.id])
+  if (existing) return { summary: existing, longTermCandidates: [] }
+  const dailyCases = await queryAll(`SELECT daily.id, daily.status FROM period_review_sources sources
+    JOIN period_review_cases daily ON daily.id = sources.source_period_case_id
+    WHERE sources.period_case_id = ? AND daily.period_type = 'daily' ORDER BY daily.period_key, daily.id`, [reviewCase.id])
+  const approvedDailyCases = dailyCases.filter(row => row.status === 'approved')
+  for (const dailyCase of approvedDailyCases) await createShortMemoryFromApprovedDailyReview(dailyCase.id, userId)
+  if (!approvedDailyCases.length) throw new Error('monthly_memory_has_no_approved_daily_sources')
+  const dailyIds = approvedDailyCases.map(row => Number(row.id))
+  const placeholders = dailyIds.map(() => '?').join(',')
+  const memoryItems = await queryAll(`SELECT * FROM experience_memory_items WHERE user_id = ? AND period_review_case_id IN (${placeholders})
+    AND status = 'active' ORDER BY period_review_case_id, id`, [userId, ...dailyIds])
+  if (!memoryItems.length) throw new Error('monthly_memory_sources_missing')
+  const memoryByDailyCase = new Map(memoryItems.map(item => [Number(item.period_review_case_id), item]))
+  const sourceIds = memoryItems.map(item => Number(item.id)).sort((a, b) => a - b)
+  const sourceHash = sha256(JSON.stringify(sourceIds))
+  const scope = `${reviewCase.strategy_id}@${Number(reviewCase.strategy_version || 1)}:*:*`
+  const summaryText = sanitizeMemoryText([
+    content.period_summary,
+    ...(content.recurring_patterns || []).map(item => `重复模式：${item}`),
+    ...(content.strengths || []).map(item => `有效做法：${item}`),
+    ...(content.next_month_actions || []).map(item => `后续行动：${item}`),
+  ].filter(Boolean).join('。'), 12000)
+  if (!summaryText || tokenCount(summaryText) > SUMMARY_MAX_TOKENS) throw new Error('invalid_monthly_memory_summary')
+  return withTransaction(async run => {
+    const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [reviewCase.id])
+    if (!locked[0] || locked[0].status !== 'approved' || Number(locked[0].approved_version_id) !== Number(version.id)) throw new Error('approved_period_review_changed')
+    const [existingRows] = await run('SELECT * FROM experience_memory_summaries WHERE period_review_version_id = ? FOR UPDATE', [version.id])
+    if (existingRows[0]) return { summary: existingRows[0], longTermCandidates: [] }
+    const [versions] = await run('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM experience_memory_summaries WHERE user_id = ? AND scope_key = ? FOR UPDATE', [userId, scope])
+    const now = beijingNow()
+    await run(`UPDATE experience_memory_summaries SET status = 'superseded', invalidated_at = ?
+      WHERE user_id = ? AND scope_key = ? AND status = 'active'`, [now, userId, scope])
+    const [insert] = await run(`INSERT INTO experience_memory_summaries
+      (user_id, scope_key, period_review_case_id, period_review_version_id, period_key, version_no,
+       source_memory_ids_json, source_set_hash, summary_text, token_count, status, model_profile_id,
+       credential_source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 'monthly_review', ?)`, [
+      userId, scope, reviewCase.id, version.id, reviewCase.period_key, Number(versions[0].max_version) + 1,
+      JSON.stringify(sourceIds), sourceHash, summaryText, tokenCount(summaryText), now,
+    ])
+    await run(`UPDATE experience_memory_items SET status = 'compressed', updated_at = ?
+      WHERE user_id = ? AND id IN (${sourceIds.map(() => '?').join(',')}) AND status = 'active'`, [now, userId, ...sourceIds])
+    const longTermCandidates = []
+    for (const candidate of content.memory_candidates || []) {
+      const supportingCases = [...new Set((candidate.supporting_period_case_ids || []).map(Number))]
+      const supportingItems = supportingCases.map(id => memoryByDailyCase.get(id)).filter(Boolean)
+      if (supportingItems.length < 2 || supportingItems.length !== supportingCases.length) continue
+      const ids = supportingItems.map(item => Number(item.id)).sort((a, b) => a - b)
+      const candidateHash = sha256(JSON.stringify(ids))
+      const text = sanitizeMemoryText([candidate.lesson, candidate.anti_pattern ? `需要避免：${candidate.anti_pattern}` : ''].filter(Boolean).join('。'), 5000)
+      const conditions = { source: 'approved_monthly_review', period_key: reviewCase.period_key,
+        supporting_period_case_ids: supportingCases, support_count: supportingCases.length }
+      await run(`INSERT IGNORE INTO experience_long_term_memories
+        (user_id, strategy_id, strategy_version, period_review_case_id, period_review_version_id, period_key,
+         symbol, timeframe, direction, entry_method, market_regime, source_memory_ids_json, source_set_hash,
+         summary_text, conditions_json, confidence, support_count, token_count, status, candidate_reason, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'candidate', ?, ?, ?)`, [
+        userId, reviewCase.strategy_id, Number(reviewCase.strategy_version || 1), reviewCase.id, version.id, reviewCase.period_key,
+        JSON.stringify(ids), candidateHash, text, JSON.stringify(conditions), Number(candidate.confidence || 0.5),
+        supportingCases.length, tokenCount(text), `由 ${supportingCases.length} 个已确认日复盘支持`, now, now,
+      ])
+      const [created] = await run(`SELECT * FROM experience_long_term_memories WHERE user_id = ? AND strategy_id = ?
+        AND strategy_version = ? AND source_set_hash = ?`, [userId, reviewCase.strategy_id, Number(reviewCase.strategy_version || 1), candidateHash])
+      if (created[0]) longTermCandidates.push(created[0])
+    }
+    const [summaries] = await run('SELECT * FROM experience_memory_summaries WHERE id = ?', [insert.insertId])
+    return { summary: summaries[0], longTermCandidates }
+  })
+}
+
+export async function createMemoryFromApprovedPeriodReview(periodCaseId, userId) {
+  if (!await isAiFeatureEnabled('experience_memory_enabled', userId)) throw new Error('experience_memory_rollout_disabled')
+  const reviewCase = await queryOne('SELECT period_type FROM period_review_cases WHERE id = ? AND user_id = ?', [periodCaseId, userId])
+  if (!reviewCase) throw new Error('period_review_not_found')
+  if (reviewCase.period_type === 'daily') return { shortMemory: await createShortMemoryFromApprovedDailyReview(periodCaseId, userId) }
+  if (reviewCase.period_type === 'monthly') return createMonthlyMemoryFromApprovedReview(periodCaseId, userId)
+  throw new Error('invalid_review_period_type')
+}
+
 export async function setMemorySettings(userId, input = {}) {
   const enabled = input.enabled === undefined ? 1 : input.enabled ? 1 : 0
   const budget = Math.min(MAX_BUDGET, Math.max(100, Number(input.runtime_token_budget || DEFAULT_BUDGET)))
@@ -170,7 +291,7 @@ async function invalidateSummariesForSource(userId, memoryId) {
 
 export async function revokeMemoryItem(memoryId, userId) {
   const result = await queryRun(`UPDATE experience_memory_items SET status = 'revoked', revoked_at = ?, updated_at = ?
-    WHERE id = ? AND user_id = ? AND status IN ('active','duplicate_candidate')`, [beijingNow(), beijingNow(), memoryId, userId])
+    WHERE id = ? AND user_id = ? AND status IN ('active','compressed','duplicate_candidate')`, [beijingNow(), beijingNow(), memoryId, userId])
   if (!result.changes) throw new Error('memory_item_not_found')
   await invalidateSummariesForSource(userId, memoryId)
   return { revoked: true }
@@ -272,13 +393,15 @@ function buildInjectionBlock(parts) {
 }
 
 async function getValidSummary(userId, key) {
-  const summary = await queryOne(`SELECT * FROM experience_memory_summaries WHERE user_id = ? AND scope_key IN (?, '*:*:*')
-    AND status = 'active' ORDER BY scope_key = ? DESC, version_no DESC LIMIT 1`, [userId, key, key])
+  const strategyScope = `${String(key).split(':')[0]}:*:*`
+  const summary = await queryOne(`SELECT * FROM experience_memory_summaries WHERE user_id = ? AND scope_key IN (?, ?, '*:*:*')
+    AND status = 'active' ORDER BY CASE WHEN scope_key = ? THEN 0 WHEN scope_key = ? THEN 1 ELSE 2 END, version_no DESC LIMIT 1`,
+  [userId, key, strategyScope, key, strategyScope])
   if (!summary) return null
   const ids = parse(summary.source_memory_ids_json, []).map(Number)
   if (!ids.length) return null
   const placeholders = ids.map(() => '?').join(',')
-  const rows = await queryAll(`SELECT id FROM experience_memory_items WHERE user_id = ? AND status = 'active' AND id IN (${placeholders})`, [userId, ...ids])
+  const rows = await queryAll(`SELECT id FROM experience_memory_items WHERE user_id = ? AND status IN ('active','compressed') AND id IN (${placeholders})`, [userId, ...ids])
   const current = rows.map(row => Number(row.id)).sort((a, b) => a - b)
   if (current.length !== ids.length || sha256(JSON.stringify(current)) !== summary.source_set_hash) {
     await queryRun(`UPDATE experience_memory_summaries SET status = 'stale', invalidated_at = ? WHERE id = ?`, [beijingNow(), summary.id])
@@ -495,7 +618,7 @@ export async function rollbackMemorySummary(summaryId, userId) {
     const summary = rows[0]
     if (!summary) throw new Error('memory_summary_not_found')
     const ids = parse(summary.source_memory_ids_json, []).map(Number)
-    const [active] = await run(`SELECT id FROM experience_memory_items WHERE user_id = ? AND status = 'active' AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id`, [userId, ...ids])
+    const [active] = await run(`SELECT id FROM experience_memory_items WHERE user_id = ? AND status IN ('active','compressed') AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id`, [userId, ...ids])
     if (sha256(JSON.stringify(active.map(row => Number(row.id)))) !== summary.source_set_hash) throw new Error('memory_summary_sources_stale')
     await run(`UPDATE experience_memory_summaries SET status = 'superseded', invalidated_at = ? WHERE user_id = ? AND scope_key = ? AND status = 'active'`, [beijingNow(), userId, summary.scope_key])
     await run(`UPDATE experience_memory_summaries SET status = 'active', invalidated_at = NULL WHERE id = ?`, [summaryId])

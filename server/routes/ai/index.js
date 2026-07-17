@@ -16,7 +16,7 @@ import { listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retr
   ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { createMemoryFromApprovedReview, listMemoryItems, revokeMemoryItem, activateDuplicateMemory,
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
-  revokeLongTermMemory } from './memory-system.js'
+  revokeLongTermMemory, createMemoryFromApprovedPeriodReview } from './memory-system.js'
 import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
   listPlatformExperience, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteModelProfile,
@@ -602,7 +602,8 @@ export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome
   listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   getReviewAdminHealth } from './review-workflow.js'
 export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
-  createMemoryFromApprovedReview, setMemorySettings, getMemorySettings, listMemoryItems,
+  createMemoryFromApprovedReview, createMemoryFromApprovedPeriodReview,
+  setMemorySettings, getMemorySettings, listMemoryItems,
   confirmLongTermMemory, revokeLongTermMemory,
   revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
   maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,

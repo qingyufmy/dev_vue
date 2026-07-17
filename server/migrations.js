@@ -2335,6 +2335,38 @@ const migrations = [
       await addIndex('period_review_sources', 'uk_period_review_period_source', 'period_case_id, source_period_case_id', true)
       await addIndex('period_review_sources', 'idx_period_review_source_period', 'source_period_case_id')
     }
+  },
+  {
+    id: '091_period_review_memory_lineage',
+    up: async () => {
+      const addColumn = async (table, name, definition) => {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`)
+      }
+      const addIndex = async (table, name, definition, unique = false) => {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`CREATE ${unique ? 'UNIQUE ' : ''}INDEX \`${name}\` ON \`${table}\` (${definition})`)
+      }
+      await queryRun('ALTER TABLE experience_memory_items MODIFY review_case_id BIGINT DEFAULT NULL')
+      await queryRun('ALTER TABLE experience_memory_items MODIFY review_version_id BIGINT DEFAULT NULL')
+      await addColumn('experience_memory_items', 'period_review_case_id', 'period_review_case_id BIGINT DEFAULT NULL AFTER review_version_id')
+      await addColumn('experience_memory_items', 'period_review_version_id', 'period_review_version_id BIGINT DEFAULT NULL AFTER period_review_case_id')
+      await addColumn('experience_memory_items', 'period_key', 'period_key VARCHAR(16) DEFAULT NULL AFTER period_review_version_id')
+      await addIndex('experience_memory_items', 'uk_memory_period_review_version', 'period_review_version_id', true)
+      await addIndex('experience_memory_items', 'idx_memory_period_review_case', 'period_review_case_id')
+
+      await addColumn('experience_memory_summaries', 'period_review_case_id', 'period_review_case_id BIGINT DEFAULT NULL AFTER scope_key')
+      await addColumn('experience_memory_summaries', 'period_review_version_id', 'period_review_version_id BIGINT DEFAULT NULL AFTER period_review_case_id')
+      await addColumn('experience_memory_summaries', 'period_key', 'period_key VARCHAR(16) DEFAULT NULL AFTER period_review_version_id')
+      await addIndex('experience_memory_summaries', 'uk_memory_summary_period_review', 'period_review_version_id', true)
+
+      await addColumn('experience_long_term_memories', 'period_review_case_id', 'period_review_case_id BIGINT DEFAULT NULL AFTER strategy_version')
+      await addColumn('experience_long_term_memories', 'period_review_version_id', 'period_review_version_id BIGINT DEFAULT NULL AFTER period_review_case_id')
+      await addColumn('experience_long_term_memories', 'period_key', 'period_key VARCHAR(16) DEFAULT NULL AFTER period_review_version_id')
+      await addIndex('experience_long_term_memories', 'idx_long_memory_period_review', 'period_review_case_id')
+    }
   }
 ]
 
