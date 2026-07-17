@@ -299,7 +299,7 @@ describe('take-profit execution clarity', () => {
     expect(html).toContain('value="ai_recommended"')
     expect(app).toContain('signalTakeProfitSelection')
     expect(app).toContain('实际执行止盈')
-    expect(app).toContain('AI 止盈候选')
+    expect(app).toContain('止盈候选')
   })
 })
 
