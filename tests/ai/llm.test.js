@@ -77,6 +77,33 @@ describe('requestJsonObject', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 
+  it('JSON 结构校验失败时要求模型修复并再次校验', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: '{"summary":"缺少必填字段"}' } }] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: '{"period_summary":"字段已补齐"}' } }] })
+      })
+
+    const validateObject = vi.fn(value => {
+      if (!value.period_summary) throw new Error('daily_review_summary_missing')
+      return value
+    })
+    const result = await requestJsonObject({
+      url: 'https://api.test.com', apiKey: 'test-key', model: 'test-model', temperature: 0.2,
+      maxTokens: 2000, messages: [{ role: 'user', content: 'test' }], validateObject,
+    })
+
+    expect(result).toEqual({ period_summary: '字段已补齐' })
+    expect(validateObject).toHaveBeenCalledTimes(2)
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    expect(repairBody.messages.at(-1).content).toContain('daily_review_summary_missing')
+  })
+
   it('HTTP 错误抛出异常', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500 })
 

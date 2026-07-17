@@ -191,11 +191,29 @@ export function monthlyReviewStatistics(dailyCases) {
 const DAILY_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_interpretation', 'strategy_rule', 'none', 'unknown'])
 
+function unwrapReviewContent(input, wrapperKeys) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  for (const key of wrapperKeys) {
+    if (input[key] && typeof input[key] === 'object' && !Array.isArray(input[key])) return input[key]
+  }
+  return input
+}
+
+function firstReviewText(input, keys) {
+  for (const key of keys) {
+    const value = String(input?.[key] || '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
 export function validateDailyReviewContent(input, outcomeIds = []) {
+  input = unwrapReviewContent(input, ['daily_review', 'review'])
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_daily_review_content')
   // Models sometimes add harmless explanatory keys. Normalize to the strict
   // server-owned shape below instead of failing an otherwise valid review.
-  if (!String(input.period_summary || '').trim()) throw new Error('daily_review_summary_missing')
+  const periodSummary = firstReviewText(input, ['period_summary', 'daily_summary', 'review_summary', 'summary'])
+  if (!periodSummary) throw new Error('daily_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_daily_review_decision')
   for (const key of ['trade_assessments', 'repeated_issues', 'strengths', 'daily_lessons', 'risk_observations', 'chan_diagnoses']) if (!Array.isArray(input[key])) throw new Error(`invalid_daily_review_${key}`)
   if (!Number.isFinite(Number(input.confidence)) || Number(input.confidence) < 0 || Number(input.confidence) > 1) throw new Error('invalid_daily_review_confidence')
@@ -218,7 +236,7 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
   const affectedOutcomeIds = [...new Set((Array.isArray(periodChan.affected_outcome_ids) ? periodChan.affected_outcome_ids : []).map(Number))]
   if (!CHAN_SOURCES.has(periodChan.issue_source) || affectedOutcomeIds.some(id => !known.has(id))) throw new Error('invalid_daily_period_chan_assessment')
   return {
-    period_summary: String(input.period_summary).trim(), decision_quality: input.decision_quality, trade_assessments: assessments,
+    period_summary: periodSummary, decision_quality: input.decision_quality, trade_assessments: assessments,
     repeated_issues: input.repeated_issues.map(String), strengths: input.strengths.map(String), daily_lessons: input.daily_lessons.map(String),
     risk_observations: input.risk_observations.map(String), chan_diagnoses: chanDiagnoses,
     period_chan_assessment:{ status:String(periodChan.status || 'insufficient_evidence'), issue_source:periodChan.issue_source,
@@ -228,8 +246,10 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
 }
 
 export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds) {
+  input = unwrapReviewContent(input, ['monthly_review', 'review'])
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_monthly_review_content')
-  if (!String(input.period_summary || '').trim()) throw new Error('monthly_review_summary_missing')
+  const periodSummary = firstReviewText(input, ['period_summary', 'monthly_summary', 'review_summary', 'summary'])
+  if (!periodSummary) throw new Error('monthly_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_monthly_review_decision')
   for (const key of ['daily_assessments', 'recurring_patterns', 'strengths', 'risk_observations', 'chan_issue_summary', 'next_month_actions', 'memory_candidates']) {
     if (!Array.isArray(input[key])) throw new Error(`invalid_monthly_review_${key}`)
@@ -250,7 +270,7 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
       supporting_period_case_ids: support, confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
   })
   return {
-    period_summary: String(input.period_summary).trim(), decision_quality: input.decision_quality, daily_assessments: assessments,
+    period_summary: periodSummary, decision_quality: input.decision_quality, daily_assessments: assessments,
     recurring_patterns: input.recurring_patterns.map(String), strengths: input.strengths.map(String),
     risk_observations: input.risk_observations.map(String), chan_issue_summary: input.chan_issue_summary.map(String),
     next_month_actions: input.next_month_actions.map(String), memory_candidates: memoryCandidates, confidence: Number(input.confidence),
@@ -502,16 +522,24 @@ async function generateDailyReview(job, requestModel) {
   shape.period_chan_assessment = { status:'normal|suspected_issue|confirmed_issue|insufficient_evidence',
     issue_source:'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown',
     explanation:'string', affected_outcome_ids:outcomeIds, confidence:0.5 }
+  const contract = [
+    '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
+    '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。',
+    'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
+    `trade_assessments 和 chan_diagnoses 必须各包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}。`,
+    '不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。',
+  ].join('\n')
   const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
     model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
     maxTokens: Number(resolved.model.max_tokens || 3000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     messages: [
-      { role: 'system', content: '你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。只返回 JSON。' },
-      { role: 'user', content: JSON.stringify({ output: shape, evidence }) },
+      { role: 'system', content: `你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
+      { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
     onProgress: stage => setPeriodReviewJobStage(job, stage),
+    validateObject: value => validateDailyReviewContent(value, outcomeIds),
   })
   return { content: validateDailyReviewContent(output, outcomeIds), resolved }
 }
@@ -595,16 +623,25 @@ async function generateMonthlyReview(job, requestModel) {
     recurring_patterns: ['string'], strengths: ['string'], risk_observations: ['string'], chan_issue_summary: ['string'],
     next_month_actions: ['string'], memory_candidates: approvedDailyCaseIds.length >= 2
       ? [{ lesson: 'string', anti_pattern: 'string', supporting_period_case_ids: approvedDailyCaseIds.slice(0, 2), confidence: 0.5 }] : [], confidence: 0.5 }
+  const contract = [
+    '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
+    '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。',
+    'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
+    `daily_assessments 必须包含 ${dailyCaseIds.length} 项，并且 period_case_id 只能且必须完整覆盖：${dailyCaseIds.join(', ')}。`,
+    'memory_candidates 的每项必须至少由两个已确认日复盘支持；不符合条件时必须返回空数组。',
+    '不得遗漏、合并或虚构日复盘，不得修改系统提供的基础统计。',
+  ].join('\n')
   const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
     model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
     maxTokens: Number(resolved.model.max_tokens || 4000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     messages: [
-      { role: 'system', content: '你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。period_market_digest 是各个交易日使用完整日内 K 线计算后的行情与缠论结构摘要，只能从日复盘和这些摘要中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。只返回 JSON。' },
-      { role: 'user', content: JSON.stringify({ output: shape, evidence }) },
+      { role: 'system', content: `你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。period_market_digest 是各个交易日使用完整日内 K 线计算后的行情与缠论结构摘要，只能从日复盘和这些摘要中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。\n\n以下输出契约不可违反：\n${contract}` },
+      { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
     onProgress: stage => setPeriodReviewJobStage(job, stage),
+    validateObject: value => validateMonthlyReviewContent(value, dailyCaseIds, approvedDailyCaseIds),
   })
   return { content: validateMonthlyReviewContent(output, dailyCaseIds, approvedDailyCaseIds), resolved }
 }
@@ -846,12 +883,41 @@ export async function retryPeriodReviewCase(periodCaseId, userId) {
   return result
 }
 
+export async function recoverExpiredPeriodReviewJobs() {
+  const now = beijingNow()
+  const expired = await queryAll(`SELECT id, period_case_id, attempt_count
+    FROM period_review_jobs
+    WHERE status = 'leased' AND lease_expires_at < ? AND attempt_count >= max_attempts`, [now])
+  let recovered = 0
+  for (const job of expired) {
+    const changed = await withTransaction(async run => {
+      const [update] = await run(`UPDATE period_review_jobs SET status = 'failed', progress_stage = 'failed', stage_updated_at = ?,
+        last_error_code = 'period_review_model_timeout', lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+        WHERE id = ? AND status = 'leased' AND lease_expires_at < ? AND attempt_count >= max_attempts`, [now, now, job.id, now])
+      if (!update.affectedRows) return false
+      await run(`UPDATE period_review_cases SET status = 'failed', updated_at = ?
+        WHERE id = ? AND current_version_id IS NULL`, [now, job.period_case_id])
+      await run(`INSERT INTO period_review_job_events
+        (job_id, period_case_id, attempt_no, stage, event_status, message_code, metadata_json, created_at)
+        VALUES (?, ?, ?, 'failed', 'error', 'period_review_model_timeout', NULL, ?)`,
+      [job.id, job.period_case_id, Number(job.attempt_count || 0), now])
+      return true
+    })
+    if (changed) {
+      recovered += 1
+      console.warn(`[PeriodReview case=${job.period_case_id}] expired after final attempt; marked failed`)
+    }
+  }
+  return recovered
+}
+
 export async function runPeriodReviewCycle() {
+  const recoveredExpiredJobs = await recoverExpiredPeriodReviewJobs()
   const dailyPreparation = await prepareEligibleDailyReviews()
   const dailyWorker = await runDailyReviewWorkerOnce()
   const monthlyPreparation = await prepareEligibleMonthlyReviews()
   const monthlyWorker = await runMonthlyReviewWorkerOnce()
-  return { dailyPreparation, dailyWorker, monthlyPreparation, monthlyWorker }
+  return { recoveredExpiredJobs, dailyPreparation, dailyWorker, monthlyPreparation, monthlyWorker }
 }
 
 export function startPeriodReviewWorker(intervalMs = 60_000) {

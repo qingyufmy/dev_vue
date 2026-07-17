@@ -80,6 +80,19 @@ describe('daily review model boundary', () => {
     expect(() => validateDailyReviewContent({ ...value, chan_diagnoses: [] }, [1])).toThrow('daily_review_chan_coverage_incomplete')
     expect(() => validateDailyReviewContent({ ...value, chan_diagnoses: [{ ...value.chan_diagnoses[0], issue_source: 'future_guess' }] }, [1])).toThrow('invalid_daily_chan_diagnosis')
   })
+
+  it('normalizes common summary aliases and a harmless review wrapper', () => {
+    const value = validateDailyReviewContent({ daily_review: {
+      summary: '当日两笔交易均按计划退出', decision_quality: 'mixed',
+      trade_assessments: [{ outcome_id: 1, decision_quality: 'mixed', summary: '执行正常', issue_codes: [] }],
+      repeated_issues: [], strengths: [], daily_lessons: [], risk_observations: [],
+      chan_diagnoses: [{ outcome_id: 1, status: 'normal', issue_source: 'none', impact_on_decision: 'none', explanation: '未发现结构问题', confidence: 0.8 }],
+      period_chan_assessment: { status: 'normal', issue_source: 'none', explanation: '结构正常', affected_outcome_ids: [], confidence: 0.8 },
+      confidence: 0.8,
+    } }, [1])
+    expect(value.period_summary).toBe('当日两笔交易均按计划退出')
+    expect(value).not.toHaveProperty('summary')
+  })
 })
 
 describe('monthly review aggregation', () => {
@@ -154,6 +167,7 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('096_period_review_observability')
     expect(migration).toContain('period_review_job_events')
     expect(migration).toContain('period_review_user_states')
+    expect(readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')).toContain('recoverExpiredPeriodReviewJobs')
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })
 })

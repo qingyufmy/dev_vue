@@ -2302,9 +2302,20 @@ function periodReviewFailureText(value) {
   const text = String(value || "");
   if (/HTTP 429|rate.?limit/i.test(text)) return "模型服务当前请求过多，请稍后重试";
   if (/response content is empty|repair response content is empty/i.test(text)) return "模型已响应，但没有返回可用的复盘内容";
+  if (/daily_review_summary_missing/i.test(text)) return "模型没有返回必填的日复盘总结；系统已加强格式校验，请重新生成";
+  if (/monthly_review_summary_missing/i.test(text)) return "模型没有返回必填的月复盘总结；系统已加强格式校验，请重新生成";
+  if (/daily_review_trade_coverage_incomplete/i.test(text)) return "模型没有逐笔分析全部交易；系统已要求补齐后再保存";
+  if (/daily_review_chan_coverage_incomplete/i.test(text)) return "模型没有逐笔完成缠论结构诊断；系统已要求补齐后再保存";
+  if (/monthly_review_daily_coverage_incomplete/i.test(text)) return "模型没有覆盖本月全部日复盘；系统已要求补齐后再保存";
+  if (/period_review_model_timeout/i.test(text)) return "模型在限定时间内没有完成复盘，任务已停止；请重新生成";
+  if (/invalid_daily_review_|invalid_daily_trade_assessment|invalid_daily_chan/i.test(text)) return "日复盘输出字段或取值不符合要求，系统已自动要求模型修正";
+  if (/invalid_monthly_review_|invalid_monthly_daily_assessment|invalid_monthly_memory/i.test(text)) return "月复盘输出字段或取值不符合要求，系统已自动要求模型修正";
   if (/unknown_.*review_field/i.test(text)) return "模型输出包含多余字段，系统已更新兼容规则，请重新生成";
   if (/model.*unavailable|credential|api.?key/i.test(text)) return "复盘模型暂不可用，请检查模型配置";
-  return text ? localizeReason(text) : "生成任务未完成，请稍后重试";
+  if (/LLM HTTP 5\d\d/i.test(text)) return "模型服务暂时异常，系统稍后会自动重试";
+  if (/LLM HTTP 4\d\d/i.test(text)) return "模型请求未被服务商接受，请检查模型配置后重试";
+  const localized = text ? localizeReason(text) : "";
+  return localized && localized !== text ? localized : "复盘生成未完成，请重新生成；详细错误已记录在服务器日志中";
 }
 
 function formatReviewEventTime(value, offsetMinutes = 180) {
@@ -2405,6 +2416,10 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   const editable = Boolean(current) && review.status !== "approved";
   const sourceLabel = review.evidence_status === "complete" ? "证据完整" : "证据待补全";
   const sourceDetail = quality.complete === false ? "部分行情或结构证据不可用" : `已汇总 ${Number(review.source_count || 0)} 个来源`;
+  const periodScope = isMonthly
+    ? `MT5 时间 ${review.period_key || '--'} 全月 · 月末结算后生成`
+    : `MT5 时间 ${review.period_key || '--'} 00:00–24:00 · 已结束周期`;
+  const nextPeriodHint = isMonthly ? "本月结束后的交易将进入下月复盘" : "本周期结束后的平仓将进入下一份日复盘";
   const editableGroups = isMonthly
     ? [
       ["recurring_patterns", "重复出现的模式"], ["strengths", "稳定有效的做法"],
@@ -2416,7 +2431,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     ...(content.chan_diagnoses || []),
   ];
   detail.innerHTML = `<header class="period-review-detail-header">
-      <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · 策略版本 v${Number(review.strategy_version || 1)}</p></div>
+      <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · 策略版本 v${Number(review.strategy_version || 1)}</p><p class="period-review-period-scope"><i data-lucide="clock-3" size="13"></i>${escapeHtml(periodScope)}</p></div>
       <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
     </header>
     ${periodReviewProgressHtml(review)}
@@ -2426,7 +2441,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       <div><span>胜率</span><strong>${Number.isFinite(Number(stats.win_rate)) ? `${Math.round(Number(stats.win_rate) * 100)}%` : '--'}</strong><small>只描述结果，不代表决策质量</small></div>
       <div><span>结论置信度</span><strong>${confidencePercent}%</strong><small>AI 对复盘结论的把握</small></div>
     </section>
-    <div class="period-review-source ${review.evidence_status === 'complete' ? 'complete' : 'warning'}"><i data-lucide="${review.evidence_status === 'complete' ? 'shield-check' : 'triangle-alert'}" size="16"></i><div><strong>${sourceLabel}</strong><span>${escapeHtml(sourceDetail)}</span></div></div>
+    <div class="period-review-source ${review.evidence_status === 'complete' ? 'complete' : 'warning'}"><i data-lucide="${review.evidence_status === 'complete' ? 'shield-check' : 'triangle-alert'}" size="16"></i><div><strong>${sourceLabel}</strong><span>${escapeHtml(sourceDetail)}；${escapeHtml(nextPeriodHint)}</span></div></div>
     ${current ? `<section class="period-review-editor">
       <div class="period-review-section-heading"><div><span class="review-section-kicker">核心结论</span><h3>${isMonthly ? '本月策略表现' : '当日策略表现'}</h3></div><span>版本 ${Number(current.version_no || 1)}</span></div>
       <label class="review-field"><span>复盘摘要</span><textarea data-period-review-field="period_summary" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(content.period_summary || '')}</textarea></label>

@@ -198,7 +198,7 @@ async function emitModelProgress(onProgress, stage) {
   try { await onProgress(stage) } catch (error) { console.error('[LLM] Progress callback failed:', error.message) }
 }
 
-export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null, onProgress = null }) {
+export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null, onProgress = null, validateObject = null }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
@@ -212,13 +212,14 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
   if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
   await emitModelProgress(onProgress, 'validating')
   try {
-    return parseJsonObject(content)
+    const parsed = parseJsonObject(content)
+    return typeof validateObject === 'function' ? validateObject(parsed) : parsed
   } catch (exc) {
     await emitModelProgress(onProgress, 'repairing')
     const repairMessages = [
       ...messages,
       { role: 'assistant', content: content.substring(0, 6000) },
-      { role: 'user', content: `上一次输出不是合法 JSON，解析错误为：${exc.message}。请只返回修正后的一个 JSON 对象，不要 Markdown，不要解释。` },
+      { role: 'user', content: `上一次输出未通过系统校验，错误代码为：${exc.message}。请严格按照最初要求的字段名、数据类型、枚举值和完整覆盖范围修正。必须补齐所有必填字段，只返回修正后的一个 JSON 对象，不要 Markdown，不要解释，不要增加外层包装字段。` },
     ]
     const repairBody = buildLlmRequestBody({
       protocol, provider, model, temperature: 0, maxTokens, messages: repairMessages,
@@ -231,7 +232,8 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
     const repaired = extractLlmContent(repairedData, protocol)
     if (!repaired) throw new Error('LLM repair response content is empty')
     await emitModelProgress(onProgress, 'validating')
-    return parseJsonObject(repaired)
+    const repairedObject = parseJsonObject(repaired)
+    return typeof validateObject === 'function' ? validateObject(repairedObject) : repairedObject
   }
 }
 

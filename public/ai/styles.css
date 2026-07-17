@@ -483,6 +483,7 @@ button {
 .period-review-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 17px; border-bottom: 1px solid rgba(148,163,184,.12); }
 .period-review-detail-header h2 { margin: 8px 0 4px; font-size: 25px; letter-spacing: -.02em; }
 .period-review-detail-header p { margin: 0; color: var(--text-muted); font-size: 13px; }
+.period-review-detail-header .period-review-period-scope { display: flex; align-items: center; gap: 6px; margin-top: 7px; color: var(--text-secondary); font-size: 12px; }
 .period-review-header-state { display: flex; align-items: center; gap: 9px; }
 .period-review-type { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 9px; border-radius: 999px; color: #7dd3fc; background: rgba(14,165,233,.1); font-size: 12px; font-weight: 700; }
 .period-review-type.monthly { color: var(--gold); background: rgba(234,190,55,.11); }
