@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { dailyReviewStatistics, groupDailyReviewOutcomes, outcomeCloseUtcMs,
-  periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent } from '../../server/routes/ai/period-review.js'
+import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
+  periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 
 describe('period review calendar', () => {
   it('uses the calibrated MT5 offset for daily boundaries', () => {
@@ -75,5 +75,46 @@ describe('daily review model boundary', () => {
     expect(() => validateDailyReviewContent({ ...value, trade_assessments: [] }, [1])).toThrow('daily_review_trade_coverage_incomplete')
     expect(() => validateDailyReviewContent({ ...value, chan_diagnoses: [] }, [1])).toThrow('daily_review_chan_coverage_incomplete')
     expect(() => validateDailyReviewContent({ ...value, chan_diagnoses: [{ ...value.chan_diagnoses[0], issue_source: 'future_guess' }] }, [1])).toThrow('invalid_daily_chan_diagnosis')
+  })
+})
+
+describe('monthly review aggregation', () => {
+  const daily = (id, day, netProfit, status = 'approved') => ({ id, period_type: 'daily', period_key: day,
+    user_id: 7, strategy_id: 3, strategy_version: 2, strategy_scope: 'private', trading_account_id: id,
+    current_version_id: id + 100, status, evidence_json: JSON.stringify({ statistics: { trade_count: 2, wins: netProfit > 0 ? 2 : 0,
+      losses: netProfit < 0 ? 2 : 0, breakeven: 0, net_profit: netProfit, gross_profit: Math.max(0, netProfit),
+      gross_loss: Math.abs(Math.min(0, netProfit)), external_intervention_count: id === 2 ? 1 : 0 } }) })
+
+  it('waits for the MT5 monthly grace period and combines accounts without losing daily sources', () => {
+    const rows = [daily(1, '2026-02-03', 20), daily(2, '2026-02-12', -10, 'draft')]
+    expect(groupMonthlyReviewCases(rows, { offsetMinutes: 180, asOfUtcMs: Date.parse('2026-02-28T22:59:59Z') })).toHaveLength(0)
+    const groups = groupMonthlyReviewCases(rows, { offsetMinutes: 180, asOfUtcMs: Date.parse('2026-02-28T23:00:00Z') })
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({ periodKey: '2026-02', tradingAccountId: 0, strategyVersion: 2 })
+    expect(groups[0].dailyCases.map(item => item.id)).toEqual([1, 2])
+  })
+
+  it('computes monthly metrics from deterministic daily statistics', () => {
+    expect(monthlyReviewStatistics([daily(1, '2026-02-03', 20), daily(2, '2026-02-12', -10)])).toEqual({
+      trading_days: 2, trade_count: 4, wins: 2, losses: 2, breakeven: 0, win_rate: 0.5,
+      net_profit: 10, gross_profit: 20, gross_loss: 10, profit_factor: 2, profitable_days: 1,
+      losing_days: 1, external_intervention_count: 1,
+    })
+  })
+})
+
+describe('monthly review model boundary', () => {
+  it('requires every daily source and multi-day support for memory candidates', () => {
+    const input = { period_summary: '月度决策总体稳定', decision_quality: 'mixed',
+      daily_assessments: [
+        { period_case_id: 11, decision_quality: 'good', summary: '证据一致', issue_codes: [] },
+        { period_case_id: 12, decision_quality: 'poor', summary: '确认过早', issue_codes: ['confirmation_early'] },
+      ], recurring_patterns: ['确认偏早'], strengths: ['遵守止损'], risk_observations: [], chan_issue_summary: ['背驰确认滞后'],
+      next_month_actions: ['等待结构确认'], memory_candidates: [{ lesson: '等待两个交易日重复验证的结构确认', anti_pattern: '单点抢跑',
+        supporting_period_case_ids: [11, 12], confidence: 0.8 }], confidence: 0.8 }
+    expect(validateMonthlyReviewContent(input, [11, 12]).memory_candidates[0].supporting_period_case_ids).toEqual([11, 12])
+    expect(() => validateMonthlyReviewContent({ ...input, daily_assessments: input.daily_assessments.slice(0, 1) }, [11, 12])).toThrow('monthly_review_daily_coverage_incomplete')
+    expect(() => validateMonthlyReviewContent({ ...input, memory_candidates: [{ ...input.memory_candidates[0], supporting_period_case_ids: [11] }] }, [11, 12])).toThrow('invalid_monthly_memory_candidate')
+    expect(() => validateMonthlyReviewContent(input, [11, 12], [11])).toThrow('invalid_monthly_memory_candidate')
   })
 })

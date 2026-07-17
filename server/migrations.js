@@ -2316,6 +2316,25 @@ const migrations = [
         INDEX idx_period_review_job_case (period_case_id, created_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '090_monthly_review_sources',
+    up: async () => {
+      const addColumn = async (table, name, definition) => {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`)
+      }
+      const addIndex = async (table, name, definition, unique = false) => {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`CREATE ${unique ? 'UNIQUE ' : ''}INDEX \`${name}\` ON \`${table}\` (${definition})`)
+      }
+      await queryRun(`ALTER TABLE period_review_sources MODIFY outcome_id BIGINT DEFAULT NULL`)
+      await addColumn('period_review_sources', 'source_period_case_id', 'source_period_case_id BIGINT DEFAULT NULL AFTER trade_review_case_id')
+      await addIndex('period_review_sources', 'uk_period_review_period_source', 'period_case_id, source_period_case_id', true)
+      await addIndex('period_review_sources', 'idx_period_review_source_period', 'source_period_case_id')
+    }
   }
 ]
 

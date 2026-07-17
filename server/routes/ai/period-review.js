@@ -9,6 +9,7 @@ import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-provider
 const DAY_MS = 86400000
 const DEFAULT_MT5_OFFSET_MINUTES = 180
 const DAILY_GRACE_MINUTES = 30
+const MONTHLY_GRACE_MINUTES = 120
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const safeError = error => String(error?.message || error || 'period_review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
 
@@ -103,6 +104,48 @@ export function dailyReviewStatistics(outcomes) {
   }
 }
 
+export function groupMonthlyReviewCases(rows, { offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES, asOfUtcMs = Date.now() } = {}) {
+  const groups = new Map()
+  for (const row of rows || []) {
+    if (String(row?.period_type) !== 'daily' || !row?.current_version_id) continue
+    const periodKey = String(row.period_key || '').slice(0, 7)
+    if (!/^\d{4}-\d{2}$/.test(periodKey)) continue
+    const bounds = reviewPeriodBounds('monthly', periodKey, offsetMinutes)
+    if (Number(asOfUtcMs) < bounds.endUtcMs + MONTHLY_GRACE_MINUTES * 60000) continue
+    const key = [row.user_id, row.strategy_id, Number(row.strategy_version || 1), periodKey].join(':')
+    if (!groups.has(key)) groups.set(key, { periodType: 'monthly', periodKey, ...bounds,
+      userId: Number(row.user_id), tradingAccountId: 0, strategyId: Number(row.strategy_id),
+      strategyVersion: Number(row.strategy_version || 1), strategyScope: row.strategy_scope, dailyCases: [] })
+    groups.get(key).dailyCases.push(row)
+  }
+  return [...groups.values()].map(group => ({ ...group,
+    dailyCases: group.dailyCases.sort((a, b) => String(a.period_key).localeCompare(String(b.period_key)) || Number(a.id) - Number(b.id)) }))
+    .sort((a, b) => a.periodKey.localeCompare(b.periodKey) || a.strategyId - b.strategyId)
+}
+
+export function monthlyReviewStatistics(dailyCases) {
+  const statistics = (dailyCases || []).map(row => parse(row?.evidence_json, {})?.statistics || {})
+  const sum = key => statistics.reduce((total, item) => total + Number(item[key] || 0), 0)
+  const tradeCount = sum('trade_count')
+  const grossLoss = sum('gross_loss')
+  const netByDay = statistics.map(item => Number(item.net_profit || 0))
+  return {
+    trading_days: statistics.length,
+    trade_count: tradeCount,
+    wins: sum('wins'),
+    losses: sum('losses'),
+    breakeven: sum('breakeven'),
+    win_rate: tradeCount ? sum('wins') / tradeCount : 0,
+    net_profit: sum('net_profit'),
+    gross_profit: sum('gross_profit'),
+    gross_loss: grossLoss,
+    profit_factor: grossLoss > 0 ? sum('gross_profit') / grossLoss : null,
+    profitable_days: netByDay.filter(value => value > 0).length,
+    losing_days: netByDay.filter(value => value < 0).length,
+    external_intervention_count: sum('external_intervention_count'),
+  }
+}
+
 const DAILY_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_interpretation', 'strategy_rule', 'none', 'unknown'])
 
@@ -132,6 +175,39 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
     period_summary: String(input.period_summary).trim(), decision_quality: input.decision_quality, trade_assessments: assessments,
     repeated_issues: input.repeated_issues.map(String), strengths: input.strengths.map(String), daily_lessons: input.daily_lessons.map(String),
     risk_observations: input.risk_observations.map(String), chan_diagnoses: chanDiagnoses, confidence: Number(input.confidence),
+  }
+}
+
+export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_monthly_review_content')
+  const allowed = new Set(['period_summary', 'decision_quality', 'daily_assessments', 'recurring_patterns', 'strengths',
+    'risk_observations', 'chan_issue_summary', 'next_month_actions', 'memory_candidates', 'confidence'])
+  if (Object.keys(input).some(key => !allowed.has(key))) throw new Error('unknown_monthly_review_field')
+  if (!String(input.period_summary || '').trim()) throw new Error('monthly_review_summary_missing')
+  if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_monthly_review_decision')
+  for (const key of ['daily_assessments', 'recurring_patterns', 'strengths', 'risk_observations', 'chan_issue_summary', 'next_month_actions', 'memory_candidates']) {
+    if (!Array.isArray(input[key])) throw new Error(`invalid_monthly_review_${key}`)
+  }
+  if (!Number.isFinite(Number(input.confidence)) || Number(input.confidence) < 0 || Number(input.confidence) > 1) throw new Error('invalid_monthly_review_confidence')
+  const known = new Set(dailyCaseIds.map(Number))
+  const approved = new Set(approvedDailyCaseIds.map(Number))
+  const assessments = input.daily_assessments.map(item => {
+    const periodCaseId = Number(item?.period_case_id)
+    if (!known.has(periodCaseId) || !DAILY_DECISIONS.has(item?.decision_quality) || !String(item?.summary || '').trim()) throw new Error('invalid_monthly_daily_assessment')
+    return { period_case_id: periodCaseId, decision_quality: item.decision_quality, summary: String(item.summary).trim(), issue_codes: Array.isArray(item.issue_codes) ? item.issue_codes.map(String) : [] }
+  })
+  if (new Set(assessments.map(item => item.period_case_id)).size !== known.size) throw new Error('monthly_review_daily_coverage_incomplete')
+  const memoryCandidates = input.memory_candidates.map(item => {
+    const support = Array.isArray(item?.supporting_period_case_ids) ? [...new Set(item.supporting_period_case_ids.map(Number))] : []
+    if (!String(item?.lesson || '').trim() || support.length < 2 || support.some(id => !known.has(id) || !approved.has(id))) throw new Error('invalid_monthly_memory_candidate')
+    return { lesson: String(item.lesson).trim(), anti_pattern: String(item.anti_pattern || '').trim(),
+      supporting_period_case_ids: support, confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
+  })
+  return {
+    period_summary: String(input.period_summary).trim(), decision_quality: input.decision_quality, daily_assessments: assessments,
+    recurring_patterns: input.recurring_patterns.map(String), strengths: input.strengths.map(String),
+    risk_observations: input.risk_observations.map(String), chan_issue_summary: input.chan_issue_summary.map(String),
+    next_month_actions: input.next_month_actions.map(String), memory_candidates: memoryCandidates, confidence: Number(input.confidence),
   }
 }
 
@@ -184,8 +260,11 @@ async function upsertDailyGroup(group, clock) {
      timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
      evidence_reason, evidence_json, evidence_hash, source_count, created_at, updated_at)
     VALUES ('daily', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE evidence_status = VALUES(evidence_status), evidence_reason = VALUES(evidence_reason),
-      evidence_json = VALUES(evidence_json), evidence_hash = VALUES(evidence_hash), source_count = VALUES(source_count),
+    ON DUPLICATE KEY UPDATE evidence_status = IF(status = 'approved', evidence_status, VALUES(evidence_status)),
+      evidence_reason = IF(status = 'approved', evidence_reason, VALUES(evidence_reason)),
+      evidence_json = IF(status = 'approved', evidence_json, VALUES(evidence_json)),
+      evidence_hash = IF(status = 'approved', evidence_hash, VALUES(evidence_hash)),
+      source_count = IF(status = 'approved', source_count, VALUES(source_count)),
       status = IF(status IN ('approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
     group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion, group.strategyScope,
     group.offsetMinutes, group.startUtcMs, group.endUtcMs, complete ? 'ready' : 'incomplete', complete ? 'complete' : 'incomplete',
@@ -209,6 +288,68 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
   for (const group of groups) {
     const prepared = await upsertDailyGroup(group, clock)
     result[prepared.complete ? 'ready' : 'incomplete'] += 1
+  }
+  return result
+}
+
+async function eligibleDailyReviewRows(limit) {
+  return queryAll(`SELECT cases.*, versions.content_json AS current_content_json,
+      versions.content_hash AS current_content_hash
+    FROM period_review_cases cases
+    JOIN period_review_versions versions ON versions.id = cases.current_version_id
+    WHERE cases.period_type = 'daily' AND cases.evidence_status = 'complete'
+      AND cases.status IN ('draft','edited','approved','needs_revision','deferred')
+    ORDER BY cases.period_key DESC, cases.id DESC LIMIT ?`, [Math.min(3000, Math.max(1, Number(limit || 1000)))])
+}
+
+async function upsertMonthlyGroup(group, clock) {
+  const sources = group.dailyCases.map(row => ({ period_case_id: Number(row.id), period_key: row.period_key,
+    trading_account_id: Number(row.trading_account_id || 0), review_status: row.status,
+    evidence_hash: row.evidence_hash, content_hash: row.current_content_hash,
+    statistics: parse(row.evidence_json, {})?.statistics || {}, review: parse(row.current_content_json, {}) }))
+  const evidence = {
+    schema_version: 1,
+    period: { type: 'monthly', key: group.periodKey, timezone_offset_minutes: group.offsetMinutes,
+      clock_status: clock.status, start_utc_msc: group.startUtcMs, end_utc_msc: group.endUtcMs },
+    strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope },
+    statistics: monthlyReviewStatistics(group.dailyCases),
+    source_quality: { approved_days: sources.filter(item => item.review_status === 'approved').length,
+      unconfirmed_days: sources.filter(item => item.review_status !== 'approved').length },
+    sources,
+  }
+  const evidenceHash = sha256(JSON.stringify(evidence))
+  const now = beijingNow()
+  await queryRun(`INSERT INTO period_review_cases
+    (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_scope,
+     timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
+     evidence_reason, evidence_json, evidence_hash, source_count, created_at, updated_at)
+    VALUES ('monthly', ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready', 'complete', NULL, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE evidence_status = VALUES(evidence_status), evidence_reason = VALUES(evidence_reason),
+      evidence_json = VALUES(evidence_json), evidence_hash = VALUES(evidence_hash), source_count = VALUES(source_count),
+      status = IF(status IN ('approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
+    group.periodKey, group.userId, group.strategyId, group.strategyVersion, group.strategyScope,
+    group.offsetMinutes, group.startUtcMs, group.endUtcMs, JSON.stringify(evidence), evidenceHash, sources.length, now, now,
+  ])
+  const periodCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
+    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? AND strategy_version = ?`,
+  [group.periodKey, group.userId, group.strategyId, group.strategyVersion])
+  for (const source of sources) await queryRun(`INSERT INTO period_review_sources
+    (period_case_id, outcome_id, trade_review_case_id, source_period_case_id, source_hash, created_at)
+    VALUES (?, NULL, NULL, ?, ?, ?) ON DUPLICATE KEY UPDATE source_hash = VALUES(source_hash)`,
+  [periodCase.id, source.period_case_id, sha256(`${source.evidence_hash || ''}:${source.content_hash || ''}`), now])
+  if (!periodCase.current_version_id) await queryRun(`INSERT IGNORE INTO period_review_jobs
+    (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
+    VALUES (?, 'monthly_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `monthly:${periodCase.id}:${evidenceHash}`, now, now])
+  return { id: Number(periodCase.id), periodKey: group.periodKey, sourceCount: sources.length, evidenceHash }
+}
+
+export async function prepareEligibleMonthlyReviews({ limit = 1000, asOfUtcMs = Date.now() } = {}) {
+  const [clock, rows] = await Promise.all([latestMt5Clock(), eligibleDailyReviewRows(limit)])
+  const groups = groupMonthlyReviewCases(rows, { offsetMinutes: clock.offsetMinutes, asOfUtcMs })
+  const result = { scanned: rows.length, groups: groups.length, ready: 0, clock }
+  for (const group of groups) {
+    await upsertMonthlyGroup(group, clock)
+    result.ready += 1
   }
   return result
 }
@@ -299,6 +440,94 @@ export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObjec
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
     await finishDailyReviewFailure(job, error)
+    return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
+  }
+}
+
+async function claimMonthlyReviewJob() {
+  return withTransaction(async run => {
+    const [rows] = await run(`SELECT jobs.*, cases.user_id, cases.strategy_id, cases.evidence_json, cases.evidence_hash
+      FROM period_review_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+      WHERE jobs.job_type = 'monthly_review'
+        AND (jobs.status = 'queued' OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
+        AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'monthly' AND cases.evidence_status = 'complete'
+      ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow()])
+    if (!rows[0]) return null
+    const token = crypto.randomUUID()
+    await run(`UPDATE period_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?,
+      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(420), beijingNow(), rows[0].id])
+    await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
+      WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
+    return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
+  })
+}
+
+async function generateMonthlyReview(job, requestModel) {
+  const evidence = parse(job.evidence_json, null)
+  if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('monthly_review_evidence_invalid')
+  const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review' })
+  if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
+  const endpoint = modelEndpoint(resolved.model)
+  const dailyCaseIds = evidence.sources.map(item => Number(item.period_case_id))
+  const approvedDailyCaseIds = evidence.sources.filter(item => item.review_status === 'approved').map(item => Number(item.period_case_id))
+  const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
+    daily_assessments: dailyCaseIds.map(id => ({ period_case_id: id, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
+    recurring_patterns: ['string'], strengths: ['string'], risk_observations: ['string'], chan_issue_summary: ['string'],
+    next_month_actions: ['string'], memory_candidates: approvedDailyCaseIds.length >= 2
+      ? [{ lesson: 'string', anti_pattern: 'string', supporting_period_case_ids: approvedDailyCaseIds.slice(0, 2), confidence: 0.5 }] : [], confidence: 0.5 }
+  const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
+    model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
+    maxTokens: Number(resolved.model.max_tokens || 4000), thinkingEnabled: resolved.model.thinking_enabled,
+    reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
+    messages: [
+      { role: 'system', content: '你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。只能从日复盘证据中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。只返回 JSON。' },
+      { role: 'user', content: JSON.stringify({ output: shape, evidence }) },
+    ],
+    usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
+  })
+  return { content: validateMonthlyReviewContent(output, dailyCaseIds, approvedDailyCaseIds), resolved }
+}
+
+async function finishMonthlyReviewSuccess(job, generated) {
+  await withTransaction(async run => {
+    const [jobs] = await run('SELECT * FROM period_review_jobs WHERE id = ? FOR UPDATE', [job.id])
+    if (!jobs[0] || jobs[0].status !== 'leased' || jobs[0].lease_token !== job.lease_token) throw new Error('monthly_review_job_lease_lost')
+    const [cases] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [job.period_case_id])
+    if (!cases[0]) throw new Error('monthly_review_case_missing')
+    const now = beijingNow()
+    if (!cases[0].current_version_id) {
+      const [versions] = await run('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM period_review_versions WHERE period_case_id = ? FOR UPDATE', [job.period_case_id])
+      const body = JSON.stringify(generated.content)
+      const [insert] = await run(`INSERT INTO period_review_versions
+        (period_case_id, version_no, parent_version_id, author_type, author_user_id, content_json, content_hash, change_note, created_at)
+        VALUES (?, ?, NULL, 'ai', NULL, ?, ?, 'AI monthly review draft', ?)`,
+      [job.period_case_id, Number(versions[0].max_version) + 1, body, sha256(body), now])
+      await run(`UPDATE period_review_cases SET status = 'draft', current_version_id = ?, updated_at = ? WHERE id = ?`, [insert.insertId, now, job.period_case_id])
+    }
+    await run(`UPDATE period_review_jobs SET status = 'succeeded', model_profile_id = ?, credential_source = ?, completed_at = ?,
+      lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`,
+    [generated.resolved.model_profile_id, generated.resolved.credential_source, now, now, job.id])
+  })
+}
+
+async function finishMonthlyReviewFailure(job, error) {
+  const exhausted = job.attempt_count >= Number(job.max_attempts)
+  await queryRun(`UPDATE period_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
+    lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`,
+  [exhausted ? 'failed' : 'queued', safeError(error), beijingNow(), job.id, job.lease_token])
+  await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`,
+  [exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
+}
+
+export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
+  const job = await claimMonthlyReviewJob()
+  if (!job) return { claimed: false }
+  try {
+    const generated = await generateMonthlyReview(job, requestModel)
+    await finishMonthlyReviewSuccess(job, generated)
+    return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
+  } catch (error) {
+    await finishMonthlyReviewFailure(job, error)
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
   }
 }
