@@ -3334,11 +3334,16 @@ function renderDecisionList(items, emptyText) {
 let _inferenceChart = null;
 let _inferenceCandleSeries = null;
 let _inferenceChartResizeObserver = null;
+let _inferenceChartMutationObserver = null;
 
 function destroyInferenceChart() {
   if (_inferenceChartResizeObserver) {
     _inferenceChartResizeObserver.disconnect();
     _inferenceChartResizeObserver = null;
+  }
+  if (_inferenceChartMutationObserver) {
+    _inferenceChartMutationObserver.disconnect();
+    _inferenceChartMutationObserver = null;
   }
   if (_inferenceChart) {
     _inferenceChart.remove();
@@ -3373,15 +3378,15 @@ function inferenceRateTime(value) {
 
 function normalizeInferenceRates(rows) {
   const unique = new Map();
-  for (const raw of Array.isArray(rows) ? rows : []) {
+  for (const [sourceIndex, raw] of (Array.isArray(rows) ? rows : []).entries()) {
     const row = Array.isArray(raw)
       ? { time: raw[0], open: raw[1], high: raw[2], low: raw[3], close: raw[4], tick_volume: raw[5] }
       : raw;
     const time = inferenceRateTime(row?.time);
     const open = Number(row?.open), high = Number(row?.high), low = Number(row?.low), close = Number(row?.close);
     if (!Number.isFinite(time) || ![open, high, low, close].every(Number.isFinite)) continue;
-    if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || high < low) continue;
-    unique.set(time, { time, open, high, low, close, volume: Math.max(0, Number(row?.tick_volume || row?.volume || 0) || 0) });
+    if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || high < Math.max(open, close) || low > Math.min(open, close)) continue;
+    unique.set(time, { time, open, high, low, close, volume: Math.max(0, Number(row?.tick_volume || row?.volume || 0) || 0), sourceIndex });
   }
   return [...unique.values()].sort((a, b) => a.time - b.time).slice(-500);
 }
@@ -3429,8 +3434,31 @@ function inferenceChartShell(signal) {
 
 function chartIndexTime(candles, value) {
   const index = Number(value);
-  if (!Number.isInteger(index) || index < 0 || index >= candles.length) return null;
-  return candles[index]?.time ?? null;
+  if (!Number.isInteger(index) || index < 0) return null;
+  return candles.find(item => item.sourceIndex === index)?.time ?? null;
+}
+
+function inferenceStructureTime(candles, structure, edge, chan = {}) {
+  if (!candles.length || !structure) return null;
+  const first = candles[0].time, last = candles.at(-1).time;
+  const rawTime = structure[`${edge}_broker_time`] ?? structure[`${edge}_time`];
+  const structureTime = inferenceRateTime(rawTime);
+  if (Number.isFinite(structureTime) && structureTime >= first && structureTime <= last) {
+    const exact = candles.find(item => item.time === structureTime);
+    if (exact) return exact.time;
+    const nearest = candles.reduce((best, item) => Math.abs(item.time - structureTime) < Math.abs(best.time - structureTime) ? item : best, candles[0]);
+    const typicalStep = candles.length > 1 ? Math.max(1, candles.at(-1).time - candles.at(-2).time) : 60;
+    if (Math.abs(nearest.time - structureTime) <= typicalStep) return nearest.time;
+  }
+  // Index fallback is safe only when the visualized array is the same source
+  // window used by Chan. Compact display windows have a different index base.
+  const sourceCount = Number(chan.received_history_count || chan.raw_bar_count);
+  if (sourceCount === candles.length || sourceCount === candles.length - 1) return chartIndexTime(candles, structure[`${edge}_index`]);
+  return null;
+}
+
+function removeInferenceChartAttribution(container) {
+  container.querySelectorAll('#tv-attr-logo, a[href*="tradingview"]').forEach(node => node.remove());
 }
 
 function addInferenceLine(chart, points, options) {
@@ -3446,6 +3474,13 @@ function inferenceChartTimeLabel(seconds) {
   if (!Number.isFinite(date.getTime())) return "--";
   const pad = value => String(value).padStart(2, "0");
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+function inferenceChartTickLabel(seconds) {
+  const full = inferenceChartTimeLabel(typeof seconds === "object"
+    ? Date.UTC(seconds.year, seconds.month - 1, seconds.day) / 1000
+    : seconds);
+  return full === "--" ? "--" : full.slice(5);
 }
 
 function renderInferenceChart(signal) {
@@ -3469,26 +3504,28 @@ function renderInferenceChart(signal) {
   const chart = LightweightCharts.createChart(container, {
     width: container.clientWidth || 720,
     height: container.clientHeight || 340,
-    layout: { background: { type: "solid", color: "transparent" }, textColor: "#8ea0ba", fontSize: 11 },
+    layout: { background: { type: "solid", color: "transparent" }, textColor: "#8ea0ba", fontSize: 11, attributionLogo: false },
     grid: { vertLines: { color: "rgba(148,163,184,.055)" }, horzLines: { color: "rgba(148,163,184,.055)" } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: "rgba(224,190,68,.34)", style: 2 }, horzLine: { color: "rgba(224,190,68,.34)", style: 2 } },
     rightPriceScale: { borderColor: "rgba(148,163,184,.15)", scaleMargins: { top: .08, bottom: .08 } },
-    timeScale: { borderColor: "rgba(148,163,184,.15)", timeVisible: true, secondsVisible: false, rightOffset: 4 },
+    timeScale: { borderColor: "rgba(148,163,184,.15)", timeVisible: true, secondsVisible: false, rightOffset: 4, tickMarkFormatter: inferenceChartTickLabel },
+    localization: { locale: "zh-CN", timeFormatter: inferenceChartTickLabel },
     handleScroll: { vertTouchDrag: false },
   });
   const candleSeries = chart.addCandlestickSeries({ upColor: "#ef5b66", downColor: "#20b486", borderUpColor: "#ef5b66", borderDownColor: "#20b486", wickUpColor: "#ef5b66", wickDownColor: "#20b486" });
-  candleSeries.setData(candles.map(({ volume, ...candle }) => candle));
+  candleSeries.setData(candles.map(({ volume, sourceIndex, ...candle }) => candle));
   _inferenceChart = chart;
   _inferenceCandleSeries = candleSeries;
 
   const chan = chanSummaryForTimeframe(context, timeframe) || {};
   const legend = [];
+  let structureOutsideWindow = false;
   if (state.inferenceChartLayers.segments) {
     const segments = [chan.prev_segment, chan.current_segment, chan.candidate_segment].filter(Boolean);
     let segmentLines = 0;
     for (const segment of segments) {
-      const start = chartIndexTime(candles, segment.start_index), end = chartIndexTime(candles, segment.end_index);
-      if (start == null || end == null) continue;
+      const start = inferenceStructureTime(candles, segment, "start", chan), end = inferenceStructureTime(candles, segment, "end", chan);
+      if (start == null || end == null) { structureOutsideWindow = true; continue; }
       if (addInferenceLine(chart, [{ time: start, value: Number(segment.start_price) }, { time: end, value: Number(segment.end_price) }], { color: segment.confirmed === false ? "#94a3b8" : "#e8c957", lineStyle: segment.confirmed === false ? 2 : 0 })) segmentLines += 1;
     }
     if (segmentLines) legend.push('<span><i class="legend-line segment"></i>线段</span>');
@@ -3496,18 +3533,24 @@ function renderInferenceChart(signal) {
   if (state.inferenceChartLayers.centers) {
     const center = chan.active_center || chan.latest_center || chan.current_center;
     if (center && Number.isFinite(Number(center.zl)) && Number.isFinite(Number(center.zh))) {
-      const start = candles[Math.max(0, candles.length - 60)].time, end = candles.at(-1).time;
+      const start = inferenceStructureTime(candles, center, "start", chan);
+      const end = inferenceStructureTime(candles, center, "end", chan);
+      if (start == null || end == null) {
+        // Never draw a center across an arbitrary latest-60-bar window: that
+        // visually asserts a duration which the evidence does not support.
+        structureOutsideWindow = true;
+      } else {
       addInferenceLine(chart, [{ time: start, value: Number(center.zl) }, { time: end, value: Number(center.zl) }], { color: "#7c8da8", lineStyle: 2, lineWidth: 1 });
       addInferenceLine(chart, [{ time: start, value: Number(center.zh) }, { time: end, value: Number(center.zh) }], { color: "#7c8da8", lineStyle: 2, lineWidth: 1 });
       legend.push('<span><i class="legend-box center"></i>当前中枢区间</span>');
+      }
     }
   }
   const markers = [];
   if (state.inferenceChartLayers.divergence) {
     for (const divergence of (chan.recent_divergences || []).slice(-3)) {
-      const index = divergence?.departure_segment?.end_index;
-      const time = chartIndexTime(candles, index);
-      if (time == null) continue;
+      const time = inferenceStructureTime(candles, divergence?.departure_segment, "end", chan);
+      if (time == null) { structureOutsideWindow = true; continue; }
       const bottom = divergence.type === "bottom";
       markers.push({ time, position: bottom ? "belowBar" : "aboveBar", color: bottom ? "#30c99b" : "#ff6b76", shape: bottom ? "arrowUp" : "arrowDown", text: bottom ? "底背驰" : "顶背驰" });
     }
@@ -3516,8 +3559,8 @@ function renderInferenceChart(signal) {
   if (state.inferenceChartLayers.entries) {
     const entryLabels = { first_buy: "一买", second_buy: "二买", third_buy: "三买", first_sell: "一卖", second_sell: "二卖", third_sell: "三卖" };
     for (const candidate of (chan.entry_candidates || []).filter(item => item.usable_for_entry).slice(-3)) {
-      const time = chartIndexTime(candles, candidate?.segment?.end_index);
-      if (time == null) continue;
+      const time = inferenceStructureTime(candles, candidate?.segment, "end", chan);
+      if (time == null) { structureOutsideWindow = true; continue; }
       const buy = candidate.side === "buy";
       markers.push({ time, position: buy ? "belowBar" : "aboveBar", color: "#61a8ff", shape: "circle", text: entryLabels[candidate.type] || "候选点" });
     }
@@ -3539,14 +3582,20 @@ function renderInferenceChart(signal) {
     }
     legend.push('<span><i class="legend-line levels"></i>AI 入场 / 止损 / 止盈</span>');
   }
+  if (structureOutsideWindow) legend.push('<span class="is-warning"><i data-lucide="info" size="12"></i>旧快照未保存完整结构区间，已隐藏无法精确定位的图层</span>');
   $("inferenceChartLegend").innerHTML = legend.join("") || '<span class="muted">当前周期没有可展示的结构图层</span>';
+  initIcons();
   $("inferenceKlineTableBody").innerHTML = candles.slice(-10).reverse().map(item => `<tr><td>${escapeHtml(inferenceChartTimeLabel(item.time))}</td><td>${fmt(item.open, 2)}</td><td>${fmt(item.high, 2)}</td><td>${fmt(item.low, 2)}</td><td>${fmt(item.close, 2)}</td></tr>`).join("");
+  $("inferenceChartCursor").textContent = `${timeframe} · ${candles.length} 根 · ${inferenceChartTimeLabel(candles[0].time)} → ${inferenceChartTimeLabel(candles.at(-1).time)}`;
   chart.subscribeCrosshairMove(param => {
     const data = param?.seriesData?.get(candleSeries);
     if (!data) return;
     $("inferenceChartCursor").textContent = `开 ${fmt(data.open, 2)} · 高 ${fmt(data.high, 2)} · 低 ${fmt(data.low, 2)} · 收 ${fmt(data.close, 2)}`;
   });
   chart.timeScale().fitContent();
+  removeInferenceChartAttribution(container);
+  _inferenceChartMutationObserver = new MutationObserver(() => removeInferenceChartAttribution(container));
+  _inferenceChartMutationObserver.observe(container, { childList: true, subtree: true });
   _inferenceChartResizeObserver = new ResizeObserver(() => {
     if (_inferenceChart && container.clientWidth > 0 && container.clientHeight > 0) _inferenceChart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
   });

@@ -6482,6 +6482,11 @@ a.signal-link:hover {
   height: 340px;
 }
 
+.inference-kline-chart #tv-attr-logo,
+.inference-kline-chart a[href*="tradingview"] {
+  display: none !important;
+}
+
 .inference-chart-cursor {
   position: absolute;
   top: 10px;
@@ -6513,6 +6518,8 @@ a.signal-link:hover {
   align-items: center;
   gap: 6px;
 }
+
+.inference-chart-legend .is-warning { color: #d7b96a; }
 
 .inference-chart-legend i { display: inline-block; flex: 0 0 auto; }
 .legend-line { width: 16px; height: 2px; border-radius: 2px; }

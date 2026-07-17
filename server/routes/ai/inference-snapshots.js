@@ -59,14 +59,31 @@ export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, v
     ai_volume_range: { min: Number(volumeMin), max: Number(volumeMax) },
   }
   for (const key of technicalFields) if (market?.[key] !== undefined) result[key] = stripAccountPrivateData(clean(market[key]))
+  const visualizationKlines = market?.strategy_context?.visualization_klines
+  if (visualizationKlines && result.strategy_context) {
+    Object.defineProperty(result.strategy_context, 'visualization_klines', { value: visualizationKlines, enumerable: false })
+  }
   return result
 }
 
 function extractKlines(market) {
+  const visualization = market?.strategy_context?.visualization_klines
+  if (visualization && typeof visualization === 'object') return visualization
   const frames = market?.strategy_context?.timeframes || {}
   const result = {}
   for (const [timeframe, value] of Object.entries(frames)) {
     if (Array.isArray(value?.klines)) result[timeframe] = value.klines
+  }
+  return result
+}
+
+function stripEmbeddedKlines(market) {
+  const result = clean(market || {})
+  const context = result?.strategy_context
+  if (!context || typeof context !== 'object') return result
+  delete context.visualization_klines
+  for (const value of Object.values(context.timeframes || {})) {
+    if (value && typeof value === 'object') delete value.klines
   }
   return result
 }
@@ -81,7 +98,10 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
     market_snapshot: input.marketSnapshot || {}, klines: input.klines || extractKlines(input.marketSnapshot),
   })
   const contentHash = sha256(JSON.stringify(full))
-  let stored = full
+  // K-lines have their own column. Keeping the same arrays inside the market
+  // snapshot doubled every record and made size compaction discard old bars
+  // required to position Chan structures accurately.
+  let stored = { ...full, market_snapshot: stripEmbeddedKlines(full.market_snapshot) }
   const omitted = []
   if (byteLength(stored) > maxBytes) {
     const compactKlines = {}

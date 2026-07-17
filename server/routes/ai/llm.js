@@ -279,6 +279,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     }
     if (market.strategy_context) {
       const ctx = { ...market.strategy_context }
+      // Full Chan history is retained only for the auditable chart snapshot;
+      // the model still receives the strategy-configured visible K-line window.
+      delete ctx.visualization_klines
       // Strip Chan data when the strategy capability is disabled.
       if (!useChan && ctx.timeframes) {
         let stripped = 0

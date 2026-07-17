@@ -477,6 +477,16 @@ describe('Chan payload summaries', () => {
     const summary = summarizeCenter({ id: 3, zl: 100, zh: 110, fluctuation_high: 118, fluctuation_low: 95, status: 'closed', start_segment_id: 4, end_segment_id: 7, closed_by_segment_id: 8 }, 'H1')
     expect(summary).toMatchObject({ id: 3, zl: 100, zh: 110, gg: 118, dd: 95, status: 'closed', structure_level: 'segment', closed_by_segment_id: 8 })
   })
+
+  it('中枢摘要带有可复现的开始和结束行情时间', () => {
+    const segments = [
+      { id: 4, dir: 'up', start_price: 100, end_price: 110, bi_ids: [1], raw_start_idx: 2, raw_end_idx: 4 },
+      { id: 7, dir: 'down', start_price: 112, end_price: 104, bi_ids: [2], raw_start_idx: 8, raw_end_idx: 10 },
+    ]
+    const rates = Array.from({ length: 12 }, (_, i) => ({ time: `2026-07-17 ${String(i).padStart(2, '0')}:00:00` }))
+    const summary = summarizeCenter({ id: 3, zl: 102, zh: 108, fluctuation_high: 112, fluctuation_low: 98, status: 'closed', start_segment_id: 4, end_segment_id: 7 }, 'H1', segments, [], rates)
+    expect(summary).toMatchObject({ start_index: 2, end_index: 10, start_broker_time: '2026-07-17 02:00:00', end_broker_time: '2026-07-17 10:00:00' })
+  })
 })
 
 describe('detectDivergence', () => {

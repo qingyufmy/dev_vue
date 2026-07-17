@@ -728,8 +728,12 @@ function summarizeSegment(segment, bis = [], rates = []) {
   }
 }
 
-function summarizeCenter(center, timeframe) {
+function summarizeCenter(center, timeframe, segments = [], bis = [], rates = []) {
   if (!center) return null
+  const startSegment = segments.find(segment => segment.id === center.start_segment_id)
+  const endSegment = segments.find(segment => segment.id === center.end_segment_id)
+  const startLocation = segmentLocation(startSegment, bis, rates)
+  const endLocation = segmentLocation(endSegment, bis, rates)
   return {
     id: center.id,
     zl: round5(center.zl),
@@ -743,6 +747,14 @@ function summarizeCenter(center, timeframe) {
     start_segment_id: center.start_segment_id,
     end_segment_id: center.end_segment_id,
     closed_by_segment_id: center.closed_by_segment_id,
+    start_index: startLocation?.start_index ?? null,
+    end_index: endLocation?.end_index ?? null,
+    start_time: startLocation?.start_time ?? null,
+    end_time: endLocation?.end_time ?? null,
+    start_broker_time: startLocation?.start_broker_time ?? null,
+    end_broker_time: endLocation?.end_broker_time ?? null,
+    start_time_utc_msc: startLocation?.start_time_utc_msc ?? null,
+    end_time_utc_msc: endLocation?.end_time_utc_msc ?? null,
   }
 }
 
@@ -1111,9 +1123,9 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     current_segment: summarizeSegment(lastSeg, allBis, closedRates),
     prev_segment: summarizeSegment(validSegs[validSegs.length - 2], allBis, closedRates),
     candidate_segment: formingSegment ? { ...summarizeSegment(formingSegment, allBis, closedRates), confirmed: false } : candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price), confirmed: false } : null,
-    current_center: summarizeCenter(latestCenter, timeframe),
-    active_center: summarizeCenter(activeCenter, timeframe),
-    latest_center: summarizeCenter(latestCenter, timeframe),
+    current_center: summarizeCenter(latestCenter, timeframe, validSegs, allBis, closedRates),
+    active_center: summarizeCenter(activeCenter, timeframe, validSegs, allBis, closedRates),
+    latest_center: summarizeCenter(latestCenter, timeframe, validSegs, allBis, closedRates),
     price_vs_center: priceVsCenter,
     divergence,
     forming_divergence: formingDivergence,

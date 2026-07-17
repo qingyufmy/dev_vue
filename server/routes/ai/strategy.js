@@ -162,6 +162,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   }
   const useChan = useChanAnalysis == null ? /\{\{USE_CHAN\}\}/.test(prompt) : Boolean(useChanAnalysis)
   const timeframes = {}
+  const visualizationKlines = {}
   const missingTimeframes = []
   for (const { tf, count } of tags) {
     const historyHintKey = chanHistoryHintKey(userId, symbol, tf)
@@ -205,8 +206,9 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     }
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
     timeframes[tf] = { summary: slimSummary, klines: compactRates(visibleRates) }
+    if (useChan) visualizationKlines[tf] = compactRates(rates)
   }
-  return {
+  const context = {
     strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
     required_timeframes: tags.map(t => t.tf),
     used_timeframes: Object.keys(timeframes),
@@ -215,6 +217,10 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     ...(useChan ? { chan_timeframe_alignment: buildChanTimeframeAlignment(timeframes, fallbackTimeframe, missingTimeframes.length === 0 ? 'complete' : 'partial') } : {}),
     timeframes,
   }
+  // Snapshot-only evidence: keep it out of model payloads, ai_signals JSON and
+  // ordinary WebSocket responses. prepareInferenceSnapshot reads it directly.
+  if (useChan) Object.defineProperty(context, 'visualization_klines', { value: visualizationKlines, enumerable: false })
+  return context
 }
 
 export async function executeOrder(userId, config, request, action, options = {}) {

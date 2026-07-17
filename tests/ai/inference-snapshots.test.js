@@ -24,6 +24,16 @@ describe('shared market inference boundary', () => {
     expect(first).not.toHaveProperty('chan')
     expect(first.strategy_context.timeframes.M5.summary).toEqual({ rsi_14: 50, chan: { divergence: { type: 'top' } } })
   })
+
+  it('carries snapshot-only visualization bars without adding them to normal JSON payloads', () => {
+    const strategyContext = { timeframes: {} }
+    Object.defineProperty(strategyContext, 'visualization_klines', { value: { M5: [{ time: 't1' }] }, enumerable: false })
+    const result = buildSharedMarketSnapshot({ symbol: 'XAUUSD', strategy_context: strategyContext })
+    expect(result.strategy_context.visualization_klines.M5).toHaveLength(1)
+    expect(JSON.stringify(result)).not.toContain('visualization_klines')
+    const snapshot = prepareInferenceSnapshot({ marketSnapshot: result })
+    expect(snapshot.klines.M5).toHaveLength(1)
+  })
 })
 
 describe('inference snapshot evidence', () => {
@@ -64,6 +74,20 @@ describe('inference snapshot evidence', () => {
     expect(result.omittedFields.length).toBeGreaterThan(0)
     expect(result.contentHash).toMatch(/^[a-f0-9]{64}$/)
     expect(result.byteSize).toBeLessThanOrEqual(1800)
+  })
+
+  it('stores full Chan visualization bars once without duplicating visible model bars', () => {
+    const chartBars = Array.from({ length: 300 }, (_, i) => ({ time: `t${i}`, open: 1, high: 2, low: 0.5, close: 1.5 }))
+    const visibleBars = chartBars.slice(-80)
+    const result = prepareInferenceSnapshot({
+      systemPrompt: 'system', userPrompt: 'payload',
+      marketSnapshot: { strategy_context: { visualization_klines: { H1: chartBars }, timeframes: { H1: { klines: visibleBars, summary: { chan: { status: 'ok' } } } } } },
+    })
+    expect(result.klines.H1).toHaveLength(300)
+    expect(result.marketSnapshot.strategy_context).not.toHaveProperty('visualization_klines')
+    expect(result.marketSnapshot.strategy_context.timeframes.H1).not.toHaveProperty('klines')
+    expect(result.marketSnapshot.strategy_context.timeframes.H1.summary.chan.status).toBe('ok')
+    expect(result.evidenceStatus).toBe('complete')
   })
 
   it('persists metadata without any model secret column or value', async () => {

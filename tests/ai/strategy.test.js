@@ -85,6 +85,9 @@ describe('buildStrategyContextFromTags', () => {
     expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 300 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
     expect(result.timeframes.H1.klines[0].time).toBe('t220')
+    expect(result.visualization_klines.H1).toHaveLength(300)
+    expect(result.visualization_klines.H1[0].time).toBe('t0')
+    expect(JSON.stringify(result)).not.toContain('visualization_klines')
   })
 
   it('300根没有完整线段时仅对该周期自适应补取500根', async () => {
@@ -98,6 +101,7 @@ describe('buildStrategyContextFromTags', () => {
     expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
     expect(result.timeframes.H1.klines[0].time).toBe('b420')
+    expect(result.visualization_klines.H1).toHaveLength(500)
   })
 
   it('300根已有线段但没有中枢时自适应补取500根', async () => {

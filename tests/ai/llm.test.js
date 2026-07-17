@@ -408,12 +408,13 @@ describe('maybeAiSignal', () => {
       temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场', _use_chan_analysis: true
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100, atr_anchor: 15, atr_anchor_tf: 'H1',
-      strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
+      strategy_context: { visualization_klines: { M5: [{ time: 'internal-only' }] }, timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
     }
     await maybeAiSignal(null, config, market)
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
+    expect(userPayload.strategy_context).not.toHaveProperty('visualization_klines')
     expect(userPayload).toMatchObject({ atr_anchor: 15, atr_anchor_tf: 'H1' })
   })
 
