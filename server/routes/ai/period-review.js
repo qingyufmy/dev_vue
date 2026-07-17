@@ -248,6 +248,29 @@ async function prepareTradeEvidence(outcome) {
   return { status: loaded?.evidence_status || 'incomplete', reason: loaded?.evidence_reason || null, reviewCase: loaded, evidence: parse(loaded?.evidence_json, null) }
 }
 
+export function compactPeriodTradeEvidence(evidence) {
+  if (!evidence || typeof evidence !== 'object') return null
+  const inference = evidence.inference_time || {}
+  const snapshot = inference.snapshot || {}
+  const postTrade = evidence.post_trade || {}
+  return {
+    schema_version:evidence.schema_version,
+    inference_time:{
+      signal:inference.signal || null,
+      snapshot_ref:snapshot ? { id:snapshot.id, strategy_id:snapshot.strategy_id, strategy_version:snapshot.strategy_version,
+        strategy_scope:snapshot.strategy_scope, prompt_hash:snapshot.prompt_hash, model_profile_id:snapshot.model_profile_id,
+        provider:snapshot.provider, model_name:snapshot.model_name, credential_source:snapshot.credential_source,
+        content_hash:snapshot.content_hash } : null,
+      risk_decision:inference.risk_decision || null, original_order:inference.original_order || null,
+      approved_order:inference.approved_order || null,
+    },
+    post_trade:{ outcome:postTrade.outcome || null, execution:postTrade.execution || null, deals:postTrade.deals || [],
+      path_metrics:postTrade.path_metrics || null, post_trade_structure:postTrade.post_trade_structure || {},
+      path_evidence:postTrade.path_evidence || null },
+    evidence_refs:evidence.evidence_refs || {},
+  }
+}
+
 async function upsertDailyGroup(group, clock) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND strategy_version = ?`,
@@ -257,7 +280,8 @@ async function upsertDailyGroup(group, clock) {
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     const marketGeneratedAt = Date.parse(existingEvidence.period_market?.generated_at || '')
-    const needsPeriodMarketUpgrade = Number(existingEvidence.period_market?.schema_version || 0) < 2 || !existingEvidence.period_market?.generated_at
+    const needsPeriodMarketUpgrade = Number(existingEvidence.schema_version || 0) < 2
+      || Number(existingEvidence.period_market?.schema_version || 0) < 2 || !existingEvidence.period_market?.generated_at
       || (existingEvidence.period_market.status !== 'complete' && (!Number.isFinite(marketGeneratedAt) || Date.now() - marketGeneratedAt >= 3600000))
     if (existingCase.current_version_id || (existingJob && !needsPeriodMarketUpgrade)) return { id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
@@ -266,13 +290,16 @@ async function upsertDailyGroup(group, clock) {
   for (const outcome of group.outcomes) prepared.push({ outcome, ...(await prepareTradeEvidence(outcome)) })
   const complete = prepared.every(item => item.status === 'complete' && item.evidence)
   const reasons = [...new Set(prepared.flatMap(item => String(item.reason || '').split(',')).filter(Boolean))]
-  const sources = prepared.map(item => ({ outcome_id: Number(item.outcome.id), trade_review_case_id: Number(item.reviewCase?.id || 0) || null, evidence_hash: item.reviewCase?.evidence_hash || null, evidence: item.evidence }))
+  const sources = prepared.map(item => ({ outcome_id: Number(item.outcome.id), trade_review_case_id: Number(item.reviewCase?.id || 0) || null,
+    evidence_hash: item.reviewCase?.evidence_hash || null, evidence: compactPeriodTradeEvidence(item.evidence) }))
   const sourceIds = sources.map(item => item.outcome_id).sort((a, b) => a - b)
   const sourceHash = sha256(JSON.stringify(sources.map(item => [item.outcome_id, item.evidence_hash])))
   const evidence = {
-    schema_version: 1,
+    schema_version: 2,
     period: { type: 'daily', key: group.periodKey, timezone_offset_minutes: group.offsetMinutes, clock_status: clock.status, start_utc_msc: group.startUtcMs, end_utc_msc: group.endUtcMs },
-    strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope },
+    strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope,
+      inference_system_prompt:prepared.find(item => item.evidence?.inference_time?.snapshot?.system_prompt)?.evidence?.inference_time?.snapshot?.system_prompt || null,
+      prompt_hashes:[...new Set(prepared.map(item => item.evidence?.inference_time?.snapshot?.prompt_hash).filter(Boolean))] },
     statistics: dailyReviewStatistics(group.outcomes),
     sources,
   }
@@ -346,7 +373,7 @@ async function upsertMonthlyGroup(group, clock) {
     statistics: parse(row.evidence_json, {})?.statistics || {}, review: parse(row.current_content_json, {}) }))
   const periodMarketDigest = monthlyPeriodMarketDigest(group.dailyCases)
   const evidence = {
-    schema_version: 1,
+    schema_version: 2,
     period: { type: 'monthly', key: group.periodKey, timezone_offset_minutes: group.offsetMinutes,
       clock_status: clock.status, start_utc_msc: group.startUtcMs, end_utc_msc: group.endUtcMs },
     strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope },

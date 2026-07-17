@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
-  periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+  compactPeriodTradeEvidence, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 import { isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
@@ -165,5 +165,15 @@ describe('period market evidence', () => {
     const digest = monthlyPeriodMarketDigest([{ id:4, period_key:'2026-07-16', evidence_json:JSON.stringify({ period_market:{ status:'complete', symbols:{ XAUUSD:{ M15:{ status:'complete', candle_count:96, expected_candle_count:96, first_time_utc_msc:1, last_time_utc_msc:2, full_period_candles:[{ t:1 }], summary:{ chan:{ status:'ok', segment_count:3 } } } } } } }) }])
     expect(digest[0].symbols.XAUUSD.M15.summary.chan.segment_count).toBe(3)
     expect(digest[0].symbols.XAUUSD.M15).not.toHaveProperty('full_period_candles')
+  })
+
+  it('keeps replay references while removing repeated prompt and candle payloads from each trade', () => {
+    const compact = compactPeriodTradeEvidence({ schema_version:2, inference_time:{ signal:{ id:9 }, snapshot:{ id:7,
+      system_prompt:'large', user_prompt:'large', market_snapshot:{ large:true }, klines:{ M5:[1,2] }, prompt_hash:'hash', content_hash:'content' },
+    risk_decision:{ status:'pass' } }, post_trade:{ outcome:{ id:3 }, post_trade_klines:{ M5:[1,2] }, post_trade_structure:{ M5:{ chan:{ status:'ok' } } } }, evidence_refs:{ inference_snapshot:{ id:7 } } })
+    expect(compact.inference_time.snapshot_ref).toMatchObject({ id:7, prompt_hash:'hash', content_hash:'content' })
+    expect(compact.inference_time).not.toHaveProperty('snapshot')
+    expect(compact.post_trade).not.toHaveProperty('post_trade_klines')
+    expect(compact.evidence_refs.inference_snapshot.id).toBe(7)
   })
 })
