@@ -193,20 +193,28 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
   }
 }
 
-export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null }) {
+async function emitModelProgress(onProgress, stage) {
+  if (typeof onProgress !== 'function') return
+  try { await onProgress(stage) } catch (error) { console.error('[LLM] Progress callback failed:', error.message) }
+}
+
+export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null, onProgress = null }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
   const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
   const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + Math.max(0, Number(maxTokens) || 0)
+  await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
     url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request', provider,
   })
   const content = extractLlmContent(data, protocol)
   if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
+  await emitModelProgress(onProgress, 'validating')
   try {
     return parseJsonObject(content)
   } catch (exc) {
+    await emitModelProgress(onProgress, 'repairing')
     const repairMessages = [
       ...messages,
       { role: 'assistant', content: content.substring(0, 6000) },
@@ -222,6 +230,7 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
     })
     const repaired = extractLlmContent(repairedData, protocol)
     if (!repaired) throw new Error('LLM repair response content is empty')
+    await emitModelProgress(onProgress, 'validating')
     return parseJsonObject(repaired)
   }
 }

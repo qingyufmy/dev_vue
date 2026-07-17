@@ -35,7 +35,8 @@ import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from '
 import { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
 import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, listPeriodReviewCases, getPeriodReviewCase,
-  editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase } from './period-review.js'
+  editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
+  markPeriodReviewRead, getPeriodReviewJobStatus } from './period-review.js'
 
 const router = Router()
 
@@ -442,14 +443,29 @@ router.get('/ai/period-reviews', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/period-reviews/summary', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, summary: await getPeriodReviewSummary(req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
 router.get('/ai/period-reviews/:id', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, review: await getPeriodReviewCase(Number(req.params.id), req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/period-reviews/:id/job-status', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, job: await getPeriodReviewJobStatus(Number(req.params.id), req.user.id) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/period-reviews/:id/edit', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, ...(await editPeriodReviewCase({ periodCaseId: Number(req.params.id), userId: req.user.id,
     content: req.body?.content, expectedVersionId: req.body?.expected_version_id, changeNote: req.body?.change_note })) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/period-reviews/:id/read', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await markPeriodReviewRead(Number(req.params.id), req.user.id, req.body?.version_id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -657,7 +673,8 @@ export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
 export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, runPeriodReviewCycle,
   startPeriodReviewWorker, stopPeriodReviewWorker, listPeriodReviewCases, getPeriodReviewCase,
-  editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase } from './period-review.js'
+  editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
+  markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle } from './period-review.js'
 export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
   createPlatformExperienceCandidateFromApprovedPeriodReview,
   listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,

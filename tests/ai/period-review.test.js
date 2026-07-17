@@ -72,8 +72,10 @@ describe('daily review model boundary', () => {
       trade_assessments: [{ outcome_id: 1, decision_quality: 'good', summary: '证据一致', issue_codes: [] }],
       repeated_issues: [], strengths: ['遵守止损'], daily_lessons: ['等待确认'], risk_observations: [],
       chan_diagnoses: [{ outcome_id: 1, status: 'normal', issue_source: 'none', impact_on_decision: 'none', explanation: '结构一致', confidence: 0.9 }], confidence: 0.9,
+      harmless_model_note: 'this key is normalized away',
     }, [1])
     expect(value.chan_diagnoses[0].issue_source).toBe('none')
+    expect(value).not.toHaveProperty('harmless_model_note')
     expect(() => validateDailyReviewContent({ ...value, trade_assessments: [] }, [1])).toThrow('daily_review_trade_coverage_incomplete')
     expect(() => validateDailyReviewContent({ ...value, chan_diagnoses: [] }, [1])).toThrow('daily_review_chan_coverage_incomplete')
     expect(() => validateDailyReviewContent({ ...value, chan_diagnoses: [{ ...value.chan_diagnoses[0], issue_source: 'future_guess' }] }, [1])).toThrow('invalid_daily_chan_diagnosis')
@@ -133,6 +135,9 @@ describe('period review runtime integration', () => {
     expect(routes).toContain("router.post('/ai/period-reviews/:id/edit'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/retry'")
+    expect(routes).toContain("router.get('/ai/period-reviews/summary'")
+    expect(routes).toContain("router.get('/ai/period-reviews/:id/job-status'")
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/read'")
   })
 
   it('starts only the period worker and preserves separate platform experience lineage', () => {
@@ -146,6 +151,9 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('uk_period_review_case_job_slot')
     expect(migration).toContain('094_period_review_retry_backoff')
     expect(migration).toContain('095_period_review_failed_state_repair')
+    expect(migration).toContain('096_period_review_observability')
+    expect(migration).toContain('period_review_job_events')
+    expect(migration).toContain('period_review_user_states')
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })
 })

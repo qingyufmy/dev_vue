@@ -13,12 +13,51 @@ const DAILY_GRACE_MINUTES = 30
 const MONTHLY_GRACE_MINUTES = 120
 let periodReviewTimer = null
 let periodReviewCycleRunning = false
+let periodReviewWakeRequested = false
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const safeError = error => String(error?.message || error || 'period_review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
 
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
   return date.toISOString().replace('T', ' ').slice(0, 19)
+}
+
+async function setPeriodReviewJobStage(job, stage, eventStatus = 'info', messageCode = null, metadata = null) {
+  if (!job?.id || !job?.period_case_id) return
+  const now = beijingNow()
+  try {
+    await queryRun(`UPDATE period_review_jobs SET progress_stage = ?, stage_updated_at = ?, updated_at = ? WHERE id = ?`,
+      [stage, now, now, job.id])
+    await queryRun(`INSERT INTO period_review_job_events
+      (job_id, period_case_id, attempt_no, stage, event_status, message_code, metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [job.id, job.period_case_id, Number(job.attempt_count || 0), stage,
+      eventStatus, messageCode ? safeError(messageCode) : null, metadata ? JSON.stringify(metadata) : null, now])
+  } catch (error) {
+    console.error(`[PeriodReview case=${job.period_case_id}] progress persistence failed:`, safeError(error))
+  }
+  console.log(`[PeriodReview case=${job.period_case_id} attempt=${Number(job.attempt_count || 0)}] ${stage}${messageCode ? `: ${safeError(messageCode)}` : ''}`)
+}
+
+async function runRequestedPeriodReviewCycle() {
+  if (periodReviewCycleRunning) return
+  periodReviewCycleRunning = true
+  try {
+    do {
+      periodReviewWakeRequested = false
+      const result = await runPeriodReviewCycle()
+      if (result.dailyWorker?.claimed || result.monthlyWorker?.claimed) periodReviewWakeRequested = true
+    } while (periodReviewWakeRequested)
+  } catch (error) {
+    console.error('[PeriodReview] cycle failed:', safeError(error))
+  } finally {
+    periodReviewCycleRunning = false
+    if (periodReviewWakeRequested) queueMicrotask(() => void runRequestedPeriodReviewCycle())
+  }
+}
+
+export function requestPeriodReviewCycle() {
+  periodReviewWakeRequested = true
+  queueMicrotask(() => void runRequestedPeriodReviewCycle())
 }
 
 export function reviewPeriodBounds(periodType, periodKey, offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES) {
@@ -154,8 +193,8 @@ const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_int
 
 export function validateDailyReviewContent(input, outcomeIds = []) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_daily_review_content')
-  const allowed = new Set(['period_summary', 'decision_quality', 'trade_assessments', 'repeated_issues', 'strengths', 'daily_lessons', 'risk_observations', 'chan_diagnoses', 'period_chan_assessment', 'confidence'])
-  if (Object.keys(input).some(key => !allowed.has(key))) throw new Error('unknown_daily_review_field')
+  // Models sometimes add harmless explanatory keys. Normalize to the strict
+  // server-owned shape below instead of failing an otherwise valid review.
   if (!String(input.period_summary || '').trim()) throw new Error('daily_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_daily_review_decision')
   for (const key of ['trade_assessments', 'repeated_issues', 'strengths', 'daily_lessons', 'risk_observations', 'chan_diagnoses']) if (!Array.isArray(input[key])) throw new Error(`invalid_daily_review_${key}`)
@@ -190,9 +229,6 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
 
 export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_monthly_review_content')
-  const allowed = new Set(['period_summary', 'decision_quality', 'daily_assessments', 'recurring_patterns', 'strengths',
-    'risk_observations', 'chan_issue_summary', 'next_month_actions', 'memory_candidates', 'confidence'])
-  if (Object.keys(input).some(key => !allowed.has(key))) throw new Error('unknown_monthly_review_field')
   if (!String(input.period_summary || '').trim()) throw new Error('monthly_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_monthly_review_decision')
   for (const key of ['daily_assessments', 'recurring_patterns', 'strengths', 'risk_observations', 'chan_issue_summary', 'next_month_actions', 'memory_candidates']) {
@@ -444,8 +480,8 @@ async function claimDailyReviewJob() {
       ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow(), beijingNow()])
     if (!rows[0]) return null
     const token = crypto.randomUUID()
-    await run(`UPDATE period_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(300), beijingNow(), rows[0].id])
+    await run(`UPDATE period_review_jobs SET status = 'leased', progress_stage = 'preparing', stage_updated_at = ?, lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
+      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(300), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
     return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
@@ -475,6 +511,7 @@ async function generateDailyReview(job, requestModel) {
       { role: 'user', content: JSON.stringify({ output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
+    onProgress: stage => setPeriodReviewJobStage(job, stage),
   })
   return { content: validateDailyReviewContent(output, outcomeIds), resolved }
 }
@@ -511,12 +548,16 @@ async function finishDailyReviewFailure(job, error) {
 export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimDailyReviewJob()
   if (!job) return { claimed: false }
+  await setPeriodReviewJobStage(job, 'preparing')
   try {
     const generated = await generateDailyReview(job, requestModel)
     await finishDailyReviewSuccess(job, generated)
+    await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
     await finishDailyReviewFailure(job, error)
+    await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
+      job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
   }
 }
@@ -533,8 +574,8 @@ async function claimMonthlyReviewJob() {
       ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow(), beijingNow()])
     if (!rows[0]) return null
     const token = crypto.randomUUID()
-    await run(`UPDATE period_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(420), beijingNow(), rows[0].id])
+    await run(`UPDATE period_review_jobs SET status = 'leased', progress_stage = 'preparing', stage_updated_at = ?, lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
+      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(420), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
     return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
@@ -563,6 +604,7 @@ async function generateMonthlyReview(job, requestModel) {
       { role: 'user', content: JSON.stringify({ output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
+    onProgress: stage => setPeriodReviewJobStage(job, stage),
   })
   return { content: validateMonthlyReviewContent(output, dailyCaseIds, approvedDailyCaseIds), resolved }
 }
@@ -602,12 +644,16 @@ async function finishMonthlyReviewFailure(job, error) {
 export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimMonthlyReviewJob()
   if (!job) return { claimed: false }
+  await setPeriodReviewJobStage(job, 'preparing')
   try {
     const generated = await generateMonthlyReview(job, requestModel)
     await finishMonthlyReviewSuccess(job, generated)
+    await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
     await finishMonthlyReviewFailure(job, error)
+    await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
+      job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
   }
 }
@@ -642,10 +688,13 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
       cases.status, cases.evidence_status, cases.evidence_reason, cases.source_count,
       cases.current_version_id, cases.approved_version_id, cases.evidence_json, cases.created_at, cases.updated_at,
       COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
-      (SELECT jobs.last_error_code FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS last_error_code,
-      (SELECT jobs.next_attempt_at FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS next_attempt_at
+      jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at, jobs.attempt_count, jobs.max_attempts,
+      jobs.last_error_code, jobs.next_attempt_at,
+      CASE WHEN cases.current_version_id IS NOT NULL AND (seen.last_seen_version_id IS NULL OR seen.last_seen_version_id <> cases.current_version_id) THEN 1 ELSE 0 END AS is_unread
     FROM period_review_cases cases
-    LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id ${where}
+    LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id
+    LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id ${where}
     ORDER BY cases.period_start_utc_msc DESC, cases.period_type, cases.id DESC LIMIT ? OFFSET ?`, params)
   return rows.map(row => {
     const evidence = parse(row.evidence_json, {})
@@ -656,20 +705,79 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
 export async function getPeriodReviewCase(periodCaseId, userId) {
   const reviewCase = await queryOne(`SELECT cases.*,
       COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
-      (SELECT jobs.last_error_code FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS last_error_code,
-      (SELECT jobs.next_attempt_at FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS next_attempt_at
+      jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
+      jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at,
+      CASE WHEN cases.current_version_id IS NOT NULL AND (seen.last_seen_version_id IS NULL OR seen.last_seen_version_id <> cases.current_version_id) THEN 1 ELSE 0 END AS is_unread
     FROM period_review_cases cases
     LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id
+    LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id
     WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
   if (!reviewCase) throw new Error('period_review_not_found')
-  const [versions, sources] = await Promise.all([
+  const [versions, sources, events] = await Promise.all([
     queryAll(`SELECT id, version_no, parent_version_id, author_type, author_user_id, content_json,
       content_hash, change_note, created_at FROM period_review_versions WHERE period_case_id = ? ORDER BY version_no`, [periodCaseId]),
     queryAll(`SELECT id, outcome_id, trade_review_case_id, source_period_case_id, source_hash, created_at
       FROM period_review_sources WHERE period_case_id = ? ORDER BY id`, [periodCaseId]),
+    queryAll(`SELECT id, attempt_no, stage, event_status, message_code, metadata_json, created_at
+      FROM period_review_job_events WHERE period_case_id = ? ORDER BY id DESC LIMIT 30`, [periodCaseId]),
   ])
   return { ...reviewCase, evidence: parse(reviewCase.evidence_json, null), evidence_json: undefined, sources,
+    job_events: events.map(row => ({ ...row, metadata: parse(row.metadata_json, null), metadata_json: undefined })),
     versions: versions.map(row => ({ ...row, content: parse(row.content_json, {}), content_json: undefined })) }
+}
+
+export async function getPeriodReviewSummary(userId) {
+  const rows = await queryAll(`SELECT cases.period_type, cases.status, cases.current_version_id,
+      seen.last_seen_version_id, jobs.status AS job_status
+    FROM period_review_cases cases
+    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id
+    LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    WHERE cases.user_id = ?`, [userId])
+  const summary = { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0,
+    daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0 }
+  for (const row of rows) {
+    const unread = row.current_version_id != null && Number(row.last_seen_version_id || 0) !== Number(row.current_version_id)
+    const pending = ['draft', 'edited'].includes(row.status)
+    const failed = row.status === 'failed' || row.job_status === 'failed'
+    const attention = unread || pending || row.status === 'needs_revision' || failed
+    if (unread) summary.unread += 1
+    if (pending) summary.pending_confirmation += 1
+    if (row.status === 'generating' || row.job_status === 'leased') summary.generating += 1
+    if (failed) summary.failed += 1
+    if (attention) {
+      summary.attention += 1
+      summary[row.period_type === 'monthly' ? 'monthly_attention' : 'daily_attention'] += 1
+    }
+    if (pending) summary[row.period_type === 'monthly' ? 'monthly_pending' : 'daily_pending'] += 1
+  }
+  return summary
+}
+
+export async function markPeriodReviewRead(periodCaseId, userId, versionId) {
+  const reviewCase = await queryOne('SELECT current_version_id FROM period_review_cases WHERE id = ? AND user_id = ?', [periodCaseId, userId])
+  if (!reviewCase) throw new Error('period_review_not_found')
+  if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(versionId)) throw new Error('period_review_version_conflict')
+  const now = beijingNow()
+  await queryRun(`INSERT INTO period_review_user_states
+    (period_case_id, user_id, last_seen_version_id, first_seen_at, last_seen_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE last_seen_version_id = VALUES(last_seen_version_id), last_seen_at = VALUES(last_seen_at), updated_at = VALUES(updated_at)`,
+  [periodCaseId, userId, versionId, now, now, now, now])
+  return { read: true, versionId: Number(versionId) }
+}
+
+export async function getPeriodReviewJobStatus(periodCaseId, userId) {
+  const status = await queryOne(`SELECT cases.id, cases.period_type, cases.status, cases.current_version_id,
+      jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
+      jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at
+    FROM period_review_cases cases
+    LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
+  if (!status) throw new Error('period_review_not_found')
+  const events = await queryAll(`SELECT id, attempt_no, stage, event_status, message_code, metadata_json, created_at
+    FROM period_review_job_events WHERE period_case_id = ? ORDER BY id DESC LIMIT 12`, [periodCaseId])
+  return { ...status, job_events:events.map(row => ({ ...row, metadata:parse(row.metadata_json, null), metadata_json:undefined })) }
 }
 
 export async function editPeriodReviewCase({ periodCaseId, userId, content, expectedVersionId, changeNote = null }) {
@@ -711,7 +819,7 @@ export async function confirmPeriodReviewCase({ periodCaseId, userId, versionId,
 }
 
 export async function retryPeriodReviewCase(periodCaseId, userId) {
-  return withTransaction(async run => {
+  const result = await withTransaction(async run => {
     const [rows] = await run('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [periodCaseId, userId])
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
@@ -721,14 +829,21 @@ export async function retryPeriodReviewCase(periodCaseId, userId) {
     if (!jobType) throw new Error('invalid_review_period_type')
     const [jobs] = await run('SELECT * FROM period_review_jobs WHERE period_case_id = ? AND job_type = ? AND job_slot = 0 LIMIT 1 FOR UPDATE', [periodCaseId, jobType])
     const now = beijingNow()
-    if (jobs[0]) await run(`UPDATE period_review_jobs SET status = 'queued', attempt_count = 0, last_error_code = NULL,
-      lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`, [now, jobs[0].id])
-    else await run(`INSERT INTO period_review_jobs
+    let jobId = Number(jobs[0]?.id || 0)
+    if (jobs[0]) await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0, last_error_code = NULL,
+      lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, jobs[0].id])
+    else {
+      const [insert] = await run(`INSERT INTO period_review_jobs
       (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
       VALUES (?, ?, ?, 'queued', 0, 3, ?, ?)`, [periodCaseId, jobType, `retry:${jobType}:${periodCaseId}:${crypto.randomUUID()}`, now, now])
+      jobId = Number(insert.insertId)
+    }
     await run(`UPDATE period_review_cases SET status = 'ready', updated_at = ? WHERE id = ?`, [now, periodCaseId])
-    return { queued: true }
+    return { queued: true, jobId, period_case_id: periodCaseId, attempt_count: 0, job_status: 'queued', progress_stage: 'queued' }
   })
+  await setPeriodReviewJobStage({ id:result.jobId, period_case_id:periodCaseId, attempt_count:0 }, 'queued', 'info', 'manual_retry_queued')
+  requestPeriodReviewCycle()
+  return result
 }
 
 export async function runPeriodReviewCycle() {
@@ -741,15 +856,8 @@ export async function runPeriodReviewCycle() {
 
 export function startPeriodReviewWorker(intervalMs = 60_000) {
   if (periodReviewTimer) return false
-  const run = () => {
-    if (periodReviewCycleRunning) return
-    periodReviewCycleRunning = true
-    void runPeriodReviewCycle()
-      .catch(error => console.error('[PeriodReview] cycle failed:', safeError(error)))
-      .finally(() => { periodReviewCycleRunning = false })
-  }
-  run()
-  periodReviewTimer = setInterval(run, Math.max(10_000, Number(intervalMs || 60_000)))
+  requestPeriodReviewCycle()
+  periodReviewTimer = setInterval(requestPeriodReviewCycle, Math.max(10_000, Number(intervalMs || 60_000)))
   periodReviewTimer.unref?.()
   return true
 }
@@ -758,5 +866,6 @@ export function stopPeriodReviewWorker() {
   if (!periodReviewTimer) return false
   clearInterval(periodReviewTimer)
   periodReviewTimer = null
+  periodReviewWakeRequested = false
   return true
 }

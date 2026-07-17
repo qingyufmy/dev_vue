@@ -33,6 +33,11 @@ const state = {
   strategyFilter: "all",
   reviewCases: [],
   reviewOverview: { pending: 0, issues: 0 },
+  reviewSummary: { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0, daily_attention:0, monthly_attention:0 },
+  reviewSummaryInitialized: false,
+  reviewSummaryTimer: null,
+  reviewDetailPollTimer: null,
+  reviewDetailJobKey: null,
   reviewFilter: "",
   reviewPeriodFilter: "",
   memoryTierFilter: "all",
@@ -2133,7 +2138,56 @@ function renderExecutionDecisions(rows, pagination = {}) {
   renderPager("executionDecisionPager", state.executionFilters.page, state.executionFilters.pageSize, state.executionFilters.total, "executions");
 }
 
-function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", deferred:"稍后处理" })[value] || value; }
+function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", queued:"已进入队列", preparing:"准备证据", model_request:"AI 分析中", validating:"校验结果", repairing:"修复输出", retry_wait:"等待重试", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", succeeded:"生成完成", deferred:"稍后处理" })[value] || value; }
+function periodReviewEffectiveStatus(item) {
+  if (item.job_status === "leased") return item.progress_stage || "generating";
+  if (item.job_status === "queued" && item.next_attempt_at) return "retry_wait";
+  if (item.job_status === "queued") return "queued";
+  return item.status;
+}
+
+function renderReviewSummary(summary = state.reviewSummary) {
+  const badge = $("reviewNavBadge"), failureDot = $("reviewNavFailureDot");
+  const attention = Number(summary.attention || 0), failed = Number(summary.failed || 0);
+  if (badge) { badge.textContent = attention > 99 ? "99+" : String(attention); badge.classList.toggle("hidden", attention < 1); }
+  failureDot?.classList.toggle("hidden", failed < 1);
+  const nav = document.querySelector('[data-tab="review-memory"]');
+  if (nav) nav.title = `待确认 ${Number(summary.pending_confirmation || 0)} · 未读 ${Number(summary.unread || 0)} · 生成失败 ${failed}`;
+  setText("reviewPendingStat", Number(summary.pending_confirmation || 0));
+  setText("reviewGeneratingStat", Number(summary.generating || 0));
+  setText("reviewFailedStat", failed);
+  setText("reviewAllCount", Number(summary.attention || 0));
+  setText("reviewDailyCount", Number(summary.daily_attention || 0));
+  setText("reviewMonthlyCount", Number(summary.monthly_attention || 0));
+}
+
+async function loadReviewSummary({ announce = true } = {}) {
+  if (!state.token) return state.reviewSummary;
+  const data = await api("/api/ai/period-reviews/summary");
+  const next = data.summary || {};
+  if (announce && state.reviewSummaryInitialized && Number(next.pending_confirmation || 0) > Number(state.reviewSummary.pending_confirmation || 0)) {
+    toast(`有新的复盘等待确认（${Number(next.pending_confirmation || 0)}）`, "success");
+  }
+  state.reviewSummary = next;
+  state.reviewSummaryInitialized = true;
+  renderReviewSummary(next);
+  return next;
+}
+
+function startReviewSummaryPolling() {
+  if (state.reviewSummaryTimer) return;
+  state.reviewSummaryTimer = setInterval(() => {
+    if (document.visibilityState === "hidden" || !state.token) return;
+    loadReviewSummary().catch(() => {});
+  }, 30000);
+}
+
+function stopReviewDetailPolling() {
+  if (state.reviewDetailPollTimer) clearTimeout(state.reviewDetailPollTimer);
+  state.reviewDetailPollTimer = null;
+  state.reviewDetailJobKey = null;
+}
+
 async function loadReviewMemory() {
   const query = state.reviewPeriodFilter ? `?periodType=${encodeURIComponent(state.reviewPeriodFilter)}` : "";
   const isAdmin = state.user?.role === "admin";
@@ -2141,12 +2195,7 @@ async function loadReviewMemory() {
     ? await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
     : await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
   state.reviewCases = reviewData.cases || [];
-  if (!state.reviewFilter && !state.reviewPeriodFilter) state.reviewOverview = {
-    pending: state.reviewCases.filter(item => ["draft","edited","evidence_pending","incomplete","ready","generating","failed"].includes(item.status)).length,
-    issues: state.reviewCases.filter(item => item.status === "needs_revision").length,
-  };
-  setText("reviewPendingStat", state.reviewOverview.pending);
-  setText("reviewIssueStat", state.reviewOverview.issues);
+  await loadReviewSummary({ announce:false });
   $("sharedCredentialNotice")?.classList.toggle("hidden", isAdmin || (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
   const userFlags = featureData.flags?.user || {};
   const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled", userPairedExperimentFlag:"paired_experiment_enabled" };
@@ -2174,14 +2223,16 @@ function renderReviewCases() {
   const items = state.reviewCases.filter(item => !state.reviewFilter || (state.reviewFilter === "pending" ? pending.has(item.status) : item.status === state.reviewFilter));
   host.innerHTML = items.length ? items.map(item => {
     const selected = Number(item.id) === Number(state.selectedReviewId);
-    const icon = item.status === "approved" ? "check" : item.status === "needs_revision" ? "triangle-alert" : item.status === "failed" ? "x" : "clock-3";
+    const effectiveStatus = periodReviewEffectiveStatus(item);
+    const icon = item.status === "approved" ? "check" : item.status === "needs_revision" ? "triangle-alert" : item.status === "failed" ? "x" : effectiveStatus === "model_request" ? "sparkles" : "clock-3";
     const stats = item.statistics || {};
     const isMonthly = item.period_type === "monthly";
     const profit = Number(stats.net_profit || 0);
-    return `<button class="workspace-row review-case-button ${selected ? 'selected' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}">
+    return `<button class="workspace-row review-case-button ${selected ? 'selected' : ''} ${Number(item.is_unread) ? 'is-unread' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}">
+      <span class="review-unread-dot ${Number(item.is_unread) ? '' : 'hidden'}" aria-label="未读复盘"></span>
       <span class="review-case-leading ${statusClass(item.status)}"><i data-lucide="${icon}" size="16"></i></span>
       <span class="workspace-row-main">
-        <span class="workspace-row-title"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(item.status))}</span></span>
+        <span class="workspace-row-title"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
         <span class="review-case-strategy">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} <small>v${Number(item.strategy_version || 1)}</small></span>
         <span class="workspace-row-meta"><span>${isMonthly ? `${Number(stats.trading_days || 0)} 个交易日` : `${Number(stats.trade_count || item.source_count || 0)} 笔交易`}</span><span class="${profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''}">净收益 ${fmt(profit, 2)}</span></span>
       </span>
@@ -2250,8 +2301,70 @@ function periodReviewLines(value) { return periodReviewArray(value).join("\n"); 
 function periodReviewFailureText(value) {
   const text = String(value || "");
   if (/HTTP 429|rate.?limit/i.test(text)) return "模型服务当前请求过多，请稍后重试";
+  if (/response content is empty|repair response content is empty/i.test(text)) return "模型已响应，但没有返回可用的复盘内容";
+  if (/unknown_.*review_field/i.test(text)) return "模型输出包含多余字段，系统已更新兼容规则，请重新生成";
   if (/model.*unavailable|credential|api.?key/i.test(text)) return "复盘模型暂不可用，请检查模型配置";
   return text ? localizeReason(text) : "生成任务未完成，请稍后重试";
+}
+
+function formatReviewEventTime(value, offsetMinutes = 180) {
+  if (!value) return "--";
+  const utcMs = Date.parse(`${String(value).replace(" ", "T")}+08:00`);
+  if (!Number.isFinite(utcMs)) return formatTime(value);
+  return new Date(utcMs + Number(offsetMinutes || 0) * 60000).toISOString().slice(5, 19).replace("T", " ");
+}
+
+function periodReviewEventLabel(event) {
+  const labels = { queued:"已进入生成队列", preparing:"正在准备复盘证据", model_request:"AI 开始分析", validating:"正在校验模型结果",
+    repairing:"正在修复输出格式", retry_wait:"本次生成未完成，等待自动重试", succeeded:"复盘生成完成", failed:"复盘生成失败" };
+  return labels[event.stage] || reviewStatusLabel(event.stage);
+}
+
+function periodReviewProgressHtml(review) {
+  if (!review?.job_id && !review?.job_status) return "";
+  const stage = periodReviewEffectiveStatus(review);
+  const stages = ["preparing", "model_request", "validating", "succeeded"];
+  const stageIndex = stage === "queued" || stage === "retry_wait" ? 0 : stage === "repairing" ? 2 : Math.max(0, stages.indexOf(stage));
+  const terminal = ["succeeded", "failed"].includes(stage) || ["draft", "edited", "approved"].includes(review.status);
+  const nextMs = review.next_attempt_at ? Date.parse(String(review.next_attempt_at).replace(" ", "T")) : NaN;
+  const retrySeconds = Number.isFinite(nextMs) ? Math.max(0, Math.ceil((nextMs - Date.now()) / 1000)) : null;
+  const title = stage === "retry_wait" ? "等待自动重试" : stage === "failed" ? "复盘生成失败" : stage === "succeeded" ? "复盘已生成" : "正在生成复盘";
+  const detail = stage === "retry_wait" && retrySeconds != null ? `${retrySeconds} 秒后可再次执行` : reviewStatusLabel(stage);
+  const events = (review.job_events || []).slice(0, 8);
+  return `<section id="periodReviewProgress" class="period-review-progress is-${escapeHtml(stage)}" aria-live="polite">
+    <header><div><span class="review-section-kicker">生成状态</span><h3>${escapeHtml(title)}</h3></div><span class="period-review-attempt">第 ${Number(review.attempt_count || 0)}/${Number(review.max_attempts || 3)} 次尝试</span></header>
+    <div class="period-review-stage-track" role="progressbar" aria-label="复盘生成阶段" aria-valuemin="1" aria-valuemax="4" aria-valuenow="${Math.min(4, stageIndex + 1)}">
+      ${["准备证据", "AI 分析", "校验结果", "等待确认"].map((label,index) => `<div class="${index < stageIndex || (terminal && stage !== 'failed') ? 'done' : index === stageIndex && !terminal ? 'active' : ''}"><span>${index < stageIndex || (terminal && stage !== 'failed') ? '<i data-lucide="check" size="12"></i>' : index + 1}</span><small>${label}</small></div>`).join("")}
+    </div>
+    <div class="period-review-live-line ${stage === 'failed' ? 'danger' : ''}"><span class="period-review-live-dot"></span><strong>${escapeHtml(detail)}</strong>${review.stage_updated_at ? `<small>更新于 ${escapeHtml(formatReviewEventTime(review.stage_updated_at, review.timezone_offset_minutes))} MT5</small>` : ''}</div>
+    ${review.last_error_code && ["retry_wait", "failed"].includes(stage) ? `<div class="period-review-inline-error"><i data-lucide="circle-alert" size="15"></i><span>${escapeHtml(periodReviewFailureText(review.last_error_code))}</span></div>` : ""}
+    ${events.length ? `<details class="period-review-log"><summary>生成记录 <span>${events.length}</span></summary><ol>${events.map(event => `<li class="${escapeHtml(event.event_status || 'info')}"><time>${escapeHtml(formatReviewEventTime(event.created_at, review.timezone_offset_minutes))}</time><span>${escapeHtml(periodReviewEventLabel(event))}${event.message_code ? `<small>${escapeHtml(periodReviewFailureText(event.message_code))}</small>` : ''}</span></li>`).join("")}</ol></details>` : ""}
+  </section>`;
+}
+
+function schedulePeriodReviewDetailPoll(review) {
+  stopReviewDetailPolling();
+  if (!review || !["queued", "leased"].includes(review.job_status) || Number(review.current_version_id || 0)) return;
+  const caseId = Number(review.id), timezoneOffset = Number(review.timezone_offset_minutes || 180);
+  state.reviewDetailJobKey = `${review.job_status}:${review.progress_stage}:${review.attempt_count}:${review.next_attempt_at || ''}`;
+  state.reviewDetailPollTimer = setTimeout(async () => {
+    if (Number(state.selectedReviewId) !== caseId || activeTabId() !== "review-memory") return;
+    try {
+      const data = await api(`/api/ai/period-reviews/${caseId}/job-status`), job = { ...(data.job || {}), timezone_offset_minutes:timezoneOffset };
+      const nextKey = `${job.job_status}:${job.progress_stage}:${job.attempt_count}:${job.next_attempt_at || ''}:${job.current_version_id || ''}`;
+      if (job.current_version_id || ["failed", "succeeded"].includes(job.job_status)) {
+        await loadReviewMemory();
+        await openPeriodReviewDetail(caseId, { silent:true });
+        if (job.current_version_id) toast(`${job.period_type === 'monthly' ? '月' : '日'}复盘已生成，等待确认`, "success");
+        return;
+      }
+      const progress = $("periodReviewProgress");
+      if (progress) progress.outerHTML = periodReviewProgressHtml(job);
+      state.reviewDetailJobKey = nextKey;
+      initIcons();
+      schedulePeriodReviewDetailPoll(job);
+    } catch { schedulePeriodReviewDetailPoll(review); }
+  }, 3000);
 }
 
 function syncPeriodReviewEditorFromFields() {
@@ -2272,10 +2385,11 @@ function periodReviewListBlock(title, values, icon = "list-checks") {
   return `<section class="period-review-evidence-card"><header><i data-lucide="${icon}" size="15"></i><strong>${escapeHtml(title)}</strong><span>${items.length}</span></header>${items.length ? `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : '<p>本周期未记录相关问题</p>'}</section>`;
 }
 
-async function openPeriodReviewDetail(id) {
+async function openPeriodReviewDetail(id, { silent = false } = {}) {
+  stopReviewDetailPolling();
   state.selectedReviewId = Number(id); renderReviewCases();
   const detail = $("reviewDetail");
-  detail.innerHTML = '<div class="workspace-skeleton"></div>';
+  if (!silent) detail.innerHTML = '<div class="workspace-skeleton"></div>';
   const data = await api(`/api/ai/period-reviews/${id}`);
   const review = data.review || {};
   const current = (review.versions || []).find(item => Number(item.id) === Number(review.current_version_id)) || review.versions?.at(-1);
@@ -2305,6 +2419,7 @@ async function openPeriodReviewDetail(id) {
       <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · 策略版本 v${Number(review.strategy_version || 1)}</p></div>
       <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
     </header>
+    ${periodReviewProgressHtml(review)}
     <section class="period-review-metrics" aria-label="周期统计">
       <div class="${profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''}"><span>净收益</span><strong>${fmt(profit, 2)}</strong><small>系统成交数据</small></div>
       <div><span>${isMonthly ? '交易日 / 交易' : '交易笔数'}</span><strong>${isMonthly ? `${Number(stats.trading_days || 0)} / ${Number(stats.trade_count || 0)}` : Number(stats.trade_count || review.source_count || 0)}</strong><small>${isMonthly ? '天 / 笔' : `胜 ${Number(stats.wins || 0)} · 负 ${Number(stats.losses || 0)}`}</small></div>
@@ -2326,6 +2441,15 @@ async function openPeriodReviewDetail(id) {
     <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>UTC${Number(review.timezone_offset_minutes || 0) >= 0 ? '+' : ''}${fmt(Number(review.timezone_offset_minutes || 0) / 60, 1)}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(current.created_at || '--')}</strong></div></div></div></details>
     <footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认后才会进入记忆体系</strong><small>${isMonthly ? '月复盘负责压缩跨日模式并产生长期记忆候选' : '日复盘先形成短期策略记忆，月底再统一压缩'}</small></span></div>${editable ? `<div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">标记有问题</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>确认并沉淀经验</button></div>` : '<span class="status-chip success">内容已锁定</span>'}</footer>` : ''}`;
   initIcons();
+  if (current && Number(review.is_unread)) {
+    api(`/api/ai/period-reviews/${id}/read`, { method:"POST", body:{ version_id:current.id } }).then(() => {
+      const item = state.reviewCases.find(row => Number(row.id) === Number(id));
+      if (item) item.is_unread = 0;
+      renderReviewCases();
+      loadReviewSummary({ announce:false }).catch(() => {});
+    }).catch(() => {});
+  }
+  schedulePeriodReviewDetailPoll(review);
 }
 
 function renderMemoryItemsLegacy(items, settings) {
@@ -2478,6 +2602,7 @@ async function saveGlobalRisk() {
 function setTab(tabId, options = {}) {
   const modelStrategyTarget = tabId === "model-management" ? "models" : tabId === "ai-config" ? "strategies" : null;
   if (modelStrategyTarget) tabId = "model-strategy";
+  if (tabId !== "review-memory") stopReviewDetailPolling();
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabId);
   });
@@ -2560,6 +2685,9 @@ function logout() {
   if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopRealtimeSync();
   stopPresenceHeartbeat();
+  stopReviewDetailPolling();
+  if (state.reviewSummaryTimer) clearInterval(state.reviewSummaryTimer);
+  state.reviewSummaryTimer = null;
   state.user = null;
   state.selectedSignal = null;
   setAuth("");
@@ -2667,6 +2795,8 @@ async function bootstrap() {
     setTab('dashboard');
     startPresenceHeartbeat();
     await refreshAll();
+    await loadReviewSummary({ announce:false });
+    startReviewSummaryPolling();
     // Data loads on-demand: tab switch + manual refresh + bridge data push
     refreshTabData(activeTabId());
   } catch {
@@ -5596,7 +5726,12 @@ function bindEvents() {
     if (reviewAction) {
       const caseId = state.selectedReviewId, versionId = Number(reviewAction.dataset.versionId || 0), action = reviewAction.dataset.reviewAction;
       try {
-        if (action === "retry") await api(`/api/ai/period-reviews/${caseId}/retry`, { method:"POST" });
+        if (action === "retry") {
+          reviewAction.disabled = true;
+          reviewAction.innerHTML = '<i data-lucide="loader-circle" size="14"></i>正在进入队列';
+          await api(`/api/ai/period-reviews/${caseId}/retry`, { method:"POST" });
+          toast("已进入生成队列，后台将立即开始处理", "success");
+        }
         else if (action === "save") { syncPeriodReviewEditorFromFields(); const content = JSON.parse($("reviewContentEditor").value); const saved = await api(`/api/ai/period-reviews/${caseId}/edit`, { method:"POST", body:{ content, expected_version_id:versionId, change_note:"用户在周期复盘页面修改" } }); toast(`已保存为新版本 #${saved.versionNo}`,"success"); }
         else {
           const confirmed = await api(`/api/ai/period-reviews/${caseId}/confirm`, { method:"POST", body:{ version_id:versionId, action } });
@@ -5604,6 +5739,7 @@ function bindEvents() {
         }
         await loadReviewMemory(); await openPeriodReviewDetail(caseId);
       } catch (error) { toast(error.message,"error"); }
+      finally { reviewAction.disabled = false; }
       return;
     }
     if (memoryAction) {

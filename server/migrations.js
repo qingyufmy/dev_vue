@@ -2426,6 +2426,48 @@ const migrations = [
         SET cases.status = 'failed', cases.updated_at = ?
         WHERE jobs.status = 'failed' AND cases.current_version_id IS NULL AND cases.status <> 'failed'`, [beijingNow()])
     }
+  },
+  {
+    id: '096_period_review_observability',
+    up: async () => {
+      const jobColumns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs'
+          AND COLUMN_NAME IN ('progress_stage', 'stage_updated_at')`)
+      const existing = new Set(jobColumns.map(row => row.COLUMN_NAME))
+      if (!existing.has('progress_stage')) await queryRun("ALTER TABLE period_review_jobs ADD COLUMN progress_stage VARCHAR(32) NOT NULL DEFAULT 'queued' AFTER status")
+      if (!existing.has('stage_updated_at')) await queryRun('ALTER TABLE period_review_jobs ADD COLUMN stage_updated_at DATETIME DEFAULT NULL AFTER progress_stage')
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_job_events (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        job_id BIGINT NOT NULL,
+        period_case_id BIGINT NOT NULL,
+        attempt_no INT NOT NULL DEFAULT 0,
+        stage VARCHAR(32) NOT NULL,
+        event_status VARCHAR(16) NOT NULL DEFAULT 'info',
+        message_code VARCHAR(128) DEFAULT NULL,
+        metadata_json JSON DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        INDEX idx_period_review_events_job (job_id, id),
+        INDEX idx_period_review_events_case (period_case_id, id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_user_states (
+        period_case_id BIGINT NOT NULL,
+        user_id INT NOT NULL,
+        last_seen_version_id BIGINT DEFAULT NULL,
+        first_seen_at DATETIME DEFAULT NULL,
+        last_seen_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (period_case_id, user_id),
+        INDEX idx_period_review_user_states_user (user_id, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`UPDATE period_review_jobs SET progress_stage = CASE
+        WHEN status = 'failed' THEN 'failed'
+        WHEN status = 'succeeded' THEN 'succeeded'
+        WHEN status = 'leased' THEN 'model_request'
+        WHEN status = 'queued' AND next_attempt_at IS NOT NULL THEN 'retry_wait'
+        ELSE 'queued' END
+        WHERE stage_updated_at IS NULL`)
+    }
   }
 ]
 
