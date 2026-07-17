@@ -16,6 +16,7 @@ import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSIO
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
 const _chanMaxHistoryHints = new Map()
+const TIMEFRAME_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080 }
 
 function rememberChanMaxHistory(key) {
   _chanMaxHistoryHints.delete(key)
@@ -41,7 +42,61 @@ export function resolveChanHistoryCount(userId, symbol, timeframe, requestedCoun
   return Math.max(requestedCount, preferred)
 }
 
-export const __strategyTest = { clearChanHistoryHints }
+export function buildChanTimeframeAlignment(timeframes, primaryTimeframe, contextStatus = 'complete') {
+  const frames = Object.entries(timeframes || {})
+    .map(([timeframe, value]) => ({ timeframe, chan: value?.summary?.chan }))
+    .filter(item => item.chan?.trend_state && item.chan.trend_state.state !== 'unavailable')
+    .sort((a, b) => (TIMEFRAME_MINUTES[b.timeframe] || 0) - (TIMEFRAME_MINUTES[a.timeframe] || 0))
+  const reliableFrames = frames.filter(item => item.chan.reliability !== 'low')
+  const higher = reliableFrames[0] || frames[0] || null
+  const directional = reliableFrames.filter(item => ['up', 'down'].includes(item.chan.trend_state?.direction))
+  const directions = new Set(directional.map(item => item.chan.trend_state.direction))
+  let agreement = 'insufficient'
+  let direction = 'neutral'
+  if (directional.length >= 2 && directions.size === 1) {
+    direction = directional[0].chan.trend_state.direction
+    agreement = direction === 'up' ? 'aligned_up' : 'aligned_down'
+  } else if (directions.size > 1) {
+    agreement = 'mixed'
+  } else if (directional.length === 1) {
+    direction = directional[0].chan.trend_state.direction
+  }
+  const higherDirection = reliableFrames.length > 0 ? higher?.chan?.trend_state?.direction || 'neutral' : 'neutral'
+  const candidates = frames.flatMap(frame => (frame.chan.entry_candidates || []).map(candidate => {
+    const candidateDirection = candidate.side === 'buy' ? 'up' : 'down'
+    return {
+      timeframe: frame.timeframe,
+      ...candidate,
+      alignment_with_higher: higherDirection === 'neutral'
+        ? 'unconfirmed'
+        : candidateDirection === higherDirection ? 'aligned' : 'conflict',
+    }
+  }))
+  return {
+    status: frames.length === 0 ? 'unavailable' : contextStatus === 'partial' ? 'partial' : 'complete',
+    primary_timeframe: String(primaryTimeframe || '').toUpperCase() || null,
+    higher_timeframe: higher?.timeframe || null,
+    higher_timeframe_direction: higherDirection,
+    higher_timeframe_phase: reliableFrames.length > 0 ? higher?.chan?.trend_state?.phase || 'unknown' : 'unknown',
+    agreement,
+    direction,
+    conflict: agreement === 'mixed',
+    usable_timeframes: reliableFrames.map(item => item.timeframe),
+    excluded_low_reliability_timeframes: frames.filter(item => item.chan.reliability === 'low').map(item => item.timeframe),
+    frames: frames.map(item => ({
+      timeframe: item.timeframe,
+      reliability: item.chan.reliability,
+      state: item.chan.trend_state.state,
+      direction: item.chan.trend_state.direction,
+      phase: item.chan.trend_state.phase,
+      reversal_bias: item.chan.trend_state.reversal_bias,
+    })),
+    entry_candidates: candidates,
+    execution_policy: 'evidence_only',
+  }
+}
+
+export const __strategyTest = { clearChanHistoryHints, buildChanTimeframeAlignment }
 
 export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) {
   const timeframes = market.strategy_context?.timeframes || {}
@@ -157,6 +212,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     used_timeframes: Object.keys(timeframes),
     missing_timeframes: missingTimeframes,
     context_status: missingTimeframes.length === 0 ? 'complete' : 'partial',
+    ...(useChan ? { chan_timeframe_alignment: buildChanTimeframeAlignment(timeframes, fallbackTimeframe, missingTimeframes.length === 0 ? 'complete' : 'partial') } : {}),
     timeframes,
   }
 }

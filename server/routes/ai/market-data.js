@@ -29,6 +29,7 @@ const MIN_KLINES_FOR_CHAN = 30
 const DIVERGENCE_MIN_AREA_RATIO = 0.85
 const DIVERGENCE_MIN_PEAK_RATIO = 0.95
 const MACD_WARMUP_BARS = 40
+const CHAN_ENTRY_MAX_AGE_BARS = 20
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
 // === MACD Series Calculation ===
@@ -745,6 +746,180 @@ function summarizeCenter(center, timeframe) {
   }
 }
 
+function emptyTrendState(reason = 'structure_unavailable') {
+  return {
+    state: 'unavailable',
+    direction: 'neutral',
+    phase: 'unknown',
+    reversal_bias: 'none',
+    confidence: 'low',
+    reason,
+    center_id: null,
+    segment_id: null,
+  }
+}
+
+function capStructureConfidence(reliability, preferred = 'medium') {
+  if (reliability === 'low') return 'low'
+  if (reliability === 'high') return preferred
+  return preferred === 'high' ? 'medium' : preferred
+}
+
+function classifyChanTrend(segments, centers, latestPrice, divergence, reliability = 'low') {
+  const validSegments = segments.filter(segment => !segment.weak && Array.isArray(segment.bi_ids) && segment.bi_ids.length >= MIN_BIS_PER_SEGMENT)
+  const latestSegment = validSegments.at(-1)
+  const latestCenter = centers.at(-1)
+  if (!latestSegment) return emptyTrendState('no_confirmed_segment')
+
+  if (divergence?.confirmed && divergence.type === 'top') {
+    return {
+      state: 'upward_exhaustion', direction: 'up', phase: 'exhaustion', reversal_bias: 'down',
+      confidence: capStructureConfidence(reliability, divergence.strength === 'strong' ? 'high' : 'medium'),
+      reason: 'confirmed_top_divergence', center_id: divergence.center_id ?? latestCenter?.id ?? null,
+      segment_id: divergence.departure_segment_id ?? latestSegment.id,
+    }
+  }
+  if (divergence?.confirmed && divergence.type === 'bottom') {
+    return {
+      state: 'downward_exhaustion', direction: 'down', phase: 'exhaustion', reversal_bias: 'up',
+      confidence: capStructureConfidence(reliability, divergence.strength === 'strong' ? 'high' : 'medium'),
+      reason: 'confirmed_bottom_divergence', center_id: divergence.center_id ?? latestCenter?.id ?? null,
+      segment_id: divergence.departure_segment_id ?? latestSegment.id,
+    }
+  }
+
+  if (centers.length >= 2) {
+    const previousCenter = centers.at(-2)
+    if (latestCenter.zl > previousCenter.zh) {
+      return {
+        state: 'uptrend', direction: 'up', phase: 'trend', reversal_bias: 'none',
+        confidence: capStructureConfidence(reliability, 'high'), reason: 'centers_rising_without_overlap',
+        center_id: latestCenter.id, segment_id: latestSegment.id,
+      }
+    }
+    if (latestCenter.zh < previousCenter.zl) {
+      return {
+        state: 'downtrend', direction: 'down', phase: 'trend', reversal_bias: 'none',
+        confidence: capStructureConfidence(reliability, 'high'), reason: 'centers_falling_without_overlap',
+        center_id: latestCenter.id, segment_id: latestSegment.id,
+      }
+    }
+  }
+
+  if (latestCenter) {
+    const breakoutSegment = validSegments.find(segment => segment.id === latestCenter.closed_by_segment_id)
+    if (latestCenter.status === 'closed' && breakoutSegment?.dir === 'up' && Number(latestPrice) > latestCenter.zh) {
+      return {
+        state: 'upward_breakout', direction: 'up', phase: 'breakout', reversal_bias: 'none',
+        confidence: capStructureConfidence(reliability), reason: 'price_above_closed_center',
+        center_id: latestCenter.id, segment_id: breakoutSegment.id,
+      }
+    }
+    if (latestCenter.status === 'closed' && breakoutSegment?.dir === 'down' && Number(latestPrice) < latestCenter.zl) {
+      return {
+        state: 'downward_breakout', direction: 'down', phase: 'breakout', reversal_bias: 'none',
+        confidence: capStructureConfidence(reliability), reason: 'price_below_closed_center',
+        center_id: latestCenter.id, segment_id: breakoutSegment.id,
+      }
+    }
+    return {
+      state: 'consolidation', direction: 'neutral', phase: 'range', reversal_bias: 'none',
+      confidence: capStructureConfidence(reliability), reason: latestCenter.status === 'closed' ? 'price_returned_to_center' : 'center_active',
+      center_id: latestCenter.id, segment_id: latestSegment.id,
+    }
+  }
+
+  return {
+    state: latestSegment.dir === 'up' ? 'structural_rise' : 'structural_decline',
+    direction: latestSegment.dir === 'up' ? 'up' : 'down',
+    phase: 'structure', reversal_bias: 'none', confidence: 'low', reason: 'segments_without_center',
+    center_id: null, segment_id: latestSegment.id,
+  }
+}
+
+function detectChanEntryCandidates(segments, centers, divergence, recentDivergences, bis, rates, reliability, timeLocationReliable) {
+  const validSegments = segments.filter(segment => !segment.weak && Array.isArray(segment.bi_ids) && segment.bi_ids.length >= MIN_BIS_PER_SEGMENT)
+  const latestSegment = validSegments.at(-1)
+  if (!latestSegment) return []
+  const structurallyUsable = reliability !== 'low' && timeLocationReliable !== false
+  const confidence = preferred => capStructureConfidence(reliability, preferred)
+  const results = []
+  const add = ({ type, side, source, segment, center = null, referencePrice, invalidationPrice, preferredConfidence = 'medium' }) => {
+    const location = summarizeSegment(segment, bis, rates)
+    const stablePart = location?.stable_id || `segment-${segment?.id ?? 'unknown'}`
+    const pointEndIndex = Number(location?.end_index)
+    const barsSincePoint = Number.isFinite(pointEndIndex) && rates.length > 0 ? Math.max(0, rates.length - 1 - pointEndIndex) : null
+    const freshness = barsSincePoint == null ? 'unknown' : barsSincePoint <= CHAN_ENTRY_MAX_AGE_BARS ? 'fresh' : 'stale'
+    results.push({
+      type, side, state: 'confirmed_candidate', source,
+      candidate_key: `${type}:${stablePart}`,
+      confidence: confidence(preferredConfidence),
+      usable_for_entry: structurallyUsable && freshness !== 'stale',
+      freshness,
+      bars_since_point: barsSincePoint,
+      max_age_bars: CHAN_ENTRY_MAX_AGE_BARS,
+      segment_id: segment?.id ?? null,
+      center_id: center?.id ?? null,
+      reference_price: Number.isFinite(Number(referencePrice)) ? round5(Number(referencePrice)) : null,
+      invalidation_price: Number.isFinite(Number(invalidationPrice)) ? round5(Number(invalidationPrice)) : null,
+      segment: location,
+    })
+  }
+
+  if (divergence?.confirmed && divergence.type === 'bottom') {
+    const segment = validSegments.find(item => item.id === divergence.departure_segment_id) || latestSegment
+    add({
+      type: 'first_buy', side: 'buy', source: 'confirmed_bottom_divergence', segment,
+      center: centers.find(item => item.id === divergence.center_id), referencePrice: segment.end_price,
+      invalidationPrice: divergence.price_extreme_cur, preferredConfidence: divergence.strength === 'strong' ? 'high' : 'medium',
+    })
+  } else if (divergence?.confirmed && divergence.type === 'top') {
+    const segment = validSegments.find(item => item.id === divergence.departure_segment_id) || latestSegment
+    add({
+      type: 'first_sell', side: 'sell', source: 'confirmed_top_divergence', segment,
+      center: centers.find(item => item.id === divergence.center_id), referencePrice: segment.end_price,
+      invalidationPrice: divergence.price_extreme_cur, preferredConfidence: divergence.strength === 'strong' ? 'high' : 'medium',
+    })
+  }
+
+  const priorDivergences = Array.isArray(recentDivergences) ? recentDivergences : []
+  const lastBottom = [...priorDivergences].reverse().find(item => item.type === 'bottom' && item.confirmed)
+  const lastTop = [...priorDivergences].reverse().find(item => item.type === 'top' && item.confirmed)
+  if (lastBottom && latestSegment.dir === 'down' && latestSegment.id >= Number(lastBottom.departure_segment_id) + 2 && latestSegment.low > Number(lastBottom.price_extreme_cur)) {
+    add({
+      type: 'second_buy', side: 'buy', source: 'higher_low_after_first_buy', segment: latestSegment,
+      center: centers.find(item => item.id === lastBottom.center_id), referencePrice: latestSegment.end_price,
+      invalidationPrice: lastBottom.price_extreme_cur,
+    })
+  }
+  if (lastTop && latestSegment.dir === 'up' && latestSegment.id >= Number(lastTop.departure_segment_id) + 2 && latestSegment.high < Number(lastTop.price_extreme_cur)) {
+    add({
+      type: 'second_sell', side: 'sell', source: 'lower_high_after_first_sell', segment: latestSegment,
+      center: centers.find(item => item.id === lastTop.center_id), referencePrice: latestSegment.end_price,
+      invalidationPrice: lastTop.price_extreme_cur,
+    })
+  }
+
+  const closedCenter = [...centers].reverse().find(center => center.status === 'closed' && center.closed_by_segment_id != null)
+  if (closedCenter) {
+    const breakoutSegment = validSegments.find(segment => segment.id === closedCenter.closed_by_segment_id)
+    if (breakoutSegment?.dir === 'up' && latestSegment.id > breakoutSegment.id && latestSegment.dir === 'down' && latestSegment.low > closedCenter.zh) {
+      add({
+        type: 'third_buy', side: 'buy', source: 'pullback_holds_above_center', segment: latestSegment,
+        center: closedCenter, referencePrice: latestSegment.end_price, invalidationPrice: closedCenter.zh,
+      })
+    }
+    if (breakoutSegment?.dir === 'down' && latestSegment.id > breakoutSegment.id && latestSegment.dir === 'up' && latestSegment.high < closedCenter.zl) {
+      add({
+        type: 'third_sell', side: 'sell', source: 'rebound_holds_below_center', segment: latestSegment,
+        center: closedCenter, referencePrice: latestSegment.end_price, invalidationPrice: closedCenter.zl,
+      })
+    }
+  }
+
+  return [...new Map(results.map(item => [item.candidate_key, item])).values()].slice(-6)
+}
+
 function emptyDivergence(reason = 'structure_unavailable') {
   return divergenceResult(reason)
 }
@@ -785,6 +960,8 @@ function emptyChanResult(overrides = {}) {
     divergence: emptyDivergence(),
     forming_divergence: emptyDivergence('no_forming_segment'),
     recent_divergences: [],
+    trend_state: emptyTrendState(),
+    entry_candidates: [],
     warnings: [],
     ...overrides,
   }
@@ -908,6 +1085,9 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   else if (validSegs.length > 0 && centers.length === 0) status = 'partial'
   else if (warnings.length > 0) status = 'partial'
 
+  const trendState = classifyChanTrend(validSegs, centers, latest, divergence, reliability)
+  const entryCandidates = detectChanEntryCandidates(validSegs, centers, divergence, recentDivergences, allBis, closedRates, reliability, timeLocationReliable)
+
   if (DEBUG_CHAN) console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
   return {
     status, reliability,
@@ -938,12 +1118,14 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     divergence,
     forming_divergence: formingDivergence,
     recent_divergences: recentDivergences,
+    trend_state: trendState,
+    entry_candidates: entryCandidates,
     warnings,
   }
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, emptyChanResult, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()

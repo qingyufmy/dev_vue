@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 
-const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, computeChan } = __chanTest
+const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -739,6 +739,68 @@ describe('divergence segment locator', () => {
       entry_segment_id: 2, departure_segment_id: 4,
       departure_segment: { start_time: 't46', end_time: 't48' },
     })
+  })
+})
+
+describe('advanced Chan structure evidence', () => {
+  const segment = (id, dir, low, high, endPrice = dir === 'up' ? high : low) => ({
+    id, dir, low, high, start_price: dir === 'up' ? low : high, end_price: endPrice,
+    bi_ids: [id * 3 - 2, id * 3 - 1, id * 3], weak: false,
+  })
+
+  it('classifies a confirmed top divergence as upward exhaustion', () => {
+    const segments = [segment(1, 'down', 90, 120), segment(2, 'up', 95, 130)]
+    const result = classifyChanTrend(segments, [{ id: 7, zl: 100, zh: 110 }], 129, {
+      type: 'top', confirmed: true, strength: 'strong', center_id: 7, departure_segment_id: 2,
+    }, 'high')
+    expect(result).toMatchObject({
+      state: 'upward_exhaustion', direction: 'up', phase: 'exhaustion', reversal_bias: 'down', confidence: 'high',
+    })
+  })
+
+  it('uses separated rising centers as a conservative uptrend', () => {
+    const segments = [segment(1, 'up', 90, 110), segment(2, 'down', 100, 115), segment(3, 'up', 105, 125)]
+    const centers = [{ id: 1, zl: 95, zh: 100 }, { id: 2, zl: 105, zh: 110 }]
+    expect(classifyChanTrend(segments, centers, 123, { type: 'none' }, 'high')).toMatchObject({
+      state: 'uptrend', direction: 'up', phase: 'trend', reason: 'centers_rising_without_overlap',
+    })
+  })
+
+  it('emits first-buy evidence but disables it when structure reliability is low', () => {
+    const segments = [segment(1, 'up', 95, 125), segment(2, 'down', 85, 118)]
+    const candidates = detectChanEntryCandidates(segments, [{ id: 3, zl: 95, zh: 105 }], {
+      type: 'bottom', confirmed: true, strength: 'strong', center_id: 3,
+      departure_segment_id: 2, price_extreme_cur: 85,
+    }, [], [], [], 'low', true)
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      type: 'first_buy', side: 'buy', state: 'confirmed_candidate', usable_for_entry: false,
+      reference_price: 85, invalidation_price: 85, confidence: 'low',
+    })
+  })
+
+  it('keeps stale entry candidates for observation but not entry use', () => {
+    const departure = { ...segment(2, 'down', 85, 118), raw_start_idx: 5, raw_end_idx: 10 }
+    const rates = Array.from({ length: 50 }, (_, index) => ({ time: `t${index}` }))
+    const candidates = detectChanEntryCandidates([segment(1, 'up', 95, 125), departure], [], {
+      type: 'bottom', confirmed: true, strength: 'strong', departure_segment_id: 2, price_extreme_cur: 85,
+    }, [], [], rates, 'high', true)
+    expect(candidates[0]).toMatchObject({
+      type: 'first_buy', freshness: 'stale', bars_since_point: 39, max_age_bars: 20, usable_for_entry: false,
+    })
+  })
+
+  it('recognizes a higher-low second buy and a center-holding third buy', () => {
+    const segments = [
+      segment(1, 'down', 90, 120), segment(2, 'up', 95, 125), segment(3, 'down', 92, 118),
+      segment(4, 'up', 105, 130), segment(5, 'down', 112, 128),
+    ]
+    const divergences = [{ type: 'bottom', confirmed: true, departure_segment_id: 1, center_id: 1, price_extreme_cur: 90 }]
+    const centers = [{ id: 1, zl: 100, zh: 110, status: 'closed', closed_by_segment_id: 4 }]
+    const candidates = detectChanEntryCandidates(segments, centers, { type: 'none' }, divergences, [], [], 'high', true)
+    expect(candidates.map(item => item.type)).toEqual(['second_buy', 'third_buy'])
+    expect(candidates.every(item => item.usable_for_entry)).toBe(true)
+    expect(candidates.find(item => item.type === 'third_buy')?.invalidation_price).toBe(110)
   })
 })
 

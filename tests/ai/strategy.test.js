@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount, __strategyTest } from '../../server/routes/ai/strategy.js'
+import { attachAtrAnchor, buildChanTimeframeAlignment, buildStrategyContextFromTags, resolveChanHistoryCount, __strategyTest } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
@@ -144,6 +144,56 @@ describe('buildStrategyContextFromTags', () => {
     })
     expect(result.timeframes).toHaveProperty('M5')
     expect(result.timeframes).not.toHaveProperty('H1')
+  })
+})
+
+describe('buildChanTimeframeAlignment', () => {
+  const frame = (reliability, direction, state, entryCandidates = []) => ({
+    summary: { chan: {
+      reliability,
+      trend_state: { direction, state, phase: state.includes('trend') ? 'trend' : 'breakout', reversal_bias: 'none' },
+      entry_candidates: entryCandidates,
+    } },
+  })
+
+  it('reports aligned higher and execution timeframes', () => {
+    const result = buildChanTimeframeAlignment({
+      H4: frame('high', 'up', 'uptrend'),
+      H1: frame('medium', 'up', 'upward_breakout'),
+      M15: frame('medium', 'up', 'structural_rise', [{ type: 'third_buy', side: 'buy', usable_for_entry: true }]),
+    }, 'H1')
+    expect(result).toMatchObject({
+      status: 'complete', higher_timeframe: 'H4', higher_timeframe_direction: 'up',
+      agreement: 'aligned_up', direction: 'up', conflict: false, execution_policy: 'evidence_only',
+    })
+    expect(result.entry_candidates[0]).toMatchObject({ timeframe: 'M15', alignment_with_higher: 'aligned' })
+  })
+
+  it('marks opposing reliable timeframes and entry evidence as conflicted', () => {
+    const result = buildChanTimeframeAlignment({
+      H4: frame('high', 'down', 'downtrend'),
+      M15: frame('medium', 'up', 'upward_breakout', [{ type: 'first_buy', side: 'buy', usable_for_entry: true }]),
+      M5: frame('low', 'up', 'structural_rise'),
+    }, 'M15', 'partial')
+    expect(result).toMatchObject({ status: 'partial', agreement: 'mixed', conflict: true })
+    expect(result.excluded_low_reliability_timeframes).toEqual(['M5'])
+    expect(result.entry_candidates[0].alignment_with_higher).toBe('conflict')
+  })
+
+  it('safely ignores legacy Chan payloads without trend state', () => {
+    const result = buildChanTimeframeAlignment({ H1: { summary: { chan: { reliability: 'high' } } } }, 'H1')
+    expect(result).toMatchObject({ status: 'unavailable', agreement: 'insufficient', execution_policy: 'evidence_only' })
+  })
+
+  it('does not promote an all-low-reliability structure to higher-timeframe bias', () => {
+    const result = buildChanTimeframeAlignment({
+      H4: frame('low', 'up', 'structural_rise', [{ type: 'first_buy', side: 'buy', usable_for_entry: false }]),
+    }, 'H4')
+    expect(result).toMatchObject({
+      higher_timeframe: 'H4', higher_timeframe_direction: 'neutral', higher_timeframe_phase: 'unknown',
+      agreement: 'insufficient', direction: 'neutral',
+    })
+    expect(result.entry_candidates[0].alignment_with_higher).toBe('unconfirmed')
   })
 })
 

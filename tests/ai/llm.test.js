@@ -394,6 +394,8 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).not.toContain('{{USE_CHAN}}')
     expect(body.messages[0].content).toContain('缠论背驰使用规则')
     expect(body.messages[0].content).toContain('forming_divergence')
+    expect(body.messages[0].content).toContain('entry_candidates')
+    expect(body.messages[0].content).toContain('chan_timeframe_alignment')
   })
 
   it('结构化开关启用时payload保留chan', async () => {

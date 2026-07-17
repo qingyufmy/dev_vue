@@ -10,6 +10,30 @@
 - 多周期上下文输出请求、已用、缺失周期和 `context_status`；缺失任一周期时为 `partial`。
 - `forming_divergence` 只是候选线段证据，不能单独触发交易。智能平仓不在本阶段范围内。
 
+## 实用高级结构（第一阶段）
+
+### 走势状态 `trend_state`
+
+- `uptrend` / `downtrend`：最近两个中枢区间明确向上或向下分离。
+- `upward_breakout` / `downward_breakout`：已关闭中枢被确认线段突破，且当前价格仍在中枢外侧。
+- `consolidation`：中枢仍在延伸，或价格已经回到最近中枢。
+- `upward_exhaustion` / `downward_exhaustion`：确认离开段出现顶背驰或底背驰，只表示原方向衰竭和反转风险上升。
+- `structural_rise` / `structural_decline`：已有确认线段但没有足够中枢，置信度固定为低。
+
+输出同时包含 `direction`、`phase`、`reversal_bias`、`confidence` 和对应的中枢、线段编号。
+
+### 买卖点候选 `entry_candidates`
+
+- 一类买卖点来自确认底背驰或顶背驰。
+- 二类买卖点要求一类点后的回撤不创新低，或反弹不创新高。
+- 三类买卖点要求突破中枢后的回踩保持在上沿之上，或反弹保持在下沿之下。
+
+每个候选包含方向、来源、结构参考价、失效价、稳定编号和 `usable_for_entry`。`reference_price` 是结构定位价格，不是可以直接提交的订单价格。系统通过 `bars_since_point` 标记新鲜度，超过 20 根 K 线后为 `stale`；结构可靠性低、时间定位不可靠或候选过期时，候选仍可供观察，但 `usable_for_entry=false`。候选不是订单信号，不能绕过 AI 综合判断和风控。
+
+### 跨周期映射 `chan_timeframe_alignment`
+
+多周期上下文输出高周期方向、各周期走势阶段、一致性和冲突状态。`aligned_up` / `aligned_down` 表示至少两个可靠周期方向一致，`mixed` 表示可靠周期冲突，`insufficient` 表示证据不足。低可靠性周期进入 `excluded_low_reliability_timeframes`；买卖点候选标记 `alignment_with_higher`。该汇总的 `execution_policy` 固定为 `evidence_only`。
+
 ## 概述
 
 本系统在 `server/routes/ai/market-data.js` 中实现了**保守版缠论结构计算**，用于为 AI 模型提供真实的价格结构数据（分型→笔→线段→中枢→背驰），替代模型自行从 K 线推测结构。
