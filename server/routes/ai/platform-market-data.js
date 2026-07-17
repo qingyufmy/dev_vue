@@ -122,15 +122,17 @@ async function loadClosedCandles(sourceId, standardSymbol, timeframe, count) {
   const key = cacheKey(sourceId, standardSymbol, timeframe)
   const hot = await cacheGetJSON(key)
   const required = Math.max(1, count - 1)
-  if (Array.isArray(hot) && hot.length) return { rates: hot.slice(-count), layer: hot.length >= required ? 'redis' : 'redis_partial' }
+  if (Array.isArray(hot) && hot.length >= required) return { rates: hot.slice(-count), layer: 'redis' }
   const rows = await queryAll(`SELECT broker_symbol, broker_time AS time, open_time_utc_msc AS time_utc_msc,
     open_price AS open, high_price AS high, low_price AS low, close_price AS close,
     tick_volume, spread FROM market_candles
     WHERE source_id = ? AND standard_symbol = ? AND timeframe = ?
     ORDER BY open_time_utc_msc DESC LIMIT ?`, [sourceId, standardSymbol, timeframe, Math.min(CACHE_LIMIT, count)])
-  const rates = rows.reverse().map(row => ({ ...row, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), tick_volume: Number(row.tick_volume), spread: Number(row.spread) }))
+  const stored = rows.reverse().map(row => ({ ...row, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), tick_volume: Number(row.tick_volume), spread: Number(row.spread) }))
+  const rates = mergeRates(stored, Array.isArray(hot) ? hot : [], count)
   if (rates.length) await cacheSetJSON(key, rates, CACHE_TTL_SECONDS)
-  return { rates, layer: rates.length ? 'mysql' : 'cold' }
+  const layer = rates.length >= required ? 'mysql' : Array.isArray(hot) && hot.length ? 'redis_partial' : rates.length ? 'mysql_partial' : 'cold'
+  return { rates, layer }
 }
 
 async function saveClosedCache(sourceId, standardSymbol, timeframe, rates) {
@@ -182,7 +184,11 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   if (platformUserId) {
     const clock = getPlatformMarketClockState(platformUserId)
     const source = await findSource(platformUserId, clock).catch(() => ({ id: null }))
-    const cachedResult = await loadClosedCandles(source.id, stripBrokerSuffix(symbol), timeframe, count).catch(() => ({ rates: [], layer: 'cold' }))
+    const standardSymbol = stripBrokerSuffix(symbol)
+    const structureAnchor = source.id ? await queryOne(`SELECT anchor_time_utc_msc, last_confirmed_segment_time_utc_msc
+      FROM chan_structure_anchors WHERE source_id = ? AND standard_symbol = ? AND timeframe = ? LIMIT 1`,
+    [source.id, standardSymbol, timeframe]).catch(() => null) : null
+    const cachedResult = await loadClosedCandles(source.id, standardSymbol, timeframe, count).catch(() => ({ rates: [], layer: 'cold' }))
     const probeOnly = cachedResult.rates.length >= count - 1
     const fetchCount = probeOnly ? 3 : count + 1
     let response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: fetchCount }, { timeoutMs: 15000, noFallback: true })
@@ -230,6 +236,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_layer: cachedResult.layer,
           cache_gap_refilled: gapDetected,
           live_candle_cached: false,
+          chan_structure_anchor_utc_msc: Number(structureAnchor?.anchor_time_utc_msc) || null,
+          chan_last_confirmed_segment_utc_msc: Number(structureAnchor?.last_confirmed_segment_time_utc_msc) || null,
         },
       }
     }
@@ -242,6 +250,21 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     cache_layer: 'none', live_candle_cached: false,
   }
   return fallback
+}
+
+export async function saveChanStructureAnchor(sourceId, symbol, timeframe, structureAnchor) {
+  const anchorTime = Number(structureAnchor?.recommended_time_utc_msc)
+  if (!Number.isInteger(Number(sourceId)) || Number(sourceId) <= 0 || !Number.isFinite(anchorTime) || anchorTime <= 0) return false
+  const lastConfirmedTime = Number(structureAnchor?.last_confirmed_segment_time_utc_msc)
+  await queryRun(`INSERT INTO chan_structure_anchors
+    (source_id, standard_symbol, timeframe, anchor_time_utc_msc, last_confirmed_segment_time_utc_msc)
+    VALUES (?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      anchor_time_utc_msc = GREATEST(anchor_time_utc_msc, VALUES(anchor_time_utc_msc)),
+      last_confirmed_segment_time_utc_msc = GREATEST(COALESCE(last_confirmed_segment_time_utc_msc, 0), COALESCE(VALUES(last_confirmed_segment_time_utc_msc), 0))`,
+  [Number(sourceId), stripBrokerSuffix(symbol), String(timeframe || '').toUpperCase(), anchorTime,
+    Number.isFinite(lastConfirmedTime) && lastConfirmedTime > 0 ? lastConfirmedTime : null])
+  return true
 }
 
 export async function getPlatformRates(requestUserId, params = {}) {

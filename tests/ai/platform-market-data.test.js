@@ -13,7 +13,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge }))
 vi.mock('../../server/redis.js', () => ({ cacheGetJSON: redis.get, cacheSetJSON: redis.set }))
 
-import { getPlatformRates } from '../../server/routes/ai/platform-market-data.js'
+import { getPlatformRates, saveChanStructureAnchor } from '../../server/routes/ai/platform-market-data.js'
 
 const rate = (minute, close) => ({
   time: `2026-07-16 10:0${minute}:00`, time_msc: 1784196000000 + minute * 60000,
@@ -98,7 +98,7 @@ describe('platform market data', () => {
     redis.get.mockResolvedValue([rate(0, 2000)])
     mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(1, 2001), rate(2, 2002), rate(3, 2003), rate(4, 2004)] })
     const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 3 })
-    expect(db.queryAll.mock.calls.some(([sql]) => sql.includes('FROM market_candles'))).toBe(false)
+    expect(db.queryAll.mock.calls.some(([sql]) => sql.includes('FROM market_candles'))).toBe(true)
     expect(mt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ count: 4 }), expect.any(Object))
     expect(result.market_meta.cache_layer).toBe('redis_partial')
     expect(result.rates.map(item => item.close)).toEqual([2002, 2003, 2004])
@@ -110,5 +110,25 @@ describe('platform market data', () => {
     const result = await getPlatformRates(7, { symbol: 'EURUSD', timeframe: 'M5', count: 10 })
     expect(mt5Bridge).toHaveBeenCalledWith(7, 'rates', expect.any(Object), expect.objectContaining({ noFallback: true }))
     expect(result.market_meta).toMatchObject({ source: 'user_bridge_fallback', source_user_id: 7, live_candle_cached: false })
+  })
+
+  it('returns and advances the persisted Chan structure anchor', async () => {
+    db.queryOne
+      .mockResolvedValueOnce({ id: 9 })
+      .mockResolvedValueOnce({ anchor_time_utc_msc: 1784185200000, last_confirmed_segment_time_utc_msc: 1784188800000 })
+      .mockResolvedValueOnce({ id: 9 })
+    mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+    const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M5', count: 3 })
+    expect(result.market_meta).toMatchObject({
+      chan_structure_anchor_utc_msc: 1784185200000,
+      chan_last_confirmed_segment_utc_msc: 1784188800000,
+    })
+    await expect(saveChanStructureAnchor(9, 'XAUUSD.a', 'm5', {
+      recommended_time_utc_msc: 1784185500000,
+      last_confirmed_segment_time_utc_msc: 1784190000000,
+    })).resolves.toBe(true)
+    expect(db.queryRun).toHaveBeenCalledWith(expect.stringContaining('GREATEST(anchor_time_utc_msc'), [
+      9, 'XAUUSD', 'M5', 1784185500000, 1784190000000,
+    ])
   })
 })

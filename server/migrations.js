@@ -2133,6 +2133,22 @@ const migrations = [
         await queryRun('UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(schema, null, 2), row.id])
       }
     }
+  },
+  {
+    id: '085_chan_structure_anchors',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS chan_structure_anchors (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        source_id BIGINT UNSIGNED NOT NULL,
+        standard_symbol VARCHAR(64) NOT NULL,
+        timeframe VARCHAR(8) NOT NULL,
+        anchor_time_utc_msc BIGINT NOT NULL,
+        last_confirmed_segment_time_utc_msc BIGINT DEFAULT NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_chan_structure_anchor (source_id, standard_symbol, timeframe),
+        INDEX idx_chan_structure_anchor_time (source_id, anchor_time_utc_msc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

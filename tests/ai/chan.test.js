@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 
-const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan } = __chanTest
+const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -1243,5 +1243,72 @@ describe('divergence equal area no divergence', () => {
     expect(result.reason).toBe('macd_no_divergence')
     expect(result.area_cur).toBeGreaterThan(0)
     expect(result.area_prev).toBeGreaterThan(0)
+  })
+})
+
+describe('persistent Chan structure anchor', () => {
+  it('prefers the terminal structure supported by more independent windows', () => {
+    const result = (previous, current, raw, centerCount = 0) => ({
+      window_stable: true,
+      segment_count: centerCount ? 3 : 2,
+      center_count: centerCount,
+      raw_bar_count: raw,
+      prev_segment: { stable_id: previous },
+      current_segment: { stable_id: current },
+    })
+    const selected = selectStableChanResult([
+      result('p1', 'c1', 900), result('p1', 'c1', 800), result('p1', 'c1', 700),
+      result('p2', 'c2', 600, 1), result('p2', 'c2', 500, 1),
+    ])
+    expect(selected.current_segment.stable_id).toBe('c1')
+    expect(selected.raw_bar_count).toBe(900)
+  })
+
+  it('keeps confirmed segment boundaries after the market window shifts', () => {
+    let state = 1
+    const random = () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    let price = 100
+    const vertices = [{ type: 'bottom', price }]
+    for (let i = 0; i < 60; i++) {
+      const dir = i % 2 === 0 ? 'up' : 'down'
+      const distance = 1 + random() * 25
+      price = dir === 'up' ? price + distance : price - distance
+      vertices.push({ type: dir === 'up' ? 'top' : 'bottom', price })
+    }
+    const makeFractals = offset => vertices.map((vertex, index) => ({
+      idx: index * 4 - offset,
+      raw_start_idx: index * 4 - offset,
+      raw_end_idx: index * 4 - offset,
+      type: vertex.type,
+      price: vertex.price,
+      high: vertex.price,
+      low: vertex.price,
+      time: `t${index * 4}`,
+    })).filter(item => item.idx >= 0)
+    const allRates = Array.from({ length: 302 }, (_, i) => ({
+      time: `t${i}`,
+      time_utc_msc: 1784185200000 + i * 300000,
+      open: 100,
+      high: 110,
+      low: 90,
+      close: 100,
+      tick_volume: 1,
+    }))
+    const firstRates = allRates.slice(0, 300)
+    const first = computeChan(firstRates, 'M5', Array(firstRates.length).fill(0), { fractalsForTest: makeFractals(0) })
+    const anchor = first.structure_anchor.recommended_time_utc_msc
+    expect(anchor).toBeGreaterThan(0)
+    const shiftedRates = allRates.slice(2)
+    const shifted = computeChan(shiftedRates, 'M5', Array(shiftedRates.length).fill(0), {
+      fractalsForTest: makeFractals(2),
+      trustedStructureAnchorUtcMs: anchor,
+    })
+    expect(shifted.structure_anchor).toMatchObject({ requested_time_utc_msc: anchor, matched: true })
+    expect(shifted.window_stable).toBe(true)
+    expect(shifted.current_segment?.stable_id).toBe(first.current_segment?.stable_id)
+    expect(shifted.prev_segment?.stable_id).toBe(first.prev_segment?.stable_id)
   })
 })

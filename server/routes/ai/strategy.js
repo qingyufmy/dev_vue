@@ -12,6 +12,7 @@ import { persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
+import { saveChanStructureAnchor } from './platform-market-data.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
@@ -203,6 +204,11 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
           })
         }
       }
+    }
+    if (useChan && summary.chan?.structure_anchor?.recommended_time_utc_msc && chanDataQuality?.source_id) {
+      await saveChanStructureAnchor(chanDataQuality.source_id, symbol, tf, summary.chan.structure_anchor).catch(error => {
+        console.warn(`[Chan] Failed to persist structure anchor for ${symbol} ${tf}: ${error.message}`)
+      })
     }
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
     timeframes[tf] = { summary: slimSummary, klines: compactRates(visibleRates) }

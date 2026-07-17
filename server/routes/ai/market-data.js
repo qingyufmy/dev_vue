@@ -460,7 +460,7 @@ function buildSegments(confirmedBis, options = {}) {
   const candidate = primary.candidate && candidateValidators.length >= 2 && candidateValidators.every(result => sameCandidate(primary.candidate, result.candidate))
     ? primary.candidate
     : null
-  return { segments, candidate, resynced: true, stable: segments.length > 0 || candidate !== null, historicalSegmentRuns }
+  return { segments, candidate, resynced: true, stable: segments.length > 0, historicalSegmentRuns }
 }
 
 // === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
@@ -950,6 +950,12 @@ function emptyChanResult(overrides = {}) {
     cache_gap_refilled: false,
     window_resynced: false,
     window_stable: false,
+    structure_anchor: {
+      requested_time_utc_msc: null,
+      matched: false,
+      recommended_time_utc_msc: null,
+      last_confirmed_segment_time_utc_msc: null,
+    },
     raw_bar_count: 0,
     closed_bar_count: 0,
     processed_bar_count: 0,
@@ -980,7 +986,7 @@ function emptyChanResult(overrides = {}) {
 }
 
 // === Chan Theory: Assembly ===
-function computeChan(rates, timeframe, macdHist, options = {}) {
+function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   const warnings = []
   const dataQuality = options.dataQuality && typeof options.dataQuality === 'object' ? options.dataQuality : null
   const requestedHistoryCount = Number(options.requestedHistoryCount) || rates?.length || 0
@@ -1046,8 +1052,16 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       warnings,
     })
   }
-  const { segments, candidate, resynced, stable: windowStable, historicalSegmentRuns = [] } = buildSegments(confirmedBis, { trustedStart: false })
-  if (!resynced) warnings.push('segment_window_not_resynced')
+  const requestedStructureAnchor = Number(options.trustedStructureAnchorUtcMs)
+  const anchoredBiIndex = Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0
+    ? confirmedBis.findIndex(bi => Number(closedRates[Number(bi.raw_start_idx)]?.time_utc_msc) === requestedStructureAnchor)
+    : -1
+  const structureAnchorMatched = anchoredBiIndex >= 0
+  if (Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0 && !structureAnchorMatched) warnings.push('structure_anchor_not_found')
+  const segmentBis = structureAnchorMatched ? confirmedBis.slice(anchoredBiIndex) : confirmedBis
+  const { segments, candidate, resynced, stable: windowStable, historicalSegmentRuns = [] } = buildSegments(segmentBis, { trustedStart: structureAnchorMatched })
+  const windowResynced = structureAnchorMatched || resynced
+  if (!windowResynced) warnings.push('segment_window_not_resynced')
   else if (!windowStable) warnings.push('segment_window_unstable')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
@@ -1099,6 +1113,11 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 
   const trendState = classifyChanTrend(validSegs, centers, latest, divergence, reliability)
   const entryCandidates = detectChanEntryCandidates(validSegs, centers, divergence, recentDivergences, allBis, closedRates, reliability, timeLocationReliable)
+  const anchorSegment = validSegs[Math.max(0, validSegs.length - 8)] || null
+  const anchorRawIndex = Number(anchorSegment?.raw_start_idx)
+  const recommendedAnchorTime = Number.isFinite(anchorRawIndex) ? Number(closedRates[anchorRawIndex]?.time_utc_msc) : null
+  const lastSegmentRawIndex = Number(lastSeg?.raw_end_idx)
+  const lastConfirmedSegmentTime = Number.isFinite(lastSegmentRawIndex) ? Number(closedRates[lastSegmentRawIndex]?.time_utc_msc) : null
 
   if (DEBUG_CHAN) console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
   return {
@@ -1111,8 +1130,14 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     clock_status: clockStatus,
     time_location_reliable: timeLocationReliable,
     cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
-    window_resynced: resynced,
+    window_resynced: windowResynced,
     window_stable: windowStable,
+    structure_anchor: {
+      requested_time_utc_msc: Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0 ? requestedStructureAnchor : null,
+      matched: structureAnchorMatched,
+      recommended_time_utc_msc: Number.isFinite(recommendedAnchorTime) && recommendedAnchorTime > 0 ? recommendedAnchorTime : null,
+      last_confirmed_segment_time_utc_msc: Number.isFinite(lastConfirmedSegmentTime) && lastConfirmedSegmentTime > 0 ? lastConfirmedSegmentTime : null,
+    },
     raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
     fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
     historical_segment_run_count: historicalSegmentRuns.length,
@@ -1136,8 +1161,63 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   }
 }
 
+function stableTerminalStructureKey(result) {
+  const current = result?.current_segment?.stable_id
+  const previous = result?.prev_segment?.stable_id
+  return result?.window_stable && result?.segment_count >= 2 && current && previous ? `${previous}|${current}` : null
+}
+
+function selectStableChanResult(candidates) {
+  const groups = new Map()
+  for (const candidate of candidates) {
+    const key = stableTerminalStructureKey(candidate)
+    if (!key) continue
+    const group = groups.get(key) || []
+    group.push(candidate)
+    groups.set(key, group)
+  }
+  const supported = [...groups.values()].filter(group => group.length >= 2)
+  if (supported.length === 0) return null
+  supported.sort((a, b) => {
+    if (a.length !== b.length) return b.length - a.length
+    const bestA = Math.max(...a.map(item => item.center_count * 10000 + item.segment_count * 100 + item.raw_bar_count))
+    const bestB = Math.max(...b.map(item => item.center_count * 10000 + item.segment_count * 100 + item.raw_bar_count))
+    return bestB - bestA
+  })
+  return supported[0].sort((a, b) => (
+    b.center_count - a.center_count || b.segment_count - a.segment_count || b.raw_bar_count - a.raw_bar_count
+  ))[0]
+}
+
+function computeChan(rates, timeframe, macdHist, options = {}) {
+  const primary = computeChanWindow(rates, timeframe, macdHist, options)
+  const hasTrustedAnchor = Number(options.trustedStructureAnchorUtcMs) > 0
+  const trustedAnchorMatched = hasTrustedAnchor && primary.structure_anchor?.matched === true
+  if (trustedAnchorMatched || !Array.isArray(rates) || rates.length < 600 || (primary.window_stable && primary.segment_count >= 3 && primary.center_count > 0)) {
+    return { ...primary, source_history_count: rates?.length || 0, calculation_window_count: rates?.length || 0, window_selection: trustedAnchorMatched ? 'trusted_anchor' : 'full_window' }
+  }
+  const sizes = []
+  for (let size = Math.floor(Math.min(rates.length, 1000) / 100) * 100; size >= 300; size -= 100) sizes.push(size)
+  const candidates = sizes.map(size => {
+    if (size === rates.length) return primary
+    const windowRates = rates.slice(-size)
+    const windowMacd = calculateMacdSeries(windowRates.map(rate => Number(rate.close))).histSeries
+    return computeChanWindow(windowRates, timeframe, windowMacd, { ...options, requestedHistoryCount: size })
+  })
+  const selected = selectStableChanResult(candidates)
+  if (!selected) {
+    return { ...primary, source_history_count: rates.length, calculation_window_count: rates.length, window_selection: 'full_window_unresolved' }
+  }
+  return {
+    ...selected,
+    source_history_count: rates.length,
+    calculation_window_count: selected.raw_bar_count,
+    window_selection: 'stable_suffix_consensus',
+  }
+}
+
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan }
+export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan, computeChanWindow, selectStableChanResult }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
@@ -1288,7 +1368,11 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const chanCloses = chanRates === rates ? closes : chanRates.map(r => parseFloat(r.close))
   const chanMacdSeries = chanRates === rates ? macdSeries : calculateMacdSeries(chanCloses)
   const chan = options.computeChan
-    ? computeChan(chanRates, timeframe, chanMacdSeries.histSeries, { requestedHistoryCount: options.requestedChanHistoryCount, dataQuality: options.chanDataQuality })
+    ? computeChan(chanRates, timeframe, chanMacdSeries.histSeries, {
+      requestedHistoryCount: options.requestedChanHistoryCount,
+      dataQuality: options.chanDataQuality,
+      trustedStructureAnchorUtcMs: options.chanDataQuality?.chan_structure_anchor_utc_msc,
+    })
     : undefined
 
   return {
