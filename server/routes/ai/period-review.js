@@ -10,6 +10,8 @@ const DAY_MS = 86400000
 const DEFAULT_MT5_OFFSET_MINUTES = 180
 const DAILY_GRACE_MINUTES = 30
 const MONTHLY_GRACE_MINUTES = 120
+let periodReviewTimer = null
+let periodReviewCycleRunning = false
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const safeError = error => String(error?.message || error || 'period_review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
 
@@ -239,6 +241,15 @@ async function prepareTradeEvidence(outcome) {
 }
 
 async function upsertDailyGroup(group, clock) {
+  const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
+    AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND strategy_version = ?`,
+  [group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion])
+  if (existingCase) {
+    const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
+      WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
+    if (existingCase.current_version_id || existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
+      complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
+  }
   const prepared = []
   for (const outcome of group.outcomes) prepared.push({ outcome, ...(await prepareTradeEvidence(outcome)) })
   const complete = prepared.every(item => item.status === 'complete' && item.evidence)
@@ -260,12 +271,12 @@ async function upsertDailyGroup(group, clock) {
      timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
      evidence_reason, evidence_json, evidence_hash, source_count, created_at, updated_at)
     VALUES ('daily', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE evidence_status = IF(status = 'approved', evidence_status, VALUES(evidence_status)),
-      evidence_reason = IF(status = 'approved', evidence_reason, VALUES(evidence_reason)),
-      evidence_json = IF(status = 'approved', evidence_json, VALUES(evidence_json)),
-      evidence_hash = IF(status = 'approved', evidence_hash, VALUES(evidence_hash)),
-      source_count = IF(status = 'approved', source_count, VALUES(source_count)),
-      status = IF(status IN ('approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
+    ON DUPLICATE KEY UPDATE evidence_status = IF(current_version_id IS NOT NULL, evidence_status, VALUES(evidence_status)),
+      evidence_reason = IF(current_version_id IS NOT NULL, evidence_reason, VALUES(evidence_reason)),
+      evidence_json = IF(current_version_id IS NOT NULL, evidence_json, VALUES(evidence_json)),
+      evidence_hash = IF(current_version_id IS NOT NULL, evidence_hash, VALUES(evidence_hash)),
+      source_count = IF(current_version_id IS NOT NULL, source_count, VALUES(source_count)),
+      status = IF(status IN ('generating','approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
     group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion, group.strategyScope,
     group.offsetMinutes, group.startUtcMs, group.endUtcMs, complete ? 'ready' : 'incomplete', complete ? 'complete' : 'incomplete',
     reasons.join(',').slice(0, 255) || null, JSON.stringify(evidence), evidenceHash, sourceIds.length, now, now,
@@ -303,6 +314,15 @@ async function eligibleDailyReviewRows(limit) {
 }
 
 async function upsertMonthlyGroup(group, clock) {
+  const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
+    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? AND strategy_version = ?`,
+  [group.periodKey, group.userId, group.strategyId, group.strategyVersion])
+  if (existingCase) {
+    const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
+      WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
+    if (existingCase.current_version_id || existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
+      sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
+  }
   const sources = group.dailyCases.map(row => ({ period_case_id: Number(row.id), period_key: row.period_key,
     trading_account_id: Number(row.trading_account_id || 0), review_status: row.status,
     evidence_hash: row.evidence_hash, content_hash: row.current_content_hash,
@@ -333,13 +353,15 @@ async function upsertMonthlyGroup(group, clock) {
   const periodCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
     AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? AND strategy_version = ?`,
   [group.periodKey, group.userId, group.strategyId, group.strategyVersion])
-  for (const source of sources) await queryRun(`INSERT INTO period_review_sources
-    (period_case_id, outcome_id, trade_review_case_id, source_period_case_id, source_hash, created_at)
-    VALUES (?, NULL, NULL, ?, ?, ?) ON DUPLICATE KEY UPDATE source_hash = VALUES(source_hash)`,
-  [periodCase.id, source.period_case_id, sha256(`${source.evidence_hash || ''}:${source.content_hash || ''}`), now])
-  if (!periodCase.current_version_id) await queryRun(`INSERT IGNORE INTO period_review_jobs
-    (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
-    VALUES (?, 'monthly_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `monthly:${periodCase.id}:${evidenceHash}`, now, now])
+  if (!periodCase.current_version_id) {
+    for (const source of sources) await queryRun(`INSERT INTO period_review_sources
+      (period_case_id, outcome_id, trade_review_case_id, source_period_case_id, source_hash, created_at)
+      VALUES (?, NULL, NULL, ?, ?, ?) ON DUPLICATE KEY UPDATE source_hash = VALUES(source_hash)`,
+    [periodCase.id, source.period_case_id, sha256(`${source.evidence_hash || ''}:${source.content_hash || ''}`), now])
+    await queryRun(`INSERT IGNORE INTO period_review_jobs
+      (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
+      VALUES (?, 'monthly_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `monthly:${periodCase.id}:${evidenceHash}`, now, now])
+  }
   return { id: Number(periodCase.id), periodKey: group.periodKey, sourceCount: sources.length, evidenceHash }
 }
 
@@ -367,6 +389,7 @@ async function claimDailyReviewJob() {
     const [rows] = await run(`SELECT jobs.*, cases.user_id, cases.strategy_id, cases.evidence_json, cases.evidence_hash
       FROM period_review_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
       WHERE jobs.job_type = 'daily_review'
+        AND jobs.job_slot = 0
         AND (jobs.status = 'queued' OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
         AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'daily' AND cases.evidence_status = 'complete'
       ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow()])
@@ -449,6 +472,7 @@ async function claimMonthlyReviewJob() {
     const [rows] = await run(`SELECT jobs.*, cases.user_id, cases.strategy_id, cases.evidence_json, cases.evidence_hash
       FROM period_review_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
       WHERE jobs.job_type = 'monthly_review'
+        AND jobs.job_slot = 0
         AND (jobs.status = 'queued' OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
         AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'monthly' AND cases.evidence_status = 'complete'
       ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow()])
@@ -530,4 +554,143 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
     await finishMonthlyReviewFailure(job, error)
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
   }
+}
+
+function periodReviewContentForCase(reviewCase, content) {
+  const evidence = parse(reviewCase.evidence_json, {})
+  if (reviewCase.period_type === 'daily') {
+    const outcomeIds = (evidence.sources || []).map(item => Number(item.outcome_id))
+    return validateDailyReviewContent(content, outcomeIds)
+  }
+  if (reviewCase.period_type === 'monthly') {
+    const dailyCaseIds = (evidence.sources || []).map(item => Number(item.period_case_id))
+    const approvedDailyCaseIds = (evidence.sources || []).filter(item => item.review_status === 'approved').map(item => Number(item.period_case_id))
+    return validateMonthlyReviewContent(content, dailyCaseIds, approvedDailyCaseIds)
+  }
+  throw new Error('invalid_review_period_type')
+}
+
+export async function listPeriodReviewCases(userId, { periodType = null, status = null, limit = 50, offset = 0 } = {}) {
+  const params = [userId]
+  let where = 'WHERE cases.user_id = ?'
+  if (periodType) {
+    if (!['daily', 'monthly'].includes(periodType)) throw new Error('invalid_review_period_type')
+    where += ' AND cases.period_type = ?'; params.push(periodType)
+  }
+  if (status) { where += ' AND cases.status = ?'; params.push(status) }
+  const safeLimit = Math.min(100, Math.max(1, Number(limit || 50)))
+  const safeOffset = Math.max(0, Number(offset || 0))
+  params.push(safeLimit, safeOffset)
+  const rows = await queryAll(`SELECT cases.id, cases.period_type, cases.period_key, cases.trading_account_id,
+      cases.strategy_id, cases.strategy_version, cases.strategy_scope, cases.timezone_offset_minutes,
+      cases.status, cases.evidence_status, cases.evidence_reason, cases.source_count,
+      cases.current_version_id, cases.approved_version_id, cases.evidence_json, cases.created_at, cases.updated_at
+    FROM period_review_cases cases ${where}
+    ORDER BY cases.period_start_utc_msc DESC, cases.period_type, cases.id DESC LIMIT ? OFFSET ?`, params)
+  return rows.map(row => {
+    const evidence = parse(row.evidence_json, {})
+    return { ...row, evidence_json: undefined, statistics: evidence.statistics || {}, source_quality: evidence.source_quality || null }
+  })
+}
+
+export async function getPeriodReviewCase(periodCaseId, userId) {
+  const reviewCase = await queryOne('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ?', [periodCaseId, userId])
+  if (!reviewCase) throw new Error('period_review_not_found')
+  const [versions, sources] = await Promise.all([
+    queryAll(`SELECT id, version_no, parent_version_id, author_type, author_user_id, content_json,
+      content_hash, change_note, created_at FROM period_review_versions WHERE period_case_id = ? ORDER BY version_no`, [periodCaseId]),
+    queryAll(`SELECT id, outcome_id, trade_review_case_id, source_period_case_id, source_hash, created_at
+      FROM period_review_sources WHERE period_case_id = ? ORDER BY id`, [periodCaseId]),
+  ])
+  return { ...reviewCase, evidence: parse(reviewCase.evidence_json, null), evidence_json: undefined, sources,
+    versions: versions.map(row => ({ ...row, content: parse(row.content_json, {}), content_json: undefined })) }
+}
+
+export async function editPeriodReviewCase({ periodCaseId, userId, content, expectedVersionId, changeNote = null }) {
+  return withTransaction(async run => {
+    const [rows] = await run('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [periodCaseId, userId])
+    const reviewCase = rows[0]
+    if (!reviewCase) throw new Error('period_review_not_found')
+    if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(expectedVersionId)) throw new Error('period_review_version_conflict')
+    const normalized = periodReviewContentForCase(reviewCase, content)
+    const [versions] = await run('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM period_review_versions WHERE period_case_id = ? FOR UPDATE', [periodCaseId])
+    const now = beijingNow()
+    const body = JSON.stringify(normalized)
+    const [insert] = await run(`INSERT INTO period_review_versions
+      (period_case_id, version_no, parent_version_id, author_type, author_user_id, content_json, content_hash, change_note, created_at)
+      VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?)`, [periodCaseId, Number(versions[0].max_version) + 1,
+      reviewCase.current_version_id, userId, body, sha256(body), String(changeNote || '').slice(0, 500) || null, now])
+    await run(`UPDATE period_review_cases SET status = 'edited', current_version_id = ?, approved_version_id = NULL,
+      updated_at = ? WHERE id = ?`, [insert.insertId, now, periodCaseId])
+    return { versionId: Number(insert.insertId), versionNo: Number(versions[0].max_version) + 1 }
+  })
+}
+
+export async function confirmPeriodReviewCase({ periodCaseId, userId, versionId, action }) {
+  if (!['approve', 'needs_revision', 'defer'].includes(action)) throw new Error('invalid_review_action')
+  return withTransaction(async run => {
+    const [rows] = await run('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [periodCaseId, userId])
+    const reviewCase = rows[0]
+    if (!reviewCase) throw new Error('period_review_not_found')
+    if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(versionId)) throw new Error('period_review_version_conflict')
+    const [versions] = await run('SELECT id FROM period_review_versions WHERE id = ? AND period_case_id = ?', [versionId, periodCaseId])
+    if (!versions[0]) throw new Error('period_review_version_not_found')
+    const status = action === 'approve' ? 'approved' : action === 'defer' ? 'deferred' : 'needs_revision'
+    const now = beijingNow()
+    await run(`UPDATE period_review_cases SET status = ?, approved_version_id = ?, updated_at = ? WHERE id = ?`,
+    [status, action === 'approve' ? versionId : null, now, periodCaseId])
+    return { status, periodType: reviewCase.period_type, strategyScope: reviewCase.strategy_scope,
+      approvedVersionId: action === 'approve' ? Number(versionId) : null }
+  })
+}
+
+export async function retryPeriodReviewCase(periodCaseId, userId) {
+  return withTransaction(async run => {
+    const [rows] = await run('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [periodCaseId, userId])
+    const reviewCase = rows[0]
+    if (!reviewCase) throw new Error('period_review_not_found')
+    if (reviewCase.evidence_status !== 'complete') throw new Error('period_review_evidence_incomplete')
+    if (reviewCase.current_version_id) throw new Error('period_review_already_generated')
+    const jobType = reviewCase.period_type === 'daily' ? 'daily_review' : reviewCase.period_type === 'monthly' ? 'monthly_review' : null
+    if (!jobType) throw new Error('invalid_review_period_type')
+    const [jobs] = await run('SELECT * FROM period_review_jobs WHERE period_case_id = ? AND job_type = ? AND job_slot = 0 LIMIT 1 FOR UPDATE', [periodCaseId, jobType])
+    const now = beijingNow()
+    if (jobs[0]) await run(`UPDATE period_review_jobs SET status = 'queued', attempt_count = 0, last_error_code = NULL,
+      lease_token = NULL, lease_expires_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`, [now, jobs[0].id])
+    else await run(`INSERT INTO period_review_jobs
+      (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
+      VALUES (?, ?, ?, 'queued', 0, 3, ?, ?)`, [periodCaseId, jobType, `retry:${jobType}:${periodCaseId}:${crypto.randomUUID()}`, now, now])
+    await run(`UPDATE period_review_cases SET status = 'ready', updated_at = ? WHERE id = ?`, [now, periodCaseId])
+    return { queued: true }
+  })
+}
+
+export async function runPeriodReviewCycle() {
+  const dailyPreparation = await prepareEligibleDailyReviews()
+  const dailyWorker = await runDailyReviewWorkerOnce()
+  const monthlyPreparation = await prepareEligibleMonthlyReviews()
+  const monthlyWorker = await runMonthlyReviewWorkerOnce()
+  return { dailyPreparation, dailyWorker, monthlyPreparation, monthlyWorker }
+}
+
+export function startPeriodReviewWorker(intervalMs = 60_000) {
+  if (periodReviewTimer) return false
+  const run = () => {
+    if (periodReviewCycleRunning) return
+    periodReviewCycleRunning = true
+    void runPeriodReviewCycle()
+      .catch(error => console.error('[PeriodReview] cycle failed:', safeError(error)))
+      .finally(() => { periodReviewCycleRunning = false })
+  }
+  run()
+  periodReviewTimer = setInterval(run, Math.max(10_000, Number(intervalMs || 60_000)))
+  periodReviewTimer.unref?.()
+  return true
+}
+
+export function stopPeriodReviewWorker() {
+  if (!periodReviewTimer) return false
+  clearInterval(periodReviewTimer)
+  periodReviewTimer = null
+  return true
 }

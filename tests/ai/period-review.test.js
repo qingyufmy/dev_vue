@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 
@@ -116,5 +117,32 @@ describe('monthly review model boundary', () => {
     expect(() => validateMonthlyReviewContent({ ...input, daily_assessments: input.daily_assessments.slice(0, 1) }, [11, 12])).toThrow('monthly_review_daily_coverage_incomplete')
     expect(() => validateMonthlyReviewContent({ ...input, memory_candidates: [{ ...input.memory_candidates[0], supporting_period_case_ids: [11] }] }, [11, 12])).toThrow('invalid_monthly_memory_candidate')
     expect(() => validateMonthlyReviewContent(input, [11, 12], [11])).toThrow('invalid_monthly_memory_candidate')
+  })
+})
+
+describe('period review runtime integration', () => {
+  const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
+  const server = readFileSync(new URL('../../server/index.js', import.meta.url), 'utf8')
+  const platform = readFileSync(new URL('../../server/routes/ai/platform-experience.js', import.meta.url), 'utf8')
+  const migration = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
+
+  it('exposes owner-scoped daily and monthly review APIs', () => {
+    expect(routes).toContain("router.get('/ai/period-reviews'")
+    expect(routes).toContain("router.get('/ai/period-reviews/:id'")
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/edit'")
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/retry'")
+  })
+
+  it('starts only the period worker and preserves separate platform experience lineage', () => {
+    expect(server).toContain('startPeriodReviewWorker()')
+    expect(server).not.toContain('startReviewWorker()')
+    expect(server).not.toContain('startMemoryCompressionWorker()')
+    expect(platform).toContain('createPlatformExperienceCandidateFromApprovedPeriodReview')
+    expect(migration).toContain('092_platform_period_experience_lineage')
+    expect(migration).toContain('uk_platform_experience_period_version')
+    expect(migration).toContain('093_period_review_single_job_slot')
+    expect(migration).toContain('uk_period_review_case_job_slot')
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })
 })

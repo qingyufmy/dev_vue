@@ -58,6 +58,36 @@ export async function createPlatformExperienceCandidateFromApprovedReview(caseId
   return queryOne('SELECT * FROM platform_strategy_experience_items WHERE id = ?', [result.insertId])
 }
 
+export async function createPlatformExperienceCandidateFromApprovedPeriodReview(periodCaseId, adminUserId) {
+  const reviewCase = await queryOne(`SELECT cases.*, u.role AS user_role FROM period_review_cases cases
+    JOIN users u ON u.id = cases.user_id WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, adminUserId])
+  if (!reviewCase || reviewCase.status !== 'approved' || !reviewCase.approved_version_id) throw new Error('approved_period_review_required')
+  if (reviewCase.user_role !== 'admin' || reviewCase.strategy_scope !== 'platform') throw new Error('platform_period_review_required')
+  const version = await queryOne('SELECT * FROM period_review_versions WHERE id = ? AND period_case_id = ?', [reviewCase.approved_version_id, periodCaseId])
+  if (!version) throw new Error('approved_period_review_version_missing')
+  const existing = await queryOne('SELECT * FROM platform_strategy_experience_items WHERE period_review_version_id = ?', [version.id])
+  if (existing) return existing
+  const strategy = await queryOne("SELECT id FROM auto_prompt_types WHERE id = ? AND scope = 'platform' AND deleted_at IS NULL", [reviewCase.strategy_id])
+  if (!strategy) throw new Error('platform_strategy_required')
+  const content = parse(version.content_json, {})
+  const fragments = reviewCase.period_type === 'daily'
+    ? [...(content.daily_lessons || []), ...(content.strengths || [])]
+    : [content.period_summary, ...(content.recurring_patterns || []), ...(content.strengths || []),
+      ...(content.next_month_actions || []), ...(content.memory_candidates || []).map(item => item.lesson)]
+  const lessonText = sanitizePlatformExperienceText(fragments.filter(Boolean).join('。'), 6000)
+  if (!lessonText) return { skipped: true, reason: 'platform_experience_has_no_market_safe_lesson' }
+  const context = { period_type: reviewCase.period_type, period_key: reviewCase.period_key,
+    strategy_version: Number(reviewCase.strategy_version || 1), symbol: null, timeframe: null }
+  const now = beijingNow()
+  const contentHash = sha256(JSON.stringify({ strategy_id: Number(reviewCase.strategy_id), lesson: lessonText, context }))
+  await queryRun(`INSERT IGNORE INTO platform_strategy_experience_items
+    (strategy_id, review_case_id, review_version_id, period_review_case_id, period_review_version_id,
+     period_key, source_admin_user_id, lesson_text, context_json, content_hash, status, created_at, updated_at)
+    VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'candidate', ?, ?)`, [reviewCase.strategy_id,
+    reviewCase.id, version.id, reviewCase.period_key, adminUserId, lessonText, JSON.stringify(context), contentHash, now, now])
+  return queryOne('SELECT * FROM platform_strategy_experience_items WHERE period_review_version_id = ?', [version.id])
+}
+
 export async function listPlatformExperience({ strategyId = null, status = null, limit = 100 } = {}) {
   const where = []
   const params = []

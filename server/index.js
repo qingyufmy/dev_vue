@@ -29,7 +29,7 @@ import feedbackRoutes from './routes/feedback.js'
 import sentimentRoutes from './routes/sentiment.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON } from './redis.js'
-import { initAutoSchedulers, startReviewWorker, startMemoryCompressionWorker } from './routes/ai/index.js'
+import { initAutoSchedulers, startPeriodReviewWorker } from './routes/ai/index.js'
 import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { authMiddleware } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
@@ -389,8 +389,7 @@ initBridgeWS(server)
   }
   await initAutoSchedulers()
   startOrderIntentReconciler()
-  startReviewWorker()
-  startMemoryCompressionWorker()
+  startPeriodReviewWorker()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()
   console.log(`[TZ] server=${Intl.DateTimeFormat().resolvedOptions().timeZone} db_session=+08:00 parse=explicit(+08:00)`)

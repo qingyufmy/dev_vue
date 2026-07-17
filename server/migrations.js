@@ -2367,6 +2367,45 @@ const migrations = [
       await addColumn('experience_long_term_memories', 'period_key', 'period_key VARCHAR(16) DEFAULT NULL AFTER period_review_version_id')
       await addIndex('experience_long_term_memories', 'idx_long_memory_period_review', 'period_review_case_id')
     }
+  },
+  {
+    id: '092_platform_period_experience_lineage',
+    up: async () => {
+      const addColumn = async (table, name, definition) => {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`)
+      }
+      const addIndex = async (table, name, definition, unique = false) => {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`CREATE ${unique ? 'UNIQUE ' : ''}INDEX \`${name}\` ON \`${table}\` (${definition})`)
+      }
+      await queryRun('ALTER TABLE platform_strategy_experience_items MODIFY review_case_id BIGINT UNSIGNED DEFAULT NULL')
+      await queryRun('ALTER TABLE platform_strategy_experience_items MODIFY review_version_id BIGINT UNSIGNED DEFAULT NULL')
+      await addColumn('platform_strategy_experience_items', 'period_review_case_id', 'period_review_case_id BIGINT DEFAULT NULL AFTER review_version_id')
+      await addColumn('platform_strategy_experience_items', 'period_review_version_id', 'period_review_version_id BIGINT DEFAULT NULL AFTER period_review_case_id')
+      await addColumn('platform_strategy_experience_items', 'period_key', 'period_key VARCHAR(16) DEFAULT NULL AFTER period_review_version_id')
+      await addIndex('platform_strategy_experience_items', 'uk_platform_experience_period_version', 'period_review_version_id', true)
+    }
+  },
+  {
+    id: '093_period_review_single_job_slot',
+    up: async () => {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs' AND COLUMN_NAME = 'job_slot'`)
+      if (!columns.length) await queryRun('ALTER TABLE period_review_jobs ADD COLUMN job_slot BIGINT NOT NULL DEFAULT 0 AFTER job_type')
+      await queryRun(`UPDATE period_review_jobs jobs
+        JOIN (SELECT period_case_id, job_type, MIN(id) AS keep_id FROM period_review_jobs GROUP BY period_case_id, job_type HAVING COUNT(*) > 1) duplicates
+          ON duplicates.period_case_id = jobs.period_case_id AND duplicates.job_type = jobs.job_type
+        SET jobs.job_slot = jobs.id, jobs.status = 'superseded', jobs.lease_token = NULL, jobs.lease_expires_at = NULL,
+          jobs.last_error_code = 'duplicate_job_superseded', jobs.updated_at = ?
+        WHERE jobs.id <> duplicates.keep_id`, [beijingNow()])
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs' AND INDEX_NAME = 'uk_period_review_case_job_slot'`)
+      if (!indexes.length) await queryRun(`CREATE UNIQUE INDEX uk_period_review_case_job_slot
+        ON period_review_jobs (period_case_id, job_type, job_slot)`)
+    }
   }
 ]
 

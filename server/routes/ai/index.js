@@ -18,7 +18,8 @@ import { createMemoryFromApprovedReview, listMemoryItems, revokeMemoryItem, acti
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
   revokeLongTermMemory, createMemoryFromApprovedPeriodReview } from './memory-system.js'
 import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
-  listPlatformExperience, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
+  createPlatformExperienceCandidateFromApprovedPeriodReview, listPlatformExperience,
+  updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
@@ -33,7 +34,8 @@ import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, 
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 import { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
 import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
-  runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce } from './period-review.js'
+  runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, listPeriodReviewCases, getPeriodReviewCase,
+  editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase } from './period-review.js'
 
 const router = Router()
 
@@ -435,6 +437,45 @@ router.get('/ai/reviews', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/period-reviews', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, cases: await listPeriodReviewCases(req.user.id, req.query) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/period-reviews/:id', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, review: await getPeriodReviewCase(Number(req.params.id), req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/period-reviews/:id/edit', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await editPeriodReviewCase({ periodCaseId: Number(req.params.id), userId: req.user.id,
+    content: req.body?.content, expectedVersionId: req.body?.expected_version_id, changeNote: req.body?.change_note })) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/period-reviews/:id/confirm', authMiddleware, async (req, res) => {
+  try {
+    const periodCaseId = Number(req.params.id)
+    const result = await confirmPeriodReviewCase({ periodCaseId, userId: req.user.id,
+      versionId: req.body?.version_id, action: req.body?.action })
+    let memory = null
+    let platformExperience = null
+    let postActionError = null
+    if (req.body?.action === 'approve') {
+      try {
+        if (req.user.role === 'admin') platformExperience = await createPlatformExperienceCandidateFromApprovedPeriodReview(periodCaseId, req.user.id)
+        else memory = await createMemoryFromApprovedPeriodReview(periodCaseId, req.user.id)
+      } catch (error) { postActionError = String(error?.message || error).slice(0, 128) }
+    }
+    res.json({ ok: true, ...result, memory, platform_experience: platformExperience, post_action_error: postActionError })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/period-reviews/:id/retry', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, ...(await retryPeriodReviewCase(Number(req.params.id), req.user.id)) }) }
+  catch (error) { reviewError(res, error) }
+})
+
 router.get('/ai/reviews/:id', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, review: await getReviewCase(Number(req.params.id), req.user.id) }) }
   catch (error) { reviewError(res, error) }
@@ -609,8 +650,11 @@ export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
   maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,
   startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
 export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
-  runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce } from './period-review.js'
+  runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, runPeriodReviewCycle,
+  startPeriodReviewWorker, stopPeriodReviewWorker, listPeriodReviewCases, getPeriodReviewCase,
+  editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase } from './period-review.js'
 export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
+  createPlatformExperienceCandidateFromApprovedPeriodReview,
   listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,
   updatePlatformExperienceItem, retrievePlatformExperience } from './platform-experience.js'
 
