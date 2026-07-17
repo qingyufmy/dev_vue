@@ -127,6 +127,7 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
     return { outcome_id: outcomeId, status: String(item.status || 'insufficient_evidence'), issue_source: item.issue_source,
       impact_on_decision: String(item.impact_on_decision || 'unknown'), explanation: String(item.explanation || '').trim(), confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
   })
+  if (new Set(chanDiagnoses.map(item => item.outcome_id)).size !== known.size) throw new Error('daily_review_chan_coverage_incomplete')
   return {
     period_summary: String(input.period_summary).trim(), decision_quality: input.decision_quality, trade_assessments: assessments,
     repeated_issues: input.repeated_issues.map(String), strengths: input.strengths.map(String), daily_lessons: input.daily_lessons.map(String),
@@ -251,7 +252,7 @@ async function generateDailyReview(job, requestModel) {
     chan_diagnoses: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, status: 'normal|suspected_issue|confirmed_issue|insufficient_evidence', issue_source: 'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown', impact_on_decision: 'none|minor|material|unknown', explanation: 'string', confidence: 0.5 })), confidence: 0.5 }
   const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
     model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
-    maxTokens: Math.max(3000, Number(resolved.model.max_tokens || 3000)), thinkingEnabled: resolved.model.thinking_enabled,
+    maxTokens: Number(resolved.model.max_tokens || 3000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     messages: [
       { role: 'system', content: '你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。只返回 JSON。' },
