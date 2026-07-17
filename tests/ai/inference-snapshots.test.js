@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   buildSharedMarketSnapshot,
+  inferenceVisualizationSnapshot,
   prepareInferenceSnapshot,
   persistInferenceSnapshotTx,
   sanitizeInferenceEvidence,
@@ -26,6 +27,28 @@ describe('shared market inference boundary', () => {
 })
 
 describe('inference snapshot evidence', () => {
+  it('builds a chart-safe client snapshot without prompts', () => {
+    const result = inferenceVisualizationSnapshot({
+      id: 8,
+      strategy_id: 3,
+      standard_symbol: 'XAUUSD',
+      market_source: 'platform_market_bridge',
+      evidence_status: 'complete',
+      omitted_fields_json: '[]',
+      klines_json: JSON.stringify({ M5: [{ time: '2026-07-17 09:00:00', open: 1, high: 2, low: 0.5, close: 1.5 }] }),
+      market_snapshot_json: JSON.stringify({ strategy_context: { timeframes: { M5: { klines: [{ time: 1 }], summary: { chan: { status: 'ok' } } } } } }),
+      system_prompt: 'must not leak',
+      user_prompt: 'must not leak either',
+      created_at: '2026-07-17 09:01:00',
+    })
+    expect(result).toMatchObject({ id: 8, strategy_id: 3, standard_symbol: 'XAUUSD', evidence_status: 'complete' })
+    expect(result.klines.M5).toHaveLength(1)
+    expect(result.market_snapshot.strategy_context.timeframes.M5.summary.chan.status).toBe('ok')
+    expect(result.market_snapshot.strategy_context.timeframes.M5).not.toHaveProperty('klines')
+    expect(result).not.toHaveProperty('system_prompt')
+    expect(result).not.toHaveProperty('user_prompt')
+  })
+
   it('recursively strips credentials and Authorization headers', () => {
     const clean = sanitizeInferenceEvidence({ api_key: 'x', nested: { Authorization: 'Bearer y', price: 1 }, access_token: 'z' })
     expect(clean).toEqual({ nested: { price: 1 } })

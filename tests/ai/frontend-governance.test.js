@@ -291,6 +291,20 @@ describe('AI governance navigation and DOM contract', () => {
     expect(signalCard).not.toContain('上次信号摘要')
     expect(signalCard).not.toContain('data-tab-jump="signals"')
   })
+
+  it('renders inference charts from the selected inference snapshot on demand', () => {
+    expect(app).toContain('signal?.inference_snapshot')
+    expect(app).toContain('仅展示推理发生时的数据')
+    expect(app).toContain('data-inference-timeframe')
+    for (const layer of ['segments', 'centers', 'divergence', 'entries', 'levels']) {
+      expect(app).toContain(`["${layer}"`)
+    }
+    expect(app).toContain('signal_detail')
+    expect(app).toContain('detail_loaded: true')
+    expect(css).toContain('.inference-chart-panel:fullscreen')
+    expect(css).toContain('.inference-chart-table')
+    expect(bridgeWs).toContain('getInferenceVisualizationSnapshot(signalId)')
+  })
 })
 
 describe('take-profit execution clarity', () => {

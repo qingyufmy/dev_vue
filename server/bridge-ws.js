@@ -920,6 +920,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.delivery_id = delivery.id
             item.prompt_type_id = delivery.prompt_type_id
             item.source = 'auto_shared'
+            item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
+            if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
             ai.attachSignalTiming(item)
             Object.assign(item, ai.attachSignalPresentation(item))
             result = { status: 'success', signal: item }
@@ -936,6 +938,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
           delete item.market_data_json
           item.is_executed = !!item.is_executed
+          item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
+          if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
           ai.attachSignalTiming(item)
           Object.assign(item, ai.attachSignalPresentation(item))
           result = { status: 'success', signal: item }

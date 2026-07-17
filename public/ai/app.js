@@ -39,6 +39,8 @@ const state = {
   autoProgressCycles: {},
   autoProgressFlash: null,
   autoProgressVisual: {},
+  inferenceChartTimeframe: null,
+  inferenceChartLayers: { segments: true, centers: true, divergence: true, entries: true, levels: true },
 };
 
 // ===== History Cache =====
@@ -3329,8 +3331,253 @@ function renderDecisionList(items, emptyText) {
   return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
 }
 
+let _inferenceChart = null;
+let _inferenceCandleSeries = null;
+let _inferenceChartResizeObserver = null;
+
+function destroyInferenceChart() {
+  if (_inferenceChartResizeObserver) {
+    _inferenceChartResizeObserver.disconnect();
+    _inferenceChartResizeObserver = null;
+  }
+  if (_inferenceChart) {
+    _inferenceChart.remove();
+    _inferenceChart = null;
+    _inferenceCandleSeries = null;
+  }
+}
+
+function inferenceSnapshotContext(signal) {
+  const snapshot = signal?.inference_snapshot || {};
+  const market = snapshot.market_snapshot && typeof snapshot.market_snapshot === "object"
+    ? snapshot.market_snapshot
+    : (signal?.market_data || {});
+  const frames = market?.strategy_context?.timeframes || signal?.market_data?.strategy_context?.timeframes || {};
+  const klines = { ...(snapshot.klines || {}) };
+  for (const [timeframe, value] of Object.entries(frames)) {
+    if (!Array.isArray(klines[timeframe]) && Array.isArray(value?.klines)) klines[timeframe] = value.klines;
+  }
+  return { snapshot, market, frames, klines };
+}
+
+function inferenceRateTime(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value > 1e12 ? value / 1000 : value);
+  if (typeof value !== "string" || !value.trim()) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return Math.floor(numeric > 1e12 ? numeric / 1000 : numeric);
+  const parts = value.trim().replace("T", " ").split(/[- :]/).map(Number);
+  if (parts.length < 3 || parts.slice(0, 3).some(item => !Number.isFinite(item))) return null;
+  const seconds = Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2], parts[3] || 0, parts[4] || 0, parts[5] || 0) / 1000);
+  return Number.isFinite(seconds) ? seconds : null;
+}
+
+function normalizeInferenceRates(rows) {
+  const unique = new Map();
+  for (const raw of Array.isArray(rows) ? rows : []) {
+    const row = Array.isArray(raw)
+      ? { time: raw[0], open: raw[1], high: raw[2], low: raw[3], close: raw[4], tick_volume: raw[5] }
+      : raw;
+    const time = inferenceRateTime(row?.time);
+    const open = Number(row?.open), high = Number(row?.high), low = Number(row?.low), close = Number(row?.close);
+    if (!Number.isFinite(time) || ![open, high, low, close].every(Number.isFinite)) continue;
+    if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || high < low) continue;
+    unique.set(time, { time, open, high, low, close, volume: Math.max(0, Number(row?.tick_volume || row?.volume || 0) || 0) });
+  }
+  return [...unique.values()].sort((a, b) => a.time - b.time).slice(-500);
+}
+
+function chanSummaryForTimeframe(context, timeframe) {
+  return context.frames?.[timeframe]?.summary?.chan
+    || context.market?.strategy_context?.timeframes?.[timeframe]?.summary?.chan
+    || null;
+}
+
+function inferenceChartShell(signal) {
+  const context = inferenceSnapshotContext(signal);
+  const available = Object.entries(context.klines)
+    .filter(([, rows]) => Array.isArray(rows) && rows.length)
+    .map(([timeframe]) => timeframe);
+  if (!available.length) {
+    return `<section class="inference-chart-panel is-empty" aria-labelledby="inferenceChartTitle">
+      <div class="inference-chart-empty"><i data-lucide="candlestick-chart" size="20"></i><div><strong id="inferenceChartTitle">K 线与结构证据</strong><span>本次推理没有保存可视化 K 线，无法还原当时行情。</span></div></div>
+    </section>`;
+  }
+  const preferred = context.market?.primary_timeframe || signal?.timeframe;
+  if (!state.inferenceChartTimeframe || !available.includes(state.inferenceChartTimeframe)) {
+    state.inferenceChartTimeframe = available.includes(preferred) ? preferred : available[0];
+  }
+  const snapshotStatus = context.snapshot?.evidence_status;
+  const sourceLabel = context.snapshot?.market_source === "platform_market_bridge" ? "平台行情快照" : "推理行情快照";
+  const evidenceLabel = snapshotStatus === "incomplete" ? "部分证据已压缩" : "证据完整";
+  const layerButtons = [
+    ["segments", "线段"], ["centers", "中枢"], ["divergence", "背驰"], ["entries", "买卖点"], ["levels", "执行价位"],
+  ].map(([key, label]) => `<button type="button" class="inference-layer-btn ${state.inferenceChartLayers[key] ? "active" : ""}" data-inference-layer="${key}" aria-pressed="${state.inferenceChartLayers[key]}">${label}</button>`).join("");
+  return `<section id="inferenceChartPanel" class="inference-chart-panel" aria-labelledby="inferenceChartTitle">
+    <div class="inference-chart-header">
+      <div><span class="analysis-section-title"><i data-lucide="candlestick-chart" size="15"></i><strong id="inferenceChartTitle">K 线与结构证据</strong></span><small>${escapeHtml(sourceLabel)} · ${escapeHtml(evidenceLabel)} · 仅展示推理发生时的数据</small></div>
+      <button id="inferenceChartFullscreen" type="button" class="chart-icon-btn" aria-label="全屏查看 K 线图" title="全屏查看"><i data-lucide="maximize-2" size="15"></i></button>
+    </div>
+    <div class="inference-chart-toolbar">
+      <div class="inference-timeframe-tabs" role="tablist" aria-label="K 线周期">${available.map(timeframe => `<button type="button" role="tab" aria-selected="${timeframe === state.inferenceChartTimeframe}" class="${timeframe === state.inferenceChartTimeframe ? "active" : ""}" data-inference-timeframe="${escapeHtml(timeframe)}">${escapeHtml(timeframe)}</button>`).join("")}</div>
+      <div class="inference-layer-tabs" aria-label="图表图层">${layerButtons}</div>
+    </div>
+    <div class="inference-chart-stage"><div id="inferenceKlineChart" class="inference-kline-chart" role="img" aria-label="${escapeHtml(signal.symbol)} ${escapeHtml(state.inferenceChartTimeframe)} 推理时 K 线和缠论结构图"></div><div id="inferenceChartCursor" class="inference-chart-cursor" aria-live="polite">移动光标查看 OHLC</div></div>
+    <div id="inferenceChartLegend" class="inference-chart-legend"></div>
+    <details class="inference-chart-table"><summary>查看最近 K 线数据</summary><div class="table-wrap"><table><thead><tr><th>时间</th><th>开</th><th>高</th><th>低</th><th>收</th></tr></thead><tbody id="inferenceKlineTableBody"></tbody></table></div></details>
+  </section>`;
+}
+
+function chartIndexTime(candles, value) {
+  const index = Number(value);
+  if (!Number.isInteger(index) || index < 0 || index >= candles.length) return null;
+  return candles[index]?.time ?? null;
+}
+
+function addInferenceLine(chart, points, options) {
+  const valid = points.filter(point => Number.isFinite(Number(point?.time)) && Number.isFinite(Number(point?.value)));
+  if (valid.length < 2 || valid[0].time === valid[1].time) return false;
+  const series = chart.addLineSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...options });
+  series.setData(valid);
+  return true;
+}
+
+function inferenceChartTimeLabel(seconds) {
+  const date = new Date(Number(seconds) * 1000);
+  if (!Number.isFinite(date.getTime())) return "--";
+  const pad = value => String(value).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+function renderInferenceChart(signal) {
+  destroyInferenceChart();
+  const container = $("inferenceKlineChart");
+  if (!container || typeof LightweightCharts === "undefined") return;
+  if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+    _inferenceChartResizeObserver = new ResizeObserver(() => {
+      if (container.offsetWidth > 0 && container.offsetHeight > 0) renderInferenceChart(signal);
+    });
+    _inferenceChartResizeObserver.observe(container);
+    return;
+  }
+  const context = inferenceSnapshotContext(signal);
+  const timeframe = state.inferenceChartTimeframe;
+  const candles = normalizeInferenceRates(context.klines?.[timeframe]);
+  if (!candles.length) {
+    container.innerHTML = '<div class="inference-chart-error">K 线数据格式无效，无法绘制。</div>';
+    return;
+  }
+  const chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth || 720,
+    height: container.clientHeight || 340,
+    layout: { background: { type: "solid", color: "transparent" }, textColor: "#8ea0ba", fontSize: 11 },
+    grid: { vertLines: { color: "rgba(148,163,184,.055)" }, horzLines: { color: "rgba(148,163,184,.055)" } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: "rgba(224,190,68,.34)", style: 2 }, horzLine: { color: "rgba(224,190,68,.34)", style: 2 } },
+    rightPriceScale: { borderColor: "rgba(148,163,184,.15)", scaleMargins: { top: .08, bottom: .08 } },
+    timeScale: { borderColor: "rgba(148,163,184,.15)", timeVisible: true, secondsVisible: false, rightOffset: 4 },
+    handleScroll: { vertTouchDrag: false },
+  });
+  const candleSeries = chart.addCandlestickSeries({ upColor: "#ef5b66", downColor: "#20b486", borderUpColor: "#ef5b66", borderDownColor: "#20b486", wickUpColor: "#ef5b66", wickDownColor: "#20b486" });
+  candleSeries.setData(candles.map(({ volume, ...candle }) => candle));
+  _inferenceChart = chart;
+  _inferenceCandleSeries = candleSeries;
+
+  const chan = chanSummaryForTimeframe(context, timeframe) || {};
+  const legend = [];
+  if (state.inferenceChartLayers.segments) {
+    const segments = [chan.prev_segment, chan.current_segment, chan.candidate_segment].filter(Boolean);
+    let segmentLines = 0;
+    for (const segment of segments) {
+      const start = chartIndexTime(candles, segment.start_index), end = chartIndexTime(candles, segment.end_index);
+      if (start == null || end == null) continue;
+      if (addInferenceLine(chart, [{ time: start, value: Number(segment.start_price) }, { time: end, value: Number(segment.end_price) }], { color: segment.confirmed === false ? "#94a3b8" : "#e8c957", lineStyle: segment.confirmed === false ? 2 : 0 })) segmentLines += 1;
+    }
+    if (segmentLines) legend.push('<span><i class="legend-line segment"></i>线段</span>');
+  }
+  if (state.inferenceChartLayers.centers) {
+    const center = chan.active_center || chan.latest_center || chan.current_center;
+    if (center && Number.isFinite(Number(center.zl)) && Number.isFinite(Number(center.zh))) {
+      const start = candles[Math.max(0, candles.length - 60)].time, end = candles.at(-1).time;
+      addInferenceLine(chart, [{ time: start, value: Number(center.zl) }, { time: end, value: Number(center.zl) }], { color: "#7c8da8", lineStyle: 2, lineWidth: 1 });
+      addInferenceLine(chart, [{ time: start, value: Number(center.zh) }, { time: end, value: Number(center.zh) }], { color: "#7c8da8", lineStyle: 2, lineWidth: 1 });
+      legend.push('<span><i class="legend-box center"></i>当前中枢区间</span>');
+    }
+  }
+  const markers = [];
+  if (state.inferenceChartLayers.divergence) {
+    for (const divergence of (chan.recent_divergences || []).slice(-3)) {
+      const index = divergence?.departure_segment?.end_index;
+      const time = chartIndexTime(candles, index);
+      if (time == null) continue;
+      const bottom = divergence.type === "bottom";
+      markers.push({ time, position: bottom ? "belowBar" : "aboveBar", color: bottom ? "#30c99b" : "#ff6b76", shape: bottom ? "arrowUp" : "arrowDown", text: bottom ? "底背驰" : "顶背驰" });
+    }
+    if (markers.length) legend.push('<span><i class="legend-dot divergence"></i>已确认背驰</span>');
+  }
+  if (state.inferenceChartLayers.entries) {
+    const entryLabels = { first_buy: "一买", second_buy: "二买", third_buy: "三买", first_sell: "一卖", second_sell: "二卖", third_sell: "三卖" };
+    for (const candidate of (chan.entry_candidates || []).filter(item => item.usable_for_entry).slice(-3)) {
+      const time = chartIndexTime(candles, candidate?.segment?.end_index);
+      if (time == null) continue;
+      const buy = candidate.side === "buy";
+      markers.push({ time, position: buy ? "belowBar" : "aboveBar", color: "#61a8ff", shape: "circle", text: entryLabels[candidate.type] || "候选点" });
+    }
+    if ((chan.entry_candidates || []).some(item => item.usable_for_entry)) legend.push('<span><i class="legend-dot entry"></i>可用买卖点候选</span>');
+  }
+  markers.sort((a, b) => a.time - b.time);
+  candleSeries.setMarkers(markers);
+
+  if (state.inferenceChartLayers.levels) {
+    const takeProfit = signalTakeProfitSelection(signal);
+    const levels = [
+      [signal.limit_price || context.market?.latest_price, "AI 入场", "#61a8ff", 0],
+      [signal.stop_loss_price, "止损", "#ff6b76", 2],
+      [takeProfit.price || signal.take_profit_1_price, "止盈", "#30c99b", 2],
+    ];
+    for (const [price, title, color, lineStyle] of levels) {
+      if (!Number.isFinite(Number(price)) || Number(price) <= 0) continue;
+      candleSeries.createPriceLine({ price: Number(price), color, lineWidth: 1, lineStyle, axisLabelVisible: true, title });
+    }
+    legend.push('<span><i class="legend-line levels"></i>AI 入场 / 止损 / 止盈</span>');
+  }
+  $("inferenceChartLegend").innerHTML = legend.join("") || '<span class="muted">当前周期没有可展示的结构图层</span>';
+  $("inferenceKlineTableBody").innerHTML = candles.slice(-10).reverse().map(item => `<tr><td>${escapeHtml(inferenceChartTimeLabel(item.time))}</td><td>${fmt(item.open, 2)}</td><td>${fmt(item.high, 2)}</td><td>${fmt(item.low, 2)}</td><td>${fmt(item.close, 2)}</td></tr>`).join("");
+  chart.subscribeCrosshairMove(param => {
+    const data = param?.seriesData?.get(candleSeries);
+    if (!data) return;
+    $("inferenceChartCursor").textContent = `开 ${fmt(data.open, 2)} · 高 ${fmt(data.high, 2)} · 低 ${fmt(data.low, 2)} · 收 ${fmt(data.close, 2)}`;
+  });
+  chart.timeScale().fitContent();
+  _inferenceChartResizeObserver = new ResizeObserver(() => {
+    if (_inferenceChart && container.clientWidth > 0 && container.clientHeight > 0) _inferenceChart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+  });
+  _inferenceChartResizeObserver.observe(container);
+
+  document.querySelectorAll("[data-inference-timeframe]").forEach(button => { button.onclick = () => {
+    state.inferenceChartTimeframe = button.dataset.inferenceTimeframe;
+    document.querySelectorAll("[data-inference-timeframe]").forEach(item => { item.classList.toggle("active", item === button); item.setAttribute("aria-selected", String(item === button)); });
+    renderInferenceChart(signal);
+  }});
+  document.querySelectorAll("[data-inference-layer]").forEach(button => { button.onclick = () => {
+    const layer = button.dataset.inferenceLayer;
+    state.inferenceChartLayers[layer] = !state.inferenceChartLayers[layer];
+    button.classList.toggle("active", state.inferenceChartLayers[layer]);
+    button.setAttribute("aria-pressed", String(state.inferenceChartLayers[layer]));
+    renderInferenceChart(signal);
+  }});
+  const fullscreenButton = $("inferenceChartFullscreen");
+  if (fullscreenButton) fullscreenButton.onclick = async () => {
+    const panel = $("inferenceChartPanel");
+    if (!panel) return;
+    try {
+      if (document.fullscreenElement === panel) await document.exitFullscreen();
+      else await panel.requestFullscreen();
+    } catch (error) { toast(`无法进入全屏：${error.message}`, "warning"); }
+  };
+}
+
 function renderSignal(signal, elapsedMs = null, options = {}) {
   if (!signal) {
+    destroyInferenceChart();
     updateSignalDisplay(null);
     $("analysisResult").className = "analysis-result muted-block";
     $("analysisResult").textContent = "暂无推理记录，选择品种和周期后生成信号";
@@ -3399,6 +3646,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     analysisBlock = `<strong>行情分析</strong>\n${escapedAnalysis}`;
   }
   const reasoningBlock = reasoningText ? `\n\n<strong>分析依据</strong>\n${escapeHtml(reasoningText)}` : "";
+  destroyInferenceChart();
   result.className = "analysis-result";
   result.innerHTML = `
     <div class="analysis-summary-head">
@@ -3430,6 +3678,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div class="execution-target-primary"><span>${takeProfitSelection.price ? "实际执行止盈" : "计划执行止盈"}</span><strong>${escapeHtml(takeProfitSelection.price || (takeProfitSelection.tier ? signal[`take_profit_${takeProfitSelection.tier}_price`] : null) || "--")}</strong><small>${escapeHtml(takeProfitSelection.sourceLabel)}${takeProfitSelection.tier ? ` · TP${takeProfitSelection.tier}` : ""}</small></div>
       <div class="take-profit-candidates"><span class="take-profit-heading">止盈候选 <small><i></i>AI 推荐</small></span><div>${[1,2,3].map(tier => `<span class="take-profit-chip ${takeProfitSelection.tier === tier ? "selected" : ""} ${takeProfitSelection.recommendedTier === tier ? "recommended" : ""}"><b>TP${tier}</b><strong>${escapeHtml(signal[`take_profit_${tier}_price`] || "--")}</strong></span>`).join("")}</div></div>
     </div>
+    ${inferenceChartShell(signal)}
     <div class="decision-evidence-grid">
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
       <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
@@ -3465,6 +3714,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   `;
   highlightActiveAnalysis(signal.id);
   initIcons();
+  requestAnimationFrame(() => renderInferenceChart(signal));
 }
 
 function setManualInferenceModal(open) {
@@ -3984,26 +4234,35 @@ function highlightActiveAnalysis(signalId) {
   });
 }
 
-async function openAnalysisFromHistory(signalId) {
+async function openAnalysisFromHistory(signalId, options = {}) {
   let signal = state.signals.find((item) => String(item.id) === String(signalId));
-  if (!signal) {
-    // Not in local cache — fetch single signal by ID
+  if (!signal?.detail_loaded) {
+    const resultHost = $("analysisResult");
+    resultHost?.classList.add("is-loading");
+    resultHost?.setAttribute("aria-busy", "true");
     try {
       const data = await wsApi("signal_detail", { signal_id: Number(signalId) });
       if (data.status === 'success' && data.signal) {
-        signal = data.signal;
-        // Insert into state.signals at top
-        state.signals.unshift(signal);
+        signal = { ...(signal || {}), ...data.signal, detail_loaded: true };
+        const index = state.signals.findIndex(item => String(item.id) === String(signalId));
+        if (index >= 0) state.signals[index] = signal;
+        else state.signals.unshift(signal);
         renderAnalysisHistory(state.signals);
       }
-    } catch (e) { /* ignore */ }
+    } catch (error) {
+      console.error('[Inference] signal detail load failed:', error);
+      if (options.navigate !== false) toast("推理快照读取失败，已显示基础信号信息", "warning");
+    } finally {
+      resultHost?.classList.remove("is-loading");
+      resultHost?.removeAttribute("aria-busy");
+    }
   }
   if (!signal) {
     toast("未找到对应推理记录", "warning");
     return;
   }
   state.selectedSignal = signal;
-  setTab("ai-analyze");
+  if (options.navigate !== false) setTab("ai-analyze");
   renderSignal(signal, null);
   highlightActiveAnalysis(signalId);
   // Scroll the active item into view
@@ -4066,9 +4325,15 @@ async function loadSignals(options = {}) {
   if (state.signals.length > 0 && !options.append) _lastSignalId = state.signals[0].id;
 
   // Preserve selected signal if it still exists, otherwise use latest
-  const selectedId = state.selectedSignal?.id;
+  const previousSelected = state.selectedSignal;
+  const selectedId = previousSelected?.id;
   const stillExists = selectedId ? state.signals.find(s => String(s.id) === String(selectedId)) : null;
-  const activeSignal = stillExists || state.signals[0] || null;
+  let activeSignal = stillExists || state.signals[0] || null;
+  if (stillExists && previousSelected?.detail_loaded) {
+    activeSignal = { ...stillExists, ...previousSelected };
+    const activeIndex = state.signals.findIndex(item => String(item.id) === String(activeSignal.id));
+    if (activeIndex >= 0) state.signals[activeIndex] = activeSignal;
+  }
 
   if (!options.append) {
     state.selectedSignal = activeSignal;
@@ -4077,7 +4342,8 @@ async function loadSignals(options = {}) {
   }
   renderAnalysisHistory(state.signals, options.append ? { append: true } : {});
   if (!options.skipResultRender && !options.append) {
-    renderSignal(activeSignal, null);
+    if (activeSignal) await openAnalysisFromHistory(activeSignal.id, { navigate:false });
+    else renderSignal(null, null);
   }
 
   // Also refresh signal table on non-append loads

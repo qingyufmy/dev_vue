@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { beijingNow } from '../../db.js'
+import { beijingNow, queryOne } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
 
 export const MAX_INFERENCE_SNAPSHOT_BYTES = 512 * 1024
@@ -132,4 +132,40 @@ export async function persistInferenceSnapshotTx(run, input) {
     row.createdAt || beijingNow(),
   ])
   return result.insertId
+}
+
+function parseJson(value, fallback) {
+  if (value == null || value === '') return fallback
+  if (typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+export function inferenceVisualizationSnapshot(row) {
+  if (!row) return null
+  const klines = parseJson(row.klines_json, {})
+  const marketSnapshot = clean(parseJson(row.market_snapshot_json, {}))
+  const frames = marketSnapshot?.strategy_context?.timeframes || {}
+  for (const value of Object.values(frames)) {
+    if (value && typeof value === 'object') delete value.klines
+  }
+  return {
+    id: Number(row.id),
+    strategy_id: row.strategy_id == null ? null : Number(row.strategy_id),
+    standard_symbol: row.standard_symbol || null,
+    market_source: row.market_source || null,
+    evidence_status: row.evidence_status || 'incomplete',
+    omitted_fields: parseJson(row.omitted_fields_json, []),
+    klines,
+    market_snapshot: marketSnapshot,
+    created_at: row.created_at || null,
+  }
+}
+
+export async function getInferenceVisualizationSnapshot(signalId) {
+  const id = Number(signalId)
+  if (!id) return null
+  const row = await queryOne(`SELECT id, strategy_id, standard_symbol, market_source, evidence_status,
+    omitted_fields_json, klines_json, market_snapshot_json, created_at
+    FROM inference_snapshots WHERE signal_id = ? ORDER BY id DESC LIMIT 1`, [id])
+  return inferenceVisualizationSnapshot(row)
 }

@@ -6347,6 +6347,244 @@ a.signal-link:hover {
   background: var(--calm-surface);
 }
 
+.analysis-result.is-loading {
+  opacity: .58;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.inference-chart-panel {
+  margin-top: var(--space-4);
+  overflow: hidden;
+  border: 1px solid var(--calm-border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(10, 17, 29, .76), rgba(12, 20, 34, .9));
+}
+
+.inference-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 14px 16px 10px;
+}
+
+.inference-chart-header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.inference-chart-header .analysis-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.inference-chart-header small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.chart-icon-btn {
+  display: inline-grid;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--calm-border);
+  border-radius: 9px;
+  background: var(--bg-input-soft);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.chart-icon-btn:hover,
+.chart-icon-btn:focus-visible {
+  border-color: rgba(232, 201, 87, .58);
+  outline: none;
+  background: rgba(232, 201, 87, .08);
+  color: var(--gold-light);
+}
+
+.inference-chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 12px;
+}
+
+.inference-timeframe-tabs,
+.inference-layer-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.inference-timeframe-tabs button,
+.inference-layer-tabs button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.inference-timeframe-tabs {
+  padding: 3px;
+  border: 1px solid var(--calm-border);
+  border-radius: 10px;
+  background: rgba(8, 13, 23, .72);
+}
+
+.inference-timeframe-tabs button.active {
+  border-color: rgba(232, 201, 87, .35);
+  background: rgba(232, 201, 87, .12);
+  color: var(--gold-light);
+}
+
+.inference-layer-tabs button {
+  border-color: var(--calm-border);
+  background: rgba(16, 25, 41, .66);
+}
+
+.inference-layer-tabs button.active {
+  border-color: rgba(97, 168, 255, .34);
+  background: rgba(97, 168, 255, .1);
+  color: #a9ceff;
+}
+
+.inference-timeframe-tabs button:focus-visible,
+.inference-layer-tabs button:focus-visible {
+  outline: 2px solid rgba(232, 201, 87, .7);
+  outline-offset: 2px;
+}
+
+.inference-chart-stage {
+  position: relative;
+  min-height: 340px;
+  border-top: 1px solid rgba(148, 163, 184, .1);
+  border-bottom: 1px solid rgba(148, 163, 184, .1);
+  background: rgba(5, 10, 19, .36);
+}
+
+.inference-kline-chart {
+  width: 100%;
+  height: 340px;
+}
+
+.inference-chart-cursor {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 2;
+  padding: 5px 8px;
+  border: 1px solid rgba(148, 163, 184, .12);
+  border-radius: 6px;
+  background: rgba(8, 13, 23, .82);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.inference-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 40px;
+  padding: 8px 16px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.inference-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inference-chart-legend i { display: inline-block; flex: 0 0 auto; }
+.legend-line { width: 16px; height: 2px; border-radius: 2px; }
+.legend-line.segment { background: #e8c957; }
+.legend-line.levels { border-top: 1px dashed #61a8ff; }
+.legend-box { width: 14px; height: 8px; border: 1px dashed #7c8da8; border-radius: 2px; }
+.legend-dot { width: 7px; height: 7px; border-radius: 50%; }
+.legend-dot.divergence { background: #ff6b76; }
+.legend-dot.entry { background: #61a8ff; }
+
+.inference-chart-table {
+  border-top: 1px solid rgba(148, 163, 184, .08);
+}
+
+.inference-chart-table summary {
+  padding: 10px 16px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.inference-chart-table .table-wrap { max-height: 240px; overflow: auto; padding: 0 16px 14px; }
+.inference-chart-table table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.inference-chart-table th,
+.inference-chart-table td { padding: 7px 8px; border-bottom: 1px solid rgba(148, 163, 184, .08); text-align: right; }
+.inference-chart-table th:first-child,
+.inference-chart-table td:first-child { text-align: left; }
+
+.inference-chart-panel.is-empty {
+  padding: 0;
+  background: rgba(12, 20, 34, .55);
+}
+
+.inference-chart-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 82px;
+  padding: 16px;
+  color: var(--text-muted);
+}
+
+.inference-chart-empty div { display: grid; gap: 4px; }
+.inference-chart-empty strong { color: var(--text-secondary); font-size: 13px; }
+.inference-chart-empty span,
+.inference-chart-error { color: var(--text-muted); font-size: 11px; }
+.inference-chart-error { display: grid; height: 100%; place-items: center; }
+
+.inference-chart-panel:fullscreen {
+  display: flex;
+  padding: 20px;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  background: #080e18;
+}
+
+.inference-chart-panel:fullscreen .inference-chart-stage { flex: 1; min-height: 0; }
+.inference-chart-panel:fullscreen .inference-kline-chart { height: 100%; min-height: 420px; }
+.inference-chart-panel:fullscreen .inference-chart-table { display: none; }
+
+@media (max-width: 760px) {
+  .inference-chart-header,
+  .inference-chart-toolbar { align-items: flex-start; }
+  .inference-chart-toolbar { flex-direction: column; }
+  .inference-layer-tabs { width: 100%; }
+  .inference-layer-tabs button { flex: 1 1 auto; }
+  .inference-chart-stage,
+  .inference-kline-chart { min-height: 300px; height: 300px; }
+  .inference-chart-cursor { right: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
 .quiet-disclosure {
   overflow: hidden;
   padding: 0 !important;
