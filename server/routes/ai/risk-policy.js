@@ -4,7 +4,6 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { stripBrokerSuffix } from './utils.js'
 import { riskRuleIsEnforced } from './rollout-governance.js'
 
-const HOUR_MS = 3600_000
 const rule = (code, type, unit, safety, value, min, max, locked, label) => ({ code, type, unit, safety_direction: safety, default_value: value, allowed_min: min, allowed_max: max, locked, label })
 
 export const RISK_RULES = Object.freeze({
@@ -26,7 +25,7 @@ export const RISK_RULES = Object.freeze({
   max_spread_points: rule('R4.5', 'number', 'point', 'lower', 100, 1, 100000, false, '最大点差'),
   market_signal_drift_atr: rule('R4.6', 'number', 'ATR', 'lower', 0.3, 0.01, 5, false, '市价信号价格漂移'),
   broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '经纪商成交滑点'),
-  weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 120, 0, 2880, false, '周末保护提前量'),
+  weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 120, 0, 2880, false, 'MT5周末收盘提前量'),
   max_directional_exposure_lots: rule('R2.1', 'number', 'lot', 'lower', 0.1, 0.001, 1000, false, '同向最大敞口'),
   min_open_interval_seconds: rule('R2.2', 'number', 'second', 'higher', 60, 0, 86400, false, '最小开仓间隔'),
   max_daily_open_count: rule('R2.3', 'number', 'count', 'lower', 10, 1, 10000, false, '每日成功开仓次数'),
@@ -217,11 +216,28 @@ const quoteEpoch = value => {
   const parsed = Date.parse(text.replace(' ', 'T') + (/[zZ]|[+-]\d\d:\d\d$/.test(text) ? '' : '+08:00'))
   return Number.isFinite(parsed) ? parsed : null
 }
-function weekendProtected(nowMs, minutes) {
-  const date = new Date(nowMs + 8 * HOUR_MS)
+const DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
+
+function mt5TimezoneOffsetMinutes(value) {
+  if (value === null || value === undefined || value === '') return DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+  const offset = Number(value)
+  return Number.isFinite(offset) && offset >= -720 && offset <= 840
+    ? Math.trunc(offset) : DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+}
+
+export function weekendProtectionState(nowMs, minutes, timezoneOffsetMinutes = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES) {
+  const offsetMinutes = mt5TimezoneOffsetMinutes(timezoneOffsetMinutes)
+  const date = new Date(nowMs + offsetMinutes * 60_000)
   const day = date.getUTCDay()
   const minute = day * 1440 + date.getUTCHours() * 60 + date.getUTCMinutes()
-  return day === 0 || day === 6 || minute >= 6 * 1440 - minutes
+  const protectedNow = day === 0 || day === 6 || minute >= 6 * 1440 - minutes
+  return {
+    protected:protectedNow,
+    timezone_offset_minutes:offsetMinutes,
+    mt5_weekday:day,
+    mt5_time:`${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`,
+    close_advance_minutes:Number(minutes),
+  }
 }
 
 export function evaluateCoreRisk({ request, account, quote, instrument, brokerCalculation = null, policy = DEFAULT_RISK_POLICY, ruleModes = {}, nowMs = Date.now() }) {
@@ -372,8 +388,9 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
       const rejected = rolloutReject('R4.3_SIGNAL_EXPIRED'); if (rejected) return rejected
     }
   }
-  if (weekendProtected(nowMs, policy.weekend_close_minutes)) {
-    const rejected = rolloutReject('R4.2_WEEKEND_PROTECTION'); if (rejected) return rejected
+  const weekendProtection = weekendProtectionState(nowMs, policy.weekend_close_minutes, quote?.timezone_offset_minutes)
+  if (weekendProtection.protected) {
+    const rejected = rolloutReject('R4.2_WEEKEND_PROTECTION', weekendProtection); if (rejected) return rejected
   }
   approved.deviation = Math.floor(policy.broker_slippage_points)
   pass(rules, 'PX.3_BROKER_SLIPPAGE', { points: approved.deviation })

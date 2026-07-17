@@ -1958,7 +1958,7 @@ const RISK_LABELS = {
   allowed_symbols:"允许交易品种", require_stop_loss:"强制止损", sl_atr_min:"最小止损距离", sl_atr_max:"最大止损距离", min_rr:"最低盈亏比",
   pending_price_deviation_pct:"挂单价格偏离百分比", pending_price_deviation_atr:"挂单价格偏离 ATR", pending_valid_minutes:"挂单有效期",
   ai_volume_min:"AI 建议最小手数", ai_volume_max:"AI 建议最大手数", ai_volume_step:"AI 建议手数步进", max_position_size:"账户单笔最大手数", max_risk_per_trade_pct:"单笔最大风险",
-  signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", market_signal_drift_atr:"市价信号漂移", broker_slippage_points:"成交滑点", weekend_close_minutes:"周末保护提前量",
+  signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", market_signal_drift_atr:"市价信号漂移", broker_slippage_points:"成交滑点", weekend_close_minutes:"MT5周末收盘提前量",
   max_directional_exposure_lots:"同向最大敞口", min_open_interval_seconds:"最小开仓间隔", max_daily_open_count:"每日开仓次数", dedup_window_seconds:"重复订单时间窗", dedup_price_atr:"重复订单价格距离",
   daily_loss_limit_pct:"每日最大亏损", consecutive_loss_limit:"连续亏损次数", loss_cooldown_minutes:"连续亏损冷却", max_drawdown_pct:"最大回撤", min_margin_level_pct:"最低保证金水平", max_notional_exposure_pct:"最大名义敞口",
   observation_hours:"新账户观察期", observation_max_lot:"观察期最大手数",

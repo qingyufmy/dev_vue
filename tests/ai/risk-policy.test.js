@@ -8,7 +8,7 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   DEFAULT_RISK_POLICY, RISK_RULES, evaluateCoreRisk, isRelaxation,
-  resolveEffectiveRiskPolicy, submitRiskPolicyChanges, persistRiskDecision,
+  resolveEffectiveRiskPolicy, submitRiskPolicyChanges, persistRiskDecision, weekendProtectionState,
 } from '../../server/routes/ai/risk-policy.js'
 
 const nowMs = Date.parse('2026-07-15T13:00:00Z')
@@ -155,6 +155,35 @@ describe('L1/L4/L5 core risk gate', () => {
     expect(run({ request: { signal_created_at: '2026-07-15T12:40:00Z' } }).reject_code).toBe('R4.3_SIGNAL_EXPIRED')
     expect(run({ quote: { ask: 2001.1 } }).reject_code).toBe('R4.5_SPREAD_TOO_WIDE')
     expect(run({ nowMs: Date.parse('2026-07-18T02:00:00Z'), quote: { time_msc: Date.parse('2026-07-18T02:00:00Z') }, request: { signal_created_at: '2026-07-18T01:59:00Z' } }).reject_code).toBe('R4.2_WEEKEND_PROTECTION')
+  })
+
+  it('calculates weekend protection in the calibrated MT5 timezone instead of Beijing time', () => {
+    const previouslyWrong = Date.parse('2026-07-17T14:30:00Z') // 北京周五22:30，MT5 UTC+3 周五17:30
+    expect(weekendProtectionState(previouslyWrong, 120, 180).protected).toBe(false)
+
+    const beforeBoundary = Date.parse('2026-07-17T18:59:00Z') // MT5 周五21:59
+    expect(weekendProtectionState(beforeBoundary, 120, 180).protected).toBe(false)
+    const atBoundary = Date.parse('2026-07-17T19:00:00Z') // MT5 周五22:00，距周六00:00两小时
+    expect(weekendProtectionState(atBoundary, 120, 180)).toMatchObject({
+      protected:true, timezone_offset_minutes:180, mt5_weekday:5, mt5_time:'22:00',
+    })
+
+    const mondayOpen = Date.parse('2026-07-19T21:00:00Z') // MT5 周一00:00
+    expect(weekendProtectionState(mondayOpen, 120, 180).protected).toBe(false)
+  })
+
+  it('uses the quote clock offset and falls back to MT5 UTC+3 only when it is unavailable', () => {
+    const utcTime = Date.parse('2026-07-17T19:30:00Z')
+    expect(weekendProtectionState(utcTime, 120, 120).protected).toBe(false) // MT5 UTC+2 周五21:30
+    expect(weekendProtectionState(utcTime, 120, 180).protected).toBe(true)  // MT5 UTC+3 周五22:30
+    expect(weekendProtectionState(utcTime, 120, null).timezone_offset_minutes).toBe(180)
+    const utcPlus2 = run({ nowMs:utcTime, quote:{ time_msc:utcTime, timezone_offset_minutes:120 },
+      request:{ signal_created_at:'2026-07-17T19:29:00Z' } })
+    expect(utcPlus2.decision_status).toBe('pass')
+    const utcPlus3 = run({ nowMs:utcTime, quote:{ time_msc:utcTime, timezone_offset_minutes:180 },
+      request:{ signal_created_at:'2026-07-17T19:29:00Z' } })
+    expect(utcPlus3.reject_code).toBe('R4.2_WEEKEND_PROTECTION')
+    expect(utcPlus3.rule_results.at(-1).details).toMatchObject({ timezone_offset_minutes:180, mt5_time:'22:30' })
   })
 
   it('uses the bridge-normalized UTC timestamp before the raw MT5 wall-clock timestamp', () => {
