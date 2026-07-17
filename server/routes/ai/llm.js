@@ -5,12 +5,18 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { beginModelUsage, finishModelUsage } from './model-profiles.js'
+import { KIMI_CODE_CLIENT_IDENTITY, MODEL_PROVIDER_DEFAULTS, isKimiCodeRequest, modelProviderProtocol } from './model-providers.js'
 import { sha256 } from './inference-snapshots.js'
 import { normalizeEntryMethods, signalTypesForEntryMethods } from './strategy-policy.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const SL_CLAMP = { K_MIN: 1.0, K_MAX: 3.0 }
 const TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
+
+export function formatPendingValidUntilUtc(validMinutes, nowMs = Date.now()) {
+  const minutes = Math.min(Math.max(parseInt(validMinutes) || 240, 1), 1440)
+  return new Date(nowMs + minutes * 60000).toISOString().replace('T', ' ').substring(0, 19)
+}
 const PENDING_LIFECYCLE_RULE = `
 ## 挂单生命周期硬性规则
 挂单有效期、过期识别和到期取消由 MT5 与后端协调器负责。禁止比较任何时间字符串来判断挂单是否过期；禁止在 analysis 或 reasoning 中声称某挂单“已过期”“超时失效”“已自动取消”；禁止仅以时间、有效期或过期为理由输出 cancel_pending。cancel_pending 只能用于价格条件已明显失效、市场结构已破坏或方向逻辑已反转等非时间原因。是否存在挂单只能依据 pending_orders 当前数组；数组中不存在时只能表述“当前输入未包含该挂单”，不得推断其已过期或已取消。`
@@ -71,7 +77,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods) {
   return { outputFormat: JSON.stringify(schema, null, 2), hasPending }
 }
 
-function buildLlmRequestBody({ protocol, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort }) {
+function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort }) {
   if (protocol === 'responses') {
     const instructions = messages
       .filter(message => message.role === 'system')
@@ -92,10 +98,14 @@ function buildLlmRequestBody({ protocol, model, temperature, maxTokens, messages
   }
 
   const body = { model, messages }
-  // DeepSeek thinking mode: temperature/top_p ignored when enabled
+  // Thinking providers have different wire contracts. Kimi Code requires
+  // Thinking for K2.7 Code and accepts effort inside the thinking object.
   if (thinkingEnabled) {
-    body.thinking = { type: 'enabled' }
-    body.reasoning_effort = reasoningEffort || 'max'
+    body.thinking = provider === 'kimi_code'
+      ? (model === 'k3' ? { type: 'enabled', effort: 'max' } : { type: 'enabled' })
+      : { type: 'enabled' }
+    if (provider === 'kimi_code') body.max_tokens = maxTokens
+    else body.reasoning_effort = reasoningEffort || 'max'
   } else {
     body.temperature = temperature
     body.max_tokens = maxTokens
@@ -128,20 +138,35 @@ function extractTokenCount(data) {
   return Math.max(0, Math.trunc(Number(input) + Number(output)))
 }
 
-async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, estimatedTokens, phase }) {
+function providerHttpError(url, provider, status) {
+  if (!isKimiCodeRequest(url, provider)) return `LLM HTTP ${status}`
+  if (status === 401 || status === 404) return 'kimi_code_subscription_or_model_permission_denied'
+  if (status === 429) return 'kimi_code_rate_limited'
+  if (status === 403) return 'kimi_code_request_rejected'
+  if (status === 400) return 'kimi_code_request_invalid'
+  if (status >= 500) return 'kimi_code_service_unavailable'
+  return `kimi_code_http_${status}`
+}
+
+async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider }) {
   let usageLogId = null
   try {
     if (usageContext) {
       const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
       usageLogId = reservation.logId
     }
+    const headers = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
+    if (isKimiCodeRequest(url, provider)) headers['User-Agent'] = KIMI_CODE_CLIENT_IDENTITY
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeout),
     })
-    if (!response.ok) throw new Error(`${phase === 'repair' ? 'LLM repair' : 'LLM'} HTTP ${response.status}`)
+    if (!response.ok) {
+      const code = providerHttpError(url, provider, response.status)
+      throw new Error(phase === 'repair' && !code.startsWith('kimi_code_') ? code.replace(/^LLM/, 'LLM repair') : code)
+    }
     const data = await response.json()
     if (usageLogId) {
       const reportedTokens = extractTokenCount(data)
@@ -168,14 +193,14 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
   }
 }
 
-export async function requestJsonObject({ url, apiKey, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null }) {
+export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
-  const body = buildLlmRequestBody({ protocol, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
+  const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
   const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + Math.max(0, Number(maxTokens) || 0)
   const { response, data } = await trackedModelRequest({
-    url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request',
+    url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request', provider,
   })
   const content = extractLlmContent(data, protocol)
   if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
@@ -188,12 +213,12 @@ export async function requestJsonObject({ url, apiKey, model, temperature, maxTo
       { role: 'user', content: `上一次输出不是合法 JSON，解析错误为：${exc.message}。请只返回修正后的一个 JSON 对象，不要 Markdown，不要解释。` },
     ]
     const repairBody = buildLlmRequestBody({
-      protocol, model, temperature: 0, maxTokens, messages: repairMessages,
+      protocol, provider, model, temperature: 0, maxTokens, messages: repairMessages,
       thinkingEnabled, reasoningEffort,
     })
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: repairedData } = await trackedModelRequest({
-      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate, phase: 'repair',
+      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate, phase: 'repair', provider,
     })
     const repaired = extractLlmContent(repairedData, protocol)
     if (!repaired) throw new Error('LLM repair response content is empty')
@@ -208,19 +233,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
   const baseUrl = config.api_base_url
   if (!apiKey) return aiFailureHold(market, 'empty_ai_key')
 
-  const compatibleProviders = new Set(['deepseek', 'gpt', 'kimi', 'qwen', 'zhipu', 'doubao', 'volcengine_agent_plan'])
+  const compatibleProviders = new Set(Object.keys(MODEL_PROVIDER_DEFAULTS))
   if (!compatibleProviders.has(provider)) return aiFailureHold(market, `unsupported_ai_provider:${provider}`)
-  const providerDefaults = {
-    deepseek: DEFAULT_API_BASE_URL,
-    gpt: 'https://api.openai.com/v1',
-    kimi: 'https://api.moonshot.cn/v1',
-    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    zhipu: 'https://open.bigmodel.cn/api/paas/v4',
-    doubao: 'https://ark.cn-beijing.volces.com/api/v3',
-    volcengine_agent_plan: 'https://ark.cn-beijing.volces.com/api/plan/v3',
-  }
-  const normalizedBaseUrl = String(baseUrl || providerDefaults[provider]).replace(/\/+$/, '')
-  const protocol = provider === 'volcengine_agent_plan' ? 'responses' : 'chat_completions'
+  const normalizedBaseUrl = String(baseUrl || MODEL_PROVIDER_DEFAULTS[provider]).replace(/\/+$/, '')
+  const protocol = modelProviderProtocol(provider)
   const url = `${normalizedBaseUrl}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`
 
   try {
@@ -300,8 +316,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
     if (DEBUG_LLM_PAYLOAD) console.log(JSON.stringify(aiPayload, null, 2).substring(0, 3000))
     // DeepSeek and Agent Plan use different reasoning contracts.
-    const thinkingEnabled = (provider === 'deepseek' || provider === 'volcengine_agent_plan')
-      && config.thinking_enabled !== 0 && config.thinking_enabled !== false
+    const thinkingEnabled = provider === 'kimi_code'
+      || ((provider === 'deepseek' || provider === 'volcengine_agent_plan')
+        && config.thinking_enabled !== 0 && config.thinking_enabled !== false)
     console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
     const usageContext = config._model_profile_id ? {
       userId: config._userId || 0,
@@ -320,7 +337,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       })
     }
     const parsed = await requestJsonObject({
-      url, apiKey,
+      url, apiKey, provider,
       model: config.model_name || 'deepseek-chat',
       temperature: parseFloat(config.temperature ?? 0.3),
       maxTokens: parseInt(config.max_tokens || 2000),
@@ -373,6 +390,22 @@ export function normalizeAiSignal(parsed, config, market) {
     pending_valid_minutes: 0, pending_valid_until: null,
     normalization_info: { type: 'l5_schema_hold', reason },
   })
+  const pendingSchemaHold = (reason, details = {}) => {
+    const reasonLabels = {
+      stop_limit_price_required: '缺少 Stop Limit 触发后的限价',
+      pending_reference_price_unavailable: '当前行情参考价不可用',
+      pending_price_direction_invalid: '挂单触发价与当前价格的方向关系错误',
+      stop_limit_price_relation_invalid: 'Stop Limit 触发价与触发后限价的关系错误',
+    }
+    return {
+      ...schemaHold(reason),
+      decision_summary: '挂单价格结构不符合当前行情规则，本次暂不执行。',
+      trigger_condition: '',
+      invalidation_condition: '等待下一轮行情更新后重新评估入场方式和价格。',
+      reasoning: `系统校验未通过：${reasonLabels[reason] || '挂单价格结构无效'}。AI 原始入场建议未进入执行链路。`,
+      normalization_info: { type: 'l5_schema_hold', reason, ...details },
+    }
+  }
   let signalType = String(parsed.signal_type || 'hold').toLowerCase()
   const validTypes = ['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit']
   if (!validTypes.includes(signalType)) {
@@ -417,16 +450,39 @@ export function normalizeAiSignal(parsed, config, market) {
   let stopLimitPrice = parsed.stop_limit_price ? parseFloat(parsed.stop_limit_price) : null
   if (entryMethod === 'stop_limit') {
     if (!stopLimitPrice || !Number.isFinite(stopLimitPrice) || stopLimitPrice <= 0) {
-      stopLimitPrice = null // optional, fallback to limit_price
+      if (strictInference) return pendingSchemaHold('stop_limit_price_required')
+      stopLimitPrice = null
     }
   } else {
     stopLimitPrice = null
   }
 
-  // Pending validity — UTC time string (no timezone suffix), consistent with reconcilePendingOrders parsing
+  if (strictInference && entryMethod !== 'market' && entryMethod !== 'observe') {
+    const referencePrice = Number(market.latest_price)
+    if (!(referencePrice > 0)) return pendingSchemaHold('pending_reference_price_unavailable')
+    const isBuySide = signalType.startsWith('buy')
+    const directionInvalid = entryMethod === 'limit'
+      ? (isBuySide ? limitPrice >= referencePrice : limitPrice <= referencePrice)
+      : (isBuySide ? limitPrice <= referencePrice : limitPrice >= referencePrice)
+    if (directionInvalid) {
+      return pendingSchemaHold('pending_price_direction_invalid', {
+        entry_method: entryMethod, trigger_price: limitPrice, reference_price: referencePrice,
+      })
+    }
+    if (entryMethod === 'stop_limit') {
+      const relationInvalid = isBuySide ? stopLimitPrice > limitPrice : stopLimitPrice < limitPrice
+      if (relationInvalid) {
+        return pendingSchemaHold('stop_limit_price_relation_invalid', {
+          trigger_price: limitPrice, stop_limit_price: stopLimitPrice,
+        })
+      }
+    }
+  }
+
+  // Persist UTC as a timezone-less DATETIME string. Consumers must parse it as UTC.
   let pendingValidMinutes = Math.min(Math.max(parseInt(parsed.pending_valid_minutes) || 240, 1), 1440)
   const pendingValidUntil = entryMethod !== 'market' && entryMethod !== 'observe'
-    ? new Date(Date.now() + pendingValidMinutes * 60000).toISOString().replace('T', ' ').substring(0, 19)
+    ? formatPendingValidUntilUtc(pendingValidMinutes)
     : null
 
   const riskLevel = (config || {}).risk_level || 'medium'

@@ -4,17 +4,17 @@ import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
 import { sha256 } from './inference-snapshots.js'
 import { getEffectiveFeatureFlags, isAiFeatureEnabled } from './rollout-governance.js'
+import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 
 const DEFAULT_BUDGET = 800
 const MAX_BUDGET = 1600
 const SUMMARY_TRIGGER_ITEMS = 20
 const SUMMARY_TRIGGER_TOKENS = 4000
 const SUMMARY_MAX_TOKENS = 1200
-const PROVIDER_BASE_URLS = {
-  deepseek: 'https://api.deepseek.com', gpt: 'https://api.openai.com/v1', kimi: 'https://api.moonshot.cn/v1',
-  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1', zhipu: 'https://open.bigmodel.cn/api/paas/v4',
-  doubao: 'https://ark.cn-beijing.volces.com/api/v3', volcengine_agent_plan: 'https://ark.cn-beijing.volces.com/api/plan/v3',
-}
+const SHORT_MEMORY_TTL_DAYS = 30
+const LONG_MEMORY_MIN_SUPPORT = 3
+const LONG_MEMORY_MIN_SPAN_DAYS = 7
+const LONG_MEMORY_BUDGET_RATIO = 0.6
 let compressionTimer = null
 const parse = (value, fallback) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const tokenCount = value => Math.max(1, Math.ceil(Buffer.byteLength(String(value || ''), 'utf8') / 4))
@@ -22,6 +22,11 @@ const safeError = error => String(error?.message || error || 'memory_error').rep
 
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
+  return date.toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function afterDays(days) {
+  const date = new Date(Date.now() + (8 * 3600 + days * 86400) * 1000)
   return date.toISOString().replace('T', ' ').slice(0, 19)
 }
 
@@ -46,7 +51,7 @@ export function memorySimilarity(left, right) {
 }
 
 function scopeKey(item) {
-  return [item.strategy_id || '*', item.symbol || '*', item.timeframe || '*'].join(':')
+  return [`${item.strategy_id || '*'}@${Number(item.strategy_version || 1)}`, item.symbol || '*', item.timeframe || '*'].join(':')
 }
 
 function buildMemoryPayload(reviewCase, version) {
@@ -66,6 +71,7 @@ function buildMemoryPayload(reviewCase, version) {
   }
   const scope = {
     strategy_id: snapshot.strategy_id || null,
+    strategy_version: Number(snapshot.strategy_version || 1),
     symbol: evidence?.post_trade?.outcome?.symbol || approvedOrder.symbol || null,
     timeframe: signal.timeframe || snapshot.market_snapshot?.timeframe || null,
     direction: signal.signal_type || null,
@@ -81,6 +87,9 @@ export async function createMemoryFromApprovedReview(caseId, userId) {
   if (!await isAiFeatureEnabled('experience_memory_enabled', userId)) throw new Error('experience_memory_rollout_disabled')
   const reviewCase = await queryOne('SELECT * FROM trade_review_cases WHERE id = ? AND user_id = ?', [caseId, userId])
   if (!reviewCase || reviewCase.status !== 'approved' || !reviewCase.approved_version_id) throw new Error('approved_review_required')
+  const reviewStrategy = await queryOne(`SELECT snap.strategy_scope, snap.strategy_version FROM inference_snapshots snap
+    WHERE snap.signal_id = ? ORDER BY snap.id DESC LIMIT 1`, [reviewCase.signal_id])
+  if (reviewStrategy?.strategy_scope !== 'private') throw new Error('personal_memory_requires_private_strategy_review')
   const version = await queryOne('SELECT * FROM trade_review_versions WHERE id = ? AND case_id = ?', [reviewCase.approved_version_id, caseId])
   if (!version) throw new Error('approved_review_version_missing')
   const existing = await queryOne('SELECT * FROM experience_memory_items WHERE review_version_id = ?', [version.id])
@@ -88,25 +97,29 @@ export async function createMemoryFromApprovedReview(caseId, userId) {
   const payload = buildMemoryPayload(reviewCase, version)
   if (!payload.lesson) throw new Error('approved_review_has_no_lesson')
   const comparable = await queryAll(`SELECT id, lesson_text, anti_pattern_text FROM experience_memory_items
-    WHERE user_id = ? AND status = 'active' AND strategy_id <=> ? AND symbol <=> ? AND timeframe <=> ?`,
-  [userId, payload.scope.strategy_id, payload.scope.symbol, payload.scope.timeframe])
+    WHERE user_id = ? AND status = 'active' AND memory_tier = 'short' AND strategy_id <=> ?
+      AND strategy_version = ? AND symbol <=> ? AND timeframe <=> ? AND (expires_at IS NULL OR expires_at > ?)`,
+  [userId, payload.scope.strategy_id, payload.scope.strategy_version, payload.scope.symbol, payload.scope.timeframe, beijingNow()])
   const body = `${payload.lesson}\n${payload.antiPattern}`
   const ancestors = comparable.filter(item => memorySimilarity(body, `${item.lesson_text}\n${item.anti_pattern_text || ''}`) >= 0.85).map(item => Number(item.id))
   const status = ancestors.length ? 'duplicate_candidate' : 'active'
   const now = beijingNow()
   const result = await queryRun(`INSERT INTO experience_memory_items
-    (user_id, review_case_id, review_version_id, strategy_id, symbol, timeframe, direction, entry_method,
+    (user_id, review_case_id, review_version_id, strategy_id, strategy_version, memory_tier, symbol, timeframe, direction, entry_method,
      market_regime, scope_json, conditions_json, lesson_text, anti_pattern_text, evidence_refs_json,
-     ancestor_memory_ids_json, content_hash, token_count, confidence, status, confirmed_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-    userId, caseId, version.id, payload.scope.strategy_id, payload.scope.symbol, payload.scope.timeframe,
+     ancestor_memory_ids_json, content_hash, token_count, confidence, status, confirmed_at, expires_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'short', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    userId, caseId, version.id, payload.scope.strategy_id, payload.scope.strategy_version, payload.scope.symbol, payload.scope.timeframe,
     payload.scope.direction, payload.scope.entry_method, payload.scope.market_regime, JSON.stringify(payload.scope),
     JSON.stringify(payload.conditions), payload.lesson, payload.antiPattern || null, JSON.stringify(payload.evidenceRefs),
     JSON.stringify(ancestors), sha256(JSON.stringify(payload.canonical)), tokenCount(body), payload.confidence,
-    status, now, now, now,
+    status, now, afterDays(SHORT_MEMORY_TTL_DAYS), now, now,
   ])
   const item = await queryOne('SELECT * FROM experience_memory_items WHERE id = ?', [result.insertId])
-  if (status === 'active') await maybeQueueCompression(userId, scopeKey(item))
+  if (status === 'active') {
+    await maybeQueueCompression(userId, scopeKey(item))
+    await maybeCreateLongTermCandidate(userId, item)
+  }
   return item
 }
 
@@ -126,11 +139,24 @@ export async function getMemorySettings(userId) {
 }
 
 export async function listMemoryItems(userId, { status = null, limit = 100 } = {}) {
+  await expireShortMemories(userId)
   const params = [userId]
   let suffix = ''
   if (status) { suffix = ' AND status = ?'; params.push(status) }
   params.push(Math.min(200, Math.max(1, Number(limit))))
-  return queryAll(`SELECT * FROM experience_memory_items WHERE user_id = ?${suffix} ORDER BY updated_at DESC LIMIT ?`, params)
+  const [shortItems, longItems] = await Promise.all([
+    queryAll(`SELECT *, 'short' AS memory_tier FROM experience_memory_items WHERE user_id = ?${suffix} ORDER BY updated_at DESC LIMIT ?`, params),
+    queryAll(`SELECT *, 'long' AS memory_tier, NULL AS review_version_id FROM experience_long_term_memories
+      WHERE user_id = ?${status ? ' AND status = ?' : ''} ORDER BY updated_at DESC LIMIT ?`, params),
+  ])
+  return [...longItems, ...shortItems].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, Number(params.at(-1)))
+}
+
+async function expireShortMemories(userId) {
+  await queryRun(`UPDATE experience_memory_items SET status = 'expired', updated_at = ?
+    WHERE user_id = ? AND memory_tier = 'short' AND status IN ('active','duplicate_candidate')
+      AND expires_at IS NOT NULL AND expires_at <= ?`,
+  [beijingNow(), userId, beijingNow()])
 }
 
 async function invalidateSummariesForSource(userId, memoryId) {
@@ -156,7 +182,68 @@ export async function activateDuplicateMemory(memoryId, userId) {
   if (!result.changes) throw new Error('duplicate_memory_not_found')
   const item = await queryOne('SELECT * FROM experience_memory_items WHERE id = ? AND user_id = ?', [memoryId, userId])
   await maybeQueueCompression(userId, scopeKey(item))
+  await maybeCreateLongTermCandidate(userId, item)
   return item
+}
+
+function longMemorySummary(items) {
+  const lessons = [...new Set(items.map(item => sanitizeMemoryText(item.lesson_text, 1200)).filter(Boolean))]
+  const antiPatterns = [...new Set(items.map(item => sanitizeMemoryText(item.anti_pattern_text, 600)).filter(Boolean))]
+  return sanitizeMemoryText([
+    `经 ${items.length} 次独立复盘反复验证：${lessons.slice(0, 3).join('；')}`,
+    antiPatterns.length ? `需要避免：${antiPatterns.slice(0, 2).join('；')}` : '',
+  ].filter(Boolean).join('。'), 5000)
+}
+
+export async function maybeCreateLongTermCandidate(userId, seedItem) {
+  if (!seedItem?.strategy_id || String(seedItem.status) !== 'active') return { created: false, reason: 'short_memory_not_eligible' }
+  await expireShortMemories(userId)
+  const rows = await queryAll(`SELECT * FROM experience_memory_items
+    WHERE user_id = ? AND status = 'active' AND memory_tier = 'short'
+      AND strategy_id = ? AND strategy_version = ? AND symbol <=> ? AND timeframe <=> ?
+      AND (expires_at IS NULL OR expires_at > ?) ORDER BY confirmed_at, id`,
+  [userId, seedItem.strategy_id, Number(seedItem.strategy_version || 1), seedItem.symbol, seedItem.timeframe, beijingNow()])
+  const seedBody = `${seedItem.lesson_text || ''}\n${seedItem.anti_pattern_text || ''}`
+  const cluster = rows.filter(item => memorySimilarity(seedBody, `${item.lesson_text || ''}\n${item.anti_pattern_text || ''}`) >= 0.65)
+  const reviewCount = new Set(cluster.map(item => Number(item.review_case_id))).size
+  if (reviewCount < LONG_MEMORY_MIN_SUPPORT) return { created: false, reason: 'insufficient_support', supportCount: reviewCount }
+  const firstAt = new Date(String(cluster[0]?.confirmed_at || '').replace(' ', 'T') + '+08:00').getTime()
+  const lastAt = new Date(String(cluster.at(-1)?.confirmed_at || '').replace(' ', 'T') + '+08:00').getTime()
+  const spanDays = Number.isFinite(firstAt) && Number.isFinite(lastAt) ? (lastAt - firstAt) / 86400000 : 0
+  if (spanDays < LONG_MEMORY_MIN_SPAN_DAYS) return { created: false, reason: 'insufficient_time_span', supportCount: reviewCount, spanDays }
+  const ids = cluster.map(item => Number(item.id)).sort((a, b) => a - b)
+  const sourceHash = sha256(JSON.stringify(ids))
+  const summary = longMemorySummary(cluster)
+  const conditions = { minimum_support: LONG_MEMORY_MIN_SUPPORT, support_count: reviewCount, span_days: Number(spanDays.toFixed(2)), source: 'confirmed_short_memories' }
+  const now = beijingNow()
+  await queryRun(`INSERT IGNORE INTO experience_long_term_memories
+    (user_id, strategy_id, strategy_version, symbol, timeframe, direction, entry_method, market_regime,
+     source_memory_ids_json, source_set_hash, summary_text, conditions_json, confidence, support_count,
+     token_count, status, candidate_reason, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate', ?, ?, ?)`, [
+    userId, seedItem.strategy_id, Number(seedItem.strategy_version || 1), seedItem.symbol, seedItem.timeframe,
+    seedItem.direction, seedItem.entry_method, seedItem.market_regime, JSON.stringify(ids), sourceHash,
+    summary, JSON.stringify(conditions), Math.min(0.99, cluster.reduce((sum, item) => sum + Number(item.confidence || 0.5), 0) / cluster.length),
+    reviewCount, tokenCount(summary), `由 ${reviewCount} 次独立复盘形成，覆盖 ${spanDays.toFixed(1)} 天`, now, now,
+  ])
+  const candidate = await queryOne(`SELECT * FROM experience_long_term_memories
+    WHERE user_id = ? AND strategy_id = ? AND strategy_version = ? AND source_set_hash = ?`,
+  [userId, seedItem.strategy_id, Number(seedItem.strategy_version || 1), sourceHash])
+  return { created: true, candidate }
+}
+
+export async function confirmLongTermMemory(memoryId, userId) {
+  const result = await queryRun(`UPDATE experience_long_term_memories SET status = 'active', confirmed_at = ?, updated_at = ?
+    WHERE id = ? AND user_id = ? AND status = 'candidate'`, [beijingNow(), beijingNow(), memoryId, userId])
+  if (!result.changes) throw new Error('long_memory_candidate_not_found')
+  return queryOne('SELECT * FROM experience_long_term_memories WHERE id = ? AND user_id = ?', [memoryId, userId])
+}
+
+export async function revokeLongTermMemory(memoryId, userId) {
+  const result = await queryRun(`UPDATE experience_long_term_memories SET status = 'revoked', revoked_at = ?, updated_at = ?
+    WHERE id = ? AND user_id = ? AND status IN ('candidate','active','revalidation')`, [beijingNow(), beijingNow(), memoryId, userId])
+  if (!result.changes) throw new Error('long_memory_not_found')
+  return { revoked: true }
 }
 
 function recencyScore(date) {
@@ -201,7 +288,7 @@ async function getValidSummary(userId, key) {
   return summary
 }
 
-export async function retrievePersonalMemory({ userId, strategyId = null, symbol = null, timeframe = null,
+export async function retrievePersonalMemory({ userId, strategyId = null, strategyVersion = 1, symbol = null, timeframe = null,
   direction = null, entryMethod = null, marketRegime = null, mode = null, experimentGroup = null } = {}) {
   if (!userId) return { promptBlock: '', selectedItemIds: [], selectedSummaryIds: [], tokenCount: 0, disabled: true }
   const rollout = await getEffectiveFeatureFlags(userId)
@@ -209,18 +296,40 @@ export async function retrievePersonalMemory({ userId, strategyId = null, symbol
   const settings = await getMemorySettings(userId)
   if (!settings.enabled) return { promptBlock: '', selectedItemIds: [], selectedSummaryIds: [], tokenCount: 0, disabled: true }
   const actualMode = rollout.retrieval_shadow_enabled || mode === 'shadow' || settings.retrieval_mode === 'shadow' ? 'shadow' : 'active'
-  const context = { strategy_id: strategyId, symbol, timeframe, direction, entry_method: entryMethod, market_regime: marketRegime }
+  await expireShortMemories(userId)
+  const version = Math.max(1, Number(strategyVersion || 1))
+  if (strategyId) {
+    await queryRun(`UPDATE experience_memory_items SET status = 'stale', updated_at = ?
+      WHERE user_id = ? AND strategy_id = ? AND strategy_version <> ? AND status = 'active'`, [beijingNow(), userId, strategyId, version])
+    await queryRun(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
+      WHERE user_id = ? AND strategy_id = ? AND strategy_version <> ? AND status = 'active'`, [beijingNow(), userId, strategyId, version])
+  }
+  const context = { strategy_id: strategyId, strategy_version: version, symbol, timeframe, direction, entry_method: entryMethod, market_regime: marketRegime }
   const items = await queryAll(`SELECT * FROM experience_memory_items WHERE user_id = ? AND status = 'active'
-    AND (strategy_id IS NULL OR strategy_id = ?) AND (symbol IS NULL OR symbol = ?)
-    AND (timeframe IS NULL OR timeframe = ?) ORDER BY updated_at DESC LIMIT 200`, [userId, strategyId, symbol, timeframe])
+    AND memory_tier = 'short' AND strategy_id = ? AND strategy_version = ?
+    AND (expires_at IS NULL OR expires_at > ?) AND (symbol IS NULL OR symbol = ?)
+    AND (timeframe IS NULL OR timeframe = ?) ORDER BY updated_at DESC LIMIT 200`, [userId, strategyId, version, beijingNow(), symbol, timeframe])
+  const longItems = await queryAll(`SELECT * FROM experience_long_term_memories WHERE user_id = ? AND status = 'active'
+    AND strategy_id = ? AND strategy_version = ? AND (symbol IS NULL OR symbol = ?)
+    AND (timeframe IS NULL OR timeframe = ?) ORDER BY support_count DESC, updated_at DESC LIMIT 50`,
+  [userId, strategyId, version, symbol, timeframe])
   const ranked = rankMemoryCandidates(items, context)
-  const key = [strategyId || '*', symbol || '*', timeframe || '*'].join(':')
+  const rankedLong = rankMemoryCandidates(longItems, context)
+  const key = [`${strategyId || '*'}@${version}`, symbol || '*', timeframe || '*'].join(':')
   const summary = await getValidSummary(userId, key)
   const budget = settings.runtime_token_budget || DEFAULT_BUDGET
+  const longBudget = Math.floor(budget * LONG_MEMORY_BUDGET_RATIO)
   const parts = []
-  const selectedItems = []; const selectedSummaries = []; const reasons = []
+  const selectedItems = []; const selectedSummaries = []; const selectedLong = []; const reasons = []
   let used = 0
-  if (summary && Number(summary.token_count) <= budget) {
+  for (const candidate of rankedLong) {
+    const cost = Number(candidate.item.token_count || tokenCount(candidate.item.summary_text))
+    if (used + cost > longBudget) continue
+    parts.push({ type: 'long_term', id: candidate.item.id, support_count: Number(candidate.item.support_count), conditions: parse(candidate.item.conditions_json, {}), lesson: candidate.item.summary_text })
+    selectedLong.push(Number(candidate.item.id)); used += cost
+    reasons.push({ long_memory_id: Number(candidate.item.id), score: candidate.score, reasons: candidate.reasons })
+  }
+  if (summary && used + Number(summary.token_count) <= budget) {
     parts.push({ type: 'summary', id: summary.id, content: sanitizeMemoryText(summary.summary_text, 8000) })
     selectedSummaries.push(Number(summary.id)); used += Number(summary.token_count)
     reasons.push({ summary_id: Number(summary.id), reason: 'active_scope_summary' })
@@ -236,13 +345,20 @@ export async function retrievePersonalMemory({ userId, strategyId = null, symbol
   // A paid paired inference must be explicitly enabled by the user as well as
   // globally authorized. Merely enabling the global rollout must not double a
   // user's model spend.
-  const pairedExperimentEnabled = Boolean(rollout.paired_experiment_enabled && rollout.user?.paired_experiment_enabled === true)
+  const pairedExperimentEnabled = Boolean(actualMode === 'active' && rollout.paired_experiment_enabled && rollout.user?.paired_experiment_enabled === true)
   const group = experimentGroup || (actualMode === 'shadow' ? 'retrieval_shadow' : pairedExperimentEnabled ? 'paired_inference_treatment' : 'memory_active')
   const log = await queryRun(`INSERT INTO memory_injection_logs
-    (user_id, strategy_id, symbol, mode, experiment_group, selected_item_ids_json,
-     selected_summary_ids_json, token_count, retrieval_reasons_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [userId, strategyId, symbol, actualMode, group, JSON.stringify(selectedItems), JSON.stringify(selectedSummaries), used, JSON.stringify(reasons), beijingNow()])
-  return { promptBlock: actualMode === 'active' ? buildInjectionBlock(parts) : '', selectedItemIds: selectedItems, selectedSummaryIds: selectedSummaries, tokenCount: used, logId: log.insertId, mode: actualMode, retrievalReasons: reasons, pairedExperimentEnabled }
+    (user_id, strategy_id, strategy_version, symbol, mode, experiment_group, selected_item_ids_json,
+     selected_summary_ids_json, selected_long_memory_ids_json, token_count, retrieval_reasons_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [userId, strategyId, version, symbol, actualMode, group,
+    JSON.stringify(selectedItems), JSON.stringify(selectedSummaries), JSON.stringify(selectedLong), used, JSON.stringify(reasons), beijingNow()])
+  if (selectedItems.length) await queryRun(`UPDATE experience_memory_items SET match_count = match_count + 1, last_matched_at = ?, updated_at = updated_at
+    WHERE user_id = ? AND id IN (${selectedItems.map(() => '?').join(',')})`, [beijingNow(), userId, ...selectedItems])
+  if (selectedLong.length) await queryRun(`UPDATE experience_long_term_memories SET match_count = match_count + 1, last_matched_at = ?, updated_at = updated_at
+    WHERE user_id = ? AND id IN (${selectedLong.map(() => '?').join(',')})`, [beijingNow(), userId, ...selectedLong])
+  return { promptBlock: actualMode === 'active' ? buildInjectionBlock(parts) : '', selectedItemIds: selectedItems,
+    selectedSummaryIds: selectedSummaries, selectedLongMemoryIds: selectedLong, tokenCount: used, logId: log.insertId,
+    mode: actualMode, retrievalReasons: reasons, pairedExperimentEnabled }
 }
 
 export function pairedInferenceDigest(signal = {}) {
@@ -275,10 +391,12 @@ export async function attachMemoryInjectionSignal(logId, userId, signalId, infer
 }
 
 async function activeScopeItems(userId, key) {
-  const [strategy, symbol, timeframe] = key.split(':')
+  const [strategyPart, symbol, timeframe] = key.split(':')
+  const [strategy, version = '1'] = strategyPart.split('@')
   return queryAll(`SELECT * FROM experience_memory_items WHERE user_id = ? AND status = 'active'
-    AND (? = '*' OR strategy_id = ?) AND (? = '*' OR symbol = ?) AND (? = '*' OR timeframe = ?)
-    ORDER BY id`, [userId, strategy, strategy, symbol, symbol, timeframe, timeframe])
+    AND memory_tier = 'short' AND (? = '*' OR strategy_id = ?) AND strategy_version = ?
+    AND (expires_at IS NULL OR expires_at > ?) AND (? = '*' OR symbol = ?) AND (? = '*' OR timeframe = ?)
+    ORDER BY id`, [userId, strategy, strategy, Number(version || 1), beijingNow(), symbol, symbol, timeframe, timeframe])
 }
 
 export async function maybeQueueCompression(userId, key, force = false) {
@@ -312,8 +430,8 @@ async function claimCompressionJob() {
 
 function modelEndpoint(model) {
   const provider = model.provider || model.api_provider
-  const protocol = provider === 'volcengine_agent_plan' ? 'responses' : 'chat_completions'
-  const base = String(model.api_base_url || PROVIDER_BASE_URLS[provider] || '').replace(/\/+$/, '')
+  const protocol = modelProviderProtocol(provider)
+  const base = String(model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
   if (!base) throw new Error('unsupported_compression_model_provider')
   return { protocol, url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}` }
 }
@@ -322,6 +440,12 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
   const job = await claimCompressionJob()
   if (!job) return { claimed: false }
   try {
+    if (!await isAiFeatureEnabled('memory_compression_enabled', job.user_id)) {
+      await queryRun(`UPDATE memory_compression_jobs SET status = 'skipped', last_error_code = 'memory_compression_disabled',
+        lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
+      [beijingNow(), beijingNow(), job.id, job.lease_token])
+      return { claimed: true, status: 'skipped', reason: 'memory_compression_disabled' }
+    }
     const ids = parse(job.source_memory_ids_json, []).map(Number).sort((a, b) => a - b)
     const current = await activeScopeItems(job.user_id, job.scope_key)
     const currentIds = current.map(item => Number(item.id)).sort((a, b) => a - b)
@@ -330,7 +454,7 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     if (!resolved.model) throw new Error(resolved.error || 'compression_model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
     const input = current.map(item => ({ id: Number(item.id), scope: parse(item.scope_json, {}), conditions: parse(item.conditions_json, {}), lesson: item.lesson_text, anti_pattern: item.anti_pattern_text }))
-    const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, model: resolved.model.model_name,
+    const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider, model: resolved.model.model_name,
       temperature: 0.1, maxTokens: Math.min(resolved.model.max_tokens || 1600, 1800), thinkingEnabled: resolved.model.thinking_enabled,
       reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
       messages: [{ role: 'system', content: '把用户确认的交易经验压缩成保留适用条件和冲突边界的摘要。不得创造新规则，不得提高仓位或风险。只返回 JSON。' },

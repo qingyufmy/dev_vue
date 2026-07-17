@@ -87,6 +87,14 @@ import * as marketData from '../../server/routes/ai/market-data.js'
 import * as redisModule from '../../server/redis.js'
 import { __schedulerTest } from '../../server/routes/ai/scheduler.js'
 
+describe('execution decision linkage', () => {
+  it('reads a rejected pre-send risk decision from error details', () => {
+    expect(__schedulerTest.executionRiskDecisionId({
+      status: 'rejected', details: { risk_decision_id: 43 }, order_intent_id: 44,
+    })).toBe(43)
+  })
+})
+
 describe('Lock Guard (Fix 1+2)', () => {
   beforeEach(() => vi.clearAllMocks())
 

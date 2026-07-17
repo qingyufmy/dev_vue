@@ -277,7 +277,8 @@ export async function handleAnalyze(userId, params) {
     if (strategy.scope === 'platform') {
       memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), symbol, timeframe: primaryTf })
     } else {
-      memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), symbol, timeframe: primaryTf, mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
+      memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1),
+        symbol, timeframe: primaryTf, mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
     }
   } catch (error) {
     console.error('[Analyze] Experience retrieval failed; continuing without it:', error.message)

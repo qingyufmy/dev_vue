@@ -38,8 +38,28 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('id="analysisTextContent" class="analysis-text"')
   })
 
+  it('defaults each inference chart to its smallest valid timeframe', () => {
+    expect(app).toContain('function inferenceTimeframeMinutes(timeframe)')
+    expect(app).toContain('const available = availableInferenceTimeframes(context.klines)')
+    expect(app).toContain('state.inferenceChartTimeframe = available[0]')
+    expect(app).toContain('state.inferenceChartSignalKey !== signalKey')
+  })
+
   it('locks duplicate execution according to server execution advice', () => {
     expect(app).toContain('advice.executable === true')
+    expect(app).toContain('advice.executable !== true')
+    expect(app).toContain('activeSignal = { ...previousSelected, ...stillExists }')
     expect(app).toContain("msg.type === 'signal_execution_updated'")
+  })
+
+  it('isolates async signal details and chart renders by the active selection', () => {
+    expect(app).toContain('const requestVersion = ++_analysisDetailRequestVersion')
+    expect(app).toContain('const forceRefresh = options.forceRefresh ?? navigate')
+    expect(app).toContain('requestVersion !== _analysisDetailRequestVersion')
+    expect(app).toContain('resultHost?.dataset.signalId !== signalKey')
+    expect(app).toContain('resultHost?.dataset.renderVersion !== String(renderVersion)')
+    expect(app).toContain('cancelAnimationFrame(_inferenceChartFrame)')
+    expect(app).toContain('renderAnalysisDetailLoading(signalId)')
+    expect(app).toContain('setTab("ai-analyze", { skipRefresh:true })')
   })
 })

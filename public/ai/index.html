@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260717h" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260717u" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -371,12 +371,12 @@
             <section class="workspace-panel form-modal-dialog model-profile-dialog" tabindex="-1">
               <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div><button id="cancelModelProfileBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="settings-grid">
-                <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="gpt">OpenAI compatible</option><option value="kimi">Kimi</option><option value="qwen">Qwen</option><option value="zhipu">智谱</option><option value="doubao">豆包</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option></select></label>
+                <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="gpt">OpenAI compatible</option><option value="kimi">Kimi 开放平台</option><option value="kimi_code">Kimi Code 订阅（个人）</option><option value="qwen">Qwen</option><option value="zhipu">智谱</option><option value="doubao">豆包</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option></select><small id="profileProviderHelp" class="field-help"></small></label>
                 <label><span>模型名称</span><input id="profileModelName" value="deepseek-chat" autocomplete="off"></label>
                 <label><span>API 地址</span><input id="profileBaseUrl" value="https://api.deepseek.com" autocomplete="off"></label>
                 <label><span>API Key</span><input id="profileApiKey" type="password" autocomplete="new-password" placeholder="编辑时留空表示不更换"></label>
                 <label><span>Temperature</span><input id="profileTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label>
-                <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="10000" step="100" value="2000"></label>
+                <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="65536" step="100" value="2000"></label>
               </div>
               <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button></div>
             </section>
@@ -387,6 +387,7 @@
               <div class="policy-switches">
                 <label><input id="shareForManual" type="checkbox"><span>手动推理</span></label><label><input id="shareForAuto" type="checkbox"><span>自动推理</span></label><label><input id="shareForReview" type="checkbox"><span>复盘生成</span></label><label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
               </div>
+              <div id="platformSharingProviderNotice" class="source-notice compact-notice" role="status">Kimi Code 订阅凭据仅供凭据所有者使用，不会共享给其他用户。</div>
               <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
             </section>
           </div>
@@ -620,7 +621,7 @@
             <section id="riskOverview" class="insight-strip risk-overview-strip" aria-label="风险状态概览"><div class="workspace-skeleton"></div></section>
             <div class="workspace-subtabs" role="tablist" aria-label="风控中心视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="risk" data-workspace-target="status"><i data-lucide="activity" size="15"></i>当前状态</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="rules"><i data-lucide="sliders-horizontal" size="15"></i>我的规则</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="decisions"><i data-lucide="list-checks" size="15"></i>执行记录</button></div>
             <section class="workspace-subpanel active" data-workspace-panel="risk" data-workspace-view="status"><div id="riskStatusList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-            <section class="workspace-subpanel" data-workspace-panel="risk" data-workspace-view="rules" hidden><div class="risk-legend compact"><span><i class="legend-dot effective"></i>最终有效</span><span><i class="legend-dot user"></i>我的设置</span><span><i class="legend-dot platform"></i>平台边界</span><span><i class="legend-dot pending"></i>待生效</span></div><div id="riskAccountsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+            <section class="workspace-subpanel" data-workspace-panel="risk" data-workspace-view="rules" hidden><div class="risk-legend compact"><span><i class="legend-dot effective"></i>最终有效</span><span><i class="legend-dot user"></i>我的设置</span><span><i class="legend-dot platform"></i>平台边界</span><span><i class="legend-dot effective"></i>保存后立即生效</span></div><div id="riskAccountsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
             <section class="workspace-panel workspace-subpanel" data-workspace-panel="risk" data-workspace-view="decisions" hidden>
               <div class="section-heading"><div><h2>最近执行决策</h2><p>优先显示风控结论和具体原因，计算明细按需查看。</p></div></div>
               <div id="executionDecisionList" class="workspace-list"><div class="workspace-skeleton"></div></div>
@@ -635,7 +636,7 @@
             <section class="insight-strip" aria-label="复盘与记忆概览"><div class="insight-item primary"><span>待我确认</span><strong id="reviewPendingStat" class="num">--</strong><small>需要阅读的复盘</small></div><div class="insight-item"><span>内容有问题</span><strong id="reviewIssueStat" class="num">--</strong><small>等待继续修改</small></div><div class="insight-item"><span id="memoryActiveLabel">有效记忆</span><strong id="memoryActiveStat" class="num">--</strong><small id="memoryActiveHelp">可用于后续推理</small></div></section>
             <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
             <div class="workspace-subtabs" role="tablist" aria-label="复盘与记忆视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="clipboard-check" size="15"></i>交易复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">我的记忆</span></button></div>
-            <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-status-tabs" role="tablist"><button class="active" data-review-filter="">全部</button><button data-review-filter="evidence_pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">内容有问题</button></div><div class="review-layout"><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div><aside id="reviewDetail" class="workspace-panel review-detail"><div class="empty-state"><strong>选择一条复盘</strong><span>查看结论、交易证据并确认内容。</span></div></aside></div></section>
+            <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>交易复盘</h2></div><span class="review-queue-hint">选择一条查看详情</span></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" data-review-filter="">全部</button><button data-review-filter="evidence_pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="clipboard-check" size="22"></i></span><strong>选择一条复盘</strong><span>查看交易结果、校对复盘结论，并决定是否沉淀为经验。</span></div></aside></div></section>
             <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
               <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的经验，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
               <details class="workspace-panel quiet-disclosure settings-disclosure user-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、压缩与高级实验</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。高级效果对照会额外调用一次模型。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认经验用于后续推理</strong><small>只注入你确认过的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>自动压缩过长经验</strong><small>降低每次推理的上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span><strong>高级效果对照实验</strong><small>付费配对实验（额外一次调用）</small></span></label></div></div></details>
@@ -952,7 +953,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260717h"></script>
+    <script src="/ai/app.js?v=20260717u"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

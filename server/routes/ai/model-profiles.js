@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { encryptCredential, decryptCredential, isEncryptionAvailable, isEncryptedEnvelope, getActiveKeyVersion } from '../../ai-credential.js'
 import { recordCredentialMigration } from './rollout-governance.js'
+import { isPlatformShareableProvider, normalizeModelProviderProfile } from './model-providers.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'auto_private', 'auto_platform', 'review', 'memory_compression']
@@ -30,6 +31,7 @@ export async function createModelProfile(userId, payload, callerRole) {
     throw new Error('platform_scope_requires_admin')
   }
   const ownerUserId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
+  const providerConfig = normalizeModelProviderProfile(payload)
   let keyEnc = null
   let keyVersion = null
   if (payload.api_key) {
@@ -45,15 +47,15 @@ export async function createModelProfile(userId, payload, callerRole) {
     [
       ownerUserId,
       scope,
-      payload.provider || 'deepseek',
-      payload.model_name || 'deepseek-chat',
-      payload.api_base_url || null,
+      providerConfig.provider,
+      providerConfig.model_name,
+      providerConfig.api_base_url,
       keyEnc,
       keyVersion,
       payload.temperature ?? 0.3,
       payload.max_tokens ?? 2000,
-      payload.thinking_enabled !== undefined ? (payload.thinking_enabled ? 1 : 0) : 1,
-      payload.reasoning_effort || 'max',
+      providerConfig.thinking_enabled,
+      providerConfig.reasoning_effort,
       now, now,
     ]
   )
@@ -100,6 +102,7 @@ export async function updateModelProfile(id, userId, payload) {
   const existing = await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])
   if (!existing) throw new Error('model_profile_not_found')
   if (existing.owner_user_id !== userId) throw new Error('model_profile_access_denied')
+  const providerConfig = normalizeModelProviderProfile(payload, existing)
 
   let keyEnc = existing.api_key_encrypted
   let keyVersion = existing.key_version
@@ -119,13 +122,13 @@ export async function updateModelProfile(id, userId, payload) {
       updated_at = ?
      WHERE id = ? AND deleted_at IS NULL`,
     [
-      payload.provider ?? null, payload.model_name ?? null,
-      payload.api_base_url !== undefined ? payload.api_base_url : null,
+      providerConfig.provider, providerConfig.model_name,
+      providerConfig.api_base_url,
       keyEnc !== undefined ? keyEnc : null,
       keyVersion,
       payload.temperature ?? null, payload.max_tokens ?? null,
-      payload.thinking_enabled !== undefined ? (payload.thinking_enabled ? 1 : 0) : null,
-      payload.reasoning_effort ?? null,
+      providerConfig.thinking_enabled,
+      providerConfig.reasoning_effort,
       now, id,
     ]
   )
@@ -409,7 +412,7 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
   if (policy[shareKey]) {
     const platformModel = await getPlatformModelForSharing()
-    if (platformModel && platformModel.api_key_encrypted) {
+    if (platformModel && platformModel.api_key_encrypted && isPlatformShareableProvider(platformModel.provider)) {
       const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
       const allowedPlans = JSON.parse(policy.allowed_plans || '["pro"]')
       if (user && allowedPlans.includes(user.plan)) {
@@ -430,7 +433,7 @@ async function resolvePlatformModel() {
 }
 
 async function getPlatformModelForSharing() {
-  return await queryOne('SELECT * FROM ai_model_profiles WHERE scope = "platform" AND deleted_at IS NULL AND status = "active" ORDER BY is_default DESC LIMIT 1')
+  return await queryOne('SELECT * FROM ai_model_profiles WHERE scope = "platform" AND provider <> "kimi_code" AND deleted_at IS NULL AND status = "active" ORDER BY is_default DESC, updated_at DESC LIMIT 1')
 }
 
 // [P0-3] Decrypt credential before returning to callers
@@ -474,6 +477,7 @@ function buildResult(profile, source, usage, reason) {
 function sanitizeProfile(row) {
   const out = { ...row }
   out.has_api_key = !!out.api_key_encrypted
+  out.share_eligible = isPlatformShareableProvider(out.provider)
   out.masked_api_key = out.has_api_key ? '****' : null
   delete out.api_key_encrypted
   return out

@@ -8,7 +8,7 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   DEFAULT_RISK_POLICY, RISK_RULES, evaluateCoreRisk, isRelaxation,
-  resolveEffectiveRiskPolicy, submitRiskPolicyChanges,
+  resolveEffectiveRiskPolicy, submitRiskPolicyChanges, persistRiskDecision,
 } from '../../server/routes/ai/risk-policy.js'
 
 const nowMs = Date.parse('2026-07-15T13:00:00Z')
@@ -198,7 +198,7 @@ describe('versioned policy semantics', () => {
     expect(RISK_RULES.require_stop_loss.locked).toBe(true)
   })
 
-  it('applies tightening immediately and queues relaxation from one mixed submission', async () => {
+  it('applies tightening and relaxation immediately in one version while retaining field audits', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
       if (sql.includes('FROM risk_policy_sets')) return [[{ id: 7 }], []]
@@ -208,9 +208,13 @@ describe('versioned policy semantics', () => {
       return [{ affectedRows: 1 }, []]
     }))
     const result = await submitRiskPolicyChanges({ policySetId: 7, actorId: 5, changes: { max_position_size: 0.02, market_signal_drift_atr: 0.5 }, reason: 'test' })
-    expect(result.immediate_fields).toEqual(['max_position_size'])
-    expect(result.pending_fields).toEqual(['market_signal_drift_atr'])
+    expect(result.immediate_fields).toEqual(['max_position_size', 'market_signal_drift_atr'])
+    expect(result.applied_fields).toEqual(['max_position_size', 'market_signal_drift_atr'])
+    expect(result.pending_fields).toEqual([])
+    const versionWrite = writes.find(item => item.sql.startsWith('INSERT INTO risk_policy_versions'))
+    expect(JSON.parse(versionWrite.params[2])).toMatchObject({ max_position_size: 0.02, market_signal_drift_atr: 0.5 })
     expect(writes.some(item => item.sql.includes('risk_policy_change_items'))).toBe(true)
+    expect(writes.filter(item => item.sql.includes('risk_policy_change_items')).every(item => item.sql.includes("'applied'"))).toBe(true)
   })
 
   it('resolves platform, account, due field and strategy profile with profile only tightening', async () => {
@@ -219,13 +223,28 @@ describe('versioned policy semantics', () => {
       if (sql.includes("scope = 'account'")) return { id: 2 }
       if (sql.includes('risk_policy_versions')) return params[0] === 1
         ? { id: 11, config_json: '{"max_position_size":0.04}' }
-        : { id: 12, config_json: '{"max_position_size":0.03,"min_rr":1.4}' }
+        : { id: 12, config_json: '{"max_position_size":0.03,"min_rr":1.4,"market_signal_drift_atr":0.4}' }
       if (sql.includes('risk_profiles')) return { config_json: '{"max_position_size":0.02,"min_rr":1.6}' }
       return null
     })
-    db.queryAll.mockImplementation(async (sql, params) => params[0] === 2 ? [{ field_code: 'market_signal_drift_atr', new_value_json: '0.4' }] : [])
+    db.queryAll.mockResolvedValue([])
     const result = await resolveEffectiveRiskPolicy({ userId: 5, tradingAccountId: 6, riskProfileId: 7, legacyConfig: { max_position_size: 0.05 } })
     expect(result.policy).toMatchObject({ max_position_size: 0.02, min_rr: 1.6, market_signal_drift_atr: 0.4 })
     expect(result.policyVersionIds).toEqual([11, 12])
+  })
+})
+
+describe('risk decision persistence', () => {
+  it('links the durable order intent to the persisted decision', async () => {
+    db.queryRun
+      .mockResolvedValueOnce({ insertId: 43 })
+      .mockResolvedValueOnce({ changes: 1 })
+    await expect(persistRiskDecision(44, {
+      decision_status: 'reject', reject_code: 'R1.7_PENDING_DIRECTION',
+      original_order: {}, approved_order: null, rule_results: [],
+    }, [7])).resolves.toBe(43)
+    expect(db.queryRun).toHaveBeenNthCalledWith(2,
+      'UPDATE order_intents SET risk_decision_id = ?, updated_at = ? WHERE id = ?',
+      [43, '2026-07-15 21:00:00', 44])
   })
 })

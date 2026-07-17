@@ -91,6 +91,14 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('付费配对实验（额外一次调用）')
   })
 
+  it('separates Kimi production API from personal Code subscription credentials', () => {
+    expect(html).toContain('<option value="kimi">Kimi 开放平台</option>')
+    expect(html).toContain('<option value="kimi_code">Kimi Code 订阅（个人）</option>')
+    expect(html).toContain('id="platformSharingProviderNotice"')
+    expect(app).toContain("kimi_code: { models: ['kimi-for-coding', 'k3', 'kimi-for-coding-highspeed']")
+    expect(app).toContain('profile.share_eligible !== false')
+  })
+
   it('shows user-editable price controls and separates AI, cap and final execution volume', () => {
     expect(app).toContain('pending_price_deviation_pct')
     expect(app).toContain('market_signal_drift_atr')
@@ -102,6 +110,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('R1.5_RR_TOO_LOW":"盈亏比低于最低要求')
     expect(app).toContain('pagerButton.dataset.pager === "executions"')
     expect(routes).toContain('page_size, 10) || 5')
+  })
+
+  it('states that user risk parameters take effect immediately without a cooldown queue', () => {
+    expect(html).toContain('保存后立即生效')
+    expect(app).toContain('所有修改保存后立即生效，并保留版本与审计记录。')
+    expect(app).toContain('用户风控已立即生效')
+    expect(app).not.toContain('放宽需经过冷却期')
+    expect(app).not.toContain('放宽设置等待冷却生效')
+    expect(routes).not.toContain("rpci.status = 'pending'")
   })
 
   it('provides account and platform kill switches without a recovery approval workflow', () => {
@@ -318,6 +335,17 @@ describe('take-profit execution clarity', () => {
     expect(app).toContain('signalTakeProfitSelection')
     expect(app).toContain('实际执行止盈')
     expect(app).toContain('止盈候选')
+  })
+})
+
+describe('subscription schedule modal layout', () => {
+  it('keeps long schedule content inside the viewport with sticky actions', () => {
+    expect(css).toContain('.subscription-editor-dialog {')
+    expect(css).toContain('overflow-y:auto')
+    expect(css).not.toContain('.subscription-editor-dialog { width:min(100%,680px); overflow:visible; }')
+    expect(css).toContain('.form-modal-actions { position:sticky')
+    expect(app).toContain('scrollIntoView({')
+    expect(app).toContain('prefers-reduced-motion: reduce')
   })
 })
 

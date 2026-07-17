@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildStrategyOutputFormat } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc } from '../../server/routes/ai/llm.js'
 
 describe('buildStrategyOutputFormat', () => {
   it('removes all pending-order fields from a market-only strategy', () => {
@@ -162,6 +162,47 @@ describe('requestJsonObject', () => {
     expect(repairBody.temperature).toBe(0)
     expect(repairBody).not.toHaveProperty('messages')
   })
+
+  it('uses the Kimi Code thinking contract and an honest client identity', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"ok":true}' } }] }),
+    })
+    await requestJsonObject({
+      url: 'https://api.kimi.com/coding/v1/chat/completions',
+      apiKey: 'kimi-key', provider: 'kimi_code', model: 'k3', temperature: 0.3,
+      maxTokens: 32000, thinkingEnabled: true, reasoningEffort: 'low',
+      messages: [{ role: 'user', content: 'test' }],
+    })
+    const options = mockFetch.mock.calls[0][1]
+    const body = JSON.parse(options.body)
+    expect(body.thinking).toEqual({ type: 'enabled', effort: 'max' })
+    expect(body.max_tokens).toBe(32000)
+    expect(body).not.toHaveProperty('temperature')
+    expect(options.headers['User-Agent']).toBe('Aurum-AI-Trading-Lab/2.3.4')
+  })
+
+  it('maps Kimi Code subscription rate limits to a stable error code', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 429 })
+    await expect(requestJsonObject({
+      url: 'https://api.kimi.com/coding/v1/chat/completions',
+      apiKey: 'kimi-key', provider: 'kimi_code', model: 'kimi-for-coding', maxTokens: 2000,
+      thinkingEnabled: true, messages: [],
+    })).rejects.toThrow('kimi_code_rate_limited')
+  })
+
+  it('enables K2.7 thinking without sending the unsupported effort field', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"ok":true}' } }] }),
+    })
+    await requestJsonObject({
+      url: 'https://api.kimi.com/coding/v1/chat/completions',
+      apiKey: 'kimi-key', provider: 'kimi_code', model: 'kimi-for-coding', maxTokens: 2000,
+      thinkingEnabled: true, reasoningEffort: 'max', messages: [],
+    })
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).thinking).toEqual({ type: 'enabled' })
+  })
 })
 
 describe('OpenAI-compatible provider URL', () => {
@@ -214,6 +255,23 @@ describe('OpenAI-compatible provider URL', () => {
     expect(requestBody).toHaveProperty('instructions')
     expect(requestBody).toHaveProperty('input')
     expect(requestBody).not.toHaveProperty('messages')
+  })
+
+  it('routes Kimi Code through its subscription endpoint with Thinking enabled', async () => {
+    vi.clearAllMocks()
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', confidence: 0.7, recommended_volume: 0,
+        analysis: 'test', reasoning: 'test', cancel_pending: [],
+      }) } }] }),
+    })
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'key', api_provider: 'kimi_code', model_name: 'kimi-for-coding',
+      thinking_enabled: false,
+    }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
+    expect(mockFetch.mock.calls[0][0]).toBe('https://api.kimi.com/coding/v1/chat/completions')
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).thinking.type).toBe('enabled')
   })
 })
 
@@ -607,5 +665,49 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       signal_type: 'hold', recommended_volume: 0,
       normalization_info: { type: 'l5_schema_hold', reason: 'invalid_recommended_take_profit_tier' },
     })
+  })
+
+  it('degrades a sell stop-limit whose trigger is above the current market price', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
+      recommended_volume: 0.02, limit_price: 2005, stop_limit_price: 2010,
+      stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
+    }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)
+    expect(result).toMatchObject({
+      signal_type: 'hold', entry_method: 'observe', recommended_volume: 0,
+      decision_summary: '挂单价格结构不符合当前行情规则，本次暂不执行。',
+      normalization_info: {
+        reason: 'pending_price_direction_invalid', trigger_price: 2005, reference_price: 2000,
+      },
+    })
+  })
+
+  it('degrades a sell stop-limit whose post-trigger limit is below its trigger', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
+      recommended_volume: 0.02, limit_price: 1995, stop_limit_price: 1990,
+      stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
+    }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)
+    expect(result).toMatchObject({
+      signal_type: 'hold', entry_method: 'observe', recommended_volume: 0,
+      normalization_info: { reason: 'stop_limit_price_relation_invalid' },
+    })
+  })
+
+  it('keeps a valid sell stop-limit and stores its validity as UTC', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T04:00:00Z'))
+    try {
+      const result = normalizeAiSignal({
+        _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
+        recommended_volume: 0.02, limit_price: 1995, stop_limit_price: 1998, pending_valid_minutes: 240,
+        stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
+      }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)
+      expect(result.signal_type).toBe('sell_stop_limit')
+      expect(result.pending_valid_until).toBe('2026-07-17 08:00:00')
+      expect(formatPendingValidUntilUtc(240)).toBe('2026-07-17 08:00:00')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

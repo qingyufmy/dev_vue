@@ -98,6 +98,16 @@ describe('resolveAiTaskModel', () => {
     expect(result.error).toBe('no_model_configured')
   })
 
+  it('never shares a Kimi Code subscription credential to another user', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(policy({ share_for_manual: 1 }))
+      .mockResolvedValueOnce(profile({ owner_user_id: 0, scope: 'platform', provider: 'kimi_code' }))
+    const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
+    expect(result).toMatchObject({ model: null, credential_source: 'none', error: 'no_model_configured' })
+    expect(mockQueryOne).toHaveBeenCalledTimes(3)
+  })
+
   it('does not share with a disallowed plan', async () => {
     mockQueryOne
       .mockResolvedValueOnce(null)
@@ -198,6 +208,19 @@ describe('model profile authorization and defaults', () => {
     mockQueryOne.mockResolvedValueOnce(null)
     await createModelProfile(55, { scope: 'platform', api_key: 'test' }, 'admin')
     expect(mockQueryRun.mock.calls[0][1][0]).toBe(0)
+  })
+
+  it('stores Kimi Code profiles with the subscription endpoint and forced thinking', async () => {
+    mockQueryRun.mockResolvedValueOnce({ insertId: 8 })
+    mockQueryOne.mockResolvedValueOnce(null)
+    await createModelProfile(1, {
+      provider: 'kimi_code', model_name: 'kimi-for-coding', api_key: 'test',
+      thinking_enabled: false,
+    }, 'pro')
+    const params = mockQueryRun.mock.calls[0][1]
+    expect(params[2]).toBe('kimi_code')
+    expect(params[4]).toBe('https://api.kimi.com/coding/v1')
+    expect(params[9]).toBe(1)
   })
 
   it('updates both default representations in one transaction', async () => {

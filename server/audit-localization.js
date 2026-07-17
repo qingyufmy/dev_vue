@@ -82,6 +82,7 @@ const VALUE_LABELS = {
   redis_unavailable: 'Redis 不可用',
   lock_lost: '任务锁已失效',
   signal_expired: '信号已过期',
+  signal_already_executed_or_pending: '该信号已经执行或已有挂单，不能重复执行',
   no_active_auto_trade_config: '自动交易未开启',
   open_position_exists: '当前品种已有持仓',
   position_check_failed: '持仓检查失败',

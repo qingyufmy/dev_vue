@@ -40,6 +40,7 @@ const state = {
   autoProgressFlash: null,
   autoProgressVisual: {},
   inferenceChartTimeframe: null,
+  inferenceChartSignalKey: null,
   inferenceChartLayers: { segments: true, centers: true, divergence: true, entries: true, levels: true },
 };
 
@@ -208,6 +209,13 @@ const REASON_MAP = {
   mt5_account_expert_trading_disabled: "MT5 账户禁止 EA/脚本交易",
   hold_signal_cannot_execute: "已跳过（HOLD 信号）",
   signal_expired: "已跳过（信号已过期）",
+  signal_already_executed_or_pending: "该信号已经执行或已有挂单，不能重复执行",
+  kimi_code_model_not_supported: "Kimi Code 模型名称无效，请选择 k3、kimi-for-coding 或 kimi-for-coding-highspeed",
+  kimi_code_subscription_or_model_permission_denied: "Kimi Code 订阅或模型权限不足，请检查会员档位、API Key 和模型名称",
+  kimi_code_rate_limited: "Kimi Code 订阅额度或五小时频率窗口已用尽，请稍后再试",
+  kimi_code_request_rejected: "Kimi Code 拒绝了本次请求，请检查内容与账户状态",
+  kimi_code_request_invalid: "Kimi Code 请求参数不兼容，请检查模型与思考设置",
+  kimi_code_service_unavailable: "Kimi Code 服务暂时不可用，请稍后再试",
   no_active_auto_trade_config: "已跳过（自动交易未开启）",
   open_position_exists: "已跳过（当前品种已有持仓）",
   position_check_failed: "已跳过（持仓检查失败）",
@@ -1541,11 +1549,30 @@ const PROVIDER_PRESETS = {
   deepseek: { models: ['deepseek-chat', 'deepseek-reasoner'], url: 'https://api.deepseek.com' },
   gpt: { models: ['gpt-4o', 'gpt-4o-mini'], url: 'https://api.openai.com/v1' },
   kimi: { models: ['moonshot-v1-8k'], url: 'https://api.moonshot.cn/v1' },
+  kimi_code: { models: ['kimi-for-coding', 'k3', 'kimi-for-coding-highspeed'], url: 'https://api.kimi.com/coding/v1' },
   qwen: { models: ['qwen-plus'], url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   zhipu: { models: ['glm-4-flash'], url: 'https://open.bigmodel.cn/api/paas/v4' },
   doubao: { models: ['doubao-1.5-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
   volcengine_agent_plan: { models: ['ark-code-latest'], url: 'https://ark.cn-beijing.volces.com/api/plan/v3' },
 };
+
+const MODEL_PROVIDER_LABELS = {
+  deepseek: "DeepSeek", gpt: "OpenAI compatible", kimi: "Kimi 开放平台",
+  kimi_code: "Kimi Code 订阅（个人）", qwen: "Qwen", zhipu: "智谱",
+  doubao: "豆包", volcengine_agent_plan: "火山方舟 Agent Plan",
+};
+
+function modelProviderLabel(provider) { return MODEL_PROVIDER_LABELS[provider] || provider; }
+
+function updateModelProviderHelp(provider) {
+  const help = $("profileProviderHelp");
+  if (!help) return;
+  help.textContent = provider === "kimi_code"
+    ? "订阅接口仅建议个人测试；强制开启 Thinking，平台不会把该凭据共享给其他用户。"
+    : provider === "kimi"
+      ? "开放平台按量计费，适合正式自动推理与客户使用。"
+      : "";
+}
 
 function renderModelProfiles() {
   const host = $("modelProfilesList");
@@ -1561,7 +1588,7 @@ function renderModelProfiles() {
   }
   host.innerHTML = state.modelProfiles.map(profile => `
     <article class="workspace-row model-profile-card" data-model-id="${Number(profile.id)}">
-      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span></div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(profile.provider)}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出 ${Number(profile.max_tokens || 0)} tokens</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span></div></details></div>
+      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? '<span class="status-chip warning">个人订阅 · 不共享</span>' : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出 ${Number(profile.max_tokens || 0)} tokens</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span></div></details></div>
       <div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" data-model-action="default" ${profile.is_default ? 'disabled' : ''}>设为默认</button><button class="btn btn-secondary btn-sm" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" data-model-action="delete" aria-label="删除 ${escapeHtml(profile.model_name)}"><i data-lucide="trash-2" size="14"></i></button></div>
     </article>`).join("");
   initIcons();
@@ -1600,6 +1627,7 @@ function openModelEditor(profile = null) {
   $("profileApiKey").value = "";
   $("profileTemperature").value = profile?.temperature ?? 0.3;
   $("profileMaxTokens").value = profile?.max_tokens ?? 2000;
+  updateModelProviderHelp(profile?.provider || "deepseek");
   openFormModal(editor);
 }
 
@@ -1607,6 +1635,7 @@ async function saveModelProfile() {
   const editor = $("modelProfileEditor");
   const id = Number(editor?.dataset.modelId || 0);
   const body = { provider: $("profileProvider").value, model_name: $("profileModelName").value.trim(), api_base_url: $("profileBaseUrl").value.trim(), temperature: Number($("profileTemperature").value), max_tokens: Number($("profileMaxTokens").value) };
+  if (body.provider === "kimi_code") { body.thinking_enabled = true; body.reasoning_effort = "max"; }
   const key = $("profileApiKey").value.trim();
   if (key) body.api_key = key;
   if (state.user?.role === "admin") body.scope = "platform";
@@ -1623,6 +1652,13 @@ async function loadPlatformPolicy() {
   $("shareForManual").checked = Boolean(policy.share_for_manual); $("shareForAuto").checked = Boolean(policy.share_for_auto);
   $("shareForReview").checked = Boolean(policy.share_for_review); $("shareForCompression").checked = Boolean(policy.share_for_memory_compression);
   $("policyDailyRequests").value = policy.daily_requests_per_user || 100; $("policyDailyTokens").value = policy.daily_tokens_per_user || 500000;
+  const shareControls = [$("shareForManual"), $("shareForAuto"), $("shareForReview"), $("shareForCompression")].filter(Boolean);
+  const hasShareableModel = state.modelProfiles.some(profile => profile.status === "active" && profile.has_api_key && profile.share_eligible !== false);
+  shareControls.forEach(control => { control.disabled = !hasShareableModel; });
+  const sharingNotice = $("platformSharingProviderNotice");
+  if (sharingNotice) sharingNotice.textContent = hasShareableModel
+    ? "平台共享只会选用开放平台或按量计费模型；Kimi Code 订阅凭据始终不会共享给其他用户。"
+    : "当前没有可共享的生产模型。Kimi Code 订阅凭据仅供凭据所有者使用，不能开启平台共享。";
 }
 
 async function savePlatformPolicy() {
@@ -1855,7 +1891,13 @@ function selectedSubscriptionScheduleWindows() {
 }
 
 function syncSubscriptionScheduleVisibility() {
-  $("subscriptionScheduleSettings")?.classList.toggle("hidden", !$("subscriptionScheduleEnabled")?.checked);
+  const settings = $("subscriptionScheduleSettings");
+  const enabled = Boolean($("subscriptionScheduleEnabled")?.checked);
+  settings?.classList.toggle("hidden", !enabled);
+  $("subscriptionScheduleEnabled")?.setAttribute("aria-expanded", String(enabled));
+  if (enabled) requestAnimationFrame(() => settings?.scrollIntoView({
+    block:"nearest", behavior:window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+  }));
 }
 
 function populateSubscriptionSymbolOptions(strategy, subscription = null) {
@@ -2039,10 +2081,9 @@ async function loadRiskCenter() {
   const host = $("riskAccountsList");
   const rows = riskData.accounts || [];
   const haltedRows = rows.filter(row => row.risk_state?.halt_status !== "active");
-  const pendingCount = rows.reduce((sum, row) => sum + (row.pending_changes || []).length, 0);
   const incompleteRows = rows.filter(row => row.risk_state?.data_complete === false || Number(row.risk_state?.data_complete) === 0);
   const overview = $("riskOverview");
-  if (overview) overview.innerHTML = `<div class="insight-item ${haltedRows.length ? 'danger' : 'success'}"><span>交易状态</span><strong>${haltedRows.length ? `${haltedRows.length} 个账户暂停` : '可以交易'}</strong><small>${haltedRows.length ? '请查看下方具体原因' : '未发现账户级停止条件'}</small></div><div class="insight-item"><span>交易账户</span><strong class="num">${rows.length}</strong><small>已登记账户</small></div><div class="insight-item ${pendingCount ? 'warning' : ''}"><span>待生效设置</span><strong class="num">${pendingCount}</strong><small>${pendingCount ? '放宽设置正在冷却' : '没有等待中的修改'}</small></div><div class="insight-item ${incompleteRows.length ? 'warning' : ''}"><span>数据完整性</span><strong>${incompleteRows.length ? `${incompleteRows.length} 个异常` : '正常'}</strong><small>账户与行情风控数据</small></div>`;
+  if (overview) overview.innerHTML = `<div class="insight-item ${haltedRows.length ? 'danger' : 'success'}"><span>交易状态</span><strong>${haltedRows.length ? `${haltedRows.length} 个账户暂停` : '可以交易'}</strong><small>${haltedRows.length ? '请查看下方具体原因' : '未发现账户级停止条件'}</small></div><div class="insight-item"><span>交易账户</span><strong class="num">${rows.length}</strong><small>已登记账户</small></div><div class="insight-item success"><span>规则应用</span><strong>立即生效</strong><small>保存后下一笔风控计算直接使用</small></div><div class="insight-item ${incompleteRows.length ? 'warning' : ''}"><span>数据完整性</span><strong>${incompleteRows.length ? `${incompleteRows.length} 个异常` : '正常'}</strong><small>账户与行情风控数据</small></div>`;
   const statusHost = $("riskStatusList");
   if (statusHost) statusHost.innerHTML = rows.length ? rows.map(row => {
     const stateInfo = row.risk_state || {}, active = stateInfo.halt_status === "active", dataComplete = !(stateInfo.data_complete === false || Number(stateInfo.data_complete) === 0);
@@ -2052,10 +2093,9 @@ async function loadRiskCenter() {
     return `<article class="workspace-panel risk-status-card ${active && dataComplete ? 'is-safe' : 'is-alert'}" data-risk-status-account="${row.account.id}"><div class="risk-status-icon"><i data-lucide="${active && dataComplete ? 'shield-check' : 'shield-alert'}" size="22"></i></div><div class="risk-status-main"><div class="workspace-row-title">${escapeHtml(row.account.nickname || row.account.login_account)} <span class="status-chip ${active && dataComplete ? 'success' : 'danger'}">${active && dataComplete ? '允许交易' : '已暂停新开仓'}</span></div><p>${escapeHtml(reason)}</p><div class="workspace-row-meta"><span>${escapeHtml(row.account.broker_server)}</span><span>数据${dataComplete ? '完整' : '不完整'}</span><span>回撤 ${escapeHtml(stateInfo.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(stateInfo.consecutive_losses ?? '--')}</span></div></div><div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" type="button" data-open-workspace-tab="risk" data-open-workspace-target="rules">查看规则</button><button class="btn ${stateInfo.user_kill_switch ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${stateInfo.user_kill_switch ? '0' : '1'}">${stateInfo.user_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></article>`;
   }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>连接 Bridge 后会在这里显示账户交易状态。</span></div>';
   host.innerHTML = rows.length ? rows.map(row => {
-    const pending = (row.pending_changes || []).map(change => `${RISK_LABELS[change.field_code] || change.field_code} → ${parseJsonField(change.new_value_json,null)}（${change.effective_at}）`).join("；");
     const stateInfo = row.risk_state || {}, killEnabled = Boolean(stateInfo.user_kill_switch);
     const haltText = stateInfo.halt_reason === "R3_RISK_DATA_INCOMPLETE" ? `风控数据不完整：${riskDataIncompleteText(stateInfo.data_incomplete_reason)}` : riskDecisionLabel(stateInfo.halt_reason);
-    return `<article class="workspace-panel risk-rule-account" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · 先查看最终有效值，需要调整时再展开对应规则组。</p></div><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${stateInfo.halt_status === 'active' ? '允许交易' : '已暂停'}</span></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(haltText)}；将在下一次完整风险快照校验通过后解除。</span></div>` : ''}${pending ? `<div class="source-notice"><span><strong>待生效：</strong>${escapeHtml(pending)}</span></div>` : ''}<div class="risk-policy-groups">${RISK_GROUPS.map(([title, keys]) => renderRiskPolicyGroup(title, keys, row, riskData.rule_metadata || {})).join("")}</div><div class="risk-save-bar"><p>留空表示继承平台值。收紧立即生效；放宽需经过冷却期。</p><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存我的规则</button></div></article>`;
+    return `<article class="workspace-panel risk-rule-account" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · 先查看最终有效值，需要调整时再展开对应规则组。</p></div><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${stateInfo.halt_status === 'active' ? '允许交易' : '已暂停'}</span></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(haltText)}；将在下一次完整风险快照校验通过后解除。</span></div>` : ''}<div class="risk-policy-groups">${RISK_GROUPS.map(([title, keys]) => renderRiskPolicyGroup(title, keys, row, riskData.rule_metadata || {})).join("")}</div><div class="risk-save-bar"><p>留空表示继承平台值。所有修改保存后立即生效，并保留版本与审计记录。</p><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存并立即生效</button></div></article>`;
   }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>账户通过 Bridge 自动验证后，这里会显示最终有效风控。</span></div>';
   renderExecutionDecisions(executionData.executions || [], executionData.pagination || {});
   initIcons();
@@ -2127,7 +2167,20 @@ async function saveUserFeatureFlags() {
 
 function renderReviewCases() {
   const host = $("reviewCaseList"); if (!host) return;
-  host.innerHTML = state.reviewCases.length ? state.reviewCases.map(item => `<button class="workspace-row review-case-button ${Number(item.id) === Number(state.selectedReviewId) ? 'selected' : ''}" data-review-id="${Number(item.id)}"><div class="review-case-leading"><i data-lucide="${item.status === 'approved' ? 'check-circle-2' : item.status === 'needs_revision' ? 'circle-alert' : 'clock-3'}" size="17"></i></div><div class="workspace-row-main"><div class="workspace-row-title">复盘 #${item.id}<span class="status-chip ${item.status === 'approved' ? 'success' : item.status === 'failed' || item.status === 'incomplete' ? 'danger' : 'warning'}">${reviewStatusLabel(item.status)}</span></div><div class="workspace-row-meta"><span>信号 #${item.signal_id || '--'}</span><span>账户 #${item.trading_account_id}</span><span>版本 #${item.current_version_id || '--'}</span></div></div><i data-lucide="chevron-right" size="16"></i></button>`).join("") : '<div class="workspace-panel empty-state"><strong>暂无复盘</strong><span>已平仓且证据完整的订单会自动进入复盘队列。</span></div>';
+  const statusClass = status => status === "approved" ? "success" : ["failed", "incomplete", "needs_revision"].includes(status) ? "danger" : "warning";
+  host.innerHTML = state.reviewCases.length ? state.reviewCases.map(item => {
+    const selected = Number(item.id) === Number(state.selectedReviewId);
+    const icon = item.status === "approved" ? "check" : item.status === "needs_revision" ? "triangle-alert" : item.status === "failed" ? "x" : "clock-3";
+    return `<button class="workspace-row review-case-button ${selected ? 'selected' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}">
+      <span class="review-case-leading ${statusClass(item.status)}"><i data-lucide="${icon}" size="16"></i></span>
+      <span class="workspace-row-main">
+        <span class="workspace-row-title"><strong>复盘 #${Number(item.id)}</strong><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(item.status))}</span></span>
+        <span class="workspace-row-meta"><span>信号 #${escapeHtml(item.signal_id || '--')}</span><span>账户 #${escapeHtml(item.trading_account_id || '--')}</span></span>
+        <span class="review-case-version">复盘版本 ${escapeHtml(item.current_version_id || '--')}</span>
+      </span>
+      <span class="review-case-arrow" aria-hidden="true"><i data-lucide="chevron-right" size="16"></i></span>
+    </button>`;
+  }).join("") : '<div class="review-list-empty empty-state"><span class="review-empty-icon"><i data-lucide="inbox" size="20"></i></span><strong>暂无复盘</strong><span>已平仓且证据完整的订单会自动进入这里。</span></div>';
   initIcons();
 }
 
@@ -2155,31 +2208,118 @@ async function openReviewDetail(id) {
   const isAdmin = state.user?.role === "admin";
   const lessonHelp = isAdmin ? "每行一条；确认后先进入平台经验候选区，发布后才用于平台策略" : "每行一条，将用于生成个人记忆";
   const approveLabel = isAdmin ? "内容准确并加入平台经验候选" : "内容准确并加入记忆";
-  detail.innerHTML = `<div class="section-heading"><div><h2>复盘 #${review.id}</h2><p>当前版本 ${current?.version_no || '--'} · ${reviewStatusLabel(review.status)}</p></div>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry">重试生成</button>' : ''}</div>
+  const netProfit = Number(outcome.net_profit);
+  const profitClass = Number.isFinite(netProfit) ? netProfit > 0 ? "positive" : netProfit < 0 ? "negative" : "neutral" : "neutral";
+  const confidence = Number(content.confidence);
+  const confidencePercent = Number.isFinite(confidence) ? Math.round(Math.max(0, Math.min(1, confidence)) * 100) : 50;
+  const pathEvidence = evidence.post_trade?.path_evidence || {};
+  const pathMetrics = evidence.post_trade?.path_metrics || {};
+  const pathCoverage = Object.entries(pathEvidence.coverage || {});
+  const excursion = (value) => Number.isFinite(Number(value)) ? `${fmt(Number(value), 2)}%` : "--";
+  detail.innerHTML = `<header class="review-detail-header"><div class="review-detail-title"><span class="review-detail-icon"><i data-lucide="clipboard-check" size="19"></i></span><div><span class="review-section-kicker">复盘详情</span><h2>复盘 #${Number(review.id)}</h2><p>版本 ${escapeHtml(current?.version_no || '--')} · 信号 #${escapeHtml(review.signal_id || '--')}</p></div></div><div class="review-detail-status"><span class="status-chip ${review.status === 'approved' ? 'success' : ['failed','incomplete','needs_revision'].includes(review.status) ? 'danger' : 'warning'}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div></header>
     ${review.evidence_status !== 'complete' ? `<div class="source-notice"><span><strong>证据缺失：</strong>${escapeHtml(review.evidence_reason || '关键证据不完整')}</span></div>` : ''}
-    <div class="review-highlight"><span>交易结果</span><strong>净利润 ${escapeHtml(outcome.net_profit ?? '--')} · ${escapeHtml(outcome.closed_volume ?? '--')} 手</strong><small>盈利与否不直接代表决策质量</small></div>
-    <div class="review-structured-form"><label><span>复盘结论</span><textarea data-review-field="summary" rows="3" ${current ? '' : 'disabled'}>${escapeHtml(content.summary || '')}</textarea></label><div class="settings-grid compact"><label><span>决策质量</span><select data-review-field="decision_quality" ${current ? '' : 'disabled'}><option value="good" ${content.decision_quality === 'good' ? 'selected' : ''}>良好</option><option value="mixed" ${content.decision_quality === 'mixed' ? 'selected' : ''}>有得有失</option><option value="poor" ${content.decision_quality === 'poor' ? 'selected' : ''}>需要改进</option><option value="insufficient_evidence" ${content.decision_quality === 'insufficient_evidence' ? 'selected' : ''}>证据不足</option></select></label><label><span>结论置信度</span><input data-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${current ? '' : 'disabled'}></label></div><label><span>交易结果说明</span><textarea data-review-field="outcome_summary" rows="2" ${current ? '' : 'disabled'}>${escapeHtml(content.outcome_summary || '')}</textarea></label>${issueSummary.length ? `<div class="review-issues"><span>发现的问题</span>${issueSummary.map(item => `<p><i data-lucide="circle-alert" size="14"></i>${escapeHtml(item)}</p>`).join('')}</div>` : '<div class="review-issues is-clear"><span>发现的问题</span><p><i data-lucide="check" size="14"></i>未记录明确的交易流程问题</p></div>'}<div class="review-form-columns"><label><span>做得好的地方</span><textarea data-review-field="strengths" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.strengths || []).join('\n'))}</textarea><small>每行一条</small></label><label><span>后续经验</span><textarea data-review-field="lessons" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.lessons || []).join('\n'))}</textarea><small>${escapeHtml(lessonHelp)}</small></label></div></div>
+    <section class="review-outcome-strip" aria-label="交易结果"><div class="review-outcome-main ${profitClass}"><span>净利润</span><strong>${fmt(outcome.net_profit, 2)}</strong><small>账户货币</small></div><div class="review-outcome-metric"><span>成交手数</span><strong>${fmt(outcome.closed_volume, 2)}</strong><small>已平仓</small></div><div class="review-outcome-metric"><span>结论置信度</span><strong>${confidencePercent}%</strong><small>AI 复盘判断</small></div><p><i data-lucide="info" size="14"></i>盈亏是结果，不直接代表当时的决策质量。</p></section>
+    <section class="review-path-summary ${pathEvidence.status === 'complete' ? 'is-complete' : 'is-partial'}">
+      <header><div><span class="review-section-kicker">持仓路径证据</span><h3>从开仓到平仓的行情表现</h3></div><span class="status-chip ${pathEvidence.status === 'complete' ? 'success' : 'warning'}">${pathEvidence.status === 'complete' ? '证据完整' : '部分可用'}</span></header>
+      <div class="review-path-metrics"><div><span>最大有利波动</span><strong>${excursion(pathMetrics.max_favorable_excursion_pct)}</strong></div><div><span>最大不利波动</span><strong>${excursion(pathMetrics.max_adverse_excursion_pct)}</strong></div><div><span>持仓 K 线</span><strong>${Number(pathMetrics.bars_held || 0)} 根</strong></div><div><span>缠论周期</span><strong>${pathCoverage.length || 0} 个</strong></div></div>
+      <footer>${pathCoverage.map(([timeframe, item]) => `<span><strong>${escapeHtml(timeframe)}</strong> ${Number(item.candle_count || 0)} 根 · ${item.status === 'complete' ? '结构已计算' : '数据不足'}</span>`).join('') || '<span>暂无可用的持仓行情路径</span>'}</footer>
+    </section>
+    <div class="review-structured-form">
+      <section class="review-form-section review-summary-section"><div class="review-form-heading"><div><span class="review-section-kicker">核心判断</span><h3>复盘结论</h3></div><small>先确认事实与结论是否一致</small></div><label class="review-field"><span class="sr-only">复盘结论</span><textarea data-review-field="summary" rows="4" ${current ? '' : 'disabled'}>${escapeHtml(content.summary || '')}</textarea></label></section>
+      <section class="review-form-section"><div class="review-form-heading"><div><span class="review-section-kicker">质量校对</span><h3>评估与结果说明</h3></div><small>可按实际交易情况修正</small></div><div class="review-assessment-grid"><label class="review-field"><span>决策质量</span><select data-review-field="decision_quality" ${current ? '' : 'disabled'}><option value="good" ${content.decision_quality === 'good' ? 'selected' : ''}>良好</option><option value="mixed" ${content.decision_quality === 'mixed' ? 'selected' : ''}>有得有失</option><option value="poor" ${content.decision_quality === 'poor' ? 'selected' : ''}>需要改进</option><option value="insufficient_evidence" ${content.decision_quality === 'insufficient_evidence' ? 'selected' : ''}>证据不足</option></select></label><label class="review-field review-confidence-field"><span>结论置信度</span><div><input data-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${current ? '' : 'disabled'}><small>填写 0–1</small></div></label><label class="review-field review-outcome-summary"><span>交易结果说明</span><textarea data-review-field="outcome_summary" rows="3" ${current ? '' : 'disabled'}>${escapeHtml(content.outcome_summary || '')}</textarea></label></div></section>
+      ${issueSummary.length ? `<section class="review-issues"><div><i data-lucide="triangle-alert" size="16"></i><span>发现 ${issueSummary.length} 项流程问题</span></div>${issueSummary.map(item => `<p>${escapeHtml(item)}</p>`).join('')}</section>` : '<section class="review-issues is-clear"><div><i data-lucide="circle-check" size="16"></i><span>交易流程检查</span></div><p>未记录明确的交易流程问题</p></section>'}
+      <section class="review-form-section"><div class="review-form-heading"><div><span class="review-section-kicker">经验沉淀</span><h3>保留有效经验</h3></div><small>使用短句，每行只写一个要点</small></div><div class="review-form-columns"><label class="review-field"><span>做得好的地方</span><textarea data-review-field="strengths" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.strengths || []).join('\n'))}</textarea><small>每行一条，记录可复用的正确做法</small></label><label class="review-field"><span>后续经验</span><textarea data-review-field="lessons" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.lessons || []).join('\n'))}</textarea><small>${escapeHtml(lessonHelp)}</small></label></div></section>
+    </div>
     <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="file-search" size="15"></i><strong>查看推理证据与原始数据</strong><small>证据只读，原始 JSON 仅供高级检查</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>信号 / 策略</span><strong>#${review.signal_id || '--'} / #${snapshot.strategy_id || '--'}</strong></div><div><span>模型来源</span><strong>${escapeHtml(snapshot.credential_source || '--')} · ${escapeHtml(snapshot.model_name || '--')}</strong></div><div><span>交易结果</span><strong>净利润 ${escapeHtml(outcome.net_profit ?? '--')} · 手数 ${escapeHtml(outcome.closed_volume ?? '--')}</strong></div><div><span>证据哈希</span><strong>${escapeHtml(snapshot.content_hash || '--')}</strong></div></div><div class="workspace-row-meta"><span>交易流程问题：${escapeHtml(review.trade_process_issue_status)}</span><span>复盘内容确认：${escapeHtml(review.review_content_status)}</span></div><label><span>原始结构化内容</span><textarea id="reviewContentEditor" class="review-editor compact" readonly>${escapeHtml(JSON.stringify(content,null,2))}</textarea></label></div></details>
-    ${current ? `<div class="form-actions review-actions"><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}">${escapeHtml(approveLabel)}</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">内容有问题，继续修改</button><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button></div>` : ''}`;
+    ${current ? `<footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认前请核对结论</strong><small>确认后才会进入经验候选或个人记忆</small></span></div><div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">内容有问题，继续修改</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>${escapeHtml(approveLabel)}</button></div></footer>` : ''}`;
+  initIcons();
+}
+
+function renderMemoryItemsLegacy(items, settings) {
+  const memoryEnabled = settings.enabled !== false;
+  if ($("memoryEnabled")) $("memoryEnabled").checked = memoryEnabled;
+  const activeCount = items.filter(item => item.status === "active").length;
+  const pendingCount = items.filter(item => ["duplicate_candidate", "stale"].includes(item.status)).length;
+  const revokedCount = items.filter(item => item.status === "revoked").length;
+  setText("memoryActiveStat", activeCount);
+  const host = $("memoryItemsList"); if (!host) return;
+  const statusLabels = { active:"正在使用", duplicate_candidate:"待确认", revoked:"已撤销", stale:"待更新" };
+  host.innerHTML = `<section class="personal-memory-section ${memoryEnabled ? '' : 'is-disabled'}">
+    <header class="personal-memory-header"><div class="personal-memory-title"><span class="personal-memory-main-icon"><i data-lucide="brain" size="19"></i></span><div><span class="review-section-kicker">个人经验</span><h3>我的记忆库</h3><p>系统只会把你确认过、且状态为“正在使用”的经验带入后续推理。</p></div></div><div class="personal-memory-stats"><span><strong>${activeCount}</strong> 正在使用</span><span><strong>${pendingCount}</strong> 等待处理</span><span><strong>${revokedCount}</strong> 已撤销</span></div></header>
+    <div class="personal-memory-state ${memoryEnabled ? 'is-on' : 'is-off'}"><i data-lucide="${memoryEnabled ? 'shield-check' : 'shield-off'}" size="15"></i><span>${memoryEnabled ? '<strong>个人记忆已启用</strong>，正在使用的经验会参与后续推理。' : '<strong>个人记忆已关闭</strong>，现有经验仍会保留，但不会注入推理。'}</span></div>
+    <div class="personal-memory-grid">${items.length ? items.map(item => {
+      const statusClass = item.status === 'active' ? 'success' : item.status === 'revoked' ? 'danger' : 'warning';
+      const icon = item.status === 'active' ? 'lightbulb' : item.status === 'revoked' ? 'archive-x' : item.status === 'stale' ? 'refresh-cw' : 'circle-help';
+      return `<article class="personal-memory-card is-${escapeHtml(item.status)}"><header><span class="personal-memory-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.symbol || '通用经验')}</strong><span>${escapeHtml(item.timeframe || '全周期')} · 记忆 #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(statusLabels[item.status] || item.status)}</span></header><div class="personal-memory-lesson"><span>经验内容</span><p>${escapeHtml(item.lesson_text)}</p></div><footer><div class="personal-memory-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(item.review_version_id || '--')}</span><span><i data-lucide="braces" size="13"></i>${Number(item.token_count || 0)} tokens</span></div><div class="personal-memory-actions">${item.status === 'duplicate_candidate' ? `<button class="btn btn-primary btn-sm" data-memory-action="activate" data-memory-id="${item.id}"><i data-lucide="check" size="14"></i>确认使用</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button>` : ''}</div></footer></article>`;
+    }).join("") : '<div class="personal-memory-empty empty-state"><span class="review-empty-icon"><i data-lucide="brain" size="20"></i></span><strong>还没有个人经验</strong><span>确认一条交易复盘后，系统会在这里生成可管理的个人记忆。</span></div>'}</div>
+  </section>`;
   initIcons();
 }
 
 function renderMemoryItems(items, settings) {
-  if ($("memoryEnabled")) $("memoryEnabled").checked = settings.enabled !== false;
-  setText("memoryActiveStat", items.filter(item => item.status === "active").length);
+  const memoryEnabled = settings.enabled !== false;
+  if ($("memoryEnabled")) $("memoryEnabled").checked = memoryEnabled;
+  const shortItems = items.filter(item => item.memory_tier !== "long");
+  const longItems = items.filter(item => item.memory_tier === "long");
+  const activeShort = shortItems.filter(item => item.status === "active").length;
+  const activeLong = longItems.filter(item => item.status === "active").length;
+  const longCandidates = longItems.filter(item => item.status === "candidate").length;
+  setText("memoryActiveStat", activeShort + activeLong);
   const host = $("memoryItemsList"); if (!host) return;
-  const statusLabels = { active:"正在使用", duplicate_candidate:"待确认", revoked:"已撤销", stale:"待更新" };
-  host.innerHTML = items.length ? items.map(item => `<article class="workspace-row memory-card"><div class="memory-card-icon"><i data-lucide="lightbulb" size="17"></i></div><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.symbol || '通用经验')} · ${escapeHtml(item.timeframe || '全周期')} <span class="status-chip ${item.status === 'active' ? 'success' : 'warning'}">${escapeHtml(statusLabels[item.status] || item.status)}</span></div><p class="memory-lesson">${escapeHtml(item.lesson_text)}</p><div class="workspace-row-meta"><span>${Number(item.token_count)} tokens</span><span>来源复盘版本 #${item.review_version_id}</span></div></div><div class="workspace-row-actions">${item.status === 'duplicate_candidate' ? `<button class="btn btn-secondary btn-sm" data-memory-action="activate" data-memory-id="${item.id}">确认启用</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}">撤销</button>` : ''}</div></article>`).join("") : '<div class="empty-state"><strong>还没有确认的经验</strong><span>确认一条复盘后，系统会生成可撤销的个人经验。</span></div>';
+  const statusLabels = { active:"正在使用", candidate:"待确认长期使用", duplicate_candidate:"待确认重复经验", revoked:"已撤销", stale:"待更新", expired:"已到期", revalidation:"待重新验证" };
+  const cards = items.map(item => {
+    const isLong = item.memory_tier === "long";
+    const statusClass = item.status === "active" ? "success" : item.status === "revoked" || item.status === "expired" ? "danger" : "warning";
+    const icon = isLong ? "book-marked" : item.status === "active" ? "zap" : item.status === "revoked" ? "archive-x" : "circle-help";
+    const content = isLong ? item.summary_text : item.lesson_text;
+    const scope = `策略 #${Number(item.strategy_id || 0)} · v${Number(item.strategy_version || 1)} · ${item.symbol || "通用品种"} · ${item.timeframe || "全周期"}`;
+    const lifecycle = isLong
+      ? `${Number(item.support_count || 0)} 次复盘支持 · 已匹配 ${Number(item.match_count || 0)} 次`
+      : `${item.expires_at ? `有效至 ${escapeHtml(item.expires_at)}` : "无到期时间"} · 已匹配 ${Number(item.match_count || 0)} 次`;
+    const actions = isLong
+      ? `${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-memory-action="confirm-long" data-memory-id="${item.id}"><i data-lucide="check" size="14"></i>确认长期使用</button>` : ""}${!['revoked'].includes(item.status) ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke-long" data-memory-id="${item.id}">撤销</button>` : ""}`
+      : `${item.status === "duplicate_candidate" ? `<button class="btn btn-primary btn-sm" data-memory-action="activate" data-memory-id="${item.id}">确认使用</button>` : ""}${!['revoked','expired'].includes(item.status) ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}">撤销</button>` : ""}`;
+    return `<article class="personal-memory-card memory-tier-${isLong ? 'long' : 'short'} is-${escapeHtml(item.status)}">
+      <header><span class="personal-memory-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${isLong ? "长期记忆" : "短期记忆"} #${Number(item.id)}</strong><span>${escapeHtml(scope)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(statusLabels[item.status] || item.status)}</span></header>
+      <div class="personal-memory-lesson"><span>${isLong ? "稳定经验" : "近期复盘经验"}</span><p>${escapeHtml(content || "暂无内容")}</p>${item.candidate_reason ? `<small>${escapeHtml(item.candidate_reason)}</small>` : ""}</div>
+      <footer><div class="personal-memory-meta"><span><i data-lucide="clock-3" size="13"></i>${lifecycle}</span><span><i data-lucide="braces" size="13"></i>${Number(item.token_count || 0)} tokens</span></div><div class="personal-memory-actions">${actions}</div></footer>
+    </article>`;
+  }).join("");
+  host.innerHTML = `<section class="personal-memory-section ${memoryEnabled ? "" : "is-disabled"}">
+    <header class="personal-memory-header"><div class="personal-memory-title"><span class="personal-memory-main-icon"><i data-lucide="brain-circuit" size="19"></i></span><div><span class="review-section-kicker">分层经验</span><h3>我的策略记忆</h3><p>短期记忆保留近期复盘，反复验证后由你确认升级为长期记忆；策略版本变化时不会跨版本注入。</p></div></div><div class="personal-memory-stats"><span><strong>${activeLong}</strong> 长期有效</span><span><strong>${activeShort}</strong> 短期有效</span><span><strong>${longCandidates}</strong> 待确认</span></div></header>
+    <div class="personal-memory-state ${memoryEnabled ? "is-on" : "is-off"}"><i data-lucide="${memoryEnabled ? 'shield-check' : 'shield-off'}" size="15"></i><span><strong>个人记忆${memoryEnabled ? '已启用' : '已关闭'}</strong> · 检索时优先长期经验，再补充与当前策略版本一致的近期经验。</span></div>
+    <div class="personal-memory-grid">${cards || '<div class="personal-memory-empty empty-state"><span class="review-empty-icon"><i data-lucide="brain" size="20"></i></span><strong>还没有个人经验</strong><span>确认私有策略的交易复盘后，会先生成有效期 30 天的短期记忆。</span></div>'}</div>
+  </section>`;
   initIcons();
 }
 
 function renderPlatformExperience(items, policies) {
   setText("memoryActiveStat", items.filter(item => item.status === "active").length);
   const policyHost = $("platformExperiencePolicies");
-  if (policyHost) policyHost.innerHTML = policies.length ? policies.map(policy => `<article class="platform-experience-policy" data-platform-policy-strategy="${Number(policy.strategy_id)}"><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>策略经验模式 · 版本 ${Number(policy.policy_version || 1)}</small></div><select aria-label="${escapeHtml(policy.strategy_title)}的平台经验模式" data-platform-policy-mode><option value="off" ${policy.mode === 'off' ? 'selected' : ''}>关闭</option><option value="shadow" ${policy.mode === 'shadow' ? 'selected' : ''}>影子评估</option><option value="active" ${policy.mode === 'active' ? 'selected' : ''}>正式启用</option></select><button class="btn btn-secondary btn-sm" data-platform-policy-save>保存</button></article>`).join("") : '<div class="empty-state"><strong>暂无平台策略</strong><span>创建平台策略后可在这里配置统一经验。</span></div>';
+  const modeLabels = { off:"未启用", shadow:"影子评估", active:"正式启用" };
+  const modeClasses = { off:"neutral", shadow:"warning", active:"success" };
+  if (policyHost) {
+    const activePolicies = policies.filter(policy => policy.mode === "active").length;
+    const shadowPolicies = policies.filter(policy => policy.mode === "shadow").length;
+    policyHost.innerHTML = `<section class="platform-policy-section">
+      <header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="route" size="18"></i></span><div><span class="review-section-kicker">策略控制</span><h3>经验运行模式</h3><p>分别决定每个策略是否读取已发布的平台经验。</p></div></div><div class="platform-section-stats"><span><strong>${activePolicies}</strong> 正式启用</span><span><strong>${shadowPolicies}</strong> 影子评估</span><span><strong>${policies.length}</strong> 个策略</span></div></header>
+      <div class="platform-mode-notice"><i data-lucide="info" size="15"></i><span><strong>影子评估</strong>只验证经验效果，不注入正式推理；选择<strong>正式启用</strong>后才会参与平台策略。</span></div>
+      <div class="platform-policy-grid">${policies.length ? policies.map(policy => `<article class="platform-experience-policy" data-platform-policy-strategy="${Number(policy.strategy_id)}">
+        <div class="platform-policy-head"><span class="platform-policy-icon"><i data-lucide="brain-circuit" size="17"></i></span><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>策略经验配置 · 版本 ${Number(policy.policy_version || 1)}</small></div><span class="status-chip ${modeClasses[policy.mode] || 'neutral'}">${escapeHtml(modeLabels[policy.mode] || policy.mode)}</span></div>
+        <div class="platform-policy-controls"><label><span>经验模式</span><select aria-label="${escapeHtml(policy.strategy_title)}的平台经验模式" data-platform-policy-mode><option value="off" ${policy.mode === 'off' ? 'selected' : ''}>关闭</option><option value="shadow" ${policy.mode === 'shadow' ? 'selected' : ''}>影子评估</option><option value="active" ${policy.mode === 'active' ? 'selected' : ''}>正式启用</option></select></label><button class="btn btn-secondary btn-sm" data-platform-policy-save><i data-lucide="save" size="14"></i>保存模式</button></div>
+      </article>`).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="route-off" size="20"></i></span><strong>暂无平台策略</strong><span>创建平台策略后，可以在这里配置统一经验。</span></div>'}</div>
+    </section>`;
+  }
   const host = $("memoryItemsList"); if (!host) return;
   const labels = { candidate:"待发布", active:"已发布", revoked:"已撤销" };
-  host.innerHTML = items.length ? items.map(item => `<article class="workspace-row memory-card"><div class="memory-card-icon"><i data-lucide="library-big" size="17"></i></div><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} <span class="status-chip ${item.status === 'active' ? 'success' : item.status === 'revoked' ? 'danger' : 'warning'}">${escapeHtml(labels[item.status] || item.status)}</span></div><p class="memory-lesson">${escapeHtml(item.lesson_text)}</p><div class="workspace-row-meta"><span>来源复盘版本 #${item.review_version_id}</span>${item.platform_version ? `<span>平台版本 ${Number(item.platform_version)}</span>` : ''}</div></div><div class="workspace-row-actions">${item.status === 'candidate' ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}">发布</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}">撤销</button>` : ''}</div></article>`).join("") : '<div class="empty-state"><strong>暂无平台经验候选</strong><span>管理员确认平台策略复盘后，市场相关经验会先进入候选区。</span></div>';
+  const candidateCount = items.filter(item => item.status === "candidate").length;
+  const activeCount = items.filter(item => item.status === "active").length;
+  host.innerHTML = `<section class="platform-library-section"><header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="library-big" size="18"></i></span><div><span class="review-section-kicker">经验内容</span><h3>平台经验库</h3><p>只有已发布的经验才会被正式启用的策略读取。</p></div></div><div class="platform-section-stats"><span><strong>${candidateCount}</strong> 待发布</span><span><strong>${activeCount}</strong> 已发布</span></div></header>
+    <div class="platform-experience-list">${items.length ? items.map(item => {
+      const statusClass = item.status === 'active' ? 'success' : item.status === 'revoked' ? 'danger' : 'warning';
+      const icon = item.status === 'active' ? 'badge-check' : item.status === 'revoked' ? 'archive-x' : 'sparkles';
+      return `<article class="platform-experience-card is-${escapeHtml(item.status)}"><header><span class="platform-experience-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>经验 #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(labels[item.status] || item.status)}</span></header><p class="platform-experience-lesson">${escapeHtml(item.lesson_text)}</p><footer><div class="platform-experience-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(item.review_version_id || '--')}</span>${item.platform_version ? `<span><i data-lucide="git-branch" size="13"></i>平台版本 ${Number(item.platform_version)}</span>` : '<span><i data-lucide="circle-dashed" size="13"></i>尚未生成平台版本</span>'}</div><div class="platform-experience-actions">${item.status === 'candidate' ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}"><i data-lucide="send" size="14"></i>发布经验</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button>` : ''}</div></footer></article>`;
+    }).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="library" size="20"></i></span><strong>暂无平台经验</strong><span>确认平台策略复盘后，市场经验会先进入待发布区。</span></div>'}</div></section>`;
   initIcons();
 }
 
@@ -2236,7 +2376,7 @@ async function saveGlobalRisk() {
   toast("全局风控新版本已生效", "success"); await loadAdminRiskCenter();
 }
 
-function setTab(tabId) {
+function setTab(tabId, options = {}) {
   const modelStrategyTarget = tabId === "model-management" ? "models" : tabId === "ai-config" ? "strategies" : null;
   if (modelStrategyTarget) tabId = "model-strategy";
   document.querySelectorAll(".nav-item").forEach((button) => {
@@ -2249,7 +2389,7 @@ function setTab(tabId) {
   if (main) main.scrollTop = 0;
   if (tabId === "model-strategy") setModelStrategySubtab(modelStrategyTarget || state.modelStrategySubtab || "strategies");
   initIcons();
-  refreshTabData(tabId).catch((error) => toast(error.message, "error"));
+  if (!options.skipRefresh) refreshTabData(tabId).catch((error) => toast(error.message, "error"));
 }
 
 function setModelStrategySubtab(target) {
@@ -3330,8 +3470,14 @@ let _inferenceChart = null;
 let _inferenceCandleSeries = null;
 let _inferenceChartResizeObserver = null;
 let _inferenceChartMutationObserver = null;
+let _inferenceChartFrame = null;
+let _inferenceChartRenderVersion = 0;
 
 function destroyInferenceChart() {
+  if (_inferenceChartFrame !== null) {
+    cancelAnimationFrame(_inferenceChartFrame);
+    _inferenceChartFrame = null;
+  }
   if (_inferenceChartResizeObserver) {
     _inferenceChartResizeObserver.disconnect();
     _inferenceChartResizeObserver = null;
@@ -3392,19 +3538,37 @@ function chanSummaryForTimeframe(context, timeframe) {
     || null;
 }
 
+function inferenceTimeframeMinutes(timeframe) {
+  const text = String(timeframe || "").trim().toUpperCase();
+  const match = text.match(/^(MN|M|H|D|W)(\d+)$/);
+  if (!match) return Number.POSITIVE_INFINITY;
+  const value = Number(match[2]);
+  const multipliers = { M: 1, H: 60, D: 1440, W: 10080, MN: 43200 };
+  return value * multipliers[match[1]];
+}
+
+function availableInferenceTimeframes(klines) {
+  return Object.entries(klines || {})
+    .filter(([, rows]) => normalizeInferenceRates(rows).length > 0)
+    .map(([timeframe]) => timeframe)
+    .sort((left, right) => inferenceTimeframeMinutes(left) - inferenceTimeframeMinutes(right)
+      || String(left).localeCompare(String(right)));
+}
+
 function inferenceChartShell(signal) {
   const context = inferenceSnapshotContext(signal);
-  const available = Object.entries(context.klines)
-    .filter(([, rows]) => Array.isArray(rows) && rows.length)
-    .map(([timeframe]) => timeframe);
+  const available = availableInferenceTimeframes(context.klines);
   if (!available.length) {
     return `<section class="inference-chart-panel is-empty" aria-labelledby="inferenceChartTitle">
       <div class="inference-chart-empty"><i data-lucide="candlestick-chart" size="20"></i><div><strong id="inferenceChartTitle">K 线与结构证据</strong><span>本次推理没有保存可视化 K 线，无法还原当时行情。</span></div></div>
     </section>`;
   }
-  const preferred = context.market?.primary_timeframe || signal?.timeframe;
-  if (!state.inferenceChartTimeframe || !available.includes(state.inferenceChartTimeframe)) {
-    state.inferenceChartTimeframe = available.includes(preferred) ? preferred : available[0];
+  const signalKey = String(signal?.id ?? `${signal?.symbol || ""}:${signal?.created_at || ""}`);
+  if (state.inferenceChartSignalKey !== signalKey) {
+    state.inferenceChartSignalKey = signalKey;
+    state.inferenceChartTimeframe = available[0];
+  } else if (!state.inferenceChartTimeframe || !available.includes(state.inferenceChartTimeframe)) {
+    state.inferenceChartTimeframe = available[0];
   }
   const snapshotStatus = context.snapshot?.evidence_status;
   const sourceLabel = ["platform_market_bridge", "platform_admin_bridge"].includes(context.snapshot?.market_source)
@@ -3483,13 +3647,20 @@ function inferenceChartTickLabel(seconds) {
   return full === "--" ? "--" : full.slice(5);
 }
 
-function renderInferenceChart(signal) {
+function renderInferenceChart(signal, renderVersion) {
+  const resultHost = $("analysisResult");
+  const signalKey = String(signal?.id ?? "");
+  if (
+    String(state.selectedSignal?.id ?? "") !== signalKey
+    || resultHost?.dataset.signalId !== signalKey
+    || resultHost?.dataset.renderVersion !== String(renderVersion)
+  ) return;
   destroyInferenceChart();
   const container = $("inferenceKlineChart");
   if (!container || typeof LightweightCharts === "undefined") return;
   if (container.offsetWidth === 0 || container.offsetHeight === 0) {
     _inferenceChartResizeObserver = new ResizeObserver(() => {
-      if (container.offsetWidth > 0 && container.offsetHeight > 0) renderInferenceChart(signal);
+      if (container.offsetWidth > 0 && container.offsetHeight > 0) renderInferenceChart(signal, renderVersion);
     });
     _inferenceChartResizeObserver.observe(container);
     return;
@@ -3604,14 +3775,14 @@ function renderInferenceChart(signal) {
   document.querySelectorAll("[data-inference-timeframe]").forEach(button => { button.onclick = () => {
     state.inferenceChartTimeframe = button.dataset.inferenceTimeframe;
     document.querySelectorAll("[data-inference-timeframe]").forEach(item => { item.classList.toggle("active", item === button); item.setAttribute("aria-selected", String(item === button)); });
-    renderInferenceChart(signal);
+    renderInferenceChart(signal, renderVersion);
   }});
   document.querySelectorAll("[data-inference-layer]").forEach(button => { button.onclick = () => {
     const layer = button.dataset.inferenceLayer;
     state.inferenceChartLayers[layer] = !state.inferenceChartLayers[layer];
     button.classList.toggle("active", state.inferenceChartLayers[layer]);
     button.setAttribute("aria-pressed", String(state.inferenceChartLayers[layer]));
-    renderInferenceChart(signal);
+    renderInferenceChart(signal, renderVersion);
   }});
   const fullscreenButton = $("inferenceChartFullscreen");
   if (fullscreenButton) fullscreenButton.onclick = async () => {
@@ -3627,9 +3798,14 @@ function renderInferenceChart(signal) {
 function renderSignal(signal, elapsedMs = null, options = {}) {
   if (!signal) {
     destroyInferenceChart();
+    _inferenceChartRenderVersion += 1;
     updateSignalDisplay(null);
-    $("analysisResult").className = "analysis-result muted-block";
-    $("analysisResult").textContent = "暂无推理记录，选择品种和周期后生成信号";
+    const emptyResult = $("analysisResult");
+    emptyResult.className = "analysis-result muted-block";
+    emptyResult.removeAttribute("aria-busy");
+    delete emptyResult.dataset.signalId;
+    emptyResult.dataset.renderVersion = String(_inferenceChartRenderVersion);
+    emptyResult.textContent = "暂无推理记录，选择品种和周期后生成信号";
     setText("analysisLatency", "--");
     setText("signalFreshness", "--");
     return;
@@ -3692,7 +3868,11 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   }
   const reasoningBlock = reasoningText ? `\n\n<strong>分析依据</strong>\n${escapeHtml(reasoningText)}` : "";
   destroyInferenceChart();
+  const renderVersion = ++_inferenceChartRenderVersion;
   result.className = "analysis-result";
+  result.removeAttribute("aria-busy");
+  result.dataset.signalId = String(signal.id);
+  result.dataset.renderVersion = String(renderVersion);
   result.innerHTML = `
     <div class="analysis-summary-head">
       <div class="analysis-summary-title">
@@ -3739,7 +3919,10 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   `;
   highlightActiveAnalysis(signal.id);
   initIcons();
-  requestAnimationFrame(() => renderInferenceChart(signal));
+  _inferenceChartFrame = requestAnimationFrame(() => {
+    _inferenceChartFrame = null;
+    renderInferenceChart(signal, renderVersion);
+  });
 }
 
 function setManualInferenceModal(open) {
@@ -3813,7 +3996,8 @@ async function runAnalysis() {
 async function executeSignal() {
   if (!state.selectedSignal) return;
   const currentDir = signalType(state.selectedSignal.signal_type);
-  if (state.selectedSignal.is_stale || state.selectedSignal.is_executed || currentDir === "hold") {
+  const advice = signalExecutionAdvice(state.selectedSignal);
+  if (advice.executable !== true || state.selectedSignal.is_stale || state.selectedSignal.is_executed || currentDir === "hold") {
     toast(executionStatus(state.selectedSignal), "warning");
     return;
   }
@@ -3827,15 +4011,15 @@ async function executeSignal() {
     state.selectedSignal.execution_advice = {
       state: result.status === "success" ? (state.selectedSignal.entry_method === "market" ? "executed" : "pending") : (result.status === "rejected" ? "rejected" : "failed"),
       title: result.status === "success" ? (state.selectedSignal.entry_method === "market" ? "订单已执行" : "挂单已提交") : (result.status === "rejected" ? "风控未放行" : "执行未完成"),
-      description: result.message || (result.status === "success" ? "执行结果已记录。" : "请查看风控中心中的具体原因。"),
+      description: localizeReason(result.message) || (result.status === "success" ? "执行结果已记录。" : "请查看风控中心中的具体原因。"),
       executable: false,
     };
     if (result.status === "success") state.selectedSignal.is_executed = state.selectedSignal.entry_method === "market";
     renderSignal(state.selectedSignal, null, { keepLatency:true });
-    toast(result.message || (result.status === "success" ? "执行请求已处理" : `结果：${result.status}`), result.status === "success" ? "success" : "warning");
+    toast(localizeReason(result.message) || (result.status === "success" ? "执行请求已处理" : `结果：${result.status}`), result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadSignals(), loadAudit()]);
   } catch (error) {
-    toast(error.message, "error");
+    toast(localizeReason(error.message), "error");
   }
 }
 
@@ -4203,7 +4387,11 @@ async function closePosition(ticket) {
 }
 
 function signalStatusLabel(signal) {
-  if (signal.is_executed) return "已执行";
+  const advice = signalExecutionAdvice(signal);
+  if (advice.state === "pending") return "挂单已提交";
+  if (advice.state === "executed" || signal.is_executed) return "已执行";
+  if (advice.state === "rejected") return "风控未放行";
+  if (advice.state === "failed") return "执行未完成";
   if (signal.is_stale) return "已过期";
   if (signalType(signal.signal_type) === "hold") return "观望";
   return "待复核";
@@ -4259,35 +4447,69 @@ function highlightActiveAnalysis(signalId) {
   });
 }
 
+let _analysisDetailRequestVersion = 0;
+
+function renderAnalysisDetailLoading(signalId) {
+  destroyInferenceChart();
+  const resultHost = $("analysisResult");
+  if (!resultHost) return;
+  const renderVersion = ++_inferenceChartRenderVersion;
+  resultHost.className = "analysis-result is-loading";
+  resultHost.dataset.signalId = String(signalId);
+  resultHost.dataset.renderVersion = String(renderVersion);
+  resultHost.setAttribute("aria-busy", "true");
+  resultHost.innerHTML = `
+    <div class="analysis-detail-loading" role="status" aria-live="polite">
+      <span class="analysis-detail-loading-mark" aria-hidden="true"></span>
+      <div>
+        <strong>正在读取完整推理快照</strong>
+        <span>正在核对信号 #${escapeHtml(signalId)} 的行情、结构与执行数据</span>
+      </div>
+    </div>
+  `;
+}
+
 async function openAnalysisFromHistory(signalId, options = {}) {
-  let signal = state.signals.find((item) => String(item.id) === String(signalId));
-  if (!signal?.detail_loaded) {
-    const resultHost = $("analysisResult");
-    resultHost?.classList.add("is-loading");
-    resultHost?.setAttribute("aria-busy", "true");
+  const requestedId = String(signalId);
+  const requestVersion = ++_analysisDetailRequestVersion;
+  const navigate = options.navigate !== false;
+  const forceRefresh = options.forceRefresh ?? navigate;
+  let signal = state.signals.find((item) => String(item.id) === requestedId);
+
+  // Select immediately: a late response for the previous signal may update its
+  // list cache, but must never reclaim the currently visible detail panel.
+  state.selectedSignal = signal || { id: signalId };
+  highlightActiveAnalysis(signalId);
+  if (navigate) setTab("ai-analyze", { skipRefresh:true });
+
+  if (!signal?.detail_loaded || forceRefresh) {
+    renderAnalysisDetailLoading(signalId);
     try {
       const data = await wsApi("signal_detail", { signal_id: Number(signalId) });
       if (data.status === 'success' && data.signal) {
         signal = { ...(signal || {}), ...data.signal, detail_loaded: true };
-        const index = state.signals.findIndex(item => String(item.id) === String(signalId));
+        const index = state.signals.findIndex(item => String(item.id) === requestedId);
         if (index >= 0) state.signals[index] = signal;
         else state.signals.unshift(signal);
         renderAnalysisHistory(state.signals);
       }
     } catch (error) {
       console.error('[Inference] signal detail load failed:', error);
-      if (options.navigate !== false) toast("推理快照读取失败，已显示基础信号信息", "warning");
-    } finally {
-      resultHost?.classList.remove("is-loading");
-      resultHost?.removeAttribute("aria-busy");
+      if (navigate) toast("推理快照读取失败，已显示基础信号信息", "warning");
     }
   }
+
+  if (
+    requestVersion !== _analysisDetailRequestVersion
+    || String(state.selectedSignal?.id ?? "") !== requestedId
+  ) return;
+
   if (!signal) {
     toast("未找到对应推理记录", "warning");
+    renderSignal(null, null);
     return;
   }
   state.selectedSignal = signal;
-  if (options.navigate !== false) setTab("ai-analyze");
   renderSignal(signal, null);
   highlightActiveAnalysis(signalId);
   // Scroll the active item into view
@@ -4355,7 +4577,9 @@ async function loadSignals(options = {}) {
   const stillExists = selectedId ? state.signals.find(s => String(s.id) === String(selectedId)) : null;
   let activeSignal = stillExists || state.signals[0] || null;
   if (stillExists && previousSelected?.detail_loaded) {
-    activeSignal = { ...stillExists, ...previousSelected };
+    // Keep heavyweight detail fields, but let the freshly loaded list row win
+    // for user-specific execution state (pending ticket, delivery result, etc.).
+    activeSignal = { ...previousSelected, ...stillExists };
     const activeIndex = state.signals.findIndex(item => String(item.id) === String(activeSignal.id));
     if (activeIndex >= 0) state.signals[activeIndex] = activeSignal;
   }
@@ -5080,7 +5304,7 @@ function bindEvents() {
   });
   $("addModelProfileBtn")?.addEventListener("click", () => openModelEditor());
   $("cancelModelProfileBtn")?.addEventListener("click", () => closeFormModal($("modelProfileEditor")));
-  $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(error.message, "error")));
+  $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(localizeReason(error.message), "error")));
   $("savePlatformPolicyBtn")?.addEventListener("click", () => savePlatformPolicy().catch(error => toast(error.message, "error")));
   $("saveGlobalRiskBtn")?.addEventListener("click", () => saveGlobalRisk().catch(error => toast(error.message, "error")));
   $("saveUserFeatureFlagsBtn")?.addEventListener("click", () => saveUserFeatureFlags().catch(error => toast(error.message, "error")));
@@ -5099,13 +5323,18 @@ function bindEvents() {
   $("profileProvider")?.addEventListener("change", event => {
     const preset = PROVIDER_PRESETS[event.target.value]; if (!preset) return;
     $("profileBaseUrl").value = preset.url; if (preset.models?.[0]) $("profileModelName").value = preset.models[0];
+    updateModelProviderHelp(event.target.value);
   });
   document.querySelectorAll(".form-modal").forEach(modal => {
     modal.addEventListener("keydown", handleFormModalKeydown);
     modal.addEventListener("click", event => { if (event.target === modal) closeFormModal(modal); });
   });
   document.querySelectorAll("[data-review-filter]").forEach(button => button.addEventListener("click", () => {
-    document.querySelectorAll("[data-review-filter]").forEach(item => item.classList.toggle("active", item === button));
+    document.querySelectorAll("[data-review-filter]").forEach(item => {
+      const selected = item === button;
+      item.classList.toggle("active", selected);
+      item.setAttribute("aria-selected", String(selected));
+    });
     state.reviewFilter = button.dataset.reviewFilter; loadReviewMemory().catch(error => toast(error.message,"error"));
   }));
   document.querySelectorAll("[data-strategy-filter]").forEach(button => button.addEventListener("click", () => {
@@ -5245,7 +5474,7 @@ function bindEvents() {
         else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope } }); toast(`连接成功 · ${data.latency_ms} ms`, "success"); }
         else if (modelAction.dataset.modelAction === "default") { await api(`/api/ai/model-profiles/${id}/default`, { method:"POST", body:{ scope } }); toast("默认模型已更新", "success"); await loadModelManagement(); }
         else if (modelAction.dataset.modelAction === "delete" && confirm("确认删除这个模型配置？已绑定的策略会停止使用它。")) { await api(`/api/ai/model-profiles/${id}?scope=${scope}`, { method:"DELETE" }); toast("模型已删除", "success"); await loadModelManagement(); }
-      } catch (error) { toast(error.message,"error"); } finally { modelAction.disabled = false; }
+      } catch (error) { toast(localizeReason(error.message),"error"); } finally { modelAction.disabled = false; }
       return;
     }
     if (reviewCase) { openReviewDetail(Number(reviewCase.dataset.reviewId)).catch(error => toast(error.message,"error")); return; }
@@ -5254,13 +5483,26 @@ function bindEvents() {
       try {
         if (action === "retry") await api(`/api/ai/reviews/${caseId}/retry`, { method:"POST" });
         else if (action === "save") { syncReviewEditorFromFields(); const content = JSON.parse($("reviewContentEditor").value); const saved = await api(`/api/ai/reviews/${caseId}/edit`, { method:"POST", body:{ content, expected_version_id:versionId, change_note:"用户在复盘页面修改" } }); toast(`已保存为新版本 #${saved.versionNo}`,"success"); }
-        else await api(`/api/ai/reviews/${caseId}/confirm`, { method:"POST", body:{ version_id:versionId, action, trade_process_issue_status: action === "approve" ? "no_issue" : "uncertain" } });
+        else {
+          const confirmed = await api(`/api/ai/reviews/${caseId}/confirm`, { method:"POST", body:{ version_id:versionId, action, trade_process_issue_status: action === "approve" ? "no_issue" : "uncertain" } });
+          if (confirmed.post_action_error) toast(`复盘已确认，但经验处理未完成：${localizeReason(confirmed.post_action_error)}`, "warning");
+        }
         await loadReviewMemory(); await openReviewDetail(caseId);
       } catch (error) { toast(error.message,"error"); }
       return;
     }
     if (memoryAction) {
-      try { await api(`/api/ai/memory/${Number(memoryAction.dataset.memoryId)}/${memoryAction.dataset.memoryAction}`, { method:"POST" }); await loadReviewMemory(); }
+      try {
+        const action = memoryAction.dataset.memoryAction;
+        const id = Number(memoryAction.dataset.memoryId);
+        const endpoint = action === "confirm-long" ? `/api/ai/memory/long/${id}/confirm`
+          : action === "revoke-long" ? `/api/ai/memory/long/${id}/revoke`
+            : `/api/ai/memory/${id}/${action}`;
+        memoryAction.disabled = true;
+        await api(endpoint, { method:"POST" });
+        toast(action === "confirm-long" ? "已加入长期记忆" : "记忆状态已更新", "success");
+        await loadReviewMemory();
+      }
       catch (error) { toast(error.message,"error"); } return;
     }
     if (platformExperienceAction) {
@@ -5296,7 +5538,7 @@ function bindEvents() {
         if (input.value.trim() !== "") changes[input.dataset.userRiskField] = Number(input.value);
       });
       if (!Object.keys(changes).length) { toast("没有需要保存的自定义风控", "warning"); return; }
-      try { const data = await api(`/api/ai/risk-center/${Number(riskSave.dataset.riskSave)}`, { method:"PUT", body:{ changes, reason:"用户从风控中心更新" } }); const pending = data.result?.pending_fields || []; toast(pending.length ? `已保存，${pending.length} 项放宽设置等待冷却生效` : "用户风控已生效", "success"); await loadRiskCenter(); }
+      try { await api(`/api/ai/risk-center/${Number(riskSave.dataset.riskSave)}`, { method:"PUT", body:{ changes, reason:"用户从风控中心更新" } }); toast("用户风控已立即生效", "success"); await loadRiskCenter(); }
       catch (error) { toast(error.message,"error"); } return;
     }
 

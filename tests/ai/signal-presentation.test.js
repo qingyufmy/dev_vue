@@ -25,6 +25,17 @@ describe('signal presentation', () => {
     expect(buildExecutionAdvice({ signal_type: 'hold' })).toMatchObject({ state: 'observe', executable: false })
   })
 
+  it('presents a successful pending delivery as submitted and never executable', () => {
+    const advice = buildExecutionAdvice({
+      signal_type: 'sell_limit',
+      entry_method: 'limit',
+      pending_ticket: '663220141',
+      pending_state: 'pending',
+      execution_result: { status: 'success' },
+    })
+    expect(advice).toMatchObject({ state: 'pending', executable: false })
+  })
+
   it('uses persisted rejection as the primary execution state', () => {
     const advice = buildExecutionAdvice({ signal_type: 'buy', execution_result: JSON.stringify({ status: 'rejected', message: '超过风险上限' }) })
     expect(advice).toMatchObject({ state: 'rejected', title: '风控未放行', executable: false })

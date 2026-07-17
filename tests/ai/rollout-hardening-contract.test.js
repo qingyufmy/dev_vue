@@ -24,6 +24,18 @@ describe('rollout hardening contract', () => {
     expect(migrations).toContain("rr.status = 'released'")
     expect(migrations).toContain("d.execution_status = 'rejected'")
   })
+
+  it('backfills durable risk decision links for intents and deliveries', () => {
+    expect(migrations).toContain("id: '086_backfill_risk_decision_links'")
+    expect(migrations).toContain('SET oi.risk_decision_id = rd.id')
+    expect(migrations).toContain('SET d.risk_decision_id = oi.risk_decision_id')
+  })
+
+  it('promotes legacy pending risk changes into an immediately active version', () => {
+    expect(migrations).toContain("id: '087_apply_pending_risk_changes_immediately'")
+    expect(migrations).toContain("SET status = 'applied', effective_at = ?")
+    expect(migrations).toContain("'待生效风控参数改为立即生效'")
+  })
   it('adds the readiness-tracked rollout migration and defaults generative features off', () => {
     expect(migrations).toContain("id: '065_ai_rollout_governance'")
     expect(migrations).toContain("VALUES ('global', 0, 0, 0, 0, 1, 0")

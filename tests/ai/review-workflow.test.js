@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { assessReviewEvidence, validateReviewContent } from '../../server/routes/ai/review-workflow.js'
+import { assessReviewEvidence, assessReviewStrategyEligibility, validateReviewContent } from '../../server/routes/ai/review-workflow.js'
 
 const completeRow = (overrides = {}) => ({
   status: 'closed', review_eligible_at: '2026-07-15 12:00:00', attribution_status: 'attributed',
@@ -41,6 +41,23 @@ describe('trade review evidence completeness', () => {
   })
 })
 
+describe('trade review strategy boundary', () => {
+  it('does not generate a personal review for an ordinary user running a platform strategy', () => {
+    expect(assessReviewStrategyEligibility({ snapshot_strategy_scope: 'platform', review_user_role: 'user' }))
+      .toEqual({ eligible: false, reason: 'platform_strategy_user_review_disabled' })
+  })
+
+  it('keeps administrator platform reviews and ordinary-user private reviews eligible', () => {
+    expect(assessReviewStrategyEligibility({ snapshot_strategy_scope: 'platform', review_user_role: 'admin' }).eligible).toBe(true)
+    expect(assessReviewStrategyEligibility({ snapshot_strategy_scope: 'private', review_user_role: 'user' }).eligible).toBe(true)
+  })
+
+  it('fails closed when the immutable strategy scope is unavailable', () => {
+    expect(assessReviewStrategyEligibility({ review_user_role: 'user' }))
+      .toEqual({ eligible: false, reason: 'review_strategy_scope_missing' })
+  })
+})
+
 describe('strict review content schema', () => {
   const refs = { original_signal: {}, execution_deals: {} }
 
@@ -63,14 +80,20 @@ describe('review durability and privacy guards', () => {
   it('deduplicates jobs and serializes immutable version allocation', () => {
     expect(migration).toContain('UNIQUE KEY uk_trade_review_job_key (idempotency_key)')
     expect(migration).toContain('UNIQUE KEY uk_trade_review_version (case_id, version_no)')
-    expect(service).toContain('SELECT * FROM trade_review_cases WHERE id = ? AND user_id = ? FOR UPDATE')
+    expect(service).toContain('SELECT rc.* FROM trade_review_cases rc WHERE rc.id = ? AND rc.user_id = ?')
     expect(service).toContain('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM trade_review_versions WHERE case_id = ? FOR UPDATE')
   })
 
   it('uses owner-scoped reads and exposes only redacted admin health', () => {
-    expect(service).toContain('WHERE id = ? AND user_id = ?')
+    expect(service).toContain('rc.id = ? AND rc.user_id = ?')
     expect(service).toContain("content_redacted: true")
     expect(routes).toContain("req.user.role !== 'admin'")
+  })
+
+  it('filters platform-strategy reviews for ordinary users at scan, queue and read boundaries', () => {
+    expect(service).toContain("snap.strategy_scope = 'platform' AND u.role <> 'admin'")
+    expect(service).toContain("eligibility_snap.strategy_scope = 'platform' AND eligibility_user.role = 'admin'")
+    expect(service).toContain('platform_strategy_user_review_disabled')
   })
 
   it('binds approval to the exact current version and retries model failures without touching trading', () => {
@@ -79,5 +102,13 @@ describe('review durability and privacy guards', () => {
     expect(service).toContain("exhausted ? 'failed' : 'queued'")
     expect(service).not.toContain('prepareAndExecuteOrderIntent')
   })
-})
 
+  it('separates immutable inference evidence from post-trade path and Chan evidence', () => {
+    expect(service).toContain('schema_version: 2')
+    expect(service).toContain('post_trade_klines')
+    expect(service).toContain('post_trade_structure')
+    expect(service).toContain('path_metrics')
+    expect(service).toContain('snapshot_strategy_version')
+    expect(migration).toContain('path_evidence_status')
+  })
+})

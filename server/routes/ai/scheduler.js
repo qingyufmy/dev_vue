@@ -1170,7 +1170,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     if (isPrivate && configuredMemoryMode !== 'off' && configuredMemoryMode !== 'platform_only') {
       try {
         memory = await retrievePersonalMemory({ userId: inferenceUserId, strategyId: promptTypeId,
-          symbol, timeframe: primaryTf, mode: configuredMemoryMode === 'shadow' ? 'shadow' : 'active' })
+          strategyVersion: Number(pt.version || 1), symbol, timeframe: primaryTf,
+          mode: configuredMemoryMode === 'shadow' ? 'shadow' : 'active' })
         config._memoryContext = memory.promptBlock
         config._memoryMode = memory.mode
       } catch (error) {
@@ -1809,10 +1810,11 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       deliveryId: `${signalId}:${userId}`,
     })
 
+    const riskDecisionId = executionRiskDecisionId(execResult)
     await queryRun(
       `UPDATE auto_signal_deliveries SET order_intent_id = ?, risk_decision_id = ?, approved_order_json = ?
        WHERE signal_id = ? AND user_id = ?`,
-      [execResult.order_intent_id || null, execResult.risk?.risk_decision_id || execResult.risk_decision_id || null,
+      [execResult.order_intent_id || null, riskDecisionId,
         execResult.risk?.approved_order ? JSON.stringify(execResult.risk.approved_order) : null, signalId, userId]
     )
     const deliveryRow = await queryOne('SELECT id FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ? LIMIT 1', [signalId, userId])
@@ -2231,7 +2233,10 @@ async function runSmartClose(userId, closeConfig, account, positions) {
     const protocol = provider === 'volcengine_agent_plan' ? 'responses' : 'chat_completions'
     const parsed = await requestJsonObject({
       url: `${baseUrl}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
-      apiKey, model, temperature, maxTokens, thinkingEnabled, reasoningEffort, protocol,
+      apiKey, provider, model, temperature, maxTokens,
+      thinkingEnabled: provider === 'kimi_code' ? true : thinkingEnabled,
+      reasoningEffort: provider === 'kimi_code' && model === 'k3' ? 'max' : reasoningEffort,
+      protocol,
       messages: [
         { role: 'system', content: stripTimeframeTags(prompt) },
         { role: 'user', content: JSON.stringify(contextPayload) },
@@ -2307,6 +2312,13 @@ async function executeOrder(userId, config, request, action, options = {}) {
   return executeOrderCore(userId, config, request, action, options)
 }
 
+function executionRiskDecisionId(result) {
+  return result?.risk?.risk_decision_id
+    || result?.risk_decision_id
+    || result?.details?.risk_decision_id
+    || null
+}
+
 
 // Test-only exports (not for production use)
 export const __schedulerTest = {
@@ -2319,4 +2331,5 @@ export const __schedulerTest = {
   validateInferenceBridgeSnapshot,
   createLockGuard,
   discardSharedSignalForWeeklyWindow,
+  executionRiskDecisionId,
 }

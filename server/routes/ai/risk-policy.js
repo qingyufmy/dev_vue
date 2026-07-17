@@ -157,8 +157,6 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
       policy = applyAccountConfig(policy, accountValues, controls)
       policyVersionIds.push(version.id)
     }
-    const due = await queryAll("SELECT * FROM risk_policy_change_items WHERE policy_set_id = ? AND status = 'pending' AND effective_at <= ? ORDER BY id", [account.id, now])
-    for (const item of due) policy = applyAccountConfig(policy, { [item.field_code]: parseJson(item.new_value_json, null) }, controls)
   }
   for (const [key, control] of Object.entries(controls)) {
     if (control.locked_value !== null && control.locked_value !== undefined) policy[key] = control.locked_value
@@ -173,37 +171,39 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
   return { policy, policyVersionIds, platformPolicy, accountValues: accountValues.values || accountValues, controls }
 }
 
-export async function submitRiskPolicyChanges({ policySetId, actorId, changes, reason = '', cooldownHours = 2 } = {}) {
+export async function submitRiskPolicyChanges({ policySetId, actorId, changes, reason = '' } = {}) {
   if (!policySetId || !actorId || !changes || typeof changes !== 'object') throw new Error('invalid_risk_policy_change')
   return withTransaction(async run => {
     const [[set]] = await run("SELECT * FROM risk_policy_sets WHERE id = ? AND status = 'active' FOR UPDATE", [policySetId])
     if (!set) throw new Error('risk_policy_set_not_found')
     const [[current]] = await run('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= NOW() ORDER BY version_no DESC LIMIT 1', [policySetId])
     const currentConfig = mergeKnown(DEFAULT_RISK_POLICY, parseJson(current?.config_json))
-    const immediate = {}, pending = []
+    const applied = {}, auditItems = []
     for (const [key, raw] of Object.entries(changes)) {
       const meta = RISK_RULES[key]
       if (!meta) throw new Error(`unknown_risk_field:${key}`)
       if (meta.locked) throw new Error(`risk_field_locked:${key}`)
       const value = normalizeValue(key, raw)
       if (value === undefined) throw new Error(`invalid_risk_value:${key}`)
-      if (isRelaxation(key, currentConfig[key], value)) pending.push([key, value])
-      else immediate[key] = value
+      applied[key] = value
+      auditItems.push([key, value, isRelaxation(key, currentConfig[key], value) ? 'relax' : 'tighten'])
     }
     let versionId = current?.id || null
-    if (Object.keys(immediate).length) {
-      const next = mergeKnown(currentConfig, immediate)
-      const [insert] = await run('INSERT INTO risk_policy_versions (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at) VALUES (?, ?, ?, ?, ?, NOW(), ?)', [policySetId, Number(current?.version_no || 0) + 1, JSON.stringify(next), actorId, reason, beijingNow()])
+    if (Object.keys(applied).length) {
+      const now = beijingNow()
+      const next = mergeKnown(currentConfig, applied)
+      const [insert] = await run('INSERT INTO risk_policy_versions (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [policySetId, Number(current?.version_no || 0) + 1, JSON.stringify(next), actorId, reason, now, now])
       versionId = insert.insertId
-      await run('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [versionId, beijingNow(), policySetId])
+      await run('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [versionId, now, policySetId])
+      for (const [key, value, changeClass] of auditItems) {
+        await run(`INSERT INTO risk_policy_change_items
+          (policy_set_id, field_code, old_value_json, new_value_json, change_class, status, requested_by, reason, effective_at, created_at)
+          VALUES (?, ?, ?, ?, ?, 'applied', ?, ?, ?, ?)`,
+        [policySetId, key, JSON.stringify(currentConfig[key]), JSON.stringify(value), changeClass, actorId, reason, now, now])
+      }
     }
-    for (const [key, value] of pending) {
-      await run(`INSERT INTO risk_policy_change_items
-        (policy_set_id, field_code, old_value_json, new_value_json, change_class, status, requested_by, reason, effective_at, created_at)
-        VALUES (?, ?, ?, ?, 'relax', 'pending', ?, ?, DATE_ADD(NOW(), INTERVAL ? HOUR), ?)`,
-      [policySetId, key, JSON.stringify(currentConfig[key]), JSON.stringify(value), actorId, reason, Math.max(1, Number(cooldownHours) || 2), beijingNow()])
-    }
-    return { active_version_id: versionId, immediate_fields: Object.keys(immediate), pending_fields: pending.map(([key]) => key) }
+    const appliedFields = Object.keys(applied)
+    return { active_version_id: versionId, applied_fields: appliedFields, immediate_fields: appliedFields, pending_fields: [] }
   })
 }
 
@@ -385,5 +385,6 @@ export async function persistRiskDecision(intentId, decision, policyVersionIds =
     (order_intent_id, policy_version_ids_json, original_order_json, approved_order_json, rule_results_json, decision_status, reject_code, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
   [intentId, JSON.stringify(policyVersionIds), JSON.stringify(decision.original_order || {}), decision.approved_order ? JSON.stringify(decision.approved_order) : null, JSON.stringify(decision.rule_results || []), decision.decision_status, decision.reject_code || null, beijingNow()])
+  await queryRun('UPDATE order_intents SET risk_decision_id = ?, updated_at = ? WHERE id = ?', [result.insertId, beijingNow(), intentId])
   return result.insertId
 }

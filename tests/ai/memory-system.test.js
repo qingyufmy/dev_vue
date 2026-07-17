@@ -53,6 +53,18 @@ describe('memory persistence, invalidation and inference boundaries', () => {
     expect(migration).toContain('ancestor_memory_ids_json')
     expect(memory).toContain("reviewCase.status !== 'approved'")
     expect(memory).toContain("status = ancestors.length ? 'duplicate_candidate' : 'active'")
+    expect(memory).toContain('personal_memory_requires_private_strategy_review')
+    expect(memory).toContain("memory_tier = 'short'")
+    expect(memory).toContain('strategy_version = ?')
+    expect(memory).toContain('SHORT_MEMORY_TTL_DAYS = 30')
+  })
+
+  it('promotes repeated short-term lessons to user-confirmed long-term candidates', () => {
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS experience_long_term_memories')
+    expect(memory).toContain('LONG_MEMORY_MIN_SUPPORT = 3')
+    expect(memory).toContain('LONG_MEMORY_MIN_SPAN_DAYS = 7')
+    expect(memory).toContain('confirmLongTermMemory')
+    expect(memory).toContain('LONG_MEMORY_BUDGET_RATIO = 0.6')
   })
 
   it('records actual or shadow selections within the configured token budget', () => {

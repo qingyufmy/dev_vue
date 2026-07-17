@@ -3,7 +3,7 @@
  * Each migration has an id and an up() function.
  * Already-run migrations are tracked in the `schema_migrations` table.
  */
-import { queryOne, queryAll, queryRun, beijingNow } from './db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from './db.js'
 
 export function applyPendingLifecycleSchema(schema) {
   return {
@@ -2148,6 +2148,97 @@ const migrations = [
         UNIQUE KEY uk_chan_structure_anchor (source_id, standard_symbol, timeframe),
         INDEX idx_chan_structure_anchor_time (source_id, anchor_time_utc_msc)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
+  },
+  {
+    id: '086_backfill_risk_decision_links',
+    up: async () => {
+      await queryRun(`UPDATE order_intents oi
+        JOIN risk_decisions rd ON rd.order_intent_id = oi.id
+        SET oi.risk_decision_id = rd.id, oi.updated_at = NOW()
+        WHERE oi.risk_decision_id IS NULL OR oi.risk_decision_id <> rd.id`)
+      await queryRun(`UPDATE auto_signal_deliveries d
+        JOIN order_intents oi ON oi.id = d.order_intent_id
+        SET d.risk_decision_id = oi.risk_decision_id, d.updated_at = NOW()
+        WHERE oi.risk_decision_id IS NOT NULL
+          AND (d.risk_decision_id IS NULL OR d.risk_decision_id <> oi.risk_decision_id)`)
+    }
+  },
+  {
+    id: '087_apply_pending_risk_changes_immediately',
+    up: async () => {
+      const sets = await queryAll("SELECT DISTINCT policy_set_id FROM risk_policy_change_items WHERE status = 'pending' ORDER BY policy_set_id")
+      for (const row of sets) {
+        await withTransaction(async run => {
+          const [pending] = await run("SELECT * FROM risk_policy_change_items WHERE policy_set_id = ? AND status = 'pending' ORDER BY id FOR UPDATE", [row.policy_set_id])
+          if (!pending.length) return
+          const [[current]] = await run('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1 FOR UPDATE', [row.policy_set_id])
+          let config = {}
+          try { config = JSON.parse(current?.config_json || '{}') } catch { config = {} }
+          const values = config.values && typeof config.values === 'object' ? { ...config.values } : { ...config }
+          for (const item of pending) {
+            try { values[item.field_code] = JSON.parse(item.new_value_json) }
+            catch { values[item.field_code] = item.new_value_json }
+          }
+          const nextConfig = config.values && typeof config.values === 'object' ? { ...config, values } : values
+          const now = beijingNow()
+          const actorId = Number(pending.at(-1)?.requested_by || current?.created_by || 1)
+          const [insert] = await run(`INSERT INTO risk_policy_versions
+            (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)
+            VALUES (?, ?, ?, ?, '待生效风控参数改为立即生效', ?, ?)`,
+          [row.policy_set_id, Number(current?.version_no || 0) + 1, JSON.stringify(nextConfig), actorId, now, now])
+          await run('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [insert.insertId, now, row.policy_set_id])
+          await run("UPDATE risk_policy_change_items SET status = 'applied', effective_at = ? WHERE policy_set_id = ? AND status = 'pending'", [now, row.policy_set_id])
+        })
+      }
+    }
+  },
+  {
+    id: '088_review_path_and_tiered_memory',
+    up: async () => {
+      const addColumn = async (table, name, definition) => {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`)
+      }
+      const addIndex = async (table, name, definition) => {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`CREATE INDEX \`${name}\` ON \`${table}\` (${definition})`)
+      }
+
+      await addColumn('trade_review_cases', 'path_evidence_status', "path_evidence_status VARCHAR(24) NOT NULL DEFAULT 'pending' AFTER evidence_hash")
+      await addColumn('trade_review_cases', 'path_evidence_reason', 'path_evidence_reason VARCHAR(255) DEFAULT NULL AFTER path_evidence_status')
+      await addColumn('trade_review_cases', 'path_evidence_hash', 'path_evidence_hash CHAR(64) DEFAULT NULL AFTER path_evidence_reason')
+
+      await addColumn('experience_memory_items', 'strategy_version', 'strategy_version INT NOT NULL DEFAULT 1 AFTER strategy_id')
+      await addColumn('experience_memory_items', 'memory_tier', "memory_tier VARCHAR(16) NOT NULL DEFAULT 'short' AFTER strategy_version")
+      await addColumn('experience_memory_items', 'expires_at', 'expires_at DATETIME DEFAULT NULL AFTER confirmed_at')
+      await addColumn('experience_memory_items', 'last_matched_at', 'last_matched_at DATETIME DEFAULT NULL AFTER expires_at')
+      await addColumn('experience_memory_items', 'match_count', 'match_count INT NOT NULL DEFAULT 0 AFTER last_matched_at')
+      await addIndex('experience_memory_items', 'idx_memory_tier_retrieval', 'user_id, status, memory_tier, strategy_id, strategy_version, expires_at')
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS experience_long_term_memories (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL, strategy_id INT NOT NULL, strategy_version INT NOT NULL,
+        symbol VARCHAR(64) DEFAULT NULL, timeframe VARCHAR(16) DEFAULT NULL,
+        direction VARCHAR(20) DEFAULT NULL, entry_method VARCHAR(32) DEFAULT NULL,
+        market_regime VARCHAR(64) DEFAULT NULL,
+        source_memory_ids_json LONGTEXT NOT NULL, source_set_hash CHAR(64) NOT NULL,
+        summary_text LONGTEXT NOT NULL, conditions_json LONGTEXT NOT NULL,
+        confidence DECIMAL(8,6) NOT NULL DEFAULT 0.5, support_count INT NOT NULL DEFAULT 0,
+        token_count INT NOT NULL DEFAULT 0, status VARCHAR(24) NOT NULL DEFAULT 'candidate',
+        candidate_reason VARCHAR(255) DEFAULT NULL, confirmed_at DATETIME DEFAULT NULL,
+        revoked_at DATETIME DEFAULT NULL, last_matched_at DATETIME DEFAULT NULL,
+        match_count INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_long_memory_source_set (user_id, strategy_id, strategy_version, source_set_hash),
+        INDEX idx_long_memory_retrieval (user_id, status, strategy_id, strategy_version, symbol, timeframe, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await addColumn('memory_injection_logs', 'strategy_version', 'strategy_version INT DEFAULT NULL AFTER strategy_id')
+      await addColumn('memory_injection_logs', 'selected_long_memory_ids_json', 'selected_long_memory_ids_json TEXT DEFAULT NULL AFTER selected_summary_ids_json')
+      await queryRun(`UPDATE experience_memory_items SET memory_tier = 'short', strategy_version = COALESCE(strategy_version, 1)
+        WHERE memory_tier IS NULL OR memory_tier = '' OR strategy_version IS NULL`)
     }
   }
 ]

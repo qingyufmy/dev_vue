@@ -8,13 +8,15 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { authMiddleware } from '../../middleware/auth.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
+import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { createMemoryFromApprovedReview, listMemoryItems, revokeMemoryItem, activateDuplicateMemory,
-  getMemorySettings, setMemorySettings, rollbackMemorySummary } from './memory-system.js'
+  getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
+  revokeLongTermMemory } from './memory-system.js'
 import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
   listPlatformExperience, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteModelProfile,
@@ -73,12 +75,6 @@ function reviewError(res, error) {
   return res.status(status).json({ ok: false, error: code })
 }
 
-const modelProviderDefaults = {
-  deepseek: 'https://api.deepseek.com', gpt: 'https://api.openai.com/v1', kimi: 'https://api.moonshot.cn/v1',
-  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1', zhipu: 'https://open.bigmodel.cn/api/paas/v4',
-  doubao: 'https://ark.cn-beijing.volces.com/api/v3', volcengine_agent_plan: 'https://ark.cn-beijing.volces.com/api/plan/v3',
-}
-
 router.get('/ai/inference-preferences', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, preference: await getInferencePreference(req.user.id, req.query.session_id || 'default') }) }
   catch (error) { reviewError(res, error) }
@@ -123,13 +119,16 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
     const resolved = await resolveOwnedModelProfileForRuntime(Number(req.params.id), ownerId)
     if (!resolved.model) throw new Error(resolved.error || 'model_unavailable')
     const provider = resolved.model.provider || resolved.model.api_provider
-    const protocol = provider === 'volcengine_agent_plan' ? 'responses' : 'chat_completions'
-    const base = String(resolved.model.api_base_url || modelProviderDefaults[provider] || '').replace(/\/+$/, '')
+    const protocol = modelProviderProtocol(provider)
+    const base = String(resolved.model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
     if (!base) throw new Error('unsupported_model_provider')
     const started = Date.now()
     const result = await requestJsonObject({ url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
-      apiKey: resolved.model.api_key_encrypted, model: resolved.model.model_name, temperature: 0,
-      maxTokens: 40, protocol, messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: '{"ok":true}' }],
+      apiKey: resolved.model.api_key_encrypted, provider, model: resolved.model.model_name, temperature: 0,
+      maxTokens: 40, protocol,
+      thinkingEnabled: provider === 'kimi_code' ? true : Boolean(resolved.model.thinking_enabled),
+      reasoningEffort: provider === 'kimi_code' && resolved.model.model_name === 'k3' ? 'max' : resolved.model.reasoning_effort,
+      messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: '{"ok":true}' }],
       usageContext: { userId: req.user.id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'manual', strategyId: null } })
     res.json({ ok: true, latency_ms: Date.now() - started, provider, model_name: resolved.model.model_name, response_valid: result?.ok === true })
   } catch (error) { reviewError(res, error) }
@@ -302,13 +301,9 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
     const subscriptions = await listSubscriptions(req.user.id, req.user.role)
     const rows = []
     for (const account of accounts) {
-      const pending = await queryAll(`SELECT rpci.field_code, rpci.new_value_json, rpci.effective_at
-        FROM risk_policy_change_items rpci JOIN risk_policy_sets rps ON rps.id = rpci.policy_set_id
-        WHERE rps.scope = 'account' AND rps.owner_user_id = ? AND rps.trading_account_id = ? AND rpci.status = 'pending'
-        ORDER BY rpci.effective_at`, [req.user.id, account.id])
       const riskState = await queryAll(`SELECT halt_status, halt_reason, cooldown_until, user_kill_switch, data_complete,
         data_incomplete_reason, last_risk_snapshot_at FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id])
-      rows.push({ account, risk_state: riskState[0] || null, effective: await resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }), pending_changes: pending, subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) })
+      rows.push({ account, risk_state: riskState[0] || null, effective: await resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }), subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) })
     }
     res.json({ ok: true, accounts: rows, rule_metadata: RISK_RULES })
   } catch (error) { reviewError(res, error) }
@@ -337,7 +332,7 @@ router.put('/ai/risk-center/:accountId', authMiddleware, async (req, res) => {
       const inserted = await queryRun(`INSERT INTO risk_policy_sets (scope, owner_user_id, trading_account_id, name, status, created_at, updated_at) VALUES ('account', ?, ?, ?, 'active', ?, ?)`, [req.user.id, accountId, `账户 ${accountId} 自定义风控`, now, now])
       sets = [{ id: inserted.insertId }]
     }
-    res.json({ ok: true, result: await submitRiskPolicyChanges({ policySetId: sets[0].id, actorId: req.user.id, changes: req.body?.changes || {}, reason: req.body?.reason || '用户更新账户风控', cooldownHours: 2 }) })
+    res.json({ ok: true, result: await submitRiskPolicyChanges({ policySetId: sets[0].id, actorId: req.user.id, changes: req.body?.changes || {}, reason: req.body?.reason || '用户更新账户风控' }) })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -462,14 +457,14 @@ router.post('/ai/reviews/:id/confirm', authMiddleware, async (req, res) => {
     const result = await confirmReviewCase({ caseId, userId: req.user.id, versionId: req.body?.version_id, action: req.body?.action, tradeProcessIssueStatus: req.body?.trade_process_issue_status })
     let memory = null
     let platformExperience = null
+    let postActionError = null
     if (req.body?.action === 'approve') {
-      if (req.user.role === 'admin') {
-        platformExperience = await createPlatformExperienceCandidateFromApprovedReview(caseId, req.user.id)
-      } else {
-        memory = await createMemoryFromApprovedReview(caseId, req.user.id)
-      }
+      try {
+        if (req.user.role === 'admin') platformExperience = await createPlatformExperienceCandidateFromApprovedReview(caseId, req.user.id)
+        else memory = await createMemoryFromApprovedReview(caseId, req.user.id)
+      } catch (error) { postActionError = String(error?.message || error).slice(0, 128) }
     }
-    res.json({ ok: true, ...result, memory, platform_experience: platformExperience })
+    res.json({ ok: true, ...result, memory, platform_experience: platformExperience, post_action_error: postActionError })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -506,6 +501,18 @@ router.post('/ai/memory/:id/revoke', authMiddleware, async (req, res) => {
 router.post('/ai/memory/:id/activate', authMiddleware, async (req, res) => {
   if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, item: await activateDuplicateMemory(Number(req.params.id), req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/memory/long/:id/confirm', authMiddleware, async (req, res) => {
+  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  try { res.json({ ok: true, item: await confirmLongTermMemory(Number(req.params.id), req.user.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/memory/long/:id/revoke', authMiddleware, async (req, res) => {
+  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  try { res.json({ ok: true, ...(await revokeLongTermMemory(Number(req.params.id), req.user.id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -594,6 +601,7 @@ export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome
   getReviewAdminHealth } from './review-workflow.js'
 export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
   createMemoryFromApprovedReview, setMemorySettings, getMemorySettings, listMemoryItems,
+  confirmLongTermMemory, revokeLongTermMemory,
   revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
   maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,
   startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
