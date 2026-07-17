@@ -2417,6 +2417,15 @@ const migrations = [
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs' AND INDEX_NAME = 'idx_period_review_retry'`)
       if (!indexes.length) await queryRun('CREATE INDEX idx_period_review_retry ON period_review_jobs (job_type, status, next_attempt_at)')
     }
+  },
+  {
+    id: '095_period_review_failed_state_repair',
+    up: async () => {
+      await queryRun(`UPDATE period_review_cases cases JOIN period_review_jobs jobs
+        ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+        SET cases.status = 'failed', cases.updated_at = ?
+        WHERE jobs.status = 'failed' AND cases.current_version_id IS NULL AND cases.status <> 'failed'`, [beijingNow()])
+    }
   }
 ]
 

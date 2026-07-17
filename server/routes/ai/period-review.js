@@ -256,7 +256,9 @@ async function upsertDailyGroup(group, clock) {
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
-    const needsPeriodMarketUpgrade = !existingEvidence.period_market
+    const marketGeneratedAt = Date.parse(existingEvidence.period_market?.generated_at || '')
+    const needsPeriodMarketUpgrade = Number(existingEvidence.period_market?.schema_version || 0) < 2 || !existingEvidence.period_market?.generated_at
+      || (existingEvidence.period_market.status !== 'complete' && (!Number.isFinite(marketGeneratedAt) || Date.now() - marketGeneratedAt >= 3600000))
     if (existingCase.current_version_id || (existingJob && !needsPeriodMarketUpgrade)) return { id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
   }
@@ -291,7 +293,7 @@ async function upsertDailyGroup(group, clock) {
       evidence_json = IF(current_version_id IS NOT NULL, evidence_json, VALUES(evidence_json)),
       evidence_hash = IF(current_version_id IS NOT NULL, evidence_hash, VALUES(evidence_hash)),
       source_count = IF(current_version_id IS NOT NULL, source_count, VALUES(source_count)),
-      status = IF(status IN ('generating','approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
+      status = IF(status IN ('generating','failed','approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
     group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion, group.strategyScope,
     group.offsetMinutes, group.startUtcMs, group.endUtcMs, complete ? 'ready' : 'incomplete', complete ? 'complete' : 'incomplete',
     reasons.join(',').slice(0, 255) || null, JSON.stringify(evidence), evidenceHash, sourceIds.length, now, now,

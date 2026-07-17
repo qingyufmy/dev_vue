@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
-import { monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
+import { isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
   it('uses the calibrated MT5 offset for daily boundaries', () => {
@@ -144,6 +144,8 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('uk_platform_experience_period_version')
     expect(migration).toContain('093_period_review_single_job_slot')
     expect(migration).toContain('uk_period_review_case_job_slot')
+    expect(migration).toContain('094_period_review_retry_backoff')
+    expect(migration).toContain('095_period_review_failed_state_repair')
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })
 })
@@ -155,6 +157,8 @@ describe('period market evidence', () => {
     expect(requiredReviewCandleCount(start, end, 'M1')).toBe(1642)
     expect(requiredReviewCandleCount(start, end, 'M5')).toBe(490)
     expect(requiredReviewCandleCount(start, end, 'H1')).toBe(226)
+    expect(isReviewGridAligned(start + 4 * 3600000, start, 'H4')).toBe(true)
+    expect(isReviewGridAligned(start + 3 * 3600000, start, 'H4')).toBe(false)
   })
 
   it('removes raw daily candles from the monthly digest but preserves structural conclusions', () => {
