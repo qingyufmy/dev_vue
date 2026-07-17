@@ -390,12 +390,13 @@ async function claimDailyReviewJob() {
       FROM period_review_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
       WHERE jobs.job_type = 'daily_review'
         AND jobs.job_slot = 0
-        AND (jobs.status = 'queued' OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
+        AND ((jobs.status = 'queued' AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at <= ?))
+          OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
         AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'daily' AND cases.evidence_status = 'complete'
-      ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow()])
+      ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow(), beijingNow()])
     if (!rows[0]) return null
     const token = crypto.randomUUID()
-    await run(`UPDATE period_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?,
+    await run(`UPDATE period_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
       attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(300), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
@@ -449,8 +450,10 @@ async function finishDailyReviewSuccess(job, generated) {
 
 async function finishDailyReviewFailure(job, error) {
   const exhausted = job.attempt_count >= Number(job.max_attempts)
+  const retryAt = exhausted ? null : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
   await queryRun(`UPDATE period_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
-    lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`, [exhausted ? 'failed' : 'queued', safeError(error), beijingNow(), job.id, job.lease_token])
+    lease_expires_at = NULL, next_attempt_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
+  [exhausted ? 'failed' : 'queued', safeError(error), retryAt, beijingNow(), job.id, job.lease_token])
   await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`, [exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
 }
 
@@ -473,12 +476,13 @@ async function claimMonthlyReviewJob() {
       FROM period_review_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
       WHERE jobs.job_type = 'monthly_review'
         AND jobs.job_slot = 0
-        AND (jobs.status = 'queued' OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
+        AND ((jobs.status = 'queued' AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at <= ?))
+          OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
         AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'monthly' AND cases.evidence_status = 'complete'
-      ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow()])
+      ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow(), beijingNow()])
     if (!rows[0]) return null
     const token = crypto.randomUUID()
-    await run(`UPDATE period_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?,
+    await run(`UPDATE period_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
       attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(420), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
@@ -536,9 +540,10 @@ async function finishMonthlyReviewSuccess(job, generated) {
 
 async function finishMonthlyReviewFailure(job, error) {
   const exhausted = job.attempt_count >= Number(job.max_attempts)
+  const retryAt = exhausted ? null : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
   await queryRun(`UPDATE period_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
-    lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`,
-  [exhausted ? 'failed' : 'queued', safeError(error), beijingNow(), job.id, job.lease_token])
+    lease_expires_at = NULL, next_attempt_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
+  [exhausted ? 'failed' : 'queued', safeError(error), retryAt, beijingNow(), job.id, job.lease_token])
   await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`,
   [exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
 }
@@ -584,8 +589,12 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
   const rows = await queryAll(`SELECT cases.id, cases.period_type, cases.period_key, cases.trading_account_id,
       cases.strategy_id, cases.strategy_version, cases.strategy_scope, cases.timezone_offset_minutes,
       cases.status, cases.evidence_status, cases.evidence_reason, cases.source_count,
-      cases.current_version_id, cases.approved_version_id, cases.evidence_json, cases.created_at, cases.updated_at
-    FROM period_review_cases cases ${where}
+      cases.current_version_id, cases.approved_version_id, cases.evidence_json, cases.created_at, cases.updated_at,
+      COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
+      (SELECT jobs.last_error_code FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS last_error_code,
+      (SELECT jobs.next_attempt_at FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS next_attempt_at
+    FROM period_review_cases cases
+    LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id ${where}
     ORDER BY cases.period_start_utc_msc DESC, cases.period_type, cases.id DESC LIMIT ? OFFSET ?`, params)
   return rows.map(row => {
     const evidence = parse(row.evidence_json, {})
@@ -594,7 +603,13 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
 }
 
 export async function getPeriodReviewCase(periodCaseId, userId) {
-  const reviewCase = await queryOne('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ?', [periodCaseId, userId])
+  const reviewCase = await queryOne(`SELECT cases.*,
+      COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
+      (SELECT jobs.last_error_code FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS last_error_code,
+      (SELECT jobs.next_attempt_at FROM period_review_jobs jobs WHERE jobs.period_case_id = cases.id AND jobs.job_slot = 0 LIMIT 1) AS next_attempt_at
+    FROM period_review_cases cases
+    LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id
+    WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
   if (!reviewCase) throw new Error('period_review_not_found')
   const [versions, sources] = await Promise.all([
     queryAll(`SELECT id, version_no, parent_version_id, author_type, author_user_id, content_json,
@@ -656,7 +671,7 @@ export async function retryPeriodReviewCase(periodCaseId, userId) {
     const [jobs] = await run('SELECT * FROM period_review_jobs WHERE period_case_id = ? AND job_type = ? AND job_slot = 0 LIMIT 1 FOR UPDATE', [periodCaseId, jobType])
     const now = beijingNow()
     if (jobs[0]) await run(`UPDATE period_review_jobs SET status = 'queued', attempt_count = 0, last_error_code = NULL,
-      lease_token = NULL, lease_expires_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`, [now, jobs[0].id])
+      lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`, [now, jobs[0].id])
     else await run(`INSERT INTO period_review_jobs
       (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
       VALUES (?, ?, ?, 'queued', 0, 3, ?, ?)`, [periodCaseId, jobType, `retry:${jobType}:${periodCaseId}:${crypto.randomUUID()}`, now, now])

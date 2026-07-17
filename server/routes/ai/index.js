@@ -14,7 +14,7 @@ import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedu
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
-import { createMemoryFromApprovedReview, listMemoryItems, revokeMemoryItem, activateDuplicateMemory,
+import { createMemoryFromApprovedReview, listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
   revokeLongTermMemory, createMemoryFromApprovedPeriodReview } from './memory-system.js'
 import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
@@ -525,7 +525,12 @@ router.get('/ai/admin/reviews/health', authMiddleware, async (req, res) => {
 
 router.get('/ai/memory', authMiddleware, async (req, res) => {
   if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
-  try { res.json({ ok: true, items: await listMemoryItems(req.user.id, req.query), settings: await getMemorySettings(req.user.id) }) }
+  try {
+    const [items, summaries, settings] = await Promise.all([
+      listMemoryItems(req.user.id, req.query), listMemorySummaries(req.user.id, req.query), getMemorySettings(req.user.id),
+    ])
+    res.json({ ok: true, items, summaries, settings })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -644,7 +649,7 @@ export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome
   getReviewAdminHealth } from './review-workflow.js'
 export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
   createMemoryFromApprovedReview, createMemoryFromApprovedPeriodReview,
-  setMemorySettings, getMemorySettings, listMemoryItems,
+  setMemorySettings, getMemorySettings, listMemoryItems, listMemorySummaries,
   confirmLongTermMemory, revokeLongTermMemory,
   revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
   maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,

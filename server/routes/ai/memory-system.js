@@ -273,6 +273,14 @@ export async function listMemoryItems(userId, { status = null, limit = 100 } = {
   return [...longItems, ...shortItems].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, Number(params.at(-1)))
 }
 
+export async function listMemorySummaries(userId, { limit = 50 } = {}) {
+  return queryAll(`SELECT id, scope_key, period_review_case_id, period_review_version_id, period_key,
+      version_no, summary_text, token_count, status, model_profile_id, credential_source,
+      created_at, invalidated_at
+    FROM experience_memory_summaries WHERE user_id = ?
+    ORDER BY created_at DESC, id DESC LIMIT ?`, [userId, Math.min(100, Math.max(1, Number(limit || 50)))])
+}
+
 async function expireShortMemories(userId) {
   await queryRun(`UPDATE experience_memory_items SET status = 'expired', updated_at = ?
     WHERE user_id = ? AND memory_tier = 'short' AND status IN ('active','duplicate_candidate')

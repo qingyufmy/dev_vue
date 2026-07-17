@@ -2406,6 +2406,17 @@ const migrations = [
       if (!indexes.length) await queryRun(`CREATE UNIQUE INDEX uk_period_review_case_job_slot
         ON period_review_jobs (period_case_id, job_type, job_slot)`)
     }
+  },
+  {
+    id: '094_period_review_retry_backoff',
+    up: async () => {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs' AND COLUMN_NAME = 'next_attempt_at'`)
+      if (!columns.length) await queryRun('ALTER TABLE period_review_jobs ADD COLUMN next_attempt_at DATETIME DEFAULT NULL AFTER lease_expires_at')
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs' AND INDEX_NAME = 'idx_period_review_retry'`)
+      if (!indexes.length) await queryRun('CREATE INDEX idx_period_review_retry ON period_review_jobs (job_type, status, next_attempt_at)')
+    }
   }
 ]
 

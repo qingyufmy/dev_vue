@@ -74,7 +74,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('id="global-risk" class="tab-panel admin-only"')
     expect(html).toContain('id="accountExceptionList"')
     expect(html).not.toContain('id="account-review"')
-    expect(app).toContain('api(`/api/ai/reviews${query}`)')
+    expect(app).toContain('api(`/api/ai/period-reviews${query}`)')
     expect(app).toContain('api("/api/ai/memory")')
     expect(routes).toContain("WHERE id = ? AND user_id = ?")
   })
