@@ -11,7 +11,7 @@ vi.mock('../../server/routes/ai/memory-system.js', () => ({
 }))
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256: value => `hash:${value}` }))
 
-import { createPlatformExperienceCandidateFromApprovedReview, retrievePlatformExperience,
+import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation, retrievePlatformExperience,
   sanitizePlatformExperienceText } from '../../server/routes/ai/platform-experience.js'
 
 describe('platform strategy experience boundary', () => {
@@ -46,6 +46,24 @@ describe('platform strategy experience boundary', () => {
     expect(result.mode).toBe('shadow')
     expect(result.promptBlock).toBe('')
     expect(result.selectedItemIds).toEqual([4])
+    expect(db.queryAll.mock.calls[0][0]).toContain("JSON_TYPE(JSON_EXTRACT(context_json, '$.symbol')) = 'NULL'")
+    expect(db.queryAll.mock.calls[0][0]).toContain("JSON_TYPE(JSON_EXTRACT(context_json, '$.timeframe')) = 'NULL'")
+  })
+
+  it('summarizes shadow hits and paired inference differences without claiming profitability', async () => {
+    db.queryAll
+      .mockResolvedValueOnce([
+        { id:3, strategy_id:1, strategy_title:'趋势策略', policy_mode:'shadow', selected_item_ids_json:'[7]', token_count:20, symbol:'XAUUSD', timeframe:'H1', created_at:'2026-07-17 12:00:00' },
+        { id:2, strategy_id:1, strategy_title:'趋势策略', policy_mode:'shadow', selected_item_ids_json:'[]', token_count:0, symbol:'XAUUSD', timeframe:'H1', created_at:'2026-07-17 11:00:00' },
+      ])
+      .mockResolvedValueOnce([{ id:7, strategy_id:1, strategy_title:'趋势策略', lesson_text:'等待结构确认', status:'active', platform_version:1, published_at:'2026-07-17 10:00:00' }])
+      .mockResolvedValueOnce([{ id:9, strategy_id:1, strategy_title:'趋势策略', user_id:2, user_nickname:'用户', signal_id:8,
+        status:'succeeded', treatment_digest_json:'{"signal_type":"buy","confidence":0.8}', control_digest_json:'{"signal_type":"hold","confidence":0.5}', created_at:'2026-07-17 12:01:00' }])
+    const result = await getPlatformExperienceEvaluation({ days:30 })
+    expect(result.retrieval).toMatchObject({ observed_total:2, shadow_total:2, shadow_hits:1, shadow_hit_rate:0.5 })
+    expect(result.items[0].hit_count).toBe(1)
+    expect(result.paired).toMatchObject({ total:1, completed:1, changed:1 })
+    expect(result.paired.recent_runs[0].changed_fields).toEqual(['signal_type', 'confidence'])
   })
 
   it('keeps platform experience separate from personal memory in runtime code', () => {

@@ -2205,7 +2205,7 @@ async function loadReviewMemory() {
     $(id).checked = key === "paired_experiment_enabled" ? userFlags[key] === true : userFlags[key] ?? true;
   }
   renderReviewCases();
-  if (isAdmin) renderPlatformExperience(memoryData.items || [], memoryData.policies || []);
+  if (isAdmin) renderPlatformExperience(memoryData.items || [], memoryData.policies || [], memoryData.evaluation || {});
   else renderMemoryItems(memoryData.items || [], memoryData.settings || {}, memoryData.summaries || []);
 }
 
@@ -2531,7 +2531,29 @@ function renderMemoryItems(items, settings, summaries = []) {
   initIcons();
 }
 
-function renderPlatformExperience(items, policies) {
+function renderPlatformExperienceEvaluation(evaluation = {}) {
+  const host = $("platformExperienceEvaluation"); if (!host) return;
+  const retrieval = evaluation.retrieval || {}, paired = evaluation.paired || {};
+  const strategies = evaluation.strategies || [], recent = evaluation.recent_retrievals || [], pairs = paired.recent_runs || [];
+  const percent = value => `${Math.round(Math.max(0, Math.min(1, Number(value || 0))) * 100)}%`;
+  const modeLabels = { shadow:"影子评估", active:"正式使用", off:"已关闭" };
+  const diffLabels = { signal_type:"信号方向", entry_method:"入场方式", confidence:"置信度", recommended_volume:"建议手数", stop_loss_price:"止损", take_profit_1_price:"止盈", limit_price:"挂单价格" };
+  const recentRows = recent.slice(0, 10).map(row => {
+    const selected = row.selected_items || [];
+    return `<div class="experience-evaluation-row"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</strong><span>${escapeHtml(row.symbol || '通用品种')} · ${escapeHtml(row.timeframe || '全周期')} · ${escapeHtml(modeLabels[row.policy_mode] || row.policy_mode)}</span></div><div class="experience-hit-result ${selected.length ? 'is-hit' : 'is-miss'}"><strong>${selected.length ? `命中 ${selected.length} 条` : '未命中'}</strong><span>${selected.length ? selected.map(item => `#${Number(item.id)}`).join('、') : '当前条件没有合适经验'}</span></div><time>${escapeHtml(row.created_at || '--')}</time></div>`;
+  }).join("");
+  const strategyRows = strategies.map(row => `<div class="experience-strategy-row"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</strong><span>最近运行 ${escapeHtml(row.latest_at || '--')}</span></div><span>${Number(row.shadow_retrievals || 0)} 次影子检索</span><span>${Number(row.shadow_hits || 0)} 次命中</span><strong>${percent(row.shadow_hit_rate)}</strong></div>`).join("");
+  const pairedRows = pairs.slice(0, 8).map(row => `<div class="experience-evaluation-row paired"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id || '--'}`)}</strong><span>信号 #${escapeHtml(row.signal_id || '--')} · ${escapeHtml(row.user_nickname || `用户 #${row.user_id}`)}</span></div><div class="experience-hit-result ${row.changed_fields?.length ? 'is-hit' : 'is-miss'}"><strong>${row.status === 'succeeded' ? (row.changed_fields?.length ? '推理结果有差异' : '推理结果一致') : '对照运行失败'}</strong><span>${row.changed_fields?.length ? row.changed_fields.map(key => diffLabels[key] || key).join('、') : row.error_code ? '未获得有效对照结果' : '关键输出没有变化'}</span></div><time>${escapeHtml(row.created_at || '--')}</time></div>`).join("");
+  host.innerHTML = `<section class="platform-evaluation-section">
+    <header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="scan-search" size="18"></i></span><div><span class="review-section-kicker">效果评估</span><h3>经验检索表现</h3><p>影子评估只衡量能否找到合适经验；配对实验才比较记忆是否改变推理结果。</p></div></div><span class="evaluation-window">最近 ${Number(evaluation.window_days || 30)} 天</span></header>
+    <div class="experience-evaluation-metrics"><div><span>可评估影子检索</span><strong>${Number(retrieval.shadow_total || 0)}</strong><small>从经验发布后开始统计</small></div><div><span>经验命中</span><strong>${Number(retrieval.shadow_hits || 0)}</strong><small>找到可用经验</small></div><div><span>影子命中率</span><strong>${percent(retrieval.shadow_hit_rate)}</strong><small>命中次数 ÷ 可评估检索</small></div><div><span>配对实验</span><strong>${Number(paired.total || 0)}</strong><small>${Number(paired.changed || 0)} 次产生差异</small></div></div>
+    ${strategies.length ? `<div class="experience-strategy-list"><div class="experience-list-heading"><strong>按策略统计</strong><span>命中率只代表检索适配度，不代表盈利提升</span></div>${strategyRows}</div>` : ''}
+    <details class="experience-evaluation-details" ${recent.length ? 'open' : ''}><summary><span><strong>最近检索记录</strong><small>${recent.length ? `显示最近 ${Math.min(10, recent.length)} 条` : '尚无检索记录'}</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="experience-evaluation-list">${recentRows || '<div class="platform-evaluation-empty"><strong>尚无影子检索数据</strong><span>策略运行并完成经验检索后，这里会显示命中详情。</span></div>'}</div></details>
+    <details class="experience-evaluation-details"><summary><span><strong>配对推理对照</strong><small>${pairs.length ? `最近 ${Math.min(8, pairs.length)} 次` : '尚未启用或尚未产生数据'}</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="experience-evaluation-list">${pairedRows || '<div class="platform-evaluation-empty"><strong>还没有配对实验</strong><span>影子评估不会额外调用模型；只有明确启用付费配对实验后，才能比较使用经验与不使用经验的推理差异。</span></div>'}</div></details>
+  </section>`;
+}
+
+function renderPlatformExperience(items, policies, evaluation = {}) {
   setText("memoryActiveStat", items.filter(item => item.status === "active").length);
   const policyHost = $("platformExperiencePolicies");
   const modeLabels = { off:"未启用", shadow:"影子评估", active:"正式启用" };
@@ -2548,6 +2570,7 @@ function renderPlatformExperience(items, policies) {
       </article>`).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="route-off" size="20"></i></span><strong>暂无平台策略</strong><span>创建平台策略后，可以在这里配置统一经验。</span></div>'}</div>
     </section>`;
   }
+  renderPlatformExperienceEvaluation(evaluation);
   const host = $("memoryItemsList"); if (!host) return;
   const labels = { candidate:"待发布", active:"已发布", revoked:"已撤销" };
   const candidateCount = items.filter(item => item.status === "candidate").length;

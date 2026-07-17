@@ -19,7 +19,7 @@ import { createMemoryFromApprovedReview, listMemoryItems, listMemorySummaries, r
   revokeLongTermMemory, createMemoryFromApprovedPeriodReview } from './memory-system.js'
 import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
   createPlatformExperienceCandidateFromApprovedPeriodReview, listPlatformExperience,
-  updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
+  getPlatformExperienceEvaluation, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
@@ -589,10 +589,10 @@ router.post('/ai/memory/summaries/:id/rollback', authMiddleware, async (req, res
 router.get('/ai/admin/platform-experience', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
   try {
-    const [items, policies] = await Promise.all([
-      listPlatformExperience(req.query), getPlatformExperiencePolicies(),
+    const [items, policies, evaluation] = await Promise.all([
+      listPlatformExperience(req.query), getPlatformExperiencePolicies(), getPlatformExperienceEvaluation(req.query),
     ])
-    res.json({ ok: true, items, policies })
+    res.json({ ok: true, items, policies, evaluation })
   } catch (error) { reviewError(res, error) }
 })
 

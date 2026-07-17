@@ -165,8 +165,10 @@ export async function retrievePlatformExperience({ strategyId, symbol = null, ti
   const budget = Number(policy?.runtime_token_budget || 800)
   const items = await queryAll(`SELECT * FROM platform_strategy_experience_items
     WHERE strategy_id = ? AND status = 'active'
-      AND (JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = ?)
-      AND (JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = ?)
+      AND (JSON_EXTRACT(context_json, '$.symbol') IS NULL OR JSON_TYPE(JSON_EXTRACT(context_json, '$.symbol')) = 'NULL'
+        OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = ?)
+      AND (JSON_EXTRACT(context_json, '$.timeframe') IS NULL OR JSON_TYPE(JSON_EXTRACT(context_json, '$.timeframe')) = 'NULL'
+        OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = ?)
     ORDER BY platform_version DESC, updated_at DESC LIMIT ?`, [strategyId, symbol, timeframe, maxItems])
   const selected = []
   let used = 0
@@ -183,4 +185,101 @@ export async function retrievePlatformExperience({ strategyId, symbol = null, ti
     (strategy_id, policy_mode, selected_item_ids_json, token_count, symbol, timeframe, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`, [strategyId, mode, JSON.stringify(selectedIds), used, symbol, timeframe, beijingNow()])
   return { mode, promptBlock, selectedItemIds: selectedIds, tokenCount: used, policyVersion: Number(policy?.policy_version || 1) }
+}
+
+function selectedExperienceIds(value) {
+  return [...new Set((parse(value, []) || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
+}
+
+function pairedDifference(row) {
+  const treatment = parse(row.treatment_digest_json, {}) || {}
+  const control = parse(row.control_digest_json, {}) || {}
+  const fields = ['signal_type', 'entry_method', 'confidence', 'recommended_volume', 'stop_loss_price', 'take_profit_1_price', 'limit_price']
+  const changedFields = row.control_digest_json ? fields.filter(key => JSON.stringify(treatment[key] ?? null) !== JSON.stringify(control[key] ?? null)) : []
+  return { treatment, control:row.control_digest_json ? control : null, changed_fields:changedFields,
+    direction_changed:changedFields.includes('signal_type'), execution_changed:changedFields.includes('entry_method') }
+}
+
+export async function getPlatformExperienceEvaluation({ days = 30, limit = 20 } = {}) {
+  const windowDays = Math.min(90, Math.max(1, Math.trunc(Number(days) || 30)))
+  const recentLimit = Math.min(50, Math.max(5, Math.trunc(Number(limit) || 20)))
+  const [logs, items, pairedRows] = await Promise.all([
+    queryAll(`SELECT logs.*, apt.title AS strategy_title
+      FROM platform_strategy_experience_logs logs
+      JOIN auto_prompt_types apt ON apt.id = logs.strategy_id
+      WHERE logs.created_at >= DATE_SUB(NOW(), INTERVAL ${windowDays} DAY)
+      ORDER BY logs.created_at DESC, logs.id DESC LIMIT 5000`),
+    queryAll(`SELECT pei.id, pei.strategy_id, pei.lesson_text, pei.status, pei.platform_version, pei.published_at,
+        apt.title AS strategy_title
+      FROM platform_strategy_experience_items pei
+      JOIN auto_prompt_types apt ON apt.id = pei.strategy_id
+      WHERE pei.status = 'active' ORDER BY pei.strategy_id, pei.platform_version DESC, pei.id DESC`),
+    queryAll(`SELECT runs.*, apt.title AS strategy_title, u.nickname AS user_nickname,
+        outcomes.net_profit, outcomes.status AS outcome_status
+      FROM ai_paired_inference_runs runs
+      LEFT JOIN auto_prompt_types apt ON apt.id = runs.strategy_id
+      LEFT JOIN users u ON u.id = runs.user_id
+      LEFT JOIN signal_outcomes outcomes ON outcomes.signal_id = runs.signal_id
+      WHERE runs.created_at >= DATE_SUB(NOW(), INTERVAL ${windowDays} DAY)
+      ORDER BY runs.created_at DESC, runs.id DESC LIMIT 500`),
+  ])
+  const itemMap = new Map(items.map(item => [Number(item.id), item]))
+  const firstPublishedByStrategy = new Map()
+  for (const item of items) {
+    if (!item.published_at) continue
+    const strategyId = Number(item.strategy_id)
+    const current = firstPublishedByStrategy.get(strategyId)
+    if (!current || String(item.published_at) < String(current)) firstPublishedByStrategy.set(strategyId, item.published_at)
+  }
+  // A retrieval before the strategy had any published experience is not a
+  // miss. Excluding it keeps the hit rate tied to runs that could actually
+  // select something.
+  const evaluationLogs = logs.filter(log => {
+    const firstPublished = firstPublishedByStrategy.get(Number(log.strategy_id))
+    return firstPublished && String(log.created_at) >= String(firstPublished)
+  })
+  const strategyMap = new Map()
+  const itemHits = new Map(items.map(item => [Number(item.id), 0]))
+  let hits = 0; let shadowTotal = 0; let shadowHits = 0; let activeTotal = 0; let activeHits = 0; let tokens = 0
+  for (const log of evaluationLogs) {
+    const selected = selectedExperienceIds(log.selected_item_ids_json)
+    const hit = selected.length > 0
+    hits += hit ? 1 : 0; tokens += Number(log.token_count || 0)
+    if (log.policy_mode === 'shadow') { shadowTotal += 1; shadowHits += hit ? 1 : 0 }
+    if (log.policy_mode === 'active') { activeTotal += 1; activeHits += hit ? 1 : 0 }
+    for (const id of selected) itemHits.set(id, Number(itemHits.get(id) || 0) + 1)
+    const key = Number(log.strategy_id)
+    const row = strategyMap.get(key) || { strategy_id:key, strategy_title:log.strategy_title, retrievals:0, hits:0, shadow_retrievals:0, shadow_hits:0, token_count:0, latest_at:null }
+    row.retrievals += 1; row.hits += hit ? 1 : 0; row.token_count += Number(log.token_count || 0)
+    if (log.policy_mode === 'shadow') { row.shadow_retrievals += 1; row.shadow_hits += hit ? 1 : 0 }
+    if (!row.latest_at) row.latest_at = log.created_at
+    strategyMap.set(key, row)
+  }
+  const recentRetrievals = evaluationLogs.slice(0, recentLimit).map(log => {
+    const selectedIds = selectedExperienceIds(log.selected_item_ids_json)
+    return { id:Number(log.id), strategy_id:Number(log.strategy_id), strategy_title:log.strategy_title,
+      policy_mode:log.policy_mode, symbol:log.symbol, timeframe:log.timeframe, token_count:Number(log.token_count || 0),
+      selected_item_ids:selectedIds, selected_items:selectedIds.map(id => ({ id, lesson_text:itemMap.get(id)?.lesson_text || null })), created_at:log.created_at }
+  })
+  const completedPairs = pairedRows.filter(row => row.status === 'completed' || row.status === 'succeeded')
+  const changedPairs = completedPairs.filter(row => pairedDifference(row).changed_fields.length > 0)
+  return {
+    generated_at:beijingNow(), window_days:windowDays,
+    retrieval:{ observed_total:logs.length, total:evaluationLogs.length, hits, misses:evaluationLogs.length - hits,
+      hit_rate:evaluationLogs.length ? hits / evaluationLogs.length : 0,
+      shadow_total:shadowTotal, shadow_hits:shadowHits, shadow_hit_rate:shadowTotal ? shadowHits / shadowTotal : 0,
+      active_total:activeTotal, active_hits:activeHits, token_count:tokens },
+    strategies:[...strategyMap.values()].map(row => ({ ...row, hit_rate:row.retrievals ? row.hits / row.retrievals : 0,
+      shadow_hit_rate:row.shadow_retrievals ? row.shadow_hits / row.shadow_retrievals : 0 })),
+    items:items.map(item => ({ ...item, hit_count:Number(itemHits.get(Number(item.id)) || 0) })),
+    recent_retrievals:recentRetrievals,
+    paired:{ total:pairedRows.length, completed:completedPairs.length, changed:changedPairs.length,
+      failed:pairedRows.filter(row => row.status === 'failed').length,
+      recent_runs:pairedRows.slice(0, recentLimit).map(row => ({ id:Number(row.id), strategy_id:Number(row.strategy_id || 0),
+        strategy_title:row.strategy_title || null, user_id:Number(row.user_id), user_nickname:row.user_nickname || null,
+        signal_id:Number(row.signal_id || 0) || null, status:row.status, error_code:row.error_code || null,
+        net_profit:row.net_profit == null ? null : Number(row.net_profit), outcome_status:row.outcome_status || null,
+        created_at:row.created_at, ...pairedDifference(row) })),
+    },
+  }
 }
