@@ -96,7 +96,7 @@ export async function buildStrategyContext(userId, symbol, account, positions, p
   }
 }
 
-export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual', marketDataPlan = null, useChanAnalysis = null) {
+export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual', marketDataPlan = null, useChanAnalysis = null, fallbackMarketMeta = null) {
   let tags = Array.isArray(marketDataPlan?.timeframes)
     ? marketDataPlan.timeframes.map(item => ({ tf: String(item.timeframe || '').toUpperCase(), count: Number(item.kline_count) || 100 }))
     : parseTimeframeTags(prompt, mode)
@@ -107,22 +107,27 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   }
   const useChan = useChanAnalysis == null ? /\{\{USE_CHAN\}\}/.test(prompt) : Boolean(useChanAnalysis)
   const timeframes = {}
+  const missingTimeframes = []
   for (const { tf, count } of tags) {
     const historyHintKey = chanHistoryHintKey(userId, symbol, tf)
     const historyCount = resolveChanHistoryCount(userId, symbol, tf, count, useChan)
     let rates
+    let chanDataQuality = null
     if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
       rates = fallbackRates
+      chanDataQuality = fallbackMarketMeta
     } else {
       const resp = await platformRates(userId, { symbol, timeframe: tf, count: historyCount })
       rates = (resp && resp.rates) ? resp.rates : []
+      chanDataQuality = resp?.market_meta || null
     }
-    if (rates.length === 0) continue
+    if (rates.length === 0) { missingTimeframes.push(tf); continue }
     let visibleRates = rates.slice(-count)
     let summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
       computeChan: useChan,
       chanRates: rates,
       requestedChanHistoryCount: historyCount,
+      chanDataQuality,
     })
     const chanNeedsMoreHistory = summary.chan && (summary.chan.segment_count === 0 || summary.chan.center_count === 0)
     if (useChan && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || chanNeedsMoreHistory)) {
@@ -132,11 +137,13 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
         const retryRates = retry?.rates || []
         if (retryRates.length > rates.length) {
           rates = retryRates
+          chanDataQuality = retry?.market_meta || chanDataQuality
           visibleRates = rates.slice(-count)
           summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
             computeChan: true,
             chanRates: rates,
             requestedChanHistoryCount: CHAN_MAX_HISTORY_COUNT,
+            chanDataQuality,
           })
         }
       }
@@ -147,6 +154,9 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   return {
     strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
     required_timeframes: tags.map(t => t.tf),
+    used_timeframes: Object.keys(timeframes),
+    missing_timeframes: missingTimeframes,
+    context_status: missingTimeframes.length === 0 ? 'complete' : 'partial',
     timeframes,
   }
 }
@@ -188,7 +198,10 @@ export async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   const market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis)
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta)
+  market.requested_timeframes = market.strategy_context.required_timeframes
+  market.used_timeframes = market.strategy_context.used_timeframes
+  market.missing_timeframes = market.strategy_context.missing_timeframes
   if (policy.useChanAnalysis) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
   await attachAtrAnchor(userId, symbol, market, primaryTf)
   let memory = { promptBlock: '', mode: 'off', logId: null }

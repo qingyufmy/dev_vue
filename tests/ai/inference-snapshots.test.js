@@ -10,7 +10,8 @@ describe('shared market inference boundary', () => {
   it('is invariant to administrator account and inventory changes', () => {
     const base = {
       symbol: 'XAUUSD.a', timeframe: 'M5', latest_price: 2400, atr_14: 12,
-      strategy_context: { timeframes: { M5: { klines: [[1, 2, 3, 1, 2, 8]], summary: { pending_orders: [{ ticket: 1 }], rsi_14: 50 } } } },
+      chan: { divergence: { type: 'top' } },
+      strategy_context: { timeframes: { M5: { klines: [[1, 2, 3, 1, 2, 8]], summary: { pending_orders: [{ ticket: 1 }], rsi_14: 50, chan: { divergence: { type: 'top' } } } } } },
     }
     const first = buildSharedMarketSnapshot({ ...base, account: { balance: 1 }, positions: { total_positions: 8 }, pending_orders: [{ ticket: 1 }] }, { volumeMin: 0.01, volumeMax: 0.05 })
     const second = buildSharedMarketSnapshot({ ...base, account: { balance: 999999 }, positions: { total_positions: 0 }, pending_orders: [] }, { volumeMin: 0.01, volumeMax: 0.05 })
@@ -19,7 +20,8 @@ describe('shared market inference boundary', () => {
     expect(first).not.toHaveProperty('account')
     expect(first).not.toHaveProperty('positions')
     expect(first).not.toHaveProperty('pending_orders')
-    expect(first.strategy_context.timeframes.M5.summary).toEqual({ rsi_14: 50 })
+    expect(first).not.toHaveProperty('chan')
+    expect(first.strategy_context.timeframes.M5.summary).toEqual({ rsi_14: 50, chan: { divergence: { type: 'top' } } })
   })
 })
 

@@ -27,6 +27,7 @@ const FEED_LAST_N_DIVERGENCES = 6
 const ENABLE_DIVERGENCE = true
 const MIN_KLINES_FOR_CHAN = 30
 const DIVERGENCE_MIN_AREA_RATIO = 0.85
+const DIVERGENCE_MIN_PEAK_RATIO = 0.95
 const MACD_WARMUP_BARS = 40
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
@@ -406,13 +407,13 @@ function sameCandidate(a, b) {
 
 function buildSegments(confirmedBis, options = {}) {
   const primary = buildSegmentsFromAnchor(confirmedBis, options)
-  if (options.trustedStart !== false) return { ...primary, stable: true }
-  if (!primary.resynced) return { ...primary, candidate: null, stable: false }
+  if (options.trustedStart !== false) return { ...primary, stable: true, historicalSegmentRuns: primary.segments.length >= 2 ? [primary.segments] : [] }
+  if (!primary.resynced) return { ...primary, candidate: null, stable: false, historicalSegmentRuns: [] }
 
   const firstStructureBiId = primary.segments[0]?.start_bi_id ?? primary.candidate?.bi_ids?.[0]
   const firstStructureIndex = confirmedBis.findIndex(bi => bi.id === firstStructureBiId)
   const latestProbeStart = firstStructureIndex - MIN_BIS_PER_SEGMENT
-  if (latestProbeStart < 1) return { segments: [], candidate: null, resynced: true, stable: false }
+  if (latestProbeStart < 1) return { segments: [], candidate: null, resynced: true, stable: false, historicalSegmentRuns: [] }
 
   // Validate the claimed terminal structure from every alternate start that
   // still leaves room to resync before that structure begins. Two arbitrary
@@ -423,7 +424,7 @@ function buildSegments(confirmedBis, options = {}) {
     const probe = buildSegmentsFromAnchor(confirmedBis.slice(start), { trustedStart: false })
     if (probe.resynced) decompositions.push(probe)
   }
-  if (decompositions.length < 2) return { segments: [], candidate: null, resynced: true, stable: false }
+  if (decompositions.length < 2) return { segments: [], candidate: null, resynced: true, stable: false, historicalSegmentRuns: [] }
 
   const segmentValidators = decompositions.filter(result => result.segments.length > 0)
   let commonCount = 0
@@ -440,11 +441,25 @@ function buildSegments(confirmedBis, options = {}) {
   // available start is missing the same older context. Two consecutive common
   // segments are the minimum evidence that decomposition phase has recovered.
   const segments = commonCount >= 2 ? primary.segments.slice(-commonCount) : []
+  const supportedPairs = primary.segments.slice(0, -1).map((segment, index) => {
+    const next = primary.segments[index + 1]
+    return decompositions.filter(result => result.segments.some((candidate, candidateIndex) => (
+      sameSegmentBoundary(segment, candidate) && sameSegmentBoundary(next, result.segments[candidateIndex + 1])
+    ))).length >= 2
+  })
+  const historicalSegmentRuns = []
+  for (let index = 0; index < supportedPairs.length;) {
+    if (!supportedPairs[index]) { index++; continue }
+    const start = index
+    while (index + 1 < supportedPairs.length && supportedPairs[index + 1]) index++
+    historicalSegmentRuns.push(primary.segments.slice(start, index + 2))
+    index++
+  }
   const candidateValidators = decompositions.filter(result => result.candidate)
   const candidate = primary.candidate && candidateValidators.length >= 2 && candidateValidators.every(result => sameCandidate(primary.candidate, result.candidate))
     ? primary.candidate
     : null
-  return { segments, candidate, resynced: true, stable: segments.length > 0 || candidate !== null }
+  return { segments, candidate, resynced: true, stable: segments.length > 0 || candidate !== null, historicalSegmentRuns }
 }
 
 // === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
@@ -502,9 +517,11 @@ function buildCenters(components) {
 function divergenceResult(reason, overrides = {}) {
   return {
     type: 'none', state: 'unavailable', confirmed: false, segment_confirmed: false, strength: 'none', reason,
+    divergence_key: null,
     category: null, center_id: null, entry_segment_id: null, departure_segment_id: null,
     entry_segment: null, departure_segment: null,
     area_cur: 0, area_prev: 0, peak_cur: 0, peak_prev: 0,
+    area_ratio: null, peak_ratio: null, area_reduction_pct: null, peak_reduction_pct: null,
     price_extreme_cur: 0, price_extreme_prev: 0,
     ...overrides,
   }
@@ -520,13 +537,25 @@ function segmentLocation(segment, bis, rates = []) {
   const endIndex = Number.isFinite(Number(segment.raw_end_idx))
     ? Number(segment.raw_end_idx)
     : segmentBis.length ? Math.max(...segmentBis.map(b => Number(b.raw_end_idx))) : null
+  const startUtcMs = startIndex != null && Number.isFinite(Number(rates[startIndex]?.time_utc_msc)) ? Number(rates[startIndex].time_utc_msc) : null
+  const endUtcMs = endIndex != null && Number.isFinite(Number(rates[endIndex]?.time_utc_msc)) ? Number(rates[endIndex].time_utc_msc) : null
+  const startBrokerTime = startIndex != null ? rates[startIndex]?.time ?? null : null
+  const endBrokerTime = endIndex != null ? rates[endIndex]?.time ?? null : null
+  const stableId = startUtcMs != null && endUtcMs != null
+    ? `${segment.dir || 'unknown'}:${startUtcMs}:${endUtcMs}`
+    : startBrokerTime != null && endBrokerTime != null ? `${segment.dir || 'unknown'}:${startBrokerTime}:${endBrokerTime}` : null
   return {
     id: segment.id ?? null,
+    stable_id: stableId,
     dir: segment.dir || null,
     start_index: startIndex,
     end_index: endIndex,
-    start_time: startIndex != null ? rates[startIndex]?.time ?? null : null,
-    end_time: endIndex != null ? rates[endIndex]?.time ?? null : null,
+    start_time: startBrokerTime,
+    end_time: endBrokerTime,
+    start_broker_time: startBrokerTime,
+    end_broker_time: endBrokerTime,
+    start_time_utc_msc: startUtcMs,
+    end_time_utc_msc: endUtcMs,
     start_price: price(segment.start_price),
     end_price: price(segment.end_price),
     high: price(segment.high),
@@ -575,6 +604,8 @@ function evaluateDivergence(current, segments, bis, macdHist, centers = [], rate
   const prev = validSegs.find(s => s.id === lastCenter.start_segment_id - 1)
   if (!prev || prev.dir !== current.dir) return emptyResult('no_entry_segment')
   const cur = current
+  const entryLocation = segmentLocation(prev, bis, rates)
+  const departureLocation = segmentLocation(cur, bis, rates)
   const context = {
     state,
     confirmed: false,
@@ -583,8 +614,8 @@ function evaluateDivergence(current, segments, bis, macdHist, centers = [], rate
     center_id: lastCenter.id ?? null,
     entry_segment_id: prev.id ?? null,
     departure_segment_id: cur.id ?? null,
-    entry_segment: segmentLocation(prev, bis, rates),
-    departure_segment: segmentLocation(cur, bis, rates),
+    entry_segment: entryLocation,
+    departure_segment: departureLocation,
   }
 
   const comparisonBis = [...prev.bi_ids, ...cur.bi_ids]
@@ -603,8 +634,10 @@ function evaluateDivergence(current, segments, bis, macdHist, centers = [], rate
 
   if (areaCur === 0 || areaPrev === 0) return divergenceResult('invalid_macd_area', { ...context, area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev) })
 
-  const areaDiverged = areaCur <= areaPrev * DIVERGENCE_MIN_AREA_RATIO
-  const heightDiverged = peakCur < peakPrev
+  const areaRatio = areaPrev > 0 ? areaCur / areaPrev : null
+  const peakRatio = peakPrev > 0 ? peakCur / peakPrev : null
+  const areaDiverged = areaRatio != null && areaRatio <= DIVERGENCE_MIN_AREA_RATIO
+  const heightDiverged = peakRatio != null && peakRatio <= DIVERGENCE_MIN_PEAK_RATIO
   const strength = areaDiverged && heightDiverged ? 'strong' : 'weak'
   const reason = areaDiverged && heightDiverged
     ? 'macd_area_and_height_divergence'
@@ -613,15 +646,22 @@ function evaluateDivergence(current, segments, bis, macdHist, centers = [], rate
       : heightDiverged
         ? 'macd_height_divergence_only'
         : 'macd_no_divergence'
-  const macdFields = { area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev) }
+  const macdFields = {
+    area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev),
+    area_ratio: areaRatio == null ? null : round3(areaRatio),
+    peak_ratio: peakRatio == null ? null : round3(peakRatio),
+    area_reduction_pct: areaRatio == null ? null : round2((1 - areaRatio) * 100),
+    peak_reduction_pct: peakRatio == null ? null : round2((1 - peakRatio) * 100),
+  }
+  const divergenceKey = type => departureLocation?.stable_id ? `${type}:${departureLocation.stable_id}` : null
 
   if (cur.dir === 'up') {
     if (cur.high <= prev.high) return divergenceResult('no_price_extreme_break', { ...context, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) })
-    if (areaDiverged || heightDiverged) return divergenceResult(reason, { ...context, type: 'top', confirmed: state === 'confirmed', trend_confirmed: false, strength, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) })
+    if (areaDiverged || heightDiverged) return divergenceResult(reason, { ...context, type: 'top', divergence_key: divergenceKey('top'), confirmed: state === 'confirmed', trend_confirmed: false, strength, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) })
     return divergenceResult(reason, { ...context, ...macdFields, price_extreme_cur: round5(cur.high), price_extreme_prev: round5(prev.high) })
   } else {
     if (cur.low >= prev.low) return divergenceResult('no_price_extreme_break', { ...context, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) })
-    if (areaDiverged || heightDiverged) return divergenceResult(reason, { ...context, type: 'bottom', confirmed: state === 'confirmed', trend_confirmed: false, strength, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) })
+    if (areaDiverged || heightDiverged) return divergenceResult(reason, { ...context, type: 'bottom', divergence_key: divergenceKey('bottom'), confirmed: state === 'confirmed', trend_confirmed: false, strength, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) })
     return divergenceResult(reason, { ...context, ...macdFields, price_extreme_cur: round5(cur.low), price_extreme_prev: round5(prev.low) })
   }
 }
@@ -667,6 +707,7 @@ function summarizeSegment(segment, bis = [], rates = []) {
   const location = segmentLocation(segment, bis, rates)
   return {
     id: segment.id,
+    stable_id: location?.stable_id ?? null,
     dir: segment.dir,
     start_price: round5(segment.start_price),
     end_price: round5(segment.end_price),
@@ -679,6 +720,10 @@ function summarizeSegment(segment, bis = [], rates = []) {
     end_index: location?.end_index ?? null,
     start_time: location?.start_time ?? null,
     end_time: location?.end_time ?? null,
+    start_broker_time: location?.start_broker_time ?? null,
+    end_broker_time: location?.end_broker_time ?? null,
+    start_time_utc_msc: location?.start_time_utc_msc ?? null,
+    end_time_utc_msc: location?.end_time_utc_msc ?? null,
   }
 }
 
@@ -711,6 +756,11 @@ function emptyChanResult(overrides = {}) {
     requested_history_count: 0,
     received_history_count: 0,
     history_sufficient: false,
+    requested_closed_history_count: 0,
+    closed_history_sufficient: false,
+    clock_status: 'unknown',
+    time_location_reliable: false,
+    cache_gap_refilled: false,
     window_resynced: false,
     window_stable: false,
     raw_bar_count: 0,
@@ -720,6 +770,8 @@ function emptyChanResult(overrides = {}) {
     bi_count: 0,
     segment_count: 0,
     center_count: 0,
+    historical_segment_run_count: 0,
+    historical_segment_count: 0,
     current_bi: null,
     developing_bi: null,
     recent_bis: [],
@@ -741,10 +793,22 @@ function emptyChanResult(overrides = {}) {
 // === Chan Theory: Assembly ===
 function computeChan(rates, timeframe, macdHist, options = {}) {
   const warnings = []
+  const dataQuality = options.dataQuality && typeof options.dataQuality === 'object' ? options.dataQuality : null
   const requestedHistoryCount = Number(options.requestedHistoryCount) || rates?.length || 0
   const historySufficient = Array.isArray(rates) && rates.length >= requestedHistoryCount
   if (!historySufficient) warnings.push('history_bars_below_requested')
   const closedRates = Array.isArray(rates) ? rates.slice(0, -1) : []
+  const requestedClosedHistoryCount = Math.max(requestedHistoryCount - 1, 0)
+  const closedHistorySufficient = closedRates.length >= requestedClosedHistoryCount
+  if (!closedHistorySufficient && historySufficient) warnings.push('closed_history_bars_below_requested')
+  const utcTimes = closedRates.map(rate => Number(rate?.time_utc_msc))
+  const utcLocationComplete = closedRates.length > 0 && utcTimes.every(value => Number.isFinite(value) && value > 0)
+  const utcSequenceMonotonic = utcLocationComplete && utcTimes.every((value, index) => index === 0 || value > utcTimes[index - 1])
+  const clockStatus = String(dataQuality?.clock_status || rates?.at?.(-1)?.clock_status || 'unknown')
+  const timeLocationReliable = dataQuality == null || (clockStatus === 'verified' && utcLocationComplete && utcSequenceMonotonic)
+  if (dataQuality && clockStatus !== 'verified') warnings.push('market_clock_unverified')
+  if (dataQuality && !utcLocationComplete) warnings.push('utc_time_location_incomplete')
+  if (dataQuality && utcLocationComplete && !utcSequenceMonotonic) warnings.push('utc_time_sequence_invalid')
   const closedMacdHist = Array.isArray(macdHist) ? macdHist.slice(0, closedRates.length) : []
   if (closedRates.length < MIN_KLINES_FOR_CHAN) {
     return emptyChanResult({
@@ -752,6 +816,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       requested_history_count: requestedHistoryCount,
       received_history_count: rates?.length || 0,
       history_sufficient: historySufficient,
+      requested_closed_history_count: requestedClosedHistoryCount,
+      closed_history_sufficient: closedHistorySufficient,
+      clock_status: clockStatus,
+      time_location_reliable: timeLocationReliable,
       raw_bar_count: rates?.length || 0,
       closed_bar_count: closedRates.length,
       divergence: emptyDivergence('insufficient_klines'),
@@ -773,6 +841,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       requested_history_count: requestedHistoryCount,
       received_history_count: rates.length,
       history_sufficient: historySufficient,
+      requested_closed_history_count: requestedClosedHistoryCount,
+      closed_history_sufficient: closedHistorySufficient,
+      clock_status: clockStatus,
+      time_location_reliable: timeLocationReliable,
       raw_bar_count: rates.length,
       closed_bar_count: closedRates.length,
       processed_bar_count: bars.length,
@@ -785,7 +857,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       warnings,
     })
   }
-  const { segments, candidate, resynced, stable: windowStable } = buildSegments(confirmedBis, { trustedStart: false })
+  const { segments, candidate, resynced, stable: windowStable, historicalSegmentRuns = [] } = buildSegments(confirmedBis, { trustedStart: false })
   if (!resynced) warnings.push('segment_window_not_resynced')
   else if (!windowStable) warnings.push('segment_window_unstable')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
@@ -804,7 +876,21 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     else priceVsCenter = 'inside'
   }
   const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers, closedRates)
-  const recentDivergences = detectDivergenceHistory(validSegs, allBis, closedMacdHist, centers, closedRates)
+  const historicalDivergenceMap = new Map()
+  for (const run of historicalSegmentRuns) {
+    const runCenters = buildCenters(run)
+    for (const item of detectDivergenceHistory(run, allBis, closedMacdHist, runCenters, closedRates)) {
+      const key = item.divergence_key || `${item.type}:${item.departure_segment_id}:${item.departure_segment?.end_index}`
+      historicalDivergenceMap.set(key, item)
+    }
+  }
+  if (divergence.type === 'top' || divergence.type === 'bottom') {
+    const key = divergence.divergence_key || `${divergence.type}:${divergence.departure_segment_id}:${divergence.departure_segment?.end_index}`
+    historicalDivergenceMap.set(key, divergence)
+  }
+  const recentDivergences = [...historicalDivergenceMap.values()]
+    .sort((a, b) => Number(a.departure_segment?.end_index || 0) - Number(b.departure_segment?.end_index || 0))
+    .slice(-FEED_LAST_N_DIVERGENCES)
   const formingSegment = buildFormingSegment(candidate, allBis, (lastSeg?.id || 0) + 1)
   const formingDivergence = detectFormingDivergence(candidate, validSegs, allBis, closedMacdHist, centers, closedRates)
   if (divergence.type !== 'none') {
@@ -814,24 +900,31 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   }
 
   let reliability = 'low'
-  if (historySufficient && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
-  else if (historySufficient && validSegs.length > 0) reliability = 'medium'
+  if (historySufficient && closedHistorySufficient && timeLocationReliable && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
+  else if (historySufficient && closedHistorySufficient && validSegs.length > 0) reliability = 'medium'
 
   let status = 'ok'
   if (validSegs.length === 0 && confirmedBis.length >= 3) status = 'unreliable_segments'
   else if (validSegs.length > 0 && centers.length === 0) status = 'partial'
   else if (warnings.length > 0) status = 'partial'
 
-  console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
+  if (DEBUG_CHAN) console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
   return {
     status, reliability,
     requested_history_count: requestedHistoryCount,
     received_history_count: rates.length,
     history_sufficient: historySufficient,
+    requested_closed_history_count: requestedClosedHistoryCount,
+    closed_history_sufficient: closedHistorySufficient,
+    clock_status: clockStatus,
+    time_location_reliable: timeLocationReliable,
+    cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
     window_resynced: resynced,
     window_stable: windowStable,
     raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
     fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
+    historical_segment_run_count: historicalSegmentRuns.length,
+    historical_segment_count: historicalSegmentRuns.reduce((sum, run) => sum + run.length, 0),
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
     developing_bi: developingBi,
     recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
@@ -1001,7 +1094,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const chanCloses = chanRates === rates ? closes : chanRates.map(r => parseFloat(r.close))
   const chanMacdSeries = chanRates === rates ? macdSeries : calculateMacdSeries(chanCloses)
   const chan = options.computeChan
-    ? computeChan(chanRates, timeframe, chanMacdSeries.histSeries, { requestedHistoryCount: options.requestedChanHistoryCount })
+    ? computeChan(chanRates, timeframe, chanMacdSeries.histSeries, { requestedHistoryCount: options.requestedChanHistoryCount, dataQuality: options.chanDataQuality })
     : undefined
 
   return {

@@ -128,6 +128,23 @@ describe('buildStrategyContextFromTags', () => {
     expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
     expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
   })
+  it('reports missing timeframes as a partial strategy context', async () => {
+    const fallbackRates = Array.from({ length: 100 }, (_, i) => ({
+      time: `m${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100',
+    }))
+    mockMt5Bridge.mockResolvedValue({ status: 'error', rates: [] })
+    const result = await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance: 10000 }, [], 'analyze {{MTF:M5:100}} {{MTF:H1:80}}', 'M5', fallbackRates, 'manual'
+    )
+    expect(result).toMatchObject({
+      context_status: 'partial',
+      required_timeframes: ['M5', 'H1'],
+      used_timeframes: ['M5'],
+      missing_timeframes: ['H1'],
+    })
+    expect(result.timeframes).toHaveProperty('M5')
+    expect(result.timeframes).not.toHaveProperty('H1')
+  })
 })
 
 describe('attachAtrAnchor', () => {

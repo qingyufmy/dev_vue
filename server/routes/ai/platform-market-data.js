@@ -157,10 +157,11 @@ function mergeRates(closed, live, count) {
   return [...merged.values()].sort((a, b) => sortTime(a) - sortTime(b)).slice(-count)
 }
 
-function ratesOverlap(left, right) {
+function ratesJoinAtCacheBoundary(left, right) {
   if (!left.length || !right.length) return false
-  const timestamps = new Set(left.map(rate => Number(rate?.time_utc_msc)).filter(Number.isFinite))
-  return right.some(rate => timestamps.has(Number(rate?.time_utc_msc)))
+  const cachedBoundary = Number(left.at(-1)?.time_utc_msc)
+  if (!Number.isFinite(cachedBoundary)) return false
+  return right.some(rate => Number(rate?.time_utc_msc) === cachedBoundary)
 }
 
 async function maybeCleanupMarketData() {
@@ -194,7 +195,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
       }
       let closedRates = normalizeClosedRates(rates, effectiveClock.timezone_offset_minutes)
-      const gapDetected = probeOnly && !ratesOverlap(cachedResult.rates, closedRates)
+      const gapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, closedRates)
       if (gapDetected) {
         const refill = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: count + 1 }, { timeoutMs: 15000, noFallback: true })
         if (refill?.status !== 'success' || !Array.isArray(refill.rates) || !refill.rates.length) {

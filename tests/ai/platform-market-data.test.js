@@ -82,6 +82,18 @@ describe('platform market data', () => {
     expect(saved.map(item => item.close)).toEqual([2007, 2008, 2009])
   })
 
+  it('refills when the probe overlaps an old candle but misses the cached boundary', async () => {
+    redis.get.mockResolvedValue([rate(0, 2000), rate(1, 2001), rate(2, 2002)])
+    mt5Bridge
+      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(0, 2000), rate(8, 2008), rate(9, 2009)] })
+      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(7, 2007), rate(8, 2008), rate(9, 2009), rate(10, 2010), rate(11, 2011)] })
+    const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 4 })
+    expect(mt5Bridge).toHaveBeenCalledTimes(2)
+    expect(mt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ count: 5 }), expect.any(Object))
+    expect(result.market_meta.cache_gap_refilled).toBe(true)
+    expect(result.rates.map(item => item.close)).toEqual([2008, 2009, 2010, 2011])
+  })
+
   it('uses a partial hot cache as the baseline and refreshes the full window', async () => {
     redis.get.mockResolvedValue([rate(0, 2000)])
     mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(1, 2001), rate(2, 2002), rate(3, 2003), rate(4, 2004)] })

@@ -1151,14 +1151,13 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算指标与市场结构', progress_percent: 31 })
     const t2 = Date.now()
     let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis)
+    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis, ratesResp.market_meta)
     if (useChanAnalysis) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
     market.primary_timeframe = primaryTf
     await attachAtrAnchor(inferenceUserId, symbol, market, primaryTf)
-    const actualUsedTimeframes = Object.keys(market.strategy_context?.timeframes || {})
-    market.requested_timeframes = usedTimeframes
-    market.used_timeframes = actualUsedTimeframes
-    market.missing_timeframes = usedTimeframes.filter(tf => !actualUsedTimeframes.includes(tf))
+    market.requested_timeframes = market.strategy_context.required_timeframes || usedTimeframes
+    market.used_timeframes = market.strategy_context.used_timeframes || Object.keys(market.strategy_context?.timeframes || {})
+    market.missing_timeframes = market.strategy_context.missing_timeframes || market.requested_timeframes.filter(tf => !market.used_timeframes.includes(tf))
     market = buildSharedMarketSnapshot(market, {
       standardSymbol: symbol,
       volumeMin: config._ai_volume_min,

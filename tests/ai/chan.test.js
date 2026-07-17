@@ -695,7 +695,10 @@ describe('divergence segment locator', () => {
     hist[40] = 5; hist[41] = 5; hist[42] = 5
     hist[46] = 1; hist[47] = 1; hist[48] = 1
     const centers = [{ id: 7, status: 'closed', start_segment_id: 3, end_segment_id: 3 }]
-    const rates = Array.from({ length: 60 }, (_, index) => ({ time: `t${index}` }))
+    const rates = Array.from({ length: 60 }, (_, index) => ({
+      time: `t${index}`,
+      time_utc_msc: 1784185200000 + index * 60000,
+    }))
     return { segments, bis, hist, centers, rates }
   }
 
@@ -705,9 +708,19 @@ describe('divergence segment locator', () => {
     expect(result).toMatchObject({
       type: 'top', state: 'confirmed', confirmed: true,
       center_id: 7, entry_segment_id: 2, departure_segment_id: 4,
-      entry_segment: { start_time: 't40', end_time: 't42' },
-      departure_segment: { start_time: 't46', end_time: 't48' },
+      entry_segment: {
+        start_time: 't40', end_time: 't42',
+        start_broker_time: 't40', end_broker_time: 't42',
+        start_time_utc_msc: 1784187600000, end_time_utc_msc: 1784187720000,
+        stable_id: 'up:1784187600000:1784187720000',
+      },
+      departure_segment: {
+        start_time: 't46', end_time: 't48',
+        start_time_utc_msc: 1784187960000, end_time_utc_msc: 1784188080000,
+        stable_id: 'up:1784187960000:1784188080000',
+      },
     })
+    expect(result.divergence_key).toBe('top:up:1784187960000:1784188080000')
   })
 
   it('历史列表只保留已确认背驰并携带定位信息', () => {
@@ -771,6 +784,25 @@ describe('computeChan', () => {
     expect(second.segment_count).toBe(first.segment_count)
     expect(second.center_count).toBe(first.center_count)
     expect(second.developing_bi).not.toEqual(first.developing_bi)
+  })
+
+  it('marks Chan time locations unreliable when the market clock is unverified', () => {
+    const rates = makeRates(50).map((rate, index) => ({
+      ...rate,
+      time_utc_msc: 1784185200000 + index * 300000,
+    }))
+    const macdHist = rates.map((_, i) => Math.sin(i * 0.3) * 5)
+    const result = computeChan(rates, 'M5', macdHist, {
+      requestedHistoryCount: 50,
+      dataQuality: { clock_status: 'stale_or_unverified', cache_gap_refilled: true },
+    })
+    expect(result).toMatchObject({
+      clock_status: 'stale_or_unverified',
+      time_location_reliable: false,
+      cache_gap_refilled: true,
+      reliability: 'low',
+    })
+    expect(result.warnings).toContain('market_clock_unverified')
   })
 
   it('uses all post-fractal bars for the developing bi extreme', () => {
@@ -1075,6 +1107,21 @@ describe('detectFractals strict', () => {
 })
 
 describe('divergence min area ratio', () => {
+  it('does not treat a near-equal MACD peak as height divergence', () => {
+    const segs = [
+      { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },
+      { id: 5, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 130, low: 100 },
+    ]
+    const bis = Array.from({ length: 6 }, (_, i) => ({ id: i + 1, raw_start_idx: i + 40, raw_end_idx: i + 40 }))
+    const hist = Array(80).fill(0)
+    hist[40] = 5; hist[41] = 5; hist[42] = 5
+    hist[43] = 4.999999; hist[44] = 4.999999; hist[45] = 4.999999
+    const result = detectDivergence(segs, bis, hist, [{ status: 'confirmed', start_segment_id: 2, end_segment_id: 4 }])
+    expect(result.type).toBe('none')
+    expect(result.reason).toBe('macd_no_divergence')
+    expect(result.peak_ratio).toBe(1)
+  })
+
   it('areaCur=99 areaPrev=100不判背驰', () => {
     const segs = [
       { id: 1, dir: 'up', bi_ids: [1, 2, 3], weak: false, high: 125, low: 95 },

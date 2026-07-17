@@ -48,7 +48,7 @@ export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, v
     'avg_volatility', 'recent_high_20', 'recent_low_20', 'range_position_20', 'sma_distance_pct',
     'momentum_3_pct', 'momentum_10_pct', 'momentum_20_pct', 'volatility_pct', 'macd', 'rsi_14',
     'bollinger', 'atr_14', 'atr_14_closed', 'atr_anchor', 'atr_anchor_tf', 'support_resistance',
-    'kline_patterns', 'volume', 'strategy_score', 'kline_count', 'chan', 'strategy_context',
+    'kline_patterns', 'volume', 'strategy_score', 'kline_count', 'strategy_context',
     'primary_timeframe', 'requested_timeframes', 'used_timeframes', 'missing_timeframes',
   ]
   const result = {

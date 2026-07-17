@@ -1,5 +1,15 @@
 # 缠论结构计算说明文档
 
+## 背驰可靠性与时间定位补充（2026-07-17）
+
+- MACD 面积背驰阈值为 `area_cur / area_prev <= 0.85`，峰值背驰阈值为 `peak_cur / peak_prev <= 0.95`；接近相等的峰值不判背驰。
+- 输出 `area_ratio`、`peak_ratio`、`area_reduction_pct`、`peak_reduction_pct`，供模型与审计解释力度差异。
+- 实时判断仍使用末端稳定线段；`recent_divergences` 从至少两个独立分解结果支持的历史稳定结构链提取，按 UTC 离开段去重后保留最近 6 个。
+- 定位同时输出 UTC 毫秒时间、MT5 服务器时间、`stable_id` 与 `divergence_key`。
+- 只有行情时钟已校验、闭合 K 线 UTC 时间严格递增且历史完整时，时间定位才可靠。
+- 多周期上下文输出请求、已用、缺失周期和 `context_status`；缺失任一周期时为 `partial`。
+- `forming_divergence` 只是候选线段证据，不能单独触发交易。智能平仓不在本阶段范围内。
+
 ## 概述
 
 本系统在 `server/routes/ai/market-data.js` 中实现了**保守版缠论结构计算**，用于为 AI 模型提供真实的价格结构数据（分型→笔→线段→中枢→背驰），替代模型自行从 K 线推测结构。
