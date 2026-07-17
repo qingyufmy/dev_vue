@@ -55,7 +55,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：检查现有挂单状态，是否需要取消、是否已有同方向挂单"
 }, null, 2)
 
-export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods) {
+export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, experienceSelection = null) {
   const methods = normalizeEntryMethods(allowedEntryMethods)
   let schema
   try { schema = JSON.parse(baseFormat || DEFAULT_OUTPUT_FORMAT) } catch { schema = JSON.parse(DEFAULT_OUTPUT_FORMAT) }
@@ -64,6 +64,11 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods) {
   const labels = { market: '市价', limit: '限价挂单', stop: '突破挂单', stop_limit: '突破限价挂单' }
   schema.signal_type = `仅允许 ${signalTypes.join(' | ')}。hold 表示观望；本策略支持的入场方式：${methods.map(item => labels[item]).join('、')}。禁止输出未列出的信号类型。`
   schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。`
+  const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
+  schema.experience_usage = experienceIds.length
+    ? { considered_ids:experienceIds, used_ids:`只能填写实际采用的经验编号，且必须来自 ${experienceIds.join('、')}`,
+      rejected_ids:'已评估但不适用于当前行情的经验编号', influence:'中文说明经验对方向、入场方式或观望结论的具体影响；没有影响时说明原因' }
+    : { considered_ids:[], used_ids:[], rejected_ids:[], influence:'本次没有提供经验，必须返回空字符串' }
   const hasPending = methods.some(item => item !== 'market')
   if (!hasPending) {
     delete schema.limit_price
@@ -266,7 +271,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       }
     } catch (e) { console.warn('[LLM] Failed to load output schema from DB, using default:', e.message) }
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
-    const strategySchema = buildStrategyOutputFormat(outputFormat, config._allowed_entry_methods)
+    const strategySchema = buildStrategyOutputFormat(outputFormat, config._allowed_entry_methods, config._experienceSelection)
     outputFormat = strategySchema.outputFormat
     console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
@@ -384,6 +389,20 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.invalidation_condition = cleanText(parsed.invalidation_condition, 240)
   parsed.key_reasons = cleanList(parsed.key_reasons)
   parsed.risk_factors = cleanList(parsed.risk_factors)
+  const availableExperienceIds = [...new Set((config?._experienceSelection?.selectedItemIds || [])
+    .map(Number).filter(id => Number.isInteger(id) && id > 0))]
+  const allowedExperienceIds = new Set(availableExperienceIds)
+  const usage = parsed.experience_usage && typeof parsed.experience_usage === 'object' ? parsed.experience_usage : {}
+  const validUsageIds = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
+    .filter(id => allowedExperienceIds.has(id)))]
+  const usedExperienceIds = validUsageIds(usage.used_ids)
+  parsed.experience_usage = {
+    source:config?._experienceSelection?.source || null,
+    considered_ids:availableExperienceIds,
+    used_ids:usedExperienceIds,
+    rejected_ids:validUsageIds(usage.rejected_ids).filter(id => !usedExperienceIds.includes(id)),
+    influence:cleanText(usage.influence, 400),
+  }
   const bullishRaw = Number(parsed.bullish_score)
   const bearishRaw = Number(parsed.bearish_score)
   if (Number.isFinite(bullishRaw) && Number.isFinite(bearishRaw) && bullishRaw >= 0 && bearishRaw >= 0 && bullishRaw + bearishRaw > 0) {

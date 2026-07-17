@@ -16,6 +16,11 @@ describe('signal presentation', () => {
     expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
   })
 
+  it('persists only model usage ids that were actually considered', () => {
+    const result = normalizeDecisionFields({ experience_usage:{ source:'platform', considered_ids:[3, 4], used_ids:[4, 99], rejected_ids:[3, 99], influence:'等待确认' } })
+    expect(result.experience_usage).toEqual({ source:'platform', considered_ids:[3, 4], used_ids:[4], rejected_ids:[3], influence:'等待确认' })
+  })
+
   it('normalizes direction inclination without presenting it as confidence', () => {
     expect(normalizeDecisionFields({ bullish_score: 2, bearish_score: 1 })).toMatchObject({ bullish_score: 66.7, bearish_score: 33.3 })
     expect(normalizeDecisionFields({ bullish_score: 'bad', bearish_score: 50 })).toMatchObject({ bullish_score: null, bearish_score: null })

@@ -2538,9 +2538,11 @@ function renderPlatformExperienceEvaluation(evaluation = {}) {
   const percent = value => `${Math.round(Math.max(0, Math.min(1, Number(value || 0))) * 100)}%`;
   const modeLabels = { shadow:"影子评估", active:"正式使用", off:"已关闭" };
   const diffLabels = { signal_type:"信号方向", entry_method:"入场方式", confidence:"置信度", recommended_volume:"建议手数", stop_loss_price:"止损", take_profit_1_price:"止盈", limit_price:"挂单价格" };
+  const retrievalReasonLabels = { market_regime_match:"市场状态", trend_direction_match:"趋势方向", volatility_bucket_match:"波动状态", chan_trend_state_match:"缠论趋势", chan_segment_direction_match:"线段方向", chan_divergence_match:"背驰状态", chan_center_state_match:"中枢状态", entry_method_overlap:"入场方式" };
   const recentRows = recent.slice(0, 10).map(row => {
     const selected = row.selected_items || [];
-    return `<div class="experience-evaluation-row"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</strong><span>${escapeHtml(row.symbol || '通用品种')} · ${escapeHtml(row.timeframe || '全周期')} · ${escapeHtml(modeLabels[row.policy_mode] || row.policy_mode)}</span></div><div class="experience-hit-result ${selected.length ? 'is-hit' : 'is-miss'}"><strong>${selected.length ? `命中 ${selected.length} 条` : '未命中'}</strong><span>${selected.length ? selected.map(item => `#${Number(item.id)}`).join('、') : '当前条件没有合适经验'}</span></div><time>${escapeHtml(row.created_at || '--')}</time></div>`;
+    const details = Array.isArray(row.selection_details) ? row.selection_details : [];
+    return `<div class="experience-evaluation-row"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</strong><span>${escapeHtml(row.symbol || '通用品种')} · ${escapeHtml(row.timeframe || '全周期')} · ${escapeHtml(modeLabels[row.policy_mode] || row.policy_mode)}</span></div><div class="experience-hit-result ${selected.length ? 'is-hit' : 'is-miss'}"><strong>${selected.length ? `命中 ${selected.length} 条` : '未命中'}</strong><span>${selected.length ? selected.map(item => { const detail = details.find(entry => Number(entry.id) === Number(item.id)); const reasons = (detail?.reasons || []).map(reason => retrievalReasonLabels[reason]).filter(Boolean).slice(0, 3); return `#${Number(item.id)}${detail ? `（${Number(detail.score)}分${reasons.length ? ` · ${reasons.join('、')}` : ''}）` : ''}`; }).join('；') : '当前市场条件没有达到经验使用门槛'}</span></div><time>${escapeHtml(row.created_at || '--')}</time></div>`;
   }).join("");
   const strategyRows = strategies.map(row => `<div class="experience-strategy-row"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</strong><span>最近运行 ${escapeHtml(row.latest_at || '--')}</span></div><span>${Number(row.shadow_retrievals || 0)} 次影子检索</span><span>${Number(row.shadow_hits || 0)} 次命中</span><strong>${percent(row.shadow_hit_rate)}</strong></div>`).join("");
   const pairedRows = pairs.slice(0, 8).map(row => `<div class="experience-evaluation-row paired"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id || '--'}`)}</strong><span>信号 #${escapeHtml(row.signal_id || '--')} · ${escapeHtml(row.user_nickname || `用户 #${row.user_id}`)}</span></div><div class="experience-hit-result ${row.changed_fields?.length ? 'is-hit' : 'is-miss'}"><strong>${row.status === 'succeeded' ? (row.changed_fields?.length ? '推理结果有差异' : '推理结果一致') : '对照运行失败'}</strong><span>${row.changed_fields?.length ? row.changed_fields.map(key => diffLabels[key] || key).join('、') : row.error_code ? '未获得有效对照结果' : '关键输出没有变化'}</span></div><time>${escapeHtml(row.created_at || '--')}</time></div>`).join("");
@@ -3698,6 +3700,7 @@ function signalDecision(signal) {
   const sourceRisks = signal?.risk_factors || stored.risk_factors;
   const bullish = Number(signal?.bullish_score ?? stored.bullish_score);
   const bearish = Number(signal?.bearish_score ?? stored.bearish_score);
+  const experienceUsage = signal?.experience_usage || stored.experience_usage || {};
   const hasDirectionBias = Number.isFinite(bullish) && Number.isFinite(bearish) && bullish >= 0 && bearish >= 0 && bullish + bearish > 0;
   const total = hasDirectionBias ? bullish + bearish : 0;
   return {
@@ -3708,7 +3711,21 @@ function signalDecision(signal) {
     risks: Array.isArray(sourceRisks) ? sourceRisks.slice(0, 4) : [],
     bullishScore: hasDirectionBias ? Math.round(bullish / total * 1000) / 10 : null,
     bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
+    experienceUsage,
   };
+}
+
+function renderExperienceUsage(usage = {}) {
+  const considered = Array.isArray(usage.considered_ids) ? usage.considered_ids : [];
+  if (!considered.length) return "";
+  const used = Array.isArray(usage.used_ids) ? usage.used_ids : [];
+  const rejected = Array.isArray(usage.rejected_ids) ? usage.rejected_ids : [];
+  const source = usage.source === "platform" ? "平台经验" : "个人记忆";
+  return `<section class="analysis-experience-usage">
+    <div class="analysis-section-title"><i data-lucide="brain-circuit" size="15"></i><strong>经验采用情况</strong><span>${escapeHtml(source)}</span></div>
+    <div class="experience-usage-stats"><span>系统候选 <strong>${considered.length}</strong></span><span class="used">模型采用 <strong>${used.length}</strong></span><span>未采用 <strong>${rejected.length}</strong></span></div>
+    <p>${escapeHtml(usage.influence || (used.length ? `本次采用经验 #${used.join("、#")}` : "模型评估后未采用候选经验。"))}</p>
+  </section>`;
 }
 
 function renderDirectionBias(decision) {
@@ -4174,6 +4191,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
       <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
     </div>
+    ${renderExperienceUsage(decision.experienceUsage)}
     ${(decision.trigger || decision.invalidation) ? `<div class="decision-conditions">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</div>` : ""}
     ${inferenceChartShell(signal)}
     <div class="analysis-section">

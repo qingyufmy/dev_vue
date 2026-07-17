@@ -275,7 +275,8 @@ export async function handleAnalyze(userId, params) {
   let memory = { promptBlock: '', mode: 'off', logId: null }
   try {
     if (strategy.scope === 'platform') {
-      memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), symbol, timeframe: primaryTf })
+      memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), symbol, timeframe: primaryTf,
+        market, allowedEntryMethods:policy.entryMethods })
     } else {
       memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1),
         symbol, timeframe: primaryTf, mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
@@ -286,6 +287,9 @@ export async function handleAnalyze(userId, params) {
   if (config) {
     if (strategy.scope === 'platform') config._platformExperienceContext = memory.promptBlock
     else config._memoryContext = memory.promptBlock
+    config._experienceSelection = { source:strategy.scope === 'platform' ? 'platform' : 'personal',
+      selectedItemIds:memory.promptBlock ? (memory.selectedItemIds || []) : [],
+      selectionDetails:memory.promptBlock ? (memory.selectionDetails || []) : [] }
     config._memoryMode = strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off')
   }
   let renderedEvidence = null

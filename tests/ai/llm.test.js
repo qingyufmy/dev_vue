@@ -21,6 +21,22 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema).toHaveProperty('limit_price')
     expect(schema).not.toHaveProperty('stop_limit_price')
   })
+
+  it('requires the model to report usage only for retrieved experience ids', () => {
+    const schema = JSON.parse(buildStrategyOutputFormat(null, ['market'], { selectedItemIds:[7, 9] }).outputFormat)
+    expect(schema.experience_usage.considered_ids).toEqual([7, 9])
+    expect(schema.experience_usage.used_ids).toContain('7、9')
+  })
+})
+
+describe('experience usage normalization', () => {
+  it('drops hallucinated experience ids from model output', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ used_ids:[7, 999], rejected_ids:[8, 998], influence:'经验支持继续等待' } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[7, 8] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage).toMatchObject({ source:'platform', considered_ids:[7, 8], used_ids:[7], rejected_ids:[8] })
+  })
 })
 
 // Mock fetch

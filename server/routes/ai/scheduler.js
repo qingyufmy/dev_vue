@@ -1179,13 +1179,18 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
       }
     } else if (!isPrivate) {
       try {
-        memory = await retrievePlatformExperience({ strategyId: promptTypeId, symbol, timeframe: primaryTf })
+        memory = await retrievePlatformExperience({ strategyId: promptTypeId, symbol, timeframe: primaryTf,
+          market, allowedEntryMethods:config._allowed_entry_methods })
         config._platformExperienceContext = memory.promptBlock
         config._memoryMode = `platform_${memory.mode}`
       } catch (error) {
         l(`platform experience unavailable; continuing without it (${error.message})`)
       }
     }
+
+    config._experienceSelection = { source:isPrivate ? 'personal' : 'platform',
+      selectedItemIds:memory.promptBlock ? (memory.selectedItemIds || []) : [],
+      selectionDetails:memory.promptBlock ? (memory.selectionDetails || []) : [] }
 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型深度推理', progress_percent: 46 })
     const t3 = Date.now()

@@ -11,7 +11,7 @@ vi.mock('../../server/routes/ai/memory-system.js', () => ({
 }))
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256: value => `hash:${value}` }))
 
-import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation, retrievePlatformExperience,
+import { buildPlatformExperienceRetrievalContext, createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation, retrievePlatformExperience,
   sanitizePlatformExperienceText } from '../../server/routes/ai/platform-experience.js'
 
 describe('platform strategy experience boundary', () => {
@@ -48,6 +48,31 @@ describe('platform strategy experience boundary', () => {
     expect(result.selectedItemIds).toEqual([4])
     expect(db.queryAll.mock.calls[0][0]).toContain("JSON_TYPE(JSON_EXTRACT(context_json, '$.symbol')) = 'NULL'")
     expect(db.queryAll.mock.calls[0][0]).toContain("JSON_TYPE(JSON_EXTRACT(context_json, '$.timeframe')) = 'NULL'")
+  })
+
+  it('injects only experiences that pass deterministic market and entry-method matching', async () => {
+    db.queryOne.mockResolvedValue({ mode:'active', max_items:5, runtime_token_budget:800, policy_version:3 })
+    db.queryAll.mockResolvedValue([
+      { id:4, lesson_text:'下跌趋势底背驰后等待确认', platform_version:2,
+        context_json:JSON.stringify({ market_regime:'downward_exhaustion', trend_direction:'down', chan_divergence:'bottom', entry_methods:['limit'] }) },
+      { id:5, lesson_text:'上涨趋势突破追多', platform_version:3,
+        context_json:JSON.stringify({ market_regime:'uptrend', trend_direction:'up', chan_divergence:'top', entry_methods:['stop'] }) },
+    ])
+    const market = { strategy_score:{ momentum_alignment:-1, trend_strength:0.8 }, sma_distance_pct:-0.5, volatility_pct:0.4,
+      chan:{ trend_state:{ state:'downward_exhaustion', direction:'down' }, current_segment:{ dir:'down' },
+        divergence:{ confirmed:true, type:'bottom' }, reliability:'high' } }
+    const result = await retrievePlatformExperience({ strategyId:3, symbol:'XAUUSD', timeframe:'H1', market, allowedEntryMethods:['limit'] })
+    expect(result.selectedItemIds).toEqual([4])
+    expect(result.selectionDetails[0]).toMatchObject({ id:4, score:96 })
+    expect(result.promptBlock).toContain('[经验 #4 | 匹配度 96]')
+    expect(result.promptBlock).not.toContain('上涨趋势突破追多')
+    expect(result.retrievalContext).toMatchObject({ market_regime:'downward_exhaustion', trend_direction:'down', chan_divergence:'bottom' })
+  })
+
+  it('derives a stable pre-inference retrieval context without another model call', () => {
+    expect(buildPlatformExperienceRetrievalContext({ symbol:'XAUUSD', timeframe:'M15', allowedEntryMethods:['market'],
+      market:{ strategy_score:{ momentum_alignment:1, trend_strength:0.7 }, sma_distance_pct:0.2, volatility_pct:0.2 } }))
+      .toMatchObject({ symbol:'XAUUSD', timeframe:'M15', trend_direction:'up', market_regime:'uptrend', volatility_bucket:'normal' })
   })
 
   it('summarizes shadow hits and paired inference differences without claiming profitability', async () => {

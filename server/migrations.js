@@ -2468,6 +2468,19 @@ const migrations = [
         ELSE 'queued' END
         WHERE stage_updated_at IS NULL`)
     }
+  },
+  {
+    id: '097_platform_experience_retrieval_evidence',
+    up: async () => {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'platform_strategy_experience_logs'
+          AND COLUMN_NAME IN ('retrieval_context_json', 'selection_details_json')`)
+      const existing = new Set(columns.map(row => row.COLUMN_NAME))
+      if (!existing.has('retrieval_context_json')) await queryRun(`ALTER TABLE platform_strategy_experience_logs
+        ADD COLUMN retrieval_context_json JSON DEFAULT NULL AFTER timeframe`)
+      if (!existing.has('selection_details_json')) await queryRun(`ALTER TABLE platform_strategy_experience_logs
+        ADD COLUMN selection_details_json JSON DEFAULT NULL AFTER retrieval_context_json`)
+    }
   }
 ]
 

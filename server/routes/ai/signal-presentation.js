@@ -22,6 +22,22 @@ function directionScores(signal) {
   return { bullish_score: bullishScore, bearish_score: Math.round((100 - bullishScore) * 10) / 10 }
 }
 
+function experienceUsage(signal) {
+  const usage = signal?.experience_usage && typeof signal.experience_usage === 'object' ? signal.experience_usage : {}
+  const ids = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
+    .filter(id => Number.isInteger(id) && id > 0))].slice(0, 10)
+  const considered = ids(usage.considered_ids)
+  const allowed = new Set(considered)
+  const used = ids(usage.used_ids).filter(id => allowed.has(id))
+  return {
+    source:usage.source === 'platform' || usage.source === 'personal' ? usage.source : null,
+    considered_ids:considered,
+    used_ids:used,
+    rejected_ids:ids(usage.rejected_ids).filter(id => allowed.has(id) && !used.includes(id)),
+    influence:cleanText(usage.influence, 400),
+  }
+}
+
 function parseJson(value) {
   if (!value) return null
   if (typeof value === 'object') return value
@@ -53,6 +69,7 @@ export function normalizeDecisionFields(signal = {}) {
     invalidation_condition: cleanText(signal.invalidation_condition, 240),
     key_reasons: cleanList(signal.key_reasons),
     risk_factors: cleanList(signal.risk_factors),
+    experience_usage:experienceUsage(signal),
     ...directionScores(signal),
   }
 }
