@@ -773,6 +773,38 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       return
     }
 
+    const redis = getRedis()
+    if (!redis || !isRedisAvailable()) {
+      st._waitCount = (st._waitCount || 0) + 1
+      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
+        console.log(`[UnifiedScheduler] ${key}: Redis unavailable, pausing (retry#${st._waitCount})`)
+      }
+      st.lastError = null
+      st.waitReason = 'redis_unavailable'
+      const delay = retryDelayMs('redis_unavailable')
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      return
+    }
+
+    try {
+      const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
+      if (ttl > 0) {
+        st.nextRunInSeconds = ttl
+        st.waitReason = 'cooldown'
+        await updateSchedulerRedisState(key, st)
+        autoSchedulerState[key].timer = setTimeout(tick, Math.min(ttl * 1000, 30000))
+        return
+      }
+    } catch (e) {
+      console.warn('[Scheduler] Redis TTL check failed, failing closed:', e.message)
+      st.waitReason = 'redis_error'
+      st.lastError = 'cooldown_check_failed'
+      autoSchedulerState[key].timer = setTimeout(tick, 15000)
+      return
+    }
+
     // Refresh subscribers
     try {
       const freshSubs = await getAutoSubscribers(promptTypeId, symbol, isBridgeAlive)
@@ -836,8 +868,9 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
 
     // Resolve the exact runtime model. Private model failures never switch to
     // another model after a request starts; missing configuration pauses here.
+    let resolvedConfig
     try {
-      await getUnifiedAutoInferenceConfig(promptTypeId, ptRow.scope === 'private' ? marketUserId : null)
+      resolvedConfig = await getUnifiedAutoInferenceConfig(promptTypeId, ptRow.scope === 'private' ? marketUserId : null)
     } catch (error) {
       st.lastError = error.message || 'no_api_key'
       st.waitReason = ''
@@ -845,40 +878,6 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
-      return
-    }
-
-    // Redis lock + cooldown — fail closed when Redis unavailable
-    const redis = getRedis()
-    if (!redis || !isRedisAvailable()) {
-      st._waitCount = (st._waitCount || 0) + 1
-      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        console.log(`[UnifiedScheduler] ${key}: Redis unavailable, pausing (retry#${st._waitCount})`)
-      }
-      st.lastError = null
-      st.waitReason = 'redis_unavailable'
-      const delay = retryDelayMs('redis_unavailable')
-      st.nextRunInSeconds = Math.round(delay / 1000)
-      await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
-      return
-    }
-
-    // Check cooldown TTL — skip if still active (Fix 5: fail-closed on error)
-    try {
-      const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
-      if (ttl > 0) {
-        st.nextRunInSeconds = ttl
-        st.waitReason = 'cooldown'
-        await updateSchedulerRedisState(key, st)
-        autoSchedulerState[key].timer = setTimeout(tick, Math.min(ttl * 1000, tickIntervalMs))
-        return
-      }
-    } catch (e) {
-      console.warn('[Scheduler] Redis TTL check failed, failing closed:', e.message)
-      st.waitReason = 'redis_error'
-      st.lastError = 'cooldown_check_failed'
-      autoSchedulerState[key].timer = setTimeout(tick, 15000)
       return
     }
 
@@ -922,7 +921,11 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     let cycleSnapshot = null
     try {
       if (lockGuard.lost) { cycleReason = 'lock_lost'; throw new Error('lock lost during renewal') }
-      const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol, lockGuard)
+      const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, {
+        strategy: ptRow,
+        inferenceUserId: marketUserId,
+        config: resolvedConfig,
+      })
       if (cycleResult?.status === 'success') {
         st.lastError = ''
         st.lastRunAt = cycleResult.createdAt
@@ -1078,7 +1081,7 @@ async function stopUnifiedScheduler(promptTypeId, symbol) {
 }
 
 // === Unified Auto Cycle: shared signal generation ===
-async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
+async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = {}) {
   const key = buildSchedulerKey(promptTypeId, symbol)
   const ts = () => new Date().toISOString()
   const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}: ${msg}`)
@@ -1089,14 +1092,19 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
   await broadcastAutoProgress(promptTypeId, symbol, { stage: 'config', label: '检查策略与模型', progress_percent: 6 })
 
   // 1. Read prompt type
-  const pt = await getAutoPromptTypeById(promptTypeId)
+  const pt = Number(preflight.strategy?.id) === Number(promptTypeId)
+    ? preflight.strategy
+    : await getAutoPromptTypeById(promptTypeId)
   if (!pt || !pt.is_active) { l('BLOCKED: prompt type not found or disabled'); return { status: 'blocked', reason: 'strategy_disabled' } }
   const supportedSymbols = parsePromptSymbols(pt.symbols_json)
   if (!supportedSymbols.includes(symbol.toUpperCase())) { l(`BLOCKED: symbol ${symbol} not in strategy symbols`); return { status: 'blocked', reason: 'symbol_not_supported' } }
 
   const isPrivate = pt.scope === 'private'
-  const platformBridgeUserId = isPrivate ? null : await getActiveAdminBridgeUserId()
-  const inferenceUserId = isPrivate ? Number(pt.owner_user_id) : platformBridgeUserId
+  const preflightUserId = Number(preflight.inferenceUserId)
+  const platformBridgeUserId = isPrivate || preflightUserId > 0 ? null : await getActiveAdminBridgeUserId()
+  const inferenceUserId = preflightUserId > 0
+    ? preflightUserId
+    : isPrivate ? Number(pt.owner_user_id) : platformBridgeUserId
   const signalSource = isPrivate ? 'auto_private' : 'auto_shared'
   if (!inferenceUserId || !isBridgeAlive(inferenceUserId)) {
     return { status: 'blocked', reason: isPrivate ? 'owner_bridge_offline' : 'admin_bridge_offline' }
@@ -1108,12 +1116,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard) {
     : 'platform_only'
 
   // 2. Resolve platform-primary or private owner model without runtime fallback.
-  let config
-  try {
-    config = await getUnifiedAutoInferenceConfig(promptTypeId, isPrivate ? inferenceUserId : null)
-  } catch (error) {
-    l(`BLOCKED: model resolution failed (${error.message})`)
-    return { status: 'blocked', reason: error.message || 'no_model_configured' }
+  let config = preflight.config || null
+  if (!config) {
+    try {
+      config = await getUnifiedAutoInferenceConfig(promptTypeId, isPrivate ? inferenceUserId : null)
+    } catch (error) {
+      l(`BLOCKED: model resolution failed (${error.message})`)
+      return { status: 'blocked', reason: error.message || 'no_model_configured' }
+    }
   }
   if (!config || !config.api_key_encrypted) {
     l(`BLOCKED: no API key (hasKey=${!!config?.api_key_encrypted})`)

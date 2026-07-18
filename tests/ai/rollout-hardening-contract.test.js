@@ -68,6 +68,15 @@ describe('rollout hardening contract', () => {
     expect(scheduler).toContain("usage: 'manual'")
   })
 
+  it('checks scheduler cooldown before repeated database and model resolution work', () => {
+    const tick = scheduler.slice(scheduler.indexOf('const tick = async () =>'), scheduler.indexOf('const lockToken = await acquireLock(key)'))
+    expect(tick.indexOf('redis.ttl')).toBeLessThan(tick.indexOf('getAutoSubscribers'))
+    expect(tick.indexOf('redis.ttl')).toBeLessThan(tick.indexOf('getUnifiedAutoInferenceConfig'))
+    expect(tick).toContain('Math.min(ttl * 1000, 30000)')
+    expect(scheduler).toContain('config: resolvedConfig')
+    expect(scheduler).toContain('let config = preflight.config || null')
+  })
+
   it('anonymizes deleted accounts, destroys credentials and preserves trading evidence', () => {
     const deleteRoute = admin.slice(admin.indexOf("router.delete('/admin-users/:id'"), admin.indexOf("router.get('/admin-audit'"))
     expect(deleteRoute).toContain("deletion_status = 'anonymized'")
