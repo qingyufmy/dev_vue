@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
-  compactPeriodTradeEvidence, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+  compactPeriodTradeEvidence, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
+  samePeriodOutcomeSet, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
@@ -62,6 +63,15 @@ describe('daily review grouping', () => {
       { net_profit: 0, external_intervention: 0 },
     ])).toEqual({ trade_count: 3, wins: 1, losses: 1, breakeven: 1, win_rate: 1 / 3,
       net_profit: 10, gross_profit: 20, gross_loss: 10, profit_factor: 2, external_intervention_count: 1 })
+  })
+
+  it('reuses terminal incomplete evidence only while the outcome set is unchanged', () => {
+    expect(isTerminalTradeEvidenceReason('inference_snapshot_incomplete')).toBe(true)
+    expect(isTerminalTradeEvidenceReason('inference_snapshot_incomplete,historical_prompt_missing')).toBe(true)
+    expect(isTerminalTradeEvidenceReason('execution_deals_missing')).toBe(false)
+    expect(isTerminalTradeEvidenceReason('inference_snapshot_incomplete,execution_deals_missing')).toBe(false)
+    expect(samePeriodOutcomeSet([{ id: 8 }, { id: 3 }, { id: 8 }], [{ outcome_id: 3 }, { outcome_id: 8 }])).toBe(true)
+    expect(samePeriodOutcomeSet([{ id: 3 }, { id: 8 }, { id: 9 }], [{ outcome_id: 3 }, { outcome_id: 8 }])).toBe(false)
   })
 })
 

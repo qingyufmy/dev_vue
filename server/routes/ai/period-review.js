@@ -11,11 +11,23 @@ const DAY_MS = 86400000
 const DEFAULT_MT5_OFFSET_MINUTES = 180
 const DAILY_GRACE_MINUTES = 30
 const MONTHLY_GRACE_MINUTES = 120
+const TERMINAL_TRADE_EVIDENCE_REASONS = new Set(['inference_snapshot_incomplete', 'historical_prompt_missing'])
 let periodReviewTimer = null
 let periodReviewCycleRunning = false
 let periodReviewWakeRequested = false
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const safeError = error => String(error?.message || error || 'period_review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
+
+export function isTerminalTradeEvidenceReason(value) {
+  const reasons = [...new Set(String(value || '').split(',').map(item => item.trim()).filter(Boolean))]
+  return reasons.length > 0 && reasons.every(reason => TERMINAL_TRADE_EVIDENCE_REASONS.has(reason))
+}
+
+export function samePeriodOutcomeSet(outcomes = [], sources = []) {
+  const outcomeIds = [...new Set(outcomes.map(item => Number(item?.id)).filter(Number.isFinite))].sort((a, b) => a - b)
+  const sourceIds = [...new Set(sources.map(item => Number(item?.outcome_id)).filter(Number.isFinite))].sort((a, b) => a - b)
+  return outcomeIds.length === sourceIds.length && outcomeIds.every((id, index) => id === sourceIds[index])
+}
 
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
@@ -341,6 +353,11 @@ async function upsertDailyGroup(group, clock) {
       || (existingEvidence.period_market.status !== 'complete' && (!Number.isFinite(marketGeneratedAt) || Date.now() - marketGeneratedAt >= 3600000))
     if (existingCase.current_version_id || (existingJob && !needsPeriodMarketUpgrade)) return { id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
+    if (!existingJob && existingCase.evidence_status === 'incomplete' && isTerminalTradeEvidenceReason(existingCase.evidence_reason)) {
+      const existingSources = await queryAll('SELECT outcome_id FROM period_review_sources WHERE period_case_id = ? ORDER BY outcome_id', [existingCase.id])
+      if (samePeriodOutcomeSet(group.outcomes, existingSources)) return { id: Number(existingCase.id), periodKey: group.periodKey,
+        complete: false, sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, terminal: true, reused: true }
+    }
   }
   const prepared = []
   for (const outcome of group.outcomes) prepared.push({ outcome, ...(await prepareTradeEvidence(outcome)) })
