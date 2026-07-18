@@ -65,6 +65,7 @@ export function buildBridgeOrderCall(request) {
       tp_selection_source: _tpSelectionSource,
       take_profit_candidates: _takeProfitCandidates,
       normalization_info: _normalizationInfo,
+      mt5_timezone_offset_minutes: _mt5TimezoneOffsetMinutes,
       ...bridgeParams
     } = request
     return { bridgeAction: 'open', bridgeParams }
@@ -76,14 +77,18 @@ export function buildBridgeOrderCall(request) {
     'stop_limit': orderType === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit',
   }
   const pendingType = pendingTypeMap[entryMethod] || entryMethod
+  const rawOffsetMinutes = Number(request.mt5_timezone_offset_minutes)
+  const timezoneOffsetMinutes = Number.isFinite(rawOffsetMinutes) && rawOffsetMinutes >= -720 && rawOffsetMinutes <= 840
+    ? Math.trunc(rawOffsetMinutes)
+    : 180
   let expiration = 0
   if (request.pending_valid_until) {
     const expDate = new Date(request.pending_valid_until.replace(' ', 'T') + 'Z')
-    if (!isNaN(expDate.getTime())) expiration = Math.floor(expDate.getTime() / 1000) + 10800
+    if (!isNaN(expDate.getTime())) expiration = Math.floor(expDate.getTime() / 1000) + timezoneOffsetMinutes * 60
   }
   if (!expiration) {
     const validMinutes = Number(request.pending_valid_minutes) || 240
-    expiration = Math.floor(Date.now() / 1000) + 10800 + validMinutes * 60
+    expiration = Math.floor(Date.now() / 1000) + timezoneOffsetMinutes * 60 + validMinutes * 60
   }
   return {
     bridgeAction: 'pending',
@@ -520,6 +525,12 @@ export async function executeOrderCore(userId, config, request, action, options 
         risk_decision_id: decisionId,
         policy_version_ids: resolved.policyVersionIds,
         policy: resolved.policy,
+      }
+    },
+    enrichRequest: async ({ request: prepared, quote }) => {
+      const offset = Number(quote?.timezone_offset_minutes)
+      if (Number.isFinite(offset) && offset >= -720 && offset <= 840) {
+        prepared.mt5_timezone_offset_minutes = Math.trunc(offset)
       }
     },
     buildBridgeCall: buildBridgeOrderCall,

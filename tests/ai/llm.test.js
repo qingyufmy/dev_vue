@@ -699,6 +699,24 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     expect(result).toMatchObject({ signal_type: 'hold', recommended_volume: 0, normalization_info: { reason: 'ai_volume_out_of_platform_range' } })
   })
 
+  it('uses the configured platform volume range instead of a hard-coded maximum', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      recommended_volume: 0.08, stop_loss_price: 1990, take_profit_1_price: 2020,
+      recommended_take_profit_tier: 1,
+    }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.08 })
+  })
+
+  it('rejects a volume that is not aligned to the configured platform step', () => {
+    const result = normalizeAiSignal({
+      _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      recommended_volume: 0.07, stop_loss_price: 1990, take_profit_1_price: 2020,
+      recommended_take_profit_tier: 1,
+    }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
+    expect(result).toMatchObject({ signal_type: 'hold', normalization_info: { reason: 'ai_volume_out_of_platform_range' } })
+  })
+
   it('requires an explicit AI take-profit recommendation for executable signals', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,

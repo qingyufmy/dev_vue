@@ -192,6 +192,25 @@ describe('buildBridgeOrderCall', () => {
     expect(result.bridgeParams.expiration).toBe(expectedExpiration)
   })
 
+  it('uses the calibrated MT5 timezone offset for pending expiration', () => {
+    const result = buildBridgeOrderCall({
+      symbol: 'XAUUSD', entry_method: 'limit', order_type: 'buy',
+      limit_price: 3980, volume: 0.01,
+      pending_valid_until: '2026-07-04 12:00:00',
+      mt5_timezone_offset_minutes: 120,
+    })
+    const expectedExpiration = Math.floor(new Date('2026-07-04T12:00:00Z').getTime() / 1000) + 7200
+    expect(result.bridgeParams.expiration).toBe(expectedExpiration)
+  })
+
+  it('does not send timezone metadata in a market order payload', () => {
+    const result = buildBridgeOrderCall({
+      symbol: 'XAUUSD', order_type: 'buy', volume: 0.01,
+      mt5_timezone_offset_minutes: 120,
+    })
+    expect(result.bridgeParams).not.toHaveProperty('mt5_timezone_offset_minutes')
+  })
+
   it('sell stop 请求 → bridgeAction pending, order_type sell_stop', () => {
     const result = buildBridgeOrderCall({
       symbol: 'XAUUSD', entry_method: 'stop', order_type: 'sell',

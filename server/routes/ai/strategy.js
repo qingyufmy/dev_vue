@@ -234,7 +234,7 @@ export async function executeOrder(userId, config, request, action, options = {}
 }
 
 export async function handleAnalyze(userId, params) {
-  const { session_id = 'default', symbol, include_positions = true, strategy_id, auto_execute = false } = params
+  const { session_id = 'default', symbol, strategy_id, auto_execute = false } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
   if (!strategy_id) return { status: 'error', message: 'strategy required' }
 
@@ -248,6 +248,9 @@ export async function handleAnalyze(userId, params) {
   config._allowed_entry_methods = policy.entryMethods
   config._market_data_plan = policy.marketDataPlan
   config._use_chan_analysis = policy.useChanAnalysis
+  config._ai_volume_min = 0.01
+  config._ai_volume_max = Number(config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE)
+  config._ai_volume_step = 0.01
   config.enable_auto_trade = Boolean(auto_execute)
   const prompt = strategy.system_prompt || ''
   const tags = policy.marketDataPlan.timeframes.map(item => ({ tf: item.timeframe, count: item.kline_count }))
@@ -301,6 +304,13 @@ export async function handleAnalyze(userId, params) {
     if (config) delete config._onInferencePrepared
   }
   market.inference_source = signal._inference_source || 'unknown'
+  if (signal._inference_source === 'ai_error_hold') {
+    return {
+      status: 'error',
+      error_code: 'ai_inference_failed',
+      message: `AI 推理失败：${signal.reasoning || '模型未返回有效结果'}`,
+    }
+  }
   delete signal._inference_source
 
   const createdAt = beijingNow()
@@ -310,12 +320,12 @@ export async function handleAnalyze(userId, params) {
   const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
   if (!renderedEvidence) throw new Error('inference_evidence_missing')
   const persisted = await withTransaction(async run => {
-    const [result] = await run(`INSERT INTO ai_signals(user_id, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
+    const [result] = await run(`INSERT INTO ai_signals(user_id, prompt_type_id, source, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
       analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier,
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
       entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
+      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, Number(strategy.id), session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
         signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
         signal.recommended_take_profit_tier || null,

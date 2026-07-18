@@ -308,6 +308,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       atr_anchor_tf: market.atr_anchor_tf,
       risk_level: (config || {}).risk_level || 'medium',
       max_position_size: parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE),
+      ai_volume_range: {
+        min: Number(config?._ai_volume_min ?? market?.ai_volume_range?.min ?? 0.01),
+        max: Number(config?._ai_volume_max ?? market?.ai_volume_range?.max ?? config?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
+      },
     }
     if (market.strategy_context) {
       const ctx = { ...market.strategy_context }
@@ -523,14 +527,20 @@ export function normalizeAiSignal(parsed, config, market) {
   }
   const risk = RISK_TABLE[riskLevel] || RISK_TABLE.medium
 
-  const configuredMaxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE)
-  const maxPosition = configuredMaxPosition
+  const configuredMinPosition = Number(config?._ai_volume_min ?? market?.ai_volume_range?.min ?? 0.01)
+  const configuredMaxPosition = Number(config?._ai_volume_max ?? market?.ai_volume_range?.max ?? config?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE)
+  const configuredVolumeStep = Number(config?._ai_volume_step ?? 0.01)
+  const minPosition = Number.isFinite(configuredMinPosition) && configuredMinPosition > 0 ? configuredMinPosition : 0.01
+  const maxPosition = Number.isFinite(configuredMaxPosition) && configuredMaxPosition >= minPosition ? configuredMaxPosition : minPosition
+  const volumeStep = Number.isFinite(configuredVolumeStep) && configuredVolumeStep > 0 ? configuredVolumeStep : 0.01
   const rawVolume = parseFloat(parsed.recommended_volume || 0)
-  if (strictInference && signalType !== 'hold' && (!Number.isFinite(rawVolume) || rawVolume < 0.01 || rawVolume > 0.05 || Math.abs(rawVolume * 100 - Math.round(rawVolume * 100)) > 1e-7)) {
+  const volumeSteps = (rawVolume - minPosition) / volumeStep
+  if (strictInference && signalType !== 'hold' && (!Number.isFinite(rawVolume) || rawVolume < minPosition || rawVolume > maxPosition || Math.abs(volumeSteps - Math.round(volumeSteps)) > 1e-7)) {
     return schemaHold('ai_volume_out_of_platform_range')
   }
-  const boundedVolume = Math.max(0.01, Math.min(Number.isFinite(rawVolume) ? rawVolume : 0.01, maxPosition))
-  let recommendedVolume = signalType === 'hold' ? 0 : Math.floor(boundedVolume * 100 + 1e-9) / 100
+  const boundedVolume = Math.max(minPosition, Math.min(Number.isFinite(rawVolume) ? rawVolume : minPosition, maxPosition))
+  let recommendedVolume = signalType === 'hold' ? 0 : Math.floor((boundedVolume - minPosition + 1e-9) / volumeStep) * volumeStep + minPosition
+  recommendedVolume = Number(recommendedVolume.toFixed(8))
 
   let rawConfidence = parseFloat(parsed.confidence)
   if (!Number.isFinite(rawConfidence)) rawConfidence = 0
