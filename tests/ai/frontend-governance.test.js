@@ -93,6 +93,17 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('id="reviewNavFailureDot"')
     expect(app).toContain('api("/api/ai/memory")')
     expect(routes).toContain("WHERE id = ? AND user_id = ?")
+    expect(app).toContain('Number(summary.daily_total || 0)')
+    expect(app).toContain('Number(summary.monthly_total || 0)')
+  })
+
+  it('uses cursor pagination and request versions to prevent stale inference list data', () => {
+    expect(bridgeWs).toContain("params.before_id")
+    expect(bridgeWs).toContain("WHERE t.id < ?")
+    expect(app).toContain("_signalsListRequestVersion")
+    expect(app).toContain("before_id:beforeId")
+    expect(app).toContain("signals.filter(item => !known.has(String(item.id)))")
+    expect(app).toContain("requestVersion !== _signalTableRequestVersion")
   })
 
   it('exposes explicit model source, shared credential and quota copy without storing a key in state', () => {

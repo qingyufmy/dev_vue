@@ -954,6 +954,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signals': {
         const offset = Number(params.offset) || 0
         const limit = Math.min(Number(params.limit) || 10, 100)
+        const beforeId = Number(params.before_id)
         // 观摩模式：始终用 admin 的信号
         const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
         const adminId = await getAdminUserId()
@@ -999,10 +1000,14 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // COUNT uses lightweight subquery (no TEXT); data uses full subquery (no market_data_json)
         const countSql = `SELECT COUNT(*) as total FROM (${countOldSub} UNION ALL ${countDelivSub}) t`
-        const dataSql = `SELECT ${selectCols} FROM (${dataOldSub} UNION ALL ${dataDelivSub}) t ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
+        const cursorWhere = Number.isInteger(beforeId) && beforeId > 0 ? ' WHERE t.id < ?' : ''
+        const dataSql = `SELECT ${selectCols} FROM (${dataOldSub} UNION ALL ${dataDelivSub}) t${cursorWhere} ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
+        const dataParams = [...oldParams, ...delivParams]
+        if (cursorWhere) dataParams.push(beforeId)
+        dataParams.push(limit + 1, cursorWhere ? 0 : offset)
         const [countRow, allRows] = await Promise.all([
           queryOne(countSql, [...oldParams, ...delivParams]),
-          queryAll(dataSql, [...oldParams, ...delivParams, limit + 1, offset])
+          queryAll(dataSql, dataParams)
         ])
         const totalCount = countRow?.total || 0
         const hasMore = allRows.length > limit

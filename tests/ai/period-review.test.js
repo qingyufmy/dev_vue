@@ -149,6 +149,7 @@ describe('period review runtime integration', () => {
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/retry'")
     expect(routes).toContain("router.get('/ai/period-reviews/summary'")
+    expect(readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')).toContain('daily_total:0, monthly_total:0')
     expect(routes).toContain("router.get('/ai/period-reviews/:id/job-status'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/read'")
   })

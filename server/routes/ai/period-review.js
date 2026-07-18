@@ -772,8 +772,11 @@ export async function getPeriodReviewSummary(userId) {
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     WHERE cases.user_id = ?`, [userId])
   const summary = { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0,
+    total:0, daily_total:0, monthly_total:0,
     daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0 }
   for (const row of rows) {
+    summary.total += 1
+    summary[row.period_type === 'monthly' ? 'monthly_total' : 'daily_total'] += 1
     const unread = row.current_version_id != null && Number(row.last_seen_version_id || 0) !== Number(row.current_version_id)
     const pending = ['draft', 'edited'].includes(row.status)
     const failed = row.status === 'failed' || row.job_status === 'failed'

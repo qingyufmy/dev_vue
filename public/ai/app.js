@@ -33,7 +33,7 @@ const state = {
   strategyFilter: "all",
   reviewCases: [],
   reviewOverview: { pending: 0, issues: 0 },
-  reviewSummary: { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0, daily_attention:0, monthly_attention:0 },
+  reviewSummary: { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0, total:0, daily_total:0, monthly_total:0, daily_attention:0, monthly_attention:0 },
   reviewSummaryInitialized: false,
   reviewSummaryTimer: null,
   reviewDetailPollTimer: null,
@@ -1411,14 +1411,7 @@ async function _maybeRefreshSignal() {
       _historyChartCache = null;
     }
 
-    const fullData = await wsApi("signals", { limit: ANALYSIS_HISTORY_PAGE_SIZE, offset: 0 });
-    const signals = fullData.signals || [];
-    state.signals = signals;
-    state.selectedSignal = signals[0] || null;
-    state.analysisHistoryOffset = signals.length;
-    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= ANALYSIS_HISTORY_PAGE_SIZE;
-    renderAnalysisHistory(signals);
-    loadSignalTable();
+    await loadSignals({ skipResultRender:true, selectLatest:true });
     if (state.selectedSignal) {
       showSignalNotification(state.selectedSignal);
       if (activeTabId() === "ai-analyze") {
@@ -1427,7 +1420,7 @@ async function _maybeRefreshSignal() {
         if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     }
-  } catch (e) { /* silent */ }
+  } catch (e) { console.error('[Inference] latest signal refresh failed:', e); }
 }
 
 // Handle new signal pushed from server (replaces polling)
@@ -1435,14 +1428,7 @@ async function handleNewSignal(msg) {
   try {
     if (msg.signal_id != null) _lastSignalId = msg.signal_id;
     // Refresh signal list
-    const fullData = await wsApi("signals", { limit: ANALYSIS_HISTORY_PAGE_SIZE, offset: 0 });
-    const signals = fullData.signals || [];
-    state.signals = signals;
-    state.selectedSignal = signals[0] || null;
-    state.analysisHistoryOffset = signals.length;
-    state.analysisHistoryHasMore = fullData.has_more !== undefined ? fullData.has_more : signals.length >= ANALYSIS_HISTORY_PAGE_SIZE;
-    renderAnalysisHistory(signals);
-    loadSignalTable();
+    await loadSignals({ skipResultRender:true, selectLatest:true });
 
     // Show notification for new signal
     if (state.selectedSignal) {
@@ -1453,7 +1439,7 @@ async function handleNewSignal(msg) {
         if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     }
-  } catch (e) { /* silent */ }
+  } catch (e) { console.error('[Inference] pushed signal refresh failed:', e); }
 }
 
 // Handle heartbeat reply — MT5 connection status
@@ -2167,9 +2153,9 @@ function renderReviewSummary(summary = state.reviewSummary) {
   setText("reviewPendingStat", Number(summary.pending_confirmation || 0));
   setText("reviewGeneratingStat", Number(summary.generating || 0));
   setText("reviewFailedStat", failed);
-  setText("reviewAllCount", Number(summary.attention || 0));
-  setText("reviewDailyCount", Number(summary.daily_attention || 0));
-  setText("reviewMonthlyCount", Number(summary.monthly_attention || 0));
+  setText("reviewAllCount", Number(summary.total || 0));
+  setText("reviewDailyCount", Number(summary.daily_total || 0));
+  setText("reviewMonthlyCount", Number(summary.monthly_total || 0));
 }
 
 async function loadReviewSummary({ announce = true } = {}) {
@@ -4744,6 +4730,8 @@ function highlightActiveAnalysis(signalId) {
 }
 
 let _analysisDetailRequestVersion = 0;
+let _signalsListRequestVersion = 0;
+let _signalTableRequestVersion = 0;
 
 function renderAnalysisDetailLoading(signalId) {
   destroyInferenceChart();
@@ -4852,12 +4840,17 @@ function renderSignalRows() {
 async function loadSignals(options = {}) {
   const limit = options.limit || ANALYSIS_HISTORY_PAGE_SIZE;
   const offset = options.offset || 0;
-  const data = await wsApi("signals", { limit, offset });
+  const requestVersion = options.append ? _signalsListRequestVersion : ++_signalsListRequestVersion;
+  const loadedIds = options.append ? state.signals.map(item => Number(item.id)).filter(Number.isFinite) : [];
+  const beforeId = loadedIds.length ? Math.min(...loadedIds) : null;
+  const data = await wsApi("signals", { limit, offset:beforeId ? 0 : offset, ...(beforeId ? { before_id:beforeId } : {}) });
+  if (requestVersion !== _signalsListRequestVersion) return;
   const signals = data.signals || [];
   const hasMore = data.has_more !== undefined ? data.has_more : signals.length >= limit;
 
   if (options.append) {
-    state.signals = state.signals.concat(signals);
+    const known = new Set(state.signals.map(item => String(item.id)));
+    state.signals = state.signals.concat(signals.filter(item => !known.has(String(item.id))));
   } else {
     state.signals = signals;
   }
@@ -4871,8 +4864,8 @@ async function loadSignals(options = {}) {
   const previousSelected = state.selectedSignal;
   const selectedId = previousSelected?.id;
   const stillExists = selectedId ? state.signals.find(s => String(s.id) === String(selectedId)) : null;
-  let activeSignal = stillExists || state.signals[0] || null;
-  if (stillExists && previousSelected?.detail_loaded) {
+  let activeSignal = options.selectLatest ? (state.signals[0] || null) : (stillExists || state.signals[0] || null);
+  if (stillExists && previousSelected?.detail_loaded && String(activeSignal?.id) === String(selectedId)) {
     // Keep heavyweight detail fields, but let the freshly loaded list row win
     // for user-specific execution state (pending ticket, delivery result, etc.).
     activeSignal = { ...previousSelected, ...stillExists };
@@ -4885,7 +4878,7 @@ async function loadSignals(options = {}) {
     updateSignalDisplay(activeSignal);
     if (activeSignal) setText("signalFreshness", signalFreshness(activeSignal));
   }
-  renderAnalysisHistory(state.signals, options.append ? { append: true } : {});
+  renderAnalysisHistory(state.signals);
   if (!options.skipResultRender && !options.append) {
     if (activeSignal) await openAnalysisFromHistory(activeSignal.id, { navigate:false });
     else renderSignal(null, null);
@@ -4897,6 +4890,7 @@ async function loadSignals(options = {}) {
 
 // Load signal table data (server-side filtering + pagination, 20/page)
 async function loadSignalTable() {
+  const requestVersion = ++_signalTableRequestVersion;
   const page = state.signalFilters.page;
   const pageSize = state.signalFilters.pageSize;
   const params = { limit: pageSize, offset: (page - 1) * pageSize };
@@ -4904,10 +4898,11 @@ async function loadSignalTable() {
   if (state.signalFilters.timeframe) params.timeframe = state.signalFilters.timeframe;
   try {
     const data = await wsApi("signals", params);
+    if (requestVersion !== _signalTableRequestVersion) return;
     state.signalTableData = data.signals || [];
     state.signalTableTotal = data.total_count || 0;
     renderSignalRows();
-  } catch (e) { /* silent */ }
+  } catch (e) { console.error('[Signals] table load failed:', e); }
 }
 
 function setHistoryZeroClass(id, value) {
