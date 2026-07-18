@@ -135,12 +135,68 @@ export async function updateModelProfile(id, userId, payload) {
   return await getModelProfileById(id)
 }
 
-export async function deleteModelProfile(id, userId) {
-  const now = beijingNow()
+export async function getModelProfileDeletionImpact(id, userId) {
   const existing = await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])
   if (!existing) throw new Error('model_profile_not_found')
-  if (existing.owner_user_id !== userId) throw new Error('model_profile_access_denied')
-  await queryRun('UPDATE ai_model_profiles SET deleted_at = ?, status = "deleted" WHERE id = ?', [now, id])
+  if (Number(existing.owner_user_id) !== Number(userId)) throw new Error('model_profile_access_denied')
+  const strategies = await queryAll(
+    `SELECT apt.id, apt.title, apt.scope, apt.visibility_status, apt.is_active,
+            COUNT(ss.id) AS subscription_count,
+            COALESCE(SUM(CASE WHEN ss.execution_enabled = 1 THEN 1 ELSE 0 END), 0) AS active_subscription_count
+       FROM auto_prompt_types apt
+       LEFT JOIN strategy_subscriptions ss ON ss.strategy_id = apt.id AND ss.is_deleted = 0
+      WHERE apt.model_profile_id = ? AND apt.deleted_at IS NULL
+      GROUP BY apt.id, apt.title, apt.scope, apt.visibility_status, apt.is_active
+      ORDER BY apt.is_active DESC, apt.id DESC`,
+    [id]
+  )
+  const defaultRow = await queryOne(
+    'SELECT user_id FROM user_model_defaults WHERE user_id = ? AND model_profile_id = ?',
+    [userId, id]
+  )
+  const isDefault = Boolean(Number(existing.is_default) || defaultRow)
+  return {
+    id: Number(existing.id),
+    model_name: String(existing.model_name || ''),
+    scope: existing.scope,
+    is_default: isDefault,
+    strategies: strategies.map(row => ({
+      ...row,
+      id: Number(row.id),
+      is_active: Boolean(Number(row.is_active)),
+      subscription_count: Number(row.subscription_count || 0),
+      active_subscription_count: Number(row.active_subscription_count || 0),
+    })),
+    can_delete: !isDefault && strategies.length === 0,
+  }
+}
+
+export async function deleteModelProfile(id, userId, confirmation = {}) {
+  const now = beijingNow()
+  await withTransaction(async run => {
+    const [profileRows] = await run(
+      'SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL FOR UPDATE',
+      [id]
+    )
+    const existing = profileRows?.[0]
+    if (!existing) throw new Error('model_profile_not_found')
+    if (Number(existing.owner_user_id) !== Number(userId)) throw new Error('model_profile_access_denied')
+    const [defaultRows] = await run(
+      'SELECT user_id FROM user_model_defaults WHERE user_id = ? AND model_profile_id = ? FOR UPDATE',
+      [userId, id]
+    )
+    if (Number(existing.is_default) || defaultRows?.length) throw new Error('model_profile_default_in_use')
+    const [strategyRows] = await run(
+      'SELECT id FROM auto_prompt_types WHERE model_profile_id = ? AND deleted_at IS NULL FOR UPDATE',
+      [id]
+    )
+    if (strategyRows?.length) throw new Error('model_profile_in_use')
+    if (String(confirmation.confirm_name || '') !== String(existing.model_name || '') ||
+        Number(confirmation.confirm_id) !== Number(existing.id)) {
+      throw new Error('model_profile_delete_confirmation_mismatch')
+    }
+    await run('UPDATE ai_model_profiles SET deleted_at = ?, status = "deleted", is_default = 0 WHERE id = ?', [now, id])
+  })
 }
 
 // [P1-3] setDefaultModelProfile writes BOTH is_default flag AND user_model_defaults table

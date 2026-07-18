@@ -230,6 +230,9 @@ const REASON_MAP = {
   model_endpoint_protocol_forbidden: "模型接口地址协议不受支持",
   model_endpoint_private_network_forbidden: "为保护服务器安全，模型接口不能指向本机或内网地址",
   model_endpoint_dns_failed: "模型接口域名无法解析，请检查地址是否正确",
+  model_profile_default_in_use: "该模型仍是默认模型，请先设置另一个默认模型",
+  model_profile_in_use: "该模型仍被策略绑定，请先为相关策略更换模型",
+  model_profile_delete_confirmation_mismatch: "删除确认信息不匹配，请重新操作",
   no_active_auto_trade_config: "已跳过（自动交易未开启）",
   open_position_exists: "已跳过（当前品种已有持仓）",
   position_check_failed: "已跳过（持仓检查失败）",
@@ -822,7 +825,8 @@ function toast(message, type = "info") {
 
 function showConfirm(title, message, {
   confirmText = "确认", cancelText = "取消", danger = false,
-  requireText = "", requireTextLabel = "输入以下文字以确认", detailRows = [],
+  requireText = "", requireTextLabel = "输入以下文字以确认",
+  requireTextHint = "必须与显示的名称完全一致", detailRows = [],
 } = {}) {
   return new Promise((resolve) => {
     const modal = $("genericConfirmModal");
@@ -830,7 +834,7 @@ function showConfirm(title, message, {
     $("genericConfirmTitle").textContent = title;
     const confirmationId = `destructiveConfirmText-${Date.now()}`;
     const details = detailRows.length ? `<dl class="confirm-impact-list">${detailRows.map(([label, value, tone = ""]) => `<div class="confirm-impact-row ${escapeHtml(tone)}"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>` : "";
-    const textCheck = requireText ? `<div class="confirm-text-check"><label for="${confirmationId}">${escapeHtml(requireTextLabel)}</label><code>${escapeHtml(requireText)}</code><input id="${confirmationId}" class="form-input" type="text" autocomplete="off" spellcheck="false" aria-describedby="${confirmationId}-hint"><small id="${confirmationId}-hint">必须与策略名称完全一致</small></div>` : "";
+    const textCheck = requireText ? `<div class="confirm-text-check"><label for="${confirmationId}">${escapeHtml(requireTextLabel)}</label><code>${escapeHtml(requireText)}</code><input id="${confirmationId}" class="form-input" type="text" autocomplete="off" spellcheck="false" aria-describedby="${confirmationId}-hint"><small id="${confirmationId}-hint">${escapeHtml(requireTextHint)}</small></div>` : "";
     $("genericConfirmBody").innerHTML = `<p class="confirm-message">${escapeHtml(message)}</p>${details}${textCheck}`;
     const okBtn = $("genericConfirmOk");
     const cancelBtn = $("genericConfirmCancel");
@@ -5781,7 +5785,38 @@ function bindEvents() {
         if (modelAction.dataset.modelAction === "edit") openModelEditor(profile);
         else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope } }); toast(`连接成功 · ${data.latency_ms} ms`, "success"); }
         else if (modelAction.dataset.modelAction === "default") { await api(`/api/ai/model-profiles/${id}/default`, { method:"POST", body:{ scope } }); toast("默认模型已更新", "success"); await loadModelManagement(); }
-        else if (modelAction.dataset.modelAction === "delete" && confirm("确认删除这个模型配置？已绑定的策略会停止使用它。")) { await api(`/api/ai/model-profiles/${id}?scope=${scope}`, { method:"DELETE" }); toast("模型已删除", "success"); await loadModelManagement(); }
+        else if (modelAction.dataset.modelAction === "delete") {
+          modelAction.disabled = true;
+          const { impact } = await api(`/api/ai/model-profiles/${id}/delete-impact?scope=${scope}`);
+          if (!impact.can_delete) {
+            const strategyNames = (impact.strategies || []).map(item => item.title).filter(Boolean);
+            const reason = impact.is_default
+              ? "该模型当前是默认模型，请先设置另一个默认模型。"
+              : `该模型仍被 ${strategyNames.length} 个策略绑定，请先在策略中更换模型。`;
+            await showConfirm("暂时无法删除模型", reason, {
+              confirmText:"知道了", cancelText:"关闭",
+              detailRows:[
+                ["模型", impact.model_name || `#${impact.id}`],
+                ["默认模型", impact.is_default ? "是" : "否", impact.is_default ? "danger" : ""],
+                ["绑定策略", strategyNames.length ? strategyNames.join("、") : "无", strategyNames.length ? "danger" : ""],
+              ],
+            });
+            return;
+          }
+          const confirmed = await showConfirm("永久删除模型", "删除后将无法恢复，已保存的接口凭据也会停止使用。", {
+            confirmText:"永久删除", danger:true,
+            requireText:impact.model_name,
+            requireTextLabel:"输入模型名称以确认",
+            requireTextHint:"必须与模型名称完全一致",
+            detailRows:[["模型", impact.model_name], ["模型编号", `#${impact.id}`], ["绑定策略", "无"]],
+          });
+          if (!confirmed) return;
+          await api(`/api/ai/model-profiles/${id}?scope=${scope}`, {
+            method:"DELETE", body:{ confirm_name:impact.model_name, confirm_id:impact.id },
+          });
+          toast("模型已删除", "success");
+          await loadModelManagement();
+        }
       } catch (error) { toast(localizeReason(error.message),"error"); } finally { modelAction.disabled = false; }
       return;
     }

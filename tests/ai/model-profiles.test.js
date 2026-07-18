@@ -22,7 +22,9 @@ import {
   beginModelUsage,
   assertModelProfileSchemaReady,
   createModelProfile,
+  deleteModelProfile,
   finishModelUsage,
+  getModelProfileDeletionImpact,
   migrateLegacyConfigs,
   recoverStaleModelUsageReservations,
   resolveAiTaskModel,
@@ -231,6 +233,52 @@ describe('model profile authorization and defaults', () => {
     expect(mockWithTransaction).toHaveBeenCalledTimes(1)
     expect(mockTx).toHaveBeenCalledTimes(3)
     expect(mockTx.mock.calls.some(([sql]) => sql.includes('user_model_defaults'))).toBe(true)
+  })
+
+  it('reports default and strategy bindings before model deletion', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce(profile({ is_default: 0 }))
+      .mockResolvedValueOnce({ user_id: 1 })
+    mockQueryAll.mockResolvedValueOnce([{ id: 7, title: '趋势策略', is_active: 1, subscription_count: 2, active_subscription_count: 1 }])
+    const impact = await getModelProfileDeletionImpact(10, 1)
+    expect(impact).toMatchObject({ id: 10, model_name: 'qwen-plus', is_default: true, can_delete: false })
+    expect(impact.strategies[0]).toMatchObject({ id: 7, is_active: true, subscription_count: 2, active_subscription_count: 1 })
+  })
+
+  it('blocks deleting a default model even when the client preview is stale', async () => {
+    mockTx
+      .mockResolvedValueOnce([[profile({ is_default: 1 })]])
+      .mockResolvedValueOnce([[{ user_id: 1 }]])
+    await expect(deleteModelProfile(10, 1, { confirm_name: 'qwen-plus', confirm_id: 10 }))
+      .rejects.toThrow('model_profile_default_in_use')
+    expect(mockTx).toHaveBeenCalledTimes(2)
+  })
+
+  it('blocks deleting a model while any strategy still references it', async () => {
+    mockTx
+      .mockResolvedValueOnce([[profile({ is_default: 0 })]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[{ id: 7 }]])
+    await expect(deleteModelProfile(10, 1, { confirm_name: 'qwen-plus', confirm_id: 10 }))
+      .rejects.toThrow('model_profile_in_use')
+    expect(mockTx).toHaveBeenCalledTimes(3)
+  })
+
+  it('requires matching model name and id then soft-deletes an unused model', async () => {
+    mockTx
+      .mockResolvedValueOnce([[profile({ is_default: 0 })]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[]])
+    await expect(deleteModelProfile(10, 1, { confirm_name: 'wrong', confirm_id: 10 }))
+      .rejects.toThrow('model_profile_delete_confirmation_mismatch')
+
+    mockTx
+      .mockResolvedValueOnce([[profile({ is_default: 0 })]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+    await deleteModelProfile(10, 1, { confirm_name: 'qwen-plus', confirm_id: 10 })
+    expect(mockTx.mock.calls.at(-1)[0]).toContain('status = "deleted"')
   })
 })
 

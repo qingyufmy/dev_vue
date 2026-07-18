@@ -20,7 +20,7 @@ import { createMemoryFromApprovedReview, listMemoryItems, listMemorySummaries, r
 import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
   createPlatformExperienceCandidateFromApprovedPeriodReview, listPlatformExperience,
   getPlatformExperienceEvaluation, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
-import { createModelProfile, getUserModelProfiles, updateModelProfile, deleteModelProfile,
+import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
@@ -108,8 +108,15 @@ router.put('/ai/model-profiles/:id', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/model-profiles/:id/delete-impact', authMiddleware, async (req, res) => {
+  try {
+    const ownerId = req.user.role === 'admin' && req.query.scope === 'platform' ? 0 : req.user.id
+    res.json({ ok: true, impact: await getModelProfileDeletionImpact(Number(req.params.id), ownerId) })
+  } catch (error) { reviewError(res, error) }
+})
+
 router.delete('/ai/model-profiles/:id', authMiddleware, async (req, res) => {
-  try { await deleteModelProfile(Number(req.params.id), req.query.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id); res.json({ ok: true }) }
+  try { await deleteModelProfile(Number(req.params.id), req.query.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id, req.body || {}); res.json({ ok: true }) }
   catch (error) { reviewError(res, error) }
 })
 
