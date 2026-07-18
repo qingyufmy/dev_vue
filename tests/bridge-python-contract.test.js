@@ -71,6 +71,14 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('volume {volume} does not match broker step')
   })
 
+  it('never treats a non-DONE MT5 ticket as confirmed execution', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('classification = classify_deal_result(result, self.mt5)')
+    expect(source).toContain('"status": "uncertain"')
+    expect(source).toContain('remaining = self.mt5.positions_get(ticket=pos.ticket)')
+    expect(source).not.toContain('订单已成交但返回码非DONE')
+  })
+
   it('serializes command and publisher access to the non-thread-safe MT5 extension', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     expect(source).toContain('self._mt5_lock = threading.RLock()')

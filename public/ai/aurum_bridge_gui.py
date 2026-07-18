@@ -10,6 +10,7 @@ import ssl
 import json
 import time
 import math
+from bridge_order_result import classify_deal_result
 import asyncio
 import threading
 import ctypes
@@ -596,13 +597,15 @@ class BridgeWorker(QThread):
             req, log_price = build_req_fn(tick)
             req["price"] = log_price
             result = self.mt5.order_send(req)
-            if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
+            classification = classify_deal_result(result, self.mt5)
+            if classification in ("success", "partial"):
                 return result, None
             code = result.retcode if result else -1
-            # Edge case: broker auto-filled despite non-DONE retcode (e.g. requote with auto-fill)
-            if result and (result.order or 0) > 0:
+            # A non-DONE ticket is only an acknowledgement. Do not retry it and
+            # do not claim success until positions/orders/history confirm it.
+            if classification == "uncertain":
                 self.log_signal.emit(
-                    f"⚠ 订单已成交但返回码非DONE (retcode={code}, ticket={result.order}) — 不重试避免重复开仓"
+                    f"⚠ 订单返回待确认状态 (retcode={code}, ticket={getattr(result, 'order', 0) or getattr(result, 'deal', 0)}) — 禁止自动重试"
                 )
                 return result, result.comment if result else "order_send failed"
             if code in self._RETRYABLE_RETCODES and attempt < self._MAX_RETRY:
@@ -869,7 +872,8 @@ class BridgeWorker(QThread):
                     req["price"] = tick.ask if ot == self.mt5.ORDER_TYPE_BUY else tick.bid
                     return req, req["price"]
                 result, comment = self._order_send_with_retry(symbol, _build)
-                if result:
+                classification = classify_deal_result(result, self.mt5)
+                if classification == "success":
                     position_id = getattr(result, "position", 0) or 0
                     deal_ticket = getattr(result, "deal", 0) or 0
                     if not position_id and deal_ticket:
@@ -882,7 +886,15 @@ class BridgeWorker(QThread):
                             "position_id": position_id or result.order, "price": result.price}
                     if comment: resp["warning"] = comment
                     return resp
-                return {"status": "error", "message": comment or "order_send failed"}
+                if classification in ("partial", "uncertain"):
+                    return {"status": "uncertain", "message": "订单已受理，成交状态待 MT5 确认，系统不会自动重发",
+                            "order": getattr(result, "order", 0) or 0,
+                            "deal": getattr(result, "deal", 0) or 0,
+                            "retcode": getattr(result, "retcode", -1)}
+                if classification == "rejected":
+                    return {"status": "rejected", "message": comment or "order_send rejected",
+                            "retcode": getattr(result, "retcode", -1)}
+                return {"status": "error", "message": comment or "order_send result unknown"}
             elif action == "close":
                 ticket = params.get("ticket")
                 if ticket:
@@ -899,11 +911,26 @@ class BridgeWorker(QThread):
                                "type_filling": fill, "price": price}
                         return req, price
                     result, comment = self._order_send_with_retry(sym, _close)
-                    if result:
-                        resp = {"status": "success", "ticket": pos.ticket}
-                        if comment: resp["warning"] = comment
-                        return resp
-                    return {"status": "error", "message": comment or "close failed"}
+                    remaining = self.mt5.positions_get(ticket=pos.ticket)
+                    if remaining is None:
+                        return {"status": "uncertain", "message": f"平仓结果无法复核: {self.mt5.last_error()}",
+                                "ticket": pos.ticket, "retcode": getattr(result, "retcode", -1) if result else -1}
+                    if len(remaining) == 0:
+                        return {"status": "success", "ticket": pos.ticket,
+                                "deal": getattr(result, "deal", 0) if result else 0,
+                                "order": getattr(result, "order", 0) if result else 0}
+                    remaining_volume = float(remaining[0].volume)
+                    classification = classify_deal_result(result, self.mt5)
+                    if remaining_volume < float(pos.volume):
+                        return {"status": "partial", "message": "仅完成部分平仓", "ticket": pos.ticket,
+                                "remaining_volume": remaining_volume,
+                                "retcode": getattr(result, "retcode", -1) if result else -1}
+                    if classification in ("partial", "uncertain", "unknown"):
+                        return {"status": "uncertain", "message": comment or "平仓状态待 MT5 确认",
+                                "ticket": pos.ticket, "remaining_volume": remaining_volume,
+                                "retcode": getattr(result, "retcode", -1) if result else -1}
+                    return {"status": "rejected", "message": comment or "close rejected", "ticket": pos.ticket,
+                            "retcode": getattr(result, "retcode", -1) if result else -1}
                 else:
                     sym = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
                     positions = self.mt5.positions_get(symbol=sym) if sym else self.mt5.positions_get()
