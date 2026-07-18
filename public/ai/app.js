@@ -1041,7 +1041,7 @@ function connectBridgeStatusWs(onReady) {
         const brokerSymbol = String(quote.symbol || '').toUpperCase();
         if (brokerSymbol && (brokerSymbol === selected || brokerSymbol.startsWith(selected)) &&
             Number.isFinite(Number(quote.bid)) && Number.isFinite(Number(quote.ask))) {
-          updateKlineTick(Number(quote.bid), Number(quote.ask));
+          updateKlineTick(Number(quote.bid), Number(quote.ask), quote);
         }
       } else if (msg.type === 'data') {
         handleBridgeData(msg);
@@ -1259,7 +1259,7 @@ function handleBridgeData(msg) {
       if (Number.isFinite(Number(q.bid)) && Number.isFinite(Number(q.ask))) {
         state.lastQuote = { symbol: q.symbol, bid: Number(q.bid), ask: Number(q.ask), spread: Number(q.spread), time: q.time };
         updateTradingQuotePreview(state.lastQuote);
-        updateKlineTick(q.bid, q.ask);
+        updateKlineTick(q.bid, q.ask, q);
       }
 
     }
@@ -3129,7 +3129,7 @@ async function refreshQuote() {
     setQuoteChangeUnavailable();
     state.lastQuote = { symbol, bid, ask, spread: Number(data.spread), time: data.time };
     updateTradingQuotePreview(state.lastQuote);
-    updateKlineTick(data.bid, data.ask);
+    updateKlineTick(data.bid, data.ask, data);
   }
   updateSignalPriceFields(state.selectedSignal);
 }
@@ -3140,11 +3140,18 @@ let _klineSeries = null;
 let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
-let _klineTimezoneOffsetMinutes = 180;
 let _klineVolRefreshTimer = null;
 let _klineMutationObserver = null;
 let _klineResizeObserver = null;
 let _klineDeferredObserver = null;
+
+function mt5BrokerTimeSeconds(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const parts = value.replace(' ', 'T').split(/[-T:]/).map(Number);
+  if (parts.length < 3 || parts.slice(0, 3).some(item => !Number.isFinite(item))) return null;
+  const seconds = Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2], parts[3] || 0, parts[4] || 0, parts[5] || 0) / 1000);
+  return Number.isFinite(seconds) ? seconds : null;
+}
 
 function disconnectKlineObservers() {
   if (_klineDeferredObserver) { _klineDeferredObserver.disconnect(); _klineDeferredObserver = null; }
@@ -3280,21 +3287,12 @@ async function loadKlineData() {
       sourceBadge.textContent = `${platform ? '平台行情' : '本人行情'} · ${offset}`;
       sourceBadge.classList.toggle('is-platform', platform);
       sourceBadge.classList.toggle('is-fallback', !platform);
-      if (Number.isFinite(Number(meta.timezone_offset_minutes))) _klineTimezoneOffsetMinutes = Number(meta.timezone_offset_minutes);
       sourceBadge.title = `品种：${meta.broker_symbol || symbol}；时钟：${meta.clock_status || 'unknown'}；当前 K 线实时获取，不写入缓存`;
     }
 
-    // Display MT5 time directly — parse as raw values, no timezone conversion
-    const mt5ToDisplay = (mt5Str) => {
-      if (typeof mt5Str !== 'string' || !mt5Str.trim()) return null;
-      const p = mt5Str.replace(' ', 'T').split(/[-T:]/).map(Number);
-      if (p.length < 3 || p.slice(0, 3).some(v => !Number.isFinite(v))) return null;
-      const seconds = Math.floor(Date.UTC(p[0], p[1] - 1, p[2], p[3] || 0, p[4] || 0, p[5] || 0) / 1000);
-      return Number.isFinite(seconds) ? seconds : null;
-    };
     const cleanRows = new Map();
     for (const row of data.rates) {
-      const time = mt5ToDisplay(row?.time);
+      const time = mt5BrokerTimeSeconds(row?.time);
       const open = Number(row?.open), high = Number(row?.high), low = Number(row?.low), close = Number(row?.close);
       if (!Number.isFinite(time) || ![open, high, low, close].every(Number.isFinite)) continue;
       if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || high < low) continue;
@@ -3340,15 +3338,17 @@ async function refreshKlineVolume() {
   } catch (e) { /* ignore */ }
 }
 
-function updateKlineTick(bid, ask) {
+function updateKlineTick(bid, ask, quote = {}) {
   if (!_klineSeries || state.marketTradeMode === 0) return;
   const price = Number(bid);
   if (!Number.isFinite(price) || price <= 0) return;
-  // MT5 broker time = UTC+3; convert current time to MT5 display
-  // MT5 broker time — treat display as raw UTC (chart shows MT5 time directly)
-  const nowMt5Sec = Math.floor(Date.now() / 1000) + _klineTimezoneOffsetMinutes * 60;
+  // Always anchor the live candle to the broker quote timestamp. During a
+  // closed market the last quote is stale; using the browser clock would create
+  // synthetic weekend candles that never existed in MT5.
+  const quoteMt5Sec = mt5BrokerTimeSeconds(quote?.time);
+  if (!Number.isFinite(quoteMt5Sec)) return;
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
-  const barTime = Math.floor(nowMt5Sec / tfSeconds) * tfSeconds;
+  const barTime = Math.floor(quoteMt5Sec / tfSeconds) * tfSeconds;
 
   if (!_klineLastBar) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };

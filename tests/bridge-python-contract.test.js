@@ -82,7 +82,12 @@ describe('Python Bridge history contract', () => {
   it('normalizes broker wall-clock timestamps while retaining the raw MT5 timestamp', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     expect(source).toContain('def _calibrate_mt5_clock(self, tick, force=False):')
-    expect(source).toContain('now - self._mt5_clock_checked_at < 300')
+    expect(source).toContain('DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180')
+    expect(source).toContain('if previous_raw_ms == raw_ms:')
+    expect(source).toContain('raw_progress_ms = raw_ms - previous_raw_ms')
+    expect(source).toContain('abs(raw_progress_ms - host_progress_ms) > MT5_CLOCK_FRESHNESS_TOLERANCE_MS')
+    expect(source).toContain('"mt5_timezone_offset_version": 2')
+    expect(source).toContain('update_config({"mt5_timezone_offset_minutes": candidate')
     expect(source).toContain('"time_utc_msc": raw_ms - offset * 60000')
     expect(source).toContain('"timezone_offset_minutes": offset')
     expect(source).toContain('"clock_status": self._mt5_clock_status')

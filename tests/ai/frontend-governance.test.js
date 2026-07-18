@@ -46,7 +46,18 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("msg.type === 'platform_market_tick'")
     const platformTickBranch = app.slice(app.indexOf("msg.type === 'platform_market_tick'"), app.indexOf("msg.type === 'data'"))
     expect(platformTickBranch).toContain('updateKlineTick')
+    expect(platformTickBranch).toContain('Number(quote.ask), quote')
     expect(platformTickBranch).not.toContain('state.lastQuote =')
+  })
+
+  it('anchors overview live candles to MT5 quote time instead of creating weekend bars from the browser clock', () => {
+    const tickStart = app.indexOf('function updateKlineTick')
+    const tickEnd = app.indexOf('// Periodic refresh for higher timeframes', tickStart)
+    const tickBlock = app.slice(tickStart, tickEnd)
+    expect(tickBlock).toContain('mt5BrokerTimeSeconds(quote?.time)')
+    expect(tickBlock).not.toContain('Date.now()')
+    expect(app).toContain('updateKlineTick(q.bid, q.ask, q)')
+    expect(app).toContain('updateKlineTick(data.bid, data.ask, data)')
   })
 
   it('provides the unified user and administrator information architecture', () => {

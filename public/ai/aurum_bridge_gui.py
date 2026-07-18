@@ -35,6 +35,9 @@ MAX_LOG_LINES = 500
 MAX_LOG_MESSAGE_CHARS = 1000
 MT5_COLLECT_TIMEOUT_SEC = 3
 SYSTEM_TRADE_MAGIC = 234000
+DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
+MT5_CLOCK_FRESHNESS_TOLERANCE_MS = 30000
+MT5_CLOCK_STALE_AFTER_SEC = 120
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 
 # Bundle resource path — compatible with PyInstaller and Nuitka
@@ -397,10 +400,27 @@ class BridgeWorker(QThread):
         self._acc_lost_warned = False
         self._manual_mt5_path = mt5_path
         self.account_created_at = ""
-        self._mt5_timezone_offset_minutes = None
-        self._mt5_clock_status = "unknown"
+        bridge_config = load_config()
+        has_saved_offset = (bridge_config.get("mt5_timezone_offset_version") == 2
+                            and "mt5_timezone_offset_minutes" in bridge_config)
+        saved_offset = bridge_config.get("mt5_timezone_offset_minutes")
+        try:
+            saved_offset = int(saved_offset)
+        except (TypeError, ValueError):
+            saved_offset = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+            has_saved_offset = False
+        if not -720 <= saved_offset <= 840:
+            saved_offset = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+            has_saved_offset = False
+        if not has_saved_offset:
+            saved_offset = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+        self._mt5_timezone_offset_minutes = saved_offset
+        self._mt5_clock_status = "persisted" if has_saved_offset else "fallback"
         self._mt5_clock_residual_ms = None
         self._mt5_clock_checked_at = 0.0
+        self._mt5_clock_last_raw_ms = None
+        self._mt5_clock_last_raw_changed_at = 0.0
+        self._mt5_clock_last_raw_host_ms = None
         # MetaTrader5's Python extension is not thread-safe. Command handling
         # and the one-second data publisher both use the executor, so all MT5
         # calls must share one lock.
@@ -440,21 +460,60 @@ class BridgeWorker(QThread):
 
     def _calibrate_mt5_clock(self, tick, force=False):
         now = time.time()
-        if not force and now - self._mt5_clock_checked_at < 300:
-            return
-        self._mt5_clock_checked_at = now
+        was_verified = self._mt5_clock_status == "verified"
         raw_ms = int(getattr(tick, "time_msc", 0) or int(getattr(tick, "time", 0) or 0) * 1000)
         if raw_ms <= 0:
             self._mt5_clock_status = "unavailable"
             return
         host_ms = int(now * 1000)
+        previous_raw_ms = self._mt5_clock_last_raw_ms
+        previous_raw_host_ms = self._mt5_clock_last_raw_host_ms
+
+        # A closed market keeps returning the final quote timestamp. Never use
+        # that increasingly old timestamp to infer a new broker timezone.
+        if previous_raw_ms == raw_ms:
+            if now - self._mt5_clock_last_raw_changed_at >= MT5_CLOCK_STALE_AFTER_SEC:
+                self._mt5_clock_status = "stale_or_unverified"
+            return
+
+        self._mt5_clock_last_raw_ms = raw_ms
+        self._mt5_clock_last_raw_changed_at = now
+        self._mt5_clock_last_raw_host_ms = host_ms
+
+        # The first sample can only confirm the saved/default offset when the
+        # quote is fresh. A different offset needs a second advancing sample so
+        # a weekend's stale quote cannot masquerade as UTC-9, UTC-10, etc.
+        current_offset = int(self._mt5_timezone_offset_minutes)
+        current_residual = raw_ms - current_offset * 60000 - host_ms
+        if abs(current_residual) <= MT5_CLOCK_FRESHNESS_TOLERANCE_MS:
+            self._mt5_clock_residual_ms = int(current_residual)
+            self._mt5_clock_status = "verified"
+            self._mt5_clock_checked_at = now
+            if not was_verified:
+                update_config({"mt5_timezone_offset_minutes": current_offset, "mt5_timezone_offset_version": 2})
+            return
+
+        if previous_raw_ms is None or previous_raw_host_ms is None:
+            self._mt5_clock_residual_ms = int(current_residual)
+            self._mt5_clock_status = "stale_or_unverified"
+            return
+
+        raw_progress_ms = raw_ms - previous_raw_ms
+        host_progress_ms = host_ms - previous_raw_host_ms
+        if raw_progress_ms <= 0 or abs(raw_progress_ms - host_progress_ms) > MT5_CLOCK_FRESHNESS_TOLERANCE_MS:
+            self._mt5_clock_residual_ms = int(current_residual)
+            self._mt5_clock_status = "stale_or_unverified"
+            return
+
         candidate = int(round((raw_ms - host_ms) / 900000.0) * 15)
         residual = raw_ms - candidate * 60000 - host_ms
         self._mt5_clock_residual_ms = int(residual)
-        if abs(residual) <= 30000:
+        if -720 <= candidate <= 840 and abs(residual) <= MT5_CLOCK_FRESHNESS_TOLERANCE_MS:
             self._mt5_timezone_offset_minutes = candidate
             self._mt5_clock_status = "verified"
-        elif self._mt5_timezone_offset_minutes is None:
+            self._mt5_clock_checked_at = now
+            update_config({"mt5_timezone_offset_minutes": candidate, "mt5_timezone_offset_version": 2})
+        else:
             self._mt5_clock_status = "stale_or_unverified"
 
     def _clock_fields(self, raw_time_msc):
