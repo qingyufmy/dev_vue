@@ -19,4 +19,11 @@ describe('Kimi Code provider policy', () => {
     expect(isPlatformShareableProvider('kimi_code')).toBe(false)
     expect(isPlatformShareableProvider('kimi')).toBe(true)
   })
+
+  it('rejects unknown providers and unsafe custom base URLs before persistence', () => {
+    expect(() => normalizeModelProviderProfile({ provider: 'unknown', model_name: 'anything' }))
+      .toThrow('unsupported_model_provider')
+    expect(() => normalizeModelProviderProfile({ provider: 'deepseek', model_name: 'deepseek-chat', api_base_url: 'http://127.0.0.1:3000' }))
+      .toThrow('model_endpoint_https_required')
+  })
 })

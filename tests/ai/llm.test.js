@@ -55,7 +55,7 @@ describe('requestJsonObject', () => {
     })
 
     const result = await requestJsonObject({
-      url: 'https://api.test.com',
+      url: 'https://api.example.test',
       apiKey: 'test-key',
       model: 'test-model',
       temperature: 0.7,
@@ -65,6 +65,7 @@ describe('requestJsonObject', () => {
 
     expect(result).toEqual({ key: 'value' })
     expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(mockFetch.mock.calls[0][1].redirect).toBe('error')
   })
 
   it('JSON 解析失败时尝试修复', async () => {
@@ -81,7 +82,7 @@ describe('requestJsonObject', () => {
       })
 
     const result = await requestJsonObject({
-      url: 'https://api.test.com',
+      url: 'https://api.example.test',
       apiKey: 'test-key',
       model: 'test-model',
       temperature: 0.7,
@@ -109,7 +110,7 @@ describe('requestJsonObject', () => {
       return value
     })
     const result = await requestJsonObject({
-      url: 'https://api.test.com', apiKey: 'test-key', model: 'test-model', temperature: 0.2,
+      url: 'https://api.example.test', apiKey: 'test-key', model: 'test-model', temperature: 0.2,
       maxTokens: 2000, messages: [{ role: 'user', content: 'test' }], validateObject,
     })
 
@@ -124,7 +125,7 @@ describe('requestJsonObject', () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500 })
 
     await expect(requestJsonObject({
-      url: 'https://api.test.com',
+      url: 'https://api.example.test',
       apiKey: 'test-key',
       model: 'test-model',
       temperature: 0.7,
@@ -135,7 +136,7 @@ describe('requestJsonObject', () => {
 
   it('非 ASCII API key 抛出异常', async () => {
     await expect(requestJsonObject({
-      url: 'https://api.test.com',
+      url: 'https://api.example.test',
       apiKey: 'test-key-中文',
       model: 'test-model',
       temperature: 0.7,

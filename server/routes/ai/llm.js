@@ -6,6 +6,7 @@ import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureH
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { beginModelUsage, finishModelUsage } from './model-profiles.js'
 import { KIMI_CODE_CLIENT_IDENTITY, MODEL_PROVIDER_DEFAULTS, isKimiCodeRequest, modelProviderProtocol } from './model-providers.js'
+import { assertSafeModelEndpoint } from './model-endpoint-security.js'
 import { sha256 } from './inference-snapshots.js'
 import { normalizeEntryMethods, signalTypesForEntryMethods } from './strategy-policy.js'
 
@@ -160,6 +161,7 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
       const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
       usageLogId = reservation.logId
     }
+    await assertSafeModelEndpoint(url)
     const headers = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
     if (isKimiCodeRequest(url, provider)) headers['User-Agent'] = KIMI_CODE_CLIENT_IDENTITY
     const response = await fetch(url, {
@@ -167,6 +169,7 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
       headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeout),
+      redirect: 'error',
     })
     if (!response.ok) {
       const code = providerHttpError(url, provider, response.status)

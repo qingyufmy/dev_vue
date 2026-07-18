@@ -1,3 +1,5 @@
+import { normalizeModelBaseUrl } from './model-endpoint-security.js'
+
 export const KIMI_CODE_PROVIDER = 'kimi_code'
 export const KIMI_CODE_BASE_URL = 'https://api.kimi.com/coding/v1'
 export const KIMI_CODE_MODELS = new Set(['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'])
@@ -20,6 +22,7 @@ export function modelProviderProtocol(provider) {
 
 export function normalizeModelProviderProfile(payload = {}, existing = {}) {
   const provider = payload.provider ?? existing.provider ?? 'deepseek'
+  if (!Object.hasOwn(MODEL_PROVIDER_DEFAULTS, provider)) throw new Error('unsupported_model_provider')
   const modelName = payload.model_name ?? existing.model_name ?? (provider === KIMI_CODE_PROVIDER ? 'kimi-for-coding' : 'deepseek-chat')
   if (provider === KIMI_CODE_PROVIDER && !KIMI_CODE_MODELS.has(modelName)) {
     throw new Error('kimi_code_model_not_supported')
@@ -29,7 +32,7 @@ export function normalizeModelProviderProfile(payload = {}, existing = {}) {
   return {
     provider,
     model_name: modelName,
-    api_base_url: String(requestedBaseUrl || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '') || null,
+    api_base_url: normalizeModelBaseUrl(requestedBaseUrl || MODEL_PROVIDER_DEFAULTS[provider]),
     thinking_enabled: provider === KIMI_CODE_PROVIDER
       ? 1
       : (payload.thinking_enabled !== undefined ? (payload.thinking_enabled ? 1 : 0) : (existing.thinking_enabled ?? 1)),
