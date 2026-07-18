@@ -72,7 +72,7 @@ async function assertProAccess(userId, userRole) {
   const row = await queryOne(
     `SELECT role, plan, plan_expires_at,
        (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
-     FROM users WHERE id = ?`,
+     FROM users WHERE id = ? FOR UPDATE`,
     [toId(userId, 'user_id')]
   )
   if (!hasCurrentPro(row)) throw new Error('pro_access_required')

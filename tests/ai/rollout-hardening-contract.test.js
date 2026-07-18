@@ -10,6 +10,7 @@ const config = readFileSync(new URL('../../server/routes/ai/config.js', import.m
 const rollout = readFileSync(new URL('../../server/routes/ai/rollout-governance.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
 const strategy = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+const strategyOwnership = readFileSync(new URL('../../server/routes/ai/strategy-ownership.js', import.meta.url), 'utf8')
 const preferences = readFileSync(new URL('../../server/routes/ai/inference-preferences.js', import.meta.url), 'utf8')
 
 describe('rollout hardening contract', () => {
@@ -134,5 +135,13 @@ describe('rollout hardening contract', () => {
   it('does not query review bodies or memory lesson text in administrator health metrics', () => {
     const health = rollout.slice(rollout.indexOf('export async function getAiRolloutHealth'))
     expect(health).not.toMatch(/content_json|evidence_json|lesson_text|api_key_encrypted/)
+  })
+
+  it('enforces one active model default and one executing subscription per user', () => {
+    expect(migrations).toContain("id: '098_ai_runtime_active_uniqueness'")
+    expect(migrations).toContain('uk_model_active_default_owner')
+    expect(migrations).toContain('uk_subscription_active_execution_user')
+    expect(migrations).toContain('STORED INVISIBLE')
+    expect(strategyOwnership).toContain('FROM users WHERE id = ? FOR UPDATE')
   })
 })

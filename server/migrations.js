@@ -2481,6 +2481,58 @@ const migrations = [
       if (!existing.has('selection_details_json')) await queryRun(`ALTER TABLE platform_strategy_experience_logs
         ADD COLUMN selection_details_json JSON DEFAULT NULL AFTER retrieval_context_json`)
     }
+  },
+  {
+    id: '098_ai_runtime_active_uniqueness',
+    up: async () => {
+      const duplicateDefaults = await queryAll(`SELECT owner_user_id FROM ai_model_profiles
+        WHERE is_default = 1 AND status = 'active' AND deleted_at IS NULL
+        GROUP BY owner_user_id HAVING COUNT(*) > 1`)
+      for (const row of duplicateDefaults) {
+        const profiles = await queryAll(`SELECT id FROM ai_model_profiles
+          WHERE owner_user_id = ? AND is_default = 1 AND status = 'active' AND deleted_at IS NULL
+          ORDER BY updated_at DESC, id DESC`, [row.owner_user_id])
+        const staleIds = profiles.slice(1).map(profile => Number(profile.id))
+        if (staleIds.length) await queryRun(`UPDATE ai_model_profiles SET is_default = 0
+          WHERE id IN (${staleIds.map(() => '?').join(',')})`, staleIds)
+      }
+
+      const duplicateSubscriptions = await queryAll(`SELECT user_id FROM strategy_subscriptions
+        WHERE execution_enabled = 1 AND is_deleted = 0
+        GROUP BY user_id HAVING COUNT(*) > 1`)
+      for (const row of duplicateSubscriptions) {
+        const subscriptions = await queryAll(`SELECT id FROM strategy_subscriptions
+          WHERE user_id = ? AND execution_enabled = 1 AND is_deleted = 0
+          ORDER BY updated_at DESC, id DESC`, [row.user_id])
+        const staleIds = subscriptions.slice(1).map(subscription => Number(subscription.id))
+        if (staleIds.length) await queryRun(`UPDATE strategy_subscriptions SET execution_enabled = 0
+          WHERE id IN (${staleIds.map(() => '?').join(',')})`, staleIds)
+      }
+
+      const modelColumns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_profiles'
+          AND COLUMN_NAME = 'active_default_owner_key'`)
+      if (!modelColumns.length) await queryRun(`ALTER TABLE ai_model_profiles
+        ADD COLUMN active_default_owner_key INT GENERATED ALWAYS AS
+          (CASE WHEN is_default = 1 AND status = 'active' AND deleted_at IS NULL THEN owner_user_id ELSE NULL END) STORED INVISIBLE`)
+      const modelIndexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_profiles'
+          AND INDEX_NAME = 'uk_model_active_default_owner'`)
+      if (!modelIndexes.length) await queryRun(`CREATE UNIQUE INDEX uk_model_active_default_owner
+        ON ai_model_profiles (active_default_owner_key)`)
+
+      const subscriptionColumns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'strategy_subscriptions'
+          AND COLUMN_NAME = 'active_execution_user_key'`)
+      if (!subscriptionColumns.length) await queryRun(`ALTER TABLE strategy_subscriptions
+        ADD COLUMN active_execution_user_key INT GENERATED ALWAYS AS
+          (CASE WHEN execution_enabled = 1 AND is_deleted = 0 THEN user_id ELSE NULL END) STORED INVISIBLE`)
+      const subscriptionIndexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'strategy_subscriptions'
+          AND INDEX_NAME = 'uk_subscription_active_execution_user'`)
+      if (!subscriptionIndexes.length) await queryRun(`CREATE UNIQUE INDEX uk_subscription_active_execution_user
+        ON strategy_subscriptions (active_execution_user_key)`)
+    }
   }
 ]
 
