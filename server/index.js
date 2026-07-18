@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { initDB, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
 import { isEncryptionAvailable } from './ai-credential.js'
-import { assertModelProfileSchemaReady, migrateLegacyConfigs } from './routes/ai/model-profiles.js'
+import { assertModelProfileSchemaReady, migrateLegacyConfigs, recoverStaleModelUsageReservations } from './routes/ai/model-profiles.js'
 import { assertAiGovernanceSchemaReady } from './routes/ai/rollout-governance.js'
 import { BILIBILI_HEADERS } from './utils.js'
 import authRoutes from './routes/auth.js'
@@ -387,6 +387,17 @@ initBridgeWS(server)
   } else {
     console.warn('[AI] Credential master key is unavailable; model calls and key updates are disabled')
   }
+  const recoverModelUsageReservations = async () => {
+    try {
+      const recovered = await recoverStaleModelUsageReservations(30)
+      if (recovered > 0) console.warn(`[AI] Recovered ${recovered} abandoned model usage reservations`)
+    } catch (error) {
+      console.error('[AI] Model usage reservation recovery failed:', error.message)
+    }
+  }
+  await recoverModelUsageReservations()
+  const modelUsageRecoveryTimer = setInterval(recoverModelUsageReservations, 5 * 60 * 1000)
+  modelUsageRecoveryTimer.unref?.()
   await initAutoSchedulers()
   startOrderIntentReconciler()
   startPeriodReviewWorker()

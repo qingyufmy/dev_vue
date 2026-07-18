@@ -374,6 +374,7 @@ export async function handleAnalyze(userId, params) {
       await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', reason: 'trade_send_disabled' }, { status: 'rejected', message: '交易发送已关闭' }, 'rejected')
       signal.execution_result = { status: 'rejected', message: '交易发送已关闭' }
       await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
+      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'rejected' })
     } else {
     try {
       const riskCfg = {
@@ -402,12 +403,22 @@ export async function handleAnalyze(userId, params) {
           signal.trade_ticket = ticket
         }
         signal.auto_executed = true
+        sendToBrowsers(userId, {
+          type: 'signal_execution_updated', signal_id: signal.id, status: 'success',
+          pending_ticket: isPending ? String(ticket) : null, trade_ticket: isPending ? null : ticket,
+        })
+      } else {
+        const executionStatus = execResult?.status === 'rejected'
+          ? 'rejected'
+          : execResult?.status === 'uncertain' ? 'uncertain' : 'failed'
+        sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: executionStatus })
       }
       await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', tp_tier_requested: orderPayload.tp_tier_requested, tp_tier_used: orderPayload.tp_tier_used, normalization_info: orderPayload.normalization_info }, execResult, execResult?.status || 'error')
     } catch (e) {
       console.error('[Analyze] Auto-execute failed:', e.message)
       signal.execution_result = { status: 'error', message: e.message || '自动执行失败' }
       await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
+      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'failed' })
     }
     }
   }

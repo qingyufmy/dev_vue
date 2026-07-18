@@ -24,6 +24,7 @@ import {
   createModelProfile,
   finishModelUsage,
   migrateLegacyConfigs,
+  recoverStaleModelUsageReservations,
   resolveAiTaskModel,
   setDefaultModelProfile,
 } from '../../server/routes/ai/model-profiles.js'
@@ -295,6 +296,22 @@ describe('model usage accounting', () => {
     mockQueryRun.mockResolvedValueOnce({ changes: 1 })
     await finishModelUsage(44, { tokenCount: 321, status: 'error', errorCode: 'provider_timeout' })
     expect(mockQueryRun).toHaveBeenCalledWith(expect.stringContaining("request_status = 'reserved'"), [321, 'error', 'provider_timeout', 44])
+  })
+
+  it('recovers abandoned reservations without discarding their reserved quota', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows: 3 })
+    await expect(recoverStaleModelUsageReservations(30)).resolves.toBe(3)
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining("error_code = COALESCE(error_code, 'model_request_abandoned')"),
+      [-30],
+    )
+    expect(mockQueryRun.mock.calls[0][0]).not.toContain('token_count =')
+  })
+
+  it('clamps an unsafe reservation recovery window', async () => {
+    mockQueryRun.mockResolvedValueOnce({ changes: 1 })
+    await expect(recoverStaleModelUsageReservations(1)).resolves.toBe(1)
+    expect(mockQueryRun.mock.calls[0][1]).toEqual([-5])
   })
 })
 

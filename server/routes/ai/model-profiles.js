@@ -308,6 +308,18 @@ export async function finishModelUsage(logId, { tokenCount = 0, status = 'succes
   )
 }
 
+export async function recoverStaleModelUsageReservations(maxAgeMinutes = 30) {
+  const safeAge = Math.min(1440, Math.max(5, Math.trunc(Number(maxAgeMinutes) || 30)))
+  const result = await queryRun(
+    `UPDATE ai_model_usage_logs
+     SET request_status = 'error', error_code = COALESCE(error_code, 'model_request_abandoned')
+     WHERE request_status = 'reserved'
+       AND created_at < TIMESTAMPADD(MINUTE, ?, NOW())`,
+    [-safeAge]
+  )
+  return Number(result?.affectedRows ?? result?.changes ?? 0)
+}
+
 // [P1-1] Check platform shared model quota
 export async function checkPlatformQuota(userId, usage) {
   const today = beijingNow().substring(0, 10)
