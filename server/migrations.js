@@ -2533,6 +2533,23 @@ const migrations = [
       if (!subscriptionIndexes.length) await queryRun(`CREATE UNIQUE INDEX uk_subscription_active_execution_user
         ON strategy_subscriptions (active_execution_user_key)`)
     }
+  },
+  {
+    id: '099_cleanup_orphan_inference_artifacts',
+    up: async () => {
+      await queryRun(`DELETE paired FROM ai_paired_inference_runs paired
+        LEFT JOIN ai_signals signal_row ON signal_row.id = paired.signal_id
+        WHERE paired.signal_id IS NOT NULL AND signal_row.id IS NULL`)
+      await queryRun(`DELETE memory_log FROM memory_injection_logs memory_log
+        LEFT JOIN ai_signals signal_row ON signal_row.id = memory_log.signal_id
+        WHERE memory_log.signal_id IS NOT NULL AND signal_row.id IS NULL`)
+      await queryRun(`DELETE snapshot_row FROM inference_snapshots snapshot_row
+        LEFT JOIN ai_signals signal_row ON signal_row.id = snapshot_row.signal_id
+        LEFT JOIN signal_outcomes outcome_row ON outcome_row.signal_id = snapshot_row.signal_id
+        LEFT JOIN trade_review_cases review_row ON review_row.signal_id = snapshot_row.signal_id
+        WHERE snapshot_row.signal_id IS NOT NULL AND signal_row.id IS NULL
+          AND outcome_row.id IS NULL AND review_row.id IS NULL`)
+    }
   }
 ]
 
