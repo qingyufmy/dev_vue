@@ -90,6 +90,24 @@ describe('inference snapshot evidence', () => {
     expect(result.evidenceStatus).toBe('complete')
   })
 
+  it('retains the largest balanced trailing K-line window that fits the snapshot budget', () => {
+    const bars = timeframe => Array.from({ length: 1000 }, (_, index) => ({
+      time: `2026-07-${String(Math.floor(index / 100) + 1).padStart(2, '0')} ${String(index % 24).padStart(2, '0')}:00:00`,
+      open: 3900 + index / 10, high: 3902 + index / 10, low: 3898 + index / 10,
+      close: 3901 + index / 10, tick_volume: index, timeframe,
+    }))
+    const visualization = { M5: bars('M5'), M15: bars('M15'), H1: bars('H1'), H4: bars('H4') }
+    const result = prepareInferenceSnapshot({
+      systemPrompt: 'system', userPrompt: 'market payload '.repeat(8000),
+      marketSnapshot: { strategy_context: { visualization_klines: visualization, timeframes: {} } },
+    }, 300 * 1024)
+    const retained = Object.values(result.klines).map(rows => rows.length)
+    expect(retained.every(count => count > 50 && count < 1000)).toBe(true)
+    expect(Math.max(...retained) - Math.min(...retained)).toBeLessThanOrEqual(1)
+    expect(result.omittedFields).toContain('klines_before_retained_window')
+    expect(result.byteSize).toBeLessThanOrEqual(300 * 1024)
+  })
+
   it('persists metadata without any model secret column or value', async () => {
     const run = vi.fn().mockResolvedValue([{ insertId: 7 }])
     const id = await persistInferenceSnapshotTx(run, {

@@ -92,6 +92,37 @@ function byteLength(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8')
 }
 
+function fitKlinesToSnapshotBudget(stored, maxBytes, minimumBars = 50) {
+  const entries = Object.entries(stored.klines || {})
+  const buildCandidate = ratio => {
+    const klines = {}
+    for (const [timeframe, rows] of entries) {
+      if (!Array.isArray(rows)) {
+        klines[timeframe] = rows
+        continue
+      }
+      const retained = Math.min(rows.length, Math.max(minimumBars, Math.floor(rows.length * ratio)))
+      klines[timeframe] = rows.slice(-retained)
+    }
+    return { ...stored, klines }
+  }
+  let best = buildCandidate(0)
+  if (byteLength(best) > maxBytes) return best
+  let low = 0
+  let high = 1
+  for (let index = 0; index < 16; index += 1) {
+    const middle = (low + high) / 2
+    const candidate = buildCandidate(middle)
+    if (byteLength(candidate) <= maxBytes) {
+      best = candidate
+      low = middle
+    } else {
+      high = middle
+    }
+  }
+  return best
+}
+
 export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHOT_BYTES) {
   const full = sanitizeInferenceEvidence({
     system_prompt: input.systemPrompt || '', user_prompt: input.userPrompt || '',
@@ -104,10 +135,8 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
   let stored = { ...full, market_snapshot: stripEmbeddedKlines(full.market_snapshot) }
   const omitted = []
   if (byteLength(stored) > maxBytes) {
-    const compactKlines = {}
-    for (const [tf, rows] of Object.entries(stored.klines || {})) compactKlines[tf] = Array.isArray(rows) ? rows.slice(-50) : rows
-    stored = { ...stored, klines: compactKlines }
-    omitted.push('klines_before_latest_50')
+    stored = fitKlinesToSnapshotBudget(stored, maxBytes)
+    omitted.push('klines_before_retained_window')
   }
   if (byteLength(stored) > maxBytes) {
     stored.user_prompt = `[evidence omitted; sha256=${sha256(full.user_prompt)}]`
