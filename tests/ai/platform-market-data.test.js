@@ -112,6 +112,17 @@ describe('platform market data', () => {
     expect(result.market_meta).toMatchObject({ source: 'user_bridge_fallback', source_user_id: 7, live_candle_cached: false })
   })
 
+  it('does not persist a temporary unknown source before the bridge publishes its account identity', async () => {
+    bridge.clock.mockReturnValue({ connected: true, timezone_offset_minutes: 180, clock_status: 'stale_or_unverified', broker_server: 'unknown', account_login: 0 })
+    mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+    const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M5', count: 3 })
+    expect(result.rates).toHaveLength(3)
+    expect(result.market_meta.source_id).toBeNull()
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO market_data_sources'))).toBe(false)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO market_candles'))).toBe(false)
+    expect(redis.set).not.toHaveBeenCalled()
+  })
+
   it('returns and advances the persisted Chan structure anchor', async () => {
     db.queryOne
       .mockResolvedValueOnce({ id: 9 })

@@ -42,6 +42,10 @@ function sourceIdentity(bridgeUserId, clock = {}) {
   }
 }
 
+function hasStableSourceIdentity(identity) {
+  return identity.brokerServer !== 'unknown' && identity.accountLogin !== '0'
+}
+
 function cacheKey(sourceId, standardSymbol, timeframe) {
   return `market:candles:v2:${sourceId}:${String(standardSymbol).toUpperCase()}:${String(timeframe).toUpperCase()}`
 }
@@ -64,6 +68,7 @@ function validRate(rate, offsetMinutes) {
 
 async function findSource(bridgeUserId, clock) {
   const identity = sourceIdentity(bridgeUserId, clock)
+  if (!hasStableSourceIdentity(identity)) return { id: null, ...identity }
   const row = await queryOne(`SELECT id FROM market_data_sources
     WHERE bridge_user_id = ? AND source_key = ? LIMIT 1`, [identity.bridgeUserId, identity.sourceKey])
   return { id: row?.id || null, ...identity }
@@ -71,6 +76,7 @@ async function findSource(bridgeUserId, clock) {
 
 async function ensureSource(bridgeUserId, clock, sampleRate) {
   const identity = sourceIdentity(bridgeUserId, clock)
+  if (!hasStableSourceIdentity(identity)) return null
   await queryRun(`INSERT INTO market_data_sources
     (bridge_user_id, broker_server, account_login, source_key, timezone_offset_minutes, clock_status, clock_residual_ms, last_calibrated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
