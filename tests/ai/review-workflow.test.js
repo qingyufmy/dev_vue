@@ -116,4 +116,10 @@ describe('review durability and privacy guards', () => {
     expect(service).toContain('snapshot_strategy_version')
     expect(migration).toContain('path_evidence_status')
   })
+
+  it('resolves review models from the immutable strategy snapshot', () => {
+    expect(service).toContain('evidence?.inference_time?.snapshot?.strategy_id')
+    expect(service).toContain('strategyId, usage: \'review\'')
+    expect(service).toContain('strategyId },')
+  })
 })

@@ -5396,6 +5396,8 @@ function auditStatusLabel(status) {
     warning: "警告",
     info: "信息",
     unknown: "未知",
+    started: "已开始",
+    superseded: "已被替换",
   }[status] || status || "--";
 }
 

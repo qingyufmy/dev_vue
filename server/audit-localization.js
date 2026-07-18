@@ -51,6 +51,8 @@ const STATUS_LABELS = {
   completed: '已完成',
   partial: '部分完成',
   retrying: '正在重试',
+  started: '已开始',
+  superseded: '已被替换',
 }
 
 const VALUE_LABELS = {

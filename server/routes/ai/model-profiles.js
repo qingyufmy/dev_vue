@@ -401,6 +401,33 @@ export async function checkPlatformQuota(userId, usage) {
 export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   if (!USAGES.includes(usage)) throw new Error(`invalid_usage:${usage}`)
 
+  if (usage === 'review' && strategyId) {
+    const strategy = await queryOne(
+      `SELECT id, scope, owner_user_id, model_profile_id
+       FROM auto_prompt_types WHERE id = ?`,
+      [strategyId]
+    )
+    if (!strategy || (strategy.scope === 'private' && Number(strategy.owner_user_id) !== Number(userId))) {
+      return { model: null, credential_source: 'none', error: 'strategy_access_denied', usage, strategy_id: strategyId }
+    }
+    if (strategy.model_profile_id) {
+      const platform = strategy.scope === 'platform'
+      const bound = await queryOne(
+        `SELECT * FROM ai_model_profiles
+         WHERE id = ? AND scope = ? AND owner_user_id = ?
+           AND status = 'active' AND deleted_at IS NULL`,
+        [strategy.model_profile_id, platform ? 'platform' : 'user', platform ? 0 : userId]
+      )
+      if (!bound || !bound.api_key_encrypted) {
+        return { model: null, credential_source: 'none', error: 'bound_model_unavailable', usage, strategy_id: strategyId, model_profile_id: strategy.model_profile_id }
+      }
+      return { ...buildResult(bound, platform ? 'platform_primary' : 'user', usage, 'strategy_binding'), strategy_id: strategyId }
+    }
+    if (strategy.scope === 'platform') {
+      return { ...(await resolvePlatformModel(usage)), strategy_id: strategyId }
+    }
+  }
+
   if (usage === 'auto_platform') {
     if (strategyId) {
       const strategy = await queryOne(
@@ -427,7 +454,7 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
         return { ...buildResult(bound, 'platform_primary', usage, 'strategy_binding'), strategy_id: strategyId }
       }
     }
-    return await resolvePlatformModel()
+    return await resolvePlatformModel(usage)
   }
 
   if (usage === 'auto_private' || (usage === 'manual' && strategyId)) {
@@ -492,12 +519,12 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   return { model: null, credential_source: 'none', error: 'no_model_configured', usage, strategy_id: strategyId || null }
 }
 
-async function resolvePlatformModel() {
+async function resolvePlatformModel(usage = 'auto_platform') {
   const row = await queryOne('SELECT * FROM ai_model_profiles WHERE scope = "platform" AND deleted_at IS NULL AND status = "active" ORDER BY is_default DESC LIMIT 1')
   if (!row || !row.api_key_encrypted) {
-    return { model: null, credential_source: 'none', error: 'no_platform_model', usage: 'auto_platform' }
+    return { model: null, credential_source: 'none', error: 'no_platform_model', usage }
   }
-  return buildResult(row, 'platform_primary', 'auto_platform', 'platform_primary')
+  return buildResult(row, 'platform_primary', usage, 'platform_primary')
 }
 
 async function getPlatformModelForSharing() {

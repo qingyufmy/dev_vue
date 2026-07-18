@@ -60,4 +60,11 @@ describe('audit localization', () => {
       status:'rejected', message:'Invalid price', retcode:10015,
     }, 'rejected').result.message).toBe('MT5 挂单价格无效')
   })
+
+  it('localizes lifecycle states that appear in historical audit payloads', () => {
+    expect(prepareAuditRecord('weekly_flatten_started', {}, { status:'started' }, 'started'))
+      .toMatchObject({ status:'已开始', result:{ status:'已开始' } })
+    expect(prepareAuditRecord('pending_superseded', {}, { status:'superseded' }, 'success').result.status)
+      .toBe('已被替换')
+  })
 })

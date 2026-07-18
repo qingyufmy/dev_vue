@@ -170,6 +170,22 @@ describe('resolveAiTaskModel', () => {
     expect(result.credential_source).toBe('platform_shared')
   })
 
+  it('uses the model bound to a private strategy for review', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 1, model_profile_id: 77 })
+      .mockResolvedValueOnce(profile({ id: 77 }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'review' })
+    expect(result).toMatchObject({ credential_source:'user', reason:'strategy_binding', strategy_id:123, model_profile_id:77 })
+  })
+
+  it('uses the platform strategy model for administrator review', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 12, scope: 'platform', owner_user_id: 0, model_profile_id: null })
+      .mockResolvedValueOnce(profile({ id: 88, owner_user_id: 0, scope: 'platform' }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 12, usage: 'review' })
+    expect(result).toMatchObject({ credential_source:'platform_primary', usage:'review', strategy_id:12, model_profile_id:88 })
+  })
+
   it('returns the primary platform model for auto_platform', async () => {
     mockQueryOne.mockResolvedValueOnce(profile({ owner_user_id: 0, scope: 'platform' }))
     const result = await resolveAiTaskModel({ userId: 1, strategyId: null, usage: 'auto_platform' })

@@ -258,7 +258,9 @@ async function generateReview(reviewCase, requestModel = requestJsonObject) {
   if (reviewCase.evidence_status !== 'complete') throw new Error('review_evidence_incomplete')
   const evidence = parse(reviewCase.evidence_json, null)
   if (!evidence) throw new Error('review_evidence_invalid')
-  const resolved = await resolveAiTaskModel({ userId: reviewCase.user_id, strategyId: null, usage: 'review' })
+  const strategyId = Number(evidence?.inference_time?.snapshot?.strategy_id) || null
+  if (!strategyId) throw new Error('review_strategy_id_missing')
+  const resolved = await resolveAiTaskModel({ userId: reviewCase.user_id, strategyId, usage: 'review' })
   if (!resolved.model) throw new Error(resolved.error || 'review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
   const system = `你是严格的交易复盘分析器。只依据提供的证据判断，不得把亏损直接等同于决策错误，也不得把盈利直接等同于决策正确。区分推理时证据与交易后结果；无法判断时使用 insufficient_evidence。只返回 JSON。`
@@ -267,7 +269,7 @@ async function generateReview(reviewCase, requestModel = requestJsonObject) {
     temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens: resolved.model.max_tokens || 3000,
     thinkingEnabled: resolved.model.thinking_enabled, reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     messages: [{ role: 'system', content: system }, { role: 'user', content: `输出结构：${json(shape)}\n\n证据包：${json(evidence)}` }],
-    usageContext: { userId: reviewCase.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: null },
+    usageContext: { userId: reviewCase.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId },
   })
   return { content: validateReviewContent(content, evidence.evidence_refs), resolved }
 }
