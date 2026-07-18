@@ -805,7 +805,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             page: params.page || 1,
             page_size: params.page_size || 20,
             direction: params.direction || '',
-            profit_filter: params.profit_filter || ''
+            profit_filter: params.profit_filter || '',
+            force_refresh: params.force_refresh === true,
           }
           if (validHistoryDate(params.entry_from)) bridgeParams.entry_from = params.entry_from
           if (validHistoryDate(params.entry_to)) bridgeParams.entry_to = params.entry_to
@@ -824,7 +825,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
         if (bridgeOk) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
-          const chartParams = {}
+          const chartParams = { force_refresh: params.force_refresh === true }
           const range = await resolveHistoryRange(userId, params)
           if (range.date_from) chartParams.date_from = range.date_from
           if (range.date_to) chartParams.date_to = range.date_to

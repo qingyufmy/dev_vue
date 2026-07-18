@@ -426,6 +426,7 @@ class BridgeWorker(QThread):
         # and the one-second data publisher both use the executor, so all MT5
         # calls must share one lock.
         self._mt5_lock = threading.RLock()
+        self._history_deals_cache = None
 
     def check_plan(self):
         """Check plan status via auth/me. Returns (plan, expired, message)."""
@@ -458,6 +459,20 @@ class BridgeWorker(QThread):
     def _mt5_time(self, ts):
         if not ts: return ''
         return datetime.utcfromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M:%S')
+
+    def _history_deals_for_range(self, date_from, date_to, force_refresh=False):
+        """Reuse one exact MT5 deal range briefly for table, chart and paging."""
+        key = (date_from.isoformat(), date_to.isoformat())
+        now = time.monotonic()
+        cached = self._history_deals_cache
+        if cached and cached.get("key") == key:
+            age = now - float(cached.get("created_at") or 0)
+            if age <= 15.0 and (not force_refresh or age <= 1.0):
+                return cached.get("deals"), True
+        deals = self.mt5.history_deals_get(date_from, date_to)
+        if deals is not None:
+            self._history_deals_cache = {"key": key, "created_at": now, "deals": deals}
+        return deals, False
 
     def _calibrate_mt5_clock(self, tick, force=False):
         now = time.time()
@@ -1170,13 +1185,15 @@ class BridgeWorker(QThread):
                     # default would undercount deposits, withdrawals and profit.
                     date_from = FULL_HISTORY_START
                 self.log_signal.emit(f"[History] date_from={date_from}, date_to={date_to}")
-                deals = self.mt5.history_deals_get(date_from, date_to)
-                self.log_signal.emit(f"[History] deals={len(deals) if deals else 'None'}")
+                deals, history_cache_hit = self._history_deals_for_range(
+                    date_from, date_to, bool(params.get("force_refresh", False)))
+                self.log_signal.emit(f"[History] deals={len(deals) if deals else 'None'}, cache_hit={history_cache_hit}")
                 if deals is None: return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
                 deal_rows = [d._asdict() for d in deals]
-                orders = self.mt5.history_orders_get(date_from, date_to)
                 order_lookup = {}
                 history_order_rows = []
+                include_deals = bool(params.get("include_deals", False))
+                orders = self.mt5.history_orders_get(date_from, date_to) if include_deals else None
                 if orders:
                     for o in orders:
                         od = o._asdict()
@@ -1267,6 +1284,18 @@ class BridgeWorker(QThread):
                     rows = [r for r in rows if str(r.get("entry_time") or "")[:10] <= entry_to]
                 total = len(rows); si = max(page-1,0)*page_size
                 pr = rows[si:si+page_size]
+                if not include_deals:
+                    # SL/TP is only rendered for the visible page. Large
+                    # accounts no longer load every historical order per page.
+                    for row in pr:
+                        try:
+                            page_orders = self.mt5.history_orders_get(ticket=int(row.get("ticket") or 0))
+                        except (TypeError, ValueError):
+                            page_orders = None
+                        if not page_orders: continue
+                        page_order = page_orders[-1]
+                        row["take_profit"] = float(getattr(page_order, "tp", 0) or 0)
+                        row["stop_loss"] = float(getattr(page_order, "sl", 0) or 0)
                 tp = sum(float(r.get("net_profit") or 0) for r in rows)
                 nr = tp+credit+deposit-withdrawal
                 ab = 10000.0
@@ -1276,7 +1305,7 @@ class BridgeWorker(QThread):
                 except Exception as e:
                     self.log_signal.emit(f"获取账户余额失败: {e}")
                 raw_deals = []
-                if params.get("include_deals", False):
+                if include_deals:
                     for d in deal_rows:
                         raw_deals.append({"deal_ticket": d.get("ticket"), "ticket": d.get("ticket"),
                             "order": d.get("order"), "position_id": d.get("position_id"), "symbol": d.get("symbol"),
@@ -1286,7 +1315,7 @@ class BridgeWorker(QThread):
                             "swap": d.get("swap"), "fee": d.get("fee"), "sl": d.get("sl"), "tp": d.get("tp"),
                             "time": self._mt5_time(d.get("time")), "time_msc": d.get("time_msc")})
                 return {"status": "success", "orders": pr,
-                    "deals": raw_deals, "history_orders": history_order_rows if params.get("include_deals", False) else [],
+                    "deals": raw_deals, "history_orders": history_order_rows if include_deals else [],
                     "statistics": {
                     "account_principal": round(ab-nr,2), "account_balance": round(ab,2),
                     "total_profit": round(tp,2), "credit": round(credit,2), "deposit": round(deposit,2),
@@ -1315,7 +1344,8 @@ class BridgeWorker(QThread):
                 direction_filter = params.get("direction", "")
                 profit_filter = params.get("profit_filter", "")
                 # Fetch deals
-                deals = self.mt5.history_deals_get(date_from, date_to)
+                deals, history_cache_hit = self._history_deals_for_range(
+                    date_from, date_to, bool(params.get("force_refresh", False)))
                 if deals is None:
                     return {"status": "error", "message": f"MT5 history_deals_get failed: {self.mt5.last_error()}"}
                 deal_rows = [d._asdict() for d in deals]
@@ -1336,7 +1366,8 @@ class BridgeWorker(QThread):
                     grp = deals_by_pos.get(pid, [])
                     ed = next((i for i in grp if i.get("entry") == entry_in), None)
                     direction = "BUY" if (ed or d).get("type") == deal_type_buy else "SELL"
-                    profit = float(d.get("profit") or 0)
+                    profit = (float(d.get("profit") or 0) + float(d.get("swap") or 0)
+                        + float(d.get("commission") or 0) + float(d.get("fee") or 0))
                     close_time = self._mt5_time(d.get("time"))
                     orders.append({"type": direction, "profit": profit, "close_time": close_time})
                 # Apply direction/profit filters
@@ -1391,7 +1422,7 @@ class BridgeWorker(QThread):
                 avg_win = gross_profit / len(wins) if wins else 0
                 avg_loss = gross_loss / len(losses) if losses else 0
                 return {"status": "success", "daily": daily, "cumulative": cumulative,
-                    "drawdown": drawdown, "stats": {
+                    "drawdown": drawdown, "history_cache_hit": history_cache_hit, "stats": {
                     "total_trades": len(orders),
                     "win_rate": round(len(wins) / len(orders) * 10000) / 100 if orders else 0,
                     "profit_factor": round(avg_win / avg_loss * 100) / 100 if avg_loss > 0 else (999 if avg_win > 0 else 0),

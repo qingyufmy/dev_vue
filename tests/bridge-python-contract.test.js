@@ -51,6 +51,26 @@ describe('Python Bridge history contract', () => {
     expect(block).toContain('tp = sum(float(r.get("net_profit") or 0) for r in rows)')
   })
 
+  it('reuses one deal range and only reads order details for the visible page', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('def _history_deals_for_range(self, date_from, date_to, force_refresh=False):')
+    expect(source).toContain('age <= 15.0 and (not force_refresh or age <= 1.0)')
+    const historyStart = source.indexOf('elif action == "history"')
+    const chartStart = source.indexOf('elif action == "chart_data"', historyStart)
+    const block = source.slice(historyStart, chartStart)
+    expect(block).toContain('orders = self.mt5.history_orders_get(date_from, date_to) if include_deals else None')
+    expect(block).toContain('for row in pr:')
+    expect(block).toContain('history_orders_get(ticket=int(row.get("ticket") or 0))')
+  })
+
+  it('uses fee-inclusive net profit in chart aggregation', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const chartStart = source.indexOf('elif action == "chart_data"')
+    const block = source.slice(chartStart)
+    expect(block).toContain('float(d.get("commission") or 0) + float(d.get("fee") or 0)')
+    expect(block).toContain('"history_cache_hit": history_cache_hit')
+  })
+
   it('exports raw MT5 attribution fields only when explicitly requested', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     const historyStart = source.indexOf('elif action == "history"')

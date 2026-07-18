@@ -4963,7 +4963,7 @@ async function loadHistory(forceRefresh) {
     }
 
     const [data] = await Promise.all([
-      wsApi("history", { page: filters.page, page_size: filters.pageSize, ...filterParams }),
+      wsApi("history", { page: filters.page, page_size: filters.pageSize, force_refresh:Boolean(forceRefresh), ...filterParams }),
       loadSignalTickets(),
       loadCloseSignalTickets(),
     ]);
@@ -5008,7 +5008,7 @@ async function loadHistoryChart(forceRefresh) {
       return;
     }
 
-    const data = await wsApi("history_chart_data", params);
+    const data = await wsApi("history_chart_data", { ...params, force_refresh:Boolean(forceRefresh) });
     if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史图表读取失败');
     _historyChartCache = { filters: filterKey, data };
     await ensureChartJs();
