@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   compactPeriodTradeEvidence, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
-import { isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
+import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
   it('uses the calibrated MT5 offset for daily boundaries', () => {
@@ -181,6 +181,22 @@ describe('period market evidence', () => {
     expect(requiredReviewCandleCount(start, end, 'H1')).toBe(226)
     expect(isReviewGridAligned(start + 4 * 3600000, start, 'H4')).toBe(true)
     expect(isReviewGridAligned(start + 3 * 3600000, start, 'H4')).toBe(false)
+  })
+
+  it('detects a long weekday cache gap but tolerates normal maintenance and weekend closure', () => {
+    const start = Date.parse('2026-07-13T00:00:00Z')
+    const end = Date.parse('2026-07-14T00:00:00Z')
+    const complete = Array.from({ length:24 }, (_, hour) => start + hour * 3600000).filter((_, hour) => hour !== 12)
+    expect(assessReviewCandleCoverage(complete.map(time_utc_msc => ({ time_utc_msc })), start, end, 'H1').complete).toBe(true)
+    const missing = [start, start + 3600000, start + 10 * 3600000, start + 23 * 3600000]
+    const coverage = assessReviewCandleCoverage(missing.map(time_utc_msc => ({ time_utc_msc })), start, end, 'H1')
+    expect(coverage).toMatchObject({ complete:false, endpoint_complete:true, internal_gap_count:2 })
+
+    const friday = Date.parse('2026-07-17T20:00:00Z')
+    const monday = Date.parse('2026-07-20T02:00:00Z')
+    expect(assessReviewCandleCoverage([
+      { time_utc_msc:friday }, { time_utc_msc:monday - 3600000 },
+    ], friday, monday, 'H1')).toMatchObject({ complete:true, internal_gap_count:0 })
   })
 
   it('removes raw daily candles from the monthly digest but preserves structural conclusions', () => {

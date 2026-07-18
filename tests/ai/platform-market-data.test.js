@@ -13,7 +13,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge }))
 vi.mock('../../server/redis.js', () => ({ cacheGetJSON: redis.get, cacheSetJSON: redis.set }))
 
-import { getPlatformRates, saveChanStructureAnchor } from '../../server/routes/ai/platform-market-data.js'
+import { buildRatesRequestKey, getPlatformRates, saveChanStructureAnchor } from '../../server/routes/ai/platform-market-data.js'
 
 const rate = (minute, close) => ({
   time: `2026-07-16 10:0${minute}:00`, time_msc: 1784196000000 + minute * 60000,
@@ -32,6 +32,13 @@ describe('platform market data', () => {
     db.queryRun.mockResolvedValue({ changes: 1, insertId: 1 })
     redis.get.mockResolvedValue(null)
     redis.set.mockResolvedValue(undefined)
+  })
+
+  it('does not coalesce review hydration with a smaller live request', () => {
+    const live = buildRatesRequestKey(7, 1, { symbol:'XAUUSD', timeframe:'M1', count:1000 })
+    const review = buildRatesRequestKey(7, 1, { symbol:'XAUUSD', timeframe:'M1', count:1642, review_window:true })
+    expect(live).not.toBe(review)
+    expect(review).toContain(':review:1642')
   })
 
   it('persists only closed bars and returns the current bar as uncached live data', async () => {

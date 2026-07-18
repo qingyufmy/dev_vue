@@ -22,6 +22,40 @@ export function isReviewGridAligned(openTimeUtcMs, periodStartUtcMs, timeframe) 
   return Boolean(interval && Number.isFinite(delta) && ((delta % interval) + interval) % interval === 0)
 }
 
+function crossesWeekend(startUtcMs, endUtcMs) {
+  const hour = 3600000
+  for (let cursor = Math.floor(startUtcMs / hour) * hour; cursor <= endUtcMs; cursor += hour) {
+    const day = new Date(cursor).getUTCDay()
+    if (day === 0 || day === 6) return true
+  }
+  return false
+}
+
+export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timeframe) {
+  const interval = REVIEW_TIMEFRAME_MS[String(timeframe || '').toUpperCase()]
+  const sorted = [...(rates || [])]
+    .map(row => Number(row?.time_utc_msc))
+    .filter(Number.isFinite)
+    .filter(time => time >= Number(startUtcMs) && time < Number(endUtcMs))
+    .sort((a, b) => a - b)
+    .filter((time, index, values) => index === 0 || time !== values[index - 1])
+  if (!interval || !sorted.length) return { complete:false, endpoint_complete:false, internal_gap_count:0, max_gap_ms:0 }
+  const endpointComplete = sorted[0] <= Number(startUtcMs) + interval && sorted.at(-1) >= Number(endUtcMs) - interval * 2
+  // 黄金、外汇每天可能存在短暂维护休市。只把超过两小时且不跨周末的缺口视为异常，
+  // 避免将正常休市误判成缓存损坏，同时仍能识别桥接长时间断开造成的大段缺失。
+  const toleratedGap = Math.max(interval * 3, 2 * 3600000)
+  let internalGapCount = 0
+  let maxGapMs = 0
+  for (let index = 1; index < sorted.length; index += 1) {
+    const gap = sorted[index] - sorted[index - 1]
+    if (gap > toleratedGap && !crossesWeekend(sorted[index - 1], sorted[index])) {
+      internalGapCount += 1
+      maxGapMs = Math.max(maxGapMs, gap)
+    }
+  }
+  return { complete:endpointComplete && internalGapCount === 0, endpoint_complete:endpointComplete, internal_gap_count:internalGapCount, max_gap_ms:maxGapMs }
+}
+
 function slimChan(chan) {
   if (!chan) return null
   return { status:chan.status, reliability:chan.reliability, warnings:chan.warnings || [], bi_count:chan.bi_count,
@@ -71,11 +105,10 @@ async function loadReviewWindow(userId, symbol, timeframe, startUtcMs, endUtcMs)
     WHERE u.role = 'admin' AND mds.broker_server = ? ORDER BY mds.last_calibrated_at, mds.id`, [existingSource.broker_server])).map(row => Number(row.id))
   let rows = relatedSourceIds.length ? await readStored(relatedSourceIds) : []
   let periodRows = rows.filter(row => Number(row.time_utc_msc) >= startUtcMs && Number(row.time_utc_msc) < endUtcMs)
-  const cacheComplete = periodRows[0] && Number(periodRows[0].time_utc_msc) <= startUtcMs + interval
-    && Number(periodRows.at(-1).time_utc_msc) >= endUtcMs - interval * 2
+  let coverage = assessReviewCandleCoverage(periodRows, startUtcMs, endUtcMs, timeframe)
   let marketMeta = existingSource ? { source:'mysql_period_cache', source_id:sourceId,
     timezone_offset_minutes:existingSource.timezone_offset_minutes, clock_status:existingSource.clock_status } : {}
-  if (!cacheComplete) {
+  if (!coverage.complete) {
     const hydrated = await platformRates(userId, { symbol, timeframe, count, review_window:true })
     sourceId = Number(hydrated?.market_meta?.source_id)
     if (hydrated?.status === 'error' || !sourceId) throw new Error(hydrated?.error || hydrated?.message || 'period_market_source_unavailable')
@@ -89,7 +122,8 @@ async function loadReviewWindow(userId, symbol, timeframe, startUtcMs, endUtcMs)
   const rates = rows.map(row => ({ ...row, time_utc_msc:Number(row.time_utc_msc), open:Number(row.open), high:Number(row.high), low:Number(row.low), close:Number(row.close), tick_volume:Number(row.tick_volume || 0) }))
   const periodRates = rates.filter(rate => rate.time_utc_msc >= startUtcMs && rate.time_utc_msc < endUtcMs)
   if (!periodRates.length) throw new Error('period_market_candles_unavailable')
-  return { sourceId, interval, rates, periodRates, marketMeta }
+  coverage = assessReviewCandleCoverage(periodRates, startUtcMs, endUtcMs, timeframe)
+  return { sourceId, interval, rates, periodRates, marketMeta, coverage }
 }
 
 export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbols = [], startUtcMs, endUtcMs, sources = [] } = {}) {
@@ -113,15 +147,21 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
         const expected = Math.ceil((endUtcMs - startUtcMs) / loaded.interval)
         const first = loaded.periodRates[0]?.time_utc_msc
         const last = loaded.periodRates.at(-1)?.time_utc_msc
-        const complete = first <= startUtcMs + loaded.interval && last >= endUtcMs - loaded.interval * 2
+        const complete = loaded.coverage.complete
         const highs = loaded.periodRates.map(item => item.high); const lows = loaded.periodRates.map(item => item.low)
         result.symbols[symbol][timeframe] = {
           status:complete ? 'complete' : 'partial', candle_count:loaded.periodRates.length, expected_candle_count:expected,
           first_time_utc_msc:first, last_time_utc_msc:last, full_period_candles:loaded.periodRates.map(compactRate),
+          coverage:{ endpoint_complete:loaded.coverage.endpoint_complete, internal_gap_count:loaded.coverage.internal_gap_count,
+            max_gap_ms:loaded.coverage.max_gap_ms },
           summary:{ open:loaded.periodRates[0].open, high:Math.max(...highs), low:Math.min(...lows), close:loaded.periodRates.at(-1).close,
             atr_14:market.atr_14, rsi_14:market.rsi_14, macd:market.macd, chan:slimChan(market.chan) },
         }
-        if (!complete) result.status = 'partial'
+        if (!complete) {
+          result.status = 'partial'
+          if (loaded.coverage.internal_gap_count > 0) errors.push(`${symbol}:${timeframe}:period_market_internal_gap`)
+          else errors.push(`${symbol}:${timeframe}:period_market_endpoint_incomplete`)
+        }
       } catch (error) {
         const reason = String(error?.message || error).slice(0, 96)
         errors.push(`${symbol}:${timeframe}:${reason}`)

@@ -277,11 +277,18 @@ export async function saveChanStructureAnchor(sourceId, symbol, timeframe, struc
 export async function getPlatformRates(requestUserId, params = {}) {
   maybeCleanupMarketData().catch(error => console.error('[MarketData] cleanup failed:', error.message))
   const platformUserId = await getActivePlatformBridgeUserId()
-  const key = `${platformUserId || `user-${requestUserId}`}:${String(params.symbol || '').trim()}:${String(params.timeframe || 'M30').toUpperCase()}:${Math.min(1000, Math.max(2, Number(params.count) || 100))}`
+  const key = buildRatesRequestKey(requestUserId, platformUserId, params)
   if (inFlightRates.has(key)) return inFlightRates.get(key)
   const request = getPlatformRatesCore(requestUserId, platformUserId, params).finally(() => inFlightRates.delete(key))
   inFlightRates.set(key, request)
   return request
+}
+
+export function buildRatesRequestKey(requestUserId, platformUserId, params = {}) {
+  const reviewWindow = params.review_window === true
+  const countLimit = reviewWindow ? 5000 : 1000
+  const count = Math.min(countLimit, Math.max(2, Number(params.count) || 100))
+  return `${platformUserId || `user-${requestUserId}`}:${String(params.symbol || '').trim()}:${String(params.timeframe || 'M30').toUpperCase()}:${reviewWindow ? 'review' : 'live'}:${count}`
 }
 
 export async function getPlatformMarketStatus() {
