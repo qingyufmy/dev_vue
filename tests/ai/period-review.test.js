@@ -216,6 +216,7 @@ describe('period review runtime integration', () => {
     expect(periodReview).toContain("isAiFeatureEnabled('review_generation_enabled'")
     expect(periodReview).toContain("status = 'stale'")
     expect(periodReview).toContain("status = 'revalidation'")
+    expect(periodReview).toContain('source_memory_ids_json')
     expect(periodReview).toContain("status = 'revoked'")
     expect(periodReview).toContain('runPeriodReviewDerivationOnce')
     expect(periodReview).toContain('monthlyReviewSourceHash')

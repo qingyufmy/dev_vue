@@ -15,6 +15,8 @@ const SHORT_MEMORY_TTL_DAYS = 30
 const LONG_MEMORY_MIN_SUPPORT = 3
 const LONG_MEMORY_MIN_SPAN_DAYS = 7
 const LONG_MEMORY_BUDGET_RATIO = 0.6
+const MAX_SHORT_MEMORY_ITEMS = 5
+const MAX_LONG_MEMORY_ITEMS = 3
 let compressionTimer = null
 const parse = (value, fallback) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const tokenCount = value => Math.max(1, Math.ceil(Buffer.byteLength(String(value || ''), 'utf8') / 4))
@@ -75,6 +77,29 @@ export function memorySimilarity(left, right) {
 
 function scopeKey(item) {
   return [`${item.strategy_id || '*'}@${Number(item.strategy_version || 1)}`, item.symbol || '*', item.timeframe || '*'].join(':')
+}
+
+function uniqueEvidenceValue(values, normalize = value => String(value || '').trim()) {
+  const normalized = [...new Set(values.map(normalize).filter(Boolean))]
+  return normalized.length === 1 ? normalized[0] : null
+}
+
+export function buildPeriodMemoryScope(reviewCase, evidence = {}) {
+  const tradeEvidence = (Array.isArray(evidence.sources) ? evidence.sources : [])
+    .map(source => source?.evidence).filter(Boolean)
+  const signals = tradeEvidence.map(item => item?.inference_time?.signal || {})
+  const orders = tradeEvidence.map(item => item?.inference_time?.approved_order || item?.inference_time?.original_order || {})
+  const outcomes = tradeEvidence.map(item => item?.post_trade?.outcome || {})
+  return {
+    strategy_id:Number(reviewCase.strategy_id),
+    strategy_version:Number(reviewCase.strategy_version || 1),
+    symbol:uniqueEvidenceValue(outcomes.map(item => item.symbol).concat(orders.map(item => item.symbol)), value => String(value || '').trim().toUpperCase()),
+    timeframe:uniqueEvidenceValue(signals.map(item => item.timeframe), value => String(value || '').trim().toUpperCase()),
+    direction:uniqueEvidenceValue(signals.map(item => directionSide(item.signal_type)), value => String(value || '').trim().toLowerCase()),
+    entry_method:uniqueEvidenceValue(orders.map(item => item.entry_method || item.action), value => String(value || '').trim().toLowerCase()),
+    market_regime:null,
+    source_period:reviewCase.period_key,
+  }
 }
 
 function buildMemoryPayload(reviewCase, version) {
@@ -166,8 +191,8 @@ async function createShortMemoryFromApprovedDailyReview(periodCaseId, userId) {
   const lesson = sanitizeMemoryText([...(content.daily_lessons || []), ...(content.strengths || [])].join('；') || content.period_summary, 4000)
   if (!lesson) throw new Error('approved_daily_review_has_no_lesson')
   const antiPattern = sanitizeMemoryText([...(content.repeated_issues || []), ...(content.risk_observations || [])].join('；'), 4000)
-  const scope = { strategy_id: Number(reviewCase.strategy_id), strategy_version: Number(reviewCase.strategy_version || 1),
-    symbol: null, timeframe: null, source_period: reviewCase.period_key }
+  const evidence = parse(reviewCase.evidence_json, {}) || {}
+  const scope = buildPeriodMemoryScope(reviewCase, evidence)
   const conditions = { decision_quality: content.decision_quality || 'insufficient_evidence',
     chan_diagnoses: Array.isArray(content.chan_diagnoses) ? content.chan_diagnoses.map(item => ({ status: item.status, issue_source: item.issue_source, impact_on_decision: item.impact_on_decision })) : [],
     period_chan_assessment:content.period_chan_assessment || null }
@@ -178,8 +203,9 @@ async function createShortMemoryFromApprovedDailyReview(periodCaseId, userId) {
      strategy_id, strategy_version, memory_tier, symbol, timeframe, direction, entry_method, market_regime,
      scope_json, conditions_json, lesson_text, anti_pattern_text, evidence_refs_json, ancestor_memory_ids_json,
      content_hash, token_count, confidence, status, confirmed_at, expires_at, created_at, updated_at)
-    VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, 'short', NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'active', ?, ?, ?, ?)`, [
+    VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, 'short', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'active', ?, ?, ?, ?)`, [
     userId, reviewCase.id, version.id, reviewCase.period_key, reviewCase.strategy_id, Number(reviewCase.strategy_version || 1),
+    scope.symbol, scope.timeframe, scope.direction, scope.entry_method, scope.market_regime,
     JSON.stringify(scope), JSON.stringify(conditions), lesson, antiPattern || null,
     JSON.stringify([`period_review:${reviewCase.id}`, `period_review_version:${version.id}`]),
     sha256(JSON.stringify(canonical)), tokenCount(`${lesson}\n${antiPattern}`), Number(content.confidence || 0.5),
@@ -323,12 +349,24 @@ async function invalidateSummariesForSource(userId, memoryId) {
   }
 }
 
+async function invalidateLongMemoriesForSource(userId, memoryId) {
+  const rows = await queryAll(`SELECT id, source_memory_ids_json FROM experience_long_term_memories
+    WHERE user_id = ? AND status IN ('candidate','active')`, [userId])
+  const affected = rows.filter(row => parse(row.source_memory_ids_json, []).map(Number).includes(Number(memoryId)))
+  if (!affected.length) return 0
+  await queryRun(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
+    WHERE user_id = ? AND id IN (${affected.map(() => '?').join(',')}) AND status IN ('candidate','active')`,
+  [beijingNow(), userId, ...affected.map(row => Number(row.id))])
+  return affected.length
+}
+
 export async function revokeMemoryItem(memoryId, userId) {
   const result = await queryRun(`UPDATE experience_memory_items SET status = 'revoked', revoked_at = ?, updated_at = ?
     WHERE id = ? AND user_id = ? AND status IN ('active','compressed','duplicate_candidate')`, [beijingNow(), beijingNow(), memoryId, userId])
   if (!result.changes) throw new Error('memory_item_not_found')
   await invalidateSummariesForSource(userId, memoryId)
-  return { revoked: true }
+  const longMemoriesInvalidated = await invalidateLongMemoriesForSource(userId, memoryId)
+  return { revoked: true, longMemoriesInvalidated }
 }
 
 export async function activateDuplicateMemory(memoryId, userId) {
@@ -409,16 +447,22 @@ function recencyScore(date) {
 export function rankMemoryCandidates(items, context = {}) {
   return items.map(item => {
     const reasons = []
+    let eligible = true
     let score = Number(item.confidence || 0.5) * 2 + recencyScore(item.updated_at)
-    const match = (field, weight) => {
+    const match = (field, weight, hardMismatch = false) => {
       if (!context[field] || !item[field]) return
       const contextValue = field === 'direction' ? directionSide(context[field]) : String(context[field]).toUpperCase()
       const itemValue = field === 'direction' ? directionSide(item[field]) : String(item[field]).toUpperCase()
       if (contextValue && contextValue === itemValue) { score += weight; reasons.push(`${field}_match`) }
-      else score -= weight * 0.35
+      else {
+        score -= weight * 0.35
+        reasons.push(`${field}_mismatch`)
+        if (hardMismatch) eligible = false
+      }
     }
-    match('strategy_id', 4); match('symbol', 3); match('timeframe', 2); match('direction', 1.5); match('entry_method', 1); match('market_regime', 1)
-    return { item, score, reasons: reasons.length ? reasons : ['confidence_recency'] }
+    match('strategy_id', 4, true); match('strategy_version', 4, true); match('symbol', 3, true); match('timeframe', 2, true)
+    match('direction', 1.5, true); match('entry_method', 1, true); match('market_regime', 1, true)
+    return { item, score, eligible, reasons: reasons.length ? reasons : ['confidence_recency'] }
   }).sort((a, b) => b.score - a.score || Number(b.item.id) - Number(a.item.id))
 }
 
@@ -472,8 +516,8 @@ export async function retrievePersonalMemory({ userId, strategyId = null, strate
     AND strategy_id = ? AND strategy_version = ? AND (symbol IS NULL OR symbol = ?)
     AND (timeframe IS NULL OR timeframe = ?) ORDER BY support_count DESC, updated_at DESC LIMIT 50`,
   [userId, strategyId, version, symbol, timeframe])
-  const ranked = rankMemoryCandidates(items, context)
-  const rankedLong = rankMemoryCandidates(longItems, context)
+  const ranked = rankMemoryCandidates(items, context).filter(candidate => candidate.eligible)
+  const rankedLong = rankMemoryCandidates(longItems, context).filter(candidate => candidate.eligible)
   const key = [`${strategyId || '*'}@${version}`, symbol || '*', timeframe || '*'].join(':')
   const summary = await getValidSummary(userId, key)
   const budget = settings.runtime_token_budget || DEFAULT_BUDGET
@@ -482,6 +526,7 @@ export async function retrievePersonalMemory({ userId, strategyId = null, strate
   const selectedItems = []; const selectedSummaries = []; const selectedLong = []; const reasons = []
   let used = 0
   for (const candidate of rankedLong) {
+    if (selectedLong.length >= MAX_LONG_MEMORY_ITEMS) break
     const cost = Number(candidate.item.token_count || tokenCount(candidate.item.summary_text))
     if (used + cost > longBudget) continue
     parts.push({ type: 'long_term', id: candidate.item.id, support_count: Number(candidate.item.support_count), conditions: parse(candidate.item.conditions_json, {}), lesson: candidate.item.summary_text })
@@ -494,6 +539,7 @@ export async function retrievePersonalMemory({ userId, strategyId = null, strate
     reasons.push({ summary_id: Number(summary.id), reason: 'active_scope_summary' })
   }
   for (const candidate of ranked) {
+    if (selectedItems.length >= MAX_SHORT_MEMORY_ITEMS) break
     if (summary && parse(summary.source_memory_ids_json, []).map(Number).includes(Number(candidate.item.id))) continue
     const cost = Number(candidate.item.token_count)
     if (used + cost > budget) continue

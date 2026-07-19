@@ -278,7 +278,7 @@ export async function handleAnalyze(userId, params) {
   let memory = { promptBlock: '', mode: 'off', logId: null }
   try {
     if (strategy.scope === 'platform') {
-      memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), symbol, timeframe: primaryTf,
+      memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), strategyVersion:Number(strategy.version || 1), symbol, timeframe: primaryTf,
         market, allowedEntryMethods:policy.entryMethods })
     } else {
       const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, policy.entryMethods)

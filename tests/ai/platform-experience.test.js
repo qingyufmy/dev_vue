@@ -11,8 +11,8 @@ vi.mock('../../server/routes/ai/memory-system.js', () => ({
 }))
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256: value => `hash:${value}` }))
 
-import { buildPlatformExperienceRetrievalContext, createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation, retrievePlatformExperience,
-  sanitizePlatformExperienceText } from '../../server/routes/ai/platform-experience.js'
+import { buildPlatformExperienceRetrievalContext, createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation,
+  platformExperienceApplicability, retrievePlatformExperience, sanitizePlatformExperienceText } from '../../server/routes/ai/platform-experience.js'
 
 describe('platform strategy experience boundary', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -73,6 +73,12 @@ describe('platform strategy experience boundary', () => {
     expect(buildPlatformExperienceRetrievalContext({ symbol:'XAUUSD', timeframe:'M15', allowedEntryMethods:['market'],
       market:{ strategy_score:{ momentum_alignment:1, trend_strength:0.7 }, sma_distance_pct:0.2, volatility_pct:0.2 } }))
       .toMatchObject({ symbol:'XAUUSD', timeframe:'M15', trend_direction:'up', market_regime:'uptrend', volatility_bucket:'normal' })
+  })
+
+  it('rejects experience from a different strategy version before prompt injection', () => {
+    const result = platformExperienceApplicability({ context_json:JSON.stringify({ strategy_version:2 }) },
+      buildPlatformExperienceRetrievalContext({ strategyVersion:3, symbol:'XAUUSD', timeframe:'M5' }))
+    expect(result).toEqual({ eligible:false, score:0, reasons:['strategy_version_mismatch'] })
   })
 
   it('summarizes shadow hits and paired inference differences without claiming profitability', async () => {

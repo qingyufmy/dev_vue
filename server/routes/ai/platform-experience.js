@@ -28,7 +28,7 @@ function primaryChan(market = {}, timeframe = null) {
     || null
 }
 
-export function buildPlatformExperienceRetrievalContext({ symbol = null, timeframe = null, market = {}, allowedEntryMethods = [] } = {}) {
+export function buildPlatformExperienceRetrievalContext({ strategyVersion = 1, symbol = null, timeframe = null, market = {}, allowedEntryMethods = [] } = {}) {
   const chan = primaryChan(market, timeframe)
   const momentum = Number(market.strategy_score?.momentum_alignment || 0)
   const smaDistance = Number(market.sma_distance_pct || 0)
@@ -42,6 +42,7 @@ export function buildPlatformExperienceRetrievalContext({ symbol = null, timefra
   const divergence = !chan ? null : chan?.divergence?.confirmed ? textValue(chan.divergence.type) : chan?.forming_divergence?.type && chan.forming_divergence.type !== 'none'
     ? `forming_${textValue(chan.forming_divergence.type)}` : 'none'
   return {
+    strategy_version:Number(strategyVersion || 1),
     symbol:textValue(symbol).toUpperCase() || null, timeframe:textValue(timeframe).toUpperCase() || null,
     trend_direction:trendDirection, market_regime:marketRegime, volatility_bucket:volatilityBucket,
     allowed_entry_methods:stringList(allowedEntryMethods), chan_trend_state:textValue(chan?.trend_state?.state) || null,
@@ -51,12 +52,17 @@ export function buildPlatformExperienceRetrievalContext({ symbol = null, timefra
   }
 }
 
-function experienceApplicability(item, retrievalContext) {
+export function platformExperienceApplicability(item, retrievalContext) {
   const context = parse(item.context_json, {}) || {}
   const applicable = context.applicable_when && typeof context.applicable_when === 'object' ? context.applicable_when : context
   const avoid = context.avoid_when && typeof context.avoid_when === 'object' ? context.avoid_when : {}
   const reasons = ['strategy_match']
   let score = 55
+  const expectedStrategyVersion = Number(applicable.strategy_version || 0)
+  if (expectedStrategyVersion && expectedStrategyVersion !== Number(retrievalContext.strategy_version || 1)) {
+    return { eligible:false, score:0, reasons:['strategy_version_mismatch'] }
+  }
+  if (expectedStrategyVersion) { score += 8; reasons.push('strategy_version_match') }
   const scoreField = (field, weight, aliases = []) => {
     let expected = stringList(applicable[field] ?? aliases.map(key => applicable[key]).find(value => value != null))
     if (field === 'trend_direction') expected = expected.map(value => signalDirection(value) || value)
@@ -104,7 +110,7 @@ function buildCandidate(reviewCase, version) {
   const lessonText = sanitizePlatformExperienceText(lessons.join('。'))
   const market = snapshot.market_snapshot || {}
   const timeframe = sanitizeMemoryText(signal.timeframe || market.timeframe || market.strategy_context?.primary_timeframe || '', 16) || null
-  const retrievalContext = buildPlatformExperienceRetrievalContext({ symbol:outcome.symbol || market.symbol, timeframe, market,
+  const retrievalContext = buildPlatformExperienceRetrievalContext({ strategyVersion:Number(snapshot.strategy_version || 1), symbol:outcome.symbol || market.symbol, timeframe, market,
     allowedEntryMethods:signal.entry_method ? [signal.entry_method] : [] })
   const context = {
     symbol: sanitizeMemoryText(outcome.symbol || market.symbol || '', 64) || null,
@@ -118,6 +124,7 @@ function buildCandidate(reviewCase, version) {
     chan_segment_direction: retrievalContext.chan_segment_direction,
     chan_divergence: retrievalContext.chan_divergence,
     chan_center_state: retrievalContext.chan_center_state,
+    strategy_version:Number(snapshot.strategy_version || 1),
   }
   return { strategyId: Number(snapshot.strategy_id), lessonText, context }
 }
@@ -246,7 +253,7 @@ function estimateTokens(value) {
   return Math.max(1, Math.ceil(Buffer.byteLength(String(value || ''), 'utf8') / 4))
 }
 
-export async function retrievePlatformExperience({ strategyId, symbol = null, timeframe = null, market = {}, allowedEntryMethods = [] } = {}) {
+export async function retrievePlatformExperience({ strategyId, strategyVersion = 1, symbol = null, timeframe = null, market = {}, allowedEntryMethods = [] } = {}) {
   const policy = await queryOne('SELECT * FROM platform_strategy_experience_policies WHERE strategy_id = ?', [strategyId])
   const mode = policy?.mode || 'shadow'
   const maxItems = Number(policy?.max_items || 5)
@@ -257,9 +264,11 @@ export async function retrievePlatformExperience({ strategyId, symbol = null, ti
         OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = ?)
       AND (JSON_EXTRACT(context_json, '$.timeframe') IS NULL OR JSON_TYPE(JSON_EXTRACT(context_json, '$.timeframe')) = 'NULL'
         OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = ?)
-    ORDER BY platform_version DESC, updated_at DESC LIMIT 100`, [strategyId, symbol, timeframe])
-  const retrievalContext = buildPlatformExperienceRetrievalContext({ symbol, timeframe, market, allowedEntryMethods })
-  const ranked = items.map(item => ({ item, ...experienceApplicability(item, retrievalContext) }))
+      AND (JSON_EXTRACT(context_json, '$.strategy_version') IS NULL OR JSON_TYPE(JSON_EXTRACT(context_json, '$.strategy_version')) = 'NULL'
+        OR CAST(JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.strategy_version')) AS UNSIGNED) = ?)
+    ORDER BY platform_version DESC, updated_at DESC LIMIT 100`, [strategyId, symbol, timeframe, Number(strategyVersion || 1)])
+  const retrievalContext = buildPlatformExperienceRetrievalContext({ strategyVersion, symbol, timeframe, market, allowedEntryMethods })
+  const ranked = items.map(item => ({ item, ...platformExperienceApplicability(item, retrievalContext) }))
     .filter(candidate => candidate.eligible)
     .sort((a, b) => b.score - a.score || Number(b.item.platform_version || 0) - Number(a.item.platform_version || 0)
       || String(b.item.updated_at || '').localeCompare(String(a.item.updated_at || '')))

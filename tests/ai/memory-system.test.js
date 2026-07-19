@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { buildPersonalMemoryRetrievalContext, memorySimilarity, pairedInferenceDigest, rankMemoryCandidates, sanitizeMemoryText } from '../../server/routes/ai/memory-system.js'
+import { buildPeriodMemoryScope, buildPersonalMemoryRetrievalContext, memorySimilarity, pairedInferenceDigest, rankMemoryCandidates, sanitizeMemoryText } from '../../server/routes/ai/memory-system.js'
 
 describe('personal memory input hardening', () => {
   it('removes control characters, escapes delimiters and breaks template markers', () => {
@@ -48,6 +48,22 @@ describe('memory retrieval ranking', () => {
     ], { direction: 'buy' })
     expect(ranked[0].item.id).toBe(1)
     expect(ranked[0].reasons).toContain('direction_match')
+  })
+
+  it('hard-excludes memories whose deterministic trading context conflicts', () => {
+    const ranked = rankMemoryCandidates([
+      { id:1, strategy_id:5, strategy_version:2, symbol:'XAUUSD', timeframe:'M5', direction:'sell', entry_method:'limit', confidence:0.9, updated_at:'2026-07-15 10:00:00' },
+    ], { strategy_id:5, strategy_version:2, symbol:'XAUUSD', timeframe:'M5', direction:'buy', entry_method:'limit' })
+    expect(ranked[0]).toMatchObject({ eligible:false })
+    expect(ranked[0].reasons).toContain('direction_mismatch')
+  })
+
+  it('derives the narrowest common scope from daily review evidence', () => {
+    const scope = buildPeriodMemoryScope({ strategy_id:5, strategy_version:3, period_key:'2026-07-18' }, { sources:[
+      { evidence:{ inference_time:{ signal:{ signal_type:'sell_stop', timeframe:'M5' }, approved_order:{ symbol:'XAUUSD', entry_method:'stop' } }, post_trade:{ outcome:{ symbol:'XAUUSD' } } } },
+      { evidence:{ inference_time:{ signal:{ signal_type:'sell_limit', timeframe:'M5' }, approved_order:{ symbol:'XAUUSD', entry_method:'limit' } }, post_trade:{ outcome:{ symbol:'XAUUSD' } } } },
+    ] })
+    expect(scope).toMatchObject({ strategy_id:5, strategy_version:3, symbol:'XAUUSD', timeframe:'M5', direction:'sell', entry_method:null })
   })
 
   it('derives stable direction, regime and sole allowed entry method from current market evidence', () => {
@@ -105,6 +121,8 @@ describe('memory persistence, invalidation and inference boundaries', () => {
     expect(memory).toContain("SET status = 'stale'")
     expect(memory).toContain('invalidateSummariesForSource')
     expect(memory).toContain('if (summary && parse(summary.source_memory_ids_json')
+    expect(memory).toContain('invalidateLongMemoriesForSource')
+    expect(memory).toContain("status = 'revalidation'")
   })
 
   it('uses source-set hashes, leases, bounded summaries and versioned rollback', () => {

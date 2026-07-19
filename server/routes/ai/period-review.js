@@ -451,6 +451,16 @@ async function upsertDailyGroup(group, clock) {
       const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
       if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id)) throw new Error('period_review_version_conflict')
       const oldVersionId = Number(locked[0].approved_version_id || locked[0].current_version_id)
+      const [sourceMemories] = await run(`SELECT id, user_id FROM experience_memory_items
+        WHERE period_review_version_id = ? AND status IN ('active','compressed','duplicate_candidate') FOR UPDATE`, [oldVersionId])
+      for (const sourceMemory of sourceMemories) {
+        const [derivedMemories] = await run(`SELECT id, source_memory_ids_json FROM experience_long_term_memories
+          WHERE user_id = ? AND status IN ('candidate','active') FOR UPDATE`, [sourceMemory.user_id])
+        const affectedIds = derivedMemories.filter(item => parse(item.source_memory_ids_json, []).map(Number)
+          .includes(Number(sourceMemory.id))).map(item => Number(item.id))
+        if (affectedIds.length) await run(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
+          WHERE id IN (${affectedIds.map(() => '?').join(',')})`, [now, ...affectedIds])
+      }
       await run(`UPDATE experience_memory_items SET status = 'stale', updated_at = ?
         WHERE period_review_version_id = ? AND status IN ('active','compressed','duplicate_candidate')`, [now, oldVersionId])
       await run(`UPDATE experience_memory_summaries SET status = 'stale', invalidated_at = ?
