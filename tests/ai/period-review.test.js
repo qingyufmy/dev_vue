@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
-  compactPeriodTradeEvidence, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
-  samePeriodOutcomeSet, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+  compactPeriodTradeEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
+  samePeriodOutcomeSet, shouldRefreshDailyReviewCase, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
@@ -72,6 +72,28 @@ describe('daily review grouping', () => {
     expect(isTerminalTradeEvidenceReason('inference_snapshot_incomplete,execution_deals_missing')).toBe(false)
     expect(samePeriodOutcomeSet([{ id: 8 }, { id: 3 }, { id: 8 }], [{ outcome_id: 3 }, { outcome_id: 8 }])).toBe(true)
     expect(samePeriodOutcomeSet([{ id: 3 }, { id: 8 }, { id: 9 }], [{ outcome_id: 3 }, { outcome_id: 8 }])).toBe(false)
+  })
+
+  it('rechecks incomplete evidence and detects late outcomes without polling settled reviews forever', () => {
+    const group = { outcomes:[{ id:3 }, { id:8 }], endUtcMs:Date.parse('2026-07-17T21:00:00Z') }
+    const sources = [{ outcome_id:3 }, { outcome_id:8 }]
+    const recent = { evidence_status:'incomplete', current_version_id:null, updated_at:'2026-07-18 05:00:00' }
+    expect(shouldRefreshDailyReviewCase(recent, group, sources, Date.parse('2026-07-17T21:30:00Z'))).toMatchObject({ refresh:false })
+    expect(shouldRefreshDailyReviewCase(recent, group, sources, Date.parse('2026-07-17T22:00:00Z'))).toMatchObject({ refresh:true, reason:'incomplete_recheck_due' })
+    expect(shouldRefreshDailyReviewCase(recent, { ...group, outcomes:[...group.outcomes, { id:9 }] }, sources,
+      Date.parse('2026-07-17T21:31:00Z'))).toMatchObject({ refresh:true, reason:'outcome_set_changed' })
+
+    const settled = { evidence_status:'complete', current_version_id:11, updated_at:'2026-07-18 05:00:00' }
+    expect(shouldRefreshDailyReviewCase(settled, group, sources, Date.parse('2026-07-19T22:00:00Z'))).toMatchObject({ refresh:false, reason:'finalized_unchanged' })
+  })
+
+  it('ignores evidence generation timestamps when deciding whether a review changed', () => {
+    const left = { statistics:{ trade_count:2 }, sources:[{ outcome_id:1, evidence_hash:'a' }],
+      period_market:{ generated_at:'2026-07-18T00:00:00Z', hash:'old', symbols:{ XAUUSD:{ M15:{ candle_count:10 } } } } }
+    const right = { ...left, period_market:{ ...left.period_market, generated_at:'2026-07-18T01:00:00Z', hash:'new' } }
+    expect(dailyEvidenceSemanticHash(left)).toBe(dailyEvidenceSemanticHash(right))
+    right.statistics = { trade_count:3 }
+    expect(dailyEvidenceSemanticHash(left)).not.toBe(dailyEvidenceSemanticHash(right))
   })
 })
 
@@ -165,6 +187,7 @@ describe('period review runtime integration', () => {
   })
 
   it('starts only the period worker and preserves separate platform experience lineage', () => {
+    const periodReview = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
     expect(server).toContain('startPeriodReviewWorker()')
     expect(server).not.toContain('startReviewWorker()')
     expect(server).not.toContain('startMemoryCompressionWorker()')
@@ -178,7 +201,11 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('096_period_review_observability')
     expect(migration).toContain('period_review_job_events')
     expect(migration).toContain('period_review_user_states')
-    expect(readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')).toContain('recoverExpiredPeriodReviewJobs')
+    expect(periodReview).toContain('recoverExpiredPeriodReviewJobs')
+    expect(periodReview).toContain("isAiFeatureEnabled('review_generation_enabled'")
+    expect(periodReview).toContain("status = 'stale'")
+    expect(periodReview).toContain("status = 'revalidation'")
+    expect(periodReview).toContain("status = 'revoked'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })
 })

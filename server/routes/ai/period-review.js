@@ -6,11 +6,15 @@ import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { buildDailyPeriodMarketEvidence, monthlyPeriodMarketDigest } from './period-market-evidence.js'
+import { isAiFeatureEnabled } from './rollout-governance.js'
 
 const DAY_MS = 86400000
 const DEFAULT_MT5_OFFSET_MINUTES = 180
 const DAILY_GRACE_MINUTES = 30
 const MONTHLY_GRACE_MINUTES = 120
+const DAILY_COMPLETE_RECHECK_MS = 15 * 60 * 1000
+const DAILY_INCOMPLETE_RECHECK_MS = 60 * 60 * 1000
+const DAILY_SETTLE_MS = 24 * 60 * 60 * 1000
 const TERMINAL_TRADE_EVIDENCE_REASONS = new Set(['inference_snapshot_incomplete', 'historical_prompt_missing'])
 let periodReviewTimer = null
 let periodReviewCycleRunning = false
@@ -27,6 +31,33 @@ export function samePeriodOutcomeSet(outcomes = [], sources = []) {
   const outcomeIds = [...new Set(outcomes.map(item => Number(item?.id)).filter(Number.isFinite))].sort((a, b) => a - b)
   const sourceIds = [...new Set(sources.map(item => Number(item?.outcome_id)).filter(Number.isFinite))].sort((a, b) => a - b)
   return outcomeIds.length === sourceIds.length && outcomeIds.every((id, index) => id === sourceIds[index])
+}
+
+function beijingDateTimeMs(value) {
+  const parsed = Date.parse(`${String(value || '').replace(' ', 'T')}+08:00`)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], asOfUtcMs = Date.now()) {
+  if (!reviewCase) return { refresh:true, reason:'new_case' }
+  if (!samePeriodOutcomeSet(group?.outcomes || [], sources)) return { refresh:true, reason:'outcome_set_changed' }
+  const elapsed = Math.max(0, Number(asOfUtcMs) - beijingDateTimeMs(reviewCase.updated_at))
+  if (reviewCase.evidence_status !== 'complete') {
+    return { refresh:elapsed >= DAILY_INCOMPLETE_RECHECK_MS, reason:elapsed >= DAILY_INCOMPLETE_RECHECK_MS ? 'incomplete_recheck_due' : 'incomplete_recheck_wait' }
+  }
+  if (!reviewCase.current_version_id) return { refresh:true, reason:'draft_missing' }
+  const stillSettling = Number(asOfUtcMs) <= Number(group?.endUtcMs || 0) + DAILY_SETTLE_MS
+  if (stillSettling && elapsed >= DAILY_COMPLETE_RECHECK_MS) return { refresh:true, reason:'settlement_recheck_due' }
+  return { refresh:false, reason:stillSettling ? 'settlement_recheck_wait' : 'finalized_unchanged' }
+}
+
+export function dailyEvidenceSemanticHash(evidence) {
+  const value = parse(JSON.stringify(evidence || {}), {}) || {}
+  if (value.period_market) {
+    delete value.period_market.generated_at
+    delete value.period_market.hash
+  }
+  return sha256(JSON.stringify(value))
 }
 
 function afterSeconds(seconds) {
@@ -343,7 +374,9 @@ async function upsertDailyGroup(group, clock) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND strategy_version = ?`,
   [group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion])
+  let existingSources = []
   if (existingCase) {
+    existingSources = await queryAll('SELECT outcome_id FROM period_review_sources WHERE period_case_id = ? ORDER BY outcome_id', [existingCase.id])
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
@@ -351,11 +384,22 @@ async function upsertDailyGroup(group, clock) {
     const needsPeriodMarketUpgrade = Number(existingEvidence.schema_version || 0) < 2
       || Number(existingEvidence.period_market?.schema_version || 0) < 2 || !existingEvidence.period_market?.generated_at
       || (existingEvidence.period_market.status !== 'complete' && (!Number.isFinite(marketGeneratedAt) || Date.now() - marketGeneratedAt >= 3600000))
-    if (existingCase.current_version_id || (existingJob && !needsPeriodMarketUpgrade)) return { id: Number(existingCase.id), periodKey: group.periodKey,
+    const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources)
+    if (!refresh.refresh && !needsPeriodMarketUpgrade) return { id: Number(existingCase.id), periodKey: group.periodKey,
+      complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0),
+      evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason }
+    if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
+      const now = beijingNow()
+      await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+        attempt_count = 0, last_error_code = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`,
+      [now, now, existingJob.id])
+      return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
+        sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, requeued:true }
+    }
+    if (existingJob && !existingCase.current_version_id && !needsPeriodMarketUpgrade) return { id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
-    if (!existingJob && existingCase.evidence_status === 'incomplete' && isTerminalTradeEvidenceReason(existingCase.evidence_reason)) {
-      const existingSources = await queryAll('SELECT outcome_id FROM period_review_sources WHERE period_case_id = ? ORDER BY outcome_id', [existingCase.id])
-      if (samePeriodOutcomeSet(group.outcomes, existingSources)) return { id: Number(existingCase.id), periodKey: group.periodKey,
+    if (!existingJob && existingCase.evidence_status === 'incomplete' && isTerminalTradeEvidenceReason(existingCase.evidence_reason) && !refresh.refresh) {
+      return { id: Number(existingCase.id), periodKey: group.periodKey,
         complete: false, sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, terminal: true, reused: true }
     }
   }
@@ -383,6 +427,34 @@ async function upsertDailyGroup(group, clock) {
     period_market_reason:evidence.period_market.reason || null }
   const evidenceHash = sha256(JSON.stringify(evidence))
   const now = beijingNow()
+  if (existingCase?.current_version_id) {
+    const previousSemanticHash = dailyEvidenceSemanticHash(parse(existingCase.evidence_json, {}))
+    const nextSemanticHash = dailyEvidenceSemanticHash(evidence)
+    if (previousSemanticHash === nextSemanticHash) {
+      await queryRun('UPDATE period_review_cases SET updated_at = ? WHERE id = ?', [now, existingCase.id])
+      return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
+        sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, reused:true, refreshReason:'semantic_evidence_unchanged' }
+    }
+    await withTransaction(async run => {
+      const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
+      if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id)) throw new Error('period_review_version_conflict')
+      const oldVersionId = Number(locked[0].approved_version_id || locked[0].current_version_id)
+      await run(`UPDATE experience_memory_items SET status = 'stale', updated_at = ?
+        WHERE period_review_version_id = ? AND status IN ('active','compressed','duplicate_candidate')`, [now, oldVersionId])
+      await run(`UPDATE experience_memory_summaries SET status = 'stale', invalidated_at = ?
+        WHERE period_review_version_id = ? AND status = 'active'`, [now, oldVersionId])
+      await run(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
+        WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, oldVersionId])
+      await run(`UPDATE platform_strategy_experience_items SET status = 'revoked', revoked_at = ?, updated_at = ?
+        WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, now, oldVersionId])
+      await run(`UPDATE period_review_cases SET status = 'ready', current_version_id = NULL, approved_version_id = NULL,
+        evidence_status = 'pending', evidence_reason = 'daily_evidence_changed', updated_at = ? WHERE id = ?`, [now, existingCase.id])
+      await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+        attempt_count = 0, last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL,
+        next_attempt_at = NULL, completed_at = NULL, updated_at = ?
+        WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0`, [now, now, existingCase.id])
+    })
+  }
   await queryRun(`INSERT INTO period_review_cases
     (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_scope,
      timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
@@ -400,6 +472,8 @@ async function upsertDailyGroup(group, clock) {
   ])
   const periodCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND strategy_version = ?`, [group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion])
+  if (sourceIds.length) await queryRun(`DELETE FROM period_review_sources WHERE period_case_id = ? AND outcome_id IS NOT NULL
+    AND outcome_id NOT IN (${sourceIds.map(() => '?').join(',')})`, [periodCase.id, ...sourceIds])
   for (const source of sources) await queryRun(`INSERT INTO period_review_sources
     (period_case_id, outcome_id, trade_review_case_id, source_hash, created_at) VALUES (?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE trade_review_case_id = VALUES(trade_review_case_id), source_hash = VALUES(source_hash)`, [periodCase.id, source.outcome_id, source.trade_review_case_id, source.evidence_hash, now])
@@ -411,8 +485,12 @@ async function upsertDailyGroup(group, clock) {
 
 export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Date.now() } = {}) {
   const [clock, rows] = await Promise.all([latestMt5Clock(), eligibleOutcomeRows(limit)])
-  const groups = groupDailyReviewOutcomes(rows, { offsetMinutes: clock.offsetMinutes, asOfUtcMs })
-  const result = { scanned: rows.length, groups: groups.length, ready: 0, incomplete: 0, clock }
+  const userIds = [...new Set(rows.map(row => Number(row.user_id)).filter(id => id > 0))]
+  const enabledEntries = await Promise.all(userIds.map(async userId => [userId, await isAiFeatureEnabled('review_generation_enabled', userId)]))
+  const enabledUsers = new Set(enabledEntries.filter(([, enabled]) => enabled).map(([userId]) => userId))
+  const enabledRows = rows.filter(row => enabledUsers.has(Number(row.user_id)))
+  const groups = groupDailyReviewOutcomes(enabledRows, { offsetMinutes: clock.offsetMinutes, asOfUtcMs })
+  const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length, groups: groups.length, ready: 0, incomplete: 0, clock }
   for (const group of groups) {
     const prepared = await upsertDailyGroup(group, clock)
     result[prepared.complete ? 'ready' : 'incomplete'] += 1
@@ -437,6 +515,14 @@ async function upsertMonthlyGroup(group, clock) {
   if (existingCase) {
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
+    if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
+      const now = beijingNow()
+      await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+        attempt_count = 0, last_error_code = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`,
+      [now, now, existingJob.id])
+      return { id:Number(existingCase.id), periodKey:group.periodKey, sourceCount:Number(existingCase.source_count || 0),
+        evidenceHash:existingCase.evidence_hash, requeued:true }
+    }
     if (existingCase.current_version_id || existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
       sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
   }
@@ -488,8 +574,12 @@ async function upsertMonthlyGroup(group, clock) {
 
 export async function prepareEligibleMonthlyReviews({ limit = 1000, asOfUtcMs = Date.now() } = {}) {
   const [clock, rows] = await Promise.all([latestMt5Clock(), eligibleDailyReviewRows(limit)])
-  const groups = groupMonthlyReviewCases(rows, { offsetMinutes: clock.offsetMinutes, asOfUtcMs })
-  const result = { scanned: rows.length, groups: groups.length, ready: 0, clock }
+  const userIds = [...new Set(rows.map(row => Number(row.user_id)).filter(id => id > 0))]
+  const enabledEntries = await Promise.all(userIds.map(async userId => [userId, await isAiFeatureEnabled('review_generation_enabled', userId)]))
+  const enabledUsers = new Set(enabledEntries.filter(([, enabled]) => enabled).map(([userId]) => userId))
+  const enabledRows = rows.filter(row => enabledUsers.has(Number(row.user_id)))
+  const groups = groupMonthlyReviewCases(enabledRows, { offsetMinutes: clock.offsetMinutes, asOfUtcMs })
+  const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length, groups: groups.length, ready: 0, clock }
   for (const group of groups) {
     await upsertMonthlyGroup(group, clock)
     result.ready += 1
@@ -569,11 +659,13 @@ async function finishDailyReviewSuccess(job, generated) {
     if (!cases[0]) throw new Error('daily_review_case_missing')
     const now = beijingNow()
     if (!cases[0].current_version_id) {
-      const [versions] = await run('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM period_review_versions WHERE period_case_id = ? FOR UPDATE', [job.period_case_id])
+      const [versions] = await run('SELECT id, version_no FROM period_review_versions WHERE period_case_id = ? ORDER BY version_no DESC LIMIT 1 FOR UPDATE', [job.period_case_id])
+      const parentVersionId = versions[0]?.id || null
+      const nextVersionNo = Number(versions[0]?.version_no || 0) + 1
       const body = JSON.stringify(generated.content)
       const [insert] = await run(`INSERT INTO period_review_versions
         (period_case_id, version_no, parent_version_id, author_type, author_user_id, content_json, content_hash, change_note, created_at)
-        VALUES (?, ?, NULL, 'ai', NULL, ?, ?, 'AI daily review draft', ?)`, [job.period_case_id, Number(versions[0].max_version) + 1, body, sha256(body), now])
+        VALUES (?, ?, ?, 'ai', NULL, ?, ?, 'AI daily review draft', ?)`, [job.period_case_id, nextVersionNo, parentVersionId, body, sha256(body), now])
       await run(`UPDATE period_review_cases SET status = 'draft', current_version_id = ?, updated_at = ? WHERE id = ?`, [insert.insertId, now, job.period_case_id])
     }
     await run(`UPDATE period_review_jobs SET status = 'succeeded', model_profile_id = ?, credential_source = ?, completed_at = ?,
@@ -590,11 +682,26 @@ async function finishDailyReviewFailure(job, error) {
   await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`, [exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
 }
 
+async function skipDisabledPeriodReviewJob(job) {
+  const now = beijingNow()
+  await withTransaction(async run => {
+    await run(`UPDATE period_review_jobs SET status = 'skipped', progress_stage = 'skipped', stage_updated_at = ?,
+      last_error_code = 'review_generation_disabled', lease_token = NULL, lease_expires_at = NULL,
+      next_attempt_at = NULL, completed_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
+    [now, now, now, job.id, job.lease_token])
+    await run(`UPDATE period_review_cases SET status = 'ready', updated_at = ?
+      WHERE id = ? AND current_version_id IS NULL`, [now, job.period_case_id])
+  })
+  await setPeriodReviewJobStage(job, 'skipped', 'info', 'review_generation_disabled')
+  return { claimed:true, status:'skipped', periodCaseId:Number(job.period_case_id), reason:'review_generation_disabled' }
+}
+
 export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimDailyReviewJob()
   if (!job) return { claimed: false }
   await setPeriodReviewJobStage(job, 'preparing')
   try {
+    if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateDailyReview(job, requestModel)
     await finishDailyReviewSuccess(job, generated)
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
@@ -671,12 +778,14 @@ async function finishMonthlyReviewSuccess(job, generated) {
     if (!cases[0]) throw new Error('monthly_review_case_missing')
     const now = beijingNow()
     if (!cases[0].current_version_id) {
-      const [versions] = await run('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM period_review_versions WHERE period_case_id = ? FOR UPDATE', [job.period_case_id])
+      const [versions] = await run('SELECT id, version_no FROM period_review_versions WHERE period_case_id = ? ORDER BY version_no DESC LIMIT 1 FOR UPDATE', [job.period_case_id])
+      const parentVersionId = versions[0]?.id || null
+      const nextVersionNo = Number(versions[0]?.version_no || 0) + 1
       const body = JSON.stringify(generated.content)
       const [insert] = await run(`INSERT INTO period_review_versions
         (period_case_id, version_no, parent_version_id, author_type, author_user_id, content_json, content_hash, change_note, created_at)
-        VALUES (?, ?, NULL, 'ai', NULL, ?, ?, 'AI monthly review draft', ?)`,
-      [job.period_case_id, Number(versions[0].max_version) + 1, body, sha256(body), now])
+        VALUES (?, ?, ?, 'ai', NULL, ?, ?, 'AI monthly review draft', ?)`,
+      [job.period_case_id, nextVersionNo, parentVersionId, body, sha256(body), now])
       await run(`UPDATE period_review_cases SET status = 'draft', current_version_id = ?, updated_at = ? WHERE id = ?`, [insert.insertId, now, job.period_case_id])
     }
     await run(`UPDATE period_review_jobs SET status = 'succeeded', model_profile_id = ?, credential_source = ?, completed_at = ?,
@@ -700,6 +809,7 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
   if (!job) return { claimed: false }
   await setPeriodReviewJobStage(job, 'preparing')
   try {
+    if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateMonthlyReview(job, requestModel)
     await finishMonthlyReviewSuccess(job, generated)
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
