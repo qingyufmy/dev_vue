@@ -193,6 +193,23 @@ describe('finalize recovery deadline', () => {
   })
 })
 
+describe('scheduler wait cadence', () => {
+  it('checks a closed market once per minute while keeping transient waits responsive', () => {
+    expect(__schedulerTest.retryDelayMs('market_closed')).toBe(60000)
+    expect(__schedulerTest.retryDelayMs('market_stale_tick')).toBe(15000)
+    expect(__schedulerTest.retryDelayMs('admin_bridge_offline')).toBe(5000)
+  })
+
+  it('logs wait transitions immediately and unchanged states only every 30 minutes', () => {
+    const state = { _lastLoggedWaitReason: '', _lastWaitLogAtMs: 0 }
+    expect(__schedulerTest.shouldLogSchedulerWait(state, 'market_closed', 1000)).toBe(true)
+    expect(__schedulerTest.shouldLogSchedulerWait(state, 'market_closed', 1000 + 29 * 60_000)).toBe(false)
+    expect(__schedulerTest.shouldLogSchedulerWait(state, 'market_closed', 1000 + 30 * 60_000)).toBe(true)
+    expect(__schedulerTest.shouldLogSchedulerWait(state, 'market_stale_tick', 1000 + 30 * 60_000 + 1)).toBe(true)
+    expect(__schedulerTest.schedulerWaitLabel('market_closed')).toBe('市场休市，等待开市')
+  })
+})
+
 describe('resolveEffectiveSymbols (Fix 3)', () => {
   it('NULL returns strategy all symbols', async () => {
     const { resolveEffectiveSymbols } = await import('../../server/routes/ai/config.js')

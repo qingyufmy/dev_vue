@@ -537,13 +537,15 @@ async function setCooldown(key, intervalSeconds) {
 function retryDelayMs(reason) {
   switch (reason) {
     case 'admin_bridge_offline':
-    case 'market_closed':
-    case 'market_stale_tick':
-    case 'market_unknown_no_tick':
-    case 'market_unknown':
     case 'redis_unavailable':
     case 'weekly_flatten_window':
       return 5000
+    case 'market_closed':
+      return 60000
+    case 'market_stale_tick':
+    case 'market_unknown_no_tick':
+    case 'market_unknown':
+      return 15000
     case 'rates_failed':
     case 'rates_empty':
     case 'account_failed':
@@ -602,6 +604,30 @@ async function broadcastAutoProgress(promptTypeId, symbol, progress) {
   for (const uid of st.subscribers) {
     try { sendToBrowsers(uid, payload) } catch (e) { console.warn('[Scheduler] Failed to send progress to browser:', e.message) }
   }
+}
+
+const SCHEDULER_WAIT_LOG_HEARTBEAT_MS = 30 * 60_000
+
+function shouldLogSchedulerWait(state, reason, nowMs = Date.now()) {
+  const changed = state._lastLoggedWaitReason !== reason
+  const heartbeatDue = !Number.isFinite(state._lastWaitLogAtMs) || nowMs - state._lastWaitLogAtMs >= SCHEDULER_WAIT_LOG_HEARTBEAT_MS
+  if (!changed && !heartbeatDue) return false
+  state._lastLoggedWaitReason = reason
+  state._lastWaitLogAtMs = nowMs
+  return true
+}
+
+function schedulerWaitLabel(reason) {
+  const labels = {
+    redis_unavailable: 'Redis 不可用，等待恢复',
+    owner_bridge_offline: '策略所属账户桥接离线，等待重连',
+    admin_bridge_offline: '管理员行情桥接离线，等待重连',
+    market_closed: '市场休市，等待开市',
+    market_stale_tick: '行情报价停滞，等待恢复',
+    market_unknown_no_tick: '尚未收到行情报价，等待同步',
+    market_unknown: '市场状态未知，等待确认',
+  }
+  return labels[reason] || `等待条件恢复（${reason}）`
 }
 
 function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSnapshot) {
@@ -754,6 +780,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     cycleStartedAt: '',
     stageUpdatedAt: '',
     _waitCount: 0,
+    _lastLoggedWaitReason: '',
+    _lastWaitLogAtMs: 0,
   }
 
   console.log(`[UnifiedScheduler] Started ${key} (subscribers=${subSet.size}, interval=${intervalMinutes}min)`)
@@ -776,9 +804,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     const redis = getRedis()
     if (!redis || !isRedisAvailable()) {
       st._waitCount = (st._waitCount || 0) + 1
-      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        console.log(`[UnifiedScheduler] ${key}: Redis unavailable, pausing (retry#${st._waitCount})`)
-      }
+      if (shouldLogSchedulerWait(st, 'redis_unavailable')) console.log(`[UnifiedScheduler] ${key}: ${schedulerWaitLabel('redis_unavailable')}`)
       st.lastError = null
       st.waitReason = 'redis_unavailable'
       const delay = retryDelayMs('redis_unavailable')
@@ -834,11 +860,9 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     const marketUserId = ptRow.scope === 'private' ? Number(ptRow.owner_user_id) : platformBridgeUserId
     if (!marketUserId || !isBridgeAlive(marketUserId)) {
       st._waitCount = (st._waitCount || 0) + 1
-      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        console.log(`[UnifiedScheduler] ${key}: market bridge offline, pausing (retry#${st._waitCount})`)
-      }
       st.lastError = null
       st.waitReason = ptRow.scope === 'private' ? 'owner_bridge_offline' : 'admin_bridge_offline'
+      if (shouldLogSchedulerWait(st, st.waitReason)) console.log(`[UnifiedScheduler] ${key}: ${schedulerWaitLabel(st.waitReason)}`)
       const delay = retryDelayMs(st.waitReason)
       st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)
@@ -849,9 +873,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     const marketState = getOwnBridgeMarketState(marketUserId)
     if (!marketState.isOpen) {
       st._waitCount = (st._waitCount || 0) + 1
-      if (st._waitCount === 1 || st._waitCount % 10 === 0) {
-        console.log(`[UnifiedScheduler] ${key}: ${marketState.reason}, pausing (retry#${st._waitCount})`)
-      }
+      if (shouldLogSchedulerWait(st, marketState.reason)) console.log(`[UnifiedScheduler] ${key}: ${schedulerWaitLabel(marketState.reason)}`)
       st.lastError = null
       st.waitReason = marketState.reason
       st.marketState = marketState
@@ -863,6 +885,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
 
     st._waitCount = 0
+    st._lastLoggedWaitReason = ''
+    st._lastWaitLogAtMs = 0
     st.lastError = null
     st.waitReason = ''
 
@@ -2347,4 +2371,7 @@ export const __schedulerTest = {
   createLockGuard,
   discardSharedSignalForWeeklyWindow,
   executionRiskDecisionId,
+  retryDelayMs,
+  shouldLogSchedulerWait,
+  schedulerWaitLabel,
 }
