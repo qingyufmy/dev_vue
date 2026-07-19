@@ -353,6 +353,7 @@ export async function handleAnalyze(userId, params) {
     catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
   }
   signal.symbol = symbol
+  signal.user_id = userId
   signal.timeframe = primaryTf
   signal.created_at = createdAt
   signal.market_data = market

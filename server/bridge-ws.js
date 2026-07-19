@@ -901,6 +901,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       case 'analyze':
         result = await ai.handleAnalyze(userId, params)
+        if (result?.signal) {
+          result.signal = ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(result.signal, {
+            requesterUserId: userId, requesterRole: user?.role || 'user',
+          }))
+        }
         break
       case 'signals_latest_id': {
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
@@ -982,7 +987,9 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
             if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
             ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
-            Object.assign(item, ai.attachSignalPresentation(item))
+            Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
+              requesterUserId: userId, requesterRole: user?.role || 'user',
+            })))
             result = { status: 'success', signal: item }
           } else {
             result = { status: 'error', message: 'signal not found' }
@@ -1000,7 +1007,9 @@ async function handleBrowserCommand(ws, userId, msg) {
           item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
           if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
           ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
-          Object.assign(item, ai.attachSignalPresentation(item))
+          Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
+            requesterUserId: userId, requesterRole: user?.role || 'user',
+          })))
           result = { status: 'success', signal: item }
         } else {
           result = { status: 'error', message: 'signal not found' }
@@ -1081,7 +1090,9 @@ async function handleBrowserCommand(ws, userId, msg) {
           delete item.delivery_id
           item.is_executed = !!item.is_executed
           ai.attachSignalTiming(item, signalTimezoneOffset)
-          return ai.attachSignalPresentation(item)
+          return ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
+            requesterUserId: userId, requesterRole: user?.role || 'user',
+          }))
         })
         result = { status: 'success', signals, has_more: hasMore, total_count: totalCount }
 

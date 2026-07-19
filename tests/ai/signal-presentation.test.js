@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields } from '../../server/routes/ai/signal-presentation.js'
+import { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields, restrictSignalExperienceUsage } from '../../server/routes/ai/signal-presentation.js'
 
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 
 describe('signal presentation', () => {
+  it('shows platform usage only to admins and personal usage only to its owner', () => {
+    const platform = { user_id:0, experience_usage:{ source:'platform', considered_ids:[3], used_ids:[3], influence:'采用平台经验' } }
+    expect(restrictSignalExperienceUsage(platform, { requesterUserId:7, requesterRole:'user' }).experience_usage).toBeUndefined()
+    expect(restrictSignalExperienceUsage(platform, { requesterUserId:1, requesterRole:'admin' }).experience_usage.used_ids).toEqual([3])
+
+    const personal = { user_id:7, decision_json:JSON.stringify({ experience_usage:{ source:'personal', considered_ids:[9], used_ids:[9] } }) }
+    expect(JSON.parse(restrictSignalExperienceUsage(personal, { requesterUserId:8, requesterRole:'user' }).decision_json)).not.toHaveProperty('experience_usage')
+    expect(JSON.parse(restrictSignalExperienceUsage(personal, { requesterUserId:7, requesterRole:'user' }).decision_json).experience_usage.used_ids).toEqual([9])
+    expect(JSON.parse(restrictSignalExperienceUsage(personal, { requesterUserId:1, requesterRole:'admin' }).decision_json)).not.toHaveProperty('experience_usage')
+    expect(restrictSignalExperienceUsage({ user_id:7, experience_usage:{ considered_ids:[99] } }, { requesterUserId:7, requesterRole:'user' }).experience_usage).toBeUndefined()
+  })
   it('does not present an unavailable confidence sentinel as a measured zero percent', () => {
     expect(app).toContain('if (rounded === 0) return { value: 0, label: "不可用" }')
   })

@@ -3745,7 +3745,15 @@ function signalDecision(signal) {
   };
 }
 
-function renderExperienceUsage(usage = {}) {
+function canViewSignalExperienceUsage(signal, usage = {}) {
+  const source = String(usage.source || "").toLowerCase();
+  if (source === "platform") return state.user?.role === "admin";
+  if (source === "personal") return state.user?.role !== "admin" && Number(signal?.user_id) === Number(state.user?.id);
+  return false;
+}
+
+function renderExperienceUsage(signal, usage = {}) {
+  if (!canViewSignalExperienceUsage(signal, usage)) return "";
   const considered = Array.isArray(usage.considered_ids) ? usage.considered_ids : [];
   if (!considered.length) return "";
   const used = Array.isArray(usage.used_ids) ? usage.used_ids : [];
@@ -4221,7 +4229,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
       <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
     </div>
-    ${renderExperienceUsage(decision.experienceUsage)}
+    ${renderExperienceUsage(signal, decision.experienceUsage)}
     ${(decision.trigger || decision.invalidation) ? `<div class="decision-conditions">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</div>` : ""}
     ${inferenceChartShell(signal)}
     <div class="analysis-section">

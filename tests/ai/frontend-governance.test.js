@@ -215,6 +215,12 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('renderAutoAnalyzeBadge(deleted.scheduler)')
   })
 
+  it('limits inference experience usage to platform admins or private-strategy owners', () => {
+    expect(app).toContain('if (source === "platform") return state.user?.role === "admin"')
+    expect(app).toContain('state.user?.role !== "admin" && Number(signal?.user_id) === Number(state.user?.id)')
+    expect(bridgeWs).toContain('restrictSignalExperienceUsage')
+  })
+
   it('keeps checkbox labels inline and exposes subscription runtime scheduling', () => {
     for (const id of ['subscriptionExecutionEnabled','subscriptionScheduleEnabled','subscriptionScheduleTimezone','subscriptionOutsideWindowBehavior','subscriptionScheduleWindows']) {
       expect(html).toContain(`id="${id}"`)

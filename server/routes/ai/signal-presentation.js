@@ -44,6 +44,37 @@ function parseJson(value) {
   try { return JSON.parse(value) } catch { return null }
 }
 
+function signalExperienceUsage(signal = {}) {
+  const decision = parseJson(signal.decision) || {}
+  const stored = parseJson(signal.decision_json) || {}
+  const usage = signal.experience_usage || decision.experience_usage || stored.experience_usage
+  return usage && typeof usage === 'object' ? usage : {}
+}
+
+export function restrictSignalExperienceUsage(signal = {}, { requesterUserId = null, requesterRole = 'user' } = {}) {
+  const usage = signalExperienceUsage(signal)
+  const source = String(usage.source || '').toLowerCase()
+  const canViewPlatform = source === 'platform' && requesterRole === 'admin'
+  const canViewPersonal = source === 'personal' && requesterRole !== 'admin'
+    && Number(requesterUserId) > 0 && Number(signal.user_id) === Number(requesterUserId)
+  const hasUsageDetails = ['considered_ids', 'used_ids', 'rejected_ids'].some(key => Array.isArray(usage[key]) && usage[key].length)
+    || Boolean(String(usage.influence || '').trim())
+  if (canViewPlatform || canViewPersonal || (!source && !hasUsageDetails)) return signal
+
+  const sanitized = { ...signal }
+  delete sanitized.experience_usage
+  if (sanitized.decision && typeof sanitized.decision === 'object') {
+    sanitized.decision = { ...sanitized.decision }
+    delete sanitized.decision.experience_usage
+  }
+  const stored = parseJson(sanitized.decision_json)
+  if (stored) {
+    delete stored.experience_usage
+    sanitized.decision_json = typeof sanitized.decision_json === 'string' ? JSON.stringify(stored) : stored
+  }
+  return sanitized
+}
+
 function executionDescription(execution, fallback) {
   const rejectedRule = Array.isArray(execution?.details?.rules)
     ? execution.details.rules.find(rule => rule?.outcome === 'reject')

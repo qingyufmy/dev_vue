@@ -680,7 +680,7 @@ export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatur
 
 export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, timeframeIntervalMs } from './utils.js'
-export { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields } from './signal-presentation.js'
+export { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields, restrictSignalExperienceUsage } from './signal-presentation.js'
 export { getInferenceVisualizationSnapshot, inferenceVisualizationSnapshot } from './inference-snapshots.js'
 
 export default router
