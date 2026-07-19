@@ -6,7 +6,7 @@ import { getRedis, isRedisAvailable } from './redis.js'
 import { autoSchedulerState } from './routes/ai/scheduler.js'
 import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/config.js'
-import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
+import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 
 import { JWT_SECRET } from './config.js'
@@ -540,6 +540,7 @@ async function _initBridge(ws, userId, user) {
         receivedAt: Date.now(),
       }
       applyBridgeMarketState(bridge, msg, userId)
+      if (userId === adminUserId && Number.isFinite(Number(msg.timezone_offset_minutes))) setWeeklyMarketTimezoneOffset(msg.timezone_offset_minutes)
     }
 
     if (msg.type === 'data') {
@@ -549,6 +550,7 @@ async function _initBridge(ws, userId, user) {
         bridge.clockResidualMs = msg.quote.clock_residual_ms ?? bridge.clockResidualMs ?? null
         bridge.brokerServer = msg.account?.server || bridge.brokerServer || null
         bridge.accountLogin = msg.account?.login || bridge.accountLogin || null
+        if (userId === adminUserId && Number.isFinite(Number(msg.quote.timezone_offset_minutes))) setWeeklyMarketTimezoneOffset(msg.quote.timezone_offset_minutes)
       }
       const explicitMarketState = bridge && msg.quote ? applyBridgeMarketState(bridge, { symbol: msg.quote.symbol, ...msg.quote }, userId) : null
       if (bridge && msg.quote && typeof msg.quote.time === 'string') {

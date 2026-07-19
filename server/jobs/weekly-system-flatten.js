@@ -236,7 +236,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     const failures = []
     for (const order of pendingOrders) {
       if (!isWeeklyFlattenWindow(clock())) {
-        logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+        logUser(cycle, userId, '停止处理：MT5 周六00:00任务窗口已经结束')
         return { status: 'window_ended', cycle, failures }
       }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
@@ -268,7 +268,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 
     for (const position of positions) {
       if (!isWeeklyFlattenWindow(clock())) {
-        logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+        logUser(cycle, userId, '停止处理：MT5 周六00:00任务窗口已经结束')
         return { status: 'window_ended', cycle, failures }
       }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
@@ -282,7 +282,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     }
 
     if (!isWeeklyFlattenWindow(clock())) {
-      logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+      logUser(cycle, userId, '停止处理：MT5 周六00:00任务窗口已经结束')
       return { status: 'window_ended', cycle, failures }
     }
     logUser(cycle, userId, '正在复核清理结果')
@@ -380,7 +380,7 @@ export async function runWeeklySystemFlatten(now = new Date()) {
 export async function finalizeWeeklyFlattenCycle(cycle) {
   if (!cycle) return { status: 'no_cycle', users: [] }
 
-  logCycle(cycle, '05:00 任务窗口结束，开始汇总最终状态')
+  logCycle(cycle, 'MT5 周六00:00任务窗口结束，开始汇总最终状态')
 
   if (activeUserRuns.size > 0) {
     await Promise.allSettled([...activeUserRuns])
@@ -480,7 +480,7 @@ export function startWeeklySystemFlatten(now = new Date()) {
       .catch(err => console.error('[WeeklyFlatten] Startup deadline finalize failed:', err.message))
   }
   scheduleNext(now)
-  console.log('[WeeklyFlatten] Scheduled: Saturday 04:00-05:00 Asia/Shanghai')
+  console.log('[WeeklyFlatten] Scheduled: Friday 23:00-Saturday 00:00 MT5 time')
 }
 
 export function stopWeeklySystemFlatten() {

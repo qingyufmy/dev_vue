@@ -34,8 +34,8 @@ beforeEach(() => {
   mockQueryRun.mockResolvedValue({ affectedRows: 1 })
 })
 
-describe('weekly Beijing risk window', () => {
-  it('only locks from Saturday 04:00 through 04:59 Beijing', async () => {
+describe('weekly MT5 risk window', () => {
+  it('only locks from Friday 23:00 through 23:59 MT5 time', async () => {
     const { isWeeklyFlattenWindow, isWeeklyFlattenPrimaryWindow } = await import('../server/jobs/weekly-risk-window.js')
 
     expect(isWeeklyFlattenWindow(new Date('2026-07-17T19:59:00.000Z'))).toBe(false)
@@ -47,7 +47,7 @@ describe('weekly Beijing risk window', () => {
     expect(isWeeklyFlattenWindow(new Date('2026-07-20T00:00:00.000Z'))).toBe(false)
   })
 
-  it('calculates the next Saturday 04:00 Beijing start', async () => {
+  it('calculates the next Friday 23:00 MT5 start', async () => {
     const { currentWeeklyFlattenEnd, nextWeeklyFlattenStart } = await import('../server/jobs/weekly-risk-window.js')
 
     expect(nextWeeklyFlattenStart(new Date('2026-07-17T19:00:00.000Z')).toISOString()).toBe('2026-07-17T20:00:00.000Z')
@@ -55,13 +55,21 @@ describe('weekly Beijing risk window', () => {
     expect(currentWeeklyFlattenEnd(new Date('2026-07-17T20:30:00.000Z')).toISOString()).toBe('2026-07-17T21:00:00.000Z')
   })
 
-  it('uses the Saturday Beijing date as the cycle id', async () => {
+  it('uses the MT5 Saturday date as the cycle id', async () => {
     const { weeklyFlattenCycleId } = await import('../server/jobs/weekly-risk-window.js')
 
     expect(weeklyFlattenCycleId(new Date('2026-07-17T20:00:00.000Z'))).toBe('2026-07-18')
     expect(weeklyFlattenCycleId(new Date('2026-07-18T20:00:00.000Z'))).toBe('2026-07-18')
     expect(weeklyFlattenCycleId(new Date('2026-07-19T23:00:00.000Z'))).toBe('2026-07-18')
     expect(weeklyFlattenCycleId(new Date('2026-07-21T03:00:00.000Z'))).toBe('2026-07-18')
+  })
+
+  it('moves the same MT5 window when the broker offset changes', async () => {
+    const { isWeeklyFlattenWindow, setWeeklyMarketTimezoneOffset } = await import('../server/jobs/weekly-risk-window.js')
+    setWeeklyMarketTimezoneOffset(120)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-17T20:30:00.000Z'))).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-17T21:30:00.000Z'))).toBe(true)
+    setWeeklyMarketTimezoneOffset(180)
   })
 
   it('returns a deterministic rejection during the risk window', async () => {
@@ -138,7 +146,7 @@ describe('weekly system flatten execution', () => {
     expect(mockSendBridgeCommand).not.toHaveBeenCalled()
   })
 
-  it('stops sending MT5 commands when the 05:00 deadline is reached', async () => {
+  it('stops sending MT5 commands when the MT5 Saturday 00:00 deadline is reached', async () => {
     const endedAt = new Date('2026-07-17T21:00:00.000Z')
     const clock = vi.fn()
       .mockReturnValueOnce(runAt)
