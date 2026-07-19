@@ -2611,6 +2611,19 @@ const migrations = [
         LEFT JOIN experience_memory_summaries memory_summary ON memory_summary.period_review_version_id = cases.approved_version_id
         WHERE cases.status = 'approved' AND cases.approved_version_id IS NOT NULL`)
     }
+  },
+  {
+    id: '102_disable_legacy_trade_review_generation',
+    up: async () => {
+      await queryRun(`UPDATE trade_review_jobs SET status = 'skipped',
+        last_error_code = 'legacy_trade_review_disabled', lease_token = NULL,
+        lease_expires_at = NULL, updated_at = NOW()
+        WHERE status IN ('queued','leased')`)
+      await queryRun(`UPDATE trade_review_cases SET
+        status = CASE WHEN evidence_status = 'complete' THEN 'ready' ELSE 'incomplete' END,
+        updated_at = NOW()
+        WHERE status = 'generating' AND current_version_id IS NULL`)
+    }
   }
 ]
 

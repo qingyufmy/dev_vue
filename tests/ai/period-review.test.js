@@ -215,6 +215,8 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('period_review_user_states')
     expect(migration).toContain('101_period_review_derivation_jobs')
     expect(migration).toContain('period_review_derivation_jobs')
+    expect(migration).toContain('102_disable_legacy_trade_review_generation')
+    expect(routes).toContain("error:'legacy_trade_review_disabled'")
     expect(periodReview).toContain('recoverExpiredPeriodReviewJobs')
     expect(periodReview).toContain("isAiFeatureEnabled('review_generation_enabled'")
     expect(periodReview).toContain("status = 'stale'")

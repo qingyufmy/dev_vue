@@ -97,7 +97,7 @@ describe('review durability and privacy guards', () => {
   })
 
   it('allows period reviews to prepare immutable trade evidence without queueing a legacy model job', () => {
-    expect(service).toContain('ensureReviewCaseForOutcome(outcomeId, { queueGeneration = true } = {})')
+    expect(service).toContain('ensureReviewCaseForOutcome(outcomeId, { queueGeneration = false } = {})')
     expect(service).toContain('if (queueGeneration && generationEnabled')
   })
 

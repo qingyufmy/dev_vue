@@ -12,13 +12,11 @@ import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-provider
 import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
-import { listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
-  ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
-import { createMemoryFromApprovedReview, listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
+import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
+import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
   revokeLongTermMemory, createMemoryFromApprovedPeriodReview } from './memory-system.js'
-import { createPlatformExperienceCandidateFromApprovedReview, getPlatformExperiencePolicies,
-  createPlatformExperienceCandidateFromApprovedPeriodReview, listPlatformExperience,
+import { getPlatformExperiencePolicies, createPlatformExperienceCandidateFromApprovedPeriodReview, listPlatformExperience,
   getPlatformExperienceEvaluation, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
@@ -495,36 +493,20 @@ router.post('/ai/reviews/outcomes/:outcomeId', authMiddleware, async (req, res) 
   try {
     const outcome = await queryAll('SELECT user_id FROM signal_outcomes WHERE id = ? LIMIT 1', [Number(req.params.outcomeId)])
     if (!outcome[0] || Number(outcome[0].user_id) !== Number(req.user.id)) return res.status(404).json({ ok: false, error: 'outcome_not_found' })
-    res.json({ ok: true, review: await ensureReviewCaseForOutcome(Number(req.params.outcomeId)) })
+    res.json({ ok: true, review: await ensureReviewCaseForOutcome(Number(req.params.outcomeId), { queueGeneration:false }) })
   } catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/reviews/:id/edit', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await editReviewCase({ caseId: Number(req.params.id), userId: req.user.id, content: req.body?.content, expectedVersionId: req.body?.expected_version_id, changeNote: req.body?.change_note })) }) }
-  catch (error) { reviewError(res, error) }
+  res.status(410).json({ ok:false, error:'legacy_trade_review_disabled', use_endpoint:'/api/ai/period-reviews' })
 })
 
 router.post('/ai/reviews/:id/confirm', authMiddleware, async (req, res) => {
-  try {
-    const caseId = Number(req.params.id)
-    const result = await confirmReviewCase({ caseId, userId: req.user.id, versionId: req.body?.version_id, action: req.body?.action, tradeProcessIssueStatus: req.body?.trade_process_issue_status })
-    let memory = null
-    let platformExperience = null
-    let postActionError = null
-    if (req.body?.action === 'approve') {
-      try {
-        if (req.user.role === 'admin') platformExperience = await createPlatformExperienceCandidateFromApprovedReview(caseId, req.user.id)
-        else memory = await createMemoryFromApprovedReview(caseId, req.user.id)
-      } catch (error) { postActionError = String(error?.message || error).slice(0, 128) }
-    }
-    res.json({ ok: true, ...result, memory, platform_experience: platformExperience, post_action_error: postActionError })
-  }
-  catch (error) { reviewError(res, error) }
+  res.status(410).json({ ok:false, error:'legacy_trade_review_disabled', use_endpoint:'/api/ai/period-reviews' })
 })
 
 router.post('/ai/reviews/:id/retry', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await retryReviewCase(Number(req.params.id), req.user.id)) }) }
-  catch (error) { reviewError(res, error) }
+  res.status(410).json({ ok:false, error:'legacy_trade_review_disabled', use_endpoint:'/api/ai/period-reviews' })
 })
 
 router.get('/ai/admin/reviews/health', authMiddleware, async (req, res) => {

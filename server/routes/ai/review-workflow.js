@@ -165,7 +165,7 @@ async function loadEvidence(outcomeId) {
   return { row, assessment, bundle, evidenceHash: sha256(json(bundle)) }
 }
 
-export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration = true } = {}) {
+export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration = false } = {}) {
   const evidence = await loadEvidence(outcomeId)
   const eligibility = assessReviewStrategyEligibility(evidence.row)
   if (!eligibility.eligible) return { skipped: true, reason: eligibility.reason, outcome_id: Number(outcomeId) }
