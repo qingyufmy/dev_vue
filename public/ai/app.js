@@ -446,6 +446,7 @@ const AUTO_REASON_LABELS = {
   bridge_offline: '桥接离线',
   market_open: '市场开放',
   market_closed: '休市',
+  market_restricted: '交易权限受限',
   market_unknown: '市场状态未知',
   market_unknown_no_tick: '等待行情数据',
   market_stale_tick: '行情停滞',
@@ -474,7 +475,7 @@ function autoReasonText(reason) {
 }
 
 function isMarketClosedReason(reason) {
-  return ['market_closed', 'market_stale_tick', 'market_unknown_no_tick', 'market_unknown'].includes(reason);
+  return ['market_closed', 'market_restricted', 'market_stale_tick', 'market_unknown_no_tick', 'market_unknown'].includes(reason);
 }
 
 // Badge cache to avoid flickering on hover
@@ -6368,6 +6369,7 @@ function waitReasonText(reason) {
     cooldown: '冷却中',
     admin_bridge_offline: '管理员桥接离线',
     market_closed: '市场休市',
+    market_restricted: '交易权限受限',
     market_stale_tick: '行情停滞',
     market_unknown: '行情未知',
     redis_unavailable: 'Redis不可用',

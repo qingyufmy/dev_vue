@@ -271,8 +271,12 @@ export async function updateSchedulerRedisState(key, state) {
     }
     if (state.marketState) {
       fields.market_reason = state.marketState.reason || ''
+      fields.market_detail_reason = state.marketState.detailReason || ''
+      fields.market_state_source = state.marketState.source || ''
+      fields.market_symbol = state.marketState.symbol || ''
       fields.market_trade_mode = String(state.marketState.tradeMode ?? -1)
       fields.market_tick_age_ms = String(state.marketState.tickAgeMs ?? '')
+      fields.market_tick_age_seconds = String(state.marketState.tickAgeSeconds ?? '')
       fields.market_mt5_time = state.marketState.mt5TimeStr || ''
     }
     await redis.hset(`${REDIS_SUBS_PREFIX}${key}:state`, fields)
@@ -541,6 +545,7 @@ function retryDelayMs(reason) {
     case 'weekly_flatten_window':
       return 5000
     case 'market_closed':
+    case 'market_restricted':
       return 60000
     case 'market_stale_tick':
     case 'market_unknown_no_tick':
@@ -623,6 +628,7 @@ function schedulerWaitLabel(reason) {
     owner_bridge_offline: '策略所属账户桥接离线，等待重连',
     admin_bridge_offline: '管理员行情桥接离线，等待重连',
     market_closed: '市场休市，等待开市',
+    market_restricted: '品种交易权限受限，等待恢复',
     market_stale_tick: '行情报价停滞，等待恢复',
     market_unknown_no_tick: '尚未收到行情报价，等待同步',
     market_unknown: '市场状态未知，等待确认',
@@ -870,13 +876,13 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       return
     }
 
-    const marketState = getOwnBridgeMarketState(marketUserId)
+    const marketState = getOwnBridgeMarketState(marketUserId, symbol)
+    st.marketState = marketState
     if (!marketState.isOpen) {
       st._waitCount = (st._waitCount || 0) + 1
       if (shouldLogSchedulerWait(st, marketState.reason)) console.log(`[UnifiedScheduler] ${key}: ${schedulerWaitLabel(marketState.reason)}`)
       st.lastError = null
       st.waitReason = marketState.reason
-      st.marketState = marketState
       const delay = retryDelayMs(marketState.reason)
       st.nextRunInSeconds = Math.round(delay / 1000)
       await updateSchedulerRedisState(key, st)

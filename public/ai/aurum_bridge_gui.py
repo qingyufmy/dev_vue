@@ -427,6 +427,8 @@ class BridgeWorker(QThread):
         # calls must share one lock.
         self._mt5_lock = threading.RLock()
         self._history_deals_cache = None
+        self._market_observations = {}
+        self._last_market_state = None
 
     def check_plan(self):
         """Check plan status via auth/me. Returns (plan, expired, message)."""
@@ -543,6 +545,68 @@ class BridgeWorker(QThread):
             "clock_residual_ms": self._mt5_clock_residual_ms,
             "captured_at_utc_msc": int(time.time() * 1000),
         }
+
+    def _detect_market_state(self, symbol, info, tick, terminal_info=None):
+        now_mono = time.monotonic()
+        now_utc_ms = int(time.time() * 1000)
+        raw_tick_ms = int(getattr(tick, "time_msc", 0) or int(getattr(tick, "time", 0) or 0) * 1000) if tick else 0
+        trade_mode = int(getattr(info, "trade_mode", -1)) if info else -1
+        observation = self._market_observations.setdefault(symbol, {
+            "last_tick_msc": None, "last_change_monotonic": now_mono,
+        })
+        previous_tick_ms = observation.get("last_tick_msc")
+        tick_progressing = bool(raw_tick_ms and previous_tick_ms is not None and raw_tick_ms != previous_tick_ms)
+        if raw_tick_ms and raw_tick_ms != previous_tick_ms:
+            observation["last_tick_msc"] = raw_tick_ms
+            observation["last_change_monotonic"] = now_mono
+            if previous_tick_ms is not None:
+                observation["confirmed_open"] = True
+        unchanged_seconds = max(0.0, now_mono - float(observation.get("last_change_monotonic") or now_mono))
+        offset_minutes = int(self._mt5_timezone_offset_minutes or 0)
+        tick_utc_ms = raw_tick_ms - offset_minutes * 60000 if raw_tick_ms else 0
+        tick_age_seconds = max(0.0, (now_utc_ms - tick_utc_ms) / 1000.0) if tick_utc_ms else None
+        terminal_connected = bool(terminal_info and getattr(terminal_info, "connected", False))
+        bid = float(getattr(tick, "bid", 0) or 0) if tick else 0.0
+        ask = float(getattr(tick, "ask", 0) or 0) if tick else 0.0
+
+        if terminal_info is None or not terminal_connected:
+            state, reason = "unknown", "terminal_disconnected"
+        elif info is None:
+            state, reason = "unknown", "symbol_info_unavailable"
+        elif tick is None or raw_tick_ms <= 0:
+            state, reason = "unknown", "tick_unavailable"
+        elif trade_mode == 0:
+            state, reason = "closed", "symbol_trade_disabled"
+        elif trade_mode in (1, 2, 3):
+            state, reason = "restricted", {1: "long_only", 2: "short_only", 3: "close_only"}[trade_mode]
+        elif bid <= 0 or ask <= 0 or ask < bid:
+            state, reason = "stale", "invalid_quote"
+        elif tick_progressing:
+            state, reason = "open", "tick_advancing"
+        elif tick_age_seconds is not None and tick_age_seconds >= 120:
+            state, reason = "closed", "tick_not_advancing"
+        elif observation.get("confirmed_open") and unchanged_seconds < 60:
+            state, reason = "open", "recent_tick_activity"
+        elif unchanged_seconds >= 60:
+            state, reason = "closed", "tick_not_advancing"
+        else:
+            state, reason = "unknown", "observing_tick"
+
+        result = {
+            "market_state_version": 1,
+            "market_state": state,
+            "market_reason": reason,
+            "symbol_trade_mode": trade_mode,
+            "terminal_connected": terminal_connected,
+            "tick_progressing": tick_progressing,
+            "tick_unchanged_seconds": round(unchanged_seconds, 3),
+            "tick_age_seconds": round(tick_age_seconds, 3) if tick_age_seconds is not None else None,
+            "market_checked_at_utc_msc": now_utc_ms,
+        }
+        if state in ("closed", "stale"):
+            observation["confirmed_open"] = False
+        self._last_market_state = {"symbol": symbol, **result}
+        return result
 
     def _resolve_symbol(self, symbol):
         if symbol is None:
@@ -2183,6 +2247,8 @@ class BridgeWorker(QThread):
             self.log_signal.emit("MT5账户已恢复")
         if not acc:
             return None
+        terminal = self.mt5.terminal_info()
+        info = self.mt5.symbol_info(sym)
         tick = self.mt5.symbol_info_tick(sym)
         if tick: self._calibrate_mt5_clock(tick)
         positions = self.mt5.positions_get() or []
@@ -2194,6 +2260,7 @@ class BridgeWorker(QThread):
         except Exception:
             pass
         clock_fields = self._clock_fields(getattr(tick, "time_msc", tick.time * 1000)) if tick else self._clock_fields(0)
+        market_fields = self._detect_market_state(sym, info, tick, terminal)
         return {"type": "data", "account": {
             "login": acc.login, "balance": round(acc.balance, 2),
             "equity": round(acc.equity, 2), "margin": round(acc.margin, 2),
@@ -2202,7 +2269,7 @@ class BridgeWorker(QThread):
             "bid": round(tick.bid, 5) if tick else None, "ask": round(tick.ask, 5) if tick else None,
             "spread": round((tick.ask - tick.bid) / (0.01 if "JPY" not in sym else 0.001), 1) if tick else None,
             "time": self._mt5_time(tick.time) if tick else time.strftime("%Y-%m-%d %H:%M:%S"),
-            "volume": bar_vol, **clock_fields},
+            "volume": bar_vol, **clock_fields, **market_fields},
             "positions": [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type == 0 else "sell",
                 "volume": p.volume, "price_open": p.price_open, "price_current": p.price_current,
                 "time": self._mt5_time(p.time) if p.time else '', "time_update": self._mt5_time(p.time_update) if getattr(p, 'time_update', None) else '',
@@ -2261,6 +2328,7 @@ class BridgeWorker(QThread):
                     "timezone_offset_minutes": self._mt5_timezone_offset_minutes,
                     "clock_status": self._mt5_clock_status,
                     "clock_residual_ms": self._mt5_clock_residual_ms,
+                    **(self._last_market_state or {}),
                 }
                 await ws.send(json.dumps(hb))
             except (websockets.ConnectionClosed, OSError):

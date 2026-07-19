@@ -121,6 +121,20 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('"clock_status": self._mt5_clock_status')
   })
 
+  it('detects market state next to MT5 and publishes it in data and heartbeats', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('def _detect_market_state(self, symbol, info, tick, terminal_info=None):')
+    expect(source).toContain('terminal = self.mt5.terminal_info()')
+    expect(source).toContain('info = self.mt5.symbol_info(sym)')
+    expect(source).toContain('"market_state_version": 1')
+    expect(source).toContain('"market_state": state')
+    expect(source).toContain('"symbol_trade_mode": trade_mode')
+    expect(source).toContain('"tick_progressing": tick_progressing')
+    expect(source).toContain('observation.get("confirmed_open") and unchanged_seconds < 60')
+    expect(source).toContain('**(self._last_market_state or {})')
+    expect(source).toContain('market_fields = self._detect_market_state(sym, info, tick, terminal)')
+  })
+
   it('rejects invalid pending expirations and reports MT5 pending-list failures', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     expect(source).toContain('"message": "invalid pending order expiration"')

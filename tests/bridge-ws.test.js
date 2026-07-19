@@ -58,6 +58,7 @@ import {
   sendToBrowsers,
   collectTradeRefs,
   buildSignalRefIndex,
+  normalizeBridgeMarketState,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -186,6 +187,27 @@ describe('getOwnBridgeMarketState', () => {
     expect(state.isOpen).toBe(false)
     expect(state.tradeMode).toBe(-1)
     expect(state.reason).toBe('bridge_offline')
+  })
+})
+
+describe('bridge-reported market state', () => {
+  it('maps explicit bridge states to the legacy trade-mode contract', () => {
+    expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'open', market_reason: 'tick_advancing',
+      symbol: 'XAUUSD', symbol_trade_mode: 4, tick_progressing: true }, 1000)).toMatchObject({
+      state: 'open', reason: 'market_open', tradeMode: 4, symbol: 'XAUUSD', tickProgressing: true, receivedAt: 1000,
+    })
+    expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'closed', market_reason: 'tick_not_advancing',
+      symbol_trade_mode: 4 }, 2000)).toMatchObject({ state: 'closed', reason: 'market_closed', tradeMode: 0, symbolTradeMode: 4 })
+    expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'restricted', market_reason: 'close_only',
+      symbol_trade_mode: 3 })).toMatchObject({ state: 'restricted', reason: 'market_restricted', tradeMode: 3 })
+  })
+
+  it('rejects unsupported payloads and preserves missing metrics as null', () => {
+    expect(normalizeBridgeMarketState({ market_state: 'open' })).toBeNull()
+    expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'halted' })).toBeNull()
+    expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'unknown', tick_age_seconds: null })).toMatchObject({
+      reason: 'market_unknown', tradeMode: -1, tickAgeSeconds: null,
+    })
   })
 })
 

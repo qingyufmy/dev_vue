@@ -4,7 +4,7 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing
 import { ADMIN_CACHE_TTL_MS } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 import { autoSchedulerState } from './routes/ai/scheduler.js'
-import { utcToMt5Time } from './routes/ai/utils.js'
+import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/config.js'
 import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
@@ -71,6 +71,45 @@ export function buildSignalRefIndex(rows, toSignal = row => row) {
     }
   }
   return index
+}
+
+export function normalizeBridgeMarketState(payload, receivedAt = Date.now()) {
+  if (Number(payload?.market_state_version) !== 1) return null
+  const state = String(payload?.market_state || '').toLowerCase()
+  if (!['open', 'closed', 'restricted', 'stale', 'unknown'].includes(state)) return null
+  const optionalNumber = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null
+  const symbolTradeMode = optionalNumber(payload?.symbol_trade_mode)
+  const tradeMode = state === 'open' ? 4
+    : state === 'closed' ? 0
+      : state === 'restricted' && [1, 2, 3].includes(symbolTradeMode) ? symbolTradeMode : -1
+  const reasons = {
+    open: 'market_open', closed: 'market_closed', restricted: 'market_restricted',
+    stale: 'market_stale_tick', unknown: 'market_unknown',
+  }
+  return {
+    state, reason: reasons[state], detailReason: String(payload.market_reason || ''), tradeMode,
+    symbolTradeMode: symbolTradeMode ?? -1,
+    symbol: String(payload.symbol || ''), terminalConnected: payload.terminal_connected !== false,
+    tickProgressing: Boolean(payload.tick_progressing),
+    tickUnchangedSeconds: optionalNumber(payload.tick_unchanged_seconds),
+    tickAgeSeconds: optionalNumber(payload.tick_age_seconds),
+    checkedAtUtcMsc: optionalNumber(payload.market_checked_at_utc_msc),
+    receivedAt,
+  }
+}
+
+function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()) {
+  const normalized = normalizeBridgeMarketState(payload, receivedAt)
+  if (!bridge || !normalized) return null
+  const previous = bridge.marketState?.state
+  bridge.marketState = normalized
+  if (!bridge.marketStates) bridge.marketStates = new Map()
+  if (normalized.symbol) bridge.marketStates.set(stripBrokerSuffix(normalized.symbol), normalized)
+  bridge.lastTradeMode = normalized.tradeMode
+  if (previous && previous !== normalized.state) {
+    console.log(`[BridgeWS] User ${userId}: market ${previous} -> ${normalized.state} (${normalized.detailReason || normalized.reason})`)
+  }
+  return normalized
 }
 
 const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
@@ -373,7 +412,7 @@ async function _initBridge(ws, userId, user) {
   const isAdmin = userId === (adminUserId || -1)
   const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
   const replacedOld = !!existing
-  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: schedulerAutoEnabled, lastPong: Date.now(), lastTradeMode: -1, _pingInterval: null, _connectTime: Date.now() }
+  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: schedulerAutoEnabled, lastPong: Date.now(), lastTradeMode: -1, marketState: null, marketStates: new Map(), _pingInterval: null, _connectTime: Date.now() }
   bridges.set(userId, bridgeEntry)
   ws._userId = userId
   console.log(`[BridgeWS] bridge connected user=${userId} role=${user?.role || 'unknown'} plan=${user?.plan || 'unknown'} replacedOld=${replacedOld}`)
@@ -488,6 +527,7 @@ async function _initBridge(ws, userId, user) {
         clock_residual_ms: msg.clock_residual_ms ?? null,
         receivedAt: Date.now(),
       }
+      applyBridgeMarketState(bridge, msg, userId)
     }
 
     if (msg.type === 'data') {
@@ -498,12 +538,13 @@ async function _initBridge(ws, userId, user) {
         bridge.brokerServer = msg.account?.server || bridge.brokerServer || null
         bridge.accountLogin = msg.account?.login || bridge.accountLogin || null
       }
+      const explicitMarketState = bridge && msg.quote ? applyBridgeMarketState(bridge, { symbol: msg.quote.symbol, ...msg.quote }, userId) : null
       if (bridge && msg.quote && typeof msg.quote.time === 'string') {
         const now = Date.now()
         bridge.lastTickMs = now
         const prev = bridge.mt5TimeStr
         bridge.mt5TimeStr = msg.quote.time
-        if (prev !== undefined) {
+        if (!explicitMarketState && prev !== undefined) {
           if (msg.quote.time !== prev) {
             if (bridge.lastTradeMode !== 4) {
               console.log(`[BridgeWS] User ${userId}: market OPENED (tick=${msg.quote.time}, was tradeMode=${bridge.lastTradeMode})`)
@@ -1898,7 +1939,7 @@ const MARKET_SAME_TICK_CLOSED_MS = 60_000
 const MARKET_TICK_STALE_MS = 120_000
 
 // Unified market state function
-export function getOwnBridgeMarketState(userId) {
+export function getOwnBridgeMarketState(userId, symbol = null) {
   const bridge = bridges.get(userId)
   if (!bridge || bridge.ws.readyState !== 1) {
     return {
@@ -1911,6 +1952,28 @@ export function getOwnBridgeMarketState(userId) {
   const lastTickMs = bridge.lastTickMs || null
   const tickAgeMs = lastTickMs ? now - lastTickMs : null
   const tradeMode = typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1
+
+  const explicit = symbol ? bridge.marketStates?.get(stripBrokerSuffix(symbol)) : bridge.marketState
+  const explicitFresh = explicit && now - explicit.receivedAt <= 30_000
+  if (explicitFresh) {
+    return {
+      alive: true, isOpen: explicit.state === 'open', tradeMode: explicit.tradeMode,
+      reason: explicit.reason, detailReason: explicit.detailReason, marketState: explicit.state,
+      symbol: explicit.symbol, symbolTradeMode: explicit.symbolTradeMode,
+      terminalConnected: explicit.terminalConnected, tickProgressing: explicit.tickProgressing,
+      tickUnchangedSeconds: explicit.tickUnchangedSeconds, tickAgeSeconds: explicit.tickAgeSeconds,
+      lastTickMs, tickAgeMs, mt5TimeStr: bridge.mt5TimeStr || null,
+      source: 'bridge_market_state_v1',
+    }
+  }
+  if (symbol && bridge.marketStates?.size > 0) {
+    return {
+      alive: true, isOpen: false, tradeMode: -1, reason: 'market_unknown',
+      detailReason: explicit ? 'symbol_state_stale' : 'symbol_state_unavailable',
+      marketState: 'unknown', symbol: stripBrokerSuffix(symbol), lastTickMs, tickAgeMs,
+      mt5TimeStr: bridge.mt5TimeStr || null, source: 'bridge_market_state_v1',
+    }
+  }
 
   if (!lastTickMs) {
     return { alive: true, isOpen: false, tradeMode, reason: 'market_unknown_no_tick', lastTickMs, tickAgeMs, mt5TimeStr: bridge.mt5TimeStr || null }
