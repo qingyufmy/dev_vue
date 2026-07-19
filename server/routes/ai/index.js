@@ -35,7 +35,8 @@ import { getInferencePreference, saveInferencePreference } from './inference-pre
 import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, listPeriodReviewCases, getPeriodReviewCase,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
-  markPeriodReviewRead, getPeriodReviewJobStatus } from './period-review.js'
+  markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
+  retryPeriodReviewDerivation } from './period-review.js'
 
 const router = Router()
 
@@ -470,21 +471,18 @@ router.post('/ai/period-reviews/:id/confirm', authMiddleware, async (req, res) =
     const periodCaseId = Number(req.params.id)
     const result = await confirmPeriodReviewCase({ periodCaseId, userId: req.user.id,
       versionId: req.body?.version_id, action: req.body?.action })
-    let memory = null
-    let platformExperience = null
-    let postActionError = null
-    if (req.body?.action === 'approve') {
-      try {
-        if (req.user.role === 'admin') platformExperience = await createPlatformExperienceCandidateFromApprovedPeriodReview(periodCaseId, req.user.id)
-        else memory = await createMemoryFromApprovedPeriodReview(periodCaseId, req.user.id)
-      } catch (error) { postActionError = String(error?.message || error).slice(0, 128) }
-    }
-    res.json({ ok: true, ...result, memory, platform_experience: platformExperience, post_action_error: postActionError })
+    if (req.body?.action === 'approve') requestPeriodReviewCycle()
+    res.json({ ok: true, ...result })
   } catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/period-reviews/:id/retry', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, ...(await retryPeriodReviewCase(Number(req.params.id), req.user.id)) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/period-reviews/:id/derivation/retry', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, ...(await retryPeriodReviewDerivation(Number(req.params.id), req.user.id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -667,9 +665,11 @@ export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
   startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
 export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, runPeriodReviewCycle,
+  runPeriodReviewDerivationOnce, resumePeriodReviewDerivationJobs,
   startPeriodReviewWorker, stopPeriodReviewWorker, listPeriodReviewCases, getPeriodReviewCase,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
-  markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle } from './period-review.js'
+  markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
+  retryPeriodReviewDerivation } from './period-review.js'
 export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
   createPlatformExperienceCandidateFromApprovedPeriodReview,
   listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,

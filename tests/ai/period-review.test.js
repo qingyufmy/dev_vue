@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   compactPeriodTradeEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
-  samePeriodOutcomeSet, shouldRefreshDailyReviewCase, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+  monthlyReviewSourceHash, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
@@ -150,6 +150,14 @@ describe('monthly review aggregation', () => {
       losing_days: 1, external_intervention_count: 1,
     })
   })
+
+  it('invalidates a monthly source snapshot when a daily review version or status changes', () => {
+    const source = { id:11, status:'draft', evidence_hash:'e1', current_content_hash:'v1' }
+    expect(monthlyReviewSourceHash([source])).toBe(monthlyReviewSourceHash([{ period_case_id:11,
+      review_status:'draft', evidence_hash:'e1', content_hash:'v1' }]))
+    expect(monthlyReviewSourceHash([source])).not.toBe(monthlyReviewSourceHash([{ ...source, status:'approved' }]))
+    expect(monthlyReviewSourceHash([source])).not.toBe(monthlyReviewSourceHash([{ ...source, current_content_hash:'v2' }]))
+  })
 })
 
 describe('monthly review model boundary', () => {
@@ -184,6 +192,7 @@ describe('period review runtime integration', () => {
     expect(readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')).toContain('daily_total:0, monthly_total:0')
     expect(routes).toContain("router.get('/ai/period-reviews/:id/job-status'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/read'")
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/derivation/retry'")
   })
 
   it('starts only the period worker and preserves separate platform experience lineage', () => {
@@ -201,11 +210,15 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('096_period_review_observability')
     expect(migration).toContain('period_review_job_events')
     expect(migration).toContain('period_review_user_states')
+    expect(migration).toContain('101_period_review_derivation_jobs')
+    expect(migration).toContain('period_review_derivation_jobs')
     expect(periodReview).toContain('recoverExpiredPeriodReviewJobs')
     expect(periodReview).toContain("isAiFeatureEnabled('review_generation_enabled'")
     expect(periodReview).toContain("status = 'stale'")
     expect(periodReview).toContain("status = 'revalidation'")
     expect(periodReview).toContain("status = 'revoked'")
+    expect(periodReview).toContain('runPeriodReviewDerivationOnce')
+    expect(periodReview).toContain('monthlyReviewSourceHash')
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })
 })

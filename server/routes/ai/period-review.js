@@ -7,6 +7,8 @@ import { requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { buildDailyPeriodMarketEvidence, monthlyPeriodMarketDigest } from './period-market-evidence.js'
 import { isAiFeatureEnabled } from './rollout-governance.js'
+import { createMemoryFromApprovedPeriodReview } from './memory-system.js'
+import { createPlatformExperienceCandidateFromApprovedPeriodReview } from './platform-experience.js'
 
 const DAY_MS = 86400000
 const DEFAULT_MT5_OFFSET_MINUTES = 180
@@ -60,6 +62,16 @@ export function dailyEvidenceSemanticHash(evidence) {
   return sha256(JSON.stringify(value))
 }
 
+export function monthlyReviewSourceHash(rows = []) {
+  const sources = rows.map(row => ({
+    period_case_id:Number(row.id ?? row.period_case_id),
+    review_status:String((row.status ?? row.review_status) || ''),
+    evidence_hash:row.evidence_hash || null,
+    content_hash:row.current_content_hash ?? row.content_hash ?? null,
+  })).sort((a, b) => a.period_case_id - b.period_case_id)
+  return sha256(JSON.stringify(sources))
+}
+
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
   return date.toISOString().replace('T', ' ').slice(0, 19)
@@ -88,7 +100,7 @@ async function runRequestedPeriodReviewCycle() {
     do {
       periodReviewWakeRequested = false
       const result = await runPeriodReviewCycle()
-      if (result.dailyWorker?.claimed || result.monthlyWorker?.claimed) periodReviewWakeRequested = true
+      if (result.dailyWorker?.claimed || result.monthlyWorker?.claimed || result.derivationWorker?.claimed) periodReviewWakeRequested = true
     } while (periodReviewWakeRequested)
   } catch (error) {
     console.error('[PeriodReview] cycle failed:', safeError(error))
@@ -447,6 +459,9 @@ async function upsertDailyGroup(group, clock) {
         WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, oldVersionId])
       await run(`UPDATE platform_strategy_experience_items SET status = 'revoked', revoked_at = ?, updated_at = ?
         WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, now, oldVersionId])
+      await run(`UPDATE period_review_derivation_jobs SET status = 'superseded', lease_token = NULL,
+        lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+        WHERE period_case_id = ? AND period_version_id = ? AND status NOT IN ('superseded')`, [now, existingCase.id, oldVersionId])
       await run(`UPDATE period_review_cases SET status = 'ready', current_version_id = NULL, approved_version_id = NULL,
         evidence_status = 'pending', evidence_reason = 'daily_evidence_changed', updated_at = ? WHERE id = ?`, [now, existingCase.id])
       await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
@@ -515,6 +530,33 @@ async function upsertMonthlyGroup(group, clock) {
   if (existingCase) {
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
+    const existingEvidence = parse(existingCase.evidence_json, {}) || {}
+    const sourceChanged = monthlyReviewSourceHash(group.dailyCases) !== monthlyReviewSourceHash(existingEvidence.sources || [])
+    if (existingCase.current_version_id && !sourceChanged) return { id: Number(existingCase.id), periodKey: group.periodKey,
+      sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, reused:true }
+    if (existingCase.current_version_id && sourceChanged) {
+      const now = beijingNow()
+      await withTransaction(async run => {
+        const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
+        if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id)) throw new Error('period_review_version_conflict')
+        const oldVersionId = Number(locked[0].approved_version_id || locked[0].current_version_id)
+        await run(`UPDATE experience_memory_summaries SET status = 'stale', invalidated_at = ?
+          WHERE period_review_version_id = ? AND status = 'active'`, [now, oldVersionId])
+        await run(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
+          WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, oldVersionId])
+        await run(`UPDATE platform_strategy_experience_items SET status = 'revoked', revoked_at = ?, updated_at = ?
+          WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, now, oldVersionId])
+        await run(`UPDATE period_review_derivation_jobs SET status = 'superseded', lease_token = NULL,
+          lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+          WHERE period_case_id = ? AND period_version_id = ? AND status NOT IN ('superseded')`, [now, existingCase.id, oldVersionId])
+        await run(`UPDATE period_review_cases SET status = 'ready', current_version_id = NULL, approved_version_id = NULL,
+          evidence_status = 'pending', evidence_reason = 'monthly_sources_changed', updated_at = ? WHERE id = ?`, [now, existingCase.id])
+        await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+          attempt_count = 0, last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL,
+          next_attempt_at = NULL, completed_at = NULL, updated_at = ?
+          WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0`, [now, now, existingCase.id])
+      })
+    }
     if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
       const now = beijingNow()
       await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
@@ -523,7 +565,7 @@ async function upsertMonthlyGroup(group, clock) {
       return { id:Number(existingCase.id), periodKey:group.periodKey, sourceCount:Number(existingCase.source_count || 0),
         evidenceHash:existingCase.evidence_hash, requeued:true }
     }
-    if (existingCase.current_version_id || existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
+    if (!sourceChanged && existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
       sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
   }
   const sources = group.dailyCases.map(row => ({ period_case_id: Number(row.id), period_key: row.period_key,
@@ -561,6 +603,9 @@ async function upsertMonthlyGroup(group, clock) {
     AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? AND strategy_version = ?`,
   [group.periodKey, group.userId, group.strategyId, group.strategyVersion])
   if (!periodCase.current_version_id) {
+    const sourcePeriodIds = sources.map(source => Number(source.period_case_id))
+    if (sourcePeriodIds.length) await queryRun(`DELETE FROM period_review_sources WHERE period_case_id = ? AND source_period_case_id IS NOT NULL
+      AND source_period_case_id NOT IN (${sourcePeriodIds.map(() => '?').join(',')})`, [periodCase.id, ...sourcePeriodIds])
     for (const source of sources) await queryRun(`INSERT INTO period_review_sources
       (period_case_id, outcome_id, trade_review_case_id, source_period_case_id, source_hash, created_at)
       VALUES (?, NULL, NULL, ?, ?, ?) ON DUPLICATE KEY UPDATE source_hash = VALUES(source_hash)`,
@@ -854,10 +899,13 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
       COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
       jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at, jobs.attempt_count, jobs.max_attempts,
       jobs.last_error_code, jobs.next_attempt_at,
+      derivation.status AS derivation_status, derivation.last_error_code AS derivation_error_code,
       CASE WHEN cases.current_version_id IS NOT NULL AND (seen.last_seen_version_id IS NULL OR seen.last_seen_version_id <> cases.current_version_id) THEN 1 ELSE 0 END AS is_unread
     FROM period_review_cases cases
     LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
+      AND derivation.period_version_id = cases.approved_version_id
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id ${where}
     ORDER BY cases.period_start_utc_msc DESC, cases.period_type, cases.id DESC LIMIT ? OFFSET ?`, params)
   return rows.map(row => {
@@ -871,10 +919,15 @@ export async function getPeriodReviewCase(periodCaseId, userId) {
       COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
       jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
       jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at,
+      derivation.id AS derivation_job_id, derivation.status AS derivation_status,
+      derivation.attempt_count AS derivation_attempt_count, derivation.max_attempts AS derivation_max_attempts,
+      derivation.last_error_code AS derivation_error_code, derivation.completed_at AS derivation_completed_at,
       CASE WHEN cases.current_version_id IS NOT NULL AND (seen.last_seen_version_id IS NULL OR seen.last_seen_version_id <> cases.current_version_id) THEN 1 ELSE 0 END AS is_unread
     FROM period_review_cases cases
     LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
+      AND derivation.period_version_id = cases.approved_version_id
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id
     WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
   if (!reviewCase) throw new Error('period_review_not_found')
@@ -893,25 +946,32 @@ export async function getPeriodReviewCase(periodCaseId, userId) {
 
 export async function getPeriodReviewSummary(userId) {
   const rows = await queryAll(`SELECT cases.period_type, cases.status, cases.current_version_id,
-      seen.last_seen_version_id, jobs.status AS job_status
+      seen.last_seen_version_id, jobs.status AS job_status, derivation.status AS derivation_status
     FROM period_review_cases cases
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
+      AND derivation.period_version_id = cases.approved_version_id
     WHERE cases.user_id = ?`, [userId])
   const summary = { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0,
     total:0, daily_total:0, monthly_total:0,
-    daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0 }
+    daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0,
+    derivation_pending:0, derivation_failed:0 }
   for (const row of rows) {
     summary.total += 1
     summary[row.period_type === 'monthly' ? 'monthly_total' : 'daily_total'] += 1
     const unread = row.current_version_id != null && Number(row.last_seen_version_id || 0) !== Number(row.current_version_id)
     const pending = ['draft', 'edited'].includes(row.status)
     const failed = row.status === 'failed' || row.job_status === 'failed'
-    const attention = unread || pending || row.status === 'needs_revision' || failed
+    const derivationPending = ['queued','leased','paused'].includes(row.derivation_status)
+    const derivationFailed = row.derivation_status === 'failed'
+    const attention = unread || pending || row.status === 'needs_revision' || failed || derivationFailed
     if (unread) summary.unread += 1
     if (pending) summary.pending_confirmation += 1
     if (row.status === 'generating' || row.job_status === 'leased') summary.generating += 1
     if (failed) summary.failed += 1
+    if (derivationPending) summary.derivation_pending += 1
+    if (derivationFailed) summary.derivation_failed += 1
     if (attention) {
       summary.attention += 1
       summary[row.period_type === 'monthly' ? 'monthly_attention' : 'daily_attention'] += 1
@@ -937,9 +997,14 @@ export async function markPeriodReviewRead(periodCaseId, userId, versionId) {
 export async function getPeriodReviewJobStatus(periodCaseId, userId) {
   const status = await queryOne(`SELECT cases.id, cases.period_type, cases.status, cases.current_version_id,
       jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
-      jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at
+      jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at,
+      derivation.status AS derivation_status, derivation.attempt_count AS derivation_attempt_count,
+      derivation.max_attempts AS derivation_max_attempts, derivation.last_error_code AS derivation_error_code,
+      derivation.completed_at AS derivation_completed_at
     FROM period_review_cases cases
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
+    LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
+      AND derivation.period_version_id = cases.approved_version_id
     WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
   if (!status) throw new Error('period_review_not_found')
   const events = await queryAll(`SELECT id, attempt_no, stage, event_status, message_code, metadata_json, created_at
@@ -980,9 +1045,113 @@ export async function confirmPeriodReviewCase({ periodCaseId, userId, versionId,
     const now = beijingNow()
     await run(`UPDATE period_review_cases SET status = ?, approved_version_id = ?, updated_at = ? WHERE id = ?`,
     [status, action === 'approve' ? versionId : null, now, periodCaseId])
+    let derivationJobId = null
+    if (action === 'approve') {
+      const targetType = reviewCase.strategy_scope === 'platform' ? 'platform_experience' : 'personal_memory'
+      await run(`INSERT IGNORE INTO period_review_derivation_jobs
+        (period_case_id, period_version_id, user_id, target_type, status, attempt_count, max_attempts, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'queued', 0, 5, ?, ?)`, [periodCaseId, versionId, userId, targetType, now, now])
+      const [jobs] = await run(`SELECT id FROM period_review_derivation_jobs
+        WHERE period_case_id = ? AND period_version_id = ? AND target_type = ? LIMIT 1`, [periodCaseId, versionId, targetType])
+      derivationJobId = Number(jobs[0]?.id || 0) || null
+    }
     return { status, periodType: reviewCase.period_type, strategyScope: reviewCase.strategy_scope,
-      approvedVersionId: action === 'approve' ? Number(versionId) : null }
+      approvedVersionId: action === 'approve' ? Number(versionId) : null,
+      derivationJobId, derivationStatus:action === 'approve' ? 'queued' : null }
   })
+}
+
+async function claimPeriodReviewDerivationJob() {
+  return withTransaction(async run => {
+    const now = beijingNow()
+    const [rows] = await run(`SELECT jobs.*, cases.period_type, cases.strategy_scope
+      FROM period_review_derivation_jobs jobs
+      JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+      WHERE ((jobs.status = 'queued' AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at <= ?))
+        OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
+        AND jobs.attempt_count < jobs.max_attempts
+      ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [now, now])
+    if (!rows[0]) return null
+    const token = crypto.randomUUID()
+    await run(`UPDATE period_review_derivation_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?,
+      next_attempt_at = NULL, attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`,
+    [token, afterSeconds(180), now, rows[0].id])
+    return { ...rows[0], lease_token:token, attempt_count:Number(rows[0].attempt_count || 0) + 1 }
+  })
+}
+
+async function pausePeriodReviewDerivationJob(job, reason) {
+  await queryRun(`UPDATE period_review_derivation_jobs SET status = 'paused', last_error_code = ?,
+    lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+    WHERE id = ? AND lease_token = ?`, [reason, beijingNow(), job.id, job.lease_token])
+  return { claimed:true, status:'paused', jobId:Number(job.id), reason }
+}
+
+export async function resumePeriodReviewDerivationJobs(limit = 100) {
+  const rows = await queryAll(`SELECT jobs.id, jobs.user_id, jobs.target_type, cases.period_type
+    FROM period_review_derivation_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+    WHERE jobs.status = 'paused' ORDER BY jobs.updated_at LIMIT ?`, [Math.min(500, Math.max(1, Number(limit || 100)))])
+  let resumed = 0
+  for (const row of rows) {
+    let enabled = true
+    if (row.target_type === 'personal_memory') {
+      enabled = await isAiFeatureEnabled('experience_memory_enabled', row.user_id)
+      if (enabled && row.period_type === 'monthly') enabled = await isAiFeatureEnabled('memory_compression_enabled', row.user_id)
+    }
+    if (!enabled) continue
+    const result = await queryRun(`UPDATE period_review_derivation_jobs SET status = 'queued', attempt_count = 0,
+      last_error_code = NULL, next_attempt_at = NULL, updated_at = ? WHERE id = ? AND status = 'paused'`, [beijingNow(), row.id])
+    resumed += Number(result.changes || result.affectedRows || 0) > 0 ? 1 : 0
+  }
+  return resumed
+}
+
+export async function runPeriodReviewDerivationOnce() {
+  const job = await claimPeriodReviewDerivationJob()
+  if (!job) return { claimed:false }
+  try {
+    if (job.target_type === 'personal_memory') {
+      if (!await isAiFeatureEnabled('experience_memory_enabled', job.user_id)) return pausePeriodReviewDerivationJob(job, 'experience_memory_disabled')
+      if (job.period_type === 'monthly' && !await isAiFeatureEnabled('memory_compression_enabled', job.user_id)) {
+        return pausePeriodReviewDerivationJob(job, 'memory_compression_disabled')
+      }
+      await createMemoryFromApprovedPeriodReview(job.period_case_id, job.user_id)
+    } else if (job.target_type === 'platform_experience') {
+      await createPlatformExperienceCandidateFromApprovedPeriodReview(job.period_case_id, job.user_id)
+    } else throw new Error('invalid_period_review_derivation_target')
+    const now = beijingNow()
+    await queryRun(`UPDATE period_review_derivation_jobs SET status = 'succeeded', last_error_code = NULL,
+      lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
+      WHERE id = ? AND lease_token = ?`, [now, now, job.id, job.lease_token])
+    return { claimed:true, status:'succeeded', jobId:Number(job.id), periodCaseId:Number(job.period_case_id) }
+  } catch (error) {
+    const exhausted = Number(job.attempt_count) >= Number(job.max_attempts)
+    const retryAt = exhausted ? null : afterSeconds(Math.min(3600, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
+    await queryRun(`UPDATE period_review_derivation_jobs SET status = ?, last_error_code = ?,
+      lease_token = NULL, lease_expires_at = NULL, next_attempt_at = ?, updated_at = ?
+      WHERE id = ? AND lease_token = ?`, [exhausted ? 'failed' : 'queued', safeError(error), retryAt, beijingNow(), job.id, job.lease_token])
+    return { claimed:true, status:exhausted ? 'failed' : 'retry_wait', jobId:Number(job.id), error:safeError(error) }
+  }
+}
+
+export async function retryPeriodReviewDerivation(periodCaseId, userId) {
+  const result = await withTransaction(async run => {
+    const [cases] = await run(`SELECT id, approved_version_id FROM period_review_cases
+      WHERE id = ? AND user_id = ? FOR UPDATE`, [periodCaseId, userId])
+    const reviewCase = cases[0]
+    if (!reviewCase || !reviewCase.approved_version_id) throw new Error('approved_period_review_required')
+    const [jobs] = await run(`SELECT * FROM period_review_derivation_jobs
+      WHERE period_case_id = ? AND period_version_id = ? LIMIT 1 FOR UPDATE`, [periodCaseId, reviewCase.approved_version_id])
+    if (!jobs[0]) throw new Error('period_review_derivation_not_found')
+    if (jobs[0].status === 'succeeded') return { queued:false, status:'succeeded', jobId:Number(jobs[0].id) }
+    const now = beijingNow()
+    await run(`UPDATE period_review_derivation_jobs SET status = 'queued', attempt_count = 0,
+      last_error_code = NULL, next_attempt_at = NULL, lease_token = NULL, lease_expires_at = NULL,
+      completed_at = NULL, updated_at = ? WHERE id = ?`, [now, jobs[0].id])
+    return { queued:true, status:'queued', jobId:Number(jobs[0].id) }
+  })
+  if (result.queued) requestPeriodReviewCycle()
+  return result
 }
 
 export async function retryPeriodReviewCase(periodCaseId, userId) {
@@ -1043,11 +1212,13 @@ export async function recoverExpiredPeriodReviewJobs() {
 
 export async function runPeriodReviewCycle() {
   const recoveredExpiredJobs = await recoverExpiredPeriodReviewJobs()
+  const resumedDerivationJobs = await resumePeriodReviewDerivationJobs()
   const dailyPreparation = await prepareEligibleDailyReviews()
   const dailyWorker = await runDailyReviewWorkerOnce()
   const monthlyPreparation = await prepareEligibleMonthlyReviews()
   const monthlyWorker = await runMonthlyReviewWorkerOnce()
-  return { recoveredExpiredJobs, dailyPreparation, dailyWorker, monthlyPreparation, monthlyWorker }
+  const derivationWorker = await runPeriodReviewDerivationOnce()
+  return { recoveredExpiredJobs, resumedDerivationJobs, dailyPreparation, dailyWorker, monthlyPreparation, monthlyWorker, derivationWorker }
 }
 
 export function startPeriodReviewWorker(intervalMs = 60_000) {

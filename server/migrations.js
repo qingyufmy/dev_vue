@@ -2565,6 +2565,52 @@ const migrations = [
         updated_at = NOW()
         WHERE is_deleted = 0 AND (review_status <> 'approved' OR anomaly_code = 'admin_rejected')`)
     }
+  },
+  {
+    id: '101_period_review_derivation_jobs',
+    up: async () => {
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_derivation_jobs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        period_case_id BIGINT NOT NULL,
+        period_version_id BIGINT NOT NULL,
+        user_id INT NOT NULL,
+        target_type VARCHAR(32) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 5,
+        next_attempt_at DATETIME DEFAULT NULL,
+        lease_token VARCHAR(64) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_period_review_derivation (period_case_id, period_version_id, target_type),
+        INDEX idx_period_review_derivation_claim (status, next_attempt_at, lease_expires_at, updated_at),
+        INDEX idx_period_review_derivation_user (user_id, status, updated_at)
+      )`)
+      await queryRun(`INSERT IGNORE INTO period_review_derivation_jobs
+        (period_case_id, period_version_id, user_id, target_type, status, attempt_count, max_attempts, completed_at, created_at, updated_at)
+        SELECT cases.id, cases.approved_version_id, cases.user_id,
+          CASE WHEN cases.strategy_scope = 'platform' THEN 'platform_experience' ELSE 'personal_memory' END,
+          CASE
+            WHEN cases.strategy_scope = 'platform' AND platform_item.id IS NOT NULL THEN 'succeeded'
+            WHEN cases.strategy_scope = 'private' AND (memory_item.id IS NOT NULL OR memory_summary.id IS NOT NULL) THEN 'succeeded'
+            ELSE 'queued'
+          END,
+          0, 5,
+          CASE
+            WHEN cases.strategy_scope = 'platform' AND platform_item.id IS NOT NULL THEN NOW()
+            WHEN cases.strategy_scope = 'private' AND (memory_item.id IS NOT NULL OR memory_summary.id IS NOT NULL) THEN NOW()
+            ELSE NULL
+          END,
+          NOW(), NOW()
+        FROM period_review_cases cases
+        LEFT JOIN platform_strategy_experience_items platform_item ON platform_item.period_review_version_id = cases.approved_version_id
+        LEFT JOIN experience_memory_items memory_item ON memory_item.period_review_version_id = cases.approved_version_id
+        LEFT JOIN experience_memory_summaries memory_summary ON memory_summary.period_review_version_id = cases.approved_version_id
+        WHERE cases.status = 'approved' AND cases.approved_version_id IS NOT NULL`)
+    }
   }
 ]
 

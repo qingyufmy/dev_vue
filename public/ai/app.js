@@ -2385,7 +2385,9 @@ function periodReviewProgressHtml(review) {
 
 function schedulePeriodReviewDetailPoll(review) {
   stopReviewDetailPolling();
-  if (!review || !["queued", "leased"].includes(review.job_status) || Number(review.current_version_id || 0)) return;
+  const generatingReview = review && ["queued", "leased"].includes(review.job_status) && !Number(review.current_version_id || 0);
+  const derivingMemory = review && ["queued", "leased"].includes(review.derivation_status);
+  if (!generatingReview && !derivingMemory) return;
   const caseId = Number(review.id), timezoneOffset = Number(review.timezone_offset_minutes || 180);
   state.reviewDetailJobKey = `${review.job_status}:${review.progress_stage}:${review.attempt_count}:${review.next_attempt_at || ''}`;
   state.reviewDetailPollTimer = setTimeout(async () => {
@@ -2393,10 +2395,12 @@ function schedulePeriodReviewDetailPoll(review) {
     try {
       const data = await api(`/api/ai/period-reviews/${caseId}/job-status`), job = { ...(data.job || {}), timezone_offset_minutes:timezoneOffset };
       const nextKey = `${job.job_status}:${job.progress_stage}:${job.attempt_count}:${job.next_attempt_at || ''}:${job.current_version_id || ''}`;
-      if (job.current_version_id || ["failed", "succeeded"].includes(job.job_status)) {
+      if ((generatingReview && (job.current_version_id || ["failed", "succeeded"].includes(job.job_status)))
+        || (derivingMemory && !["queued", "leased"].includes(job.derivation_status))) {
         await loadReviewMemory();
         await openPeriodReviewDetail(caseId, { silent:true });
-        if (job.current_version_id) toast(`${job.period_type === 'monthly' ? '月' : '日'}复盘已生成，等待确认`, "success");
+        if (generatingReview && job.current_version_id) toast(`${job.period_type === 'monthly' ? '月' : '日'}复盘已生成，等待确认`, "success");
+        if (derivingMemory && job.derivation_status === "succeeded") toast("复盘经验已沉淀完成", "success");
         return;
       }
       const progress = $("periodReviewProgress");
@@ -2450,6 +2454,14 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     ? `MT5 时间 ${review.period_key || '--'} 全月 · 月末结算后生成`
     : `MT5 时间 ${review.period_key || '--'} 00:00–24:00 · 已结束周期`;
   const nextPeriodHint = isMonthly ? "本月结束后的交易将进入下月复盘" : "本周期结束后的平仓将进入下一份日复盘";
+  const derivationLabels = { queued:"经验等待处理", leased:"正在沉淀经验", paused:"经验处理已暂停", failed:"经验处理失败", succeeded:"经验已沉淀" };
+  const derivationStatus = review.derivation_status || "";
+  const derivationClass = derivationStatus === "succeeded" ? "complete" : derivationStatus === "failed" ? "warning" : "";
+  const derivationDetail = derivationStatus === "paused"
+    ? "相关记忆功能当前已关闭，重新启用后会自动继续"
+    : derivationStatus === "failed" ? periodReviewFailureText(review.derivation_error_code)
+      : derivationStatus === "succeeded" ? (state.user?.role === "admin" ? "已生成平台经验候选" : "已写入个人记忆体系")
+        : "后台任务会自动完成，无需重复确认";
   const editableGroups = isMonthly
     ? [
       ["recurring_patterns", "重复出现的模式"], ["strengths", "稳定有效的做法"],
@@ -2472,6 +2484,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       <div><span>结论置信度</span><strong>${confidencePercent}%</strong><small>AI 对复盘结论的把握</small></div>
     </section>
     <div class="period-review-source ${review.evidence_status === 'complete' ? 'complete' : 'warning'}"><i data-lucide="${review.evidence_status === 'complete' ? 'shield-check' : 'triangle-alert'}" size="16"></i><div><strong>${sourceLabel}</strong><span>${escapeHtml(sourceDetail)}；${escapeHtml(nextPeriodHint)}</span></div></div>
+    ${review.status === 'approved' && derivationStatus ? `<div class="period-review-source ${derivationClass}"><i data-lucide="${derivationStatus === 'succeeded' ? 'brain-circuit' : derivationStatus === 'failed' ? 'circle-alert' : 'loader-circle'}" size="16"></i><div><strong>${escapeHtml(derivationLabels[derivationStatus] || derivationStatus)}</strong><span>${escapeHtml(derivationDetail)}</span></div>${derivationStatus === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry-derivation">重试经验处理</button>' : ''}</div>` : ''}
     ${current ? `<section class="period-review-editor">
       <div class="period-review-section-heading"><div><span class="review-section-kicker">核心结论</span><h3>${isMonthly ? '本月策略表现' : '当日策略表现'}</h3></div><span>版本 ${Number(current.version_no || 1)}</span></div>
       <label class="review-field"><span>复盘摘要</span><textarea data-period-review-field="period_summary" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(content.period_summary || '')}</textarea></label>
@@ -5866,6 +5879,11 @@ function bindEvents() {
           reviewAction.innerHTML = '<i data-lucide="loader-circle" size="14"></i>正在进入队列';
           await api(`/api/ai/period-reviews/${caseId}/retry`, { method:"POST" });
           toast("已进入生成队列，后台将立即开始处理", "success");
+        }
+        else if (action === "retry-derivation") {
+          reviewAction.disabled = true;
+          await api(`/api/ai/period-reviews/${caseId}/derivation/retry`, { method:"POST" });
+          toast("经验处理已重新进入队列", "success");
         }
         else if (action === "save") { syncPeriodReviewEditorFromFields(); const content = JSON.parse($("reviewContentEditor").value); const saved = await api(`/api/ai/period-reviews/${caseId}/edit`, { method:"POST", body:{ content, expected_version_id:versionId, change_note:"用户在周期复盘页面修改" } }); toast(`已保存为新版本 #${saved.versionNo}`,"success"); }
         else {
