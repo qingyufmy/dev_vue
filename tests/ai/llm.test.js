@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse } from '../../server/routes/ai/llm.js'
 
 describe('buildStrategyOutputFormat', () => {
   it('removes all pending-order fields from a market-only strategy', () => {
@@ -246,6 +246,30 @@ describe('requestJsonObject', () => {
       thinkingEnabled: true, reasoningEffort: 'max', messages: [],
     })
     expect(JSON.parse(mockFetch.mock.calls[0][1].body).thinking).toEqual({ type: 'enabled' })
+  })
+})
+
+describe('validateAiSignalResponse', () => {
+  const hold = {
+    signal_type: 'hold', entry_method: 'observe', confidence: 0.62,
+    recommended_volume: 0, analysis: '暂无优势', reasoning: '等待结构确认',
+  }
+
+  it('accepts a complete HOLD contract', () => {
+    expect(validateAiSignalResponse(hold, ['market'])).toBe(hold)
+  })
+
+  it('rejects missing fields and mismatched entry methods before normalization', () => {
+    expect(() => validateAiSignalResponse({ ...hold, entry_method: undefined }, ['market']))
+      .toThrow('ai_response_entry_method_mismatch')
+    expect(() => validateAiSignalResponse({ ...hold, signal_type: 'sell_stop_limit', entry_method: 'limit', recommended_volume: 0.01 }, ['stop_limit']))
+      .toThrow('ai_response_entry_method_mismatch')
+  })
+
+  it('rejects methods excluded by the selected strategy', () => {
+    expect(() => validateAiSignalResponse({
+      ...hold, signal_type: 'buy_limit', entry_method: 'limit', recommended_volume: 0.01,
+    }, ['market'])).toThrow('ai_response_invalid_signal_type')
   })
 })
 

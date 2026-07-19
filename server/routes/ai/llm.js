@@ -245,6 +245,35 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
   }
 }
 
+export function validateAiSignalResponse(value, allowedEntryMethods) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('ai_response_not_object')
+  const required = ['signal_type', 'entry_method', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
+  const missing = required.filter(key => !(key in value))
+  if (missing.length) throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
+
+  const methods = normalizeEntryMethods(allowedEntryMethods)
+  const allowedSignals = new Set(signalTypesForEntryMethods(methods))
+  const signalType = String(value.signal_type || '').trim().toLowerCase()
+  const entryMethod = String(value.entry_method || '').trim().toLowerCase()
+  if (!allowedSignals.has(signalType)) throw new Error(`ai_response_invalid_signal_type:${signalType || 'empty'}`)
+  const expectedMethod = signalType === 'hold' ? 'observe'
+    : signalType === 'buy' || signalType === 'sell' ? 'market'
+      : signalType.endsWith('_stop_limit') ? 'stop_limit'
+        : signalType.endsWith('_limit') ? 'limit' : 'stop'
+  if (entryMethod !== expectedMethod) throw new Error(`ai_response_entry_method_mismatch:${entryMethod || 'empty'}:${expectedMethod}`)
+  if (entryMethod !== 'observe' && !methods.includes(entryMethod)) throw new Error(`ai_response_entry_method_not_allowed:${entryMethod}`)
+
+  const confidence = Number(value.confidence)
+  const volume = Number(value.recommended_volume)
+  if (!Number.isFinite(confidence) || confidence <= 0 || confidence > 1) throw new Error('ai_response_invalid_confidence')
+  if (!Number.isFinite(volume) || volume < 0) throw new Error('ai_response_invalid_recommended_volume')
+  if (signalType === 'hold' && volume !== 0) throw new Error('ai_response_hold_volume_must_be_zero')
+  if (signalType !== 'hold' && volume <= 0) throw new Error('ai_response_trade_volume_required')
+  if (typeof value.analysis !== 'string' || !value.analysis.trim()) throw new Error('ai_response_analysis_required')
+  if (typeof value.reasoning !== 'string' || !value.reasoning.trim()) throw new Error('ai_response_reasoning_required')
+  return value
+}
+
 export async function maybeAiSignal(db, config, market, promptOverride) {
   if (!config || !config.api_key_encrypted) return aiFailureHold(market, 'missing_ai_configuration_or_key')
   const apiKey = config.api_key_encrypted
@@ -372,12 +401,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
         { role: 'user', content: renderedUserPrompt },
       ],
       usageContext,
+      validateObject: value => validateAiSignalResponse(value, config._allowed_entry_methods),
     })
-    const required = ['signal_type', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
-    if (!required.every(k => k in parsed)) {
-      const missing = required.filter(k => !(k in parsed))
-      throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
-    }
     parsed._inference_source = 'ai'
     return normalizeAiSignal(parsed, config, market)
   } catch (exc) {

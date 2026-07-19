@@ -128,7 +128,10 @@ export function timeframeIntervalMs(tf) {
 export function aiFailureHold(market, reason) {
   return {
     signal_type: 'hold',
-    confidence: 0.5,
+    // Zero is a UI sentinel for unavailable model confidence, not a measured
+    // market-confidence score. It prevents an inference error looking like a
+    // valid 50% HOLD conclusion.
+    confidence: 0,
     recommended_volume: 0.0,
     entry_method: 'observe',
     limit_price: null,

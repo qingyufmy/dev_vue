@@ -176,7 +176,7 @@ describe('aiFailureHold', () => {
     const market = { symbol: 'XAUUSD', timeframe: 'M5' }
     const result = aiFailureHold(market, 'test_error')
     expect(result.signal_type).toBe('hold')
-    expect(result.confidence).toBe(0.5)
+    expect(result.confidence).toBe(0)
     expect(result._inference_source).toBe('ai_error_hold')
   })
 })
