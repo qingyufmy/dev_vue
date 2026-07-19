@@ -266,13 +266,14 @@ describe('recovery and reconciliation', () => {
   })
 
   it('commits an uncertain intent only when its safe comment is observed', async () => {
-    intent = { id: 1, user_id: 1, status: 'uncertain', bridge_command_ref: 'AI-1', symbol: 'XAUUSD' }
+    intent = { id: 1, user_id: 1, status: 'uncertain', bridge_command_ref: 'AI-1', symbol: 'XAUUSD', created_at: '2026-07-19 10:00:00' }
     reservation = { order_intent_id: 1, status: 'active' }
     mockQueryAll.mockResolvedValue([intent])
-    mockBridge.mockImplementation(async (_userId, action) => action === 'pending_list'
-      ? { orders: [{ ticket: 555, comment: 'AI-1' }] }
-      : action === 'positions' ? { positions: [] } : { history: [] })
+    mockBridge.mockResolvedValue({ status: 'success', found: true, kind: 'pending', ticket: 555, comment: 'AI-1' })
     await expect(reconcileUncertainOrderIntents({ bridge: mockBridge })).resolves.toBe(1)
+    expect(mockBridge).toHaveBeenCalledTimes(1)
+    expect(mockBridge.mock.calls[0][1]).toBe('order_lookup')
+    expect(mockBridge.mock.calls[0][2]).not.toHaveProperty('page_size')
     expect(intent.status).toBe('succeeded')
     expect(intent.trade_ticket).toBeNull()
     expect(intent.pending_ticket).toBe('555')

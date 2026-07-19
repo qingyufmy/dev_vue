@@ -433,16 +433,13 @@ export async function recoverExpiredOrderIntentLeases() {
   return recovered
 }
 
-function collectOrders(result) {
-  const candidates = [result?.orders, result?.pending_list, result?.positions, result?.deals, result?.history, result?.trades]
-  return candidates.flatMap(value => Array.isArray(value) ? value : [])
-}
-
-function matchesIntent(order, intent) {
-  const comment = String(order?.comment || order?.order_comment || '')
-  if (intent.bridge_command_ref && comment.includes(intent.bridge_command_ref)) return true
-  const ticket = String(order?.ticket ?? order?.order ?? order?.position_ticket ?? '')
-  return Boolean(ticket && (ticket === String(intent.trade_ticket || '') || ticket === String(intent.pending_ticket || '')))
+function reconciliationLookbackSeconds(intent, nowMs = Date.now()) {
+  const raw = String(intent?.created_at || intent?.updated_at || '').trim()
+  const normalized = raw && !/[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+    ? `${raw.replace(' ', 'T')}+08:00` : raw
+  const createdMs = Date.parse(normalized)
+  if (!Number.isFinite(createdMs)) return 48 * 60 * 60
+  return Math.max(6 * 60 * 60, Math.min(10 * 365 * 24 * 60 * 60, Math.ceil((nowMs - createdMs) / 1000) + 60 * 60))
 }
 
 export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit = 50 } = {}) {
@@ -455,16 +452,16 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
     let found = null
     let foundKind = null
     try {
-      const [pending, positions, history] = await Promise.all([
-        bridge(intent.user_id, 'pending_list', { symbol: intent.symbol }, { noFallback: true }),
-        bridge(intent.user_id, 'positions', { symbol: intent.symbol }, { noFallback: true }),
-        bridge(intent.user_id, 'history', { page: 1, page_size: 500 }, { noFallback: true }),
-      ])
-      const pendingMatch = collectOrders(pending).find(order => matchesIntent(order, intent))
-      const tradeMatch = [...collectOrders(positions), ...collectOrders(history)]
-        .find(order => matchesIntent(order, intent))
-      found = pendingMatch || tradeMatch
-      foundKind = pendingMatch ? 'pending' : (tradeMatch ? 'trade' : null)
+      const lookup = await bridge(intent.user_id, 'order_lookup', {
+        symbol: intent.symbol,
+        bridge_command_ref: intent.bridge_command_ref,
+        trade_ticket: intent.trade_ticket,
+        pending_ticket: intent.pending_ticket,
+        lookback_seconds: reconciliationLookbackSeconds(intent),
+      }, { noFallback: true })
+      if (lookup?.status !== 'success' || !lookup?.found) continue
+      found = lookup
+      foundKind = lookup.kind === 'pending' ? 'pending' : 'trade'
     } catch {
       continue
     }

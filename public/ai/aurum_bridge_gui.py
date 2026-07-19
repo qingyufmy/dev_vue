@@ -1223,6 +1223,50 @@ class BridgeWorker(QThread):
                         "account_trade_allowed": acc.trade_allowed, "account_trade_expert": acc.trade_expert,
                         "login": acc.login, "server": acc.server, "balance": acc.balance, "equity": acc.equity}
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
+            elif action == "order_lookup":
+                # Reconcile an uncertain send locally. Only the matching order
+                # is returned to the server; positions, pending orders and the
+                # account's historical deal list never cross the WebSocket.
+                requested_symbol = str(params.get("symbol") or "").strip()
+                symbol = self._resolve_symbol(requested_symbol) if requested_symbol else ""
+                command_ref = str(params.get("bridge_command_ref") or "").strip()
+                expected_tickets = {
+                    str(value) for value in (params.get("trade_ticket"), params.get("pending_ticket"))
+                    if value not in (None, "", 0, "0")
+                }
+                try:
+                    lookback_seconds = max(3600, min(int(params.get("lookback_seconds") or 172800), 315360000))
+                except (TypeError, ValueError):
+                    lookback_seconds = 172800
+
+                def compact_match(row, kind):
+                    ticket = str(getattr(row, "ticket", "") or getattr(row, "order", "") or "")
+                    comment = str(getattr(row, "comment", "") or "")
+                    row_symbol = str(getattr(row, "symbol", "") or "")
+                    if symbol and row_symbol != symbol: return None
+                    if int(getattr(row, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC: return None
+                    if not ((command_ref and command_ref in comment) or (ticket and ticket in expected_tickets)): return None
+                    return {"status": "success", "found": True, "kind": kind,
+                            "ticket": int(ticket) if ticket.isdigit() else ticket,
+                            "symbol": row_symbol, "comment": comment}
+
+                active_orders = (self.mt5.orders_get(symbol=symbol) or []) if symbol else (self.mt5.orders_get() or [])
+                for row in active_orders:
+                    matched = compact_match(row, "pending")
+                    if matched: return matched
+                active_positions = (self.mt5.positions_get(symbol=symbol) or []) if symbol else (self.mt5.positions_get() or [])
+                for row in active_positions:
+                    matched = compact_match(row, "trade")
+                    if matched: return matched
+                date_to = datetime.now(timezone.utc) + timedelta(minutes=5)
+                date_from = date_to - timedelta(seconds=lookback_seconds)
+                historical = self.mt5.history_orders_get(date_from, date_to)
+                if historical is None:
+                    return {"status": "error", "message": f"history_orders_get failed: {self.mt5.last_error()}"}
+                for row in reversed(historical):
+                    matched = compact_match(row, "trade")
+                    if matched: return matched
+                return {"status": "success", "found": False}
             elif action == "risk_snapshot":
                 return self._risk_snapshot(params)
             elif action == "history":
