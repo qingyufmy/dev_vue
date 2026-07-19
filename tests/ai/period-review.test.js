@@ -72,6 +72,9 @@ describe('daily review grouping', () => {
     expect(isTerminalTradeEvidenceReason('inference_snapshot_incomplete,execution_deals_missing')).toBe(false)
     expect(samePeriodOutcomeSet([{ id: 8 }, { id: 3 }, { id: 8 }], [{ outcome_id: 3 }, { outcome_id: 8 }])).toBe(true)
     expect(samePeriodOutcomeSet([{ id: 3 }, { id: 8 }, { id: 9 }], [{ outcome_id: 3 }, { outcome_id: 8 }])).toBe(false)
+    expect(shouldRefreshDailyReviewCase({ evidence_status:'incomplete', evidence_reason:'historical_prompt_missing',
+      updated_at:'2026-07-01 00:00:00' }, { outcomes:[{ id:3 }] }, [{ outcome_id:3 }], Date.parse('2026-07-19T00:00:00Z')))
+      .toEqual({ refresh:false, reason:'terminal_evidence_incomplete' })
   })
 
   it('rechecks incomplete evidence and detects late outcomes without polling settled reviews forever', () => {
@@ -233,6 +236,10 @@ describe('period market evidence', () => {
     expect(requiredReviewCandleCount(start, end, 'H1')).toBe(226)
     expect(isReviewGridAligned(start + 4 * 3600000, start, 'H4')).toBe(true)
     expect(isReviewGridAligned(start + 3 * 3600000, start, 'H4')).toBe(false)
+    const evidenceSource = readFileSync(new URL('../../server/routes/ai/period-market-evidence.js', import.meta.url), 'utf8')
+    const bridgeSource = readFileSync(new URL('../../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(evidenceSource).toContain('start_utc_msc:startUtcMs - CHAN_LOOKBACK_BARS * interval')
+    expect(bridgeSource).toContain('copy_rates_range')
   })
 
   it('detects a long weekday cache gap but tolerates normal maintenance and weekend closure', () => {

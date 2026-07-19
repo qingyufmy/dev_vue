@@ -36,9 +36,25 @@ describe('platform market data', () => {
 
   it('does not coalesce review hydration with a smaller live request', () => {
     const live = buildRatesRequestKey(7, 1, { symbol:'XAUUSD', timeframe:'M1', count:1000 })
-    const review = buildRatesRequestKey(7, 1, { symbol:'XAUUSD', timeframe:'M1', count:1642, review_window:true })
+    const review = buildRatesRequestKey(7, 1, { symbol:'XAUUSD', timeframe:'M1', count:1642, review_window:true,
+      start_utc_msc:1784185200000, end_utc_msc:1784271600000 })
     expect(live).not.toBe(review)
-    expect(review).toContain(':review:1642')
+    expect(review).toContain(':review:1784185200000-1784271600000:1642')
+  })
+
+  it('hydrates an exact historical review range without dropping its final closed bar', async () => {
+    const start = rate(0, 2000).time_utc_msc
+    const end = rate(2, 2002).time_utc_msc + 60000
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:true,
+      rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:20,
+      review_window:true, start_utc_msc:start, end_utc_msc:end })
+    expect(mt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({
+      start_utc_msc:start, end_utc_msc:end,
+    }), expect.objectContaining({ timeoutMs:30000, noFallback:true }))
+    expect(result.rates.map(item => item.close)).toEqual([2000, 2001, 2002])
+    expect(result.market_meta).toMatchObject({ source:'platform_admin_bridge_range', cache_layer:'exact_range', closed_candles_written:3 })
+    expect(redis.set).not.toHaveBeenCalled()
   })
 
   it('persists only closed bars and returns the current bar as uncached live data', async () => {

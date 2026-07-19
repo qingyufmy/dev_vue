@@ -190,6 +190,34 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   const count = Math.min(countLimit, Math.max(2, Number(params.count) || 100))
   if (platformUserId) {
     const clock = getPlatformMarketClockState(platformUserId)
+    const rangeStartUtcMs = Number(params.start_utc_msc)
+    const rangeEndUtcMs = Number(params.end_utc_msc)
+    const exactReviewRange = params.review_window === true && Number.isFinite(rangeStartUtcMs)
+      && Number.isFinite(rangeEndUtcMs) && rangeStartUtcMs > 0 && rangeEndUtcMs > rangeStartUtcMs
+    if (exactReviewRange) {
+      const response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count,
+        start_utc_msc:rangeStartUtcMs, end_utc_msc:rangeEndUtcMs }, { timeoutMs:30000, noFallback:true })
+      if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
+        const effectiveClock = {
+          ...clock,
+          timezone_offset_minutes:response.rates.at(-1)?.timezone_offset_minutes ?? clock.timezone_offset_minutes,
+          clock_status:response.rates.at(-1)?.clock_status || clock.clock_status,
+          clock_residual_ms:response.rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
+        }
+        const closedRates = response.rates.map(rate => validRate(rate, effectiveClock.timezone_offset_minutes))
+          .filter(rate => rate && rate.time_utc_msc >= rangeStartUtcMs && rate.time_utc_msc < rangeEndUtcMs)
+        const sourceId = await ensureSource(platformUserId, effectiveClock, response.rates.at(-1))
+        const brokerSymbol = response.symbol || symbol
+        const persistedCount = await persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates)
+        return { ...response, rates:closedRates, market_meta:{
+          source:'platform_admin_bridge_range', source_user_id:platformUserId, source_id:sourceId,
+          broker_symbol:brokerSymbol, timeframe, timezone_offset_minutes:effectiveClock.timezone_offset_minutes,
+          clock_status:effectiveClock.clock_status, closed_candles_persisted:closedRates.length,
+          closed_candles_written:persistedCount, cache_layer:'exact_range', live_candle_cached:false,
+          range_start_utc_msc:rangeStartUtcMs, range_end_utc_msc:rangeEndUtcMs,
+        } }
+      }
+    }
     const source = await findSource(platformUserId, clock).catch(() => ({ id: null }))
     const standardSymbol = stripBrokerSuffix(symbol)
     const structureAnchor = source.id ? await queryOne(`SELECT anchor_time_utc_msc, last_confirmed_segment_time_utc_msc
@@ -249,7 +277,10 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       }
     }
   }
-  const fallback = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count }, { timeoutMs: 15000, noFallback: true })
+  const fallback = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count,
+    ...(params.review_window === true && Number(params.start_utc_msc) > 0 && Number(params.end_utc_msc) > Number(params.start_utc_msc)
+      ? { start_utc_msc:Number(params.start_utc_msc), end_utc_msc:Number(params.end_utc_msc) } : {}) },
+  { timeoutMs: params.review_window === true ? 30000 : 15000, noFallback: true })
   if (fallback && typeof fallback === 'object') fallback.market_meta = {
     source: 'user_bridge_fallback', source_user_id: requestUserId, broker_symbol: fallback.symbol || symbol,
     timeframe, timezone_offset_minutes: fallback.rates?.at(-1)?.timezone_offset_minutes ?? null,
@@ -288,7 +319,8 @@ export function buildRatesRequestKey(requestUserId, platformUserId, params = {})
   const reviewWindow = params.review_window === true
   const countLimit = reviewWindow ? 5000 : 1000
   const count = Math.min(countLimit, Math.max(2, Number(params.count) || 100))
-  return `${platformUserId || `user-${requestUserId}`}:${String(params.symbol || '').trim()}:${String(params.timeframe || 'M30').toUpperCase()}:${reviewWindow ? 'review' : 'live'}:${count}`
+  const range = reviewWindow ? `${Number(params.start_utc_msc) || 0}-${Number(params.end_utc_msc) || 0}` : 'current'
+  return `${platformUserId || `user-${requestUserId}`}:${String(params.symbol || '').trim()}:${String(params.timeframe || 'M30').toUpperCase()}:${reviewWindow ? 'review' : 'live'}:${range}:${count}`
 }
 
 export async function getPlatformMarketStatus() {

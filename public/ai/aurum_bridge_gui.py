@@ -1064,7 +1064,22 @@ class BridgeWorker(QThread):
                           "M15": self.mt5.TIMEFRAME_M15, "M30": self.mt5.TIMEFRAME_M30,
                           "H1": self.mt5.TIMEFRAME_H1, "H4": self.mt5.TIMEFRAME_H4, "D1": self.mt5.TIMEFRAME_D1}
                 tf = tf_map.get(params.get("timeframe", "M30"), self.mt5.TIMEFRAME_M30)
-                rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, int(params.get("count", 100)))
+                count = min(5000, max(2, int(params.get("count", 100))))
+                start_utc_msc = int(params.get("start_utc_msc") or 0)
+                end_utc_msc = int(params.get("end_utc_msc") or 0)
+                range_complete = bool(start_utc_msc > 0 and end_utc_msc > start_utc_msc)
+                if range_complete:
+                    # This broker exposes MT5 epoch values shifted by the
+                    # calibrated server offset. Query the matching raw range,
+                    # then _clock_fields normalizes every returned bar to UTC.
+                    offset_msc = int(self._mt5_timezone_offset_minutes or 0) * 60000
+                    raw_start = datetime.fromtimestamp((start_utc_msc + offset_msc) / 1000.0, timezone.utc)
+                    raw_end = datetime.fromtimestamp((end_utc_msc + offset_msc) / 1000.0, timezone.utc)
+                    rates = self.mt5.copy_rates_range(symbol, tf, raw_start, raw_end)
+                    if rates is not None and len(rates) > count:
+                        rates = rates[-count:]
+                else:
+                    rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, count)
                 if rates is not None and len(rates) > 0:
                     tick = self.mt5.symbol_info_tick(symbol)
                     if tick: self._calibrate_mt5_clock(tick)
@@ -1072,7 +1087,8 @@ class BridgeWorker(QThread):
                             "low": float(r[3]), "close": float(r[4]), "tick_volume": int(r[5]),
                             "spread": int(r[6]) if len(r) > 6 else 0} for r in rates]
                     return {"status": "success", "symbol": symbol, "timeframe": params.get("timeframe","M30"),
-                            "count": len(out), "rates": out, "source": "mt5"}
+                            "count": len(out), "rates": out, "source": "mt5", "range_complete": range_complete,
+                            "range_start_utc_msc": start_utc_msc or None, "range_end_utc_msc": end_utc_msc or None}
                 return {"status": "success", "symbol": symbol, "rates": [], "source": "mt5"}
             elif action == "quote":
                 symbol = self._resolve_symbol(params.get("symbol"))

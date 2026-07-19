@@ -45,6 +45,7 @@ export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], as
   if (!samePeriodOutcomeSet(group?.outcomes || [], sources)) return { refresh:true, reason:'outcome_set_changed' }
   const elapsed = Math.max(0, Number(asOfUtcMs) - beijingDateTimeMs(reviewCase.updated_at))
   if (reviewCase.evidence_status !== 'complete') {
+    if (isTerminalTradeEvidenceReason(reviewCase.evidence_reason)) return { refresh:false, reason:'terminal_evidence_incomplete' }
     return { refresh:elapsed >= DAILY_INCOMPLETE_RECHECK_MS, reason:elapsed >= DAILY_INCOMPLETE_RECHECK_MS ? 'incomplete_recheck_due' : 'incomplete_recheck_wait' }
   }
   if (!reviewCase.current_version_id) return { refresh:true, reason:'draft_missing' }
@@ -341,15 +342,31 @@ async function latestMt5Clock() {
 }
 
 async function eligibleOutcomeRows(limit) {
-  return queryAll(`SELECT so.*, snap.strategy_id, snap.strategy_version, snap.strategy_scope,
+  const batchLimit = Math.min(2000, Math.max(2, Number(limit || 500)))
+  const backlogLimit = Math.max(1, Math.ceil(batchLimit * 0.7))
+  const recentLimit = Math.max(1, batchLimit - backlogLimit)
+  const select = `SELECT so.*, snap.strategy_id, snap.strategy_version, snap.strategy_scope,
       u.role AS user_role,
       (SELECT sod.raw_json FROM signal_outcome_deals sod WHERE sod.outcome_id = so.id ORDER BY sod.deal_time DESC, sod.id DESC LIMIT 1) AS last_deal_raw_json
     FROM signal_outcomes so
     JOIN users u ON u.id = so.user_id
-    JOIN inference_snapshots snap ON snap.id = (SELECT MAX(s2.id) FROM inference_snapshots s2 WHERE s2.signal_id = so.signal_id)
-    WHERE so.status = 'closed' AND so.review_eligible_at IS NOT NULL
-      AND ((snap.strategy_scope = 'private' AND u.role <> 'admin') OR (snap.strategy_scope = 'platform' AND u.role = 'admin'))
-    ORDER BY so.review_eligible_at DESC LIMIT ?`, [Math.min(2000, Math.max(1, Number(limit || 500)))])
+    JOIN inference_snapshots snap ON snap.id = (SELECT MAX(s2.id) FROM inference_snapshots s2 WHERE s2.signal_id = so.signal_id)`
+  const eligible = `so.status = 'closed' AND so.review_eligible_at IS NOT NULL
+    AND ((snap.strategy_scope = 'private' AND u.role <> 'admin') OR (snap.strategy_scope = 'platform' AND u.role = 'admin'))`
+  const [backlog, recent] = await Promise.all([
+    queryAll(`${select} WHERE ${eligible} AND (
+      NOT EXISTS (SELECT 1 FROM period_review_sources prs WHERE prs.outcome_id = so.id)
+      OR EXISTS (SELECT 1 FROM period_review_sources prs
+        JOIN period_review_cases cases ON cases.id = prs.period_case_id
+        WHERE prs.outcome_id = so.id AND cases.period_type = 'daily' AND cases.evidence_status <> 'complete'
+          AND cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+          AND COALESCE(cases.evidence_reason, '') NOT IN ('inference_snapshot_incomplete','historical_prompt_missing'))
+      ) ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]),
+    queryAll(`${select} WHERE ${eligible} ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?`, [recentLimit]),
+  ])
+  const merged = new Map()
+  for (const row of [...backlog, ...recent]) merged.set(Number(row.id), row)
+  return [...merged.values()]
 }
 
 async function prepareTradeEvidence(outcome) {

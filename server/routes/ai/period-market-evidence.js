@@ -109,7 +109,8 @@ async function loadReviewWindow(userId, symbol, timeframe, startUtcMs, endUtcMs)
   let marketMeta = existingSource ? { source:'mysql_period_cache', source_id:sourceId,
     timezone_offset_minutes:existingSource.timezone_offset_minutes, clock_status:existingSource.clock_status } : {}
   if (!coverage.complete) {
-    const hydrated = await platformRates(userId, { symbol, timeframe, count, review_window:true })
+    const hydrated = await platformRates(userId, { symbol, timeframe, count, review_window:true,
+      start_utc_msc:startUtcMs - CHAN_LOOKBACK_BARS * interval, end_utc_msc:endUtcMs })
     sourceId = Number(hydrated?.market_meta?.source_id)
     if (hydrated?.status === 'error' || !sourceId) throw new Error(hydrated?.error || hydrated?.message || 'period_market_source_unavailable')
     const hydratedSource = await queryOne('SELECT broker_server FROM market_data_sources WHERE id = ?', [sourceId])
