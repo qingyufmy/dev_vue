@@ -228,7 +228,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('北京时间（UTC+8）')
     expect(html).toContain('伦敦时间（UTC+0，夏令时 UTC+1）')
     expect(html).toContain('纽约时间（UTC-5，夏令时 UTC-4）')
-    expect(app).toContain('subscription?.schedule_timezone || "Etc/GMT-3"')
+    expect(app).toContain('const defaultScheduleTimezone = syncMt5ScheduleTimezoneOption();')
+    expect(app).toContain('subscription?.schedule_timezone || defaultScheduleTimezone')
+    expect(app).toContain('return "Etc/GMT-3"')
   })
 
   it('uses one strategy control plane and removes the legacy manual preference editor', () => {
