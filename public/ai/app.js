@@ -1973,7 +1973,7 @@ const RISK_SAFETY_LABELS = {
   locked:"系统锁定", locked_true:"系统强制开启",
 };
 const RISK_ROLLOUT_LABELS = {
-  ownership:"策略与账户归属校验", entitlement:"会员权限校验", account_review:"账户审核状态校验",
+  ownership:"策略与账户归属校验", entitlement:"会员权限校验",
   kill_switch:"紧急停止开关", data_complete:"风控数据完整性", idempotency:"重复下单幂等保护", volume_bounds:"下单手数硬边界",
   "R1.1_SYMBOL_NOT_ALLOWED":"交易品种白名单", "R1.4_STOP_LOSS_TOO_FAR":"止损距离上限", "R1.5_RR_TOO_LOW":"最低盈亏比",
   "R1.7_PENDING_DEVIATION":"挂单价格偏离", "R2.1_DIRECTIONAL_EXPOSURE":"同向持仓敞口", "R2.2_MIN_OPEN_INTERVAL":"最小开仓间隔",
@@ -2008,7 +2008,7 @@ const RISK_DECISION_LABELS = {
   "R3.3_MAX_DRAWDOWN":"达到最大回撤上限", "R3.4_MARGIN_LEVEL":"保证金水平低于要求",
   "R3.4_NOTIONAL_DATA_INCOMPLETE":"名义敞口数据不完整", "R3.4_NOTIONAL_EXPOSURE":"名义敞口超过上限",
   "R3_ACCOUNT_HALTED":"账户风控已暂停", "R3_RISK_DATA_INCOMPLETE":"账户风险数据不完整",
-  "R6_ACCOUNT_NOT_FOUND":"未找到交易账户", "R6_ACCOUNT_REVIEW_REQUIRED":"交易账户尚未通过审核",
+  "R6_ACCOUNT_NOT_FOUND":"未找到交易账户",
   "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
   "R6_USER_KILL_SWITCH":"账户紧急停止已开启", "R6.4_OBSERVATION_BELOW_MINIMUM":"观察期手数低于最小可交易手数",
   "PX.3_BROKER_SLIPPAGE":"已应用经纪商滑点上限",
@@ -2620,10 +2620,10 @@ async function saveGlobalFeatureFlags() {
 
 function renderAccountExceptions(accounts) {
   const host = $("accountExceptionList"); if (!host) return;
-  const reasonLabels = { duplicate_account_binding:"同一交易账户已绑定其他用户", admin_rejected:"管理员已冻结", frozen:"账户已冻结", paused:"账户已暂停" };
+  const reasonLabels = { duplicate_account_binding:"同一交易账户已绑定其他用户", frozen:"账户已冻结", paused:"账户已暂停" };
   host.innerHTML = accounts.length ? accounts.map(account => {
     const reason = reasonLabels[account.anomaly_code] || reasonLabels[account.observe_status] || account.anomaly_code || "身份状态异常";
-    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.login_account)} <span class="status-chip danger">${escapeHtml(reason)}</span></div><div class="workspace-row-meta"><span>${escapeHtml(account.broker_server)}</span><span>验证：${escapeHtml(account.review_status)}</span><span>账户状态：${escapeHtml(account.observe_status)}</span><span>首次验证：${escapeHtml(account.first_verified_at || '--')}</span></div></div><div class="workspace-row-actions"><button class="btn btn-primary btn-sm" data-account-review="approve" data-account-id="${account.id}">解除异常</button><button class="btn btn-danger btn-sm" data-account-review="reject" data-account-id="${account.id}">冻结账户</button></div></article>`;
+    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.login_account)} <span class="status-chip danger">${escapeHtml(reason)}</span></div><div class="workspace-row-meta"><span>${escapeHtml(account.broker_server)}</span><span>账户状态：${escapeHtml(account.observe_status)}</span><span>首次验证：${escapeHtml(account.first_verified_at || '--')}</span></div></div></article>`;
   }).join("") : '<div class="empty-state"><strong>没有异常账户</strong><span>普通账户已由 Bridge 自动完成身份验证。</span></div>';
 }
 
@@ -5704,7 +5704,6 @@ function bindEvents() {
     const memoryTier = event.target.closest("[data-memory-tier]");
     const platformExperienceAction = event.target.closest("[data-platform-experience-action]");
     const platformPolicySave = event.target.closest("[data-platform-policy-save]");
-    const accountReview = event.target.closest("[data-account-review]");
     const riskSave = event.target.closest("[data-risk-save]");
     const killSwitch = event.target.closest("[data-kill-switch]");
     const strategyAction = event.target.closest("[data-strategy-action]");
@@ -5867,11 +5866,6 @@ function bindEvents() {
         toast("平台经验模式已保存", "success"); await loadReviewMemory();
       } catch (error) { toast(error.message,"error"); }
       return;
-    }
-    if (accountReview) {
-      const approved = accountReview.dataset.accountReview === "approve"; const reason = prompt(approved ? "请输入解除账户异常的依据" : "请输入冻结账户的原因"); if (!reason) return;
-      try { await api(`/api/ai/admin/accounts/${Number(accountReview.dataset.accountId)}/review`, { method:"POST", body:{ approved, reason } }); toast(approved ? "账户异常已解除" : "账户已冻结","success"); await loadAdminRiskCenter(); }
-      catch (error) { toast(error.message,"error"); } return;
     }
     if (killSwitch) {
       const enabled = killSwitch.dataset.enabled === "1";

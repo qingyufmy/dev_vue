@@ -281,7 +281,7 @@ describe('identity and platform permissions', () => {
     expect(result).toEqual({ accountId: 3, switched: false, verified: false, anomalyCode: 'duplicate_account_binding' })
   })
 
-  it('does not let a Bridge reconnect clear an administrator rejection', async () => {
+  it('clears legacy administrator-review state after Bridge identity verification', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
       if (sql.startsWith('SELECT * FROM trading_accounts')) return [[{
@@ -293,10 +293,10 @@ describe('identity and platform permissions', () => {
       return [{ affectedRows: 1 }, []]
     }))
     const result = await syncTradingAccountIdentity(2, { server: 'Demo', login: 123 })
-    expect(result).toEqual({ accountId: 7, switched: false, verified: false, anomalyCode: 'admin_rejected' })
+    expect(result).toEqual({ accountId: 7, switched: false, verified: true, anomalyCode: null })
     const accountUpdate = writes.find(write => write.sql.includes('first_verified_at = COALESCE'))
-    expect(accountUpdate.params[0]).toBe('rejected')
-    expect(accountUpdate.params[1]).toBe('frozen')
+    expect(accountUpdate.params[0]).toBe('approved')
+    expect(accountUpdate.params[1]).toBe('observing')
   })
 
   it('only admins can clear the global kill switch', async () => {

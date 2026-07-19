@@ -2550,6 +2550,21 @@ const migrations = [
         WHERE snapshot_row.signal_id IS NOT NULL AND signal_row.id IS NULL
           AND outcome_row.id IS NULL AND review_row.id IS NULL`)
     }
+  },
+  {
+    id: '100_remove_account_review_gate',
+    up: async () => {
+      await queryRun(`UPDATE trading_accounts SET review_status = 'approved',
+        observe_status = CASE
+          WHEN anomaly_code = 'admin_rejected' AND identity_verified_at IS NULL THEN 'unverified'
+          WHEN anomaly_code = 'admin_rejected' AND observed_until > NOW() THEN 'observing'
+          WHEN anomaly_code = 'admin_rejected' THEN 'active'
+          ELSE observe_status
+        END,
+        anomaly_code = CASE WHEN anomaly_code = 'admin_rejected' THEN NULL ELSE anomaly_code END,
+        updated_at = NOW()
+        WHERE is_deleted = 0 AND (review_status <> 'approved' OR anomaly_code = 'admin_rejected')`)
+    }
   }
 ]
 

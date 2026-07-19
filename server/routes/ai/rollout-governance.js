@@ -9,11 +9,11 @@ export const AI_FEATURE_KEYS = [
 ]
 
 export const FORCED_ENFORCE_RULES = new Set([
-  'ownership', 'entitlement', 'account_review', 'kill_switch', 'data_complete', 'idempotency', 'volume_bounds',
+  'ownership', 'entitlement', 'kill_switch', 'data_complete', 'idempotency', 'volume_bounds',
 ])
 
 const FORCED_RUNTIME_PATTERNS = [
-  /^R5_/, /^R6_ACCOUNT_NOT_FOUND$/, /^R6_ACCOUNT_REVIEW_REQUIRED$/, /^R6_ACCOUNT_PAUSED$/,
+  /^R5_/, /^R6_ACCOUNT_NOT_FOUND$/, /^R6_ACCOUNT_PAUSED$/,
   /^R6_(GLOBAL|USER)_KILL_SWITCH$/, /^R3_RISK_DATA_INCOMPLETE$/,
   /^R3_ACCOUNT_HALTED$/,
   /^R3\.4_NOTIONAL_DATA_INCOMPLETE$/, /^R1_INSTRUMENT_DATA_INCOMPLETE$/,

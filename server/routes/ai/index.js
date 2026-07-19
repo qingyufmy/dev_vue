@@ -25,8 +25,7 @@ import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelP
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
-  listSubscriptions, createSubscription, updateSubscription, deleteSubscription,
-  adminReviewTradingAccount } from './strategy-ownership.js'
+  listSubscriptions, createSubscription, updateSubscription, deleteSubscription } from './strategy-ownership.js'
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
@@ -377,8 +376,7 @@ router.get('/ai/admin/risk-center', authMiddleware, async (req, res) => {
     const exceptions = await queryAll(`SELECT ta.*, u.nickname AS user_nickname, u.email AS user_email
       FROM trading_accounts ta JOIN users u ON u.id = ta.user_id
       WHERE ta.is_deleted = 0 AND (
-        ta.anomaly_code IN ('duplicate_account_binding', 'admin_rejected')
-        OR ta.review_status = 'rejected' OR ta.observe_status IN ('frozen', 'paused')
+        ta.anomaly_code = 'duplicate_account_binding' OR ta.observe_status IN ('frozen', 'paused')
       ) ORDER BY ta.updated_at DESC LIMIT 500`)
     const global = await queryAll('SELECT global_kill_switch, reason, changed_by, updated_at FROM global_risk_control WHERE id = 1 LIMIT 1')
     let set = await queryAll("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")
@@ -429,15 +427,6 @@ router.put('/ai/admin/risk-center', authMiddleware, async (req, res) => {
     })
     res.json({ ok: true, result })
   } catch (error) { reviewError(res, error) }
-})
-
-router.post('/ai/admin/accounts/:id/review', authMiddleware, async (req, res) => {
-  try {
-    const account = await adminReviewTradingAccount(Number(req.params.id), req.user.id, req.user.role, req.body || {})
-    await reconcileAutoSchedulers()
-    res.json({ ok: true, account })
-  }
-  catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/reviews', authMiddleware, async (req, res) => {
@@ -656,7 +645,6 @@ export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
 
 export { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, getTradingAccountById, createTradingAccount, updateTradingAccount, deleteTradingAccount,
-  adminReviewTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription,
   adminListUserStrategies, adminListUserSubscriptions, getSubscriptionWithContext } from './strategy-ownership.js'
 

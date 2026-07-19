@@ -196,12 +196,11 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
     const conflicts = (await run(`SELECT id, user_id FROM trading_accounts
       WHERE user_id <> ? AND UPPER(broker_server) = ? AND login_account = ? AND is_deleted = 0 FOR UPDATE`,
     [userId, serverKey, login]))[0]
-    const adminRejected = matched?.review_status === 'rejected' || matched?.anomaly_code === 'admin_rejected'
-    const adminPaused = !adminRejected && matched?.observe_status === 'paused'
-    const anomalyCode = adminRejected ? 'admin_rejected' : conflicts.length ? 'duplicate_account_binding'
+    const adminPaused = matched?.observe_status === 'paused' && matched?.anomaly_code !== 'admin_rejected'
+    const anomalyCode = conflicts.length ? 'duplicate_account_binding'
       : adminPaused ? (matched.anomaly_code || 'account_paused') : null
-    const reviewStatus = adminRejected ? 'rejected' : conflicts.length ? 'pending' : 'approved'
-    const observeStatus = adminRejected || conflicts.length ? 'frozen' : adminPaused ? 'paused' : 'observing'
+    const reviewStatus = 'approved'
+    const observeStatus = conflicts.length ? 'frozen' : adminPaused ? 'paused' : 'observing'
     if (!matched) {
       const [insert] = await run(`INSERT INTO trading_accounts
         (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status,
@@ -267,7 +266,6 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
       VALUES (?, ?, 'active', 0, ?, ?)`, [accountId, userId, beijingNow(), beijingNow()])
     state = { trading_account_id: accountId, user_id: userId, halt_status: 'active', data_complete: 0 }
   }
-  if (accountRow.review_status !== 'approved') return blocked('R6_ACCOUNT_REVIEW_REQUIRED')
   if (['paused', 'switched', 'frozen'].includes(accountRow.observe_status)) return blocked('R6_ACCOUNT_PAUSED')
   if (state.user_kill_switch) return blocked('R6_USER_KILL_SWITCH')
   if (state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now()) {

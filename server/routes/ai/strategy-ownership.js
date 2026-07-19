@@ -346,41 +346,14 @@ export async function createTradingAccount(userId, payload = {}) {
   const result = await queryRun(
     `INSERT INTO trading_accounts
       (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status, observed_until, anomaly_code, is_deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', 'unverified', NULL, 'awaiting_bridge_verification', 0, ?, ?)
+     VALUES (?, ?, ?, ?, ?, 'approved', 'unverified', NULL, 'awaiting_bridge_verification', 0, ?, ?)
      ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), nickname = VALUES(nickname), margin_mode = VALUES(margin_mode),
-       review_status = 'pending', observe_status = 'unverified', observed_until = NULL,
+       review_status = 'approved', observe_status = 'unverified', observed_until = NULL,
        anomaly_code = 'awaiting_bridge_verification',
        is_deleted = 0, updated_at = VALUES(updated_at)`,
     [actorId, brokerServer, loginAccount, String(payload.nickname || ''), normalizeMarginMode(payload.margin_mode), now, now]
   )
   return queryOne('SELECT * FROM trading_accounts WHERE id = ?', [result.insertId])
-}
-
-export async function adminReviewTradingAccount(accountId, adminId, adminRole, { approved, reason } = {}) {
-  if (!isAdmin(adminRole)) throw new Error('admin_required')
-  if (!String(reason || '').trim()) throw new Error('review_reason_required')
-  const id = toId(accountId, 'account_id')
-  const existing = await queryOne('SELECT * FROM trading_accounts WHERE id = ? AND is_deleted = 0', [id])
-  if (!existing) throw new Error('account_not_found')
-  const now = beijingNow()
-  if (approved) {
-    if (!existing.identity_verified_at) throw new Error('bridge_identity_verification_required')
-    const duplicate = await queryOne(`SELECT id FROM trading_accounts
-      WHERE user_id <> ? AND UPPER(broker_server) = UPPER(?) AND login_account = ? AND is_deleted = 0 LIMIT 1`,
-    [existing.user_id, existing.broker_server, existing.login_account])
-    if (duplicate) throw new Error('duplicate_account_binding_unresolved')
-    await queryRun(`UPDATE trading_accounts SET review_status = 'approved',
-      observe_status = CASE WHEN observed_until > NOW() THEN 'observing' ELSE 'active' END,
-      anomaly_code = NULL, updated_at = ? WHERE id = ?`, [now, id])
-  } else {
-    await withTransaction(async run => {
-      await run("UPDATE trading_accounts SET review_status = 'rejected', observe_status = 'frozen', anomaly_code = 'admin_rejected', updated_at = ? WHERE id = ?", [now, id])
-      await run('UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE trading_account_id = ? AND is_deleted = 0', [now, id])
-      await syncLegacySchedulerTx(run, Number(existing.user_id))
-    })
-  }
-  await logAudit({ userId: adminId, action: approved ? 'trading_account_approved' : 'trading_account_rejected', targetType: 'trading_account', targetId: id, detail: JSON.stringify({ reason }) })
-  return queryOne('SELECT * FROM trading_accounts WHERE id = ?', [id])
 }
 
 export async function updateTradingAccount(accountId, userId, payload = {}) {
