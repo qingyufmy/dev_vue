@@ -96,6 +96,15 @@ function countPendingForSymbol(orders, symbol) {
   return orders.filter(order => stripBrokerSuffix(String(order?.symbol || '')) === normalizedSymbol).length
 }
 
+function countPendingForSymbolDirection(orders, symbol, direction) {
+  const normalizedSymbol = stripBrokerSuffix(symbol)
+  const buySide = String(direction || '').toLowerCase().startsWith('buy')
+  return (Array.isArray(orders) ? orders : []).filter(order => {
+    if (stripBrokerSuffix(String(order?.symbol || '')) !== normalizedSymbol) return false
+    return String(order?.pending_type || order?.order_type || '').toLowerCase().startsWith('buy') === buySide
+  }).length
+}
+
 function isFilledHistoryOrder(order) {
   if (!order || typeof order !== 'object') return false
   const state = String(order.state ?? order.status ?? order.order_state ?? '').toLowerCase()
@@ -1722,6 +1731,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     // Supersede: cancel same-symbol SAME-DIRECTION pending orders before placing new one
     const SUPERSEDE_SAME_SYMBOL = true
     let remainingPendingCount = 0
+    let remainingSameDirectionCount = 0
     const newOrderDirection = order.order_type || 'buy'
     if (SUPERSEDE_SAME_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
       try {
@@ -1802,6 +1812,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           }
           const confirmOrders = confirmResp.orders || confirmResp.pending_list || []
           remainingPendingCount = countPendingForSymbol(confirmOrders, symbol)
+          remainingSameDirectionCount = countPendingForSymbolDirection(confirmOrders, symbol, newOrderDirection)
         } catch (confirmErr) {
           l(`rejected: pending_list confirm failed: ${confirmErr.message}`)
           await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
@@ -1809,6 +1820,15 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
             { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_list_confirm_failed' },
             { status: 'rejected', message: 'pending_list_confirm_failed' }, 'warning')
+          return
+        }
+        if (remainingSameDirectionCount > 0) {
+          l(`rejected: ${remainingSameDirectionCount} same-direction pending order(s) remain after supersede`)
+          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
+            ['rejected', JSON.stringify({ reason: 'pending_supersede_incomplete', remaining_same_direction: remainingSameDirectionCount }), signalId, userId])
+          await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
+            { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_supersede_incomplete', remaining_same_direction: remainingSameDirectionCount },
+            { status: 'rejected', message: 'pending_supersede_incomplete' }, 'warning')
           return
         }
       } catch (listErr) {
@@ -2372,6 +2392,7 @@ export const __schedulerTest = {
   calculateRecoverySeconds,
   matchPendingCancelCondition,
   countPendingForSymbol,
+  countPendingForSymbolDirection,
   isFilledHistoryOrder,
   validateInferenceBridgeSnapshot,
   createLockGuard,

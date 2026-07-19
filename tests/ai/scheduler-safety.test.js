@@ -176,6 +176,17 @@ describe('cancel_pending broker suffix (Fix 4)', () => {
       { symbol: 'EURUSD', pending_type: 'buy_limit' },
     ], 'XAUUSD')).toBe(2)
   })
+
+  it('counts only the requested pending direction after supersede', () => {
+    const orders = [
+      { symbol: 'XAUUSD.s', pending_type: 'buy_limit' },
+      { symbol: 'XAUUSD.c', pending_type: 'sell_limit' },
+      { symbol: 'XAUUSD', pending_type: 'buy_stop' },
+      { symbol: 'EURUSD', pending_type: 'buy_limit' },
+    ]
+    expect(__schedulerTest.countPendingForSymbolDirection(orders, 'XAUUSD', 'buy')).toBe(2)
+    expect(__schedulerTest.countPendingForSymbolDirection(orders, 'XAUUSD', 'sell')).toBe(1)
+  })
 })
 
 describe('finalize recovery deadline', () => {
