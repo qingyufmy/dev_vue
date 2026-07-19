@@ -6,7 +6,7 @@ import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, 
 import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun } from './memory-system.js'
+import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun, buildPersonalMemoryRetrievalContext } from './memory-system.js'
 import { retrievePlatformExperience } from './platform-experience.js'
 import { persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
@@ -281,8 +281,11 @@ export async function handleAnalyze(userId, params) {
       memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), symbol, timeframe: primaryTf,
         market, allowedEntryMethods:policy.entryMethods })
     } else {
+      const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, policy.entryMethods)
       memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1),
-        symbol, timeframe: primaryTf, mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
+        symbol, timeframe: primaryTf, direction: retrievalContext.direction,
+        entryMethod: retrievalContext.entryMethod, marketRegime: retrievalContext.marketRegime,
+        mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
     }
   } catch (error) {
     console.error('[Analyze] Experience retrieval failed; continuing without it:', error.message)

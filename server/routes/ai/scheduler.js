@@ -12,7 +12,7 @@ import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun } from './memory-system.js'
+import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun, buildPersonalMemoryRetrievalContext } from './memory-system.js'
 import { retrievePlatformExperience } from './platform-experience.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 import { resolveAiTaskModel } from './model-profiles.js'
@@ -1220,8 +1220,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     let memory = { promptBlock: '', mode: 'off', logId: null }
     if (isPrivate && configuredMemoryMode !== 'off' && configuredMemoryMode !== 'platform_only') {
       try {
+        const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, config._allowed_entry_methods)
         memory = await retrievePersonalMemory({ userId: inferenceUserId, strategyId: promptTypeId,
           strategyVersion: Number(pt.version || 1), symbol, timeframe: primaryTf,
+          direction: retrievalContext.direction, entryMethod: retrievalContext.entryMethod,
+          marketRegime: retrievalContext.marketRegime,
           mode: configuredMemoryMode === 'shadow' ? 'shadow' : 'active' })
         config._memoryContext = memory.promptBlock
         config._memoryMode = memory.mode

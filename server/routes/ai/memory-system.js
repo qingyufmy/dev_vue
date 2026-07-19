@@ -20,6 +20,29 @@ const parse = (value, fallback) => { try { return value == null ? fallback : JSO
 const tokenCount = value => Math.max(1, Math.ceil(Buffer.byteLength(String(value || ''), 'utf8') / 4))
 const safeError = error => String(error?.message || error || 'memory_error').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
 
+function directionSide(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized.startsWith('buy') || normalized === 'up' || normalized === 'bullish') return 'buy'
+  if (normalized.startsWith('sell') || normalized === 'down' || normalized === 'bearish') return 'sell'
+  return normalized === 'hold' || normalized === 'neutral' ? 'hold' : null
+}
+
+export function buildPersonalMemoryRetrievalContext(market = {}, timeframe = null, allowedEntryMethods = []) {
+  const primaryTf = String(timeframe || market.timeframe || market.strategy_context?.primary_timeframe || '').toUpperCase()
+  const chan = market.chan || market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan || null
+  const alignedDirection = market.strategy_context?.chan_timeframe_alignment?.direction
+  const momentum = Number(market.strategy_score?.momentum_alignment || 0)
+  const smaDistance = Number(market.sma_distance_pct || 0)
+  const fallback = momentum > 0 && smaDistance >= 0 ? 'buy' : momentum < 0 && smaDistance <= 0 ? 'sell' : 'hold'
+  const direction = directionSide(alignedDirection) || directionSide(chan?.trend_state?.direction) || fallback
+  const strength = Number(market.strategy_score?.trend_strength || 0)
+  const marketRegime = String(market.market_regime || market.strategy_context?.market_regime || chan?.trend_state?.state || '').trim().toLowerCase()
+    || (strength >= 0.55 && direction !== 'hold' ? `${direction}_trend` : 'range')
+  const methods = [...new Set((Array.isArray(allowedEntryMethods) ? allowedEntryMethods : [])
+    .map(value => String(value || '').trim().toLowerCase()).filter(Boolean))]
+  return { direction, marketRegime, entryMethod: methods.length === 1 ? methods[0] : null }
+}
+
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
   return date.toISOString().replace('T', ' ').slice(0, 19)
@@ -60,6 +83,8 @@ function buildMemoryPayload(reviewCase, version) {
   const signal = evidence?.inference_time?.signal || {}
   const snapshot = evidence?.inference_time?.snapshot || {}
   const approvedOrder = evidence?.inference_time?.approved_order || {}
+  const marketSnapshot = snapshot.market_snapshot || {}
+  const retrievalContext = buildPersonalMemoryRetrievalContext(marketSnapshot, signal.timeframe, signal.entry_method ? [signal.entry_method] : [])
   const issues = Array.isArray(content.trade_process_issues) ? content.trade_process_issues : []
   const lesson = sanitizeMemoryText([...(content.lessons || []), ...(content.strengths || [])].join('；') || content.summary, 4000)
   const antiPattern = sanitizeMemoryText(issues.map(item => `${item.code}: ${item.description}`).join('；'), 4000)
@@ -76,7 +101,7 @@ function buildMemoryPayload(reviewCase, version) {
     timeframe: signal.timeframe || snapshot.market_snapshot?.timeframe || null,
     direction: signal.signal_type || null,
     entry_method: approvedOrder.entry_method || approvedOrder.action || null,
-    market_regime: snapshot.market_snapshot?.market_regime || snapshot.market_snapshot?.strategy_context?.market_regime || null,
+    market_regime: retrievalContext.marketRegime || null,
   }
   const evidenceRefs = Array.isArray(content.evidence_refs) ? content.evidence_refs.map(value => sanitizeMemoryText(value, 128)) : []
   const canonical = { scope, conditions, lesson, anti_pattern: antiPattern, evidence_refs: evidenceRefs }
@@ -387,7 +412,9 @@ export function rankMemoryCandidates(items, context = {}) {
     let score = Number(item.confidence || 0.5) * 2 + recencyScore(item.updated_at)
     const match = (field, weight) => {
       if (!context[field] || !item[field]) return
-      if (String(context[field]).toUpperCase() === String(item[field]).toUpperCase()) { score += weight; reasons.push(`${field}_match`) }
+      const contextValue = field === 'direction' ? directionSide(context[field]) : String(context[field]).toUpperCase()
+      const itemValue = field === 'direction' ? directionSide(item[field]) : String(item[field]).toUpperCase()
+      if (contextValue && contextValue === itemValue) { score += weight; reasons.push(`${field}_match`) }
       else score -= weight * 0.35
     }
     match('strategy_id', 4); match('symbol', 3); match('timeframe', 2); match('direction', 1.5); match('entry_method', 1); match('market_regime', 1)

@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { memorySimilarity, pairedInferenceDigest, rankMemoryCandidates, sanitizeMemoryText } from '../../server/routes/ai/memory-system.js'
+import { buildPersonalMemoryRetrievalContext, memorySimilarity, pairedInferenceDigest, rankMemoryCandidates, sanitizeMemoryText } from '../../server/routes/ai/memory-system.js'
 
 describe('personal memory input hardening', () => {
   it('removes control characters, escapes delimiters and breaks template markers', () => {
@@ -39,6 +39,26 @@ describe('memory retrieval ranking', () => {
     const ranked = rankMemoryCandidates(items, { strategy_id: 5, symbol: 'XAUUSD', timeframe: 'H1' })
     expect(ranked[0].item.id).toBe(1)
     expect(ranked[0].reasons).toEqual(expect.arrayContaining(['strategy_id_match', 'symbol_match', 'timeframe_match']))
+  })
+
+  it('matches buy and sell sides across concrete pending entry types', () => {
+    const ranked = rankMemoryCandidates([
+      { id: 1, direction: 'buy_limit', confidence: 0.7, updated_at: '2026-07-15 10:00:00' },
+      { id: 2, direction: 'sell_stop', confidence: 0.7, updated_at: '2026-07-15 10:00:00' },
+    ], { direction: 'buy' })
+    expect(ranked[0].item.id).toBe(1)
+    expect(ranked[0].reasons).toContain('direction_match')
+  })
+
+  it('derives stable direction, regime and sole allowed entry method from current market evidence', () => {
+    expect(buildPersonalMemoryRetrievalContext({
+      sma_distance_pct: 0.2,
+      strategy_score: { momentum_alignment: 1, trend_strength: 0.7 },
+    }, 'M5', ['limit'])).toEqual({ direction: 'buy', marketRegime: 'buy_trend', entryMethod: 'limit' })
+    expect(buildPersonalMemoryRetrievalContext({
+      strategy_context: { chan_timeframe_alignment: { direction: 'down' }, timeframes: {} },
+      strategy_score: { trend_strength: 0.8 },
+    }, 'H1', ['market', 'stop'])).toEqual({ direction: 'sell', marketRegime: 'sell_trend', entryMethod: null })
   })
 })
 
