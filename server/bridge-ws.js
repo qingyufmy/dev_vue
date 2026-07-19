@@ -112,6 +112,12 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
   return normalized
 }
 
+export function recordBridgeMarketState(userId, payload, receivedAt = Date.now()) {
+  const bridge = bridges.get(Number(userId))
+  if (!bridge || bridge.ws?.readyState !== 1) return null
+  return applyBridgeMarketState(bridge, payload, Number(userId), receivedAt)
+}
+
 const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
 
 // 每 10 分钟清理超过 30 秒未使用的广播节流条目

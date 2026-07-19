@@ -133,6 +133,8 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('observation.get("confirmed_open") and unchanged_seconds < 60')
     expect(source).toContain('**(self._last_market_state or {})')
     expect(source).toContain('market_fields = self._detect_market_state(sym, info, tick, terminal)')
+    expect(source).toContain('elif action == "market_state":')
+    expect(source).toContain('self._detect_market_state(symbol, info, tick, terminal)')
   })
 
   it('rejects invalid pending expirations and reports MT5 pending-list failures', () => {

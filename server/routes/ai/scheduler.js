@@ -2,7 +2,7 @@
 
 import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
-import { getOwnBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
+import { getOwnBridgeMarketState, recordBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, platformRates, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
@@ -555,7 +555,7 @@ function retryDelayMs(reason) {
       return 5000
     case 'market_closed':
     case 'market_restricted':
-      return 60000
+      return 15000
     case 'market_stale_tick':
     case 'market_unknown_no_tick':
     case 'market_unknown':
@@ -885,6 +885,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       return
     }
 
+    const marketProbe = await mt5Bridge(marketUserId, 'market_state', { symbol }, { timeoutMs: 5000, noFallback: true })
+    if (marketProbe?.status === 'success') recordBridgeMarketState(marketUserId, marketProbe)
     const marketState = getOwnBridgeMarketState(marketUserId, symbol)
     st.marketState = marketState
     if (!marketState.isOpen) {

@@ -13,6 +13,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
   isBridgeAlive: vi.fn(() => true),
   isTradeEnabled: vi.fn(() => true),
   getOwnBridgeMarketState: vi.fn(() => ({ isOpen: true, reason: 'open' })),
+  recordBridgeMarketState: vi.fn(),
   sendToBrowsers: vi.fn(),
   getAllBridges: vi.fn(() => []),
 }))
@@ -205,8 +206,8 @@ describe('finalize recovery deadline', () => {
 })
 
 describe('scheduler wait cadence', () => {
-  it('checks a closed market once per minute while keeping transient waits responsive', () => {
-    expect(__schedulerTest.retryDelayMs('market_closed')).toBe(60000)
+  it('checks a closed market every 15 seconds while keeping transient waits responsive', () => {
+    expect(__schedulerTest.retryDelayMs('market_closed')).toBe(15000)
     expect(__schedulerTest.retryDelayMs('market_stale_tick')).toBe(15000)
     expect(__schedulerTest.retryDelayMs('admin_bridge_offline')).toBe(5000)
   })

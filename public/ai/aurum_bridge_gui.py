@@ -1507,6 +1507,15 @@ class BridgeWorker(QThread):
                 self._resolved_symbol = self._resolve_symbol(params.get("symbol", "XAUUSD"))
                 return {"status": "success", "symbol": self._resolved_symbol}
 
+            elif action == "market_state":
+                symbol = self._resolve_symbol(params.get("symbol", "XAUUSD"))
+                self.mt5.symbol_select(symbol, True)
+                info = self.mt5.symbol_info(symbol)
+                tick = self.mt5.symbol_info_tick(symbol)
+                terminal = self.mt5.terminal_info()
+                return {"status": "success", "symbol": symbol,
+                    **self._detect_market_state(symbol, info, tick, terminal)}
+
             elif action == "pending":
                 if not self._trade_enabled:
                     return {"status": "rejected", "message": "trade sending is disabled"}
