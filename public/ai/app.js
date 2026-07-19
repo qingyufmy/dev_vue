@@ -290,12 +290,21 @@ const parseDate = (v) => {
   try { return fmtUtc(new Date(v.replace(" ", "T"))); } catch { return null; }
 };
 
-function utcToMt5(utcStr) {
+function utcToMt5(utcStr, timezoneOffsetMinutes = 180) {
   if (!utcStr) return null;
   const d = new Date(utcStr.replace(" ", "T") + "Z");
   if (isNaN(d.getTime())) return utcStr;
+  const shifted = new Date(d.getTime() + Number(timezoneOffsetMinutes || 0) * 60_000);
   const p = (x) => String(x).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p((d.getUTCHours() + 3) % 24)}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  return `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth() + 1)}-${p(shifted.getUTCDate())} ${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}:${p(shifted.getUTCSeconds())}`;
+}
+
+function parseBeijingServerTime(value) {
+  if (!value) return NaN;
+  const raw = String(value).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(raw) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+    ? `${raw.replace(" ", "T")}+08:00` : raw;
+  return new Date(normalized).getTime();
 }
 
 function compactTimeParts(value) {
@@ -341,7 +350,7 @@ function signalIsStale(signal) {
   if (signal.is_executed) return false;
   const ttl = Number(signal.ttl_seconds);
   if (!Number.isFinite(ttl)) return !!signal.is_stale;
-  const createdAt = new Date(signal.created_at).getTime();
+  const createdAt = parseBeijingServerTime(signal.created_at);
   if (!createdAt || isNaN(createdAt)) return !!signal.is_stale;
   return (Date.now() - createdAt) / 1000 > ttl;
 }
@@ -1049,6 +1058,7 @@ function connectBridgeStatusWs(onReady) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'platform_market_tick') {
         const quote = msg.quote || {};
+        if (Number.isFinite(Number(quote.timezone_offset_minutes))) state.mt5TimezoneOffsetMinutes = Number(quote.timezone_offset_minutes);
         const selected = String($("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || getGlobalSymbol()).toUpperCase();
         const brokerSymbol = String(quote.symbol || '').toUpperCase();
         if (brokerSymbol && (brokerSymbol === selected || brokerSymbol.startsWith(selected)) &&
@@ -1249,6 +1259,7 @@ function handleBridgeData(msg) {
 
   if (msg.quote) {
     const q = msg.quote;
+    if (Number.isFinite(Number(q.timezone_offset_minutes))) state.mt5TimezoneOffsetMinutes = Number(q.timezone_offset_minutes);
     // Only update quote display if the pushed symbol matches the selected symbol
     if (q.symbol && q.symbol === selectedSymbol) {
       const prev = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
@@ -1831,8 +1842,28 @@ async function saveStrategyEditor() {
   closeFormModal($("strategyEditor"), false); toast("策略已保存", "success"); await loadStrategyCatalog();
 }
 
+function mt5ScheduleTimezone(offsetMinutes = state.mt5TimezoneOffsetMinutes) {
+  const offsetHours = Number(offsetMinutes) / 60;
+  if (!Number.isInteger(offsetHours) || offsetHours < -14 || offsetHours > 12) return "Etc/GMT-3";
+  if (offsetHours === 0) return "UTC";
+  return `Etc/GMT${offsetHours > 0 ? "-" : "+"}${Math.abs(offsetHours)}`;
+}
+
+function syncMt5ScheduleTimezoneOption() {
+  const select = $("subscriptionScheduleTimezone");
+  if (!select) return "Etc/GMT-3";
+  const timezone = mt5ScheduleTimezone();
+  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
+  const offsetLabel = `UTC${offset >= 0 ? "+" : ""}${offset / 60}`;
+  const option = [...select.options].find(item => item.dataset.mt5Dynamic === "1") || select.options[0];
+  option.dataset.mt5Dynamic = "1";
+  option.value = timezone;
+  option.textContent = `MT5 服务器时间（${offsetLabel}）`;
+  return timezone;
+}
+
 function openSubscriptionEditor(strategy, subscription = null) {
-  if (!state.tradingAccounts?.length) { toast("请先连接交易桥并完成账户登记/审核", "warning"); return; }
+  if (!state.tradingAccounts?.length) { toast("请先连接交易桥并完成账户登记", "warning"); return; }
   const editor = $("subscriptionEditor"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
   $("subscriptionAccount").innerHTML = state.tradingAccounts.map(account => `<option value="${Number(account.id)}">${escapeHtml(account.nickname || account.login_account)} · ${escapeHtml(account.broker_server)}</option>`).join("");
   $("subscriptionAccount").value = subscription?.trading_account_id || state.tradingAccounts[0].id;
@@ -1845,7 +1876,8 @@ function openSubscriptionEditor(strategy, subscription = null) {
   $("subscriptionExecutionEnabled").checked = Boolean(subscription?.execution_enabled);
   $("subscriptionTakeProfitMode").value = subscription?.take_profit_mode || "ai_recommended";
   $("subscriptionScheduleEnabled").checked = Boolean(Number(subscription?.schedule_enabled || 0));
-  $("subscriptionScheduleTimezone").value = subscription?.schedule_timezone || "Etc/GMT-3";
+  const defaultScheduleTimezone = syncMt5ScheduleTimezoneOption();
+  $("subscriptionScheduleTimezone").value = subscription?.schedule_timezone || defaultScheduleTimezone;
   $("subscriptionOutsideWindowBehavior").value = subscription?.outside_window_behavior || "pause_all";
   const weekdays = new Set(parseJsonField(subscription?.schedule_weekdays_json, [1,2,3,4,5]).map(Number));
   document.querySelectorAll("[data-schedule-weekday]").forEach(input => { input.checked = weekdays.has(Number(input.dataset.scheduleWeekday)); });
@@ -3650,7 +3682,7 @@ function signalFreshness(signal) {
   // Compute age in real-time from created_at, not from stale snapshot
   const ttl = Number(signal.ttl_seconds);
   if (!Number.isFinite(ttl)) return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
-  const createdAt = new Date(signal.created_at).getTime();
+  const createdAt = parseBeijingServerTime(signal.created_at);
   if (!createdAt || isNaN(createdAt)) return "--";
   const age = Math.floor((Date.now() - createdAt) / 1000);
   const isStale = age > ttl;
@@ -3684,7 +3716,7 @@ function renderPendingSignalInfo(signal, market) {
   if (em === 'stop_limit' && signal.stop_limit_price) rows += `<div><span>限价</span><strong>${escapeHtml(priceDisplay(signal.stop_limit_price))}</strong></div>`
   if (em === 'stop_limit' && Number.isFinite(Number(market.latest_price))) rows += `<div><span>当前市价</span><strong>${escapeHtml(priceDisplay(market.latest_price))}</strong></div>`
   if (signal.pending_valid_until) {
-    const validDate = utcToMt5(signal.pending_valid_until)
+    const validDate = utcToMt5(signal.pending_valid_until, signal.mt5_timezone_offset_minutes)
     if (validDate) rows += `<div><span>有效期至</span><strong>${escapeHtml(validDate)}</strong></div>`
   }
   return `<div class="signal-pending-info">${rows}</div>`

@@ -81,13 +81,14 @@ export function compactRates(rates) {
 
 const pad = n => String(n).padStart(2, '0')
 
-export function utcToMt5Time(str) {
+export function utcToMt5Time(str, timezoneOffsetMinutes = 180) {
   if (!str) return null
   try {
     const d = parseBeijing(str)
     if (!d) return str
-    d.setHours(d.getHours() - 5)
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    const offset = Number.isFinite(Number(timezoneOffsetMinutes)) ? Math.trunc(Number(timezoneOffsetMinutes)) : 180
+    const shifted = new Date(d.getTime() + offset * 60_000)
+    return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth()+1)}-${pad(shifted.getUTCDate())} ${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}`
   } catch { return str }
 }
 
@@ -104,7 +105,7 @@ export function signalAgeSeconds(createdAt) {
   } catch { return 999999 }
 }
 
-export function attachSignalTiming(signal) {
+export function attachSignalTiming(signal, timezoneOffsetMinutes = 180) {
   const ttl = signalTtlSeconds(signal.timeframe || '')
   const age = signalAgeSeconds(signal.created_at)
   signal.ttl_seconds = ttl
@@ -113,8 +114,9 @@ export function attachSignalTiming(signal) {
     ? (() => { const d = parseBeijing(signal.created_at); if (!d) return null; d.setSeconds(d.getSeconds() + ttl); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
     : null
   signal.is_stale = age > ttl
-  signal.created_at_mt5 = utcToMt5Time(signal.created_at)
-  signal.expires_at_mt5 = utcToMt5Time(signal.expires_at)
+  signal.mt5_timezone_offset_minutes = Number.isFinite(Number(timezoneOffsetMinutes)) ? Math.trunc(Number(timezoneOffsetMinutes)) : 180
+  signal.created_at_mt5 = utcToMt5Time(signal.created_at, signal.mt5_timezone_offset_minutes)
+  signal.expires_at_mt5 = utcToMt5Time(signal.expires_at, signal.mt5_timezone_offset_minutes)
   return signal
 }
 

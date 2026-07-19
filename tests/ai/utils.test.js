@@ -162,6 +162,10 @@ describe('utcToMt5Time', () => {
     expect(result).toBe('2026-06-26 10:30:00')
   })
 
+  it('uses the calibrated MT5 offset and rolls the date forward', () => {
+    expect(utcToMt5Time('2026-06-26 23:30:00', 600)).toBe('2026-06-27 01:30:00')
+  })
+
   it('null 返回 null', () => {
     expect(utcToMt5Time(null)).toBe(null)
   })

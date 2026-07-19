@@ -165,6 +165,12 @@ export function getPlatformMarketClockState(userId) {
   }
 }
 
+async function getLabTimezoneOffsetMinutes() {
+  const platformUserId = await getActivePlatformBridgeUserId()
+  const offset = platformUserId ? Number(getPlatformMarketClockState(platformUserId).timezone_offset_minutes) : NaN
+  return Number.isFinite(offset) && offset >= -720 && offset <= 840 ? Math.trunc(offset) : 180
+}
+
 
 export function initBridgeWS(server) {
   // Cache admin userId at startup
@@ -973,7 +979,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.source = 'auto_shared'
             item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
             if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-            ai.attachSignalTiming(item)
+            ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
             Object.assign(item, ai.attachSignalPresentation(item))
             result = { status: 'success', signal: item }
           } else {
@@ -991,7 +997,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           item.is_executed = !!item.is_executed
           item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
           if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-          ai.attachSignalTiming(item)
+          ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
           Object.assign(item, ai.attachSignalPresentation(item))
           result = { status: 'success', signal: item }
         } else {
@@ -1061,6 +1067,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const hasMore = allRows.length > limit
         const sliced = allRows.slice(0, limit)
 
+        const signalTimezoneOffset = await getLabTimezoneOffsetMinutes()
         const signals = sliced.map(row => {
           const item = { ...row }
           // Both subqueries already output unified columns: delivery_* fields are named as their final names.
@@ -1071,7 +1078,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           try { item.market_data = JSON.parse(item.market_data_json || '{}') } catch { item.market_data = {} }
           delete item.delivery_id
           item.is_executed = !!item.is_executed
-          ai.attachSignalTiming(item)
+          ai.attachSignalTiming(item, signalTimezoneOffset)
           return ai.attachSignalPresentation(item)
         })
         result = { status: 'success', signals, has_more: hasMore, total_count: totalCount }
@@ -1225,9 +1232,10 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'audit_logs': {
         // 审计日志只显示自己的数据
         let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
+        const auditTimezoneOffset = await getLabTimezoneOffsetMinutes()
         const logs = ownRows.map(row => {
           const item = { ...row }
-          item.created_at_mt5 = utcToMt5Time(item.created_at)
+          item.created_at_mt5 = utcToMt5Time(item.created_at, auditTimezoneOffset)
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
           try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
           delete item.request_json

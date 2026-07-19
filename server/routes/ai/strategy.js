@@ -354,7 +354,7 @@ export async function handleAnalyze(userId, params) {
   signal.created_at = createdAt
   signal.market_data = market
   signal.is_executed = false
-  attachSignalTiming(signal)
+  attachSignalTiming(signal, ratesResp.market_meta?.timezone_offset_minutes)
   signal = attachSignalPresentation({ ...signal, ...decision, decision_json: decisionJson })
 
   // Push new signal notification to browser

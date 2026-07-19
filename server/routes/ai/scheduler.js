@@ -1357,7 +1357,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     signal = attachSignalPresentation({ ...signal, ...decision, decision_json: decisionJson })
     signal.prompt_type_id = promptTypeId
     signal.ai_model = config.model_name || 'deepseek-chat'
-    attachSignalTiming(signal)
+    attachSignalTiming(signal, ratesResp.market_meta?.timezone_offset_minutes)
     l(`shared signal #${signalId} saved`)
 
     if (isWeeklyFlattenWindow()) {
