@@ -175,6 +175,126 @@ describe('model comparison account replay', () => {
     })
   })
 
+  it('prefers the MT5 account-currency margin profile returned by the bridge', () => {
+    const result = simulateVirtualAccount(
+      [sample({ recommended_volume:0.1, take_profit_1_price:150 })],
+      [candle(0), candle(1)],
+      {
+        ...instrument,
+        trade_calc_mode:0,
+        currency_margin:'USD',
+        margin_per_lot_buy:1_000,
+        margin_per_lot_sell:1_100,
+        margin_reference_price_buy:100,
+        margin_reference_price_sell:100,
+        margin_profile_currency:'USD',
+      },
+      { starting_balance:10_000, leverage:100, account_currency:'USD' },
+    )
+    expect(result).toMatchObject({
+      margin_calculation_status:'broker_profile',
+      margin_calculation_methods:['broker_snapshot'],
+      margin_calculation_unavailable_count:0,
+    })
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      margin:100,
+      margin_calculation_status:'broker_snapshot',
+      margin_source:'mt5_order_calc_margin',
+    })
+  })
+
+  it('scales a price-sensitive CFD margin profile to the historical entry price', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        recommended_volume:1,
+        stop_loss_price:110,
+        take_profit_1_price:150,
+      })],
+      [
+        candle(0, { open:120, high:121, low:119, close:120 }),
+        candle(1, { open:120, high:121, low:119, close:120 }),
+      ],
+      {
+        ...instrument,
+        trade_calc_mode:2,
+        margin_per_lot_buy:100,
+        margin_reference_price_buy:100,
+        margin_profile_currency:'USD',
+      },
+      { starting_balance:10_000, account_currency:'USD' },
+    )
+    expect(result).toMatchObject({
+      margin_calculation_status:'broker_profile',
+      margin_calculation_methods:['broker_snapshot_scaled'],
+    })
+    expect(result.trades[0]).toMatchObject({
+      margin:120,
+      margin_calculation_status:'broker_snapshot_scaled',
+    })
+  })
+
+  it('uses the trade calculation mode formula when an MT5 margin profile is unavailable', () => {
+    const forexInstrument = {
+      ...instrument,
+      point:0.0001,
+      tick_size:0.0001,
+      tick_value:10,
+      contract_size:100_000,
+      trade_calc_mode:0,
+      currency_base:'EUR',
+      currency_profit:'USD',
+      currency_margin:'EUR',
+    }
+    const result = simulateVirtualAccount(
+      [sample({
+        recommended_volume:1,
+        stop_loss_price:1,
+        take_profit_1_price:2,
+      })],
+      [
+        candle(0, { open:1.2, high:1.21, low:1.19, close:1.2 }),
+        candle(1, { open:1.2, high:1.21, low:1.19, close:1.2 }),
+      ],
+      forexInstrument,
+      { starting_balance:10_000, leverage:100, account_currency:'USD' },
+    )
+    expect(result).toMatchObject({
+      margin_calculation_status:'estimated',
+      margin_calculation_methods:['formula_fallback'],
+    })
+    expect(result.trades[0]).toMatchObject({
+      margin:1_200,
+      margin_calculation_status:'formula_fallback',
+      margin_source:'trade_calc_mode_0',
+    })
+  })
+
+  it('reports unsupported margin metadata instead of mislabeling it as insufficient funds', () => {
+    const result = simulateVirtualAccount(
+      [sample({ recommended_volume:1 })],
+      [candle(0), candle(1)],
+      {
+        ...instrument,
+        trade_calc_mode:37,
+        currency_margin:'USD',
+      },
+      { starting_balance:10_000, leverage:100, account_currency:'USD' },
+    )
+    expect(result).toMatchObject({
+      status:'success',
+      margin_calculation_status:'unavailable',
+      margin_calculation_unavailable_count:1,
+      margin_rejected_count:0,
+      rejected_order_count:1,
+    })
+    expect(result.trades[0]).toMatchObject({
+      status:'rejected',
+      reason:'margin_calculation_unavailable',
+      margin_source:'margin_metadata_incomplete',
+    })
+  })
+
   it('liquidates the worst position when margin level reaches the MT5 stop-out line', () => {
     const result = simulateVirtualAccount(
       [sample({

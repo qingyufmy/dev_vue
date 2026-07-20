@@ -116,6 +116,12 @@ export function normalizeBacktestInstrument(instrument = {}) {
     margin_initial:finite(instrument.margin_initial),
     margin_maintenance:finite(instrument.margin_maintenance),
     margin_hedged:finite(instrument.margin_hedged),
+    margin_per_lot_buy:finite(instrument.margin_per_lot_buy),
+    margin_per_lot_sell:finite(instrument.margin_per_lot_sell),
+    margin_reference_price_buy:finite(instrument.margin_reference_price_buy),
+    margin_reference_price_sell:finite(instrument.margin_reference_price_sell),
+    margin_profile_currency:String(instrument.margin_profile_currency || '').trim().toUpperCase(),
+    margin_profile_volume:finite(instrument.margin_profile_volume),
     trade_calc_mode:finite(instrument.trade_calc_mode),
     swap_mode:finite(instrument.swap_mode),
     swap_rollover3days:finite(instrument.swap_rollover3days),
@@ -568,10 +574,104 @@ function swapCharge(position, candle, instrument, options, multiplier) {
   return { amount:rounded(amountPerLot * position.volume * multiplier), status:'ready' }
 }
 
-function requiredMargin(volume, entryPrice, instrument, options) {
-  if (instrument.margin_initial > 0) return rounded(instrument.margin_initial * volume)
-  if (!(instrument.contract_size > 0) || !(options.leverage > 0)) return null
-  return rounded(entryPrice * instrument.contract_size * volume / options.leverage)
+function brokerMarginScale(direction, entryPrice, instrument, options) {
+  const referencePrice = direction === 'buy'
+    ? instrument.margin_reference_price_buy
+    : instrument.margin_reference_price_sell
+  if (!(referencePrice > 0) || !(entryPrice > 0)) return { scale:1, status:'broker_snapshot' }
+  const mode = instrument.trade_calc_mode
+  const priceSensitiveModes = new Set([2, 3, 4, 32, 38])
+  const marginCurrency = String(instrument.currency_margin || '').toUpperCase()
+  const baseCurrency = String(instrument.currency_base || '').toUpperCase()
+  const profitCurrency = String(instrument.currency_profit || '').toUpperCase()
+  const accountCurrency = String(options.account_currency || '').toUpperCase()
+  const forexConversionTracksPrice = [0, 5].includes(mode)
+    && marginCurrency && marginCurrency === baseCurrency
+    && accountCurrency && accountCurrency === profitCurrency
+  if (priceSensitiveModes.has(mode) || forexConversionTracksPrice) {
+    return { scale:entryPrice / referencePrice, status:'broker_snapshot_scaled' }
+  }
+  return {
+    scale:1,
+    status:mode == null || ![0, 1, 2, 3, 4, 5, 32, 33, 38].includes(mode)
+      ? 'broker_snapshot_approximate'
+      : 'broker_snapshot',
+  }
+}
+
+function formulaMargin(volume, entryPrice, instrument, options) {
+  const mode = instrument.trade_calc_mode
+  const contract = instrument.contract_size
+  const leverage = options.leverage
+  if (!(volume > 0) || !(entryPrice > 0)) return null
+  let amountInMarginCurrency = null
+  let amountInAccountCurrency = null
+  if (mode === 0 && contract > 0 && leverage > 0) {
+    amountInMarginCurrency = volume * contract / leverage
+  } else if (mode === 5 && contract > 0) {
+    amountInMarginCurrency = volume * contract
+  } else if ([1, 33].includes(mode) && instrument.margin_initial > 0) {
+    amountInMarginCurrency = volume * instrument.margin_initial
+  } else if ([2, 32, 38].includes(mode) && contract > 0) {
+    amountInMarginCurrency = volume * contract * entryPrice
+  } else if (mode === 3 && contract > 0 && instrument.tick_value > 0 && instrument.tick_size > 0) {
+    amountInAccountCurrency = volume * contract * entryPrice * instrument.tick_value / instrument.tick_size
+  } else if (mode === 4 && contract > 0 && leverage > 0) {
+    amountInMarginCurrency = volume * contract * entryPrice / leverage
+  } else if (mode == null && contract > 0 && leverage > 0) {
+    return {
+      amount:rounded(volume * contract * entryPrice / leverage),
+      status:'legacy_formula',
+      source:'legacy_price_contract_leverage',
+    }
+  } else {
+    return null
+  }
+  if (amountInAccountCurrency != null) {
+    return {
+      amount:rounded(amountInAccountCurrency),
+      status:'formula_fallback',
+      source:`trade_calc_mode_${mode}`,
+    }
+  }
+  const conversionRate = currencyToDepositRate(instrument.currency_margin, entryPrice, instrument, options)
+  if (conversionRate == null) {
+    if (!options.account_currency || !instrument.currency_margin) {
+      return {
+        amount:rounded(amountInMarginCurrency),
+        status:'formula_currency_assumed',
+        source:`trade_calc_mode_${mode}`,
+      }
+    }
+    return null
+  }
+  return {
+    amount:rounded(amountInMarginCurrency * conversionRate),
+    status:'formula_fallback',
+    source:`trade_calc_mode_${mode}`,
+  }
+}
+
+function requiredMargin(direction, volume, entryPrice, instrument, options) {
+  const perLot = direction === 'buy' ? instrument.margin_per_lot_buy : instrument.margin_per_lot_sell
+  const profileCurrencyMatches = !instrument.margin_profile_currency
+    || !options.account_currency
+    || instrument.margin_profile_currency === options.account_currency
+  if (perLot != null && perLot >= 0 && profileCurrencyMatches) {
+    const scaling = brokerMarginScale(direction, entryPrice, instrument, options)
+    return {
+      amount:rounded(perLot * volume * scaling.scale),
+      status:scaling.status,
+      source:'mt5_order_calc_margin',
+    }
+  }
+  const fallback = formulaMargin(volume, entryPrice, instrument, options)
+  if (fallback) return fallback
+  return {
+    amount:null,
+    status:'unavailable',
+    source:'margin_metadata_incomplete',
+  }
 }
 
 function adverseMarkPrice(direction, candle, instrument) {
@@ -627,6 +727,8 @@ function closeVirtualPosition(position, exitPrice, exitTime, reason, ambiguous, 
       exit_reason:reason,
       same_bar_ambiguous:Boolean(ambiguous),
       margin:position.margin,
+      margin_calculation_status:position.margin_calculation_status,
+      margin_source:position.margin_source,
       gross_profit:gross,
       commission:totalCommission,
       swap,
@@ -689,6 +791,8 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   let maximumConcurrentPositions = 0
   let stopOutCount = 0
   let marginRejectedCount = 0
+  let marginCalculationUnavailableCount = 0
+  const marginCalculationStatuses = new Set()
   let positionLimitRejectedCount = 0
   let pendingLimitRejectedCount = 0
   let stopLimitDeferredCount = 0
@@ -827,10 +931,28 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
         })
         continue
       }
-      const margin = requiredMargin(intent.volume, entryPrice, instrument, options)
+      const marginResult = requiredMargin(intent.direction, intent.volume, entryPrice, instrument, options)
+      const margin = marginResult.amount
+      marginCalculationStatuses.add(marginResult.status)
       const accountBefore = summarizeAccount(balance, positions, candle, instrument)
       const entryCommission = rounded(options.commission_per_lot * intent.volume / 2)
-      if (!(margin >= 0) || accountBefore.free_margin - entryCommission + 1e-9 < margin) {
+      if (margin == null || !(margin >= 0)) {
+        marginCalculationUnavailableCount += 1
+        records.push({
+          status:'rejected',
+          reason:'margin_calculation_unavailable',
+          margin_source:marginResult.source,
+          signal_index:intent.signal_index,
+          decision_time_utc_msc:intent.decision_time_utc_msc,
+          direction:intent.direction,
+          entry_method:intent.method,
+          volume:intent.volume,
+          requested_entry_price:rounded(entryPrice),
+          free_margin:accountBefore.free_margin,
+        })
+        continue
+      }
+      if (accountBefore.free_margin - entryCommission + 1e-9 < margin) {
         marginRejectedCount += 1
         records.push({
           status:'rejected',
@@ -842,6 +964,8 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
           volume:intent.volume,
           requested_entry_price:rounded(entryPrice),
           required_margin:margin,
+          margin_calculation_status:marginResult.status,
+          margin_source:marginResult.source,
           free_margin:accountBefore.free_margin,
         })
         continue
@@ -861,6 +985,8 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
         take_profit_tier:intent.take_profit_tier,
         horizon_end_utc_msc:intent.horizon_end_utc_msc,
         margin,
+        margin_calculation_status:marginResult.status,
+        margin_source:marginResult.source,
         entry_commission:entryCommission,
         swap:0,
       }
@@ -940,6 +1066,12 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   const netProfit = rounded(balance - options.starting_balance)
   const finalAccount = summarizeAccount(balance, [], lastCandle, instrument)
   const totalCommission = rounded(closed.reduce((sum, trade) => sum + Number(trade.commission || 0), 0))
+  const marginStatuses = [...marginCalculationStatuses]
+  const marginCalculationStatus = marginCalculationUnavailableCount > 0
+    ? (marginStatuses.some(status => status !== 'unavailable') ? 'partial' : 'unavailable')
+    : marginStatuses.some(status => ['legacy_formula', 'formula_currency_assumed', 'formula_fallback', 'broker_snapshot_approximate'].includes(status))
+      ? 'estimated'
+      : marginStatuses.length ? 'broker_profile' : 'not_applicable'
   return {
     status:'success',
     simulation_mode:'event_driven_virtual_account',
@@ -972,6 +1104,9 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
     maximum_concurrent_positions:maximumConcurrentPositions,
     stop_out_count:stopOutCount,
     margin_rejected_count:marginRejectedCount,
+    margin_calculation_status:marginCalculationStatus,
+    margin_calculation_methods:marginStatuses,
+    margin_calculation_unavailable_count:marginCalculationUnavailableCount,
     position_limit_rejected_count:positionLimitRejectedCount,
     pending_limit_rejected_count:pendingLimitRejectedCount,
     broker_constraint_rejected_count:brokerConstraintRejectedCount,

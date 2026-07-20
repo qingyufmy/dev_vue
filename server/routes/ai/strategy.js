@@ -1223,7 +1223,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       metric_type: 'next_closed_bar_direction',
       metric_version: 'directional-eval-v2',
       account_simulation_type:'event_driven_virtual_account',
-      account_simulation_version:'account-replay-v2',
+      account_simulation_version:'account-replay-v3',
       account_simulation_status:accountSimulationStatus,
       account_simulation_reason:accountSimulationReason,
       execution_timeframe:backtestContext.execution_timeframe,

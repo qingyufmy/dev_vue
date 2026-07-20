@@ -1262,6 +1262,30 @@ class BridgeWorker(QThread):
                     return {"status": "error", "message": f"symbol_info unavailable: {symbol}"}
                 if not acc:
                     return {"status": "error", "message": "account_info unavailable"}
+                tick = self.mt5.symbol_info_tick(symbol)
+                reference_buy = float(getattr(tick, "ask", 0) or 0) if tick else 0.0
+                reference_sell = float(getattr(tick, "bid", 0) or 0) if tick else 0.0
+                volume_min = float(getattr(info, "volume_min", 0) or 0)
+                volume_max = float(getattr(info, "volume_max", 0) or 0)
+                volume_step = float(getattr(info, "volume_step", 0) or 0)
+                margin_probe_volume = max(volume_min, min(1.0, volume_max)) if volume_max > 0 else 1.0
+                if volume_step > 0:
+                    margin_probe_volume = round(margin_probe_volume / volume_step) * volume_step
+                    margin_probe_volume = max(volume_min, min(margin_probe_volume, volume_max))
+
+                def margin_per_lot(order_type, price):
+                    if price <= 0 or margin_probe_volume <= 0:
+                        return None
+                    try:
+                        value = self.mt5.order_calc_margin(
+                            order_type, symbol, margin_probe_volume, price)
+                        return (float(value) / margin_probe_volume
+                                if value is not None and float(value) >= 0 else None)
+                    except (AttributeError, TypeError, ValueError, RuntimeError):
+                        return None
+
+                margin_buy = margin_per_lot(self.mt5.ORDER_TYPE_BUY, reference_buy)
+                margin_sell = margin_per_lot(self.mt5.ORDER_TYPE_SELL, reference_sell)
                 return {
                     "status": "success",
                     "symbol": symbol,
@@ -1292,9 +1316,15 @@ class BridgeWorker(QThread):
                         "margin_initial": float(getattr(info, "margin_initial", 0) or 0),
                         "margin_maintenance": float(getattr(info, "margin_maintenance", 0) or 0),
                         "margin_hedged": float(getattr(info, "margin_hedged", 0) or 0),
-                        "volume_min": float(getattr(info, "volume_min", 0) or 0),
-                        "volume_max": float(getattr(info, "volume_max", 0) or 0),
-                        "volume_step": float(getattr(info, "volume_step", 0) or 0),
+                        "margin_per_lot_buy": margin_buy,
+                        "margin_per_lot_sell": margin_sell,
+                        "margin_reference_price_buy": reference_buy if reference_buy > 0 else None,
+                        "margin_reference_price_sell": reference_sell if reference_sell > 0 else None,
+                        "margin_profile_currency": str(acc.currency or ""),
+                        "margin_profile_volume": margin_probe_volume,
+                        "volume_min": volume_min,
+                        "volume_max": volume_max,
+                        "volume_step": volume_step,
                         "volume_limit": float(getattr(info, "volume_limit", 0) or 0),
                         "swap_mode": int(getattr(info, "swap_mode", 0) or 0),
                         "swap_rollover3days": int(getattr(info, "swap_rollover3days", 0) or 0),
