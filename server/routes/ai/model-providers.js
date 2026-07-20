@@ -44,7 +44,7 @@ export function normalizeModelProviderProfile(payload = {}, existing = {}) {
 }
 
 export function isPlatformShareableProvider(provider) {
-  return provider !== KIMI_CODE_PROVIDER
+  return Object.hasOwn(MODEL_PROVIDER_DEFAULTS, provider)
 }
 
 export function isKimiCodeRequest(url, provider) {

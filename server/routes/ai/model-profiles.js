@@ -557,7 +557,7 @@ async function resolvePlatformModel(usage = 'auto_platform') {
 }
 
 async function getPlatformModelForSharing() {
-  return await queryOne('SELECT * FROM ai_model_profiles WHERE scope = "platform" AND provider <> "kimi_code" AND deleted_at IS NULL AND status = "active" ORDER BY is_default DESC, updated_at DESC LIMIT 1')
+  return await queryOne('SELECT * FROM ai_model_profiles WHERE scope = "platform" AND deleted_at IS NULL AND status = "active" ORDER BY is_default DESC, updated_at DESC LIMIT 1')
 }
 
 // [P0-3] Decrypt credential before returning to callers

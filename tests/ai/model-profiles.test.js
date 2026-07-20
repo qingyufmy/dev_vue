@@ -112,14 +112,15 @@ describe('resolveAiTaskModel', () => {
     expect(result.error).toBe('no_model_configured')
   })
 
-  it('never shares a Kimi Code subscription credential to another user', async () => {
+  it('shares a Kimi Code platform subscription when the usage switch and plan allow it', async () => {
     mockQueryOne
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(policy({ share_for_manual: 1 }))
       .mockResolvedValueOnce(profile({ owner_user_id: 0, scope: 'platform', provider: 'kimi_code' }))
+      .mockResolvedValueOnce({ plan: 'pro' })
     const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
-    expect(result).toMatchObject({ model: null, credential_source: 'none', error: 'no_model_configured' })
-    expect(mockQueryOne).toHaveBeenCalledTimes(3)
+    expect(result).toMatchObject({ credential_source: 'platform_shared', model: { provider: 'kimi_code' } })
+    expect(mockQueryOne).toHaveBeenCalledTimes(4)
   })
 
   it('does not share with a disallowed plan', async () => {

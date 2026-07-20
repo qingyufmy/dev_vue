@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260720a" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260720c" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -374,7 +374,7 @@
             <section class="workspace-panel form-modal-dialog model-profile-dialog" tabindex="-1">
               <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div><button id="cancelModelProfileBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="settings-grid">
-                <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="gpt">OpenAI</option><option value="kimi">Kimi 开放平台</option><option value="kimi_code">Kimi Code 订阅（个人）</option><option value="qwen">通义千问</option><option value="zhipu">智谱</option><option value="doubao">豆包</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option><option value="openai_compatible">自定义 OpenAI 兼容</option></select><small id="profileProviderHelp" class="field-help"></small></label>
+                <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="gpt">OpenAI</option><option value="kimi">Kimi 开放平台</option><option value="kimi_code">Kimi Code 订阅</option><option value="qwen">通义千问</option><option value="zhipu">智谱</option><option value="doubao">豆包</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option><option value="openai_compatible">自定义 OpenAI 兼容</option></select><small id="profileProviderHelp" class="field-help"></small></label>
                 <label><span>模型名称</span><input id="profileModelName" value="deepseek-chat" autocomplete="off"></label>
                 <label><span>API 地址</span><input id="profileBaseUrl" value="https://api.deepseek.com" autocomplete="off"></label>
                 <label><span>API Key</span><input id="profileApiKey" type="password" autocomplete="new-password" placeholder="编辑时留空表示不更换"></label>
@@ -391,7 +391,7 @@
               <div class="policy-switches">
                 <label><input id="shareForManual" type="checkbox"><span>手动推理</span></label><label><input id="shareForAuto" type="checkbox"><span>自动推理</span></label><label><input id="shareForReview" type="checkbox"><span>复盘生成</span></label><label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
               </div>
-              <div id="platformSharingProviderNotice" class="source-notice compact-notice" role="status">Kimi Code 订阅凭据仅供凭据所有者使用，不会共享给其他用户。</div>
+              <div id="platformSharingProviderNotice" class="source-notice compact-notice" role="status">当前默认平台模型可按上方用途选择是否共享；Kimi Code 订阅也遵循相同设置。</div>
               <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
             </section>
           </div>
@@ -1011,7 +1011,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260720b"></script>
+    <script src="/ai/app.js?v=20260720c"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

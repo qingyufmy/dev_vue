@@ -1593,7 +1593,7 @@ const PROVIDER_PRESETS = {
 
 const MODEL_PROVIDER_LABELS = {
   deepseek: "DeepSeek", gpt: "OpenAI compatible", kimi: "Kimi 开放平台",
-  kimi_code: "Kimi Code 订阅（个人）", qwen: "Qwen", zhipu: "智谱",
+  kimi_code: "Kimi Code 订阅", qwen: "Qwen", zhipu: "智谱",
   doubao: "豆包", volcengine_agent_plan: "火山方舟 Agent Plan",
   openai_compatible: "自定义 OpenAI 兼容",
 };
@@ -1604,7 +1604,7 @@ function updateModelProviderHelp(provider) {
   const help = $("profileProviderHelp");
   if (!help) return;
   help.textContent = provider === "kimi_code"
-    ? "订阅接口仅建议个人测试；强制开启 Thinking，平台不会把该凭据共享给其他用户。"
+    ? "订阅接口会强制开启 Thinking；管理员配置为平台模型后，可按用途选择是否共享。"
     : provider === "kimi"
       ? "开放平台按量计费，适合正式自动推理与客户使用。"
       : "";
@@ -1624,7 +1624,7 @@ function renderModelProfiles() {
   }
   host.innerHTML = state.modelProfiles.map(profile => `
     <article class="workspace-row model-profile-card" data-model-id="${Number(profile.id)}">
-      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? '<span class="status-chip warning">个人订阅 · 不共享</span>' : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出 ${Number(profile.max_tokens || 0)} tokens</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span>${profile.request_timeout_ms ? `<span>超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ''}</div></details></div>
+      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? `<span class="status-chip warning">${state.user?.role === 'admin' ? '订阅模型 · 可按策略共享' : '个人订阅'}</span>` : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出 ${Number(profile.max_tokens || 0)} tokens</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span>${profile.request_timeout_ms ? `<span>超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ''}</div></details></div>
       <div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" data-model-action="default" ${profile.is_default ? 'disabled' : ''}>设为默认</button><button class="btn btn-secondary btn-sm" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" data-model-action="delete" aria-label="删除 ${escapeHtml(profile.model_name)}"><i data-lucide="trash-2" size="14"></i></button></div>
     </article>`).join("");
   initIcons();
@@ -1717,8 +1717,8 @@ async function loadPlatformPolicy() {
   shareControls.forEach(control => { control.disabled = !hasShareableModel; });
   const sharingNotice = $("platformSharingProviderNotice");
   if (sharingNotice) sharingNotice.textContent = hasShareableModel
-    ? "平台共享只会选用开放平台或按量计费模型；Kimi Code 订阅凭据始终不会共享给其他用户。"
-    : "当前没有可共享的生产模型。Kimi Code 订阅凭据仅供凭据所有者使用，不能开启平台共享。";
+    ? "当前默认平台模型可按上方用途选择是否共享；Kimi Code 订阅也遵循相同设置。"
+    : "当前没有已启用且已保存凭据的平台模型，暂时无法开启共享。";
 }
 
 async function savePlatformPolicy() {
