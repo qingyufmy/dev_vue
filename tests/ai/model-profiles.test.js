@@ -254,7 +254,7 @@ describe('model profile authorization and defaults', () => {
     expect(params[9]).toBe(0)
   })
 
-  it('keeps Kimi Code profiles on the subscription endpoint with thinking enabled', async () => {
+  it('keeps Kimi Code profiles on the subscription endpoint and preserves the thinking switch', async () => {
     mockQueryRun.mockResolvedValueOnce({ insertId: 9 })
     mockQueryOne.mockResolvedValueOnce(null)
     await createModelProfile(1, {
@@ -264,7 +264,7 @@ describe('model profile authorization and defaults', () => {
     const params = mockQueryRun.mock.calls[0][1]
     expect(params[2]).toBe('kimi_code')
     expect(params[4]).toBe('https://api.kimi.com/coding/v1')
-    expect(params[9]).toBe(1)
+    expect(params[9]).toBe(0)
   })
 
   it('validates model request timeout bounds', async () => {

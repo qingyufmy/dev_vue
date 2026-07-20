@@ -16,6 +16,8 @@ describe('model provider validation', () => {
   it('keeps legacy providers and Kimi Code validation compatible', () => {
     expect(normalizeModelProviderProfile({ provider: 'kimi_code', model_name: 'kimi-for-coding' }))
       .toMatchObject({ provider: 'kimi_code', thinking_enabled: 1 })
+    expect(normalizeModelProviderProfile({ provider: 'kimi_code', model_name: 'k3', thinking_enabled: false }))
+      .toMatchObject({ provider: 'kimi_code', thinking_enabled: 0 })
     expect(isPlatformShareableProvider('kimi_code')).toBe(true)
     expect(() => normalizeModelProviderProfile({ provider: 'kimi_code', model_name: 'unsupported' }))
       .toThrow('kimi_code_model_not_supported')

@@ -1604,10 +1604,14 @@ function updateModelProviderHelp(provider) {
   const help = $("profileProviderHelp");
   if (!help) return;
   help.textContent = provider === "kimi_code"
-    ? "订阅接口会强制开启 Thinking；管理员配置为平台模型后，可按用途选择是否共享。"
+    ? "订阅接口支持关闭思考模式；管理员配置为平台模型后，可按用途选择是否共享。"
     : provider === "kimi"
       ? "开放平台按量计费，适合正式自动推理与客户使用。"
       : "";
+  if ($("profileTemperature")) $("profileTemperature").disabled = provider === "kimi_code";
+  if ($("profileThinkingHelp")) $("profileThinkingHelp").textContent = provider === "kimi_code"
+    ? "关闭后响应明显加快；Kimi Code 会忽略 Temperature"
+    : "复杂任务更稳，但推理耗时更长";
 }
 
 function renderModelProfiles() {
@@ -1624,7 +1628,7 @@ function renderModelProfiles() {
   }
   host.innerHTML = state.modelProfiles.map(profile => `
     <article class="workspace-row model-profile-card" data-model-id="${Number(profile.id)}">
-      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? `<span class="status-chip warning">${state.user?.role === 'admin' ? '订阅模型 · 可按用途共享' : '个人订阅'}</span>` : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出 ${Number(profile.max_tokens || 0)} tokens</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span>${profile.request_timeout_ms ? `<span>超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ''}</div></details></div>
+      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? `<span class="status-chip warning">${state.user?.role === 'admin' ? '订阅模型 · 可按用途共享' : '个人订阅'}</span>` : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出 ${Number(profile.max_tokens || 0)} tokens</span><span>思考模式 ${Number(profile.thinking_enabled) ? '开启' : '关闭'}</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span>${profile.request_timeout_ms ? `<span>超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ''}</div></details></div>
       <div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" data-model-action="default" ${profile.is_default ? 'disabled' : ''}>设为默认</button><button class="btn btn-secondary btn-sm" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" data-model-action="delete" aria-label="删除 ${escapeHtml(profile.model_name)}"><i data-lucide="trash-2" size="14"></i></button></div>
     </article>`).join("");
   initIcons();
@@ -1685,6 +1689,7 @@ function openModelEditor(profile = null) {
   $("profileTemperature").value = profile?.temperature ?? 0.3;
   $("profileMaxTokens").value = profile?.max_tokens ?? 2000;
   $("profileRequestTimeout").value = profile?.request_timeout_ms ? Math.round(profile.request_timeout_ms / 1000) : "";
+  $("profileThinkingEnabled").checked = profile ? Boolean(Number(profile.thinking_enabled)) : true;
   updateModelProviderHelp(profile?.provider || "deepseek");
   openFormModal(editor);
 }
@@ -1692,10 +1697,10 @@ function openModelEditor(profile = null) {
 async function saveModelProfile() {
   const editor = $("modelProfileEditor");
   const id = Number(editor?.dataset.modelId || 0);
-  const body = { provider: $("profileProvider").value, model_name: $("profileModelName").value.trim(), api_base_url: $("profileBaseUrl").value.trim(), temperature: Number($("profileTemperature").value), max_tokens: Number($("profileMaxTokens").value) };
+  const body = { provider: $("profileProvider").value, model_name: $("profileModelName").value.trim(), api_base_url: $("profileBaseUrl").value.trim(), temperature: Number($("profileTemperature").value), max_tokens: Number($("profileMaxTokens").value), thinking_enabled: $("profileThinkingEnabled").checked };
   const timeoutSec = Number($("profileRequestTimeout").value);
   if (timeoutSec > 0) body.request_timeout_ms = timeoutSec * 1000;
-  if (body.provider === "kimi_code") { body.thinking_enabled = true; body.reasoning_effort = "max"; }
+  if (body.provider === "kimi_code" && body.model_name === "k3" && body.thinking_enabled) body.reasoning_effort = "max";
   const key = $("profileApiKey").value.trim();
   if (key) body.api_key = key;
   if (state.user?.role === "admin") body.scope = "platform";

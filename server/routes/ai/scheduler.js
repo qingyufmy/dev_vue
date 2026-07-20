@@ -5,7 +5,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, recordBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, platformRates, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
-import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
+import { getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { attachAtrAnchor, buildStrategyContextFromTags, loadPrivatePortfolioContext, resolveChanHistoryCount } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, stripBrokerSuffix } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -2311,10 +2311,8 @@ async function runSmartClose(userId, closeConfig, account, positions) {
     maxTokens = Math.min(maxTokens * 2, 8000)
   }
 
-  // Read global thinking config
-  const globalCfg = await getGlobalAutoConfig()
-  const thinkingEnabled = globalCfg?.thinking_enabled !== 0
-  const reasoningEffort = globalCfg?.reasoning_effort || 'max'
+  const thinkingEnabled = resolvedModel.model.thinking_enabled !== 0 && resolvedModel.model.thinking_enabled !== false
+  const reasoningEffort = resolvedModel.model.reasoning_effort || 'max'
 
   try {
     const provider = resolvedModel.model.provider || resolvedModel.model.api_provider || 'deepseek'
@@ -2322,8 +2320,8 @@ async function runSmartClose(userId, closeConfig, account, positions) {
     const parsed = await requestJsonObject({
       url: `${baseUrl}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
       apiKey, provider, model, temperature, maxTokens,
-      thinkingEnabled: provider === 'kimi_code' ? true : thinkingEnabled,
-      reasoningEffort: provider === 'kimi_code' && model === 'k3' ? 'max' : reasoningEffort,
+      thinkingEnabled,
+      reasoningEffort,
       protocol,
       messages: [
         { role: 'system', content: stripTimeframeTags(prompt) },

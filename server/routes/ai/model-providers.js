@@ -30,14 +30,15 @@ export function normalizeModelProviderProfile(payload = {}, existing = {}) {
   }
   const providerChanged = payload.provider !== undefined && payload.provider !== existing.provider
   const requestedBaseUrl = payload.api_base_url !== undefined ? payload.api_base_url : (providerChanged ? null : existing.api_base_url)
+  const thinkingEnabled = payload.thinking_enabled !== undefined
+    ? (payload.thinking_enabled ? 1 : 0)
+    : (existing.thinking_enabled ?? 1)
   return {
     provider,
     model_name: modelName,
     api_base_url: normalizeModelBaseUrl(requestedBaseUrl || MODEL_PROVIDER_DEFAULTS[provider]),
-    thinking_enabled: provider === KIMI_CODE_PROVIDER
-      ? 1
-      : (payload.thinking_enabled !== undefined ? (payload.thinking_enabled ? 1 : 0) : (existing.thinking_enabled ?? 1)),
-    reasoning_effort: provider === KIMI_CODE_PROVIDER && modelName === 'k3'
+    thinking_enabled: thinkingEnabled,
+    reasoning_effort: provider === KIMI_CODE_PROVIDER && modelName === 'k3' && thinkingEnabled
       ? 'max'
       : (payload.reasoning_effort || existing.reasoning_effort || 'max'),
   }

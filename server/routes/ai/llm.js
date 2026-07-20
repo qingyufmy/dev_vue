@@ -104,14 +104,17 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
   }
 
   const body = { model, messages }
-  // Thinking providers have different wire contracts. Kimi Code requires
-  // Thinking for K2.7 Code and accepts effort inside the thinking object.
+  // Thinking providers have different wire contracts. Kimi Code accepts
+  // enabled or disabled inside the thinking object.
   if (thinkingEnabled) {
     body.thinking = provider === 'kimi_code'
       ? (model === 'k3' ? { type: 'enabled', effort: 'max' } : { type: 'enabled' })
       : { type: 'enabled' }
     if (provider === 'kimi_code') body.max_tokens = maxTokens
     else body.reasoning_effort = reasoningEffort || 'max'
+  } else if (provider === 'kimi_code') {
+    body.thinking = { type: 'disabled' }
+    body.max_tokens = maxTokens
   } else {
     body.temperature = temperature
     body.max_tokens = maxTokens
@@ -368,9 +371,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
     if (DEBUG_LLM_PAYLOAD) console.log(JSON.stringify(aiPayload, null, 2).substring(0, 3000))
     // DeepSeek and Agent Plan use different reasoning contracts.
-    const thinkingEnabled = provider === 'kimi_code'
-      || ((provider === 'deepseek' || provider === 'volcengine_agent_plan')
-        && config.thinking_enabled !== 0 && config.thinking_enabled !== false)
+    const thinkingEnabled = (provider === 'kimi_code' || provider === 'deepseek' || provider === 'volcengine_agent_plan')
+      && config.thinking_enabled !== 0 && config.thinking_enabled !== false
     console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
     const usageContext = config._model_profile_id ? {
       userId: config._userId || 0,

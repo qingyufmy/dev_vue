@@ -138,7 +138,7 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
       apiKey: resolved.model.api_key_encrypted, provider, model: resolved.model.model_name, temperature: 0,
       maxTokens: 40, protocol,
       timeout: resolved.model.request_timeout_ms || 120000,
-      thinkingEnabled: provider === 'kimi_code' ? true : Boolean(resolved.model.thinking_enabled),
+      thinkingEnabled: Boolean(resolved.model.thinking_enabled),
       reasoningEffort: provider === 'kimi_code' && resolved.model.model_name === 'k3' ? 'max' : resolved.model.reasoning_effort,
       messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: '{"ok":true}' }],
       usageContext: { userId: req.user.id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'manual', strategyId: null } })

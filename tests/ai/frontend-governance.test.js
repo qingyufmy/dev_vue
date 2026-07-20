@@ -127,11 +127,13 @@ describe('AI governance navigation and DOM contract', () => {
   it('keeps existing model providers editable while supporting custom compatible endpoints', () => {
     expect(html).toContain('<option value="kimi">Kimi 开放平台</option>')
     expect(html).toContain('<option value="kimi_code">Kimi Code 订阅</option>')
+    expect(html).toContain('id="profileThinkingEnabled"')
     expect(html).toContain('<option value="openai_compatible">自定义 OpenAI 兼容</option>')
     expect(app).toContain("kimi_code: { models: ['kimi-for-coding', 'k3', 'kimi-for-coding-highspeed']")
     expect(app).toContain('Kimi Code 订阅也遵循相同设置')
     expect(app).toContain('订阅模型 · 可按用途共享')
     expect(app).not.toContain('个人订阅 · 不共享')
+    expect(app).toContain('thinking_enabled: $("profileThinkingEnabled").checked')
     expect(app).toContain("openai_compatible: { models: [], url: '' }")
   })
 

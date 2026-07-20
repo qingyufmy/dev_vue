@@ -226,6 +226,23 @@ describe('requestJsonObject', () => {
     expect(options.headers['User-Agent']).toBe('Aurum-AI-Trading-Lab/2.3.4')
   })
 
+  it('explicitly disables Kimi Code thinking without sending temperature', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"ok":true}' } }] }),
+    })
+    await requestJsonObject({
+      url: 'https://api.kimi.com/coding/v1/chat/completions',
+      apiKey: 'kimi-key', provider: 'kimi_code', model: 'k3', temperature: 0.3,
+      maxTokens: 2000, thinkingEnabled: false, reasoningEffort: 'max',
+      messages: [{ role: 'user', content: 'test' }],
+    })
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body.thinking).toEqual({ type: 'disabled' })
+    expect(body.max_tokens).toBe(2000)
+    expect(body).not.toHaveProperty('temperature')
+  })
+
   it('maps Kimi Code subscription rate limits to a stable error code', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 429 })
     await expect(requestJsonObject({
@@ -341,7 +358,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions')
   })
 
-  it('routes Kimi Code through its subscription endpoint with Thinking enabled', async () => {
+  it('routes Kimi Code through its subscription endpoint with Thinking disabled when configured', async () => {
     vi.clearAllMocks()
     mockFetch.mockResolvedValue({
       ok: true,
@@ -355,7 +372,7 @@ describe('OpenAI-compatible provider URL', () => {
       thinking_enabled: false,
     }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.kimi.com/coding/v1/chat/completions')
-    expect(JSON.parse(mockFetch.mock.calls[0][1].body).thinking.type).toBe('enabled')
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).thinking.type).toBe('disabled')
   })
 })
 
