@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+
+const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
 
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn()
@@ -304,5 +307,19 @@ describe('handleAnalyzeCompare', () => {
       expect(result.market_snapshot).toHaveProperty('symbol', 'XAUUSD')
       expect(result.market_snapshot).toHaveProperty('latest_price')
     })
+  })
+})
+
+describe('POST /ai/analyze-compare route', () => {
+  it('route is registered in ai/index.js', () => {
+    expect(routes).toContain("router.post('/ai/analyze-compare', authMiddleware")
+  })
+
+  it('route imports handleAnalyzeCompare from strategy.js', () => {
+    expect(routes).toContain("import { handleAnalyze, handleAnalyzeCompare, buildStrategyContextFromTags } from './strategy.js'")
+  })
+
+  it('route calls handleAnalyzeCompare(req.user.id, req.body)', () => {
+    expect(routes).toContain('handleAnalyzeCompare(req.user.id, req.body || {})')
   })
 })

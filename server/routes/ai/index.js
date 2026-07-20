@@ -9,7 +9,7 @@ import { authMiddleware } from '../../middleware/auth.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
-import { handleAnalyze, buildStrategyContextFromTags } from './strategy.js'
+import { handleAnalyze, handleAnalyzeCompare, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
@@ -142,6 +142,12 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
       usageContext: { userId: req.user.id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'manual', strategyId: null } })
     res.json({ ok: true, latency_ms: Date.now() - started, provider, model_name: resolved.model.model_name, response_valid: result?.ok === true })
   } catch (error) { reviewError(res, error) }
+})
+
+
+router.post('/ai/analyze-compare', authMiddleware, async (req, res) => {
+  try { res.json(await handleAnalyzeCompare(req.user.id, req.body || {})) }
+  catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/platform-model-policy', authMiddleware, async (req, res) => {
