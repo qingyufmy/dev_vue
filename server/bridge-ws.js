@@ -726,8 +726,8 @@ async function handleBrowserCommand(ws, userId, msg) {
     if (!isPro && writeActions.includes(action)) {
       return reply({ status: 'error', message: '升级会员即可解锁交易功能' })
     }
-    // Plus users also blocked from analyze (consumes AI API credits)
-    if (!isPro && action === 'analyze') {
+    // Plus users also blocked from analyze/compare (consumes AI API credits)
+    if (!isPro && (action === 'analyze' || action === 'compare')) {
       return reply({ status: 'error', message: '升级会员即可使用 AI 推理' })
     }
 
@@ -906,6 +906,9 @@ async function handleBrowserCommand(ws, userId, msg) {
             requesterUserId: userId, requesterRole: user?.role || 'user',
           }))
         }
+        break
+      case 'compare':
+        result = await ai.handleAnalyzeCompare(userId, params)
         break
       case 'signals_latest_id': {
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
