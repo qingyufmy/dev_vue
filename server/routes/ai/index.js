@@ -155,10 +155,6 @@ router.post('/ai/model-compare/history', authMiddleware, async (req, res) => {
   try { res.json(await handleHistoryCompare(req.user.id, req.body || {})) }
   catch (error) { reviewError(res, error) }
 })
-router.get('/ai/model-compare', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'admin_only' })
-  res.sendFile(join(process.cwd(), 'public', 'ai', 'model-compare.html'))
-})
 router.get('/ai/platform-model-policy', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
   try { res.json({ ok: true, policy: await getPlatformUsagePolicy() }) }

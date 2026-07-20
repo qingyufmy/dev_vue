@@ -2781,6 +2781,8 @@ async function refreshTabData(tabId) {
     await loadReviewMemory();
   } else if (tabId === "global-risk") {
     await loadAdminRiskCenter();
+  } else if (tabId === "model-compare") {
+    await loadModelCompare();
   }
 }
 
@@ -4365,9 +4367,10 @@ function populateModelCompareSelect() {
   const hint = $("modelCompareHint");
   const container = group?.closest(".model-compare-select");
   if (!group) return;
+  if (state.user?.role !== "admin") { container?.classList.add("hidden"); return; }
   const profiles = (state.modelProfiles || []).filter(p => p.status === "active");
   if (!profiles.length) { container?.classList.add("hidden"); return; }
-  group.innerHTML = profiles.map(p => `<label><input type="checkbox" value="${Number(p.id)}" data-compare-model><span>${escapeHtml(p.model_name)}</span><small>${escapeHtml(modelProviderLabel(p.provider))}</small></label>`).join("");
+  group.innerHTML = profiles.map((p, i) => `<label><input type="checkbox" value="${Number(p.id)}" data-compare-model ${i === 0 ? "checked" : ""}><span>${escapeHtml(p.model_name)}</span><small>${escapeHtml(modelProviderLabel(p.provider))}</small></label>`).join("");
   container?.classList.remove("hidden");
   const checkboxes = group.querySelectorAll("[data-compare-model]");
   const updateHint = () => {
@@ -4377,6 +4380,149 @@ function populateModelCompareSelect() {
   checkboxes.forEach(cb => cb.addEventListener("change", updateHint));
   updateHint();
   initIcons();
+}
+
+async function loadModelCompare() {
+  if (!state.modelProfiles?.length) {
+    try {
+      const data = await api(`/api/ai/model-profiles${profileScopeQuery()}`);
+      state.modelProfiles = data.profiles || [];
+    } catch { state.modelProfiles = []; }
+  }
+  const group = $("cmpModelGroup");
+  const hint = $("cmpModelHint");
+  if (group) {
+    const profiles = (state.modelProfiles || []).filter(p => p.status === "active");
+    if (!profiles.length) {
+      group.innerHTML = '<span style="color:var(--text-secondary)">无可用模型，请先在模型管理中创建</span>';
+    } else {
+      group.innerHTML = profiles.map((p, i) => `<label class="model-compare-checkbox"><input type="checkbox" value="${Number(p.id)}" data-cmp-model ${i === 0 ? "checked" : ""}><span>${escapeHtml(p.model_name)}</span><small>${escapeHtml(modelProviderLabel(p.provider))}</small></label>`).join("");
+      group.querySelectorAll("[data-cmp-model]").forEach(cb => cb.addEventListener("change", () => {
+        const count = group.querySelectorAll("[data-cmp-model]:checked").length;
+        if (hint) hint.textContent = count >= 2 ? `已选 ${count} 个模型` : count === 1 ? "再选至少 1 个模型" : "";
+        $("cmpRunBtn").disabled = count < 2;
+      }));
+    }
+  }
+  if (hint) {
+    const count = group?.querySelectorAll("[data-cmp-model]:checked").length || 0;
+    hint.textContent = count >= 2 ? `已选 ${count} 个模型` : count === 1 ? "再选至少 1 个模型" : "";
+    $("cmpRunBtn").disabled = count < 2;
+  }
+  const sel = $("cmpStrategy");
+  if (sel && !sel.options.length) {
+    try {
+      const data = await api("/api/ai/strategies?include_inactive=1");
+      const active = (data.strategies || []).filter(s => s.visibility_status === "active" && Number(s.is_active));
+      sel.innerHTML = '<option value="">请选择策略</option>' + active.map(s => `<option value="${s.id}">${escapeHtml(s.title)}</option>`).join("");
+    } catch { sel.innerHTML = '<option value="">加载失败</option>'; }
+  }
+  setDefaultCompareDates();
+  initIcons();
+}
+
+function setDefaultCompareDates() {
+  const now = new Date(), beijing = new Date(now.getTime() + 8 * 3600000);
+  const fmt = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}T${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
+  const end = new Date(beijing), start = new Date(end.getTime() - 7 * 24 * 3600000);
+  if ($("cmpEndTime")) $("cmpEndTime").value = fmt(end);
+  if ($("cmpStartTime")) $("cmpStartTime").value = fmt(start);
+}
+
+async function runHistoryCompare() {
+  const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
+  const timeframe = $("cmpTimeframe")?.value || "M15";
+  const strategyId = Number($("cmpStrategy")?.value || 0);
+  const modelIds = [...document.querySelectorAll("[data-cmp-model]:checked")].map(cb => Number(cb.value)).filter(id => id > 0);
+  const step = Number($("cmpStep")?.value) || 10;
+  if (!symbol) return showToast("请输入交易品种", "error");
+  if (!strategyId) return showToast("请选择推理策略", "error");
+  if (modelIds.length < 2) return showToast("至少选择 2 个模型", "error");
+  const startTime = $("cmpStartTime")?.value ? $("cmpStartTime").value + ":00" : "";
+  const endTime = $("cmpEndTime")?.value ? $("cmpEndTime").value + ":00" : "";
+  if (!startTime || !endTime) return showToast("请选择时间范围", "error");
+  const btn = $("cmpRunBtn");
+  if (btn) btn.disabled = true;
+  $("cmpProgressBar")?.classList.remove("hidden");
+  if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "10%";
+  if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "正在提交对比任务...";
+  try {
+    const data = await api("/api/ai/model-compare/history", {
+      method: "POST", body: JSON.stringify({ symbol, timeframe, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime, step }),
+    });
+    if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "100%";
+    if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "对比完成";
+    if (data.status === "success") renderHistoryCompareResults(data.results || [], data.meta || {});
+    else showToast(data.message || "对比失败", "error");
+  } catch (e) { showToast("请求失败: " + e.message, "error"); }
+  finally {
+    if (btn) btn.disabled = false;
+    setTimeout(() => $("cmpProgressBar")?.classList.add("hidden"), 2000);
+  }
+}
+
+function renderHistoryCompareResults(results, meta) {
+  const container = $("cmpResults");
+  if (!container) return;
+  const valid = results.filter(r => r.status === "success");
+  const sorted = [...valid].sort((a, b) => (b.simulated_pnl?.total || 0) - (a.simulated_pnl?.total || 0));
+  const avgWinRate = valid.length ? (valid.reduce((s, r) => s + (r.simulated_pnl?.win_rate || 0), 0) / valid.length).toFixed(1) : "0";
+  let summaryHtml = `<div class="insight-strip" style="margin-bottom:16px">
+    <div class="insight-card"><span class="insight-value">${results.length}</span><span class="insight-label">模型总数</span></div>
+    <div class="insight-card"><span class="insight-value">${valid.length}</span><span class="insight-label">成功返回</span></div>
+    ${sorted.length ? `<div class="insight-card"><span class="insight-value">${escapeHtml(sorted[0].model_name)}</span><span class="insight-label">最佳 PnL</span></div>` : ""}
+    <div class="insight-card"><span class="insight-value">${avgWinRate}%</span><span class="insight-label">平均胜率</span></div>
+  </div>`;
+  if (meta) {
+    summaryHtml += `<div style="font-size:12px;color:var(--text-secondary);padding:0 4px 12px">品种: <strong>${escapeHtml(meta.symbol||"")}</strong> · 周期: <strong>${escapeHtml(meta.timeframe||"")}</strong> · K线数: <strong>${meta.kline_count||0}</strong> · 步长: <strong>${meta.step||step}</strong></div>`;
+  }
+  $("cmpResultsSummary").innerHTML = summaryHtml;
+  let tableHtml = "";
+  if (sorted.length) {
+    tableHtml = '<div class="workspace-panel"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;border-bottom:1px solid var(--border-subtle)"><th style="padding:8px">模型</th><th>提供商</th><th>信号数</th><th>买</th><th>卖</th><th>持有</th><th>错误</th><th>胜率</th><th>总PnL</th><th>均PnL</th></tr></thead><tbody>';
+    for (const r of sorted) {
+      const pnl = r.simulated_pnl;
+      const pnlColor = pnl.total > 0 ? "color:#22c55e" : pnl.total < 0 ? "color:#ef4444" : "";
+      tableHtml += `<tr style="border-bottom:1px solid var(--border-subtle,.06)">
+        <td style="padding:8px">${escapeHtml(r.model_name)}</td><td>${escapeHtml(modelProviderLabel(r.provider))}</td>
+        <td>${r.signal_count}</td><td>${pnl.buy_count}</td><td>${pnl.sell_count}</td><td>${pnl.hold_count}</td><td>${pnl.error_count}</td>
+        <td>${pnl.win_rate}%</td><td style="${pnlColor}">${pnl.total.toFixed(4)}</td><td style="${pnlColor}">${pnl.avg_pnl.toFixed(6)}</td></tr>`;
+    }
+    tableHtml += '</tbody></table></div>';
+  }
+  $("cmpResultsTableWrap").innerHTML = tableHtml;
+  const validWithSignals = valid.filter(r => r.signals?.length);
+  let timelineHtml = "";
+  if (validWithSignals.length) {
+    const allTimes = new Set();
+    validWithSignals.forEach(r => r.signals.forEach(s => allTimes.add(s.time)));
+    const times = [...allTimes].sort();
+    const colors = ["#d4af37","#3b82f6","#10b981","#ef4444","#a855f7","#f59e0b","#06b6d4","#ec4899"];
+    const models = validWithSignals.map((r, i) => ({ ...r, color: colors[i % colors.length] }));
+    const dirIcon = { buy: "▲", sell: "▼", hold: "●", error: "✖" };
+    const dirColor = { buy: "#22c55e", sell: "#ef4444", hold: "#eab308", error: "#6b7280" };
+    timelineHtml = '<div class="workspace-panel"><div class="section-heading"><h2>信号时间线</h2></div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">';
+    models.forEach(m => { timelineHtml += `<span style="display:flex;align-items:center;gap:4px;font-size:12px"><span style="width:8px;height:8px;border-radius:50%;background:${m.color}"></span>${escapeHtml(m.model_name)}</span>`; });
+    timelineHtml += '</div><div style="max-height:400px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
+    for (const time of times) {
+      timelineHtml += `<tr style="border-bottom:1px solid var(--border-subtle,.06)"><td style="padding:4px 8px;white-space:nowrap;color:var(--text-secondary)">${String(time).replace("T"," ").slice(5,16)}</td>`;
+      for (const m of models) {
+        const sig = m.signals.find(s => s.time === time);
+        if (sig) {
+          const dir = sig.signal_type;
+          const c = dirColor[dir] || "#6b7280";
+          const tip = dir.toUpperCase() + (sig.pnl ? " PnL:" + sig.pnl.toFixed(4) : "");
+          timelineHtml += `<td style="padding:4px 8px;text-align:center" title="${escapeHtml(tip)}"><span style="color:${c}">${dirIcon[dir]||"?"}</span></td>`;
+        } else {
+          timelineHtml += '<td style="padding:4px 8px;text-align:center;color:var(--text-secondary)">-</td>';
+        }
+      }
+      timelineHtml += "</tr>";
+    }
+    timelineHtml += "</tbody></table></div></div>";
+  }
+  $("cmpResultsTimeline").innerHTML = timelineHtml;
+  container.classList.remove("hidden");
 }
 
 function getSelectedModelIds() {
@@ -5699,6 +5845,7 @@ function bindEvents() {
   $("compareResultsModal")?.addEventListener("click", event => {
     if (event.target === $("compareResultsModal")) setCompareResultsModal(false);
   });
+  $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
   document.querySelectorAll("[data-strategy-timeframe]").forEach(input => input.addEventListener("change", () => {
     const tf = input.dataset.strategyTimeframe;
     const countInput = document.querySelector(`[data-strategy-kline="${tf}"]`);

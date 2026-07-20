@@ -134,9 +134,9 @@
           <button class="nav-item admin-only" data-tab="global-risk" data-title="全局风控" style="display:none">
             <i data-lucide="shield-alert" size="16"></i>全局风控
           </button>
-          <a class="nav-item admin-only" href="/api/ai/model-compare" target="_blank" style="display:none">
+          <button class="nav-item admin-only" data-tab="model-compare" data-title="模型对比" style="display:none">
             <i data-lucide="git-compare" size="16"></i>模型对比
-          </a>
+          </button>
           <button class="nav-item" data-tab="audit" data-title="审计">
             <i data-lucide="shield-check" size="16"></i>审计
           </button>
@@ -735,6 +735,42 @@
             <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="rules" hidden><div class="section-heading panel-section-heading"><div><h2>平台风控规则</h2><p>默认值、用户允许范围和锁定值分组展示；保存后立即生成新版本。</p></div><button id="saveGlobalRiskBtn" class="btn btn-primary">保存并发布规则</button></div><div id="globalRiskEditor" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
             <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="rollout" hidden><section class="workspace-panel"><div class="section-heading"><div><h2>规则发布方式</h2><p>正式拦截会阻止违规订单；仅观察（仅记录不拦截）适合新规则上线前验证。系统强制规则不可调整。</p></div></div><div id="riskRuleRolloutList" class="workspace-list risk-rollout-list"><div class="workspace-skeleton"></div></div></section></section>
             <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="ai" hidden><section class="workspace-panel"><div class="section-heading"><div><h2>AI 辅助功能</h2><p>复盘和记忆属于辅助能力，不会改变或绕过强制风控。高级对照实验仍需用户主动开启。</p></div><button id="saveGlobalFeatureFlagsBtn" class="btn btn-primary btn-sm">保存 AI 功能</button></div><div class="policy-switches setting-switches"><label><input id="globalReviewGenerationFlag" type="checkbox"><span><strong>允许生成交易复盘</strong><small>为符合条件的平仓订单生成复盘</small></span></label><label><input id="globalExperienceMemoryFlag" type="checkbox"><span><strong>允许使用确认经验</strong><small>用户仍可在个人设置中关闭</small></span></label><label><input id="globalMemoryCompressionFlag" type="checkbox"><span><strong>允许自动压缩记忆</strong><small>控制记忆上下文大小</small></span></label><label><input id="globalRetrievalShadowFlag" type="checkbox"><span><strong>启用安全试运行</strong><small>只记录检索效果，不注入推理</small></span></label><label><input id="globalPairedExperimentFlag" type="checkbox"><span><strong>允许高级对照实验</strong><small>用户开启后会额外调用一次模型</small></span></label></div><div id="rolloutHealthSummary" class="workspace-row-meta rollout-health-summary"></div></section></section>
+          </div>
+        </section>
+
+        <section id="model-compare" class="tab-panel admin-only" style="display:none">
+          <div class="workspace-page">
+            <header class="workspace-header calm-page-header">
+              <div><span class="page-eyebrow">管理员工具</span><h1>历史多模型对比</h1><p>选择时间范围与模型，回测对比各模型在同一段行情上的信号表现。</p></div>
+            </header>
+
+            <section class="workspace-panel">
+              <div class="settings-grid">
+                <label><span>交易品种</span><input id="cmpSymbol" type="text" placeholder="例: XAUUSD" value="XAUUSD"></label>
+                <label><span>K线周期</span><select id="cmpTimeframe"><option value="M1">M1</option><option value="M5">M5</option><option value="M15" selected>M15</option><option value="M30">M30</option><option value="H1">H1</option><option value="H4">H4</option><option value="D1">D1</option></select></label>
+                <label><span>开始时间</span><input id="cmpStartTime" type="datetime-local"></label>
+                <label><span>结束时间</span><input id="cmpEndTime" type="datetime-local"></label>
+                <label><span>推理策略</span><select id="cmpStrategy"><option value="">请选择策略</option></select></label>
+                <label><span>采样步长</span><input id="cmpStep" type="number" min="1" max="50" value="10" title="每N根K线采样一次"></label>
+              </div>
+            </section>
+
+            <section class="workspace-panel">
+              <div class="section-heading"><div><h2>选择对比模型</h2><p>勾选 2~5 个模型进行对比</p></div><span id="cmpModelHint" class="cmp-hint"></span></div>
+              <div id="cmpModelGroup" class="cmp-model-checkboxes"></div>
+            </section>
+
+            <div class="compare-actions" style="padding:16px 0">
+              <button id="cmpRunBtn" class="btn btn-primary" disabled><i data-lucide="play" size="16"></i>开始对比</button>
+              <span id="cmpStatus" class="cmp-status-text" style="margin-left:12px;font-size:13px;color:var(--text-secondary)"></span>
+            </div>
+            <div id="cmpProgressBar" class="cmp-progress-bar hidden"><div id="cmpProgressFill" class="cmp-progress-fill" style="width:0%"></div><span id="cmpProgressLabel" class="cmp-progress-label">准备中...</span></div>
+
+            <section id="cmpResults" class="hidden">
+              <div id="cmpResultsSummary" class="cmp-results-summary"></div>
+              <div id="cmpResultsTableWrap" class="cmp-results-table-wrap"></div>
+              <div id="cmpResultsTimeline" class="cmp-results-timeline"></div>
+            </section>
           </div>
         </section>
 
