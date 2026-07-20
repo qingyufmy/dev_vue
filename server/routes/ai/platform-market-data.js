@@ -282,8 +282,13 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           clock_status:response.rates.at(-1)?.clock_status || clock.clock_status,
           clock_residual_ms:response.rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
         }
+        const closureCutoffUtcMs = Math.min(rangeEndUtcMs, Date.now())
+        const intervalMs = timeframeIntervalMs(timeframe)
         const closedRates = response.rates.map(rate => validRate(rate, effectiveClock.timezone_offset_minutes))
-          .filter(rate => rate && rate.time_utc_msc >= rangeStartUtcMs && rate.time_utc_msc < rangeEndUtcMs)
+          .filter(rate => rate
+            && rate.time_utc_msc >= rangeStartUtcMs
+            && rate.time_utc_msc < rangeEndUtcMs
+            && rate.time_utc_msc + intervalMs <= closureCutoffUtcMs)
         const sourceId = await ensureSource(platformUserId, effectiveClock, response.rates.at(-1))
         const brokerSymbol = response.symbol || symbol
         const persistedCount = await persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates)

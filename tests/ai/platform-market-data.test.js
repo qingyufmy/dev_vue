@@ -57,6 +57,29 @@ describe('platform market data', () => {
     expect(redis.set).not.toHaveBeenCalled()
   })
 
+  it('does not persist or return a still-forming bar from an exact range request', async () => {
+    const liveOpen = Math.floor(Date.now() / 60000) * 60000
+    const rates = [-2, -1, 0].map((offset, index) => ({
+      ...rate(index, 2000 + index),
+      time_utc_msc:liveOpen + offset * 60000,
+    }))
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:true, rates })
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD', timeframe:'M1', count:20, review_window:true,
+      start_utc_msc:liveOpen - 2 * 60000,
+      end_utc_msc:liveOpen + 60000,
+    })
+    expect(result.rates.map(item => item.close)).toEqual([2000, 2001])
+    expect(result.market_meta).toMatchObject({
+      source:'platform_admin_bridge_range',
+      closed_candles_written:2,
+      last_bar_closed:true,
+    })
+    const candleWrites = db.queryRun.mock.calls.filter(([sql]) => sql.includes('INSERT INTO market_candles'))
+    expect(candleWrites).toHaveLength(1)
+    expect(candleWrites[0][1]).toHaveLength(24)
+  })
+
   it('persists only closed bars and returns the current bar as uncached live data', async () => {
     mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
     const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 3 })

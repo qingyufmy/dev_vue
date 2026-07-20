@@ -535,6 +535,8 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.estimated_model_calls).toBe(16)
       expect(result.results[0].signals[0]).toHaveProperty('decision_time')
       expect(result.results[0].signals[0]).toHaveProperty('outcome_time')
+      expect(result.results[0].signals[0].decision_time_utc_msc)
+        .toBe(result.results[0].signals[0].outcome_time_utc_msc)
     })
 
     it('evaluates every eligible primary candle in continuous mode', async () => {
@@ -699,6 +701,13 @@ describe('historical comparison frontend contract', () => {
     expect(backend).toContain('async function reconcileInterruptedHistoryCompareJobs')
     expect(backend).toContain("stale.error = 'history_compare_interrupted'")
     expect(backend).toContain('historyCompareJobs.delete(job.id)')
+  })
+
+  it('uses only fully closed historical candles and ignores live Chan anchors', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    expect(backend).toContain('utcMs + primaryDurationMs <= evaluationCutoffUtcMs')
+    expect(backend).toContain('last_bar_closed:true')
+    expect(backend).toContain('chan_structure_anchor_utc_msc:null')
   })
 
   it('presents directional evaluation separately from the event-driven virtual account', () => {

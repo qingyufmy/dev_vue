@@ -819,10 +819,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     return { status: 'error', message: error.message || 'history_market_data_unavailable' }
   }
   const selectedWindow = historyWindows.find(item => item.timeframe === requestedTimeframe)
+  const primaryDurationMs = (TIMEFRAME_MINUTES[requestedTimeframe] || 1) * 60_000
+  const evaluationCutoffUtcMs = Math.min(endUtcMs, Date.now())
   const requestedRates = Array.isArray(selectedWindow?.window?.periodRates)
     ? selectedWindow.window.periodRates.filter(rate => {
       const utcMs = compareRateUtcMs(rate)
-      return utcMs != null && utcMs >= startUtcMs && utcMs <= endUtcMs
+      return utcMs != null && utcMs >= startUtcMs
+        && utcMs + primaryDurationMs <= evaluationCutoffUtcMs
     })
     : []
   if (requestedRates.length > HISTORY_COMPARE_MAX_KLINES) {
@@ -924,11 +927,17 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         continue
       }
       const visibleContextRates = contextRates.slice(-item.kline_count)
+      const historicalDataQuality = {
+        ...(item.window?.marketMeta || {}),
+        last_bar_closed:true,
+        chan_structure_anchor_utc_msc:null,
+        chan_last_confirmed_segment_utc_msc:null,
+      }
       const summary = calculateMarketData(symbol, item.timeframe, visibleContextRates, null, [], {
         computeChan: policy.useChanAnalysis,
         chanRates: contextRates,
         requestedChanHistoryCount: contextRates.length,
-        chanDataQuality: item.window?.marketMeta || null,
+        chanDataQuality: historicalDataQuality,
       })
       const { account: _account, positions: _positions, symbol: _symbol, timeframe: _timeframe, timestamp: _timestamp, ...slimSummary } = summary
       strategyTimeframes[item.timeframe] = { summary: slimSummary, klines: compactRates(visibleContextRates) }
@@ -937,11 +946,17 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       selectedWindow.window.periodRates, decisionUtcMs, requestedTimeframe,
       selectedWindow.kline_count, policy.useChanAnalysis
     )
+    const primaryHistoricalDataQuality = {
+      ...(selectedWindow.window?.marketMeta || {}),
+      last_bar_closed:true,
+      chan_structure_anchor_utc_msc:null,
+      chan_last_confirmed_segment_utc_msc:null,
+    }
     const market = calculateMarketData(symbol, requestedTimeframe, primaryRates.slice(-selectedWindow.kline_count), null, [], {
       computeChan: policy.useChanAnalysis,
       chanRates: primaryRates,
       requestedChanHistoryCount: primaryRates.length,
-      chanDataQuality: selectedWindow.window?.marketMeta || null,
+      chanDataQuality: primaryHistoricalDataQuality,
     })
     market.strategy_context = {
       strategy_sequence: planItems.map(item => `${item.timeframe}(${item.kline_count})`).join(' → '),
@@ -994,7 +1009,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
 
       if (result.error) {
         modelSignals[result.modelId].push({
-          decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
           decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
           signal_type: 'error', confidence: 0, next_bar_move: 0,
           latency_ms: result.latencyMs || 0, error: result.error,
@@ -1006,7 +1021,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
         modelSignals[result.modelId].push({
-          decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
           decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
           signal_type: 'error', confidence: 0, next_bar_move: 0, latency_ms: result.latencyMs || 0,
           error: signal?.reasoning || 'inference_failed',
@@ -1019,7 +1034,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       else if (direction === 'sell') nextBarMove = openPrice - closePrice
 
       modelSignals[result.modelId].push({
-        decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+        decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
         decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
         signal_type: direction, confidence: signal.confidence || 0, next_bar_move: nextBarMove,
         latency_ms: result.latencyMs || 0,
