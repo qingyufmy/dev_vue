@@ -4742,6 +4742,9 @@ async function runHistoryCompare() {
     const data = await api("/api/ai/model-compare/history", {
       method: "POST", body: {
         symbol, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime,
+        timezone_offset_minutes:Number.isFinite(Number(state.mt5TimezoneOffsetMinutes))
+          ? Number(state.mt5TimezoneOffsetMinutes)
+          : 180,
         evaluation_mode:evaluationMode,
         sample_size:evaluationMode === "sampled" ? sampleSize : null,
         backtest,
@@ -5066,9 +5069,12 @@ async function loadHistoryCompareJobs({ resumeActive = true } = {}) {
         const failureReason = job.status === "failed" && job.error
           ? `<small class="compare-cell-note danger">失败原因：${escapeHtml(apiErrorMessage(job.error))}</small>`
           : "";
+        const createdTime = Number.isFinite(Number(job.created_at_utc_msc))
+          ? `${formatCompareChartTime(job.created_at_utc_msc, params.timezone_offset_minutes)} MT5`
+          : String(job.created_at || "").replace("T"," ").slice(0,16);
         return `<article class="compare-history-item" data-job-id="${escapeHtml(job.id)}">
           <div class="compare-history-status ${escapeHtml(job.status)}"><i data-lucide="${job.status === "succeeded" ? "check" : job.status === "failed" ? "circle-alert" : job.status === "cancelled" ? "ban" : "loader-circle"}" size="16"></i></div>
-          <div><strong>${escapeHtml(params.symbol || "未知品种")} · ${escapeHtml(params.timeframe || "--")}</strong><span>${models} 个模型 · ${evaluationLabel} · ${String(job.created_at || "").replace("T"," ").slice(0,16)}</span>${failureReason}</div>
+          <div><strong>${escapeHtml(params.symbol || "未知品种")} · ${escapeHtml(params.timeframe || "--")}</strong><span>${models} 个模型 · ${evaluationLabel} · ${escapeHtml(createdTime)}</span>${failureReason}</div>
           <span class="compare-history-badge ${escapeHtml(job.status)}">${statusText[job.status] || job.status}</span>
           ${job.status === "succeeded" ? '<button type="button" class="btn btn-secondary btn-sm" data-cmp-open>查看结果</button>' : ""}
           ${["failed","cancelled","succeeded"].includes(job.status) ? '<button type="button" class="icon-btn" data-cmp-delete aria-label="删除这条对比记录"><i data-lucide="trash-2" size="15"></i></button>' : ""}

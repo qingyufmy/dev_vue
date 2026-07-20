@@ -449,6 +449,25 @@ describe('handleHistoryCompare', () => {
         start_utc_msc: expect.any(Number), end_utc_msc: expect.any(Number),
       }))
     })
+
+    it('interprets legacy unqualified ranges with the supplied MT5 timezone', async () => {
+      mockMt5Bridge.mockResolvedValue({ status:'success', rates:[], market_meta:{ source:'mysql' } })
+      await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[1, 2], strategy_id:1,
+        start_time:'2026-07-01 00:00:00', end_time:'2026-07-02 00:00:00',
+        timezone_offset_minutes:180,
+      })
+      const utc3Start = mockMt5Bridge.mock.calls.find(call => call[1] === 'rates')[2].start_utc_msc
+      mockMt5Bridge.mockClear()
+      mockMt5Bridge.mockResolvedValue({ status:'success', rates:[], market_meta:{ source:'mysql' } })
+      await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[1, 2], strategy_id:1,
+        start_time:'2026-07-01 00:00:00', end_time:'2026-07-02 00:00:00',
+        timezone_offset_minutes:480,
+      })
+      const utc8Start = mockMt5Bridge.mock.calls.find(call => call[1] === 'rates')[2].start_utc_msc
+      expect(utc3Start - utc8Start).toBe(5 * 60 * 60 * 1000)
+    })
   })
 
   describe('historical inference', () => {
@@ -575,6 +594,7 @@ describe('handleHistoryCompare', () => {
       expect(result.meta).toHaveProperty('agreement_comparable_count')
       expect(result.meta).toHaveProperty('agreement_insufficient_count')
       expect(result.meta).toHaveProperty('execution_timezone_offset_minutes', 180)
+      expect(result.meta).toHaveProperty('selection_timezone_offset_minutes', 180)
     })
 
     it('uses an explicit evenly distributed sample size for the new client', async () => {
@@ -731,6 +751,13 @@ describe('POST /ai/model-compare/history route', () => {
     expect(routes).toContain("router.get('/ai/model-compare/history', authMiddleware")
     expect(routes).toContain('listHistoryCompareJobs')
   })
+
+  it('normalizes persisted Beijing DATETIME values before MT5 display', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    expect(backend).toContain('function compareJobUtcMs(value)')
+    expect(backend).toContain('created_at_utc_msc:compareJobUtcMs(job.created_at)')
+    expect(backend).toContain('updated_at_utc_msc:compareJobUtcMs(job.updated_at)')
+  })
 })
 
 describe('historical comparison frontend contract', () => {
@@ -740,6 +767,7 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('/api/ai/model-compare/history/${encodeURIComponent(jobId)}')
     expect(frontend).toContain('{ method:"DELETE" }')
     expect(frontend).not.toContain('showToast(')
+    expect(frontend).toContain('formatCompareChartTime(job.created_at_utc_msc, params.timezone_offset_minutes)')
   })
 
   it('reattaches to an active background job after reloading the page', () => {

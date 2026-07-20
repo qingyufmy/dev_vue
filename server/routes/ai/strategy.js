@@ -27,16 +27,41 @@ const HISTORY_COMPARE_MAX_STEPS = 20
 const HISTORY_COMPARE_MIN_STEPS = 4
 const HISTORY_COMPARE_MAX_KLINES = 5000
 const HISTORY_COMPARE_MAX_CONTINUOUS_STEPS = 120
+const DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
 
-function parseCompareTimeUtcMs(value) {
+function normalizeCompareTimezoneOffset(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric >= -14 * 60 && numeric <= 14 * 60
+    ? Math.trunc(numeric)
+    : null
+}
+
+function timezoneOffsetSuffix(offsetMinutes) {
+  const normalized = normalizeCompareTimezoneOffset(offsetMinutes) ?? DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+  const sign = normalized >= 0 ? '+' : '-'
+  const absolute = Math.abs(normalized)
+  return `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`
+}
+
+function parseCompareTimeUtcMs(value, timezoneOffsetMinutes = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES) {
   const raw = String(value || '').trim()
   if (!raw) return null
   const hasTimezone = /T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
   const normalized = raw.includes('T')
     ? raw
     : raw.includes(' ') ? raw.replace(' ', 'T') : `${raw}T00:00:00`
-  const parsed = Date.parse(hasTimezone ? normalized : `${normalized}+08:00`)
+  const parsed = Date.parse(hasTimezone ? normalized : `${normalized}${timezoneOffsetSuffix(timezoneOffsetMinutes)}`)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+async function resolveCompareTimezoneOffset(value) {
+  const requested = normalizeCompareTimezoneOffset(value)
+  if (requested != null) return requested
+  const row = await queryOne(`SELECT mds.timezone_offset_minutes
+    FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
+    WHERE u.role = 'admin' AND mds.timezone_offset_minutes IS NOT NULL
+    ORDER BY (mds.clock_status = 'calibrated') DESC, mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`)
+  return normalizeCompareTimezoneOffset(row?.timezone_offset_minutes) ?? DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
 }
 
 function comparisonDirection(signalType) {
@@ -805,8 +830,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }
   const backtestOptions = normalizeBacktestOptions(params.backtest || {})
 
-  const startUtcMs = parseCompareTimeUtcMs(start_time)
-  const endUtcMs = parseCompareTimeUtcMs(end_time)
+  const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params.timezone_offset_minutes)
+  const startUtcMs = parseCompareTimeUtcMs(start_time, selectionTimezoneOffsetMinutes)
+  const endUtcMs = parseCompareTimeUtcMs(end_time, selectionTimezoneOffsetMinutes)
   if (!startUtcMs || !endUtcMs || endUtcMs <= startUtcMs) {
     return { status: 'error', message: 'invalid_history_time_range' }
   }
@@ -1270,6 +1296,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       account_simulation_reason:accountSimulationReason,
       execution_timeframe:backtestContext.execution_timeframe,
       execution_timezone_offset_minutes:backtestContext.timezone_offset_minutes,
+      selection_timezone_offset_minutes:selectionTimezoneOffsetMinutes,
       backtest_options:runtimeBacktestOptions,
       backtest_account_source:useBridgeAccountSettings
         && (bridgeLeverage > 0 || (bridgeStopOutUsesPercent && bridgeStopOut > 0))
@@ -1289,6 +1316,18 @@ function safeCompareJson(value, fallback = null) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
+function compareJobUtcMs(value) {
+  if (!value) return null
+  if (value instanceof Date) return value.getTime()
+  const raw = String(value).trim()
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T')
+  const qualified = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)
+    ? normalized
+    : `${normalized}+08:00`
+  const parsed = Date.parse(qualified)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function publicHistoryCompareJob(job, { includeResult = true } = {}) {
   return {
     id: job.id,
@@ -1302,6 +1341,8 @@ function publicHistoryCompareJob(job, { includeResult = true } = {}) {
     params: job.params || null,
     created_at: job.created_at,
     updated_at: job.updated_at,
+    created_at_utc_msc:compareJobUtcMs(job.created_at),
+    updated_at_utc_msc:compareJobUtcMs(job.updated_at),
   }
 }
 
@@ -1321,7 +1362,7 @@ function historyCompareJobFromRow(row) {
     cancel_requested: Boolean(row.cancel_requested),
     created_at: row.created_at,
     updated_at: row.updated_at,
-    updated_at_ms: Date.parse(row.updated_at) || Date.now(),
+    updated_at_ms:compareJobUtcMs(row.updated_at) || Date.now(),
   }
 }
 
