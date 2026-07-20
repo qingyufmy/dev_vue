@@ -829,6 +829,16 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('并非逐根主周期 K 线连续触发策略的完整回测')
   })
 
+  it('does not invent a leading model when every response holds, no order trades, or scores tie', () => {
+    expect(frontend).toContain('本次没有模型给出可评估方向')
+    expect(frontend).toContain('本次只有观望或异常响应')
+    expect(frontend).toContain('没有形成模拟成交')
+    expect(frontend).toContain('订单均未成交')
+    expect(frontend).toContain('多个模型的方向质量暂时并列')
+    expect(frontend).toContain('directionHasUniqueLeader')
+    expect(frontend).toContain('replayHasUniqueLeader')
+  })
+
   it('discloses conservative gap, stop-limit and intrabar margin assumptions', () => {
     expect(frontend).toContain('跳空触发和跳空止损按更差的开盘成交价计算')
     expect(frontend).toContain('挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损')

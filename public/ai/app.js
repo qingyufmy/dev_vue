@@ -4930,10 +4930,24 @@ function renderHistoryCompareResults(results, meta) {
   const isContinuous = meta.evaluation_mode === "continuous";
   const valid = results.filter(r => r.status === "success");
   const sorted = [...valid].sort((a, b) => (b.directional_score?.direction_quality_score || 0) - (a.directional_score?.direction_quality_score || 0));
-  const leader = sorted[0];
+  const directionRanked = sorted.filter(result => Number(result.directional_score?.actionable_count || 0) > 0);
+  const leader = directionRanked[0];
+  const directionLeaderScore = Number(leader?.directional_score?.direction_quality_score || 0);
+  const directionLeaderTies = leader
+    ? directionRanked.filter(result =>
+      Number(result.directional_score?.direction_quality_score || 0) === directionLeaderScore)
+    : [];
+  const directionHasUniqueLeader = directionLeaderTies.length === 1;
   const replayModels = valid.filter(result => result.account_simulation?.status === "success");
   const replaySorted = [...replayModels].sort((a, b) => Number(b.account_simulation.net_profit || 0) - Number(a.account_simulation.net_profit || 0));
-  const replayLeader = replaySorted[0];
+  const replayRanked = replaySorted.filter(result => Number(result.account_simulation.closed_trade_count || 0) > 0);
+  const replayLeader = replayRanked[0];
+  const replayLeaderProfit = Number(replayLeader?.account_simulation.net_profit || 0);
+  const replayLeaderTies = replayLeader
+    ? replayRanked.filter(result =>
+      Math.abs(Number(result.account_simulation.net_profit || 0) - replayLeaderProfit) < 0.005)
+    : [];
+  const replayHasUniqueLeader = replayLeaderTies.length === 1;
   const failedResults = results.filter(result => result.status !== "success");
   const failedModels = failedResults.length;
   const comparableAgreementCount = meta.agreement_comparable_count == null
@@ -4945,10 +4959,21 @@ function renderHistoryCompareResults(results, meta) {
   const agreementNote = comparableAgreementCount > 0
     ? `${comparableAgreementCount} 个时点具备至少两个有效响应`
     : "有效模型不足，无法计算一致度";
-  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${leader ? `${escapeHtml(leader.model_name)} 的方向判断更稳定` : "暂无可用结论"}</h2><p>方向评估与资金回放分开计算：前者比较判断质量，后者按模型给出的订单参数回放成交与资金变化。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(meta.timeframe || "")}</span></header>
+  const conclusion = !leader
+    ? "本次没有模型给出可评估方向"
+    : directionHasUniqueLeader
+      ? `${escapeHtml(leader.model_name)} 的方向判断更稳定`
+      : "多个模型的方向质量暂时并列";
+  const directionLeaderLabel = !leader
+    ? "无可评估方向"
+    : directionHasUniqueLeader ? escapeHtml(leader.model_name) : `${directionLeaderTies.length} 个模型并列`;
+  const replayLeaderLabel = !replayLeader
+    ? "没有形成模拟成交"
+    : replayHasUniqueLeader ? escapeHtml(replayLeader.model_name) : `${replayLeaderTies.length} 个模型并列`;
+  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${conclusion}</h2><p>方向评估与资金回放分开计算：前者比较判断质量，后者按模型给出的订单参数回放成交与资金变化。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(meta.timeframe || "")}</span></header>
     <div class="compare-summary-grid">
-      <div><span>方向领先</span><strong>${leader ? escapeHtml(leader.model_name) : "--"}</strong><small>方向质量分 ${leader?.directional_score?.direction_quality_score ?? 0}</small></div>
-      <div><span>资金回放领先</span><strong>${replayLeader ? escapeHtml(replayLeader.model_name) : "--"}</strong><small>${replayLeader ? `净收益 ${Number(replayLeader.account_simulation.net_profit || 0).toFixed(2)}` : "执行数据暂不可用"}</small></div>
+      <div><span>方向领先</span><strong>${directionLeaderLabel}</strong><small>${leader ? `方向质量分 ${directionLeaderScore.toFixed(1)}` : "本次只有观望或异常响应"}</small></div>
+      <div><span>资金回放领先</span><strong>${replayLeaderLabel}</strong><small>${replayLeader ? `净收益 ${replayLeaderProfit.toFixed(2)}` : replayModels.length ? "订单均未成交" : "执行数据暂不可用"}</small></div>
       <div><span>平均一致度</span><strong>${agreementValue}</strong><small>${agreementNote}</small></div>
       <div><span>${isContinuous ? "决策时点" : "评估切片"}</span><strong>${meta.evaluation_count || 0}</strong><small>${isContinuous ? "逐根策略主周期闭合" : "均匀覆盖所选行情区间"}</small></div>
     </div>
