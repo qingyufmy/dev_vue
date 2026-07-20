@@ -165,7 +165,7 @@ import { maybeAiSignal } from '../../server/routes/ai/llm.js'
 
 function makeRates(count = 100) {
   return Array.from({ length: count }, (_, i) => ({
-    time: `2026-07-01 ${String(i).padStart(2, '0')}:00:00`,
+    time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
     open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100',
   }))
 }
@@ -455,7 +455,7 @@ describe('handleHistoryCompare', () => {
         status: 'success',
         market_meta: { source: 'mysql_period_cache' },
         rates: Array.from({ length: 50 }, (_, i) => ({
-          time: `2026-07-01 ${String(i).padStart(2, '0')}:00:00`,
+          time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
           open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
         })),
       })
@@ -468,7 +468,7 @@ describe('handleHistoryCompare', () => {
       expect(callCount).toBeGreaterThan(0)
     })
 
-    it('returns results with simulated_pnl for each model', async () => {
+    it('returns next-closed-bar directional scores without labelling them as PnL', async () => {
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 25 })
       expect(result.status).toBe('success')
       expect(result.results).toHaveLength(2)
@@ -477,12 +477,13 @@ describe('handleHistoryCompare', () => {
         expect(r).toHaveProperty('model_name')
         expect(r).toHaveProperty('status', 'success')
         expect(r).toHaveProperty('signals')
-        expect(r).toHaveProperty('simulated_pnl')
-        expect(r.simulated_pnl).toHaveProperty('total')
-        expect(r.simulated_pnl).toHaveProperty('win_rate')
-        expect(r.simulated_pnl).toHaveProperty('buy_count')
-        expect(r.simulated_pnl).toHaveProperty('sell_count')
-        expect(r.simulated_pnl).toHaveProperty('hold_count')
+        expect(r).not.toHaveProperty('simulated_pnl')
+        expect(r).toHaveProperty('directional_score')
+        expect(r.directional_score).toHaveProperty('total_move')
+        expect(r.directional_score).toHaveProperty('directional_accuracy')
+        expect(r.directional_score).toHaveProperty('buy_count')
+        expect(r.directional_score).toHaveProperty('sell_count')
+        expect(r.directional_score).toHaveProperty('hold_count')
       }
     })
 
@@ -490,9 +491,11 @@ describe('handleHistoryCompare', () => {
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 10 })
       expect(result.meta).toHaveProperty('symbol', 'XAUUSD')
       expect(result.meta).toHaveProperty('timeframe', 'M30')
-      expect(result.meta).toHaveProperty('kline_count', 50)
+      expect(result.meta.kline_count).toBeGreaterThan(20)
+      expect(result.meta.kline_count).toBeLessThanOrEqual(50)
       expect(result.meta).toHaveProperty('requested_step', 10)
       expect(result.meta.evaluation_count).toBeLessThanOrEqual(20)
+      expect(result.meta).toHaveProperty('metric_type', 'next_closed_bar_direction')
     })
 
     it('evaluates a signal against the next unseen candle and records losses', async () => {
@@ -502,15 +505,21 @@ describe('handleHistoryCompare', () => {
       mockMt5Bridge.mockResolvedValue({
         status: 'success',
         rates: Array.from({ length: 25 }, (_, i) => ({
-          time: `2026-07-01T${String(i).padStart(2, '0')}:00:00`,
+          time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
           open: 2000, high: 2010, low: 1980, close: i === 20 ? 1990 : 2005, tick_volume: 100,
         })),
         market_meta: { source: 'mysql_period_cache' },
       })
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 50 })
-      expect(result.results[0].signals[0].time).toContain('20:00:00')
-      expect(result.results[0].signals[0].pnl).toBe(-10)
-      expect(result.results[0].simulated_pnl.loss_count).toBeGreaterThan(0)
+      expect(result.results[0].signals[0].time).toContain('10:00:00')
+      expect(result.results[0].signals[0].next_bar_move).toBe(-10)
+      expect(result.results[0].directional_score.incorrect_count).toBeGreaterThan(0)
+    })
+
+    it('rejects a comparison timeframe outside the strategy market-data plan', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'H1', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 10 })
+      expect(result).toEqual({ status: 'error', message: 'timeframe_not_supported_by_strategy' })
+      expect(maybeAiSignal).not.toHaveBeenCalled()
     })
   })
 })
@@ -520,11 +529,30 @@ describe('POST /ai/model-compare/history route', () => {
     expect(routes).toContain("router.post('/ai/model-compare/history', authMiddleware")
   })
 
-  it('route imports handleHistoryCompare from strategy.js', () => {
-    expect(routes).toContain('handleHistoryCompare')
+  it('route imports the history comparison job API from strategy.js', () => {
+    expect(routes).toContain('startHistoryCompareJob')
+    expect(routes).toContain('getHistoryCompareJob')
+    expect(routes).toContain('cancelHistoryCompareJob')
   })
 
-  it('route calls handleHistoryCompare(req.user.id, req.body)', () => {
-    expect(routes).toContain('handleHistoryCompare(req.user.id, req.body || {})')
+  it('route creates a background comparison job', () => {
+    expect(routes).toContain('startHistoryCompareJob(req.user.id, req.body || {})')
+    expect(routes).toContain("router.get('/ai/model-compare/history/:jobId'")
+    expect(routes).toContain("router.delete('/ai/model-compare/history/:jobId'")
+  })
+})
+
+describe('historical comparison frontend contract', () => {
+  const frontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+
+  it('polls background jobs and supports cancellation', () => {
+    expect(frontend).toContain('/api/ai/model-compare/history/${encodeURIComponent(jobId)}')
+    expect(frontend).toContain('{ method:"DELETE" }')
+  })
+
+  it('presents directional evaluation instead of simulated profit', () => {
+    expect(frontend).toContain('方向准确率')
+    expect(frontend).toContain('下一根已收盘 K 线方向')
+    expect(frontend).not.toContain('模拟盈亏')
   })
 })

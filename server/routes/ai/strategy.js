@@ -15,6 +15,7 @@ import { parseStrategyPolicy } from './strategy-policy.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
+import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
@@ -40,6 +41,26 @@ function comparisonDirection(signalType) {
   if (normalized.startsWith('buy')) return 'buy'
   if (normalized.startsWith('sell')) return 'sell'
   return normalized === 'hold' ? 'hold' : 'unknown'
+}
+
+function compareRateUtcMs(rate) {
+  const numeric = Number(rate?.time_utc_msc ?? rate?.time_msc)
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric
+  const raw = String(rate?.time || '').trim()
+  if (!raw) return null
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T')
+  const parsed = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function compareVisibleRates(rates, decisionUtcMs, timeframe, count, includeChan) {
+  const durationMs = (TIMEFRAME_MINUTES[timeframe] || 1) * 60_000
+  const closed = rates.filter(rate => {
+    const openUtcMs = compareRateUtcMs(rate)
+    return openUtcMs != null && openUtcMs + durationMs <= decisionUtcMs
+  })
+  const requested = Math.max(Number(count) || 100, includeChan ? CHAN_HISTORY_COUNT : 0)
+  return closed.slice(-Math.min(requested, CHAN_MAX_HISTORY_COUNT))
 }
 
 function rememberChanMaxHistory(key) {
@@ -635,8 +656,10 @@ export async function handleAnalyzeCompare(userId, params) {
   return { ok: true, results, models, market_snapshot: market }
 }
 
-export async function handleHistoryCompare(userId, params) {
+export async function handleHistoryCompare(userId, params, options = {}) {
   const { symbol, timeframe, model_ids, strategy_id, start_time, end_time, step } = params
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
+  const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false
 
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') return { status: 'error', message: 'admin_only' }
@@ -659,31 +682,51 @@ export async function handleHistoryCompare(userId, params) {
 
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
+  const policy = parseStrategyPolicy(strategy)
+  const planItems = policy.marketDataPlan.timeframes.map(item => ({
+    timeframe: String(item.timeframe || '').toUpperCase(),
+    kline_count: Math.max(20, Number(item.kline_count) || 100),
+  })).filter(item => TIMEFRAME_MINUTES[item.timeframe])
+  const requestedTimeframe = String(timeframe).toUpperCase()
+  if (!planItems.some(item => item.timeframe === requestedTimeframe)) {
+    return { status: 'error', message: 'timeframe_not_supported_by_strategy' }
+  }
 
   const startUtcMs = parseCompareTimeUtcMs(start_time)
   const endUtcMs = parseCompareTimeUtcMs(end_time)
   if (!startUtcMs || !endUtcMs || endUtcMs <= startUtcMs) {
     return { status: 'error', message: 'invalid_history_time_range' }
   }
-  let historyWindow
+  const warmupMs = planItems.reduce((max, item) => Math.max(max,
+    TIMEFRAME_MINUTES[item.timeframe] * item.kline_count * 2 * 60_000), 0)
+  let historyWindows
   try {
-    historyWindow = await loadPeriodMarketWindow(
-      userId, symbol, String(timeframe).toUpperCase(), startUtcMs, endUtcMs
-    )
+    historyWindows = await Promise.all(planItems.map(async item => ({
+      ...item,
+      window: await loadPeriodMarketWindow(userId, symbol, item.timeframe, startUtcMs - warmupMs, endUtcMs),
+    })))
   } catch (error) {
     return { status: 'error', message: error.message || 'history_market_data_unavailable' }
   }
-  const klines = Array.isArray(historyWindow?.periodRates)
-    ? historyWindow.periodRates.slice(0, HISTORY_COMPARE_MAX_KLINES)
+  const selectedWindow = historyWindows.find(item => item.timeframe === requestedTimeframe)
+  const requestedRates = Array.isArray(selectedWindow?.window?.periodRates)
+    ? selectedWindow.window.periodRates.filter(rate => {
+      const utcMs = compareRateUtcMs(rate)
+      return utcMs != null && utcMs >= startUtcMs && utcMs <= endUtcMs
+    })
     : []
+  if (requestedRates.length > HISTORY_COMPARE_MAX_KLINES) {
+    return { status: 'error', message: 'history_compare_range_too_large' }
+  }
+  const klines = requestedRates
   if (klines.length <= HISTORY_COMPARE_MIN_CONTEXT) return { status: 'error', message: 'insufficient_kline_data_for_compare' }
 
   const requestedInterval = Math.max(1, Math.min(50, Number(step) || 10))
   const eligibleDecisionCount = klines.length - HISTORY_COMPARE_MIN_CONTEXT
   const klineInterval = Math.max(requestedInterval, Math.ceil(eligibleDecisionCount / HISTORY_COMPARE_MAX_STEPS))
 
-  const policy = parseStrategyPolicy(strategy)
   const prompt = strategy.system_prompt || ''
+  await onProgress({ stage: 'market_ready', progress_percent: 10, completed_steps: 0, total_steps: 0 })
 
   const profileResults = await Promise.allSettled(
     uniqueIds.map(async (modelId) => {
@@ -715,15 +758,54 @@ export async function handleHistoryCompare(userId, params) {
   for (let i = HISTORY_COMPARE_MIN_CONTEXT - 1; i < klines.length - 1; i += klineInterval) {
     steps.push(i)
   }
+  await onProgress({ stage: 'models_ready', progress_percent: 15, completed_steps: 0, total_steps: steps.length })
 
-  for (const stepIdx of steps) {
-    const visibleRates = klines.slice(0, stepIdx + 1).map(k => ({
-      time: k.time,
-      open: String(k.open), high: String(k.high), low: String(k.low), close: String(k.close),
-      tick_volume: String(k.tick_volume),
-    }))
-
-    const market = calculateMarketData(symbol, String(timeframe).toUpperCase(), visibleRates, null, [], {})
+  for (let stepNumber = 0; stepNumber < steps.length; stepNumber++) {
+    if (shouldCancel()) return { status: 'cancelled', message: 'history_compare_cancelled' }
+    const stepIdx = steps[stepNumber]
+    const currentRateUtcMs = compareRateUtcMs(klines[stepIdx])
+    const decisionUtcMs = currentRateUtcMs + (TIMEFRAME_MINUTES[requestedTimeframe] || 1) * 60_000
+    const strategyTimeframes = {}
+    const missingTimeframes = []
+    for (const item of historyWindows) {
+      const sourceRates = Array.isArray(item.window?.periodRates) ? item.window.periodRates : []
+      const contextRates = compareVisibleRates(sourceRates, decisionUtcMs, item.timeframe, item.kline_count, policy.useChanAnalysis)
+      if (contextRates.length < Math.min(20, item.kline_count)) {
+        missingTimeframes.push(item.timeframe)
+        continue
+      }
+      const visibleContextRates = contextRates.slice(-item.kline_count)
+      const summary = calculateMarketData(symbol, item.timeframe, visibleContextRates, null, [], {
+        computeChan: policy.useChanAnalysis,
+        chanRates: contextRates,
+        requestedChanHistoryCount: contextRates.length,
+        chanDataQuality: item.window?.marketMeta || null,
+      })
+      const { account: _account, positions: _positions, symbol: _symbol, timeframe: _timeframe, timestamp: _timestamp, ...slimSummary } = summary
+      strategyTimeframes[item.timeframe] = { summary: slimSummary, klines: compactRates(visibleContextRates) }
+    }
+    const primaryRates = compareVisibleRates(
+      selectedWindow.window.periodRates, decisionUtcMs, requestedTimeframe,
+      selectedWindow.kline_count, policy.useChanAnalysis
+    )
+    const market = calculateMarketData(symbol, requestedTimeframe, primaryRates.slice(-selectedWindow.kline_count), null, [], {
+      computeChan: policy.useChanAnalysis,
+      chanRates: primaryRates,
+      requestedChanHistoryCount: primaryRates.length,
+      chanDataQuality: selectedWindow.window?.marketMeta || null,
+    })
+    market.strategy_context = {
+      strategy_sequence: planItems.map(item => `${item.timeframe}(${item.kline_count})`).join(' → '),
+      required_timeframes: planItems.map(item => item.timeframe),
+      used_timeframes: Object.keys(strategyTimeframes),
+      missing_timeframes: missingTimeframes,
+      context_status: missingTimeframes.length ? 'partial' : 'complete',
+      timeframes: strategyTimeframes,
+    }
+    market.requested_timeframes = market.strategy_context.required_timeframes
+    market.used_timeframes = market.strategy_context.used_timeframes
+    market.missing_timeframes = missingTimeframes
+    if (policy.useChanAnalysis) market.chan = strategyTimeframes[requestedTimeframe]?.summary?.chan
 
     const inferenceTasks = validModels.map(({ modelId, resolved }) => {
       const config = {
@@ -736,7 +818,7 @@ export async function handleHistoryCompare(userId, params) {
         _credential_source: resolved.credential_source,
         _allowed_entry_methods: policy.entryMethods,
         _market_data_plan: policy.marketDataPlan,
-        _use_chan_analysis: false,
+        _use_chan_analysis: policy.useChanAnalysis,
         _market_only: strategy.scope === 'platform',
         _ai_volume_min: 0.01,
         _ai_volume_max: 1.0,
@@ -757,7 +839,7 @@ export async function handleHistoryCompare(userId, params) {
 
       if (result.error) {
         modelSignals[result.modelId].push({
-          time: outcomeKline.time, signal_type: 'error', confidence: 0, pnl: 0, error: result.error,
+          time: outcomeKline.time, signal_type: 'error', confidence: 0, next_bar_move: 0, error: result.error,
         })
         continue
       }
@@ -766,31 +848,37 @@ export async function handleHistoryCompare(userId, params) {
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
         modelSignals[result.modelId].push({
-          time: outcomeKline.time, signal_type: 'error', confidence: 0, pnl: 0,
+          time: outcomeKline.time, signal_type: 'error', confidence: 0, next_bar_move: 0,
           error: signal?.reasoning || 'inference_failed',
         })
         continue
       }
       const direction = comparisonDirection(signal.signal_type)
-      let pnl = 0
-      if (direction === 'buy') pnl = closePrice - openPrice
-      else if (direction === 'sell') pnl = openPrice - closePrice
+      let nextBarMove = 0
+      if (direction === 'buy') nextBarMove = closePrice - openPrice
+      else if (direction === 'sell') nextBarMove = openPrice - closePrice
 
       modelSignals[result.modelId].push({
-        time: outcomeKline.time, signal_type: direction, confidence: signal.confidence || 0, pnl,
+        time: outcomeKline.time, signal_type: direction, confidence: signal.confidence || 0, next_bar_move: nextBarMove,
       })
     }
+    await onProgress({
+      stage: 'evaluating',
+      progress_percent: 15 + Math.round(((stepNumber + 1) / Math.max(1, steps.length)) * 80),
+      completed_steps: stepNumber + 1,
+      total_steps: steps.length,
+    })
   }
 
   const modelResults = []
   for (const { modelId, resolved } of validModels) {
     const signals = modelSignals[modelId]
-    const totalPnl = signals.reduce((sum, s) => sum + s.pnl, 0)
+    const totalMove = signals.reduce((sum, s) => sum + s.next_bar_move, 0)
     const buyCount = signals.filter(s => s.signal_type === 'buy').length
     const sellCount = signals.filter(s => s.signal_type === 'sell').length
     const holdCount = signals.filter(s => s.signal_type === 'hold').length
-    const winCount = signals.filter(s => s.pnl > 0).length
-    const lossCount = signals.filter(s => s.pnl < 0).length
+    const correctCount = signals.filter(s => s.next_bar_move > 0).length
+    const incorrectCount = signals.filter(s => s.next_bar_move < 0).length
     const errorCount = signals.filter(s => s.signal_type === 'error').length
     const tradeCount = buyCount + sellCount
 
@@ -801,12 +889,12 @@ export async function handleHistoryCompare(userId, params) {
       status: 'success',
       signal_count: signals.length,
       signals,
-      simulated_pnl: {
-        total: Number(totalPnl.toFixed(10)),
-        win_count: winCount,
-        loss_count: lossCount,
-        win_rate: tradeCount > 0 ? Number(((winCount / tradeCount) * 100).toFixed(1)) : 0,
-        avg_pnl: tradeCount > 0 ? Number((totalPnl / tradeCount).toFixed(10)) : 0,
+      directional_score: {
+        total_move: Number(totalMove.toFixed(10)),
+        correct_count: correctCount,
+        incorrect_count: incorrectCount,
+        directional_accuracy: tradeCount > 0 ? Number(((correctCount / tradeCount) * 100).toFixed(1)) : 0,
+        avg_next_bar_move: tradeCount > 0 ? Number((totalMove / tradeCount).toFixed(10)) : 0,
         buy_count: buyCount,
         sell_count: sellCount,
         hold_count: holdCount,
@@ -824,8 +912,120 @@ export async function handleHistoryCompare(userId, params) {
       requested_step: requestedInterval,
       evaluation_count: steps.length,
       max_evaluation_count: HISTORY_COMPARE_MAX_STEPS,
-      market_source: historyWindow.marketMeta?.source || null,
+      market_source: selectedWindow.window?.marketMeta?.source || null,
       start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
+      metric_type: 'next_closed_bar_direction',
+      strategy_timeframes: planItems.map(item => item.timeframe),
+      chan_enabled: policy.useChanAnalysis,
     },
   }
+}
+
+const historyCompareJobs = new Map()
+
+function publicHistoryCompareJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    stage: job.stage,
+    progress_percent: job.progress_percent,
+    completed_steps: job.completed_steps,
+    total_steps: job.total_steps,
+    result: job.status === 'succeeded' ? job.result : null,
+    error: job.error,
+    created_at: job.created_at,
+    updated_at: job.updated_at,
+  }
+}
+
+function cleanupHistoryCompareJobs() {
+  const cutoff = Date.now() - 60 * 60_000
+  for (const [id, job] of historyCompareJobs) {
+    if (job.updated_at_ms < cutoff && !['queued', 'running', 'cancelling'].includes(job.status)) historyCompareJobs.delete(id)
+  }
+}
+
+export async function startHistoryCompareJob(userId, params) {
+  const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+  if (!user || user.role !== 'admin') throw new Error('admin_only')
+  cleanupHistoryCompareJobs()
+  const active = [...historyCompareJobs.values()].find(job => job.user_id === Number(userId)
+    && ['queued', 'running', 'cancelling'].includes(job.status))
+  if (active) return publicHistoryCompareJob(active)
+  const now = new Date().toISOString()
+  const job = {
+    id: crypto.randomUUID(),
+    user_id: Number(userId),
+    status: 'queued',
+    stage: 'queued',
+    progress_percent: 0,
+    completed_steps: 0,
+    total_steps: 0,
+    result: null,
+    error: null,
+    cancel_requested: false,
+    created_at: now,
+    updated_at: now,
+    updated_at_ms: Date.now(),
+  }
+  historyCompareJobs.set(job.id, job)
+  queueMicrotask(async () => {
+    job.status = 'running'
+    job.stage = 'preparing'
+    job.updated_at = new Date().toISOString()
+    job.updated_at_ms = Date.now()
+    try {
+      const result = await handleHistoryCompare(userId, params, {
+        shouldCancel: () => job.cancel_requested,
+        onProgress: async progress => {
+          Object.assign(job, progress, { updated_at: new Date().toISOString(), updated_at_ms: Date.now() })
+        },
+      })
+      if (job.cancel_requested || result.status === 'cancelled') {
+        job.status = 'cancelled'
+        job.stage = 'cancelled'
+      } else if (result.status === 'success') {
+        job.status = 'succeeded'
+        job.stage = 'completed'
+        job.progress_percent = 100
+        job.result = result
+      } else {
+        job.status = 'failed'
+        job.stage = 'failed'
+        job.error = result.message || 'history_compare_failed'
+      }
+    } catch (error) {
+      job.status = job.cancel_requested ? 'cancelled' : 'failed'
+      job.stage = job.status
+      job.error = job.cancel_requested ? null : (error.message || 'history_compare_failed')
+    }
+    job.updated_at = new Date().toISOString()
+    job.updated_at_ms = Date.now()
+  })
+  return publicHistoryCompareJob(job)
+}
+
+export function getHistoryCompareJob(userId, jobId) {
+  cleanupHistoryCompareJobs()
+  const job = historyCompareJobs.get(String(jobId))
+  if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+  return publicHistoryCompareJob(job)
+}
+
+export function cancelHistoryCompareJob(userId, jobId) {
+  const job = historyCompareJobs.get(String(jobId))
+  if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+  if (['succeeded', 'failed', 'cancelled'].includes(job.status)) return publicHistoryCompareJob(job)
+  job.cancel_requested = true
+  job.status = job.status === 'queued' ? 'cancelled' : 'cancelling'
+  job.stage = job.status
+  job.updated_at = new Date().toISOString()
+  job.updated_at_ms = Date.now()
+  return publicHistoryCompareJob(job)
+}
+
+export const __historyCompareJobsTest = {
+  clear() {
+    historyCompareJobs.clear()
+  },
 }

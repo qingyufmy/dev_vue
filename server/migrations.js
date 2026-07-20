@@ -2647,6 +2647,12 @@ const migrations = [
         console.log('[Migrations] 105 added request_timeout_ms to ai_model_profiles')
       }
     }
+  },
+  {
+    id: '106_disable_smart_close_runtime',
+    async up() {
+      await queryRun('UPDATE close_config SET enabled = 0 WHERE enabled <> 0')
+    }
   }
 ]
 

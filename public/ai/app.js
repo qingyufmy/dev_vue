@@ -954,6 +954,23 @@ const API_ERROR_MESSAGES = {
   strategy_delete_version_changed: "策略在确认期间已被修改，请重新检查后再删除",
   strategy_delete_impact_changed: "策略订阅情况在确认期间发生变化，请重新确认影响范围",
   strategy_delete_active_subscriptions_unconfirmed: "仍有运行中的订阅，必须明确确认停止后才能删除",
+  admin_only: "仅管理员可以使用此功能",
+  "symbol required": "请选择交易品种",
+  "timeframe required": "请选择 K 线周期",
+  "strategy required": "请选择推理策略",
+  "start_time and end_time required": "请选择完整的开始和结束时间",
+  "model_ids must be an array of 2-5 model profile IDs": "请选择 2 至 5 个模型",
+  "model_ids must contain 2-5 unique IDs": "请选择 2 至 5 个不同模型",
+  invalid_history_time_range: "历史评估时间范围无效",
+  history_market_data_unavailable: "历史行情暂不可用，请确认桥接和行情缓存状态",
+  insufficient_kline_data_for_compare: "所选时间范围内的完整 K 线不足",
+  history_compare_range_too_large: "所选范围包含超过 5000 根 K 线，请缩短时间范围或使用更大周期",
+  timeframe_not_supported_by_strategy: "所选周期不在该策略的行情数据方案中",
+  symbol_not_supported_by_strategy: "所选品种不在该策略支持范围内",
+  history_compare_job_not_created: "历史模型对比任务创建失败",
+  history_compare_job_not_found: "历史模型对比任务不存在或已过期",
+  history_compare_failed: "历史模型对比执行失败",
+  history_compare_cancelled: "历史模型对比已取消",
 };
 
 function apiErrorMessage(code) {
@@ -4425,7 +4442,9 @@ async function loadModelCompare() {
     try {
       const data = await api("/api/ai/strategies?include_inactive=1");
       const active = (data.strategies || []).filter(s => s.visibility_status === "active" && Number(s.is_active));
+      _historyCompareStrategies = active;
       sel.innerHTML = '<option value="">请选择策略</option>' + active.map(s => `<option value="${s.id}">${escapeHtml(s.title)}</option>`).join("");
+      sel.onchange = syncHistoryCompareStrategyInputs;
     } catch { sel.innerHTML = '<option value="">加载失败</option>'; }
   }
   setDefaultCompareDates();
@@ -4440,7 +4459,37 @@ function setDefaultCompareDates() {
   if ($("cmpStartTime")) $("cmpStartTime").value = fmt(start);
 }
 
+let _historyCompareJobId = null;
+let _historyCompareStrategies = [];
+
+function syncHistoryCompareStrategyInputs() {
+  const strategyId = Number($("cmpStrategy")?.value || 0);
+  const strategy = _historyCompareStrategies.find(item => Number(item.id) === strategyId);
+  if (!strategy) return;
+  const symbols = parseJsonField(strategy.symbols_json, []);
+  if (symbols.length && $("cmpSymbol")) $("cmpSymbol").value = symbols[0];
+  const plan = parseJsonField(strategy.market_data_plan_json, {});
+  const timeframes = Array.isArray(plan.timeframes)
+    ? plan.timeframes.map(item => String(item.timeframe || "").toUpperCase()).filter(Boolean)
+    : [];
+  if ($("cmpTimeframe") && timeframes.length) {
+    $("cmpTimeframe").innerHTML = timeframes.map(tf => `<option value="${escapeHtml(tf)}">${escapeHtml(tf)}</option>`).join("");
+    const primaryTimeframe = String(plan.primary_timeframe || "").toUpperCase();
+    $("cmpTimeframe").value = timeframes.includes(primaryTimeframe) ? primaryTimeframe : timeframes[0];
+  }
+}
+
 async function runHistoryCompare() {
+  if (_historyCompareJobId) {
+    const jobId = _historyCompareJobId;
+    try {
+      await api(`/api/ai/model-compare/history/${encodeURIComponent(jobId)}`, { method:"DELETE" });
+      if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "正在取消任务…";
+    } catch (error) {
+      toast(`取消失败：${error.message}`, "error");
+    }
+    return;
+  }
   const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
   const timeframe = $("cmpTimeframe")?.value || "M15";
   const strategyId = Number($("cmpStrategy")?.value || 0);
@@ -4453,21 +4502,52 @@ async function runHistoryCompare() {
   const endTime = $("cmpEndTime")?.value ? $("cmpEndTime").value + ":00" : "";
   if (!startTime || !endTime) return showToast("请选择时间范围", "error");
   const btn = $("cmpRunBtn");
-  if (btn) btn.disabled = true;
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="square" size="16"></i>取消对比';
+  }
   $("cmpProgressBar")?.classList.remove("hidden");
-  if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "10%";
+  if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "2%";
   if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "正在提交对比任务...";
   try {
     const data = await api("/api/ai/model-compare/history", {
-      method: "POST", body: JSON.stringify({ symbol, timeframe, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime, step }),
+      method: "POST", body: { symbol, timeframe, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime, step },
     });
-    if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "100%";
-    if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "对比完成";
-    if (data.status === "success") renderHistoryCompareResults(data.results || [], data.meta || {});
-    else showToast(data.message || "对比失败", "error");
+    _historyCompareJobId = data.job?.id || null;
+    if (!_historyCompareJobId) throw new Error("history_compare_job_not_created");
+    let job = data.job;
+    while (["queued", "running", "cancelling"].includes(job.status)) {
+      const progress = Math.max(2, Math.min(99, Number(job.progress_percent || 0)));
+      if ($("cmpProgressFill")) $("cmpProgressFill").style.width = `${progress}%`;
+      const stageLabels = {
+        queued:"等待后台执行", preparing:"正在准备历史行情", market_ready:"历史行情已就绪",
+        models_ready:"模型配置已就绪", evaluating:"正在逐段评估", cancelling:"正在取消",
+      };
+      if ($("cmpProgressLabel")) {
+        const stepsText = job.total_steps ? ` · ${job.completed_steps || 0}/${job.total_steps}` : "";
+        $("cmpProgressLabel").textContent = `${stageLabels[job.stage] || "正在处理"}${stepsText}`;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      job = (await api(`/api/ai/model-compare/history/${encodeURIComponent(_historyCompareJobId)}`, { timeout:10000 })).job;
+    }
+    if (job.status === "succeeded" && job.result?.status === "success") {
+      if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "100%";
+      if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "方向评估完成";
+      renderHistoryCompareResults(job.result.results || [], job.result.meta || {});
+    } else if (job.status === "cancelled") {
+      if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "任务已取消";
+      toast("历史模型对比已取消", "warning");
+    } else {
+      throw new Error(apiErrorMessage(job.error || "history_compare_failed"));
+    }
   } catch (e) { showToast("请求失败: " + e.message, "error"); }
   finally {
-    if (btn) btn.disabled = false;
+    _historyCompareJobId = null;
+    if (btn) {
+      btn.disabled = document.querySelectorAll("[data-cmp-model]:checked").length < 2;
+      btn.innerHTML = '<i data-lucide="play" size="16"></i>开始对比';
+    }
+    initIcons();
     setTimeout(() => $("cmpProgressBar")?.classList.add("hidden"), 2000);
   }
 }
@@ -4476,28 +4556,28 @@ function renderHistoryCompareResults(results, meta) {
   const container = $("cmpResults");
   if (!container) return;
   const valid = results.filter(r => r.status === "success");
-  const sorted = [...valid].sort((a, b) => (b.simulated_pnl?.total || 0) - (a.simulated_pnl?.total || 0));
-  const avgWinRate = valid.length ? (valid.reduce((s, r) => s + (r.simulated_pnl?.win_rate || 0), 0) / valid.length).toFixed(1) : "0";
+  const sorted = [...valid].sort((a, b) => (b.directional_score?.directional_accuracy || 0) - (a.directional_score?.directional_accuracy || 0));
+  const avgAccuracy = valid.length ? (valid.reduce((s, r) => s + (r.directional_score?.directional_accuracy || 0), 0) / valid.length).toFixed(1) : "0";
   let summaryHtml = `<div class="insight-strip" style="margin-bottom:16px">
     <div class="insight-card"><span class="insight-value">${results.length}</span><span class="insight-label">模型总数</span></div>
     <div class="insight-card"><span class="insight-value">${valid.length}</span><span class="insight-label">成功返回</span></div>
-    ${sorted.length ? `<div class="insight-card"><span class="insight-value">${escapeHtml(sorted[0].model_name)}</span><span class="insight-label">最佳 PnL</span></div>` : ""}
-    <div class="insight-card"><span class="insight-value">${avgWinRate}%</span><span class="insight-label">平均胜率</span></div>
+    ${sorted.length ? `<div class="insight-card"><span class="insight-value">${escapeHtml(sorted[0].model_name)}</span><span class="insight-label">方向准确率最高</span></div>` : ""}
+    <div class="insight-card"><span class="insight-value">${avgAccuracy}%</span><span class="insight-label">平均方向准确率</span></div>
   </div>`;
   if (meta) {
-    summaryHtml += `<div style="font-size:12px;color:var(--text-secondary);padding:0 4px 12px">品种: <strong>${escapeHtml(meta.symbol||"")}</strong> · 周期: <strong>${escapeHtml(meta.timeframe||"")}</strong> · K线数: <strong>${meta.kline_count||0}</strong> · 步长: <strong>${meta.step||step}</strong></div>`;
+    summaryHtml += `<div class="workspace-panel" style="font-size:12px;color:var(--text-secondary);margin-bottom:12px"><strong>说明：</strong>这里比较的是模型对下一根已收盘 K 线方向的判断，不是交易回测，不包含挂单触发、止损止盈、点差、滑点和风控结果。<br>品种：<strong>${escapeHtml(meta.symbol||"")}</strong> · 评估周期：<strong>${escapeHtml(meta.timeframe||"")}</strong> · 策略周期：<strong>${escapeHtml((meta.strategy_timeframes||[]).join("、")||"--")}</strong> · 缠论：<strong>${meta.chan_enabled ? "启用" : "关闭"}</strong> · K线数：<strong>${meta.kline_count||0}</strong> · 实际步长：<strong>${meta.step||"--"}</strong></div>`;
   }
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (sorted.length) {
-    tableHtml = '<div class="workspace-panel"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;border-bottom:1px solid var(--border-subtle)"><th style="padding:8px">模型</th><th>提供商</th><th>信号数</th><th>买</th><th>卖</th><th>持有</th><th>错误</th><th>胜率</th><th>总PnL</th><th>均PnL</th></tr></thead><tbody>';
+    tableHtml = '<div class="workspace-panel"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;border-bottom:1px solid var(--border-subtle)"><th style="padding:8px">模型</th><th>提供商</th><th>信号数</th><th>买</th><th>卖</th><th>观望</th><th>错误</th><th>方向准确率</th><th>累计方向幅度</th><th>平均幅度</th></tr></thead><tbody>';
     for (const r of sorted) {
-      const pnl = r.simulated_pnl;
-      const pnlColor = pnl.total > 0 ? "color:#22c55e" : pnl.total < 0 ? "color:#ef4444" : "";
+      const score = r.directional_score;
+      const scoreColor = score.total_move > 0 ? "color:#22c55e" : score.total_move < 0 ? "color:#ef4444" : "";
       tableHtml += `<tr style="border-bottom:1px solid var(--border-subtle,.06)">
         <td style="padding:8px">${escapeHtml(r.model_name)}</td><td>${escapeHtml(modelProviderLabel(r.provider))}</td>
-        <td>${r.signal_count}</td><td>${pnl.buy_count}</td><td>${pnl.sell_count}</td><td>${pnl.hold_count}</td><td>${pnl.error_count}</td>
-        <td>${pnl.win_rate}%</td><td style="${pnlColor}">${pnl.total.toFixed(4)}</td><td style="${pnlColor}">${pnl.avg_pnl.toFixed(6)}</td></tr>`;
+        <td>${r.signal_count}</td><td>${score.buy_count}</td><td>${score.sell_count}</td><td>${score.hold_count}</td><td>${score.error_count}</td>
+        <td>${score.directional_accuracy}%</td><td style="${scoreColor}">${score.total_move.toFixed(4)}</td><td style="${scoreColor}">${score.avg_next_bar_move.toFixed(6)}</td></tr>`;
     }
     tableHtml += '</tbody></table></div>';
   }
@@ -4522,7 +4602,7 @@ function renderHistoryCompareResults(results, meta) {
         if (sig) {
           const dir = sig.signal_type;
           const c = dirColor[dir] || "#6b7280";
-          const tip = dir.toUpperCase() + (sig.pnl ? " PnL:" + sig.pnl.toFixed(4) : "");
+          const tip = `${directionText(dir)}${sig.next_bar_move ? ` · 下一根方向幅度 ${sig.next_bar_move.toFixed(4)}` : ""}`;
           timelineHtml += `<td style="padding:4px 8px;text-align:center" title="${escapeHtml(tip)}"><span style="color:${c}">${dirIcon[dir]||"?"}</span></td>`;
         } else {
           timelineHtml += '<td style="padding:4px 8px;text-align:center;color:var(--text-secondary)">-</td>';

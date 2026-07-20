@@ -9,7 +9,8 @@ import { authMiddleware } from '../../middleware/auth.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
-import { handleAnalyze, handleAnalyzeCompare, handleHistoryCompare, buildStrategyContextFromTags } from './strategy.js'
+import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistoryCompareJob,
+  cancelHistoryCompareJob, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
@@ -161,7 +162,17 @@ router.post('/ai/analyze-compare', authMiddleware, async (req, res) => {
 
 
 router.post('/ai/model-compare/history', authMiddleware, async (req, res) => {
-  try { res.json(await handleHistoryCompare(req.user.id, req.body || {})) }
+  try { res.status(202).json({ ok: true, job: await startHistoryCompareJob(req.user.id, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/model-compare/history/:jobId', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, job: getHistoryCompareJob(req.user.id, req.params.jobId) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.delete('/ai/model-compare/history/:jobId', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, job: cancelHistoryCompareJob(req.user.id, req.params.jobId) }) }
   catch (error) { reviewError(res, error) }
 })
 router.get('/ai/platform-model-policy', authMiddleware, async (req, res) => {
@@ -641,7 +652,7 @@ export { buildOrderIdempotencyKey, prepareAndExecuteOrderIntent,
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
   reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,
   runSmartCloseCycle, syncUserRedisSubscription, removeUserRuntimeAutoSubscription,
-  getUserAutoRuntimeStatus } from './scheduler.js'
+  getUserAutoRuntimeStatus, SMART_CLOSE_FEATURE_ENABLED } from './scheduler.js'
 
 export { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, getTradingAccountById, createTradingAccount, updateTradingAccount, deleteTradingAccount,

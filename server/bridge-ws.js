@@ -1298,6 +1298,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'save_close_config': {
+        if (!ai.SMART_CLOSE_FEATURE_ENABLED) {
+          result = { status: 'error', message: '智能平仓功能当前未启用' }
+          break
+        }
         const cfg = params.config
         if (!cfg) return reply({ status: 'error', message: 'config required' })
         const saved = await ai.saveCloseConfig(userId, cfg)
@@ -1564,6 +1568,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'toggle_close': {
+        if (!ai.SMART_CLOSE_FEATURE_ENABLED) {
+          result = { status: 'error', message: '智能平仓功能当前未启用' }
+          break
+        }
         const enabled = !!params.enabled
         const existing = await ai.getCloseConfig(userId)
         await ai.saveCloseConfig(userId, { ...(existing || {}), enabled })
@@ -1576,6 +1584,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'run_close_now': {
+        if (!ai.SMART_CLOSE_FEATURE_ENABLED) {
+          result = { status: 'error', message: '智能平仓功能当前未启用' }
+          break
+        }
         try {
           await ai.runSmartCloseCycle(userId)
           result = { status: 'success' }

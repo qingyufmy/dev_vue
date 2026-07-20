@@ -23,6 +23,7 @@ import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSIO
 // Key: "promptTypeId:symbol"
 export const autoSchedulerState = {}
 export const closeSchedulerState = {}
+export const SMART_CLOSE_FEATURE_ENABLED = false
 
 // === Permission gate: can user execute auto trades (cancel/submit) ===
 async function isUserEligibleForAutoExecution(userId) {
@@ -2155,6 +2156,7 @@ export async function reconcilePendingOrders() {
 }
 
 export async function startSmartCloseScheduler(userId) {
+  if (!SMART_CLOSE_FEATURE_ENABLED) return false
   if (closeSchedulerState[userId]?.timer) return
   const cfg = await getCloseConfig(userId)
   if (!cfg || !cfg.enabled) return
@@ -2183,6 +2185,7 @@ export function stopSmartCloseScheduler(userId) {
 }
 
 export async function runSmartCloseCycle(userId) {
+  if (!SMART_CLOSE_FEATURE_ENABLED) throw new Error('smart_close_feature_disabled')
   const closeCfg = await getCloseConfig(userId)
   if (!closeCfg || !closeCfg.enabled) return
 
