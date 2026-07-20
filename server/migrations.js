@@ -2670,6 +2670,17 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '105_add_model_profile_timeout',
+    async up() {
+      const cols = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_profiles' AND COLUMN_NAME = 'request_timeout_ms'`)
+      if (!cols.length) {
+        await queryRun(`ALTER TABLE ai_model_profiles ADD COLUMN request_timeout_ms INT DEFAULT NULL AFTER reasoning_effort`)
+        console.log('[Migrations] 105 added request_timeout_ms to ai_model_profiles')
+      }
+    }
   }
 ]
 

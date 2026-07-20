@@ -380,6 +380,7 @@
                 <label><span>API Key</span><input id="profileApiKey" type="password" autocomplete="new-password" placeholder="编辑时留空表示不更换"></label>
                 <label><span>Temperature</span><input id="profileTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label>
                 <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="65536" step="100" value="8000"></label>
+                <label><span>请求超时（秒）</span><input id="profileRequestTimeout" type="number" min="30" max="600" step="10" value="" placeholder="默认 120"><small class="field-help">慢速模型可调高；留空使用默认 120 秒</small></label>
               </div>
               <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button></div>
             </section>

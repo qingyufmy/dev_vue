@@ -54,8 +54,8 @@ export async function createModelProfile(userId, payload, callerRole) {
   const result = await queryRun(
     `INSERT INTO ai_model_profiles
       (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
-       temperature, max_tokens, thinking_enabled, reasoning_effort, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+       temperature, max_tokens, thinking_enabled, reasoning_effort, request_timeout_ms, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
     [
       ownerUserId,
       scope,
@@ -65,9 +65,10 @@ export async function createModelProfile(userId, payload, callerRole) {
       keyEnc,
       keyVersion,
       payload.temperature ?? 0.3,
-      payload.max_tokens ?? 2000,
+      payload.max_tokens ?? 8000,
       providerConfig.thinking_enabled,
       providerConfig.reasoning_effort,
+      payload.request_timeout_ms ?? null,
       now, now,
     ]
   )
@@ -131,6 +132,7 @@ export async function updateModelProfile(id, userId, payload) {
       key_version = ?,
       temperature = COALESCE(?, temperature), max_tokens = COALESCE(?, max_tokens),
       thinking_enabled = COALESCE(?, thinking_enabled), reasoning_effort = COALESCE(?, reasoning_effort),
+      request_timeout_ms = ?,
       updated_at = ?
      WHERE id = ? AND deleted_at IS NULL`,
     [
@@ -141,6 +143,7 @@ export async function updateModelProfile(id, userId, payload) {
       payload.temperature ?? null, payload.max_tokens ?? null,
       providerConfig.thinking_enabled,
       providerConfig.reasoning_effort,
+      payload.request_timeout_ms !== undefined ? payload.request_timeout_ms : null,
       now, id,
     ]
   )

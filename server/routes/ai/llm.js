@@ -396,6 +396,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       thinkingEnabled,
       reasoningEffort: config.reasoning_effort || 'max',
       protocol,
+      timeout: config.request_timeout_ms || 120000,
       messages: [
         { role: 'system', content: cleanPrompt },
         { role: 'user', content: renderedUserPrompt },
