@@ -574,6 +574,7 @@ function buildResult(profile, source, usage, reason) {
       max_tokens: profile.max_tokens,
       thinking_enabled: profile.thinking_enabled,
       reasoning_effort: profile.reasoning_effort,
+      request_timeout_ms: profile.request_timeout_ms,
       owner_user_id: profile.owner_user_id,
     },
     credential_source: source,
