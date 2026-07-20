@@ -890,6 +890,34 @@ describe('computeChan', () => {
     expect(result.warnings).toContain('market_clock_unverified')
   })
 
+  it('uses the final bar when market data marks it as completed', () => {
+    const rates = makeRates(50).map((rate, index) => ({
+      ...rate,
+      time_utc_msc: 1784185200000 + index * 300000,
+    }))
+    const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries, {
+      requestedHistoryCount: 50,
+      dataQuality: { clock_status: 'verified', last_bar_closed: true },
+    })
+    expect(result.closed_bar_count).toBe(50)
+    expect(result.requested_closed_history_count).toBe(50)
+    expect(result.closed_history_sufficient).toBe(true)
+  })
+
+  it('downgrades Chan reliability when an internal cache gap remains unresolved', () => {
+    const rates = makeRates(50).map((rate, index) => ({
+      ...rate,
+      time_utc_msc: 1784185200000 + index * 300000,
+    }))
+    const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(r => Number(r.close))).histSeries, {
+      requestedHistoryCount: 50,
+      dataQuality: { clock_status: 'verified', cache_internal_gap_unresolved: true },
+    })
+    expect(result.cache_internal_gap_unresolved).toBe(true)
+    expect(result.reliability).toBe('low')
+    expect(result.warnings).toContain('cache_internal_gap_unresolved')
+  })
+
   it('uses all post-fractal bars for the developing bi extreme', () => {
     const rates = Array.from({ length: 31 }, (_, i) => ({ time: `t${i}`, open: 105, high: 110, low: 100, close: 105, tick_volume: 1 }))
     rates[20] = { ...rates[20], low: 80, close: 90 }

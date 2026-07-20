@@ -2,14 +2,17 @@ import { queryAll, queryOne, queryRun } from '../../db.js'
 import { cacheGetJSON, cacheSetJSON } from '../../redis.js'
 import { getActivePlatformBridgeUserId, getPlatformMarketClockState } from '../../bridge-ws.js'
 import { mt5Bridge } from './market-data.js'
-import { stripBrokerSuffix } from './utils.js'
+import { stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 
 const CACHE_LIMIT = 1000
 const CACHE_TTL_SECONDS = 24 * 60 * 60
 const WRITE_BATCH_SIZE = 250
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
+const INTERNAL_GAP_REFILL_COOLDOWN_MS = 6 * 60 * 60 * 1000
+const EXPECTED_LONG_CLOSURE_MS = 8 * 60 * 60 * 1000
 const recentSampleAt = new Map()
 const inFlightRates = new Map()
+const internalGapRefillAttempts = new Map()
 let lastCleanupAt = 0
 
 const RETENTION_DAYS = {
@@ -99,9 +102,84 @@ async function ensureSource(bridgeUserId, clock, sampleRate) {
   return source?.id || null
 }
 
-function normalizeClosedRates(rates, offsetMinutes) {
-  if (!Array.isArray(rates) || rates.length < 2) return []
-  return rates.slice(0, -1).map(rate => validRate(rate, offsetMinutes)).filter(Boolean)
+function splitRatesByClosure(rates, timeframe, offsetMinutes) {
+  if (!Array.isArray(rates) || rates.length === 0) {
+    return { closedRates: [], liveRates: [], lastBarClosed: false }
+  }
+  const normalized = rates.map(rate => validRate(rate, offsetMinutes)).filter(Boolean)
+  if (normalized.length === 0) return { closedRates: [], liveRates: [], lastBarClosed: false }
+  const latest = normalized.at(-1)
+  const capturedAtUtcMs = Number(rates.at(-1)?.captured_at_utc_msc)
+  const latestOpenUtcMs = Number(latest.time_utc_msc)
+  const lastBarClosed = Number.isFinite(capturedAtUtcMs) && Number.isFinite(latestOpenUtcMs)
+    ? capturedAtUtcMs >= latestOpenUtcMs + timeframeIntervalMs(timeframe)
+    : false
+  return {
+    closedRates: lastBarClosed ? normalized : normalized.slice(0, -1),
+    liveRates: lastBarClosed ? [] : normalized.slice(-1),
+    lastBarClosed,
+  }
+}
+
+function brokerDate(rate) {
+  const match = String(rate?.time || '').match(/^(\d{4}-\d{2}-\d{2})/)
+  return match?.[1] || null
+}
+
+function crossesWeekendUtc(startUtcMs, endUtcMs) {
+  for (let cursor = startUtcMs; cursor <= endUtcMs; cursor += 86400000) {
+    const day = new Date(cursor).getUTCDay()
+    if (day === 0 || day === 6) return true
+  }
+  return false
+}
+
+export function inspectRateContinuity(rates, timeframe) {
+  const intervalMs = timeframeIntervalMs(timeframe)
+  const ordered = mergeRates([], Array.isArray(rates) ? rates : [], CACHE_LIMIT)
+  const suspicious = []
+  const expectedClosures = []
+  for (let index = 1; index < ordered.length; index++) {
+    const previous = ordered[index - 1]
+    const current = ordered[index]
+    const previousUtcMs = Number(previous.time_utc_msc)
+    const currentUtcMs = Number(current.time_utc_msc)
+    const gapMs = currentUtcMs - previousUtcMs
+    if (!Number.isFinite(gapMs) || gapMs <= intervalMs) continue
+    const previousDate = brokerDate(previous)
+    const currentDate = brokerDate(current)
+    const crossesBrokerDate = previousDate && currentDate && previousDate !== currentDate
+    const expectedClosure = crossesBrokerDate || gapMs >= EXPECTED_LONG_CLOSURE_MS
+      || crossesWeekendUtc(previousUtcMs, currentUtcMs)
+    const detail = {
+      from_utc_msc: previousUtcMs,
+      to_utc_msc: currentUtcMs,
+      gap_ms: gapMs,
+      missing_bar_count: Math.max(1, Math.round(gapMs / intervalMs) - 1),
+    }
+    if (expectedClosure) expectedClosures.push(detail)
+    else suspicious.push(detail)
+  }
+  return {
+    status: suspicious.length ? 'suspicious_gap' : 'ok',
+    suspicious_gaps: suspicious,
+    expected_closures: expectedClosures,
+  }
+}
+
+function shouldAttemptInternalGapRefill(sourceId, standardSymbol, timeframe, integrity, now = Date.now()) {
+  const gap = integrity?.suspicious_gaps?.[0]
+  if (!sourceId || !gap) return false
+  if (internalGapRefillAttempts.size > 512) {
+    for (const [key, attemptedAt] of internalGapRefillAttempts) {
+      if (now - attemptedAt >= INTERNAL_GAP_REFILL_COOLDOWN_MS) internalGapRefillAttempts.delete(key)
+    }
+  }
+  const key = `${sourceId}:${standardSymbol}:${timeframe}:${gap.from_utc_msc}-${gap.to_utc_msc}`
+  const previous = internalGapRefillAttempts.get(key) || 0
+  if (now - previous < INTERNAL_GAP_REFILL_COOLDOWN_MS) return false
+  internalGapRefillAttempts.set(key, now)
+  return true
 }
 
 async function persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates) {
@@ -214,6 +292,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           broker_symbol:brokerSymbol, timeframe, timezone_offset_minutes:effectiveClock.timezone_offset_minutes,
           clock_status:effectiveClock.clock_status, closed_candles_persisted:closedRates.length,
           closed_candles_written:persistedCount, cache_layer:'exact_range', live_candle_cached:false,
+          last_bar_closed:true, cache_internal_gap_unresolved:false,
           range_start_utc_msc:rangeStartUtcMs, range_end_utc_msc:rangeEndUtcMs,
         } }
       }
@@ -235,9 +314,14 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         clock_status: rates.at(-1)?.clock_status || clock.clock_status,
         clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
       }
-      let closedRates = normalizeClosedRates(rates, effectiveClock.timezone_offset_minutes)
-      const gapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, closedRates)
-      if (gapDetected) {
+      let split = splitRatesByClosure(rates, timeframe, effectiveClock.timezone_offset_minutes)
+      let closedRates = split.closedRates
+      const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe)
+      const boundaryGapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, closedRates)
+      const internalGapRefillAttempted = probeOnly
+        && shouldAttemptInternalGapRefill(source.id, standardSymbol, timeframe, cachedIntegrity)
+      const windowRefillNeeded = boundaryGapDetected || internalGapRefillAttempted
+      if (windowRefillNeeded) {
         const refill = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: count + 1 }, { timeoutMs: 15000, noFallback: true })
         if (refill?.status !== 'success' || !Array.isArray(refill.rates) || !refill.rates.length) {
           return { status: 'error', error: 'rates_gap_refill_failed', message: refill?.message || refill?.error || 'K 线缓存缺口补齐失败' }
@@ -250,17 +334,21 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           clock_status: rates.at(-1)?.clock_status || clock.clock_status,
           clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
         }
-        closedRates = normalizeClosedRates(rates, effectiveClock.timezone_offset_minutes)
+        split = splitRatesByClosure(rates, timeframe, effectiveClock.timezone_offset_minutes)
+        closedRates = split.closedRates
       }
+      const freshIntegrity = inspectRateContinuity(closedRates, timeframe)
+      const internalGapDetected = cachedIntegrity.status === 'suspicious_gap' || freshIntegrity.status === 'suspicious_gap'
+      const internalGapUnresolved = freshIntegrity.status === 'suspicious_gap'
       const sourceId = await ensureSource(platformUserId, effectiveClock, rates.at(-1))
       const brokerSymbol = response.symbol || symbol
-      const standardSymbol = stripBrokerSuffix(brokerSymbol)
+      const resolvedStandardSymbol = stripBrokerSuffix(brokerSymbol)
       const persistedCount = await persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates)
-      const stored = mergeRates(gapDetected ? [] : cachedResult.rates, closedRates, CACHE_LIMIT)
-      await saveClosedCache(sourceId, standardSymbol, timeframe, stored)
+      const stored = mergeRates(windowRefillNeeded ? [] : cachedResult.rates, closedRates, CACHE_LIMIT)
+      await saveClosedCache(sourceId, resolvedStandardSymbol, timeframe, stored)
       return {
         ...response,
-        rates: mergeRates(stored, rates.slice(-1), count),
+        rates: mergeRates(stored, split.liveRates, count),
         market_meta: {
           source: 'platform_admin_bridge', source_user_id: platformUserId,
           source_id: sourceId, broker_symbol: brokerSymbol, timeframe,
@@ -269,7 +357,13 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           closed_candles_persisted: stored.length,
           closed_candles_written: persistedCount,
           cache_layer: cachedResult.layer,
-          cache_gap_refilled: gapDetected,
+          cache_gap_refilled: windowRefillNeeded,
+          cache_boundary_gap_refilled: boundaryGapDetected,
+          cache_internal_gap_detected: internalGapDetected,
+          cache_internal_gap_refill_attempted: internalGapRefillAttempted,
+          cache_internal_gap_unresolved: internalGapUnresolved,
+          cache_internal_gap_details: internalGapUnresolved ? freshIntegrity.suspicious_gaps.slice(0, 3) : [],
+          last_bar_closed: split.lastBarClosed,
           live_candle_cached: false,
           chan_structure_anchor_utc_msc: Number(structureAnchor?.anchor_time_utc_msc) || null,
           chan_last_confirmed_segment_utc_msc: Number(structureAnchor?.last_confirmed_segment_time_utc_msc) || null,
@@ -281,11 +375,20 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     ...(params.review_window === true && Number(params.start_utc_msc) > 0 && Number(params.end_utc_msc) > Number(params.start_utc_msc)
       ? { start_utc_msc:Number(params.start_utc_msc), end_utc_msc:Number(params.end_utc_msc) } : {}) },
   { timeoutMs: params.review_window === true ? 30000 : 15000, noFallback: true })
-  if (fallback && typeof fallback === 'object') fallback.market_meta = {
-    source: 'user_bridge_fallback', source_user_id: requestUserId, broker_symbol: fallback.symbol || symbol,
-    timeframe, timezone_offset_minutes: fallback.rates?.at(-1)?.timezone_offset_minutes ?? null,
-    clock_status: fallback.rates?.at(-1)?.clock_status || 'unknown', closed_candles_persisted: 0,
-    cache_layer: 'none', live_candle_cached: false,
+  if (fallback && typeof fallback === 'object') {
+    const fallbackOffset = fallback.rates?.at(-1)?.timezone_offset_minutes ?? null
+    const fallbackSplit = splitRatesByClosure(fallback.rates, timeframe, fallbackOffset)
+    const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe)
+    fallback.rates = mergeRates(fallbackSplit.closedRates, fallbackSplit.liveRates, count)
+    fallback.market_meta = {
+      source: 'user_bridge_fallback', source_user_id: requestUserId, broker_symbol: fallback.symbol || symbol,
+      timeframe, timezone_offset_minutes: fallbackOffset,
+      clock_status: fallback.rates?.at(-1)?.clock_status || 'unknown', closed_candles_persisted: 0,
+      cache_layer: 'none', live_candle_cached: false, last_bar_closed:fallbackSplit.lastBarClosed,
+      cache_internal_gap_detected:fallbackIntegrity.status === 'suspicious_gap',
+      cache_internal_gap_unresolved:fallbackIntegrity.status === 'suspicious_gap',
+      cache_internal_gap_details:fallbackIntegrity.suspicious_gaps.slice(0, 3),
+    }
   }
   return fallback
 }

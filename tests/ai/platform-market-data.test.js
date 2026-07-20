@@ -13,7 +13,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge }))
 vi.mock('../../server/redis.js', () => ({ cacheGetJSON: redis.get, cacheSetJSON: redis.set }))
 
-import { buildRatesRequestKey, getPlatformRates, saveChanStructureAnchor } from '../../server/routes/ai/platform-market-data.js'
+import { buildRatesRequestKey, getPlatformRates, inspectRateContinuity, saveChanStructureAnchor } from '../../server/routes/ai/platform-market-data.js'
 
 const rate = (minute, close) => ({
   time: `2026-07-16 10:0${minute}:00`, time_msc: 1784196000000 + minute * 60000,
@@ -69,6 +69,25 @@ describe('platform market data', () => {
     expect(db.queryRun).toHaveBeenCalledWith(expect.stringContaining('account_login'), expect.arrayContaining([1, 'Demo', '123456', 'demo|123456']))
   })
 
+  it('keeps the final completed bar during a closed market instead of treating it as live', async () => {
+    const completed = [
+      { ...rate(0, 2000), captured_at_utc_msc: rate(2, 2002).time_utc_msc + 60000 },
+      { ...rate(1, 2001), captured_at_utc_msc: rate(2, 2002).time_utc_msc + 60000 },
+      { ...rate(2, 2002), captured_at_utc_msc: rate(2, 2002).time_utc_msc + 60000 },
+    ]
+    mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: completed })
+    const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 3 })
+    const candleWrites = db.queryRun.mock.calls.filter(([sql]) => sql.includes('INSERT INTO market_candles'))
+    expect(candleWrites).toHaveLength(1)
+    expect(candleWrites[0][1]).toHaveLength(36)
+    expect(result.rates.map(item => item.close)).toEqual([2000, 2001, 2002])
+    expect(result.market_meta).toMatchObject({
+      last_bar_closed: true,
+      closed_candles_written: 3,
+      live_candle_cached: false,
+    })
+  })
+
   it('drops malformed OHLC rows before persistence and response merging', async () => {
     const malformed = { ...rate(1, 2001), high: null }
     mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(0, 2000), malformed, rate(2, 2002)] })
@@ -115,6 +134,33 @@ describe('platform market data', () => {
     expect(mt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ count: 5 }), expect.any(Object))
     expect(result.market_meta.cache_gap_refilled).toBe(true)
     expect(result.rates.map(item => item.close)).toEqual([2008, 2009, 2010, 2011])
+  })
+
+  it('refills a suspicious intraday hole but accepts daily and weekend closures', async () => {
+    const intraday = [rate(0, 2000), rate(1, 2001), rate(3, 2003)]
+    const dailyClose = [
+      { ...rate(0, 2000), time: '2026-07-16 23:55:00' },
+      { ...rate(3, 2003), time: '2026-07-17 01:00:00', time_utc_msc: rate(0, 2000).time_utc_msc + 65 * 60000 },
+    ]
+    expect(inspectRateContinuity(intraday, 'M1').status).toBe('suspicious_gap')
+    expect(inspectRateContinuity(dailyClose, 'M5')).toMatchObject({
+      status: 'ok',
+      expected_closures: [expect.objectContaining({ missing_bar_count: 12 })],
+    })
+
+    redis.get.mockResolvedValue(intraday)
+    mt5Bridge
+      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(3, 2003), rate(4, 2004), rate(5, 2005)] })
+      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(2, 2002), rate(3, 2003), rate(4, 2004), rate(5, 2005)] })
+    const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 3 })
+    expect(mt5Bridge).toHaveBeenCalledTimes(2)
+    expect(result.market_meta).toMatchObject({
+      cache_gap_refilled: true,
+      cache_boundary_gap_refilled: false,
+      cache_internal_gap_detected: true,
+      cache_internal_gap_refill_attempted: true,
+      cache_internal_gap_unresolved: false,
+    })
   })
 
   it('uses a partial hot cache as the baseline and refreshes the full window', async () => {

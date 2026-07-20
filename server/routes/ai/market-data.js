@@ -963,6 +963,7 @@ function emptyChanResult(overrides = {}) {
     clock_status: 'unknown',
     time_location_reliable: false,
     cache_gap_refilled: false,
+    cache_internal_gap_unresolved: false,
     window_resynced: false,
     window_stable: false,
     structure_anchor: {
@@ -1007,8 +1008,9 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   const requestedHistoryCount = Number(options.requestedHistoryCount) || rates?.length || 0
   const historySufficient = Array.isArray(rates) && rates.length >= requestedHistoryCount
   if (!historySufficient) warnings.push('history_bars_below_requested')
-  const closedRates = Array.isArray(rates) ? rates.slice(0, -1) : []
-  const requestedClosedHistoryCount = Math.max(requestedHistoryCount - 1, 0)
+  const lastBarClosed = dataQuality?.last_bar_closed === true
+  const closedRates = Array.isArray(rates) ? (lastBarClosed ? rates : rates.slice(0, -1)) : []
+  const requestedClosedHistoryCount = Math.max(requestedHistoryCount - (lastBarClosed ? 0 : 1), 0)
   const closedHistorySufficient = closedRates.length >= requestedClosedHistoryCount
   if (!closedHistorySufficient && historySufficient) warnings.push('closed_history_bars_below_requested')
   const utcTimes = closedRates.map(rate => Number(rate?.time_utc_msc))
@@ -1019,6 +1021,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (dataQuality && clockStatus !== 'verified') warnings.push('market_clock_unverified')
   if (dataQuality && !utcLocationComplete) warnings.push('utc_time_location_incomplete')
   if (dataQuality && utcLocationComplete && !utcSequenceMonotonic) warnings.push('utc_time_sequence_invalid')
+  const cacheInternalGapUnresolved = Boolean(dataQuality?.cache_internal_gap_unresolved)
+  if (cacheInternalGapUnresolved) warnings.push('cache_internal_gap_unresolved')
   const closedMacdHist = Array.isArray(macdHist) ? macdHist.slice(0, closedRates.length) : []
   if (closedRates.length < MIN_KLINES_FOR_CHAN) {
     return emptyChanResult({
@@ -1030,6 +1034,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       closed_history_sufficient: closedHistorySufficient,
       clock_status: clockStatus,
       time_location_reliable: timeLocationReliable,
+      cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
+      cache_internal_gap_unresolved: cacheInternalGapUnresolved,
       raw_bar_count: rates?.length || 0,
       closed_bar_count: closedRates.length,
       divergence: emptyDivergence('insufficient_klines'),
@@ -1055,6 +1061,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       closed_history_sufficient: closedHistorySufficient,
       clock_status: clockStatus,
       time_location_reliable: timeLocationReliable,
+      cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
+      cache_internal_gap_unresolved: cacheInternalGapUnresolved,
       raw_bar_count: rates.length,
       closed_bar_count: closedRates.length,
       processed_bar_count: bars.length,
@@ -1128,7 +1136,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   }
 
   let reliability = 'low'
-  if (confirmedStructureStale) reliability = 'low'
+  if (confirmedStructureStale || cacheInternalGapUnresolved) reliability = 'low'
   else if (historySufficient && closedHistorySufficient && timeLocationReliable && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
   else if (historySufficient && closedHistorySufficient && validSegs.length > 0) reliability = 'medium'
 
@@ -1156,6 +1164,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     clock_status: clockStatus,
     time_location_reliable: timeLocationReliable,
     cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
+    cache_internal_gap_unresolved: cacheInternalGapUnresolved,
     window_resynced: windowResynced,
     window_stable: windowStable,
     structure_anchor: {
@@ -1339,7 +1348,9 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const bbPosition = bbWidth > 0 ? (latest - bbLower) / bbWidth : 0.5
 
   const atr14 = computeAtr14(rates)
-  const closedRates = rates.length > 1 ? rates.slice(0, -1) : []
+  const closedRates = options.chanDataQuality?.last_bar_closed === true
+    ? rates
+    : rates.length > 1 ? rates.slice(0, -1) : []
   const atr14Closed = computeAtr14(closedRates)
 
   const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
@@ -1479,6 +1490,13 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     },
     pending_orders: options.pending_orders || [],
     account: account ? { balance: account.balance, equity: account.equity } : null,
+    market_data_quality: options.chanDataQuality ? {
+      clock_status: options.chanDataQuality.clock_status || 'unknown',
+      cache_gap_refilled: Boolean(options.chanDataQuality.cache_gap_refilled),
+      cache_internal_gap_detected: Boolean(options.chanDataQuality.cache_internal_gap_detected),
+      cache_internal_gap_unresolved: Boolean(options.chanDataQuality.cache_internal_gap_unresolved),
+      last_bar_closed: Boolean(options.chanDataQuality.last_bar_closed),
+    } : undefined,
     chan,
   }
 }

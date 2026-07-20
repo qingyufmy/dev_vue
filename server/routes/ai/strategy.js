@@ -157,7 +157,9 @@ export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) 
   try {
     const response = await platformRates(userId, { symbol, timeframe: 'H1', count: 50 })
     const rates = response?.rates || []
-    const closedRates = rates.length > 1 ? rates.slice(0, -1) : []
+    const closedRates = response?.market_meta?.last_bar_closed === true
+      ? rates
+      : rates.length > 1 ? rates.slice(0, -1) : []
     const atr = closedRates.length >= 15 ? computeAtr14(closedRates) : 0
     if (atr > 0) {
       market.atr_anchor = atr
