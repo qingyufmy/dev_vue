@@ -1,6 +1,6 @@
-﻿// ai/strategy.js — 策略上下文 + 执行 + 分析
+// ai/strategy.js — 策略上下文 + 执行 + 分析
 
-import { queryOne, queryRun, beijingNow, withTransaction } from '../../db.js'
+import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
 import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds, stripBrokerSuffix } from './utils.js'
 import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './market-data.js'
@@ -589,4 +589,172 @@ export async function handleAnalyzeCompare(userId, params) {
   }
 
   return { ok: true, results, market_snapshot: market }
+}
+
+export async function handleHistoryCompare(userId, params) {
+  const { symbol, timeframe, model_ids, strategy_id, start_time, end_time, step } = params
+
+  const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+  if (!user || user.role !== 'admin') return { status: 'error', message: 'admin_only' }
+  if (!symbol) return { status: 'error', message: 'symbol required' }
+  if (!timeframe) return { status: 'error', message: 'timeframe required' }
+  if (!strategy_id) return { status: 'error', message: 'strategy required' }
+  if (!start_time || !end_time) return { status: 'error', message: 'start_time and end_time required' }
+  if (!Array.isArray(model_ids) || model_ids.length < 2 || model_ids.length > 5) {
+    return { status: 'error', message: 'model_ids must be an array of 2-5 model profile IDs' }
+  }
+
+  const uniqueIds = [...new Set(model_ids.map(Number))]
+  if (uniqueIds.length < 2 || uniqueIds.length > 5) {
+    return { status: 'error', message: 'model_ids must contain 2-5 unique IDs' }
+  }
+
+  const strategy = await getStrategyById(Number(strategy_id), userId, 'admin', { forExecution: false })
+  if (!strategy) return { status: 'error', message: 'strategy_not_found' }
+
+  const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
+  if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
+
+  const klines = await queryAll(
+    `SELECT time, open, high, low, close, tick_volume FROM kline_data
+     WHERE symbol = ? AND timeframe = ? AND time >= ? AND time <= ?
+     ORDER BY time ASC LIMIT 2000`,
+    [String(symbol).toUpperCase(), String(timeframe).toUpperCase(), start_time, end_time]
+  )
+  if (!klines || klines.length === 0) return { status: 'error', message: 'no_kline_data_for_range' }
+
+  const klineInterval = Math.max(1, Math.min(50, Number(step) || 10))
+
+  const policy = parseStrategyPolicy(strategy)
+  const prompt = strategy.system_prompt || ''
+
+  const profileResults = await Promise.allSettled(
+    uniqueIds.map(async (modelId) => {
+      const resolved = await resolveOwnedModelProfileForRuntime(modelId, userId)
+      if (!resolved.model || !resolved.model.api_key_encrypted) {
+        throw new Error(resolved.error || 'model_profile_not_found_or_inactive')
+      }
+      return { modelId, resolved }
+    })
+  )
+
+  const validModels = []
+  const modelErrors = []
+  for (let i = 0; i < uniqueIds.length; i++) {
+    const profileResult = profileResults[i]
+    if (profileResult.status === 'rejected' || !profileResult.value) {
+      modelErrors.push({ model_id: uniqueIds[i], status: 'error', error: profileResult.reason?.message || 'model_profile_resolution_failed' })
+    } else {
+      validModels.push(profileResult.value)
+    }
+  }
+
+  const modelSignals = {}
+  for (const { modelId } of validModels) {
+    modelSignals[modelId] = []
+  }
+
+  const steps = []
+  for (let i = 0; i < klines.length; i += klineInterval) {
+    steps.push(i)
+  }
+
+  for (const stepIdx of steps) {
+    const visibleRates = klines.slice(0, stepIdx + 1).map(k => ({
+      time: k.time,
+      open: String(k.open), high: String(k.high), low: String(k.low), close: String(k.close),
+      tick_volume: String(k.tick_volume),
+    }))
+
+    const market = calculateMarketData(symbol, String(timeframe).toUpperCase(), visibleRates, null, [], {})
+
+    const inferenceTasks = validModels.map(({ modelId, resolved }) => {
+      const config = {
+        ...resolved.model,
+        system_prompt: prompt,
+        _userId: userId,
+        _usage: 'manual',
+        _model_shared: resolved.credential_source === 'platform_shared',
+        _model_profile_id: resolved.model_profile_id,
+        _credential_source: resolved.credential_source,
+        _allowed_entry_methods: policy.entryMethods,
+        _market_data_plan: policy.marketDataPlan,
+        _use_chan_analysis: false,
+        _market_only: strategy.scope === 'platform',
+        _ai_volume_min: 0.01,
+        _ai_volume_max: 1.0,
+        _ai_volume_step: 0.01,
+      }
+      return maybeAiSignal(null, config, market, prompt).then(signal => ({
+        modelId, signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
+      })).catch(error => ({
+        modelId, error: error.message || 'inference_failed',
+      }))
+    })
+
+    const results = await Promise.all(inferenceTasks)
+    for (const result of results) {
+      const kline = klines[stepIdx]
+      const openPrice = Number(kline.open)
+      const closePrice = Number(kline.close)
+
+      if (result.error) {
+        modelSignals[result.modelId].push({
+          time: kline.time, signal_type: 'error', confidence: 0, pnl: 0, error: result.error,
+        })
+        continue
+      }
+
+      const signal = result.signal
+      let pnl = 0
+      if (signal.signal_type === 'buy' && closePrice > openPrice) pnl = closePrice - openPrice
+      else if (signal.signal_type === 'sell' && openPrice > closePrice) pnl = openPrice - closePrice
+
+      modelSignals[result.modelId].push({
+        time: kline.time, signal_type: signal.signal_type, confidence: signal.confidence || 0, pnl,
+      })
+    }
+  }
+
+  const modelResults = []
+  for (const { modelId, resolved } of validModels) {
+    const signals = modelSignals[modelId]
+    const totalPnl = signals.reduce((sum, s) => sum + s.pnl, 0)
+    const buyCount = signals.filter(s => s.signal_type === 'buy').length
+    const sellCount = signals.filter(s => s.signal_type === 'sell').length
+    const holdCount = signals.filter(s => s.signal_type === 'hold').length
+    const winCount = signals.filter(s => s.pnl > 0).length
+    const lossCount = signals.filter(s => s.pnl < 0).length
+    const errorCount = signals.filter(s => s.signal_type === 'error').length
+
+    modelResults.push({
+      model_id: modelId,
+      model_name: resolved.model.model_name,
+      provider: resolved.model.provider || resolved.model.api_provider,
+      status: 'success',
+      signal_count: signals.length,
+      signals,
+      simulated_pnl: {
+        total: Number(totalPnl.toFixed(10)),
+        win_count: winCount,
+        loss_count: lossCount,
+        win_rate: signals.length > 0 ? Number(((winCount / signals.length) * 100).toFixed(1)) : 0,
+        avg_pnl: signals.length > 0 ? Number((totalPnl / signals.length).toFixed(10)) : 0,
+        buy_count: buyCount,
+        sell_count: sellCount,
+        hold_count: holdCount,
+        error_count: errorCount,
+      },
+    })
+  }
+
+  return {
+    status: 'success',
+    results: [...modelResults, ...modelErrors],
+    meta: {
+      symbol, timeframe, strategy_id: Number(strategy_id),
+      kline_count: klines.length, step: klineInterval,
+      start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
+    },
+  }
 }

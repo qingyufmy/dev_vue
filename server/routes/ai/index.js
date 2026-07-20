@@ -9,7 +9,7 @@ import { authMiddleware } from '../../middleware/auth.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
-import { handleAnalyze, handleAnalyzeCompare, buildStrategyContextFromTags } from './strategy.js'
+import { handleAnalyze, handleAnalyzeCompare, handleHistoryCompare, buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
@@ -150,6 +150,11 @@ router.post('/ai/analyze-compare', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
+
+router.post('/ai/model-compare/history', authMiddleware, async (req, res) => {
+  try { res.json(await handleHistoryCompare(req.user.id, req.body || {})) }
+  catch (error) { reviewError(res, error) }
+})
 router.get('/ai/platform-model-policy', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
   try { res.json({ ok: true, policy: await getPlatformUsagePolicy() }) }

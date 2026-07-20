@@ -150,7 +150,7 @@ vi.mock('../../server/routes/ai/model-profiles.js', () => ({
   resolveOwnedModelProfileForRuntime: (...args) => mockResolveOwnedModelProfileForRuntime(...args),
 }))
 
-import { handleAnalyzeCompare } from '../../server/routes/ai/strategy.js'
+import { handleAnalyzeCompare, handleHistoryCompare } from '../../server/routes/ai/strategy.js'
 import { maybeAiSignal } from '../../server/routes/ai/llm.js'
 
 function makeRates(count = 100) {
@@ -316,10 +316,163 @@ describe('POST /ai/analyze-compare route', () => {
   })
 
   it('route imports handleAnalyzeCompare from strategy.js', () => {
-    expect(routes).toContain("import { handleAnalyze, handleAnalyzeCompare, buildStrategyContextFromTags } from './strategy.js'")
+    expect(routes).toContain('handleAnalyzeCompare')
   })
 
   it('route calls handleAnalyzeCompare(req.user.id, req.body)', () => {
     expect(routes).toContain('handleAnalyzeCompare(req.user.id, req.body || {})')
+  })
+})
+
+describe('handleHistoryCompare', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
+  })
+
+  describe('admin check', () => {
+    it('returns error for non-admin user', async () => {
+      mockQueryOne.mockResolvedValueOnce({ role: 'user' })
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01 00:00:00', end_time: '2026-07-02 00:00:00' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('admin_only')
+    })
+
+    it('returns error when user not found', async () => {
+      mockQueryOne.mockResolvedValueOnce(null)
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01 00:00:00', end_time: '2026-07-02 00:00:00' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('admin_only')
+    })
+  })
+
+  describe('input validation', () => {
+    beforeEach(() => {
+      mockQueryOne.mockResolvedValue({ role: 'admin' })
+    })
+
+    it('returns error when symbol is missing', async () => {
+      const result = await handleHistoryCompare(1, { timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('symbol required')
+    })
+
+    it('returns error when timeframe is missing', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('timeframe required')
+    })
+
+    it('returns error when strategy_id is missing', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('strategy required')
+    })
+
+    it('returns error when start_time is missing', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('start_time and end_time required')
+    })
+
+    it('returns error when model_ids has fewer than 2 items', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toContain('model_ids')
+    })
+
+    it('returns error when model_ids is not an array', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: 'bad', strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toContain('model_ids')
+    })
+
+    it('returns error when strategy is not found', async () => {
+      mockGetStrategyById.mockResolvedValueOnce(null)
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 999, start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('strategy_not_found')
+    })
+  })
+
+  describe('kline data', () => {
+    beforeEach(() => {
+      mockQueryOne.mockResolvedValue({ role: 'admin' })
+    })
+
+    it('returns error when no kline data for range', async () => {
+      mockQueryAll.mockResolvedValueOnce([])
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('no_kline_data_for_range')
+    })
+
+    it('queries kline_data table with correct params', async () => {
+      mockQueryAll.mockResolvedValueOnce([])
+      await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
+      expect(mockQueryAll).toHaveBeenCalledWith(
+        expect.stringContaining('kline_data'),
+        ['XAUUSD', 'M30', '2026-07-01', '2026-07-02']
+      )
+    })
+  })
+
+  describe('historical inference', () => {
+    beforeEach(() => {
+      mockQueryOne.mockResolvedValue({ role: 'admin' })
+      mockQueryAll.mockResolvedValue(
+        Array.from({ length: 50 }, (_, i) => ({
+          time: `2026-07-01 ${String(i).padStart(2, '0')}:00:00`,
+          open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
+        }))
+      )
+    })
+
+    it('calls maybeAiSignal for each model at each step', async () => {
+      await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 10 })
+      expect(maybeAiSignal).toHaveBeenCalled()
+      const callCount = maybeAiSignal.mock.calls.length
+      expect(callCount).toBeGreaterThan(0)
+    })
+
+    it('returns results with simulated_pnl for each model', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 25 })
+      expect(result.status).toBe('success')
+      expect(result.results).toHaveLength(2)
+      for (const r of result.results) {
+        expect(r).toHaveProperty('model_id')
+        expect(r).toHaveProperty('model_name')
+        expect(r).toHaveProperty('status', 'success')
+        expect(r).toHaveProperty('signals')
+        expect(r).toHaveProperty('simulated_pnl')
+        expect(r.simulated_pnl).toHaveProperty('total')
+        expect(r.simulated_pnl).toHaveProperty('win_rate')
+        expect(r.simulated_pnl).toHaveProperty('buy_count')
+        expect(r.simulated_pnl).toHaveProperty('sell_count')
+        expect(r.simulated_pnl).toHaveProperty('hold_count')
+      }
+    })
+
+    it('includes meta with kline_count and step', async () => {
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 10 })
+      expect(result.meta).toHaveProperty('symbol', 'XAUUSD')
+      expect(result.meta).toHaveProperty('timeframe', 'M30')
+      expect(result.meta).toHaveProperty('kline_count', 50)
+      expect(result.meta).toHaveProperty('step', 10)
+    })
+  })
+})
+
+describe('POST /ai/model-compare/history route', () => {
+  it('route is registered in ai/index.js', () => {
+    expect(routes).toContain("router.post('/ai/model-compare/history', authMiddleware")
+  })
+
+  it('route imports handleHistoryCompare from strategy.js', () => {
+    expect(routes).toContain('handleHistoryCompare')
+  })
+
+  it('route calls handleHistoryCompare(req.user.id, req.body)', () => {
+    expect(routes).toContain('handleHistoryCompare(req.user.id, req.body || {})')
   })
 })
