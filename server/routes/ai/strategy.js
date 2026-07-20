@@ -130,7 +130,14 @@ function historyExecutionWindows(modelSignals, endUtcMs, maxHoldingHours) {
     .filter(signal => signal.signal_type === 'buy' || signal.signal_type === 'sell')
     .map(signal => {
       const start = Number(signal.decision_time_utc_msc)
-      return Number.isFinite(start) ? { start, end:Math.min(endUtcMs, start + horizonMs) } : null
+      if (!Number.isFinite(start)) return null
+      const horizonEnd = start + horizonMs
+      const boundedEnd = Math.min(endUtcMs, horizonEnd)
+      // The range loader uses an exclusive end. Include the M1 candle whose
+      // open time equals the holding horizon when it is still inside the
+      // user-selected evaluation range, so horizon exits are not one minute early.
+      const exclusiveEnd = boundedEnd < endUtcMs ? boundedEnd + 60_000 : boundedEnd
+      return { start, end:exclusiveEnd }
     })
     .filter(window => window && window.end > window.start)
     .sort((a, b) => a.start - b.start)
@@ -1573,5 +1580,8 @@ export async function deleteHistoryCompareJob(userId, jobId) {
 export const __historyCompareJobsTest = {
   clear() {
     historyCompareJobs.clear()
+  },
+  executionWindows(modelSignals, endUtcMs, maxHoldingHours) {
+    return historyExecutionWindows(modelSignals, endUtcMs, maxHoldingHours)
   },
 }

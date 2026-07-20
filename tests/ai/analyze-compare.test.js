@@ -160,7 +160,11 @@ vi.mock('../../server/routes/ai/model-profiles.js', () => ({
   resolveOwnedModelProfileForRuntime: (...args) => mockResolveOwnedModelProfileForRuntime(...args),
 }))
 
-import { handleAnalyzeCompare, handleHistoryCompare } from '../../server/routes/ai/strategy.js'
+import {
+  __historyCompareJobsTest,
+  handleAnalyzeCompare,
+  handleHistoryCompare,
+} from '../../server/routes/ai/strategy.js'
 import { maybeAiSignal } from '../../server/routes/ai/llm.js'
 const defaultMaybeAiSignalImplementation = maybeAiSignal.getMockImplementation()
 
@@ -760,6 +764,30 @@ describe('POST /ai/model-compare/history route', () => {
   })
 })
 
+describe('historical comparison execution windows', () => {
+  it('includes the M1 candle at the configured holding horizon', () => {
+    const decisionTime = Date.UTC(2026, 6, 20, 10, 0, 0)
+    const evaluationEnd = decisionTime + 4 * 60 * 60 * 1000
+
+    expect(__historyCompareJobsTest.executionWindows([
+      { signal_type:'buy', decision_time_utc_msc:decisionTime },
+    ], evaluationEnd, 2)).toEqual([
+      { start:decisionTime, end:decisionTime + 2 * 60 * 60 * 1000 + 60_000 },
+    ])
+  })
+
+  it('does not extend an execution window beyond the selected evaluation range', () => {
+    const decisionTime = Date.UTC(2026, 6, 20, 10, 0, 0)
+    const evaluationEnd = decisionTime + 90 * 60 * 1000
+
+    expect(__historyCompareJobsTest.executionWindows([
+      { signal_type:'sell', decision_time_utc_msc:decisionTime },
+    ], evaluationEnd, 2)).toEqual([
+      { start:decisionTime, end:evaluationEnd },
+    ])
+  })
+})
+
 describe('historical comparison frontend contract', () => {
   const frontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 
@@ -789,6 +817,7 @@ describe('historical comparison frontend contract', () => {
     expect(backend).toContain('utcMs + primaryDurationMs <= evaluationCutoffUtcMs')
     expect(backend).toContain('last_bar_closed:true')
     expect(backend).toContain('chan_structure_anchor_utc_msc:null')
+    expect(backend).toContain('const exclusiveEnd = boundedEnd < endUtcMs ? boundedEnd + 60_000 : boundedEnd')
   })
 
   it('presents directional evaluation separately from the event-driven virtual account', () => {
@@ -804,6 +833,7 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('跳空触发和跳空止损按更差的开盘成交价计算')
     expect(frontend).toContain('Stop Limit 在同柱内无法确认先后顺序时延后到下一根')
     expect(frontend).toContain('保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照')
+    expect(frontend).toContain('当前 MT5 合约参数快照，并非经纪商当时的历史合约参数')
     expect(frontend).toContain('保证金强平按方向不利的盘中极值进行保守检查')
     expect(frontend).toContain('异常模型不参与排名与一致度计算')
     expect(frontend).toContain('apiErrorMessage(reason)')
