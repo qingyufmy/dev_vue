@@ -4615,6 +4615,164 @@ async function runHistoryCompare() {
   }
 }
 
+const COMPARE_EQUITY_STYLES = [
+  { color:"#f4c542", dash:"" },
+  { color:"#22d3ee", dash:"12 6" },
+  { color:"#34d399", dash:"3 5" },
+  { color:"#fb7185", dash:"14 5 3 5" },
+  { color:"#a78bfa", dash:"2 4" },
+];
+
+function compareTimezoneLabel(offsetMinutes) {
+  if (!Number.isFinite(Number(offsetMinutes))) return "UTC";
+  const total = Number(offsetMinutes);
+  const sign = total >= 0 ? "+" : "-";
+  const absolute = Math.abs(total);
+  return `MT5 UTC${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+}
+
+function formatCompareChartTime(value, offsetMinutes, includeDate = true) {
+  const time = Number(value);
+  if (!Number.isFinite(time)) return "--";
+  const offset = Number.isFinite(Number(offsetMinutes)) ? Number(offsetMinutes) : 0;
+  const date = new Date(time + offset * 60_000);
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return includeDate ? `${month}-${day} ${hour}:${minute}` : `${hour}:${minute}`;
+}
+
+function compareEquitySeries(results) {
+  return results.map((result, index) => {
+    const points = (result.account_simulation?.equity_curve || [])
+      .map(point => ({ time:Number(point.time_utc_msc), equity:Number(point.equity) }))
+      .filter(point => Number.isFinite(point.time) && Number.isFinite(point.equity))
+      .sort((a, b) => a.time - b.time);
+    return {
+      name:String(result.model_name || `模型 ${index + 1}`),
+      points,
+      endingBalance:Number(result.account_simulation?.ending_balance || 0),
+      maxDrawdownPct:Number(result.account_simulation?.max_drawdown_pct || 0),
+      style:COMPARE_EQUITY_STYLES[index % COMPARE_EQUITY_STYLES.length],
+    };
+  }).filter(series => series.points.length >= 2);
+}
+
+function renderCompareEquityChart(results, meta) {
+  const series = compareEquitySeries(results);
+  if (!series.length) return "";
+  const allPoints = series.flatMap(item => item.points);
+  const minTime = Math.min(...allPoints.map(point => point.time));
+  const maxTime = Math.max(...allPoints.map(point => point.time));
+  let minEquity = Math.min(...allPoints.map(point => point.equity));
+  let maxEquity = Math.max(...allPoints.map(point => point.equity));
+  if (!(maxTime > minTime)) return "";
+  const rawRange = maxEquity - minEquity;
+  const padding = rawRange > 0 ? rawRange * 0.12 : Math.max(1, Math.abs(maxEquity) * 0.01);
+  minEquity -= padding;
+  maxEquity += padding;
+  const width = 1000, height = 290;
+  const left = 72, right = 22, top = 18, bottom = 42;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const scaleX = time => left + ((time - minTime) / (maxTime - minTime)) * plotWidth;
+  const scaleY = equity => top + ((maxEquity - equity) / (maxEquity - minEquity)) * plotHeight;
+  const amount = value => Number(value).toLocaleString("zh-CN", { maximumFractionDigits:2, minimumFractionDigits:0 });
+  const axisAmount = value => new Intl.NumberFormat("zh-CN", { notation:"compact", maximumFractionDigits:2 }).format(Number(value));
+  const yTicks = Array.from({ length:5 }, (_, index) => {
+    const ratio = index / 4;
+    const y = top + ratio * plotHeight;
+    const value = maxEquity - ratio * (maxEquity - minEquity);
+    return `<g class="compare-equity-grid"><line x1="${left}" y1="${y.toFixed(2)}" x2="${width - right}" y2="${y.toFixed(2)}"></line><text x="${left - 10}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(axisAmount(value))}</text></g>`;
+  }).join("");
+  const timezone = meta.execution_timezone_offset_minutes;
+  const xTicks = Array.from({ length:5 }, (_, index) => {
+    const ratio = index / 4;
+    const x = left + ratio * plotWidth;
+    const time = minTime + ratio * (maxTime - minTime);
+    return `<g class="compare-equity-axis"><line x1="${x.toFixed(2)}" y1="${height - bottom}" x2="${x.toFixed(2)}" y2="${height - bottom + 5}"></line><text x="${x.toFixed(2)}" y="${height - 16}" text-anchor="${index === 0 ? "start" : index === 4 ? "end" : "middle"}">${escapeHtml(formatCompareChartTime(time, timezone))}</text></g>`;
+  }).join("");
+  const paths = series.map(item => {
+    const path = item.points.map((point, index) =>
+      `${index ? "L" : "M"}${scaleX(point.time).toFixed(2)},${scaleY(point.equity).toFixed(2)}`
+    ).join(" ");
+    const dash = item.style.dash ? ` stroke-dasharray="${item.style.dash}"` : "";
+    return `<path class="compare-equity-line" d="${path}" stroke="${item.style.color}"${dash}></path>`;
+  }).join("");
+  const legend = series.map(item => `
+    <div class="compare-equity-legend-item">
+      <span class="compare-equity-swatch ${item.style.dash ? "dashed" : "solid"}" style="--series-color:${item.style.color}"></span>
+      <span><strong>${escapeHtml(item.name)}</strong><small>期末 ${escapeHtml(amount(item.endingBalance))} · 回撤 ${item.maxDrawdownPct.toFixed(2)}%</small></span>
+    </div>`).join("");
+  const chartLabel = `模型资金曲线，共 ${series.length} 个模型；详细数值同时列在下方表格中`;
+  return `<section class="compare-ranking-panel compare-equity-panel">
+    <div class="section-heading"><div><h2>抽样资金曲线</h2><p>观察资金变化路径和回撤发生时段，不能只比较最终收益。</p></div><span class="compare-result-scope">${escapeHtml(compareTimezoneLabel(timezone))}</span></div>
+    <div class="compare-equity-legend">${legend}</div>
+    <div class="compare-equity-chart-frame">
+      <svg data-cmp-equity-chart viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(chartLabel)}">
+        <title>${escapeHtml(chartLabel)}</title>
+        <desc>实线、虚线和点线分别代表不同模型，横轴为执行时间，纵轴为账户净值。</desc>
+        ${yTicks}${xTicks}${paths}
+        <line class="compare-equity-cursor" data-cmp-equity-cursor x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}" hidden></line>
+      </svg>
+      <div class="compare-equity-tooltip hidden" data-cmp-equity-tooltip role="tooltip"></div>
+    </div>
+    <p class="compare-equity-footnote"><i data-lucide="info" size="14"></i>资金曲线来自均匀抽取的决策切片及其后续 M1 订单回放，并非逐根主周期 K 线连续触发策略的完整回测。</p>
+  </section>`;
+}
+
+function nearestCompareEquityPoint(points, targetTime) {
+  let low = 0, high = points.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (points[middle].time < targetTime) low = middle + 1;
+    else high = middle;
+  }
+  const right = points[low];
+  const left = points[Math.max(0, low - 1)];
+  return !left || Math.abs(right.time - targetTime) < Math.abs(left.time - targetTime) ? right : left;
+}
+
+function bindCompareEquityChart(results, meta) {
+  const svg = document.querySelector("[data-cmp-equity-chart]");
+  const tooltip = document.querySelector("[data-cmp-equity-tooltip]");
+  const cursor = document.querySelector("[data-cmp-equity-cursor]");
+  const frame = svg?.closest(".compare-equity-chart-frame");
+  const series = compareEquitySeries(results);
+  if (!svg || !tooltip || !cursor || !frame || !series.length) return;
+  const allPoints = series.flatMap(item => item.points);
+  const minTime = Math.min(...allPoints.map(point => point.time));
+  const maxTime = Math.max(...allPoints.map(point => point.time));
+  const viewWidth = 1000, chartLeft = 72, chartRight = 22;
+  const plotWidth = viewWidth - chartLeft - chartRight;
+  const hideTooltip = () => {
+    tooltip.classList.add("hidden");
+    cursor.setAttribute("hidden", "");
+  };
+  svg.addEventListener("pointermove", event => {
+    const svgRect = svg.getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
+    const svgX = ((event.clientX - svgRect.left) / Math.max(1, svgRect.width)) * viewWidth;
+    const chartX = Math.max(chartLeft, Math.min(viewWidth - chartRight, svgX));
+    const targetTime = minTime + ((chartX - chartLeft) / plotWidth) * (maxTime - minTime);
+    cursor.setAttribute("x1", chartX.toFixed(2));
+    cursor.setAttribute("x2", chartX.toFixed(2));
+    cursor.removeAttribute("hidden");
+    const rows = series.map(item => {
+      const point = nearestCompareEquityPoint(item.points, targetTime);
+      return `<div><span style="--series-color:${item.style.color}"></span><strong>${escapeHtml(item.name)}</strong><b>${Number(point.equity).toLocaleString("zh-CN", { minimumFractionDigits:2, maximumFractionDigits:2 })}</b></div>`;
+    }).join("");
+    tooltip.innerHTML = `<time>${escapeHtml(formatCompareChartTime(targetTime, meta.execution_timezone_offset_minutes))}</time>${rows}`;
+    tooltip.classList.remove("hidden");
+    const desiredLeft = event.clientX - frameRect.left + 14;
+    const desiredTop = event.clientY - frameRect.top + 14;
+    tooltip.style.left = `${Math.max(8, Math.min(frameRect.width - tooltip.offsetWidth - 8, desiredLeft))}px`;
+    tooltip.style.top = `${Math.max(8, Math.min(frameRect.height - tooltip.offsetHeight - 8, desiredTop))}px`;
+  });
+  svg.addEventListener("pointerleave", hideTooltip);
+}
+
 function renderHistoryCompareResults(results, meta) {
   const container = $("cmpResults");
   if (!container) return;
@@ -4632,11 +4790,12 @@ function renderHistoryCompareResults(results, meta) {
       <div><span>平均一致度</span><strong>${Number(meta.average_agreement_rate || 0).toFixed(1)}%</strong><small>模型给出相同方向的程度</small></div>
       <div><span>评估切片</span><strong>${meta.evaluation_count || 0}</strong><small>均匀覆盖所选行情区间</small></div>
     </div>
-    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>每个模型在相同历史时点读取相同上下文。方向质量按下一根主周期 K 线评估；虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序处理市价、限价、突破与 Stop Limit 订单，并让同一模型的挂单、并发持仓、浮动盈亏、手续费、保证金和强平共享同一份资金。杠杆与强平线优先读取 MT5 账户元数据。当前仍是 M1 OHLC 路径模拟，同一分钟内同时触及止损和止盈时采用保守的“止损优先”，尚未接入真实逐笔 Tick 和完整账户级风控，因此不能等同真实成交收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
+    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>每个模型在相同的均匀抽样历史时点读取相同上下文。方向质量按下一根主周期 K 线评估；虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序处理市价、限价、突破与 Stop Limit 订单，并让同一模型的挂单、并发持仓、浮动盈亏、手续费、保证金和强平共享同一份资金。杠杆与强平线优先读取 MT5 账户元数据。当前仍是抽样决策后的 M1 OHLC 路径模拟，并非逐根主周期 K 线连续触发策略的完整回测；同一分钟内同时触及止损和止盈时采用保守的“止损优先”，尚未接入真实逐笔 Tick 和完整账户级风控，因此不能等同真实成交收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (replaySorted.length) {
-    tableHtml += '<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>虚拟账户资金</h2><p>同一模型的全部信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">事件驱动 · M1 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>保证金状态</th><th>未触发 / 歧义</th></tr></thead><tbody>';
+    tableHtml += renderCompareEquityChart(replaySorted, meta);
+    tableHtml += '<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>抽样账户资金回放</h2><p>同一模型的全部抽样信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">抽样信号 · M1 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>保证金状态</th><th>未触发 / 歧义</th></tr></thead><tbody>';
     replaySorted.forEach(result => {
       const simulation = result.account_simulation;
       tableHtml += `<tr><td><strong>${escapeHtml(result.model_name)}</strong><small class="compare-cell-note">${escapeHtml(modelProviderLabel(result.provider))}</small></td>
@@ -4670,6 +4829,7 @@ function renderHistoryCompareResults(results, meta) {
     tableHtml += '</tbody></table></div></section>';
   }
   $("cmpResultsTableWrap").innerHTML = tableHtml;
+  bindCompareEquityChart(replaySorted, meta);
   const validWithSignals = valid.filter(r => r.signals?.length);
   let timelineHtml = "";
   if (validWithSignals.length) {

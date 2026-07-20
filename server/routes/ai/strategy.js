@@ -112,6 +112,7 @@ async function loadHistoryExecutionCandles(userId, symbol, windows) {
   const chunkMs = 4_500 * 60_000
   const merged = new Map()
   let marketSource = null
+  let timezoneOffsetMinutes = null
   for (const window of windows || []) {
     for (let cursor = window.start; cursor < window.end; cursor += chunkMs) {
       const chunkEnd = Math.min(window.end, cursor + chunkMs)
@@ -119,6 +120,9 @@ async function loadHistoryExecutionCandles(userId, symbol, windows) {
         alignToPeriodStart: false,
       })
       marketSource ||= loaded.marketMeta?.source || null
+      if (timezoneOffsetMinutes == null && Number.isFinite(Number(loaded.marketMeta?.timezone_offset_minutes))) {
+        timezoneOffsetMinutes = Number(loaded.marketMeta.timezone_offset_minutes)
+      }
       for (const rate of loaded.periodRates || []) {
         const utcMs = compareRateUtcMs(rate)
         if (utcMs != null) merged.set(utcMs, { ...rate, time_utc_msc:utcMs })
@@ -128,6 +132,7 @@ async function loadHistoryExecutionCandles(userId, symbol, windows) {
   return {
     timeframe,
     marketSource,
+    timezoneOffsetMinutes,
     candles:[...merged.values()].sort((a, b) => Number(a.time_utc_msc) - Number(b.time_utc_msc)),
   }
 }
@@ -1004,6 +1009,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     instrument:null,
     account:null,
     market_source:null,
+    timezone_offset_minutes:null,
   }
   const hasActionableSignals = Object.values(modelSignals).some(signals =>
     signals.some(signal => signal.signal_type === 'buy' || signal.signal_type === 'sell'))
@@ -1030,6 +1036,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         instrument:snapshot.instrument,
         account:snapshot.account || null,
         market_source:execution.marketSource,
+        timezone_offset_minutes:execution.timezoneOffsetMinutes,
       }
     } else {
       backtestContext = {
@@ -1167,6 +1174,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       account_simulation_status:accountSimulationStatus,
       account_simulation_reason:accountSimulationReason,
       execution_timeframe:backtestContext.execution_timeframe,
+      execution_timezone_offset_minutes:backtestContext.timezone_offset_minutes,
       backtest_options:runtimeBacktestOptions,
       backtest_account_source:useBridgeAccountSettings
         && (bridgeLeverage > 0 || (bridgeStopOutUsesPercent && bridgeStopOut > 0))

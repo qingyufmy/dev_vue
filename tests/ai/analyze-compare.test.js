@@ -465,7 +465,7 @@ describe('handleHistoryCompare', () => {
         }
         return {
           status: 'success',
-          market_meta: { source: 'mysql_period_cache' },
+          market_meta: { source: 'mysql_period_cache', timezone_offset_minutes: 180 },
           rates: Array.from({ length: 50 }, (_, i) => ({
             time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
             open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
@@ -516,6 +516,7 @@ describe('handleHistoryCompare', () => {
       expect(result.meta).toHaveProperty('metric_type', 'next_closed_bar_direction')
       expect(result.meta).toHaveProperty('metric_version', 'directional-eval-v2')
       expect(result.meta).toHaveProperty('average_agreement_rate')
+      expect(result.meta).toHaveProperty('execution_timezone_offset_minutes', 180)
     })
 
     it('uses an explicit evenly distributed sample size for the new client', async () => {
@@ -623,9 +624,18 @@ describe('historical comparison frontend contract', () => {
   it('presents directional evaluation separately from the event-driven virtual account', () => {
     expect(frontend).toContain('方向准确率')
     expect(frontend).toContain('方向评估与资金回放分开计算')
-    expect(frontend).toContain('虚拟账户资金')
+    expect(frontend).toContain('抽样账户资金回放')
     expect(frontend).toContain('挂单、并发持仓、浮动盈亏、手续费、保证金和强平')
     expect(frontend).toContain('尚未接入真实逐笔 Tick 和完整账户级风控')
+    expect(frontend).toContain('并非逐根主周期 K 线连续触发策略的完整回测')
+  })
+
+  it('renders an accessible multi-model equity curve with MT5 time tooltips', () => {
+    expect(frontend).toContain('data-cmp-equity-chart')
+    expect(frontend).toContain('role="img"')
+    expect(frontend).toContain('抽样资金曲线')
+    expect(frontend).toContain('execution_timezone_offset_minutes')
+    expect(frontend).toContain('bindCompareEquityChart(replaySorted, meta)')
   })
 
   it('shows localized failure details in recent comparison jobs', () => {
