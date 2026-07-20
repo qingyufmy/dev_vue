@@ -515,6 +515,23 @@ describe('handleHistoryCompare', () => {
       expect(callCount).toBeGreaterThan(0)
     })
 
+    it('passes a shared abort signal to every model and exits when it is cancelled', async () => {
+      const controller = new AbortController()
+      maybeAiSignal.mockImplementation(async (_db, config) => {
+        expect(config._abortSignal).toBe(controller.signal)
+        controller.abort(new Error('history_compare_cancelled'))
+        throw controller.signal.reason
+      })
+
+      await expect(handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      }, {
+        abortSignal:controller.signal,
+        shouldCancel:() => controller.signal.aborted,
+      })).rejects.toThrow('history_compare_cancelled')
+    })
+
     it('returns direction scores and a separately labelled account replay', async () => {
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 25 })
       expect(result.status).toBe('success')
@@ -804,6 +821,10 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('{ method:"DELETE" }')
     expect(frontend).not.toContain('showToast(')
     expect(frontend).toContain('formatCompareChartTime(job.created_at_utc_msc, params.timezone_offset_minutes)')
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    expect(backend).toContain('abort_controller:new AbortController()')
+    expect(backend).toContain('job.abort_controller.abort')
+    expect(backend).toContain('abortSignal:job.abort_controller.signal')
   })
 
   it('reattaches to an active background job after reloading the page', () => {

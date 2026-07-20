@@ -134,6 +134,29 @@ describe('requestJsonObject', () => {
     })).rejects.toThrow('LLM HTTP 500')
   })
 
+  it('aborts an active provider request when the caller cancels it', async () => {
+    const controller = new AbortController()
+    mockFetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      if (options.signal.aborted) {
+        reject(options.signal.reason)
+        return
+      }
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+    }))
+
+    const request = requestJsonObject({
+      url: 'https://api.example.test',
+      apiKey: 'test-key',
+      model: 'test-model',
+      maxTokens: 2000,
+      messages: [{ role: 'user', content: 'test' }],
+      signal: controller.signal,
+    })
+    controller.abort(new Error('history_compare_cancelled'))
+
+    await expect(request).rejects.toThrow('history_compare_cancelled')
+  })
+
   it('非 ASCII API key 抛出异常', async () => {
     await expect(requestJsonObject({
       url: 'https://api.example.test',
@@ -373,6 +396,24 @@ describe('OpenAI-compatible provider URL', () => {
     }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.kimi.com/coding/v1/chat/completions')
     expect(JSON.parse(mockFetch.mock.calls[0][1].body).thinking.type).toBe('disabled')
+  })
+
+  it('does not turn an externally cancelled inference into a HOLD signal', async () => {
+    vi.clearAllMocks()
+    const controller = new AbortController()
+    mockFetch.mockImplementationOnce((_url, options) => {
+      controller.abort(new Error('history_compare_cancelled'))
+      return Promise.reject(options.signal.reason)
+    })
+
+    await expect(maybeAiSignal(null, {
+      api_key_encrypted: 'key',
+      api_provider: 'deepseek',
+      model_name: 'deepseek-chat',
+      thinking_enabled: false,
+      _abortSignal: controller.signal,
+    }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} }))
+      .rejects.toThrow('history_compare_cancelled')
   })
 })
 

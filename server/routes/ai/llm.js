@@ -157,7 +157,7 @@ function providerHttpError(url, provider, status) {
   return `kimi_code_http_${status}`
 }
 
-async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider }) {
+async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal }) {
   let usageLogId = null
   try {
     if (usageContext) {
@@ -167,11 +167,15 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
     await assertSafeModelEndpoint(url)
     const headers = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
     if (isKimiCodeRequest(url, provider)) headers['User-Agent'] = KIMI_CODE_CLIENT_IDENTITY
+    const timeoutSignal = AbortSignal.timeout(timeout)
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal
     const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeout),
+      signal: requestSignal,
       redirect: 'error',
     })
     if (!response.ok) {
@@ -209,15 +213,16 @@ async function emitModelProgress(onProgress, stage) {
   try { await onProgress(stage) } catch (error) { console.error('[LLM] Progress callback failed:', error.message) }
 }
 
-export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null, onProgress = null, validateObject = null }) {
+export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null, onProgress = null, validateObject = null, signal = null }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
+  signal?.throwIfAborted()
   const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
   const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + Math.max(0, Number(maxTokens) || 0)
   await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
-    url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request', provider,
+    url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request', provider, signal,
   })
   const content = extractLlmContent(data, protocol)
   if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
@@ -226,6 +231,7 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
     const parsed = parseJsonObject(content)
     return typeof validateObject === 'function' ? validateObject(parsed) : parsed
   } catch (exc) {
+    signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
     const repairMessages = [
       ...messages,
@@ -238,7 +244,7 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
     })
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: repairedData } = await trackedModelRequest({
-      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate, phase: 'repair', provider,
+      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate, phase: 'repair', provider, signal,
     })
     const repaired = extractLlmContent(repairedData, protocol)
     if (!repaired) throw new Error('LLM repair response content is empty')
@@ -404,11 +410,13 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
         { role: 'user', content: renderedUserPrompt },
       ],
       usageContext,
+      signal: config._abortSignal || null,
       validateObject: value => validateAiSignalResponse(value, config._allowed_entry_methods),
     })
     parsed._inference_source = 'ai'
     return normalizeAiSignal(parsed, config, market)
   } catch (exc) {
+    if (config?._abortSignal?.aborted) throw exc
     return aiFailureHold(market, exc.message)
   }
 }

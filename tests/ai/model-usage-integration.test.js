@@ -60,4 +60,21 @@ describe('provider-call usage integration', () => {
 
     expect(mockQueryRun.mock.calls[1][1]).toEqual([0, 'error', 'LLM HTTP 429', 41])
   })
+
+  it('finalizes the usage reservation when an active request is cancelled', async () => {
+    const controller = new AbortController()
+    mockFetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      if (options.signal.aborted) return reject(options.signal.reason)
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once:true })
+    }))
+
+    const request = requestJsonObject({
+      url:'https://api.test/v1/chat/completions', apiKey:'test-key', model:'test-model',
+      temperature:0.3, maxTokens:500, messages:[], usageContext, signal:controller.signal,
+    })
+    controller.abort(new Error('history_compare_cancelled'))
+
+    await expect(request).rejects.toThrow('history_compare_cancelled')
+    expect(mockQueryRun.mock.calls[1][1]).toEqual([0, 'error', 'history_compare_cancelled', 41])
+  })
 })

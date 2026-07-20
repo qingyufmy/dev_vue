@@ -805,6 +805,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     : params.evaluation_mode === 'continuous' ? 'continuous' : null
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false
+  const abortSignal = options.abortSignal || null
 
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') return { status: 'error', message: 'admin_only' }
@@ -1031,6 +1032,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _ai_volume_min: 0.01,
         _ai_volume_max: 1.0,
         _ai_volume_step: 0.01,
+        _abortSignal:abortSignal,
       }
       const startedAt = Date.now()
       try {
@@ -1041,6 +1043,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
         }
       } catch (error) {
+        if (abortSignal?.aborted) throw error
         return {
           modelId,
           latencyMs:Date.now() - startedAt,
@@ -1451,6 +1454,7 @@ export async function startHistoryCompareJob(userId, params) {
     error: null,
     params:normalizedParams,
     cancel_requested: false,
+    abort_controller:new AbortController(),
     created_at: now,
     updated_at: now,
     updated_at_ms: Date.now(),
@@ -1482,7 +1486,8 @@ export async function startHistoryCompareJob(userId, params) {
       job.updated_at_ms = Date.now()
       await persistHistoryCompareJob(job)
       const result = await handleHistoryCompare(userId, normalizedParams, {
-        shouldCancel: () => job.cancel_requested,
+        shouldCancel: () => job.cancel_requested || job.abort_controller.signal.aborted,
+        abortSignal:job.abort_controller.signal,
         onProgress: async progress => {
           Object.assign(job, progress, { updated_at: new Date().toISOString(), updated_at_ms: Date.now() })
           await persistHistoryCompareJob(job)
@@ -1542,6 +1547,9 @@ export async function cancelHistoryCompareJob(userId, jobId) {
   job.cancel_requested = true
   job.status = job.status === 'queued' ? 'cancelled' : 'cancelling'
   job.stage = job.status
+  if (!job.abort_controller.signal.aborted) {
+    job.abort_controller.abort(new Error('history_compare_cancelled'))
+  }
   job.updated_at = new Date().toISOString()
   job.updated_at_ms = Date.now()
   await persistHistoryCompareJob(job)
