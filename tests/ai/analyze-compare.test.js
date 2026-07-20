@@ -49,25 +49,34 @@ vi.mock('../../server/routes/ai/market-data.js', () => ({
 }))
 
 vi.mock('../../server/routes/ai/llm.js', () => ({
-  maybeAiSignal: vi.fn(async (_db, config, _market, _prompt) => ({
-    signal_type: 'buy',
-    confidence: 0.8,
-    recommended_volume: 0.05,
-    analysis: 'Test analysis',
-    reasoning: 'Test reasoning',
-    stop_loss_price: 1990,
-    take_profit_1_price: 2010,
-    take_profit_2_price: 2020,
-    take_profit_3_price: 2030,
-    recommended_take_profit_tier: 'tp2',
-    entry_method: 'market',
-    limit_price: null,
-    stop_limit_price: null,
-    pending_valid_until: null,
-    _inference_source: 'ai',
-    _model_profile_id: config?._model_profile_id,
-    model_name: config?.model_name,
-  })),
+  maybeAiSignal: vi.fn(async (_db, config, _market, _prompt) => {
+    config?._onInferencePrepared?.({
+      systemPrompt:'rendered-system-prompt',
+      userPrompt:'rendered-user-prompt',
+      outputSchemaVersion:'schema-v1',
+    })
+    config?._onProviderRequest?.({ phase:'request' })
+    config?._onProviderUsage?.({ phase:'request', status:'success', tokenCount:123 })
+    return {
+      signal_type: 'buy',
+      confidence: 0.8,
+      recommended_volume: 0.05,
+      analysis: 'Test analysis',
+      reasoning: 'Test reasoning',
+      stop_loss_price: 1990,
+      take_profit_1_price: 2010,
+      take_profit_2_price: 2020,
+      take_profit_3_price: 2030,
+      recommended_take_profit_tier: 'tp2',
+      entry_method: 'market',
+      limit_price: null,
+      stop_limit_price: null,
+      pending_valid_until: null,
+      _inference_source: 'ai',
+      _model_profile_id: config?._model_profile_id,
+      model_name: config?.model_name,
+    }
+  }),
 }))
 
 vi.mock('../../server/routes/ai/config.js', () => ({
@@ -188,6 +197,7 @@ const mockModelProfile = (id) => ({
     max_tokens: 2000,
     thinking_enabled: 0,
     reasoning_effort: 'max',
+    profile_updated_at: '2026-07-20 12:00:00',
     owner_user_id: 1,
   },
   credential_source: 'user',
@@ -635,6 +645,38 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.sample_size).toBe(8)
       expect(result.meta.evaluation_count).toBe(8)
       expect(result.meta.estimated_model_calls).toBe(16)
+      expect(result.meta.actual_model_calls).toBe(16)
+      expect(result.meta.repair_model_calls).toBe(0)
+      expect(result.meta.model_token_count).toBe(16 * 123)
+      expect(result.meta.reproducibility).toMatchObject({
+        run_version:'history-compare-v4',
+        reproducibility_level:'input_auditable_model_nondeterministic',
+        strategy:{
+          strategy_id:1,
+          strategy_version:1,
+          system_prompt_sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+        market_data:[expect.objectContaining({
+          timeframe:'M30',
+          sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
+        })],
+      })
+      expect(result.meta.reproducibility.decision_inputs).toHaveLength(8)
+      expect(result.meta.reproducibility.evidence_sha256).toMatch(/^[a-f0-9]{64}$/)
+      expect(result.results[0].runtime_model).toMatchObject({
+        model_profile_id:10,
+        model_name:'deepseek-chat-10',
+        api_base_url_sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtime_config_sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
+      })
+      expect(result.results[0].provider_usage).toMatchObject({
+        provider_request_count:8,
+        repair_request_count:0,
+        successful_request_count:8,
+        token_count:8 * 123,
+      })
+      expect(JSON.stringify(result.meta.reproducibility)).not.toContain('encrypted-key')
+      expect(JSON.stringify(result.meta.reproducibility)).not.toContain('api.deepseek.com')
       expect(result.results[0].signals[0]).toHaveProperty('decision_time')
       expect(result.results[0].signals[0]).toHaveProperty('outcome_time')
       expect(result.results[0].signals[0].decision_time_utc_msc)
@@ -914,6 +956,15 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('确认开始高调用量评估')
     expect(frontend).toContain('模型输出需要修复时可能产生额外调用')
     expect(frontend).toContain('estimate.calls >= HISTORY_COMPARE_CONFIRM_CALLS')
+  })
+
+  it('shows actual provider usage and a reproducibility fingerprint', () => {
+    expect(frontend).toContain('meta.actual_model_calls ?? meta.estimated_model_calls')
+    expect(frontend).toContain('meta.repair_model_calls')
+    expect(frontend).toContain('meta.model_token_count')
+    expect(frontend).toContain('meta.reproducibility?.evidence_sha256')
+    expect(frontend).toContain('输入与行情已留指纹')
+    expect(frontend).toContain('模型输出具有随机性')
   })
 
   it('shows localized failure details in recent comparison jobs', () => {

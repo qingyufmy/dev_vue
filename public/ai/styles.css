@@ -8097,9 +8097,10 @@ a.signal-link:hover {
 .compare-result-header h2 { margin:4px 0 5px; color:var(--text-primary); font-size:19px; }
 .compare-result-header p { max-width:720px; margin:0; color:var(--text-muted); font-size:12px; line-height:1.6; }
 .compare-result-scope { flex:none; padding:6px 10px; border-radius:var(--radius-pill); background:rgba(212,175,55,.08); color:var(--gold-primary); font:600 11px var(--font-mono); }
-.compare-summary-grid { display:grid; grid-template-columns:repeat(4,1fr); overflow:hidden; border:1px solid var(--border-default); border-top:0; background:var(--bg-surface); }
+.compare-summary-grid { display:grid; grid-template-columns:repeat(3,1fr); overflow:hidden; border:1px solid var(--border-default); border-top:0; background:var(--bg-surface); }
 .compare-summary-grid > div { display:flex; min-width:0; flex-direction:column; gap:5px; padding:14px 16px; border-right:1px solid var(--border-default); }
-.compare-summary-grid > div:last-child { border-right:0; }
+.compare-summary-grid > div:nth-child(3n) { border-right:0; }
+.compare-summary-grid > div:nth-child(-n+3) { border-bottom:1px solid var(--border-default); }
 .compare-summary-grid span,.compare-summary-grid small { color:var(--text-muted); font-size:10px; }
 .compare-summary-grid strong { overflow:hidden; color:var(--text-primary); font-size:16px; text-overflow:ellipsis; white-space:nowrap; }
 .compare-method-note { margin-top:-14px; padding:10px 16px; border:1px solid var(--border-default); border-top:0; border-radius:0 0 var(--radius-xl) var(--radius-xl); background:var(--bg-surface); color:var(--text-muted); font-size:11px; }
@@ -8173,8 +8174,9 @@ a.signal-link:hover {
   .compare-form-stack { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
   .compare-range-field { grid-column:1/-1; }
   .compare-summary-grid { grid-template-columns:repeat(2,1fr); }
-  .compare-summary-grid > div:nth-child(2) { border-right:0; }
-  .compare-summary-grid > div:nth-child(-n+2) { border-bottom:1px solid var(--border-default); }
+  .compare-summary-grid > div { border-right:1px solid var(--border-default); border-bottom:1px solid var(--border-default); }
+  .compare-summary-grid > div:nth-child(2n) { border-right:0; }
+  .compare-summary-grid > div:nth-last-child(-n+2) { border-bottom:0; }
 }
 @media (max-width:680px) {
   .compare-workspace-header,.compare-result-header { align-items:flex-start; flex-direction:column; }

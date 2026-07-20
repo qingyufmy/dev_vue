@@ -81,17 +81,25 @@ describe('requestJsonObject', () => {
         json: () => Promise.resolve({ choices: [{ message: { content: '{"fixed": true}' } }] })
       })
 
+    const onProviderRequest = vi.fn()
+    const onProviderUsage = vi.fn()
     const result = await requestJsonObject({
       url: 'https://api.example.test',
       apiKey: 'test-key',
       model: 'test-model',
       temperature: 0.7,
       maxTokens: 2000,
-      messages: [{ role: 'user', content: 'test' }]
+      messages: [{ role: 'user', content: 'test' }],
+      onProviderRequest,
+      onProviderUsage,
     })
 
     expect(result).toEqual({ fixed: true })
     expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(onProviderRequest.mock.calls.map(([event]) => event.phase)).toEqual(['request', 'repair'])
+    expect(onProviderUsage).toHaveBeenCalledTimes(2)
+    expect(onProviderUsage.mock.calls.every(([event]) =>
+      event.status === 'success' && event.tokenCount > 0)).toBe(true)
   })
 
   it('JSON 结构校验失败时要求模型修复并再次校验', async () => {
@@ -136,7 +144,10 @@ describe('requestJsonObject', () => {
 
   it('aborts an active provider request when the caller cancels it', async () => {
     const controller = new AbortController()
+    let markFetchStarted
+    const fetchStarted = new Promise(resolve => { markFetchStarted = resolve })
     mockFetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      markFetchStarted()
       if (options.signal.aborted) {
         reject(options.signal.reason)
         return
@@ -152,6 +163,7 @@ describe('requestJsonObject', () => {
       messages: [{ role: 'user', content: 'test' }],
       signal: controller.signal,
     })
+    await fetchStarted
     controller.abort(new Error('history_compare_cancelled'))
 
     await expect(request).rejects.toThrow('history_compare_cancelled')

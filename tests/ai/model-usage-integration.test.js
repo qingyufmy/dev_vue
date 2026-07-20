@@ -63,7 +63,10 @@ describe('provider-call usage integration', () => {
 
   it('finalizes the usage reservation when an active request is cancelled', async () => {
     const controller = new AbortController()
+    let markFetchStarted
+    const fetchStarted = new Promise(resolve => { markFetchStarted = resolve })
     mockFetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      markFetchStarted()
       if (options.signal.aborted) return reject(options.signal.reason)
       options.signal.addEventListener('abort', () => reject(options.signal.reason), { once:true })
     }))
@@ -72,6 +75,7 @@ describe('provider-call usage integration', () => {
       url:'https://api.test/v1/chat/completions', apiKey:'test-key', model:'test-model',
       temperature:0.3, maxTokens:500, messages:[], usageContext, signal:controller.signal,
     })
+    await fetchStarted
     controller.abort(new Error('history_compare_cancelled'))
 
     await expect(request).rejects.toThrow('history_compare_cancelled')

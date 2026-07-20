@@ -76,6 +76,47 @@ function boundedComparisonError(value, fallback = 'history_compare_failed', maxi
   return text.length <= maximum ? text : text.slice(0, maximum)
 }
 
+function comparisonFingerprint(value) {
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value)
+  return crypto.createHash('sha256').update(serialized).digest('hex')
+}
+
+function comparisonRatesEvidence(timeframe, rates = []) {
+  const normalized = (Array.isArray(rates) ? rates : []).map(rate => ({
+    time_utc_msc:compareRateUtcMs(rate),
+    open:Number(rate?.open),
+    high:Number(rate?.high),
+    low:Number(rate?.low),
+    close:Number(rate?.close),
+    tick_volume:Number(rate?.tick_volume ?? rate?.volume ?? 0),
+  }))
+  return {
+    timeframe,
+    count:normalized.length,
+    first_time_utc_msc:normalized[0]?.time_utc_msc || null,
+    last_time_utc_msc:normalized.at(-1)?.time_utc_msc || null,
+    sha256:comparisonFingerprint(normalized),
+  }
+}
+
+function comparisonModelSnapshot(modelId, resolved) {
+  const model = resolved.model || {}
+  const runtime = {
+    model_profile_id:Number(modelId),
+    provider:model.provider || model.api_provider || null,
+    model_name:model.model_name || null,
+    api_base_url_sha256:comparisonFingerprint(model.api_base_url || ''),
+    temperature:Number(model.temperature ?? 0.3),
+    max_tokens:Number(model.max_tokens || 0),
+    thinking_enabled:model.thinking_enabled !== 0 && model.thinking_enabled !== false,
+    reasoning_effort:model.reasoning_effort || null,
+    request_timeout_ms:Number(model.request_timeout_ms || 120000),
+    credential_source:resolved.credential_source || null,
+    profile_updated_at:model.profile_updated_at || null,
+  }
+  return { ...runtime, runtime_config_sha256:comparisonFingerprint(runtime) }
+}
+
 function compareRateUtcMs(rate) {
   const numeric = Number(rate?.time_utc_msc ?? rate?.time_msc)
   if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric
@@ -838,6 +879,16 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     return { status: 'error', message: 'strategy_primary_timeframe_invalid' }
   }
   const backtestOptions = normalizeBacktestOptions(params.backtest || {})
+  const strategyRuntimeSnapshot = {
+    strategy_id:Number(strategy.id),
+    strategy_version:Number(strategy.version || 1),
+    scope:strategy.scope || null,
+    system_prompt_sha256:comparisonFingerprint(strategy.system_prompt || ''),
+    market_data_plan:policy.marketDataPlan,
+    entry_methods:policy.entryMethods,
+    use_chan_analysis:Boolean(policy.useChanAnalysis),
+  }
+  strategyRuntimeSnapshot.runtime_config_sha256 = comparisonFingerprint(strategyRuntimeSnapshot)
 
   const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params.timezone_offset_minutes)
   const startUtcMs = parseCompareTimeUtcMs(start_time, selectionTimezoneOffsetMinutes)
@@ -858,6 +909,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   } catch (error) {
     return { status: 'error', message: error.message || 'history_market_data_unavailable' }
   }
+  const marketDataEvidence = historyWindows.map(item =>
+    comparisonRatesEvidence(item.timeframe, item.window?.periodRates))
   const selectedWindow = historyWindows.find(item => item.timeframe === requestedTimeframe)
   const primaryDurationMs = (TIMEFRAME_MINUTES[requestedTimeframe] || 1) * 60_000
   const evaluationCutoffUtcMs = Math.min(endUtcMs, Date.now())
@@ -953,6 +1006,16 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   for (const { modelId } of validModels) {
     modelSignals[modelId] = []
   }
+  const modelRuntimeSnapshots = Object.fromEntries(validModels.map(({ modelId, resolved }) =>
+    [modelId, comparisonModelSnapshot(modelId, resolved)]))
+  const modelTelemetry = Object.fromEntries(validModels.map(({ modelId }) => [modelId, {
+    provider_request_count:0,
+    repair_request_count:0,
+    successful_request_count:0,
+    failed_request_count:0,
+    token_count:0,
+  }]))
+  const decisionInputEvidence = new Map()
 
   await onProgress({ stage: 'models_ready', progress_percent: 15, completed_steps: 0, total_steps: steps.length })
 
@@ -1033,6 +1096,24 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _ai_volume_max: 1.0,
         _ai_volume_step: 0.01,
         _abortSignal:abortSignal,
+        _onProviderRequest:({ phase }) => {
+          modelTelemetry[modelId].provider_request_count += 1
+          if (phase === 'repair') modelTelemetry[modelId].repair_request_count += 1
+        },
+        _onProviderUsage:({ status, tokenCount }) => {
+          if (status === 'success') modelTelemetry[modelId].successful_request_count += 1
+          else modelTelemetry[modelId].failed_request_count += 1
+          modelTelemetry[modelId].token_count += Math.max(0, Number(tokenCount) || 0)
+        },
+        _onInferencePrepared:({ systemPrompt, userPrompt, outputSchemaVersion }) => {
+          if (decisionInputEvidence.has(decisionUtcMs)) return
+          decisionInputEvidence.set(decisionUtcMs, {
+            decision_time_utc_msc:decisionUtcMs,
+            system_prompt_sha256:comparisonFingerprint(systemPrompt || ''),
+            user_prompt_sha256:comparisonFingerprint(userPrompt || ''),
+            output_schema_version:outputSchemaVersion || null,
+          })
+        },
       }
       const startedAt = Date.now()
       try {
@@ -1232,6 +1313,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       error: successfulCount > 0 ? null : 'model_compare_no_valid_response',
       signal_count: signals.length,
       signals,
+      runtime_model:modelRuntimeSnapshots[modelId],
+      provider_usage:{ ...modelTelemetry[modelId] },
       account_simulation:accountSimulation,
       directional_score: {
         total_move: Number(totalMove.toFixed(10)),
@@ -1277,6 +1360,43 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const accountSimulationReason = successfulAccountReplay
     ? null
     : (unavailableAccountReplay?.account_simulation?.reason || backtestContext.reason)
+  const providerUsageTotals = Object.values(modelTelemetry).reduce((total, item) => ({
+    provider_request_count:total.provider_request_count + item.provider_request_count,
+    repair_request_count:total.repair_request_count + item.repair_request_count,
+    successful_request_count:total.successful_request_count + item.successful_request_count,
+    failed_request_count:total.failed_request_count + item.failed_request_count,
+    token_count:total.token_count + item.token_count,
+  }), {
+    provider_request_count:0,
+    repair_request_count:0,
+    successful_request_count:0,
+    failed_request_count:0,
+    token_count:0,
+  })
+  const reproducibilityEvidence = {
+    run_version:'history-compare-v4',
+    reproducibility_level:'input_auditable_model_nondeterministic',
+    strategy:strategyRuntimeSnapshot,
+    models:Object.values(modelRuntimeSnapshots),
+    market_data:marketDataEvidence,
+    execution_data:comparisonRatesEvidence(
+      backtestContext.execution_timeframe || 'M1',
+      backtestContext.execution_candles,
+    ),
+    execution_contract_snapshot:backtestContext.status === 'ready' ? {
+      instrument:backtestContext.instrument,
+      account:{
+        currency:backtestContext.account?.currency || null,
+        leverage:Number(backtestContext.account?.leverage || 0),
+        margin_so_mode:Number(backtestContext.account?.margin_so_mode || 0),
+        margin_so_so:Number(backtestContext.account?.margin_so_so || 0),
+      },
+    } : null,
+    decision_inputs:[...decisionInputEvidence.values()]
+      .sort((a, b) => a.decision_time_utc_msc - b.decision_time_utc_msc),
+    backtest_options:runtimeBacktestOptions,
+  }
+  reproducibilityEvidence.evidence_sha256 = comparisonFingerprint(reproducibilityEvidence)
 
   return {
     status: 'success',
@@ -1293,6 +1413,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         ? HISTORY_COMPARE_MAX_CONTINUOUS_STEPS
         : HISTORY_COMPARE_MAX_STEPS,
       estimated_model_calls: steps.length * validModels.length,
+      actual_model_calls:providerUsageTotals.provider_request_count,
+      repair_model_calls:providerUsageTotals.repair_request_count,
+      successful_model_calls:providerUsageTotals.successful_request_count,
+      failed_model_calls:providerUsageTotals.failed_request_count,
+      model_token_count:providerUsageTotals.token_count,
       average_agreement_rate: Number((averageAgreement * 100).toFixed(1)),
       agreement_comparable_count: comparableAgreementSteps.length,
       agreement_insufficient_count: agreementByStep.length - comparableAgreementSteps.length,
@@ -1316,6 +1441,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         : 'configured_defaults',
       strategy_timeframes: planItems.map(item => item.timeframe),
       chan_enabled: policy.useChanAnalysis,
+      reproducibility:reproducibilityEvidence,
     },
   }
 }

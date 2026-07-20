@@ -157,8 +157,19 @@ function providerHttpError(url, provider, status) {
   return `kimi_code_http_${status}`
 }
 
-async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal }) {
+async function emitProviderTelemetry(callback, payload) {
+  if (typeof callback !== 'function') return
+  try { await callback(payload) } catch (error) {
+    console.error('[LLM] Provider telemetry callback failed:', error.message)
+  }
+}
+
+async function trackedModelRequest({
+  url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal,
+  onProviderRequest, onProviderUsage,
+}) {
   let usageLogId = null
+  let providerRequestStarted = false
   try {
     if (usageContext) {
       const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
@@ -171,6 +182,9 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
     const requestSignal = signal
       ? AbortSignal.any([signal, timeoutSignal])
       : timeoutSignal
+    signal?.throwIfAborted()
+    await emitProviderTelemetry(onProviderRequest, { phase })
+    providerRequestStarted = true
     const response = await fetch(url, {
       method: 'POST',
       headers,
@@ -183,11 +197,12 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
       throw new Error(phase === 'repair' && !code.startsWith('kimi_code_') ? code.replace(/^LLM/, 'LLM repair') : code)
     }
     const data = await response.json()
+    const reportedTokens = extractTokenCount(data)
+    const fallbackTokens = Math.ceil((JSON.stringify(body).length + JSON.stringify(data).length) / 4)
+    const tokenCount = reportedTokens || fallbackTokens
     if (usageLogId) {
-      const reportedTokens = extractTokenCount(data)
-      const fallbackTokens = Math.ceil((JSON.stringify(body).length + JSON.stringify(data).length) / 4)
       try {
-        await finishModelUsage(usageLogId, { tokenCount: reportedTokens || fallbackTokens, status: 'success' })
+        await finishModelUsage(usageLogId, { tokenCount, status: 'success' })
       } catch (logError) {
         // The reservation remains at its conservative estimate. Do not repeat a
         // provider call merely because post-call accounting could not finalize.
@@ -195,6 +210,7 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
       }
       usageLogId = null
     }
+    await emitProviderTelemetry(onProviderUsage, { phase, status: 'success', tokenCount })
     return { response, data }
   } catch (error) {
     if (usageLogId) {
@@ -203,6 +219,11 @@ async function trackedModelRequest({ url, apiKey, body, timeout, usageContext, e
       } catch (logError) {
         console.error('[LLM] Failed to finalize usage log:', logError.message)
       }
+    }
+    if (providerRequestStarted) {
+      await emitProviderTelemetry(onProviderUsage, {
+        phase, status: 'error', tokenCount: 0, errorCode: error.message,
+      })
     }
     throw error
   }
@@ -213,7 +234,12 @@ async function emitModelProgress(onProgress, stage) {
   try { await onProgress(stage) } catch (error) { console.error('[LLM] Progress callback failed:', error.message) }
 }
 
-export async function requestJsonObject({ url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null, onProgress = null, validateObject = null, signal = null }) {
+export async function requestJsonObject({
+  url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled,
+  reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null,
+  onProgress = null, validateObject = null, signal = null,
+  onProviderRequest = null, onProviderUsage = null,
+}) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
@@ -223,6 +249,7 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
   await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
     url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request', provider, signal,
+    onProviderRequest, onProviderUsage,
   })
   const content = extractLlmContent(data, protocol)
   if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
@@ -244,7 +271,8 @@ export async function requestJsonObject({ url, apiKey, provider, model, temperat
     })
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: repairedData } = await trackedModelRequest({
-      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate, phase: 'repair', provider, signal,
+      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate,
+      phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
     })
     const repaired = extractLlmContent(repairedData, protocol)
     if (!repaired) throw new Error('LLM repair response content is empty')
@@ -411,6 +439,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       ],
       usageContext,
       signal: config._abortSignal || null,
+      onProviderRequest:config._onProviderRequest || null,
+      onProviderUsage:config._onProviderUsage || null,
       validateObject: value => validateAiSignalResponse(value, config._allowed_entry_methods),
     })
     parsed._inference_source = 'ai'

@@ -590,6 +590,7 @@ function buildResult(profile, source, usage, reason) {
       reasoning_effort: profile.reasoning_effort,
       request_timeout_ms: profile.request_timeout_ms,
       owner_user_id: profile.owner_user_id,
+      profile_updated_at: profile.updated_at || null,
     },
     credential_source: source,
     usage,
