@@ -4362,12 +4362,18 @@ async function runAnalysis() {
   }
 }
 
-function populateModelCompareSelect() {
+async function populateModelCompareSelect() {
   const group = $("modelCompareCheckboxGroup");
   const hint = $("modelCompareHint");
   const container = group?.closest(".model-compare-select");
   if (!group) return;
   if (state.user?.role !== "admin") { container?.classList.add("hidden"); return; }
+  if (!state.modelProfiles?.length) {
+    try {
+      const data = await api(`/api/ai/model-profiles${profileScopeQuery()}`);
+      state.modelProfiles = data.profiles || [];
+    } catch { state.modelProfiles = []; }
+  }
   const profiles = (state.modelProfiles || []).filter(p => p.status === "active");
   if (!profiles.length) { container?.classList.add("hidden"); return; }
   group.innerHTML = profiles.map((p, i) => `<label><input type="checkbox" value="${Number(p.id)}" data-compare-model ${i === 0 ? "checked" : ""}><span>${escapeHtml(p.model_name)}</span><small>${escapeHtml(modelProviderLabel(p.provider))}</small></label>`).join("");
