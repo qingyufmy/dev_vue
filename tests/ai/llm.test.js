@@ -285,11 +285,11 @@ describe('OpenAI-compatible provider URL', () => {
     })
 
     await maybeAiSignal(null, {
-      api_key_encrypted: 'key', api_provider: 'qwen', model_name: 'qwen-plus',
-      api_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/',
+      api_key_encrypted: 'key', api_provider: 'openai_compatible', model_name: 'gpt-4o',
+      api_base_url: 'https://api.openai.com/v1/',
     }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
 
-    expect(mockFetch.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
+    expect(mockFetch.mock.calls[0][0]).toBe('https://api.openai.com/v1/chat/completions')
     const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(requestBody).not.toHaveProperty('thinking')
     expect(requestBody).not.toHaveProperty('reasoning_effort')
@@ -323,6 +323,22 @@ describe('OpenAI-compatible provider URL', () => {
     expect(requestBody).toHaveProperty('instructions')
     expect(requestBody).toHaveProperty('input')
     expect(requestBody).not.toHaveProperty('messages')
+  })
+
+  it('routes DeepSeek through its default endpoint', async () => {
+    vi.clearAllMocks()
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', confidence: 0.7, recommended_volume: 0,
+        analysis: 'test', reasoning: 'test', cancel_pending: [],
+      }) } }] }),
+    })
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      thinking_enabled: false,
+    }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
+    expect(mockFetch.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions')
   })
 
   it('routes Kimi Code through its subscription endpoint with Thinking enabled', async () => {

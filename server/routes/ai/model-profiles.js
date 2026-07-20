@@ -8,6 +8,18 @@ import { isPlatformShareableProvider, normalizeModelProviderProfile } from './mo
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'auto_private', 'auto_platform', 'review', 'memory_compression']
+const MODEL_REQUEST_TIMEOUT_MIN_MS = 30000
+const MODEL_REQUEST_TIMEOUT_MAX_MS = 600000
+
+function normalizeRequestTimeout(value, fallback = null) {
+  if (value === undefined) return fallback
+  if (value === null || value === '') return null
+  const timeout = Number(value)
+  if (!Number.isInteger(timeout) || timeout < MODEL_REQUEST_TIMEOUT_MIN_MS || timeout > MODEL_REQUEST_TIMEOUT_MAX_MS) {
+    throw new Error('model_request_timeout_out_of_range')
+  }
+  return timeout
+}
 
 function parseAllowedPlans(value) {
   if (Array.isArray(value)) return value.map(String)
@@ -44,6 +56,7 @@ export async function createModelProfile(userId, payload, callerRole) {
   }
   const ownerUserId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
   const providerConfig = normalizeModelProviderProfile(payload)
+  const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms)
   let keyEnc = null
   let keyVersion = null
   if (payload.api_key) {
@@ -68,7 +81,7 @@ export async function createModelProfile(userId, payload, callerRole) {
       payload.max_tokens ?? 8000,
       providerConfig.thinking_enabled,
       providerConfig.reasoning_effort,
-      payload.request_timeout_ms ?? null,
+      requestTimeoutMs,
       now, now,
     ]
   )
@@ -116,6 +129,7 @@ export async function updateModelProfile(id, userId, payload) {
   if (!existing) throw new Error('model_profile_not_found')
   if (existing.owner_user_id !== userId) throw new Error('model_profile_access_denied')
   const providerConfig = normalizeModelProviderProfile(payload, existing)
+  const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms, existing.request_timeout_ms)
 
   let keyEnc = existing.api_key_encrypted
   let keyVersion = existing.key_version
@@ -143,7 +157,7 @@ export async function updateModelProfile(id, userId, payload) {
       payload.temperature ?? null, payload.max_tokens ?? null,
       providerConfig.thinking_enabled,
       providerConfig.reasoning_effort,
-      payload.request_timeout_ms !== undefined ? payload.request_timeout_ms : null,
+      requestTimeoutMs,
       now, id,
     ]
   )

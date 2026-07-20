@@ -1,12 +1,4 @@
-import { lookup as dnsLookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
-
-const DNS_CACHE_TTL_MS = 5 * 60 * 1000
-const dnsCache = new Map()
-const TRUSTED_PROVIDER_HOSTS = new Set([
-  'api.deepseek.com', 'api.openai.com', 'api.moonshot.cn', 'api.kimi.com',
-  'dashscope.aliyuncs.com', 'open.bigmodel.cn', 'ark.cn-beijing.volces.com',
-])
 
 function allowPrivateEndpoints() {
   return String(process.env.AI_ALLOW_PRIVATE_MODEL_ENDPOINTS || '').toLowerCase() === 'true'
@@ -73,28 +65,6 @@ export function normalizeModelBaseUrl(rawUrl) {
   return parsed.toString().replace(/\/+$/, '')
 }
 
-async function resolveAddresses(hostname, lookup = dnsLookup) {
-  const cached = dnsCache.get(hostname)
-  if (lookup === dnsLookup && cached && cached.expiresAt > Date.now()) return cached.addresses
-  let rows
-  try { rows = await lookup(hostname, { all: true, verbatim: true }) } catch { throw new Error('model_endpoint_dns_failed') }
-  const addresses = (Array.isArray(rows) ? rows : [rows]).map(row => row?.address).filter(Boolean)
-  if (!addresses.length) throw new Error('model_endpoint_dns_failed')
-  if (lookup === dnsLookup) dnsCache.set(hostname, { addresses, expiresAt: Date.now() + DNS_CACHE_TTL_MS })
-  return addresses
-}
-
-export async function assertSafeModelEndpoint(rawUrl, { lookup = dnsLookup } = {}) {
-  const parsed = parseAndValidateUrl(rawUrl)
-  if (allowPrivateEndpoints()) return parsed
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase()
-  if (isIP(hostname) || TRUSTED_PROVIDER_HOSTS.has(hostname)) return parsed
-  if (process.env.NODE_ENV === 'test' && /\.(test|example|invalid)$/.test(parsed.hostname)) return parsed
-  const addresses = await resolveAddresses(hostname, lookup)
-  if (addresses.some(isPrivateOrReservedAddress)) throw new Error('model_endpoint_private_network_forbidden')
-  return parsed
-}
-
-export function resetModelEndpointCacheForTests() {
-  dnsCache.clear()
+export async function assertSafeModelEndpoint(rawUrl) {
+  return parseAndValidateUrl(rawUrl)
 }

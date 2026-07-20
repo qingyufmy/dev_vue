@@ -77,7 +77,7 @@ function timeframePlan(strategy, sourceEvidence) {
   return [...new Set(inferred.map(item => String(item).toUpperCase()).filter(item => REVIEW_TIMEFRAME_MS[item]))].slice(0, 4)
 }
 
-async function loadReviewWindow(userId, symbol, timeframe, startUtcMs, endUtcMs) {
+export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtcMs, endUtcMs) {
   const count = requiredReviewCandleCount(startUtcMs, endUtcMs, timeframe)
   const interval = REVIEW_TIMEFRAME_MS[timeframe]
   const readStored = async sourceIds => {
@@ -139,7 +139,7 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
     result.symbols[symbol] = {}
     for (const timeframe of timeframes) {
       try {
-        const loaded = await loadReviewWindow(userId, symbol, timeframe, startUtcMs, endUtcMs)
+        const loaded = await loadPeriodMarketWindow(userId, symbol, timeframe, startUtcMs, endUtcMs)
         const sentinel = { ...loaded.rates.at(-1), time_utc_msc:loaded.rates.at(-1).time_utc_msc + loaded.interval }
         const market = calculateMarketData(symbol, timeframe, [...loaded.rates, sentinel], {}, [], {
           computeChan:Boolean(strategy?.use_chan_analysis), chanRates:[...loaded.rates, sentinel],

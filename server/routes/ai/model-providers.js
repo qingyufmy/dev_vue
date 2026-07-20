@@ -14,6 +14,7 @@ export const MODEL_PROVIDER_DEFAULTS = Object.freeze({
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   doubao: 'https://ark.cn-beijing.volces.com/api/v3',
   volcengine_agent_plan: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+  openai_compatible: null,
 })
 
 export function modelProviderProtocol(provider) {

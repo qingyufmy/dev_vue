@@ -136,6 +136,7 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
     const result = await requestJsonObject({ url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
       apiKey: resolved.model.api_key_encrypted, provider, model: resolved.model.model_name, temperature: 0,
       maxTokens: 40, protocol,
+      timeout: resolved.model.request_timeout_ms || 120000,
       thinkingEnabled: provider === 'kimi_code' ? true : Boolean(resolved.model.thinking_enabled),
       reasoningEffort: provider === 'kimi_code' && resolved.model.model_name === 'k3' ? 'max' : resolved.model.reasoning_effort,
       messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: '{"ok":true}' }],
@@ -146,7 +147,15 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
 
 
 router.post('/ai/analyze-compare', authMiddleware, async (req, res) => {
-  try { res.json(await handleAnalyzeCompare(req.user.id, req.body || {})) }
+  try {
+    const access = await queryOne(`SELECT role, plan, plan_expires_at,
+      (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
+      FROM users WHERE id = ?`, [req.user.id])
+    if (!access || !Number(access.has_pro_access)) {
+      return res.status(403).json({ ok: false, error: 'pro_access_required' })
+    }
+    res.json(await handleAnalyzeCompare(req.user.id, req.body || {}))
+  }
   catch (error) { reviewError(res, error) }
 })
 

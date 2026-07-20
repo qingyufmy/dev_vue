@@ -14,11 +14,33 @@ import { getStrategyById } from './strategy-ownership.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
+import { loadPeriodMarketWindow } from './period-market-evidence.js'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
 const CHAN_HISTORY_HINT_LIMIT = 512
 const _chanMaxHistoryHints = new Map()
 const TIMEFRAME_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080 }
+const HISTORY_COMPARE_MIN_CONTEXT = 20
+const HISTORY_COMPARE_MAX_STEPS = 20
+const HISTORY_COMPARE_MAX_KLINES = 5000
+
+function parseCompareTimeUtcMs(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  const hasTimezone = /T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+  const normalized = raw.includes('T')
+    ? raw
+    : raw.includes(' ') ? raw.replace(' ', 'T') : `${raw}T00:00:00`
+  const parsed = Date.parse(hasTimezone ? normalized : `${normalized}+08:00`)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function comparisonDirection(signalType) {
+  const normalized = String(signalType || '').toLowerCase()
+  if (normalized.startsWith('buy')) return 'buy'
+  if (normalized.startsWith('sell')) return 'sell'
+  return normalized === 'hold' ? 'hold' : 'unknown'
+}
 
 function rememberChanMaxHistory(key) {
   _chanMaxHistoryHints.delete(key)
@@ -500,8 +522,10 @@ export async function handleAnalyzeCompare(userId, params) {
   if (uniqueIds.length < 2 || uniqueIds.length > 5) {
     return { status: 'error', message: 'model_ids must contain 2-5 unique IDs' }
   }
+  const actor = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
+  const modelOwnerId = actor?.role === 'admin' ? 0 : userId
 
-  const strategy = await getStrategyById(Number(strategy_id), userId, 'user', { forExecution: false })
+  const strategy = await getStrategyById(Number(strategy_id), userId, actor?.role || 'user', { forExecution: false })
   if (!strategy) return { ok: false, error: 'strategy_not_found' }
 
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
@@ -527,7 +551,7 @@ export async function handleAnalyzeCompare(userId, params) {
   market.used_timeframes = market.strategy_context.used_timeframes
   market.missing_timeframes = market.strategy_context.missing_timeframes
   await attachAtrAnchor(userId, symbol, market, primaryTf)
-  if (!policy.useChanAnalysis && strategy.scope === 'platform') {
+  if (strategy.scope === 'platform') {
     market = buildSharedMarketSnapshot(market, {
       standardSymbol: symbol,
       volumeMin: 0.01,
@@ -538,7 +562,7 @@ export async function handleAnalyzeCompare(userId, params) {
 
   const profileResults = await Promise.allSettled(
     uniqueIds.map(async (modelId) => {
-      const resolved = await resolveOwnedModelProfileForRuntime(modelId, userId)
+      const resolved = await resolveOwnedModelProfileForRuntime(modelId, modelOwnerId)
       if (!resolved.model || !resolved.model.api_key_encrypted) {
         throw new Error(resolved.error || 'model_profile_not_found_or_inactive')
       }
@@ -576,8 +600,24 @@ export async function handleAnalyzeCompare(userId, params) {
       _ai_volume_step: 0.01,
     }
     return maybeAiSignal(null, config, market, prompt).then(signal => {
-      signal._inference_source = signal._inference_source || 'unknown'
-      return { model_id: modelId, status: 'success', signal }
+      const inferenceSource = signal?._inference_source || 'unknown'
+      if (inferenceSource !== 'ai') {
+        return { model_id: modelId, status: 'error', error: signal?.reasoning || 'inference_failed' }
+      }
+      delete signal._inference_source
+      const profile = resolved.model
+      return {
+        model_id: modelId,
+        model_name: profile.model_name,
+        provider: profile.provider || profile.api_provider,
+        status: 'success',
+        signal,
+        signal_type: signal.signal_type,
+        confidence: signal.confidence,
+        analysis: signal.analysis,
+        reasoning: signal.reasoning,
+        latest_price: market.latest_price,
+      }
     }).catch(error => {
       return { model_id: modelId, status: 'error', error: error.message || 'inference_failed' }
     })
@@ -588,7 +628,11 @@ export async function handleAnalyzeCompare(userId, params) {
     results.push(r)
   }
 
-  return { ok: true, results, market_snapshot: market }
+  const models = Object.fromEntries(validModels.map(({ modelId, resolved }) => [modelId, {
+    model_name: resolved.model.model_name,
+    provider: resolved.model.provider || resolved.model.api_provider,
+  }]))
+  return { ok: true, results, models, market_snapshot: market }
 }
 
 export async function handleHistoryCompare(userId, params) {
@@ -596,6 +640,7 @@ export async function handleHistoryCompare(userId, params) {
 
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') return { status: 'error', message: 'admin_only' }
+  const modelOwnerId = 0
   if (!symbol) return { status: 'error', message: 'symbol required' }
   if (!timeframe) return { status: 'error', message: 'timeframe required' }
   if (!strategy_id) return { status: 'error', message: 'strategy required' }
@@ -615,22 +660,34 @@ export async function handleHistoryCompare(userId, params) {
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
 
-  const klines = await queryAll(
-    `SELECT time, open, high, low, close, tick_volume FROM kline_data
-     WHERE symbol = ? AND timeframe = ? AND time >= ? AND time <= ?
-     ORDER BY time ASC LIMIT 2000`,
-    [String(symbol).toUpperCase(), String(timeframe).toUpperCase(), start_time, end_time]
-  )
-  if (!klines || klines.length === 0) return { status: 'error', message: 'no_kline_data_for_range' }
+  const startUtcMs = parseCompareTimeUtcMs(start_time)
+  const endUtcMs = parseCompareTimeUtcMs(end_time)
+  if (!startUtcMs || !endUtcMs || endUtcMs <= startUtcMs) {
+    return { status: 'error', message: 'invalid_history_time_range' }
+  }
+  let historyWindow
+  try {
+    historyWindow = await loadPeriodMarketWindow(
+      userId, symbol, String(timeframe).toUpperCase(), startUtcMs, endUtcMs
+    )
+  } catch (error) {
+    return { status: 'error', message: error.message || 'history_market_data_unavailable' }
+  }
+  const klines = Array.isArray(historyWindow?.periodRates)
+    ? historyWindow.periodRates.slice(0, HISTORY_COMPARE_MAX_KLINES)
+    : []
+  if (klines.length <= HISTORY_COMPARE_MIN_CONTEXT) return { status: 'error', message: 'insufficient_kline_data_for_compare' }
 
-  const klineInterval = Math.max(1, Math.min(50, Number(step) || 10))
+  const requestedInterval = Math.max(1, Math.min(50, Number(step) || 10))
+  const eligibleDecisionCount = klines.length - HISTORY_COMPARE_MIN_CONTEXT
+  const klineInterval = Math.max(requestedInterval, Math.ceil(eligibleDecisionCount / HISTORY_COMPARE_MAX_STEPS))
 
   const policy = parseStrategyPolicy(strategy)
   const prompt = strategy.system_prompt || ''
 
   const profileResults = await Promise.allSettled(
     uniqueIds.map(async (modelId) => {
-      const resolved = await resolveOwnedModelProfileForRuntime(modelId, userId)
+      const resolved = await resolveOwnedModelProfileForRuntime(modelId, modelOwnerId)
       if (!resolved.model || !resolved.model.api_key_encrypted) {
         throw new Error(resolved.error || 'model_profile_not_found_or_inactive')
       }
@@ -655,7 +712,7 @@ export async function handleHistoryCompare(userId, params) {
   }
 
   const steps = []
-  for (let i = 0; i < klines.length; i += klineInterval) {
+  for (let i = HISTORY_COMPARE_MIN_CONTEXT - 1; i < klines.length - 1; i += klineInterval) {
     steps.push(i)
   }
 
@@ -694,24 +751,33 @@ export async function handleHistoryCompare(userId, params) {
 
     const results = await Promise.all(inferenceTasks)
     for (const result of results) {
-      const kline = klines[stepIdx]
-      const openPrice = Number(kline.open)
-      const closePrice = Number(kline.close)
+      const outcomeKline = klines[stepIdx + 1]
+      const openPrice = Number(outcomeKline.open)
+      const closePrice = Number(outcomeKline.close)
 
       if (result.error) {
         modelSignals[result.modelId].push({
-          time: kline.time, signal_type: 'error', confidence: 0, pnl: 0, error: result.error,
+          time: outcomeKline.time, signal_type: 'error', confidence: 0, pnl: 0, error: result.error,
         })
         continue
       }
 
       const signal = result.signal
+      const inferenceSource = signal?._inference_source || 'unknown'
+      if (inferenceSource !== 'ai') {
+        modelSignals[result.modelId].push({
+          time: outcomeKline.time, signal_type: 'error', confidence: 0, pnl: 0,
+          error: signal?.reasoning || 'inference_failed',
+        })
+        continue
+      }
+      const direction = comparisonDirection(signal.signal_type)
       let pnl = 0
-      if (signal.signal_type === 'buy' && closePrice > openPrice) pnl = closePrice - openPrice
-      else if (signal.signal_type === 'sell' && openPrice > closePrice) pnl = openPrice - closePrice
+      if (direction === 'buy') pnl = closePrice - openPrice
+      else if (direction === 'sell') pnl = openPrice - closePrice
 
       modelSignals[result.modelId].push({
-        time: kline.time, signal_type: signal.signal_type, confidence: signal.confidence || 0, pnl,
+        time: outcomeKline.time, signal_type: direction, confidence: signal.confidence || 0, pnl,
       })
     }
   }
@@ -726,6 +792,7 @@ export async function handleHistoryCompare(userId, params) {
     const winCount = signals.filter(s => s.pnl > 0).length
     const lossCount = signals.filter(s => s.pnl < 0).length
     const errorCount = signals.filter(s => s.signal_type === 'error').length
+    const tradeCount = buyCount + sellCount
 
     modelResults.push({
       model_id: modelId,
@@ -738,8 +805,8 @@ export async function handleHistoryCompare(userId, params) {
         total: Number(totalPnl.toFixed(10)),
         win_count: winCount,
         loss_count: lossCount,
-        win_rate: signals.length > 0 ? Number(((winCount / signals.length) * 100).toFixed(1)) : 0,
-        avg_pnl: signals.length > 0 ? Number((totalPnl / signals.length).toFixed(10)) : 0,
+        win_rate: tradeCount > 0 ? Number(((winCount / tradeCount) * 100).toFixed(1)) : 0,
+        avg_pnl: tradeCount > 0 ? Number((totalPnl / tradeCount).toFixed(10)) : 0,
         buy_count: buyCount,
         sell_count: sellCount,
         hold_count: holdCount,
@@ -754,6 +821,10 @@ export async function handleHistoryCompare(userId, params) {
     meta: {
       symbol, timeframe, strategy_id: Number(strategy_id),
       kline_count: klines.length, step: klineInterval,
+      requested_step: requestedInterval,
+      evaluation_count: steps.length,
+      max_evaluation_count: HISTORY_COMPARE_MAX_STEPS,
+      market_source: historyWindow.marketMeta?.source || null,
       start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
     },
   }

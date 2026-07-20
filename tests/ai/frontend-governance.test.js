@@ -50,6 +50,12 @@ describe('AI governance navigation and DOM contract', () => {
     expect(platformTickBranch).not.toContain('state.lastQuote =')
   })
 
+  it('updates the active bridge entry before synchronizing account identity', () => {
+    expect(bridgeWs).toContain('const currentBridge = bridges.get(userId)')
+    expect(bridgeWs).toContain('currentBridge.brokerServer = account.server')
+    expect(bridgeWs).toContain('syncTradingAccountIdentity(userId, account)')
+  })
+
   it('anchors overview live candles to MT5 quote time instead of creating weekend bars from the browser clock', () => {
     const tickStart = app.indexOf('function updateKlineTick')
     const tickEnd = app.indexOf('// Periodic refresh for higher timeframes', tickStart)
@@ -118,12 +124,12 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('付费配对实验（额外一次调用）')
   })
 
-  it('separates Kimi production API from personal Code subscription credentials', () => {
+  it('keeps existing model providers editable while supporting custom compatible endpoints', () => {
     expect(html).toContain('<option value="kimi">Kimi 开放平台</option>')
     expect(html).toContain('<option value="kimi_code">Kimi Code 订阅（个人）</option>')
-    expect(html).toContain('id="platformSharingProviderNotice"')
+    expect(html).toContain('<option value="openai_compatible">自定义 OpenAI 兼容</option>')
     expect(app).toContain("kimi_code: { models: ['kimi-for-coding', 'k3', 'kimi-for-coding-highspeed']")
-    expect(app).toContain('profile.share_eligible !== false')
+    expect(app).toContain("openai_compatible: { models: [], url: '' }")
   })
 
   it('shows user-editable price controls and separates AI, cap and final execution volume', () => {

@@ -2638,40 +2638,6 @@ const migrations = [
     }
   },
   {
-    id: '104_kline_data_table',
-    up: async () => {
-      try {
-        const existing = await queryAll("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'kline_data'")
-        if (!existing || !existing.length) {
-          await queryRun(`CREATE TABLE IF NOT EXISTS kline_data (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            symbol VARCHAR(50) NOT NULL,
-            timeframe VARCHAR(10) NOT NULL,
-            time DATETIME NOT NULL,
-            open DECIMAL(24,10) NOT NULL,
-            high DECIMAL(24,10) NOT NULL,
-            low DECIMAL(24,10) NOT NULL,
-            close DECIMAL(24,10) NOT NULL,
-            tick_volume BIGINT NOT NULL DEFAULT 0,
-            spread INT NOT NULL DEFAULT 0,
-            created_at DATETIME DEFAULT (NOW()),
-            UNIQUE KEY uk_kline_data (symbol, timeframe, time),
-            INDEX idx_kline_data_lookup (symbol, timeframe, time)
-          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
-          console.log('[Migrations] 104 created kline_data table')
-        } else {
-          console.log('[Migrations] 104 kline_data table already exists')
-        }
-      } catch (e) {
-        if (e.message?.includes('Duplicate')) {
-          console.log('[Migrations] 104 kline_data table already exists')
-        } else {
-          console.error('[Migrations] 104 failed:', e.message)
-        }
-      }
-    }
-  },
-  {
     id: '105_add_model_profile_timeout',
     async up() {
       const cols = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS

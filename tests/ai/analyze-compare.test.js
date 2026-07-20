@@ -129,6 +129,16 @@ vi.mock('../../server/routes/ai/platform-market-data.js', () => ({
   saveChanStructureAnchor: vi.fn(),
 }))
 
+vi.mock('../../server/routes/ai/period-market-evidence.js', () => ({
+  loadPeriodMarketWindow: async (userId, symbol, timeframe, startUtcMs, endUtcMs) => {
+    const response = await mockMt5Bridge(userId, 'rates', {
+      symbol, timeframe, review_window: true,
+      start_utc_msc: startUtcMs, end_utc_msc: endUtcMs,
+    })
+    return { periodRates: response?.rates || [], marketMeta: response?.market_meta || {} }
+  },
+}))
+
 vi.mock('../../server/routes/ai/utils.js', () => ({
   STRATEGY_TIMEFRAME_COUNTS: { M5: 100, M15: 100, M30: 100, H1: 80, H4: 50 },
   CHAN_HISTORY_COUNT: 300,
@@ -271,7 +281,10 @@ describe('handleAnalyzeCompare', () => {
         expect(r).toHaveProperty('model_id')
         expect(r).toHaveProperty('status')
         expect(r).toHaveProperty('signal')
+        expect(r.signal_type).toBe(r.signal.signal_type)
+        expect(r.confidence).toBe(r.signal.confidence)
       }
+      expect(result.models[10]).toMatchObject({ model_name: 'deepseek-chat-10', provider: 'deepseek' })
     })
 
     it('returns success for fulfilled inference and error for rejected', async () => {
@@ -284,6 +297,15 @@ describe('handleAnalyzeCompare', () => {
       expect(fulfilled.status).toBe('success')
       expect(rejected.status).toBe('error')
       expect(rejected.error).toContain('llm_timeout')
+    })
+
+    it('does not label an LLM fallback hold as a successful comparison', async () => {
+      maybeAiSignal
+        .mockResolvedValueOnce({ signal_type: 'hold', reasoning: 'llm_timeout', _inference_source: 'ai_error_hold' })
+        .mockResolvedValueOnce({ signal_type: 'buy', confidence: 0.8, analysis: 'ok', _inference_source: 'ai' })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
+      expect(result.results.find(r => r.model_id === 10)).toMatchObject({ status: 'error', error: 'llm_timeout' })
+      expect(result.results.find(r => r.model_id === 20).status).toBe('success')
     })
   })
 
@@ -321,6 +343,15 @@ describe('POST /ai/analyze-compare route', () => {
 
   it('route calls handleAnalyzeCompare(req.user.id, req.body)', () => {
     expect(routes).toContain('handleAnalyzeCompare(req.user.id, req.body || {})')
+  })
+
+  it('enforces current Pro access on the direct HTTP route', () => {
+    expect(routes).toContain('has_pro_access')
+    expect(routes).toContain("error: 'pro_access_required'")
+  })
+
+  it('uses the model-specific timeout for connection tests', () => {
+    expect(routes).toContain('timeout: resolved.model.request_timeout_ms || 120000')
   })
 })
 
@@ -401,31 +432,33 @@ describe('handleHistoryCompare', () => {
     })
 
     it('returns error when no kline data for range', async () => {
-      mockQueryAll.mockResolvedValueOnce([])
+      mockMt5Bridge.mockResolvedValueOnce({ status: 'success', rates: [], market_meta: { source: 'mysql' } })
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
       expect(result.status).toBe('error')
-      expect(result.message).toBe('no_kline_data_for_range')
+      expect(result.message).toBe('insufficient_kline_data_for_compare')
     })
 
-    it('queries kline_data table with correct params', async () => {
-      mockQueryAll.mockResolvedValueOnce([])
+    it('hydrates the existing market candle cache through platformRates', async () => {
+      mockMt5Bridge.mockResolvedValueOnce({ status: 'success', rates: [], market_meta: { source: 'mysql' } })
       await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
-      expect(mockQueryAll).toHaveBeenCalledWith(
-        expect.stringContaining('kline_data'),
-        ['XAUUSD', 'M30', '2026-07-01', '2026-07-02']
-      )
+      expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({
+        symbol: 'XAUUSD', timeframe: 'M30', review_window: true,
+        start_utc_msc: expect.any(Number), end_utc_msc: expect.any(Number),
+      }))
     })
   })
 
   describe('historical inference', () => {
     beforeEach(() => {
       mockQueryOne.mockResolvedValue({ role: 'admin' })
-      mockQueryAll.mockResolvedValue(
-        Array.from({ length: 50 }, (_, i) => ({
+      mockMt5Bridge.mockResolvedValue({
+        status: 'success',
+        market_meta: { source: 'mysql_period_cache' },
+        rates: Array.from({ length: 50 }, (_, i) => ({
           time: `2026-07-01 ${String(i).padStart(2, '0')}:00:00`,
           open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
-        }))
-      )
+        })),
+      })
     })
 
     it('calls maybeAiSignal for each model at each step', async () => {
@@ -458,7 +491,26 @@ describe('handleHistoryCompare', () => {
       expect(result.meta).toHaveProperty('symbol', 'XAUUSD')
       expect(result.meta).toHaveProperty('timeframe', 'M30')
       expect(result.meta).toHaveProperty('kline_count', 50)
-      expect(result.meta).toHaveProperty('step', 10)
+      expect(result.meta).toHaveProperty('requested_step', 10)
+      expect(result.meta.evaluation_count).toBeLessThanOrEqual(20)
+    })
+
+    it('evaluates a signal against the next unseen candle and records losses', async () => {
+      maybeAiSignal.mockResolvedValue({
+        signal_type: 'buy', confidence: 0.8, analysis: 'a', reasoning: 'r', _inference_source: 'ai',
+      })
+      mockMt5Bridge.mockResolvedValue({
+        status: 'success',
+        rates: Array.from({ length: 25 }, (_, i) => ({
+          time: `2026-07-01T${String(i).padStart(2, '0')}:00:00`,
+          open: 2000, high: 2010, low: 1980, close: i === 20 ? 1990 : 2005, tick_volume: 100,
+        })),
+        market_meta: { source: 'mysql_period_cache' },
+      })
+      const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 50 })
+      expect(result.results[0].signals[0].time).toContain('20:00:00')
+      expect(result.results[0].signals[0].pnl).toBe(-10)
+      expect(result.results[0].simulated_pnl.loss_count).toBeGreaterThan(0)
     })
   })
 })

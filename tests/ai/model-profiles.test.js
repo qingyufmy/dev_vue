@@ -29,6 +29,7 @@ import {
   recoverStaleModelUsageReservations,
   resolveAiTaskModel,
   setDefaultModelProfile,
+  updateModelProfile,
 } from '../../server/routes/ai/model-profiles.js'
 import { encryptCredential, resetKeyringForTests } from '../../server/ai-credential.js'
 
@@ -239,8 +240,21 @@ describe('model profile authorization and defaults', () => {
     expect(mockQueryRun.mock.calls[0][1][0]).toBe(0)
   })
 
-  it('stores Kimi Code profiles with the subscription endpoint and forced thinking', async () => {
+  it('stores DeepSeek profiles with the configured base URL and user settings', async () => {
     mockQueryRun.mockResolvedValueOnce({ insertId: 8 })
+    mockQueryOne.mockResolvedValueOnce(null)
+    await createModelProfile(1, {
+      provider: 'deepseek', model_name: 'deepseek-chat', api_key: 'test',
+      thinking_enabled: false,
+    }, 'pro')
+    const params = mockQueryRun.mock.calls[0][1]
+    expect(params[2]).toBe('deepseek')
+    expect(params[4]).toBe('https://api.deepseek.com')
+    expect(params[9]).toBe(0)
+  })
+
+  it('keeps Kimi Code profiles on the subscription endpoint with thinking enabled', async () => {
+    mockQueryRun.mockResolvedValueOnce({ insertId: 9 })
     mockQueryOne.mockResolvedValueOnce(null)
     await createModelProfile(1, {
       provider: 'kimi_code', model_name: 'kimi-for-coding', api_key: 'test',
@@ -250,6 +264,25 @@ describe('model profile authorization and defaults', () => {
     expect(params[2]).toBe('kimi_code')
     expect(params[4]).toBe('https://api.kimi.com/coding/v1')
     expect(params[9]).toBe(1)
+  })
+
+  it('validates model request timeout bounds', async () => {
+    await expect(createModelProfile(1, {
+      provider: 'deepseek', model_name: 'deepseek-chat', request_timeout_ms: 29999,
+    }, 'pro')).rejects.toThrow('model_request_timeout_out_of_range')
+    await expect(createModelProfile(1, {
+      provider: 'deepseek', model_name: 'deepseek-chat', request_timeout_ms: 600001,
+    }, 'pro')).rejects.toThrow('model_request_timeout_out_of_range')
+  })
+
+  it('preserves request timeout during partial profile updates', async () => {
+    const existing = profile({ request_timeout_ms: 180000 })
+    mockQueryOne
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(existing)
+    mockQueryRun.mockResolvedValueOnce({ affectedRows: 1 })
+    await updateModelProfile(existing.id, existing.owner_user_id, { model_name: 'qwen-plus-new' })
+    expect(mockQueryRun.mock.calls[0][1][9]).toBe(180000)
   })
 
   it('updates both default representations in one transaction', async () => {

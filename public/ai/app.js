@@ -1571,12 +1571,14 @@ const PROVIDER_PRESETS = {
   zhipu: { models: ['glm-4-flash'], url: 'https://open.bigmodel.cn/api/paas/v4' },
   doubao: { models: ['doubao-1.5-pro-32k'], url: 'https://ark.cn-beijing.volces.com/api/v3' },
   volcengine_agent_plan: { models: ['ark-code-latest'], url: 'https://ark.cn-beijing.volces.com/api/plan/v3' },
+  openai_compatible: { models: [], url: '' },
 };
 
 const MODEL_PROVIDER_LABELS = {
   deepseek: "DeepSeek", gpt: "OpenAI compatible", kimi: "Kimi 开放平台",
   kimi_code: "Kimi Code 订阅（个人）", qwen: "Qwen", zhipu: "智谱",
   doubao: "豆包", volcengine_agent_plan: "火山方舟 Agent Plan",
+  openai_compatible: "自定义 OpenAI 兼容",
 };
 
 function modelProviderLabel(provider) { return MODEL_PROVIDER_LABELS[provider] || provider; }
@@ -4594,26 +4596,31 @@ function renderCompareResults(result, elapsedMs) {
 
   let summaryHtml = `<div class="compare-summary-bar"><strong>共 ${results.length} 个模型</strong>`;
   const dirCounts = {};
-  results.forEach(r => { const d = signalType(r.signal_type); dirCounts[d] = (dirCounts[d] || 0) + 1; });
+  results.filter(r => !r.error && r.status !== "error").forEach(r => {
+    const signal = r.signal || r;
+    const d = signalType(signal.signal_type);
+    dirCounts[d] = (dirCounts[d] || 0) + 1;
+  });
   Object.entries(dirCounts).forEach(([dir, count]) => { summaryHtml += `<span>${directionText(dir)} × ${count}</span>`; });
   if (elapsedMs) summaryHtml += `<span>耗时 ${(elapsedMs/1000).toFixed(1)}s</span>`;
   summaryHtml += '</div>';
 
   const cardsHtml = results.map(r => {
-    const dir = signalType(r.signal_type);
-    const conf = confidenceInfo(r.confidence);
-    const modelName = models[r.model_id]?.model_name || `模型 #${r.model_id}`;
-    const provider = models[r.model_id]?.provider || "";
-    const analysis = escapeHtml(String(r.analysis || "").trim() || "暂无分析");
-    const reasoning = String(r.reasoning || "").trim();
+    const signal = r.signal || r;
+    const dir = signalType(signal.signal_type);
+    const conf = confidenceInfo(signal.confidence);
+    const modelName = r.model_name || models[r.model_id]?.model_name || `模型 #${r.model_id}`;
+    const provider = r.provider || models[r.model_id]?.provider || "";
+    const analysis = escapeHtml(String(signal.analysis || "").trim() || "暂无分析");
+    const reasoning = String(signal.reasoning || "").trim();
     if (r.error) {
       return `<div class="compare-card"><div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-provider">${escapeHtml(modelProviderLabel(provider))}</span></div><div class="compare-card-error">${escapeHtml(r.error)}</div></div>`;
     }
     return `<div class="compare-card">
-      <div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-direction ${dir}">${directionText(r.signal_type)}</span></div>
+      <div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-direction ${dir}">${directionText(signal.signal_type)}</span></div>
       <div class="compare-card-provider">${escapeHtml(modelProviderLabel(provider))}</div>
       <div class="compare-card-row"><span>置信度</span><span>${conf.label}</span></div>
-      <div class="compare-card-row"><span>当前价</span><span>${r.latest_price ?? "--"}</span></div>
+      <div class="compare-card-row"><span>当前价</span><span>${r.latest_price ?? result?.market_snapshot?.latest_price ?? "--"}</span></div>
       <div class="compare-card-analysis"><strong>行情分析</strong>\n${analysis}${reasoning ? `\n\n<strong>分析依据</strong>\n${escapeHtml(reasoning)}` : ""}</div>
     </div>`;
   }).join("");

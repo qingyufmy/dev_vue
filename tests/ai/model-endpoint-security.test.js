@@ -3,7 +3,6 @@ import {
   assertSafeModelEndpoint,
   isPrivateOrReservedAddress,
   normalizeModelBaseUrl,
-  resetModelEndpointCacheForTests,
 } from '../../server/routes/ai/model-endpoint-security.js'
 
 const originalOverride = process.env.AI_ALLOW_PRIVATE_MODEL_ENDPOINTS
@@ -11,7 +10,6 @@ const originalOverride = process.env.AI_ALLOW_PRIVATE_MODEL_ENDPOINTS
 afterEach(() => {
   if (originalOverride === undefined) delete process.env.AI_ALLOW_PRIVATE_MODEL_ENDPOINTS
   else process.env.AI_ALLOW_PRIVATE_MODEL_ENDPOINTS = originalOverride
-  resetModelEndpointCacheForTests()
 })
 
 describe('model endpoint security', () => {
@@ -31,15 +29,14 @@ describe('model endpoint security', () => {
     expect(isPrivateOrReservedAddress('2606:4700:4700::1111')).toBe(false)
   })
 
-  it('rejects a public hostname when DNS resolves to a private address', async () => {
-    const lookup = async () => [{ address: '10.20.30.40', family: 4 }]
+  it('does not perform DNS resolution for hostnames', async () => {
+    const lookup = async () => { throw new Error('dns_should_not_be_called') }
     await expect(assertSafeModelEndpoint('https://models.example.org/v1/chat/completions', { lookup }))
-      .rejects.toThrow('model_endpoint_private_network_forbidden')
+      .resolves.toBeInstanceOf(URL)
   })
 
   it('accepts a public HTTPS endpoint and strips query and fragment from saved base URLs', async () => {
-    const lookup = async () => [{ address: '1.1.1.1', family: 4 }]
-    await expect(assertSafeModelEndpoint('https://models.example.org/v1/chat/completions', { lookup })).resolves.toBeInstanceOf(URL)
+    await expect(assertSafeModelEndpoint('https://models.example.org/v1/chat/completions')).resolves.toBeInstanceOf(URL)
     expect(normalizeModelBaseUrl('https://models.example.org/v1/?token=bad#part')).toBe('https://models.example.org/v1')
   })
 

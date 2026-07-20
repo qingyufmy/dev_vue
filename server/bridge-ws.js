@@ -612,9 +612,10 @@ async function _initBridge(ws, userId, user) {
   try {
     const account = await sendBridgeCommand(userId, 'account', {}, 5000, { noFallback: true })
     if (account?.status === 'success' && account.server && account.login !== undefined) {
-      if (bridge) {
-        bridge.brokerServer = account.server
-        bridge.accountLogin = account.login
+      const currentBridge = bridges.get(userId)
+      if (currentBridge?.ws === ws) {
+        currentBridge.brokerServer = account.server
+        currentBridge.accountLogin = account.login
       }
       const ai = await import('./routes/ai/index.js')
       await ai.syncTradingAccountIdentity(userId, account)
