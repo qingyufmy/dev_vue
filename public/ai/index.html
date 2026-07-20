@@ -924,6 +924,19 @@
       </div>
     </div>
 
+    <div id="compareResultsModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="compareResultsTitle">
+      <div class="order-confirm-dialog" style="width:min(820px,calc(100vw - 40px))">
+        <div class="order-confirm-head">
+          <strong id="compareResultsTitle">模型对比结果</strong>
+          <button id="compareResultsClose" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x" size="16"></i></button>
+        </div>
+        <div id="compareResultsBody" class="order-confirm-body compare-results-body"></div>
+        <div class="order-confirm-actions">
+          <button id="compareResultsCloseBtn" class="btn" type="button">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div id="genericConfirmModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="genericConfirmTitle">
       <div class="order-confirm-dialog" style="width:min(420px,calc(100vw - 40px))">
         <div class="order-confirm-head">

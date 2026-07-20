@@ -7910,3 +7910,20 @@ a.signal-link:hover {
     animation-iteration-count: 1 !important;
   }
 }
+.compare-results-body { max-height:65vh; overflow-y:auto; }
+.compare-cards-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+.compare-card { border:1px solid var(--border-default); border-radius:var(--radius-lg); background:rgba(8,13,23,0.7); padding:16px; display:flex; flex-direction:column; gap:10px; }
+.compare-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.compare-card-model { font-size:13px; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.compare-card-provider { font-size:11px; color:var(--text-muted); }
+.compare-card-direction { padding:3px 10px; border-radius:var(--radius-pill); font-size:12px; font-weight:700; text-transform:uppercase; }
+.compare-card-direction.buy { background:rgba(34,197,94,0.15); color:#22c55e; }
+.compare-card-direction.sell { background:rgba(239,68,68,0.15); color:#ef4444; }
+.compare-card-direction.hold { background:rgba(234,179,8,0.15); color:#eab308; }
+.compare-card-row { display:flex; justify-content:space-between; align-items:center; font-size:12px; }
+.compare-card-row span:first-child { color:var(--text-muted); }
+.compare-card-row span:last-child { color:var(--text-primary); font-weight:600; }
+.compare-card-analysis { font-size:12px; color:var(--text-secondary); line-height:1.6; border-top:1px solid var(--border-default); padding-top:8px; white-space:pre-wrap; max-height:120px; overflow-y:auto; }
+.compare-card-error { color:var(--status-danger); font-size:12px; text-align:center; padding:12px 0; }
+.compare-summary-bar { display:flex; gap:12px; align-items:center; padding:8px 0; margin-bottom:10px; font-size:13px; color:var(--text-secondary); flex-wrap:wrap; }
+.compare-summary-bar strong { color:var(--text-primary); }

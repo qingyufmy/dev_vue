@@ -1785,6 +1785,7 @@ function updateManualStrategySelection() {
   if (!strategy) {
     symbolSelect.disabled = true; symbolSelect.innerHTML = '<option value="">请先选择策略</option>';
     summary.className = "strategy-run-summary empty"; summary.innerHTML = "<strong>尚未选择策略</strong><span>选择后显示行情周期、K 线数量、入场方式与模型来源。</span>";
+    populateModelCompareSelect();
     return;
   }
   const symbols = parseJsonField(strategy.symbols_json, []), previous = symbolSelect.value;
@@ -1802,6 +1803,7 @@ function updateManualStrategySelection() {
   const methodLabels = { market:"市价", limit:"限价挂单", stop:"突破挂单", stop_limit:"突破限价" };
   summary.className = "strategy-run-summary";
   summary.innerHTML = `<div><span>行情计划</span><strong>${plan.timeframes.map(item => `${escapeHtml(item.timeframe)} × ${Number(item.kline_count)}`).join(" · ")}</strong></div><div><span>缠论指标</span><strong>${Number(strategy.use_chan_analysis) ? "已启用" : "未启用"}</strong></div><div><span>允许入场</span><strong>${methods.map(item => methodLabels[item] || item).map(escapeHtml).join("、")}</strong></div><div><span>模型</span><strong>${strategy.model_profile_id ? `绑定模型 #${Number(strategy.model_profile_id)}` : "按模型管理规则解析"}</strong></div>`;
+  populateModelCompareSelect();
 }
 
 function renderStrategyModelOptions(scope, selectedId = "") {
@@ -4298,6 +4300,7 @@ function setManualInferenceModal(open) {
 }
 
 async function runAnalysis() {
+  if (getSelectedModelIds().length >= 2) { return runAnalysisCompare(); }
   const symbol = $("analyzeSymbol").value;
   const strategyId = Number($("analyzeStrategy")?.value || 0);
   const autoExecute = Boolean($("manualAutoExecute")?.checked);
@@ -4355,6 +4358,113 @@ async function runAnalysis() {
     $("runAnalysisBtn").disabled = false;
     initIcons();
   }
+}
+
+function populateModelCompareSelect() {
+  const group = $("modelCompareCheckboxGroup");
+  const hint = $("modelCompareHint");
+  const container = group?.closest(".model-compare-select");
+  if (!group) return;
+  const profiles = (state.modelProfiles || []).filter(p => p.status === "active");
+  if (!profiles.length) { container?.classList.add("hidden"); return; }
+  group.innerHTML = profiles.map(p => `<label><input type="checkbox" value="${Number(p.id)}" data-compare-model><span>${escapeHtml(p.model_name)}</span><small>${escapeHtml(modelProviderLabel(p.provider))}</small></label>`).join("");
+  container?.classList.remove("hidden");
+  const checkboxes = group.querySelectorAll("[data-compare-model]");
+  const updateHint = () => {
+    const count = getSelectedModelIds().length;
+    if (hint) { hint.textContent = count >= 2 ? `对比模式已激活（${count} 个模型）` : count === 1 ? "再选至少 1 个模型开启对比" : "勾选 ≥2 个模型开启对比推理"; hint.classList.toggle("active", count >= 2); }
+  };
+  checkboxes.forEach(cb => cb.addEventListener("change", updateHint));
+  updateHint();
+  initIcons();
+}
+
+function getSelectedModelIds() {
+  return [...document.querySelectorAll("[data-compare-model]:checked")].map(cb => Number(cb.value)).filter(id => id > 0);
+}
+
+function setCompareResultsModal(open) {
+  const modal = $("compareResultsModal");
+  if (!modal) return;
+  modal.classList.toggle("hidden", !open);
+  document.body.classList.toggle("modal-open", open);
+}
+
+async function runAnalysisCompare() {
+  const symbol = $("analyzeSymbol").value;
+  const strategyId = Number($("analyzeStrategy")?.value || 0);
+  const modelIds = getSelectedModelIds();
+  if (!strategyId) { toast("请选择推理策略", "warning"); $("analyzeStrategy")?.focus(); return; }
+  if (!symbol) { toast("请选择策略支持的品种", "warning"); return; }
+  if (modelIds.length < 2) { toast("对比模式至少需要选择 2 个模型", "warning"); return; }
+
+  $("runAnalysisBtn").disabled = true;
+  const statusEl = $("manualInferenceStatus");
+  statusEl?.classList.remove("hidden");
+  $("manualInferenceClose").disabled = true;
+  $("manualInferenceCancel").disabled = true;
+  setText("analysisLatency", "对比推理中");
+  setText("signalFreshness", "等待结果");
+  const started = performance.now();
+
+  try {
+    const result = await wsApi("compare", {
+      session_id: "default", strategy_id: strategyId, symbol,
+      model_ids: modelIds, _timeout: 180000,
+    });
+    const elapsed = Math.round(performance.now() - started);
+    setManualInferenceModal(false);
+    renderCompareResults(result, elapsed);
+    setCompareResultsModal(true);
+    toast(`对比推理完成，${(result?.results || []).length} 个模型返回结果，耗时 ${(elapsed/1000).toFixed(1)}s`, "success");
+  } catch (error) {
+    setText("analysisLatency", "--");
+    setText("signalFreshness", "--");
+    toast(error.message, "error");
+  } finally {
+    statusEl?.classList.add("hidden");
+    $("manualInferenceClose").disabled = false;
+    $("manualInferenceCancel").disabled = false;
+    $("runAnalysisBtn").disabled = false;
+    initIcons();
+  }
+}
+
+function renderCompareResults(result, elapsedMs) {
+  const body = $("compareResultsBody");
+  if (!body) return;
+  const results = result?.results || [];
+  const models = result?.models || {};
+  if (!results.length) { body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted)">所有模型均未返回有效结果</div>'; return; }
+
+  let summaryHtml = `<div class="compare-summary-bar"><strong>共 ${results.length} 个模型</strong>`;
+  const dirCounts = {};
+  results.forEach(r => { const d = signalType(r.signal_type); dirCounts[d] = (dirCounts[d] || 0) + 1; });
+  Object.entries(dirCounts).forEach(([dir, count]) => { summaryHtml += `<span>${directionText(dir)} × ${count}</span>`; });
+  if (elapsedMs) summaryHtml += `<span>耗时 ${(elapsedMs/1000).toFixed(1)}s</span>`;
+  summaryHtml += '</div>';
+
+  const cardsHtml = results.map(r => {
+    const dir = signalType(r.signal_type);
+    const conf = confidenceInfo(r.confidence);
+    const modelName = models[r.model_id]?.model_name || `模型 #${r.model_id}`;
+    const provider = models[r.model_id]?.provider || "";
+    const analysis = escapeHtml(String(r.analysis || "").trim() || "暂无分析");
+    const reasoning = String(r.reasoning || "").trim();
+    if (r.error) {
+      return `<div class="compare-card"><div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-provider">${escapeHtml(modelProviderLabel(provider))}</span></div><div class="compare-card-error">${escapeHtml(r.error)}</div></div>`;
+    }
+    return `<div class="compare-card">
+      <div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-direction ${dir}">${directionText(r.signal_type)}</span></div>
+      <div class="compare-card-provider">${escapeHtml(modelProviderLabel(provider))}</div>
+      <div class="compare-card-row"><span>置信度</span><span>${conf.label}</span></div>
+      <div class="compare-card-row"><span>当前价</span><span>${r.latest_price ?? "--"}</span></div>
+      <div class="compare-card-analysis"><strong>行情分析</strong>\n${analysis}${reasoning ? `\n\n<strong>分析依据</strong>\n${escapeHtml(reasoning)}` : ""}</div>
+    </div>`;
+  }).join("");
+
+  body.innerHTML = summaryHtml + `<div class="compare-cards-grid">${cardsHtml}</div>`;
+  initIcons();
 }
 
 async function executeSignal() {
@@ -5583,6 +5693,11 @@ function bindEvents() {
   $("manualInferenceCancel")?.addEventListener("click", () => setManualInferenceModal(false));
   $("manualInferenceModal")?.addEventListener("click", event => {
     if (event.target === $("manualInferenceModal") && !$("runAnalysisBtn")?.disabled) setManualInferenceModal(false);
+  });
+  $("compareResultsClose")?.addEventListener("click", () => setCompareResultsModal(false));
+  $("compareResultsCloseBtn")?.addEventListener("click", () => setCompareResultsModal(false));
+  $("compareResultsModal")?.addEventListener("click", event => {
+    if (event.target === $("compareResultsModal")) setCompareResultsModal(false);
   });
   document.querySelectorAll("[data-strategy-timeframe]").forEach(input => input.addEventListener("change", () => {
     const tf = input.dataset.strategyTimeframe;
