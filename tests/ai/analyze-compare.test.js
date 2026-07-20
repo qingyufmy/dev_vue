@@ -258,8 +258,16 @@ describe('handleAnalyzeCompare', () => {
     it('calls maybeAiSignal for each model_id', async () => {
       await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       expect(maybeAiSignal).toHaveBeenCalledTimes(2)
-      expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({ model_name: 'deepseek-chat-10' }), expect.any(Object), expect.any(String))
-      expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({ model_name: 'deepseek-chat-20' }), expect.any(Object), expect.any(String))
+      expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
+        model_name:'deepseek-chat-10',
+        _usage:'model_compare',
+        _strategyId:1,
+      }), expect.any(Object), expect.any(String))
+      expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
+        model_name:'deepseek-chat-20',
+        _usage:'model_compare',
+        _strategyId:1,
+      }), expect.any(Object), expect.any(String))
     })
 
     it('resolves model profiles for each id', async () => {
@@ -878,6 +886,13 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('HISTORY_COMPARE_CONTINUOUS_LIMIT = 120')
     expect(frontend).toContain('连续回测资金曲线')
     expect(frontend).toContain('逐根主周期连续决策 + M1 OHLC 执行回放')
+  })
+
+  it('confirms sampled comparisons that are expected to make many model requests', () => {
+    expect(frontend).toContain('HISTORY_COMPARE_CONFIRM_CALLS = 20')
+    expect(frontend).toContain('确认开始高调用量评估')
+    expect(frontend).toContain('模型输出需要修复时可能产生额外调用')
+    expect(frontend).toContain('estimate.calls >= HISTORY_COMPARE_CONFIRM_CALLS')
   })
 
   it('shows localized failure details in recent comparison jobs', () => {

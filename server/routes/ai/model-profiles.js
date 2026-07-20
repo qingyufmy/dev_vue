@@ -7,7 +7,7 @@ import { recordCredentialMigration } from './rollout-governance.js'
 import { isPlatformShareableProvider, normalizeModelProviderProfile } from './model-providers.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
-export const USAGES = ['manual', 'auto_private', 'auto_platform', 'review', 'memory_compression']
+export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression']
 const MODEL_REQUEST_TIMEOUT_MIN_MS = 30000
 const MODEL_REQUEST_TIMEOUT_MAX_MS = 600000
 

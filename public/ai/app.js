@@ -4508,6 +4508,7 @@ let _historyCompareJobId = null;
 let _historyCompareStrategies = [];
 let _historyComparePrimaryTimeframe = "";
 const HISTORY_COMPARE_CONTINUOUS_LIMIT = 120;
+const HISTORY_COMPARE_CONFIRM_CALLS = 20;
 const COMPARE_TIMEFRAME_MINUTES = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440 };
 
 function historyCompareEvaluationMode() {
@@ -4714,15 +4715,18 @@ async function runHistoryCompare() {
     use_bridge_account_settings:true,
   };
   if (!startTime || !endTime) return toast("请选择时间范围", "error");
-  if (evaluationMode === "continuous") {
+  if (evaluationMode === "continuous" || estimate.calls >= HISTORY_COMPARE_CONFIRM_CALLS) {
+    const continuous = evaluationMode === "continuous";
     const confirmed = await showConfirm(
-      "确认开始连续回测",
-      "连续回测会在每根策略主周期 K 线闭合后分别调用所选模型。后台会先检查完整行情、策略上下文和 120 个决策点上限，校验不通过时不会调用模型。",
+      continuous ? "确认开始连续回测" : "确认开始高调用量评估",
+      continuous
+        ? "连续回测会在每根策略主周期 K 线闭合后分别调用所选模型。后台会先检查完整行情、策略上下文和 120 个决策点上限，校验不通过时不会调用模型。模型输出需要修复时可能额外调用一次。"
+        : `本次快速抽样预计调用模型 ${estimate.calls} 次。后台会先校验历史行情和策略上下文；模型输出需要修复时可能产生额外调用。`,
       {
-        confirmText:"开始连续回测",
+        confirmText:continuous ? "开始连续回测" : "确认并开始",
         detailRows:[
           ["策略主周期", _historyComparePrimaryTimeframe || "--"],
-          ["自然时间估算", `约 ${estimate.decisionCount} 个决策点`],
+          [continuous ? "自然时间估算" : "评估切片", `约 ${estimate.decisionCount} 个决策点`],
           ["模型请求估算", `约 ${estimate.calls} 次`],
         ],
       },

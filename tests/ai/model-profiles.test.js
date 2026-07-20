@@ -226,6 +226,12 @@ describe('resolveAiTaskModel', () => {
   it('rejects unknown usages', async () => {
     await expect(resolveAiTaskModel({ userId: 1, usage: 'invalid' })).rejects.toThrow('invalid_usage:invalid')
   })
+
+  it('accepts model comparison as a distinct usage category', async () => {
+    mockQueryOne.mockResolvedValueOnce(null).mockResolvedValueOnce(policy())
+    const result = await resolveAiTaskModel({ userId: 1, usage: 'model_compare' })
+    expect(result).toMatchObject({ usage:'model_compare', error:'no_model_configured' })
+  })
 })
 
 describe('model profile authorization and defaults', () => {
