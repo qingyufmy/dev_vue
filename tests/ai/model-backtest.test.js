@@ -365,6 +365,85 @@ describe('model comparison account replay', () => {
     })
   })
 
+  it('does not reuse pre-entry extremes for an intrabar pending fill', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        signal_type:'buy_limit',
+        entry_method:'limit',
+        limit_price:96,
+        stop_loss_price:90,
+        take_profit_1_price:105,
+      })],
+      [
+        candle(0, { open:100, high:110, low:95, close:97 }),
+        candle(1, { open:97, high:99, low:96, close:98 }),
+      ],
+      instrument,
+      { starting_balance:10_000, leverage:100 },
+    )
+
+    expect(result.intrabar_entry_exit_deferred_count).toBe(1)
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      entry_time_utc_msc:Date.UTC(2026, 6, 20, 0, 0),
+      entry_price:96,
+      exit_reason:'data_end',
+      exit_price:98,
+      net_profit:20,
+    })
+  })
+
+  it('keeps a provably post-entry stop on an intrabar limit fill', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        signal_type:'buy_limit',
+        entry_method:'limit',
+        limit_price:96,
+        stop_loss_price:90,
+        take_profit_1_price:110,
+      })],
+      [candle(0, { open:100, high:101, low:89, close:95 })],
+      instrument,
+      { starting_balance:10_000, leverage:100 },
+    )
+
+    expect(result.intrabar_entry_exit_deferred_count).toBe(0)
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      entry_price:96,
+      exit_reason:'stop_loss',
+      exit_price:90,
+      net_profit:-60,
+    })
+  })
+
+  it('defers an adverse extreme that may precede an intrabar stop entry', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        signal_type:'buy_stop',
+        entry_method:'stop',
+        limit_price:101,
+        stop_loss_price:95,
+        take_profit_1_price:110,
+      })],
+      [
+        candle(0, { open:100, high:102, low:94, close:101 }),
+        candle(1, { open:101, high:103, low:100, close:102 }),
+      ],
+      instrument,
+      { starting_balance:10_000, leverage:100 },
+    )
+
+    expect(result.intrabar_entry_exit_deferred_count).toBe(1)
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      entry_price:101,
+      exit_reason:'data_end',
+      exit_price:102,
+      net_profit:10,
+    })
+  })
+
   it('uses the worse opening price when price gaps through a stop loss', () => {
     const result = simulateVirtualAccount(
       [sample()],

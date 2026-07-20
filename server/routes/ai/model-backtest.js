@@ -249,24 +249,53 @@ function fillEntry(intent, candle, instrument, options, state) {
   const askHigh = high + spread
   const askLow = low + spread
   if (intent.method === 'market') {
+    state.entry_at_open = true
     return intent.direction === 'buy' ? askOpen + slippage : open - slippage
   }
   if (!(intent.trigger_price > 0)) return null
   if (intent.method === 'limit') {
     if (intent.direction === 'buy') {
-      if (askOpen <= intent.trigger_price) return askOpen
-      return askLow <= intent.trigger_price ? intent.trigger_price : null
+      if (askOpen <= intent.trigger_price) {
+        state.entry_at_open = true
+        return askOpen
+      }
+      if (askLow <= intent.trigger_price) {
+        state.entry_at_open = false
+        return intent.trigger_price
+      }
+      return null
     }
-    if (open >= intent.trigger_price) return open
-    return high >= intent.trigger_price ? intent.trigger_price : null
+    if (open >= intent.trigger_price) {
+      state.entry_at_open = true
+      return open
+    }
+    if (high >= intent.trigger_price) {
+      state.entry_at_open = false
+      return intent.trigger_price
+    }
+    return null
   }
   if (intent.method === 'stop') {
     if (intent.direction === 'buy') {
-      if (askOpen >= intent.trigger_price) return askOpen + slippage
-      return askHigh >= intent.trigger_price ? intent.trigger_price + slippage : null
+      if (askOpen >= intent.trigger_price) {
+        state.entry_at_open = true
+        return askOpen + slippage
+      }
+      if (askHigh >= intent.trigger_price) {
+        state.entry_at_open = false
+        return intent.trigger_price + slippage
+      }
+      return null
     }
-    if (open <= intent.trigger_price) return open - slippage
-    return low <= intent.trigger_price ? intent.trigger_price - slippage : null
+    if (open <= intent.trigger_price) {
+      state.entry_at_open = true
+      return open - slippage
+    }
+    if (low <= intent.trigger_price) {
+      state.entry_at_open = false
+      return intent.trigger_price - slippage
+    }
+    return null
   }
   if (intent.method === 'stop_limit') {
     state.stop_limit_deferred_this_bar = false
@@ -290,11 +319,25 @@ function fillEntry(intent, candle, instrument, options, state) {
     const limit = intent.stop_limit_price
     if (!state.stop_triggered || !(limit > 0)) return null
     if (intent.direction === 'buy') {
-      if (askOpen <= limit) return askOpen
-      return askLow <= limit ? limit : null
+      if (askOpen <= limit) {
+        state.entry_at_open = true
+        return askOpen
+      }
+      if (askLow <= limit) {
+        state.entry_at_open = false
+        return limit
+      }
+      return null
     }
-    if (open >= limit) return open
-    return high >= limit ? limit : null
+    if (open >= limit) {
+      state.entry_at_open = true
+      return open
+    }
+    if (high >= limit) {
+      state.entry_at_open = false
+      return limit
+    }
+    return null
   }
   return null
 }
@@ -329,6 +372,32 @@ function detectExit(intent, entryPrice, candle, instrument, options = null) {
   return null
 }
 
+function resolveIntrabarEntryExit(intent, entryPrice, candle, instrument, options = null) {
+  const exit = detectExit(intent, entryPrice, candle, instrument, options)
+  if (!exit) return { exit:null, deferred:false }
+  const method = intent.method || intent.entry_method
+  // A limit fill is reached while price moves toward the adverse side, so a
+  // stop beyond that fill is provably post-entry. A target on the opposite
+  // side may have occurred before the fill and cannot be reused.
+  if (method === 'limit' || method === 'stop_limit') {
+    if (exit.reason === 'stop_loss' || exit.reason === 'same_bar_stop_first') {
+      return { exit, deferred:false }
+    }
+    return { exit:null, deferred:true }
+  }
+  // A stop entry is reached while price moves toward the favorable side, so a
+  // further target is provably post-entry. An isolated adverse extreme may
+  // have happened before the trigger; defer it. When both sides were touched,
+  // retain the documented conservative stop-first rule.
+  if (method === 'stop') {
+    if (exit.reason === 'take_profit' || exit.reason === 'same_bar_stop_first') {
+      return { exit, deferred:false }
+    }
+    return { exit:null, deferred:true }
+  }
+  return { exit, deferred:false }
+}
+
 function closeAtHorizon(intent, candle, instrument) {
   const close = finite(candle?.close)
   if (!(close > 0)) return null
@@ -361,6 +430,7 @@ export function simulateSignalReplay(samples = [], candles = [], rawInstrument =
 
   const trades = []
   let skippedSignals = 0
+  let intrabarEntryExitDeferredCount = 0
   const sampleDecisionTime = sample => finite(sample?.decision_time_utc_msc)
     ?? rateTime({ time:sample?.decision_time })
     ?? 0
@@ -389,7 +459,14 @@ export function simulateSignalReplay(samples = [], candles = [], rawInstrument =
         if (entryPrice == null) continue
         entryCandle = candle
       }
-      exit = detectExit(intent, entryPrice, candle, instrument)
+      if (entryState.entry_at_open === false && candle === entryCandle) {
+        const resolution = resolveIntrabarEntryExit(intent, entryPrice, candle, instrument)
+        if (resolution.deferred) intrabarEntryExitDeferredCount += 1
+        if (!resolution.exit) continue
+        exit = resolution.exit
+      } else {
+        exit = detectExit(intent, entryPrice, candle, instrument)
+      }
       if (exit) {
         exit.candle = candle
         break
@@ -479,6 +556,7 @@ export function simulateSignalReplay(samples = [], candles = [], rawInstrument =
     expired_order_count:trades.filter(trade => trade.status === 'expired').length,
     not_evaluated_count:trades.filter(trade => trade.status === 'not_evaluated').length,
     ambiguous_bar_count:closed.filter(trade => trade.same_bar_ambiguous).length,
+    intrabar_entry_exit_deferred_count:intrabarEntryExitDeferredCount,
     skipped_signal_count:skippedSignals,
     trades,
     equity_curve:equityCurve,
@@ -674,7 +752,15 @@ function requiredMargin(direction, volume, entryPrice, instrument, options) {
   }
 }
 
-function adverseMarkPrice(direction, candle, instrument) {
+function adverseMarkPrice(direction, candle, instrument, position = null) {
+  if (position?.entry_time_utc_msc === candle?._time
+    && position?.entry_at_open === false
+    && position?.entry_method === 'stop') {
+    // For an intrabar stop entry, the adverse extreme may precede the trigger.
+    // The candle close is the first unambiguous post-entry mark available from
+    // OHLC data.
+    return markPrice(direction, candle, instrument)
+  }
   const low = finite(candle?.low)
   const high = finite(candle?.high)
   if (!(low > 0) || !(high > 0)) return null
@@ -685,7 +771,7 @@ function summarizeAccount(balance, positions, candle, instrument, priceResolver 
   let floating = 0
   let margin = 0
   for (const position of positions) {
-    const price = priceResolver(position.direction, candle, instrument)
+    const price = priceResolver(position.direction, candle, instrument, position)
     if (price != null) floating += grossProfit(position.direction, position.volume, position.entry_price, price, instrument)
     margin += position.margin
   }
@@ -796,6 +882,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   let positionLimitRejectedCount = 0
   let pendingLimitRejectedCount = 0
   let stopLimitDeferredCount = 0
+  let intrabarEntryExitDeferredCount = 0
   let brokerConstraintRejectedCount = 0
   let previousCandle = null
   let totalSwap = 0
@@ -979,6 +1066,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
         volume:intent.volume,
         decision_time_utc_msc:intent.decision_time_utc_msc,
         entry_time_utc_msc:candle._time,
+        entry_at_open:intent.state.entry_at_open !== false,
         entry_price:rounded(entryPrice),
         stop_loss:intent.stop_loss,
         take_profit:intent.take_profit,
@@ -992,8 +1080,16 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
       }
       positions.push(position)
       maximumConcurrentPositions = Math.max(maximumConcurrentPositions, positions.length)
-      const immediateExit = detectExit(position, position.entry_price, candle, instrument, options)
-      if (immediateExit) closePositionAt(position, immediateExit.price, candle, immediateExit.reason, immediateExit.ambiguous)
+      if (intent.state.entry_at_open === false) {
+        const resolution = resolveIntrabarEntryExit(position, position.entry_price, candle, instrument, options)
+        if (resolution.deferred) intrabarEntryExitDeferredCount += 1
+        if (resolution.exit) {
+          closePositionAt(position, resolution.exit.price, candle, resolution.exit.reason, resolution.exit.ambiguous)
+        }
+      } else {
+        const immediateExit = detectExit(position, position.entry_price, candle, instrument, options)
+        if (immediateExit) closePositionAt(position, immediateExit.price, candle, immediateExit.reason, immediateExit.ambiguous)
+      }
     }
 
     for (const position of [...positions]) {
@@ -1111,6 +1207,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
     pending_limit_rejected_count:pendingLimitRejectedCount,
     broker_constraint_rejected_count:brokerConstraintRejectedCount,
     stop_limit_same_bar_deferred_count:stopLimitDeferredCount,
+    intrabar_entry_exit_deferred_count:intrabarEntryExitDeferredCount,
     rejected_order_count:records.filter(record => record.status === 'rejected').length,
     expired_order_count:records.filter(record => record.status === 'expired').length,
     not_evaluated_count:records.filter(record => record.status === 'not_evaluated').length,

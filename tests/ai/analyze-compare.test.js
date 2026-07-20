@@ -831,7 +831,8 @@ describe('historical comparison frontend contract', () => {
 
   it('discloses conservative gap, stop-limit and intrabar margin assumptions', () => {
     expect(frontend).toContain('跳空触发和跳空止损按更差的开盘成交价计算')
-    expect(frontend).toContain('Stop Limit 在同柱内无法确认先后顺序时延后到下一根')
+    expect(frontend).toContain('挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损')
+    expect(frontend).toContain('Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根')
     expect(frontend).toContain('保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照')
     expect(frontend).toContain('当前 MT5 合约参数快照，并非经纪商当时的历史合约参数')
     expect(frontend).toContain('保证金强平按方向不利的盘中极值进行保守检查')
@@ -841,6 +842,7 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('simulation.margin_calculation_unavailable_count')
     expect(frontend).toContain('未触发 / 同柱待定 / 歧义')
     expect(frontend).toContain('stop_limit_same_bar_deferred_count')
+    expect(frontend).toContain('intrabar_entry_exit_deferred_count')
   })
 
   it('shows commission and MT5-timezone swap accounting separately', () => {
