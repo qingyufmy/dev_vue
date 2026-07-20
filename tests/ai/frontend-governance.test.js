@@ -345,6 +345,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(appVersion).toBe(stylesheetVersion)
   })
 
+  it('sends model comparison ranges as timezone-qualified MT5 instants', () => {
+    expect(html).toContain('开始时间（MT5）')
+    expect(html).toContain('结束时间（MT5）')
+    expect(app).toContain('function compareWallTimeToUtcIso(value)')
+    expect(app).toContain('Number(state.mt5TimezoneOffsetMinutes)')
+    expect(app).toContain('const startTime = compareWallTimeToUtcIso')
+    expect(app).toContain('const endTime = compareWallTimeToUtcIso')
+  })
+
   it('initializes dynamically rendered risk-center icons without requiring a tab switch', () => {
     const start = app.indexOf('async function loadRiskCenter()')
     const end = app.indexOf('async function loadExecutionDecisions()', start)

@@ -4480,11 +4480,28 @@ async function loadModelCompare() {
 }
 
 function setDefaultCompareDates(days = 7, force = false) {
-  const now = new Date(), beijing = new Date(now.getTime() + 8 * 3600000);
+  const offsetMinutes = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes))
+    ? Number(state.mt5TimezoneOffsetMinutes)
+    : 180;
+  const now = new Date(), mt5Now = new Date(now.getTime() + offsetMinutes * 60_000);
   const fmt = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}T${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
-  const end = new Date(beijing), start = new Date(end.getTime() - days * 24 * 3600000);
+  const end = new Date(mt5Now), start = new Date(end.getTime() - days * 24 * 3600000);
   if ($("cmpEndTime") && (force || !$("cmpEndTime").value)) $("cmpEndTime").value = fmt(end);
   if ($("cmpStartTime") && (force || !$("cmpStartTime").value)) $("cmpStartTime").value = fmt(start);
+  if ($("cmpTimezoneHint")) $("cmpTimezoneHint").textContent = `按 ${compareTimezoneLabel(offsetMinutes)} 选择`;
+}
+
+function compareWallTimeToUtcIso(value) {
+  const matched = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!matched) return "";
+  const offsetMinutes = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes))
+    ? Number(state.mt5TimezoneOffsetMinutes)
+    : 180;
+  const utcMs = Date.UTC(
+    Number(matched[1]), Number(matched[2]) - 1, Number(matched[3]),
+    Number(matched[4]), Number(matched[5]), Number(matched[6] || 0),
+  ) - offsetMinutes * 60_000;
+  return Number.isFinite(utcMs) ? new Date(utcMs).toISOString() : "";
 }
 
 let _historyCompareJobId = null;
@@ -4686,8 +4703,8 @@ async function runHistoryCompare() {
   const evaluationMode = historyCompareEvaluationMode();
   const estimate = historyCompareEstimate();
   const sampleSize = Number($("cmpSampleSize")?.value) || 12;
-  const startTime = $("cmpStartTime")?.value ? $("cmpStartTime").value + ":00" : "";
-  const endTime = $("cmpEndTime")?.value ? $("cmpEndTime").value + ":00" : "";
+  const startTime = compareWallTimeToUtcIso($("cmpStartTime")?.value);
+  const endTime = compareWallTimeToUtcIso($("cmpEndTime")?.value);
   const backtest = {
     starting_balance:Number($("cmpStartingBalance")?.value || 10000),
     commission_per_lot:Number($("cmpCommissionPerLot")?.value || 0),

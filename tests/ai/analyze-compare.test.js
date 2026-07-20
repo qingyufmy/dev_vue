@@ -162,6 +162,7 @@ vi.mock('../../server/routes/ai/model-profiles.js', () => ({
 
 import { handleAnalyzeCompare, handleHistoryCompare } from '../../server/routes/ai/strategy.js'
 import { maybeAiSignal } from '../../server/routes/ai/llm.js'
+const defaultMaybeAiSignalImplementation = maybeAiSignal.getMockImplementation()
 
 function makeRates(count = 100) {
   return Array.from({ length: count }, (_, i) => ({
@@ -192,6 +193,7 @@ const mockModelProfile = (id) => ({
 describe('handleAnalyzeCompare', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    maybeAiSignal.mockImplementation(defaultMaybeAiSignalImplementation)
     mockMt5Bridge.mockResolvedValue({ rates: makeRates(100), market_meta: { source: 'platform_admin_bridge', timezone_offset_minutes: -480 } })
     mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
   })
@@ -358,6 +360,7 @@ describe('POST /ai/analyze-compare route', () => {
 describe('handleHistoryCompare', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    maybeAiSignal.mockImplementation(defaultMaybeAiSignalImplementation)
     mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
   })
 
@@ -545,6 +548,17 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.agreement_insufficient_count).toBe(result.meta.evaluation_count)
       expect(result.meta.high_agreement_count).toBe(0)
       expect(result.meta.disagreement_count).toBe(0)
+    })
+
+    it('bounds repeated provider errors stored in comparison results', async () => {
+      maybeAiSignal.mockRejectedValue(new Error(`provider_failure:${'x'.repeat(2000)}`))
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', step:25,
+      })
+      const errors = result.results.flatMap(item => item.signals.map(signal => signal.error))
+      expect(errors.length).toBeGreaterThan(0)
+      expect(errors.every(error => error.length === 500)).toBe(true)
     })
 
     it('includes meta with kline_count and step', async () => {

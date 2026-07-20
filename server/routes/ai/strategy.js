@@ -46,6 +46,11 @@ function comparisonDirection(signalType) {
   return normalized === 'hold' ? 'hold' : 'unknown'
 }
 
+function boundedComparisonError(value, fallback = 'history_compare_failed', maximum = 500) {
+  const text = String(value || fallback).trim() || fallback
+  return text.length <= maximum ? text : text.slice(0, maximum)
+}
+
 function compareRateUtcMs(rate) {
   const numeric = Number(rate?.time_utc_msc ?? rate?.time_msc)
   if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric
@@ -896,7 +901,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   for (let i = 0; i < uniqueIds.length; i++) {
     const profileResult = profileResults[i]
     if (profileResult.status === 'rejected' || !profileResult.value) {
-      modelErrors.push({ model_id: uniqueIds[i], status: 'error', error: profileResult.reason?.message || 'model_profile_resolution_failed' })
+      modelErrors.push({
+        model_id:uniqueIds[i],
+        status:'error',
+        error:boundedComparisonError(profileResult.reason?.message, 'model_profile_resolution_failed'),
+      })
     } else {
       validModels.push(profileResult.value)
     }
@@ -997,7 +1006,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
         }
       } catch (error) {
-        return { modelId, latencyMs: Date.now() - startedAt, error: error.message || 'inference_failed' }
+        return {
+          modelId,
+          latencyMs:Date.now() - startedAt,
+          error:boundedComparisonError(error.message, 'inference_failed'),
+        }
       }
     })
 
@@ -1313,10 +1326,13 @@ function historyCompareJobFromRow(row) {
 }
 
 async function persistHistoryCompareJob(job, { insert = false } = {}) {
+  const persistedError = job.error
+    ? boundedComparisonError(job.error, 'history_compare_failed', 240)
+    : null
   const values = [
     job.id, job.user_id, job.status, job.stage, job.progress_percent || 0,
     job.completed_steps || 0, job.total_steps || 0, JSON.stringify(job.params || {}),
-    job.result ? JSON.stringify(job.result) : null, job.error || null,
+    job.result ? JSON.stringify(job.result) : null, persistedError,
     job.cancel_requested ? 1 : 0,
   ]
   if (insert) {
@@ -1331,7 +1347,7 @@ async function persistHistoryCompareJob(job, { insert = false } = {}) {
     completed_at = CASE WHEN ? IN ('succeeded','failed','cancelled') THEN NOW() ELSE completed_at END,
     updated_at = NOW() WHERE id = ? AND user_id = ?`, [
     job.status, job.stage, job.progress_percent || 0, job.completed_steps || 0, job.total_steps || 0,
-    job.result ? JSON.stringify(job.result) : null, job.error || null, job.cancel_requested ? 1 : 0,
+    job.result ? JSON.stringify(job.result) : null, persistedError, job.cancel_requested ? 1 : 0,
     job.status, job.id, job.user_id,
   ])
 }
@@ -1433,12 +1449,12 @@ export async function startHistoryCompareJob(userId, params) {
       } else {
         job.status = 'failed'
         job.stage = 'failed'
-        job.error = result.message || 'history_compare_failed'
+        job.error = boundedComparisonError(result.message)
       }
     } catch (error) {
       job.status = job.cancel_requested ? 'cancelled' : 'failed'
       job.stage = job.status
-      job.error = job.cancel_requested ? null : (error.message || 'history_compare_failed')
+      job.error = job.cancel_requested ? null : boundedComparisonError(error.message)
     }
     job.updated_at = new Date().toISOString()
     job.updated_at_ms = Date.now()
