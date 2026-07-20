@@ -36,6 +36,10 @@ function normalizeTakeProfitMode(value) {
   return mode
 }
 
+function normalizePortfolioContext(scope, value) {
+  return scope === 'private' && (value === true || value === 1 || value === '1')
+}
+
 function normalizeSymbol(value) {
   return stripBrokerSuffix(String(value || '').trim()).toUpperCase()
 }
@@ -202,19 +206,21 @@ export async function createStrategy(userId, userRole, payload = {}) {
   const marketDataPlan = normalizeMarketDataPlan(payload.market_data_plan, { prompt: rawPrompt })
   const entryMethods = normalizeEntryMethods(payload.entry_methods)
   const useChanAnalysis = normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
+  const includePortfolioContext = normalizePortfolioContext(scope, payload.include_portfolio_context)
   const systemPrompt = stripStrategyControlTags(rawPrompt)
   const ownerUserId = scope === 'platform' ? 0 : actorId
   const binding = await validateModelBinding(scope, ownerUserId, payload.model_profile_id)
   const now = beijingNow()
   const result = await queryRun(
     `INSERT INTO auto_prompt_types
-      (title, description, system_prompt, symbols_json, market_data_plan_json, entry_methods_json, use_chan_analysis, interval_minutes, is_active, sort_order,
+      (title, description, system_prompt, symbols_json, market_data_plan_json, entry_methods_json, use_chan_analysis, include_portfolio_context, interval_minutes, is_active, sort_order,
        created_by, scope, owner_user_id, model_profile_id, inference_mode, visibility_status,
        version, version_label, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     [
       payload.title || '未命名策略', payload.description || '', systemPrompt,
       JSON.stringify(symbols), JSON.stringify(marketDataPlan), JSON.stringify(entryMethods), useChanAnalysis ? 1 : 0,
+      includePortfolioContext ? 1 : 0,
       Math.max(1, Number(payload.interval_minutes) || 5),
       visibility === 'active' ? 1 : 0, Number(payload.sort_order) || 0, actorId,
       scope, ownerUserId, binding.modelProfileId, binding.inferenceMode, visibility,
@@ -258,15 +264,19 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
   const useChanAnalysis = payload.use_chan_analysis !== undefined
     ? normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
     : normalizeUseChanAnalysis(existing.use_chan_analysis, { prompt: existing.system_prompt })
+  const includePortfolioContext = payload.include_portfolio_context !== undefined
+    ? normalizePortfolioContext(existing.scope, payload.include_portfolio_context)
+    : normalizePortfolioContext(existing.scope, existing.include_portfolio_context)
   const requestedModelId = payload.model_profile_id !== undefined ? payload.model_profile_id : existing.model_profile_id
   const binding = await validateModelBinding(existing.scope, Number(existing.owner_user_id), requestedModelId)
   const contentChanged = payload.title !== undefined || payload.system_prompt !== undefined || payload.symbols !== undefined
     || payload.market_data_plan !== undefined || payload.entry_methods !== undefined || payload.use_chan_analysis !== undefined
+    || payload.include_portfolio_context !== undefined
   const version = contentChanged ? Number(existing.version || 1) + 1 : Number(existing.version || 1)
   const now = beijingNow()
   await queryRun(
     `UPDATE auto_prompt_types SET title = ?, description = ?, system_prompt = ?, symbols_json = ?,
-       market_data_plan_json = ?, entry_methods_json = ?, use_chan_analysis = ?,
+       market_data_plan_json = ?, entry_methods_json = ?, use_chan_analysis = ?, include_portfolio_context = ?,
        interval_minutes = ?, is_active = ?, sort_order = ?, model_profile_id = ?, inference_mode = ?,
        visibility_status = ?, version = ?, version_label = ?, updated_at = ?
      WHERE id = ? AND deleted_at IS NULL`,
@@ -274,6 +284,7 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
       payload.title ?? existing.title, payload.description ?? existing.description,
       systemPrompt, symbolsJson,
       JSON.stringify(marketDataPlan), JSON.stringify(entryMethods), useChanAnalysis ? 1 : 0,
+      includePortfolioContext ? 1 : 0,
       payload.interval_minutes != null ? Math.max(1, Number(payload.interval_minutes) || 1) : existing.interval_minutes,
       visibility === 'active' ? 1 : 0,
       payload.sort_order != null ? Number(payload.sort_order) || 0 : existing.sort_order,

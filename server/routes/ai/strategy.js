@@ -8,7 +8,7 @@ import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun, buildPersonalMemoryRetrievalContext } from './memory-system.js'
 import { retrievePlatformExperience } from './platform-experience.js'
-import { persistInferenceSnapshotTx } from './inference-snapshots.js'
+import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
@@ -233,6 +233,19 @@ export async function executeOrder(userId, config, request, action, options = {}
   return executeOrderCore(userId, config, request, action, options)
 }
 
+export async function loadPrivatePortfolioContext(userId) {
+  const [positionsData, pendingData] = await Promise.all([
+    mt5Bridge(userId, 'positions', {}, { noFallback: true }),
+    mt5Bridge(userId, 'pending_list', {}, { noFallback: true }),
+  ])
+  const pendingOrders = pendingData?.orders ?? pendingData?.pending_list
+  if (!positionsData || positionsData.status === 'error' || !Array.isArray(positionsData.positions)
+    || !pendingData || pendingData.status === 'error' || !Array.isArray(pendingOrders)) {
+    throw new Error('private_portfolio_context_unavailable')
+  }
+  return { positions: positionsData.positions, pendingOrders }
+}
+
 export async function handleAnalyze(userId, params) {
   const { session_id = 'default', symbol, strategy_id, auto_execute = false } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
@@ -252,12 +265,24 @@ export async function handleAnalyze(userId, params) {
   config._ai_volume_max = Number(config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE)
   config._ai_volume_step = 0.01
   config.enable_auto_trade = Boolean(auto_execute)
+  config._market_only = strategy.scope === 'platform'
+  config._include_portfolio_context = strategy.scope === 'private' && Boolean(Number(strategy.include_portfolio_context))
   const prompt = strategy.system_prompt || ''
   const tags = policy.marketDataPlan.timeframes.map(item => ({ tf: item.timeframe, count: item.kline_count }))
 
   const account = null
-  const positions = []
-  const pendingOrders = []
+  let positions = []
+  let pendingOrders = []
+  if (config._include_portfolio_context) {
+    try {
+      const portfolio = await loadPrivatePortfolioContext(userId)
+      positions = portfolio.positions
+      pendingOrders = portfolio.pendingOrders
+    } catch (error) {
+      console.error(`[Analyze] Private portfolio context unavailable for user ${userId}:`, error.message)
+      return { status: 'error', message: '已开启持仓与挂单上下文，但当前无法从你的 MT5 获取完整数据，请确认桥接已连接后重试' }
+    }
+  }
 
   const primaryTf = policy.marketDataPlan.primary_timeframe || tags[0]?.tf || 'M30'
   const primaryTag = tags.find(item => item.tf === primaryTf) || tags[0]
@@ -268,13 +293,21 @@ export async function handleAnalyze(userId, params) {
   const rates = ratesResp.rates || []
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
-  const market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
+  let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta)
   market.requested_timeframes = market.strategy_context.required_timeframes
   market.used_timeframes = market.strategy_context.used_timeframes
   market.missing_timeframes = market.strategy_context.missing_timeframes
   if (policy.useChanAnalysis) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
   await attachAtrAnchor(userId, symbol, market, primaryTf)
+  if (!config._include_portfolio_context) {
+    market = buildSharedMarketSnapshot(market, {
+      standardSymbol: symbol,
+      volumeMin: config._ai_volume_min,
+      volumeMax: config._ai_volume_max,
+      marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
+    })
+  }
   let memory = { promptBlock: '', mode: 'off', logId: null }
   try {
     if (strategy.scope === 'platform') {

@@ -131,12 +131,18 @@ describe('strategy visibility and mutation permissions', () => {
   })
 
   it('creates private strategies with server-owned owner and user-default model semantics', async () => {
-    await createStrategy(2, 'user', { scope: 'private', owner_user_id: 99, inference_mode: 'platform_model', title: 'P', symbols: ['XAUUSD.a'] })
+    await createStrategy(2, 'user', { scope: 'private', owner_user_id: 99, inference_mode: 'platform_model', title: 'P', symbols: ['XAUUSD.a'], include_portfolio_context: true })
     const params = db.queryRun.mock.calls[0][1]
     expect(params).toContain('private')
     expect(params).toContain(2)
     expect(params).toContain('user_default')
     expect(params).not.toContain(99)
+    expect(params[7]).toBe(1)
+  })
+
+  it('forces platform strategies to exclude portfolio context', async () => {
+    await createStrategy(1, 'admin', { scope: 'platform', symbols: ['XAUUSD'], include_portfolio_context: true })
+    expect(db.queryRun.mock.calls[0][1][7]).toBe(0)
   })
 
   it('does not create administrator private strategies', async () => {
@@ -147,12 +153,12 @@ describe('strategy visibility and mutation permissions', () => {
 
   it('derives the executable flag from the strategy visibility state', async () => {
     await createStrategy(1, 'admin', { scope: 'platform', visibility_status: 'draft', is_active: true, symbols: ['XAUUSD'] })
-    expect(db.queryRun.mock.calls[0][1][8]).toBe(0)
+    expect(db.queryRun.mock.calls[0][1][9]).toBe(0)
 
     db.queryRun.mockClear()
     db.queryOne.mockImplementation(sql => sql.includes('FROM users') ? PRO : { ...PLATFORM, is_active: 0, visibility_status: 'draft' })
     await updateStrategy(1, 1, 'admin', { visibility_status: 'active', is_active: false })
-    expect(db.queryRun.mock.calls[0][1][8]).toBe(1)
+    expect(db.queryRun.mock.calls[0][1][9]).toBe(1)
   })
 
   it('imports legacy prompt controls into structured fields and stores a clean prompt', async () => {

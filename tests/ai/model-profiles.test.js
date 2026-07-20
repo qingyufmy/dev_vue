@@ -95,6 +95,16 @@ describe('resolveAiTaskModel', () => {
     expect(result.model.api_key_encrypted).toBe('admin-key')
   })
 
+  it('accepts JSON policy columns already decoded by the database driver', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(policy({ share_for_manual: 1, allowed_plans: ['pro'] }))
+      .mockResolvedValueOnce(profile({ id: 99, owner_user_id: 0, scope: 'platform', api_key_encrypted: encryptCredential('admin-key') }))
+      .mockResolvedValueOnce({ plan: 'pro' })
+    const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
+    expect(result.credential_source).toBe('platform_shared')
+  })
+
   it('does not share when the usage switch is disabled', async () => {
     mockQueryOne.mockResolvedValueOnce(null).mockResolvedValueOnce(policy())
     const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })

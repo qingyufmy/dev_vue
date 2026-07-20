@@ -227,6 +227,7 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
     _model_profile_id: resolved.model_profile_id,
     _credential_source: resolved.credential_source,
     _market_only: !isPrivate,
+    _include_portfolio_context: isPrivate && Boolean(Number(pt.include_portfolio_context)),
     _strategy_scope: pt.scope || 'platform',
     _strategy_owner_user_id: ownerUserId,
     _strategy_version: Number(pt.version || 1),

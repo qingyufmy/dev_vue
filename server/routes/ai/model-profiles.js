@@ -9,6 +9,18 @@ import { isPlatformShareableProvider, normalizeModelProviderProfile } from './mo
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'auto_private', 'auto_platform', 'review', 'memory_compression']
 
+function parseAllowedPlans(value) {
+  if (Array.isArray(value)) return value.map(String)
+  if (value && typeof value === 'object') return Object.values(value).map(String)
+  try {
+    const parsed = JSON.parse(value || '["pro"]')
+    return Array.isArray(parsed) ? parsed.map(String) : ['pro']
+  } catch (error) {
+    console.error('[ModelProfiles] Invalid allowed_plans policy:', error.message)
+    return ['pro']
+  }
+}
+
 export async function assertModelProfileSchemaReady() {
   const requiredTables = [
     'ai_model_profiles',
@@ -329,7 +341,7 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
     }
     const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
     if (!policy[shareKey]) throw new Error('platform_sharing_disabled')
-    const allowedPlans = JSON.parse(policy.allowed_plans || '["pro"]')
+    const allowedPlans = parseAllowedPlans(policy.allowed_plans)
     if (!allowedPlans.includes(lockedUsers[0].plan)) throw new Error('platform_plan_not_allowed')
     const [rows] = await run(
       `SELECT COUNT(*) AS cnt, COALESCE(SUM(token_count), 0) AS tokens
@@ -509,7 +521,7 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
     const platformModel = await getPlatformModelForSharing()
     if (platformModel && platformModel.api_key_encrypted && isPlatformShareableProvider(platformModel.provider)) {
       const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
-      const allowedPlans = JSON.parse(policy.allowed_plans || '["pro"]')
+      const allowedPlans = parseAllowedPlans(policy.allowed_plans)
       if (user && allowedPlans.includes(user.plan)) {
         return { ...buildResult(platformModel, 'platform_shared', usage, 'platform_fallback'), strategy_id: strategyId || null }
       }

@@ -66,6 +66,9 @@ vi.mock('../../server/routes/ai/strategy.js', () => ({
     strategy_sequence: 'M5(100)', required_timeframes: ['M5'],
     timeframes: { M5: { summary: {}, klines: [] } },
   })),
+  attachAtrAnchor: vi.fn(),
+  loadPrivatePortfolioContext: vi.fn(() => ({ positions:[], pendingOrders:[] })),
+  resolveChanHistoryCount: vi.fn((_userId, _symbol, _timeframe, requestedCount) => requestedCount),
 }))
 
 vi.mock('../../server/routes/ai/utils.js', () => ({

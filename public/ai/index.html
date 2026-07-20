@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260719c" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260720a" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -443,6 +443,10 @@
                 </fieldset>
                 <fieldset class="strategy-form-section"><legend><span class="section-step">04</span>推理与模型</legend><p>提示词只描述分析方法，手数、点差、价格偏差等硬限制由风控中心负责。</p>
                   <div class="settings-grid"><label><span>绑定模型</span><select id="strategyModelProfile"><option value="">按默认与共享规则解析</option></select><small id="strategyModelHelp" class="field-help">可绑定自己的模型；留空时按模型管理规则解析。</small></label><label><span>自动推理间隔（分钟）</span><input id="strategyInterval" type="number" min="1" value="5"></label></div>
+                  <label id="strategyPortfolioContextField" class="strategy-capability-toggle user-only" for="strategyIncludePortfolioContext">
+                    <input id="strategyIncludePortfolioContext" type="checkbox">
+                    <span><strong>向模型提供当前持仓与挂单</strong><small>仅适用于你的私有策略。开启后，推理会读取你当前 MT5 的持仓和挂单，用于避免重复入场、方向冲突和挂单冲突；账户余额与模型凭据不会传入。桥接数据不完整时，本次推理会停止，不会用空数据继续判断。</small></span>
+                  </label>
                   <label class="prompt-box"><span>策略提示词</span><textarea id="strategyPrompt" rows="10" spellcheck="false" placeholder="描述市场分析框架、信号判断方法和输出侧重点"></textarea></label>
                 </fieldset>
               </div>
@@ -953,7 +957,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260719c"></script>
+    <script src="/ai/app.js?v=20260720a"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

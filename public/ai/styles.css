@@ -4138,10 +4138,16 @@ body.form-modal-open .content-card { animation:none !important; transform:none !
 .strategy-capability-toggle { display:flex; align-items:flex-start; gap:10px; min-height:54px; margin-top:10px; padding:10px 12px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-input); cursor:pointer; transition:border-color .18s ease,background-color .18s ease; }
 .strategy-capability-toggle:hover { border-color:var(--accent-primary); background:var(--bg-card-hover); }
 .strategy-capability-toggle:focus-within { outline:2px solid var(--accent-primary); outline-offset:2px; }
+.strategy-capability-toggle:has(input:checked) { border-color:var(--border-gold); background:var(--gold-wash); }
 .strategy-capability-toggle input { width:19px; height:19px; margin-top:2px; flex:0 0 auto; }
 .strategy-capability-toggle span { display:grid; gap:4px; }
 .strategy-capability-toggle strong { color:var(--text-primary); font-size:14px; }
 .strategy-capability-toggle small { color:var(--text-muted); line-height:1.55; }
+.model-load-error { display:flex; align-items:center; gap:12px; min-height:78px; }
+.model-load-error > div { display:grid; gap:4px; min-width:0; flex:1; }
+.model-load-error strong { color:var(--text-primary); }
+.model-load-error small { color:var(--text-secondary); line-height:1.45; }
+.model-load-error-icon { display:grid; place-items:center; width:36px; height:36px; flex:0 0 auto; border-radius:var(--radius-md); background:var(--status-danger-bg); color:var(--status-danger); }
 .entry-method-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
 .entry-method-grid label { display:flex; align-items:flex-start; gap:9px; min-height:70px; padding:10px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-card); cursor:pointer; transition:border-color var(--transition-fast),background-color var(--transition-fast); }
 .entry-method-grid label:hover,.entry-method-grid label:has(input:checked) { border-color:var(--gold-primary); background:var(--gold-wash); }

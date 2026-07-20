@@ -473,6 +473,7 @@ const AUTO_REASON_LABELS = {
   no_symbols: '未选择品种',
   rates_failed: '行情获取失败',
   rates_empty: '行情为空',
+  private_portfolio_context_unavailable: '持仓或挂单数据不完整',
   exception: '运行异常',
   disabled: '已关闭',
   unknown: '未知',
@@ -1613,23 +1614,44 @@ function renderModelProfiles() {
 async function loadModelManagement() {
   const host = $("modelProfilesList");
   if (host) host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
+  setText("modelEffectiveSource", "正在解析…");
+  const notice = $("modelSourceNotice");
+  if (notice) notice.innerHTML = '<span><strong>模型来源：</strong>正在向服务端确认当前可用配置…</span>';
   const usage = state.user?.role === "admin" ? "auto_platform" : "manual";
-  const [data, sourceData] = await Promise.all([
+  const [profilesResult, sourceResult] = await Promise.allSettled([
     api(`/api/ai/model-profiles${profileScopeQuery()}`),
     api(`/api/ai/model-source?usage=${usage}`),
   ]);
-  state.modelProfiles = data.profiles || [];
-  renderModelProfiles();
-  const source = sourceData.source || {};
-  const notice = $("modelSourceNotice");
-  const sourceLabel = ({ user:"自有加密凭据", platform_shared:"平台共享凭据", platform_primary:"平台主模型", none:"未配置" })[source.credential_source] || source.credential_source;
-  // Provider identifiers are implementation details. Keep the user-facing
-  // resolver summary focused on the model and where its credential comes from.
-  const sourceText = source.available ? `${source.model_name} · ${sourceLabel}` : `当前任务不可用 · ${source.error || '未配置模型'}`;
-  setText("modelEffectiveSource", source.available ? `${source.model_name} · ${sourceLabel}` : "当前不可用");
-  if (notice) notice.innerHTML = `<span><strong>服务端实际解析来源：</strong> ${escapeHtml(sourceText)}</span>`;
-  if ($("strategyModelSource")) $("strategyModelSource").textContent = sourceText;
-  if (state.user?.role === "admin") await loadPlatformPolicy();
+  if (profilesResult.status === "fulfilled") {
+    state.modelProfiles = profilesResult.value.profiles || [];
+    renderModelProfiles();
+  } else {
+    state.modelProfiles = [];
+    setText("modelCountStat", "--");
+    setText("modelActiveStat", "--");
+    if ($("modelCatalogSummary")) $("modelCatalogSummary").textContent = "模型列表加载失败";
+    if (host) host.innerHTML = `<div class="workspace-panel model-load-error" role="alert"><span class="model-load-error-icon"><i data-lucide="circle-alert" size="18"></i></span><div><strong>模型列表加载失败</strong><small>${escapeHtml(profilesResult.reason?.message || "请检查网络连接后重试")}</small></div><button class="btn btn-secondary btn-sm" type="button" data-action="retry-model-management">重新加载</button></div>`;
+  }
+
+  if (sourceResult.status === "fulfilled") {
+    const source = sourceResult.value.source || {};
+    const sourceLabel = ({ user:"自有加密凭据", platform_shared:"平台共享凭据", platform_primary:"平台主模型", none:"未配置" })[source.credential_source] || source.credential_source;
+    const unavailableReason = apiErrorMessage(source.error || "no_model_configured");
+    const sourceText = source.available ? `${source.model_name} · ${sourceLabel}` : `当前任务不可用 · ${unavailableReason}`;
+    setText("modelEffectiveSource", source.available ? `${source.model_name} · ${sourceLabel}` : "当前不可用");
+    if (notice) notice.innerHTML = `<span><strong>服务端实际解析来源：</strong> ${escapeHtml(sourceText)}</span>`;
+    if ($("strategyModelSource")) $("strategyModelSource").textContent = sourceText;
+  } else {
+    const message = sourceResult.reason?.message || "模型来源解析请求失败";
+    setText("modelEffectiveSource", "解析失败");
+    if (notice) notice.innerHTML = `<span><strong>模型来源解析失败：</strong> ${escapeHtml(message)}</span><button class="btn btn-secondary btn-sm" type="button" data-action="retry-model-management">重试</button>`;
+    if ($("strategyModelSource")) $("strategyModelSource").textContent = "模型来源解析失败";
+  }
+  if (state.user?.role === "admin" && profilesResult.status === "fulfilled") {
+    try { await loadPlatformPolicy(); }
+    catch (error) { toast(`平台共享设置加载失败：${error.message}`, "warning"); }
+  }
+  initIcons();
 }
 
 function openModelEditor(profile = null) {
@@ -1713,6 +1735,9 @@ async function loadStrategyCatalog() {
     const planText = (plan.timeframes || []).map(row => `${row.timeframe}×${row.kline_count}`).join(" · ") || "M30×100";
     const entryText = entryMethods.map(method => ({market:"市价",limit:"限价",stop:"突破",stop_limit:"突破限价"}[method] || method)).join("、");
     const chanText = Number(item.use_chan_analysis) ? "缠论已启用" : "常规行情指标";
+    const portfolioText = item.scope === "private"
+      ? (Number(item.include_portfolio_context) ? "已提供持仓与挂单" : "不提供持仓与挂单")
+      : "平台行情专用";
     const source = item.model_profile_id ? `绑定模型 #${item.model_profile_id}` : "继承默认模型";
     const memory = item.scope === "private" ? "个人记忆可用" : "平台共享 · 禁止个人记忆";
     const linked = subscriptions.filter(sub => Number(sub.strategy_id) === Number(item.id));
@@ -1728,7 +1753,7 @@ async function loadStrategyCatalog() {
     const visibilityLabel = ({ active:"上线", draft:"草稿", archived:"归档" })[item.visibility_status] || item.visibility_status;
     const subscriptionsBlock = linked.length ? `<section class="strategy-subscriptions"><div class="strategy-subscriptions-head"><span><i data-lucide="radio-tower" size="15"></i>执行订阅</span><small>${linked.length} 个</small></div>${subRows}</section>` : '<div class="quiet-empty">还没有执行订阅</div>';
     const description = item.description || (item.scope === "private" ? "我的自定义分析策略" : "平台提供的分析策略");
-    return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>技术分析</small><strong>${escapeHtml(chanText)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
+    return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>技术分析</small><strong>${escapeHtml(chanText)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>账户上下文</small><strong>${escapeHtml(portfolioText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
   }).join("") : '<div class="empty-state"><strong>当前筛选下没有策略</strong><span>切换筛选条件，或新建一套自己的推理策略。</span></div>';
   populateManualStrategySelector();
   initIcons();
@@ -1807,6 +1832,8 @@ function openStrategyEditor(strategy = null) {
   const entryMethods = new Set(parseJsonField(strategy?.entry_methods_json, ["market","limit","stop","stop_limit"]));
   document.querySelectorAll("[data-strategy-entry-method]").forEach(input => { input.checked = entryMethods.has(input.dataset.strategyEntryMethod); });
   $("strategyUseChanAnalysis").checked = Boolean(Number(strategy?.use_chan_analysis || 0));
+  $("strategyIncludePortfolioContext").checked = !admin && Boolean(Number(strategy?.include_portfolio_context || 0));
+  $("strategyPortfolioContextField")?.classList.toggle("hidden", admin);
   if (admin) {
     $("strategyScope").value = "platform";
     $("strategyScopeField")?.classList.add("is-readonly");
@@ -1834,6 +1861,7 @@ async function saveStrategyEditor() {
     description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
     market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
     use_chan_analysis:$("strategyUseChanAnalysis").checked,
+    include_portfolio_context:scope === "private" && $("strategyIncludePortfolioContext").checked,
     is_active:visibilityStatus === "active",
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
     scope,
@@ -5986,6 +6014,7 @@ function bindEvents() {
         "refresh-risk-center": loadRiskCenter,
         "refresh-review-memory": loadReviewMemory,
         "refresh-global-risk": loadAdminRiskCenter,
+        "retry-model-management": loadModelManagement,
       };
       if (tasks[action]) {
         withBusy(actionButton, tasks[action]).catch((error) => toast(error.message, "error"));

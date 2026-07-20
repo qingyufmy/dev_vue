@@ -2624,6 +2624,18 @@ const migrations = [
         updated_at = NOW()
         WHERE status = 'generating' AND current_version_id IS NULL`)
     }
+  },
+  {
+    id: '103_private_strategy_portfolio_context',
+    up: async () => {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types'
+          AND COLUMN_NAME = 'include_portfolio_context'`)
+      if (!columns.length) await queryRun(`ALTER TABLE auto_prompt_types
+        ADD COLUMN include_portfolio_context TINYINT NOT NULL DEFAULT 0 AFTER use_chan_analysis`)
+      await queryRun(`UPDATE auto_prompt_types SET include_portfolio_context = 0
+        WHERE scope = 'platform' AND include_portfolio_context <> 0`)
+    }
   }
 ]
 

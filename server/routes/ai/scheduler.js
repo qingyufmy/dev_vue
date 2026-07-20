@@ -6,7 +6,7 @@ import { getOwnBridgeMarketState, recordBridgeMarketState, isBridgeAlive, isTrad
 import { mt5Bridge, platformRates, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { getGlobalAutoConfig, getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
-import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount } from './strategy.js'
+import { attachAtrAnchor, buildStrategyContextFromTags, loadPrivatePortfolioContext, resolveChanHistoryCount } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, stripBrokerSuffix } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
@@ -565,6 +565,7 @@ function retryDelayMs(reason) {
     case 'account_failed':
     case 'positions_failed':
     case 'pending_list_failed':
+    case 'private_portfolio_context_unavailable':
     case 'ai_failed':
     case 'exception':
       return 20000
@@ -641,6 +642,7 @@ function schedulerWaitLabel(reason) {
     market_stale_tick: '行情报价停滞，等待恢复',
     market_unknown_no_tick: '尚未收到行情报价，等待同步',
     market_unknown: '市场状态未知，等待确认',
+    private_portfolio_context_unavailable: '持仓或挂单数据不完整，等待桥接恢复',
   }
   return labels[reason] || `等待条件恢复（${reason}）`
 }
@@ -1176,11 +1178,22 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   config._userId = isPrivate ? inferenceUserId : 0
 
   try {
-    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: isPrivate ? '获取账户与行情数据' : '获取平台行情数据', progress_percent: 16 })
+    const includePortfolioContext = isPrivate && Boolean(config._include_portfolio_context)
+    await broadcastAutoProgress(promptTypeId, symbol, { stage: 'bridge', label: includePortfolioContext ? '获取持仓、挂单与行情数据' : '获取平台行情数据', progress_percent: 16 })
     const t0 = Date.now()
     let account = null
     let positions = []
     let pendingOrders = []
+    if (includePortfolioContext) {
+      try {
+        const portfolio = await loadPrivatePortfolioContext(inferenceUserId)
+        positions = portfolio.positions
+        pendingOrders = portfolio.pendingOrders
+      } catch (error) {
+        l(`BLOCKED: private portfolio context unavailable (${error.message})`)
+        return { status: 'blocked', reason: 'private_portfolio_context_unavailable' }
+      }
+    }
     l(`bridge done (${Date.now()-t0}ms, positions=${positions.length}, pending=${pendingOrders.length})`)
 
     const prompt = config.system_prompt || ''
@@ -1209,12 +1222,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     market.requested_timeframes = market.strategy_context.required_timeframes || usedTimeframes
     market.used_timeframes = market.strategy_context.used_timeframes || Object.keys(market.strategy_context?.timeframes || {})
     market.missing_timeframes = market.strategy_context.missing_timeframes || market.requested_timeframes.filter(tf => !market.used_timeframes.includes(tf))
-    market = buildSharedMarketSnapshot(market, {
-      standardSymbol: symbol,
-      volumeMin: config._ai_volume_min,
-      volumeMax: config._ai_volume_max,
-      marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
-    })
+    if (!includePortfolioContext) {
+      market = buildSharedMarketSnapshot(market, {
+        standardSymbol: symbol,
+        volumeMin: config._ai_volume_min,
+        volumeMax: config._ai_volume_max,
+        marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
+      })
+    }
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
     let memory = { promptBlock: '', mode: 'off', logId: null }

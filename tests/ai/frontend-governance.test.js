@@ -205,6 +205,19 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('renderStrategyModelOptions')
   })
 
+  it('lets private strategy owners explicitly opt into position and pending-order context', () => {
+    expect(html).toContain('id="strategyIncludePortfolioContext"')
+    expect(html).toContain('仅适用于你的私有策略')
+    expect(app).toContain('include_portfolio_context:scope === "private"')
+    expect(app).toContain('item.include_portfolio_context')
+  })
+
+  it('settles model list and source requests independently with retryable errors', () => {
+    expect(app).toContain('Promise.allSettled([')
+    expect(app).toContain('data-action="retry-model-management"')
+    expect(app).toContain('模型来源解析失败')
+  })
+
   it('uses a distinct subscription action area and server-confirmed scheduler state after deletion', () => {
     expect(app).toContain('class="subscription-row-actions"')
     expect(app).toContain('data-subscription-action="edit"')

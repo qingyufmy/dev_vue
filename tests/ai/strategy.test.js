@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { attachAtrAnchor, buildChanTimeframeAlignment, buildStrategyContextFromTags, resolveChanHistoryCount, __strategyTest } from '../../server/routes/ai/strategy.js'
+import { attachAtrAnchor, buildChanTimeframeAlignment, buildStrategyContextFromTags, loadPrivatePortfolioContext, resolveChanHistoryCount, __strategyTest } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
@@ -149,6 +149,29 @@ describe('buildStrategyContextFromTags', () => {
     })
     expect(result.timeframes).toHaveProperty('M5')
     expect(result.timeframes).not.toHaveProperty('H1')
+  })
+})
+
+describe('loadPrivatePortfolioContext', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('loads the owner positions and pending orders from the same bridge', async () => {
+    mockMt5Bridge.mockImplementation((_userId, action) => action === 'positions'
+      ? Promise.resolve({ status:'success', positions:[{ ticket:11, symbol:'XAUUSD' }] })
+      : Promise.resolve({ status:'success', orders:[{ ticket:22, symbol:'EURUSD' }] }))
+    await expect(loadPrivatePortfolioContext(7)).resolves.toEqual({
+      positions:[{ ticket:11, symbol:'XAUUSD' }],
+      pendingOrders:[{ ticket:22, symbol:'EURUSD' }],
+    })
+    expect(mockMt5Bridge).toHaveBeenCalledWith(7, 'positions', {}, { noFallback:true })
+    expect(mockMt5Bridge).toHaveBeenCalledWith(7, 'pending_list', {}, { noFallback:true })
+  })
+
+  it('fails closed when either private portfolio response is incomplete', async () => {
+    mockMt5Bridge.mockImplementation((_userId, action) => action === 'positions'
+      ? Promise.resolve({ status:'success', positions:[] })
+      : Promise.resolve({ status:'error', message:'offline' }))
+    await expect(loadPrivatePortfolioContext(7)).rejects.toThrow('private_portfolio_context_unavailable')
   })
 })
 
