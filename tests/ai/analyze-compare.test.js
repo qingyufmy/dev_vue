@@ -388,10 +388,10 @@ describe('handleHistoryCompare', () => {
       expect(result.message).toBe('symbol required')
     })
 
-    it('returns error when timeframe is missing', async () => {
+    it('derives the evaluation timeframe from the strategy when the client omits it', async () => {
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', model_ids: [1, 2], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02' })
-      expect(result.status).toBe('error')
-      expect(result.message).toBe('timeframe required')
+      expect(result.status).toBe('success')
+      expect(result.meta.timeframe).toBe('M30')
     })
 
     it('returns error when strategy_id is missing', async () => {
@@ -451,13 +451,26 @@ describe('handleHistoryCompare', () => {
   describe('historical inference', () => {
     beforeEach(() => {
       mockQueryOne.mockResolvedValue({ role: 'admin' })
-      mockMt5Bridge.mockResolvedValue({
-        status: 'success',
-        market_meta: { source: 'mysql_period_cache' },
-        rates: Array.from({ length: 50 }, (_, i) => ({
-          time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
-          open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
-        })),
+      mockMt5Bridge.mockImplementation(async (_userId, action) => {
+        if (action === 'symbol_snapshot') {
+          return {
+            status:'success',
+            account:{ currency:'USD', balance:10_000, equity:10_000, leverage:100 },
+            instrument:{
+              name:'XAUUSD', digits:2, point:0.01, tick_size:0.01, tick_value:1,
+              contract_size:100, volume_min:0.01, volume_max:100, volume_step:0.01,
+              currency_profit:'USD',
+            },
+          }
+        }
+        return {
+          status: 'success',
+          market_meta: { source: 'mysql_period_cache' },
+          rates: Array.from({ length: 50 }, (_, i) => ({
+            time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
+            open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
+          })),
+        }
       })
     })
 
@@ -468,7 +481,7 @@ describe('handleHistoryCompare', () => {
       expect(callCount).toBeGreaterThan(0)
     })
 
-    it('returns next-closed-bar directional scores without labelling them as PnL', async () => {
+    it('returns direction scores and a separately labelled account replay', async () => {
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 25 })
       expect(result.status).toBe('success')
       expect(result.results).toHaveLength(2)
@@ -477,8 +490,8 @@ describe('handleHistoryCompare', () => {
         expect(r).toHaveProperty('model_name')
         expect(r).toHaveProperty('status', 'success')
         expect(r).toHaveProperty('signals')
-        expect(r).not.toHaveProperty('simulated_pnl')
         expect(r).toHaveProperty('directional_score')
+        expect(r).toHaveProperty('account_simulation')
         expect(r.directional_score).toHaveProperty('total_move')
         expect(r.directional_score).toHaveProperty('directional_accuracy')
         expect(r.directional_score).toHaveProperty('direction_quality_score')
@@ -536,10 +549,11 @@ describe('handleHistoryCompare', () => {
       expect(result.results[0].directional_score.incorrect_count).toBeGreaterThan(0)
     })
 
-    it('rejects a comparison timeframe outside the strategy market-data plan', async () => {
+    it('ignores a client-supplied timeframe and always uses the strategy primary timeframe', async () => {
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'H1', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 10 })
-      expect(result).toEqual({ status: 'error', message: 'timeframe_not_supported_by_strategy' })
-      expect(maybeAiSignal).not.toHaveBeenCalled()
+      expect(result.status).toBe('success')
+      expect(result.meta.timeframe).toBe('M30')
+      expect(maybeAiSignal).toHaveBeenCalled()
     })
   })
 })
@@ -575,9 +589,10 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('{ method:"DELETE" }')
   })
 
-  it('presents directional evaluation instead of simulated profit', () => {
+  it('presents directional evaluation separately from standardized account replay', () => {
     expect(frontend).toContain('方向准确率')
-    expect(frontend).toContain('下一根已收盘 K 线方向')
-    expect(frontend).not.toContain('模拟盈亏')
+    expect(frontend).toContain('方向评估与资金回放分开计算')
+    expect(frontend).toContain('模拟账户资金')
+    expect(frontend).toContain('尚未模拟并发持仓、保证金、强平和账户级风控')
   })
 })

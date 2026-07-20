@@ -976,6 +976,10 @@ const API_ERROR_MESSAGES = {
   insufficient_available_models: "可用模型不足两个，请检查模型状态和凭据",
   history_compare_failed: "历史模型对比执行失败",
   history_compare_cancelled: "历史模型对比已取消",
+  backtest_instrument_incomplete: "交易品种合约参数不完整",
+  backtest_execution_candles_unavailable: "缺少用于订单回放的 M1 历史行情",
+  backtest_symbol_snapshot_unavailable: "桥接端未返回交易品种合约参数",
+  backtest_data_unavailable: "资金回放所需数据暂不可用",
 };
 
 function apiErrorMessage(code) {
@@ -4484,10 +4488,10 @@ function syncHistoryCompareStrategyInputs() {
   const strategyId = Number($("cmpStrategy")?.value || 0);
   const strategy = _historyCompareStrategies.find(item => Number(item.id) === strategyId);
   const symbolSelect = $("cmpSymbol");
-  const timeframeSelect = $("cmpTimeframe");
+  const baseline = $("cmpStrategyBaseline");
   if (!strategy) {
     if (symbolSelect) symbolSelect.innerHTML = '<option value="">先选择策略</option>';
-    if (timeframeSelect) timeframeSelect.innerHTML = '<option value="">先选择策略</option>';
+    if (baseline) baseline.textContent = "由策略自动决定";
     return;
   }
   const parsedSymbols = parseJsonField(strategy.symbols_json, []);
@@ -4499,16 +4503,15 @@ function syncHistoryCompareStrategyInputs() {
   const timeframes = Array.isArray(plan.timeframes)
     ? plan.timeframes.map(item => String(item.timeframe || "").toUpperCase()).filter(Boolean)
     : [];
-  if (timeframeSelect && timeframes.length) {
-    timeframeSelect.innerHTML = timeframes.map(tf => `<option value="${escapeHtml(tf)}">${escapeHtml(tf)}</option>`).join("");
-    const primaryTimeframe = String(plan.primary_timeframe || "").toUpperCase();
-    timeframeSelect.value = timeframes.includes(primaryTimeframe) ? primaryTimeframe : timeframes[0];
-  }
+  const primaryTimeframe = String(plan.primary_timeframe || timeframes[0] || "").toUpperCase();
+  if (baseline) baseline.textContent = primaryTimeframe
+    ? `${primaryTimeframe} · 策略主周期`
+    : "策略未配置主周期";
 }
 
 function updateHistoryCompareReadiness() {
   const count = document.querySelectorAll("[data-cmp-model]:checked").length;
-  const complete = Boolean($("cmpStrategy")?.value && $("cmpSymbol")?.value && $("cmpTimeframe")?.value
+  const complete = Boolean($("cmpStrategy")?.value && $("cmpSymbol")?.value
     && $("cmpStartTime")?.value && $("cmpEndTime")?.value && count >= 2 && count <= 5);
   const hint = $("cmpModelHint");
   if (hint) {
@@ -4527,14 +4530,16 @@ function setHistoryCompareProgress(job) {
   if ($("cmpProgressPercent")) $("cmpProgressPercent").textContent = `${progress}%`;
   const stageLabels = {
     queued:"等待后台执行", preparing:"正在准备历史行情", market_ready:"历史行情已就绪",
-    models_ready:"模型配置已就绪", evaluating:"正在逐段评估", cancelling:"正在安全取消",
+    models_ready:"模型配置已就绪", evaluating:"正在逐段评估", backtesting:"正在回放订单与资金",
+    cancelling:"正在安全取消",
     completed:"正在生成结论", failed:"任务失败", cancelled:"任务已取消",
   };
   const stepsText = job?.total_steps ? ` · ${job.completed_steps || 0}/${job.total_steps}` : "";
   if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = `${stageLabels[job?.stage] || "正在处理"}${stepsText}`;
   document.querySelectorAll("[data-cmp-stage]").forEach(node => {
-    const order = ["preparing", "models_ready", "evaluating", "completed"];
-    const activeIndex = order.indexOf(job?.stage === "market_ready" ? "preparing" : job?.stage);
+    const order = ["preparing", "models_ready", "evaluating", "backtesting", "completed"];
+    const normalizedStage = job?.stage === "market_ready" ? "preparing" : job?.stage;
+    const activeIndex = order.indexOf(normalizedStage);
     node.classList.toggle("active", order.indexOf(node.dataset.cmpStage) <= activeIndex);
   });
 }
@@ -4552,12 +4557,17 @@ async function runHistoryCompare() {
   }
   if (!updateHistoryCompareReadiness()) return toast("请先完整设置策略、行情范围和至少两个模型", "warning");
   const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
-  const timeframe = $("cmpTimeframe")?.value;
   const strategyId = Number($("cmpStrategy")?.value || 0);
   const modelIds = [...document.querySelectorAll("[data-cmp-model]:checked")].map(cb => Number(cb.value)).filter(id => id > 0);
   const sampleSize = Number($("cmpSampleSize")?.value) || 12;
   const startTime = $("cmpStartTime")?.value ? $("cmpStartTime").value + ":00" : "";
   const endTime = $("cmpEndTime")?.value ? $("cmpEndTime").value + ":00" : "";
+  const backtest = {
+    starting_balance:Number($("cmpStartingBalance")?.value || 10000),
+    commission_per_lot:Number($("cmpCommissionPerLot")?.value || 0),
+    slippage_points:Number($("cmpSlippagePoints")?.value || 0),
+    max_holding_hours:Number($("cmpMaxHoldingHours")?.value || 24),
+  };
   if (!startTime || !endTime) return toast("请选择时间范围", "error");
   const btn = $("cmpRunBtn");
   if (btn) {
@@ -4570,7 +4580,7 @@ async function runHistoryCompare() {
   if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "正在提交对比任务...";
   try {
     const data = await api("/api/ai/model-compare/history", {
-      method: "POST", body: { symbol, timeframe, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime, sample_size: sampleSize },
+      method: "POST", body: { symbol, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime, sample_size: sampleSize, backtest },
     });
     _historyCompareJobId = data.job?.id || null;
     if (!_historyCompareJobId) throw new Error("history_compare_job_not_created");
@@ -4609,19 +4619,41 @@ function renderHistoryCompareResults(results, meta) {
   const valid = results.filter(r => r.status === "success");
   const sorted = [...valid].sort((a, b) => (b.directional_score?.direction_quality_score || 0) - (a.directional_score?.direction_quality_score || 0));
   const leader = sorted[0];
+  const replayModels = valid.filter(result => result.account_simulation?.status === "success");
+  const replaySorted = [...replayModels].sort((a, b) => Number(b.account_simulation.net_profit || 0) - Number(a.account_simulation.net_profit || 0));
+  const replayLeader = replaySorted[0];
   const failedModels = results.filter(result => result.status !== "success").length;
-  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${leader ? `${escapeHtml(leader.model_name)} 的方向判断更稳定` : "暂无可用结论"}</h2><p>“方向质量分”对小样本准确率进行了保守修正，适合用于横向比较，不代表真实交易收益。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(meta.timeframe || "")}</span></header>
+  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${leader ? `${escapeHtml(leader.model_name)} 的方向判断更稳定` : "暂无可用结论"}</h2><p>方向评估与资金回放分开计算：前者比较判断质量，后者按模型给出的订单参数回放成交与资金变化。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(meta.timeframe || "")}</span></header>
     <div class="compare-summary-grid">
-      <div><span>领先模型</span><strong>${leader ? escapeHtml(leader.model_name) : "--"}</strong><small>方向质量分 ${leader?.directional_score?.direction_quality_score ?? 0}</small></div>
+      <div><span>方向领先</span><strong>${leader ? escapeHtml(leader.model_name) : "--"}</strong><small>方向质量分 ${leader?.directional_score?.direction_quality_score ?? 0}</small></div>
+      <div><span>资金回放领先</span><strong>${replayLeader ? escapeHtml(replayLeader.model_name) : "--"}</strong><small>${replayLeader ? `净收益 ${Number(replayLeader.account_simulation.net_profit || 0).toFixed(2)}` : "执行数据暂不可用"}</small></div>
       <div><span>平均一致度</span><strong>${Number(meta.average_agreement_rate || 0).toFixed(1)}%</strong><small>模型给出相同方向的程度</small></div>
       <div><span>评估切片</span><strong>${meta.evaluation_count || 0}</strong><small>均匀覆盖所选行情区间</small></div>
-      <div><span>异常模型</span><strong>${failedModels}</strong><small>${failedModels ? "部分结果不可用" : "全部正常返回"}</small></div>
     </div>
-    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>每个模型在相同历史时点读取相同上下文，评估的是下一根已收盘 K 线方向，并按开收方向比对。这里不是交易回测，不包含挂单触发、止损止盈、点差、滑点和风控结果。共读取 ${meta.kline_count || 0} 根 K 线，实际发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}。</p></details>`;
+    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>每个模型在相同历史时点读取相同上下文。方向质量按下一根主周期 K 线评估；资金回放使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线模拟市价、限价、突破与 Stop Limit 订单，执行模型推荐止损和止盈档位，并计入设定的手续费与滑点。当前为“独立信号回放”，尚未模拟并发持仓、保证金、强平和账户级风控，因此不能等同真实账户收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
+  if (replaySorted.length) {
+    tableHtml += '<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>模拟账户资金</h2><p>按时间顺序结算每个已成交信号，展示标准化订单回放后的资金表现。</p></div><span class="compare-result-scope">阶段 1 · 暂不含保证金</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>未触发 / 歧义</th></tr></thead><tbody>';
+    replaySorted.forEach(result => {
+      const simulation = result.account_simulation;
+      tableHtml += `<tr><td><strong>${escapeHtml(result.model_name)}</strong><small class="compare-cell-note">${escapeHtml(modelProviderLabel(result.provider))}</small></td>
+        <td>${Number(simulation.ending_balance || 0).toFixed(2)} <small class="compare-cell-note">${escapeHtml(simulation.account_currency || "")}</small></td>
+        <td class="${Number(simulation.net_profit || 0) >= 0 ? "compare-profit-positive" : "compare-profit-negative"}">${Number(simulation.net_profit || 0).toFixed(2)}</td>
+        <td>${Number(simulation.return_pct || 0).toFixed(2)}%</td>
+        <td>${simulation.closed_trade_count || 0} / ${Number(simulation.win_rate || 0).toFixed(1)}%</td>
+        <td>${Number(simulation.max_drawdown || 0).toFixed(2)} <small class="compare-cell-note">${Number(simulation.max_drawdown_pct || 0).toFixed(2)}%</small></td>
+        <td>${simulation.profit_factor == null ? "∞" : Number(simulation.profit_factor || 0).toFixed(2)}</td>
+        <td>${simulation.expired_order_count || 0} / ${simulation.ambiguous_bar_count || 0}</td></tr>`;
+    });
+    tableHtml += "</tbody></table></div></section>";
+  } else if (meta.account_simulation_status === "unavailable") {
+    tableHtml += `<section class="compare-inline-empty danger"><i data-lucide="circle-alert" size="18"></i><span>资金回放暂不可用：${escapeHtml(apiErrorMessage(meta.account_simulation_reason || "backtest_data_unavailable"))}。方向评估结果仍然有效。</span></section>`;
+  } else if (meta.account_simulation_status === "not_applicable") {
+    tableHtml += '<section class="compare-inline-empty"><i data-lucide="circle-minus" size="18"></i><span>本次模型均未给出可执行方向，因此没有产生模拟成交。</span></section>';
+  }
   if (sorted.length) {
-    tableHtml = '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>模型排名</h2><p>综合查看质量、覆盖率和服务稳定性，不应只看单一准确率。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>有效出手</th><th>响应成功率</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
+    tableHtml += '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>方向质量排名</h2><p>综合查看质量、覆盖率和服务稳定性，不应只看单一准确率。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>有效出手</th><th>响应成功率</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
     sorted.forEach((r, index) => {
       const score = r.directional_score;
       tableHtml += `<tr><td><div class="compare-rank-model"><span>${index + 1}</span><div><strong>${escapeHtml(r.model_name)}</strong><small>${escapeHtml(modelProviderLabel(r.provider))}</small></div></div></td>
@@ -6037,7 +6069,8 @@ function bindEvents() {
   });
   $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
   $("cmpRefreshHistory")?.addEventListener("click", loadHistoryCompareJobs);
-  ["cmpSymbol", "cmpTimeframe", "cmpStartTime", "cmpEndTime", "cmpSampleSize"].forEach(id => {
+  ["cmpSymbol", "cmpStartTime", "cmpEndTime", "cmpSampleSize", "cmpStartingBalance",
+    "cmpCommissionPerLot", "cmpSlippagePoints", "cmpMaxHoldingHours"].forEach(id => {
     $(id)?.addEventListener("change", updateHistoryCompareReadiness);
   });
   document.querySelectorAll("[data-cmp-range]").forEach(button => button.addEventListener("click", () => {

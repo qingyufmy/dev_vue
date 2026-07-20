@@ -88,7 +88,7 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
     const ids = [...new Set((Array.isArray(sourceIds) ? sourceIds : [sourceIds]).map(Number).filter(id => id > 0))]
     if (!ids.length) return []
     const rows = await queryAll(`SELECT source_id, open_time_utc_msc AS time_utc_msc, open_price AS open, high_price AS high,
-      low_price AS low, close_price AS close, tick_volume
+      low_price AS low, close_price AS close, tick_volume, spread
     FROM market_candles WHERE source_id IN (${ids.map(() => '?').join(',')}) AND standard_symbol = ? AND timeframe = ?
       AND open_time_utc_msc >= ? AND open_time_utc_msc < ? ORDER BY open_time_utc_msc LIMIT ?`, [
     ...ids, stripBrokerSuffix(symbol), timeframe, startUtcMs - CHAN_LOOKBACK_BARS * interval,
@@ -130,7 +130,7 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
   if (options.alignToPeriodStart !== false) {
     rows = rows.filter(row => isReviewGridAligned(row.time_utc_msc, startUtcMs, timeframe))
   }
-  const rates = rows.map(row => ({ ...row, time_utc_msc:Number(row.time_utc_msc), open:Number(row.open), high:Number(row.high), low:Number(row.low), close:Number(row.close), tick_volume:Number(row.tick_volume || 0) }))
+  const rates = rows.map(row => ({ ...row, time_utc_msc:Number(row.time_utc_msc), open:Number(row.open), high:Number(row.high), low:Number(row.low), close:Number(row.close), tick_volume:Number(row.tick_volume || 0), spread:Number(row.spread || 0) }))
   const periodRates = rates.filter(rate => rate.time_utc_msc >= startUtcMs && rate.time_utc_msc < endUtcMs)
   if (!periodRates.length) throw new Error('period_market_candles_unavailable')
   coverage = assessReviewCandleCoverage(periodRates, startUtcMs, endUtcMs, timeframe)

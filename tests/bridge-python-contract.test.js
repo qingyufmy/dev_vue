@@ -154,4 +154,18 @@ describe('Python Bridge history contract', () => {
     expect(block).toContain('"status": "rejected"')
     expect(block).toContain('"retcode": result.retcode')
   })
+
+  it('exposes lightweight symbol metadata for account simulation without exporting history', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const start = source.indexOf('elif action == "symbol_snapshot":')
+    const end = source.indexOf('elif action == "order_lookup":', start)
+    const block = source.slice(start, end)
+    expect(block).toContain('self.mt5.symbol_info(symbol)')
+    expect(block).toContain('"tick_value":')
+    expect(block).toContain('"contract_size":')
+    expect(block).toContain('"leverage":')
+    expect(block).not.toContain('history_deals_get')
+    expect(block).not.toContain('positions_get')
+    expect(block).not.toContain('orders_get')
+  })
 })

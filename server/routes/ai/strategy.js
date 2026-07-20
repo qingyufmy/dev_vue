@@ -15,6 +15,7 @@ import { parseStrategyPolicy } from './strategy-policy.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
+import { normalizeBacktestOptions, simulateSignalReplay } from './model-backtest.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -85,6 +86,50 @@ function wilsonLowerBound(correct, total, z = 1.2815515655446004) {
   const z2 = z * z
   return (p + z2 / (2 * total) - z * Math.sqrt((p * (1 - p) + z2 / (4 * total)) / total))
     / (1 + z2 / total)
+}
+
+function historyExecutionWindows(modelSignals, endUtcMs, maxHoldingHours) {
+  const horizonMs = Math.max(1, Number(maxHoldingHours) || 24) * 3_600_000
+  const raw = Object.values(modelSignals || {}).flat()
+    .filter(signal => signal.signal_type === 'buy' || signal.signal_type === 'sell')
+    .map(signal => {
+      const start = Number(signal.decision_time_utc_msc)
+      return Number.isFinite(start) ? { start, end:Math.min(endUtcMs, start + horizonMs) } : null
+    })
+    .filter(window => window && window.end > window.start)
+    .sort((a, b) => a.start - b.start)
+  const merged = []
+  for (const window of raw) {
+    const previous = merged.at(-1)
+    if (previous && window.start <= previous.end + 60_000) previous.end = Math.max(previous.end, window.end)
+    else merged.push({ ...window })
+  }
+  return merged
+}
+
+async function loadHistoryExecutionCandles(userId, symbol, windows) {
+  const timeframe = 'M1'
+  const chunkMs = 4_500 * 60_000
+  const merged = new Map()
+  let marketSource = null
+  for (const window of windows || []) {
+    for (let cursor = window.start; cursor < window.end; cursor += chunkMs) {
+      const chunkEnd = Math.min(window.end, cursor + chunkMs)
+      const loaded = await loadPeriodMarketWindow(userId, symbol, timeframe, cursor, chunkEnd, {
+        alignToPeriodStart: false,
+      })
+      marketSource ||= loaded.marketMeta?.source || null
+      for (const rate of loaded.periodRates || []) {
+        const utcMs = compareRateUtcMs(rate)
+        if (utcMs != null) merged.set(utcMs, { ...rate, time_utc_msc:utcMs })
+      }
+    }
+  }
+  return {
+    timeframe,
+    marketSource,
+    candles:[...merged.values()].sort((a, b) => Number(a.time_utc_msc) - Number(b.time_utc_msc)),
+  }
 }
 
 function rememberChanMaxHistory(key) {
@@ -683,7 +728,7 @@ export async function handleAnalyzeCompare(userId, params) {
 }
 
 export async function handleHistoryCompare(userId, params, options = {}) {
-  const { symbol, timeframe, model_ids, strategy_id, start_time, end_time, step, sample_size } = params
+  const { symbol, model_ids, strategy_id, start_time, end_time, step, sample_size } = params
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false
 
@@ -691,7 +736,6 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   if (!user || user.role !== 'admin') return { status: 'error', message: 'admin_only' }
   const modelOwnerId = 0
   if (!symbol) return { status: 'error', message: 'symbol required' }
-  if (!timeframe) return { status: 'error', message: 'timeframe required' }
   if (!strategy_id) return { status: 'error', message: 'strategy required' }
   if (!start_time || !end_time) return { status: 'error', message: 'start_time and end_time required' }
   if (!Array.isArray(model_ids) || model_ids.length < 2 || model_ids.length > 5) {
@@ -713,10 +757,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     timeframe: String(item.timeframe || '').toUpperCase(),
     kline_count: Math.max(20, Number(item.kline_count) || 100),
   })).filter(item => TIMEFRAME_MINUTES[item.timeframe])
-  const requestedTimeframe = String(timeframe).toUpperCase()
-  if (!planItems.some(item => item.timeframe === requestedTimeframe)) {
-    return { status: 'error', message: 'timeframe_not_supported_by_strategy' }
+  const requestedTimeframe = String(policy.marketDataPlan.primary_timeframe || planItems[0]?.timeframe || '').toUpperCase()
+  if (!requestedTimeframe || !planItems.some(item => item.timeframe === requestedTimeframe)) {
+    return { status: 'error', message: 'strategy_primary_timeframe_invalid' }
   }
+  const backtestOptions = normalizeBacktestOptions(params.backtest || {})
 
   const startUtcMs = parseCompareTimeUtcMs(start_time)
   const endUtcMs = parseCompareTimeUtcMs(end_time)
@@ -877,6 +922,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       if (result.error) {
         modelSignals[result.modelId].push({
           decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
           signal_type: 'error', confidence: 0, next_bar_move: 0,
           latency_ms: result.latencyMs || 0, error: result.error,
         })
@@ -888,6 +934,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       if (inferenceSource !== 'ai') {
         modelSignals[result.modelId].push({
           decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
           signal_type: 'error', confidence: 0, next_bar_move: 0, latency_ms: result.latencyMs || 0,
           error: signal?.reasoning || 'inference_failed',
         })
@@ -900,8 +947,23 @@ export async function handleHistoryCompare(userId, params, options = {}) {
 
       modelSignals[result.modelId].push({
         decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+        decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
         signal_type: direction, confidence: signal.confidence || 0, next_bar_move: nextBarMove,
         latency_ms: result.latencyMs || 0,
+        order_intent: direction === 'buy' || direction === 'sell' ? {
+          signal_type:signal.signal_type,
+          entry_method:signal.entry_method,
+          recommended_volume:signal.recommended_volume,
+          limit_price:signal.limit_price,
+          stop_limit_price:signal.stop_limit_price,
+          pending_valid_minutes:signal.pending_valid_minutes,
+          pending_valid_until:signal.pending_valid_until,
+          stop_loss_price:signal.stop_loss_price,
+          take_profit_1_price:signal.take_profit_1_price,
+          take_profit_2_price:signal.take_profit_2_price,
+          take_profit_3_price:signal.take_profit_3_price,
+          recommended_take_profit_tier:signal.recommended_take_profit_tier,
+        } : null,
       })
     }
     await onProgress({
@@ -910,6 +972,55 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       completed_steps: stepNumber + 1,
       total_steps: steps.length,
     })
+  }
+
+  let backtestContext = {
+    status:'not_applicable',
+    reason:'no_actionable_signals',
+    execution_timeframe:'M1',
+    execution_candles:[],
+    instrument:null,
+    account:null,
+    market_source:null,
+  }
+  const hasActionableSignals = Object.values(modelSignals).some(signals =>
+    signals.some(signal => signal.signal_type === 'buy' || signal.signal_type === 'sell'))
+  if (hasActionableSignals) {
+    await onProgress({
+      stage:'backtesting',
+      progress_percent:96,
+      completed_steps:steps.length,
+      total_steps:steps.length,
+    })
+    const [executionResult, symbolResult] = await Promise.allSettled([
+      loadHistoryExecutionCandles(userId, symbol,
+        historyExecutionWindows(modelSignals, endUtcMs, backtestOptions.max_holding_hours)),
+      mt5Bridge(userId, 'symbol_snapshot', { symbol }, { timeoutMs:10_000, noFallback:true }),
+    ])
+    const execution = executionResult.status === 'fulfilled' ? executionResult.value : null
+    const snapshot = symbolResult.status === 'fulfilled' ? symbolResult.value : null
+    if (execution?.candles?.length && snapshot?.status === 'success' && snapshot.instrument) {
+      backtestContext = {
+        status:'ready',
+        reason:null,
+        execution_timeframe:execution.timeframe,
+        execution_candles:execution.candles,
+        instrument:snapshot.instrument,
+        account:snapshot.account || null,
+        market_source:execution.marketSource,
+      }
+    } else {
+      backtestContext = {
+        ...backtestContext,
+        reason:executionResult.status === 'rejected'
+          ? (executionResult.reason?.message || 'backtest_execution_candles_unavailable')
+          : symbolResult.status === 'rejected'
+            ? (symbolResult.reason?.message || 'backtest_symbol_snapshot_unavailable')
+            : !execution?.candles?.length
+              ? 'backtest_execution_candles_unavailable'
+              : (snapshot?.message || snapshot?.error || 'backtest_symbol_snapshot_unavailable'),
+      }
+    }
   }
 
   const modelResults = []
@@ -934,6 +1045,18 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       ? signals.reduce((sum, s) => sum + Number(s.latency_ms || 0), 0) / signals.length
       : 0
     const qualityScore = wilsonLowerBound(correctCount, tradeCount) * (0.7 + 0.3 * responseSuccessRate / 100) * 100
+    const accountSimulation = backtestContext.status === 'ready'
+      ? simulateSignalReplay(signals, backtestContext.execution_candles, backtestContext.instrument, backtestOptions)
+      : {
+        status:'unavailable',
+        reason:backtestContext.reason,
+        options:backtestOptions,
+      }
+    if (accountSimulation.status === 'success') {
+      accountSimulation.execution_resolution = backtestContext.execution_timeframe
+      accountSimulation.market_source = backtestContext.market_source
+      accountSimulation.account_currency = backtestContext.account?.currency || backtestContext.instrument?.currency_profit || null
+    }
 
     modelResults.push({
       model_id: modelId,
@@ -942,6 +1065,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       status: 'success',
       signal_count: signals.length,
       signals,
+      account_simulation:accountSimulation,
       directional_score: {
         total_move: Number(totalMove.toFixed(10)),
         correct_count: correctCount,
@@ -976,12 +1100,20 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const averageAgreement = agreementByStep.length
     ? agreementByStep.reduce((sum, value) => sum + value, 0) / agreementByStep.length
     : 0
+  const successfulAccountReplay = modelResults.find(result => result.account_simulation?.status === 'success')
+  const unavailableAccountReplay = modelResults.find(result => result.account_simulation?.status === 'unavailable')
+  const accountSimulationStatus = successfulAccountReplay
+    ? 'ready'
+    : hasActionableSignals ? 'unavailable' : 'not_applicable'
+  const accountSimulationReason = successfulAccountReplay
+    ? null
+    : (unavailableAccountReplay?.account_simulation?.reason || backtestContext.reason)
 
   return {
     status: 'success',
     results: [...modelResults, ...modelErrors],
     meta: {
-      symbol, timeframe, strategy_id: Number(strategy_id),
+      symbol, timeframe:requestedTimeframe, strategy_id: Number(strategy_id),
       kline_count: klines.length,
       sample_size: requestedSampleSize,
       requested_step: step == null ? null : Math.max(1, Math.min(50, Number(step) || 10)),
@@ -996,6 +1128,12 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
       metric_type: 'next_closed_bar_direction',
       metric_version: 'directional-eval-v2',
+      account_simulation_type:'isolated_signal_replay',
+      account_simulation_version:'account-replay-v1',
+      account_simulation_status:accountSimulationStatus,
+      account_simulation_reason:accountSimulationReason,
+      execution_timeframe:backtestContext.execution_timeframe,
+      backtest_options:backtestOptions,
       strategy_timeframes: planItems.map(item => item.timeframe),
       chan_enabled: policy.useChanAnalysis,
     },
@@ -1073,10 +1211,18 @@ async function persistHistoryCompareJob(job, { insert = false } = {}) {
 export async function startHistoryCompareJob(userId, params) {
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') throw new Error('admin_only')
+  const strategy = params?.strategy_id
+    ? await getStrategyById(Number(params.strategy_id), userId, 'admin', { forExecution:false })
+    : null
+  const normalizedParams = {
+    ...(params || {}),
+    timeframe:strategy ? parseStrategyPolicy(strategy).marketDataPlan.primary_timeframe : null,
+    backtest:normalizeBacktestOptions(params?.backtest || {}),
+  }
   const active = [...historyCompareJobs.values()].find(job => job.user_id === Number(userId)
     && ['queued', 'running', 'cancelling'].includes(job.status))
   if (active) {
-    if (JSON.stringify(active.params) === JSON.stringify(params)) return publicHistoryCompareJob(active)
+    if (JSON.stringify(active.params) === JSON.stringify(normalizedParams)) return publicHistoryCompareJob(active)
     throw new Error('history_compare_job_already_running')
   }
   const now = new Date().toISOString()
@@ -1090,7 +1236,7 @@ export async function startHistoryCompareJob(userId, params) {
     total_steps: 0,
     result: null,
     error: null,
-    params,
+    params:normalizedParams,
     cancel_requested: false,
     created_at: now,
     updated_at: now,
@@ -1105,7 +1251,7 @@ export async function startHistoryCompareJob(userId, params) {
       job.updated_at = new Date().toISOString()
       job.updated_at_ms = Date.now()
       await persistHistoryCompareJob(job)
-      const result = await handleHistoryCompare(userId, params, {
+      const result = await handleHistoryCompare(userId, normalizedParams, {
         shouldCancel: () => job.cancel_requested,
         onProgress: async progress => {
           Object.assign(job, progress, { updated_at: new Date().toISOString(), updated_at_ms: Date.now() })

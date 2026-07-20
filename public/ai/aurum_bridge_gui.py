@@ -1241,6 +1241,40 @@ class BridgeWorker(QThread):
                         "account_trade_allowed": acc.trade_allowed, "account_trade_expert": acc.trade_expert,
                         "login": acc.login, "server": acc.server, "balance": acc.balance, "equity": acc.equity}
                 return {"mode": "mock", "mt5_package_available": True, "live_trading_enabled": False}
+            elif action == "symbol_snapshot":
+                # Lightweight contract/account metadata for historical account
+                # simulation. It deliberately avoids positions, orders and
+                # account history so model comparison does not consume excess
+                # bridge bandwidth.
+                symbol = self._resolve_symbol(params.get("symbol"))
+                self.mt5.symbol_select(symbol, True)
+                info = self.mt5.symbol_info(symbol)
+                acc = self.mt5.account_info()
+                if not info:
+                    return {"status": "error", "message": f"symbol_info unavailable: {symbol}"}
+                if not acc:
+                    return {"status": "error", "message": "account_info unavailable"}
+                return {
+                    "status": "success",
+                    "symbol": symbol,
+                    "account": {
+                        "currency": str(acc.currency or ""),
+                        "balance": float(acc.balance),
+                        "equity": float(acc.equity),
+                        "leverage": int(acc.leverage),
+                    },
+                    "instrument": {
+                        "name": info.name, "digits": int(info.digits), "trade_mode": int(info.trade_mode),
+                        "point": float(info.point),
+                        "tick_size": float(getattr(info, "trade_tick_size", 0) or 0),
+                        "tick_value": float(getattr(info, "trade_tick_value", 0) or 0),
+                        "contract_size": float(getattr(info, "trade_contract_size", 0) or 0),
+                        "volume_min": float(getattr(info, "volume_min", 0) or 0),
+                        "volume_max": float(getattr(info, "volume_max", 0) or 0),
+                        "volume_step": float(getattr(info, "volume_step", 0) or 0),
+                        "currency_profit": str(getattr(info, "currency_profit", "") or ""),
+                    },
+                }
             elif action == "order_lookup":
                 # Reconcile an uncertain send locally. Only the matching order
                 # is returned to the server; positions, pending orders and the

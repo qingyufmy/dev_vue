@@ -8016,8 +8016,18 @@ a.signal-link:hover {
 .compare-field > span,.compare-range-field legend { color:var(--text-secondary); font-size:12px; font-weight:600; }
 .compare-field > small { color:var(--text-muted); font-size:11px; line-height:1.5; }
 .compare-field select,.compare-field input { width:100%; min-height:44px; padding:0 12px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-input); color:var(--text-primary); font:inherit; font-size:13px; outline:none; }
+.compare-readonly-value { display:flex; align-items:center; min-height:44px; padding:0 12px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:rgba(148,163,184,.05); color:var(--text-primary); font-size:13px; }
 .compare-field select:focus-visible,.compare-field input:focus-visible,.compare-range-presets button:focus-visible,.compare-model-card:has(input:focus-visible) { border-color:var(--gold-primary); box-shadow:0 0 0 3px rgba(212,175,55,.14); }
 .compare-field-pair { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.compare-simulation-settings { border:1px solid var(--border-default); border-radius:var(--radius-lg); background:rgba(148,163,184,.035); }
+.compare-simulation-settings summary { display:flex; align-items:center; justify-content:space-between; min-height:44px; padding:0 12px; cursor:pointer; color:var(--text-secondary); font-size:12px; font-weight:600; list-style:none; }
+.compare-simulation-settings summary::-webkit-details-marker { display:none; }
+.compare-simulation-settings summary small { color:var(--text-muted); font-size:10px; font-weight:500; }
+.compare-simulation-settings[open] { padding-bottom:12px; }
+.compare-simulation-settings[open] summary { margin-bottom:10px; border-bottom:1px solid var(--border-subtle); }
+.compare-simulation-settings > .compare-field-pair,.compare-simulation-settings > p { margin-right:12px; margin-left:12px; }
+.compare-simulation-settings > .compare-field-pair + .compare-field-pair { margin-top:10px; }
+.compare-simulation-settings > p { margin-top:10px; color:var(--text-muted); font-size:10px; line-height:1.55; }
 .compare-range-field { display:flex; flex-direction:column; gap:10px; margin:0; padding:0; border:0; }
 .compare-range-presets { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
 .compare-range-presets button { min-height:36px; padding:0 6px; border:1px solid var(--border-default); border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); font:inherit; font-size:11px; cursor:pointer; }
@@ -8052,7 +8062,7 @@ a.signal-link:hover {
 #cmpProgressPercent { color:var(--gold-primary); font:700 16px var(--font-mono); }
 .cmp-progress-track { height:6px; overflow:hidden; border-radius:var(--radius-pill); background:rgba(148,163,184,.12); }
 .cmp-progress-fill { height:100%; border-radius:inherit; background:var(--gold-primary); transition:width .4s ease; }
-.compare-stage-list { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-top:10px; }
+.compare-stage-list { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin-top:10px; }
 .compare-stage-list span { color:var(--text-muted); font-size:10px; }
 .compare-stage-list span.active { color:var(--gold-primary); }
 .compare-empty-state { display:flex; min-height:250px; align-items:center; justify-content:center; gap:14px; padding:32px; border:1px dashed var(--border-default); border-radius:var(--radius-xl); color:var(--text-muted); text-align:left; }
@@ -8075,6 +8085,9 @@ a.signal-link:hover {
 .compare-method-note p { margin:7px 0 4px; line-height:1.7; }
 .compare-table-scroll { overflow-x:auto; }
 .compare-ranking-panel .cmp-table,.compare-decision-panel .cmp-table { min-width:900px; }
+.compare-account-panel { border-color:rgba(212,175,55,.32); }
+.compare-profit-positive { color:var(--success) !important; font-weight:700; }
+.compare-profit-negative { color:var(--danger) !important; font-weight:700; }
 .compare-rank-model { display:flex; align-items:center; gap:10px; }
 .compare-rank-model > span { display:grid; width:24px; height:24px; place-items:center; border-radius:7px; background:rgba(148,163,184,.08); color:var(--text-muted); font:600 11px var(--font-mono); }
 .compare-rank-model div { display:flex; flex-direction:column; gap:2px; }
