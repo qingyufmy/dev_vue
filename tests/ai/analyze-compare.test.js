@@ -555,6 +555,36 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.timeframe).toBe('M30')
       expect(maybeAiSignal).toHaveBeenCalled()
     })
+
+    it('falls back to the legacy compact risk snapshot until an older bridge is restarted', async () => {
+      const baseImplementation = mockMt5Bridge.getMockImplementation()
+      mockMt5Bridge.mockImplementation(async (userId, action, params) => {
+        if (action === 'symbol_snapshot') return { status:'error', message:'unknown action' }
+        if (action === 'risk_snapshot') {
+          return {
+            status:'success',
+            account:{ currency:'USD', balance:10_000, equity:10_000 },
+            instruments:{ XAUUSD:{
+              name:'XAUUSD', digits:2, point:0.01, tick_size:0.01, tick_value:1,
+              contract_size:100, volume_min:0.01, volume_max:100, volume_step:0.01,
+              currency_profit:'USD',
+            } },
+          }
+        }
+        return baseImplementation(userId, action, params)
+      })
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      })
+      expect(result.status).toBe('success')
+      expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'symbol_snapshot', { symbol:'XAUUSD' }, expect.objectContaining({ noFallback:true }))
+      expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'risk_snapshot', expect.objectContaining({
+        symbol:'XAUUSD',
+        baseline_from_utc_msc:expect.any(Number),
+      }), expect.objectContaining({ noFallback:true }))
+      expect(result.meta.account_simulation_status).toBe('ready')
+    })
   })
 })
 

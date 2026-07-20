@@ -132,6 +132,28 @@ async function loadHistoryExecutionCandles(userId, symbol, windows) {
   }
 }
 
+async function loadHistorySymbolSnapshot(userId, symbol) {
+  const lightweight = await mt5Bridge(userId, 'symbol_snapshot', { symbol }, {
+    timeoutMs:10_000,
+    noFallback:true,
+  })
+  if (lightweight?.status === 'success' && lightweight.instrument) return lightweight
+  // Bridge versions released before account-replay-v1 do not know the
+  // lightweight action. Reuse the existing compact risk snapshot once so the
+  // feature works immediately; after the bridge is restarted, the normal path
+  // above avoids positions/orders/history entirely.
+  const legacy = await mt5Bridge(userId, 'risk_snapshot', {
+    symbol,
+    last_deal_time_msc:0,
+    last_deal_ticket:0,
+    baseline_from_utc_msc:Date.now(),
+  }, { timeoutMs:10_000, noFallback:true })
+  if (legacy?.status !== 'success') return legacy
+  const instrument = Object.values(legacy.instruments || {}).find(item =>
+    stripBrokerSuffix(item?.name || '').toUpperCase() === stripBrokerSuffix(symbol).toUpperCase())
+  return { ...legacy, instrument:instrument || null, compatibility_fallback:true }
+}
+
 function rememberChanMaxHistory(key) {
   _chanMaxHistoryHints.delete(key)
   _chanMaxHistoryHints.set(key, true)
@@ -995,7 +1017,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     const [executionResult, symbolResult] = await Promise.allSettled([
       loadHistoryExecutionCandles(userId, symbol,
         historyExecutionWindows(modelSignals, endUtcMs, backtestOptions.max_holding_hours)),
-      mt5Bridge(userId, 'symbol_snapshot', { symbol }, { timeoutMs:10_000, noFallback:true }),
+      loadHistorySymbolSnapshot(userId, symbol),
     ])
     const execution = executionResult.status === 'fulfilled' ? executionResult.value : null
     const snapshot = symbolResult.status === 'fulfilled' ? symbolResult.value : null
