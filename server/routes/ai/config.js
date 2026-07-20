@@ -601,6 +601,7 @@ export async function executeOrderCore(userId, config, request, action, options 
         snapshot_complete: riskSnapshot.complete === true,
         data_incomplete_reasons: riskSnapshot.incomplete_reasons || [],
         risk_snapshot_version: Number(riskSnapshot.snapshot_version || 0),
+        timezone_offset_minutes:Number(riskSnapshot.timezone_offset_minutes || 0),
         businessDate: riskSnapshot.business_date,
         increment: riskSnapshot.increment || {},
         broker_calculation: riskSnapshot.broker_calculation || null,

@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 
 import { DEFAULT_RISK_POLICY } from '../../server/routes/ai/risk-policy.js'
 import {
-  aggregateClosedPositions, calculateAccountRiskMetrics, evaluateStatefulRiskTx,
+  aggregateClosedPositions, calculateAccountRiskMetrics, consecutiveLossCooldownUntil, evaluateStatefulRiskTx,
   refreshRiskAccountState, setGlobalKillSwitch, syncTradingAccountIdentity,
 } from '../../server/routes/ai/risk-state.js'
 
@@ -134,6 +134,17 @@ describe('account metrics', () => {
     expect(result.cumulative_cash_flow).toBe(1500)
     expect(result.last_deal_time_msc).toBe(3000)
     expect(result.data_complete).toBe(true)
+  })
+
+  it('anchors consecutive-loss cooldown to the actual threshold-crossing close time', () => {
+    const policy = { ...DEFAULT_RISK_POLICY, consecutive_loss_limit:3, loss_cooldown_minutes:120 }
+    const oldCrossingUtcMs = Date.parse('2026-07-17T20:00:00Z')
+    const metrics = { consecutive_losses:4, timezone_offset_minutes:180, loss_streak_events:[
+      { previous_count:2, count:3, close_time_msc:oldCrossingUtcMs + 180 * 60000, close_time_utc_msc:oldCrossingUtcMs },
+      { previous_count:3, count:4, close_time_msc:oldCrossingUtcMs + 3600000 + 180 * 60000, close_time_utc_msc:oldCrossingUtcMs + 3600000 },
+    ] }
+    expect(consecutiveLossCooldownUntil(metrics, 2, policy, Date.parse('2026-07-20T01:20:00Z'))).toBeNull()
+    expect(consecutiveLossCooldownUntil(metrics, 2, policy, Date.parse('2026-07-17T20:30:00Z'))).toBe('2026-07-18 06:00:00')
   })
 
   it('fails closed with a specific reason when the Bridge cursor skips ahead', () => {

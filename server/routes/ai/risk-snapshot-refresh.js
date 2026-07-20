@@ -53,6 +53,7 @@ async function refreshOne(userId, row) {
     instruments, fxRates, snapshot_complete: result.complete === true,
     data_incomplete_reasons: result.incomplete_reasons || [],
     risk_snapshot_version: Number(result.snapshot_version || 0),
+    timezone_offset_minutes:Number(result.timezone_offset_minutes || 0),
     businessDate: result.business_date, increment: result.increment || {},
   }, resolved.policy)
   return { account_id: Number(row.trading_account_id), refreshed: true, state }

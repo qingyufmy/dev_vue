@@ -51,7 +51,7 @@ function compareCursor(left, right) {
   return left[0] === right[0] ? left[1] - right[1] : left[0] - right[0]
 }
 
-function calculateIncrementalMetrics({ account, positions = [], pending = [], instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true, data_incomplete_reasons = [], increment = {} }) {
+function calculateIncrementalMetrics({ account, positions = [], pending = [], instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true, data_incomplete_reasons = [], increment = {}, timezone_offset_minutes = 0 }) {
   const stateCursor = [Math.max(0, Number(previousState.last_deal_time_msc) || 0), Math.max(0, Number(previousState.last_deal_ticket) || 0)]
   const requestedCursor = cursorOf(increment.requested_cursor)
   const throughCursor = cursorOf(increment.through_cursor)
@@ -80,7 +80,13 @@ function calculateIncrementalMetrics({ account, positions = [], pending = [], in
   const highWater = Math.max(equity, correctedHigh)
   const drawdownPct = highWater > 0 ? Math.max(0, (highWater - equity) / highWater * 100) : null
   let consecutiveLosses = toNumber(previousState.consecutive_losses)
-  for (const position of closed) consecutiveLosses = toNumber(position.net) < 0 ? consecutiveLosses + 1 : 0
+  const lossStreakEvents = []
+  for (const position of closed) {
+    const previousCount = consecutiveLosses
+    consecutiveLosses = toNumber(position.net) < 0 ? consecutiveLosses + 1 : 0
+    lossStreakEvents.push({ previous_count:previousCount, count:consecutiveLosses,
+      close_time_msc:Number(position.close_time_msc || 0), close_time_utc_msc:Number(position.close_time_utc_msc || 0) })
+  }
   const notional = exposureNotional([...positions, ...pending], instruments, account?.currency, fxRates)
   const dataComplete = snapshot_complete && reasons.length === 0 && equity > 0 && notional != null && dailyLossPct != null && drawdownPct != null
   const nextCursor = compareCursor(throughCursor, stateCursor) >= 0 ? throughCursor : stateCursor
@@ -89,7 +95,27 @@ function calculateIncrementalMetrics({ account, positions = [], pending = [], in
     daily_loss_pct: dailyLossPct, cumulative_cash_flow: cumulativeCashFlow, equity_high_water: highWater,
     drawdown_pct: drawdownPct, consecutive_losses: consecutiveLosses, notional, data_complete: dataComplete,
     data_incomplete_reasons: reasons, last_deal_time_msc: nextCursor[0], last_deal_ticket: nextCursor[1],
+    loss_streak_events:lossStreakEvents, timezone_offset_minutes:Number(timezone_offset_minutes || 0),
   }
+}
+
+function beijingDateTimeFromUtcMs(utcMs) {
+  return new Date(Number(utcMs) + 8 * 3600000).toISOString().replace('T', ' ').slice(0, 19)
+}
+
+export function consecutiveLossCooldownUntil(metrics, previousLosses, policy, nowMs = Date.now()) {
+  const limit = Math.max(1, Number(policy?.consecutive_loss_limit || 0))
+  if (Number(previousLosses || 0) >= limit || Number(metrics?.consecutive_losses || 0) < limit) return null
+  const crossing = (metrics?.loss_streak_events || []).find(event => Number(event.previous_count || 0) < limit && Number(event.count || 0) >= limit)
+  if (!crossing) return null
+  let closeUtcMs = Number(crossing.close_time_utc_msc || 0)
+  if (!(closeUtcMs > 0)) {
+    const rawCloseMs = Number(crossing.close_time_msc || 0)
+    if (rawCloseMs > 0) closeUtcMs = rawCloseMs - Number(metrics.timezone_offset_minutes || 0) * 60000
+  }
+  if (!(closeUtcMs > 0)) return null
+  const deadlineUtcMs = closeUtcMs + Math.max(1, Number(policy?.loss_cooldown_minutes || 0)) * 60000
+  return deadlineUtcMs > Number(nowMs) ? beijingDateTimeFromUtcMs(deadlineUtcMs) : null
 }
 
 function exposureNotional(items, instruments, accountCurrency, fxRates = {}) {
@@ -166,9 +192,7 @@ export async function refreshRiskAccountState(userId, accountId, snapshot, polic
 
     const previousLosses = toNumber(state.consecutive_losses)
     let cooldownUntil = state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now() ? state.cooldown_until : null
-    if (!cooldownUntil && metrics.consecutive_losses >= policy.consecutive_loss_limit && previousLosses < policy.consecutive_loss_limit) {
-      cooldownUntil = new Date(Date.now() + policy.loss_cooldown_minutes * 60_000).toISOString().replace('T', ' ').slice(0, 19)
-    }
+    if (!cooldownUntil) cooldownUntil = consecutiveLossCooldownUntil(metrics, previousLosses, policy)
     if (!haltReason && cooldownUntil) haltReason = 'R3.2_CONSECUTIVE_LOSS_COOLDOWN'
     const now = beijingNow()
     await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
@@ -286,8 +310,7 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   // Consecutive-loss cooldown is armed only when the threshold is crossed;
   // otherwise an expired cooldown would recreate itself forever.
   const previousLosses = toNumber(state.consecutive_losses)
-  let cooldownUntil = metrics.consecutive_losses >= policy.consecutive_loss_limit && previousLosses < policy.consecutive_loss_limit
-    ? new Date(Date.now() + policy.loss_cooldown_minutes * 60_000).toISOString().replace('T', ' ').slice(0, 19) : null
+  let cooldownUntil = consecutiveLossCooldownUntil(metrics, previousLosses, policy)
   if (cooldownUntil && !riskRuleIsEnforced('R3.2_CONSECUTIVE_LOSS_COOLDOWN', ruleModes)) {
     shadowRules.push({ code: 'R3.2_CONSECUTIVE_LOSS_COOLDOWN', outcome: 'shadow_reject', details: { until: cooldownUntil } })
     cooldownUntil = null

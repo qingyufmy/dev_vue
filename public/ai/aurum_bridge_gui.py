@@ -799,8 +799,10 @@ class BridgeWorker(QThread):
             net = sum(float(getattr(item, "profit", 0) or 0) + float(getattr(item, "commission", 0) or 0)
                 + float(getattr(item, "swap", 0) or 0) + float(getattr(item, "fee", 0) or 0) for item in position_deals)
             close_ms = int(d.get("time_msc") or int(d.get("time") or 0) * 1000)
+            close_clock = self._clock_fields(close_ms)
             closed_positions.append({
                 "position_id": position_id, "close_time_msc": close_ms,
+                "close_time_utc_msc": close_clock.get("time_utc_msc"),
                 "close_deal_ticket": int(d.get("ticket") or 0),
                 "business_date": self._mt5_time(close_ms // 1000)[:10], "net": round(net, 8),
             })
