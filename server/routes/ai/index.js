@@ -10,7 +10,8 @@ import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistoryCompareJob,
-  cancelHistoryCompareJob, buildStrategyContextFromTags } from './strategy.js'
+  cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
+  buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { getBridgeDiagnostics } from '../../bridge-ws.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
@@ -166,13 +167,23 @@ router.post('/ai/model-compare/history', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/model-compare/history', authMiddleware, async (req, res) => {
+  try { res.json({ ok: true, jobs: await listHistoryCompareJobs(req.user.id, req.query.limit) }) }
+  catch (error) { reviewError(res, error) }
+})
+
 router.get('/ai/model-compare/history/:jobId', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, job: getHistoryCompareJob(req.user.id, req.params.jobId) }) }
+  try { res.json({ ok: true, job: await getHistoryCompareJob(req.user.id, req.params.jobId) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.delete('/ai/model-compare/history/:jobId', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, job: cancelHistoryCompareJob(req.user.id, req.params.jobId) }) }
+  try {
+    const job = req.query.mode === 'delete'
+      ? await deleteHistoryCompareJob(req.user.id, req.params.jobId)
+      : await cancelHistoryCompareJob(req.user.id, req.params.jobId)
+    res.json({ ok: true, job })
+  }
   catch (error) { reviewError(res, error) }
 })
 router.get('/ai/platform-model-policy', authMiddleware, async (req, res) => {

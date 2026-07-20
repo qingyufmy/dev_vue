@@ -481,6 +481,11 @@ describe('handleHistoryCompare', () => {
         expect(r).toHaveProperty('directional_score')
         expect(r.directional_score).toHaveProperty('total_move')
         expect(r.directional_score).toHaveProperty('directional_accuracy')
+        expect(r.directional_score).toHaveProperty('direction_quality_score')
+        expect(r.directional_score).toHaveProperty('action_rate')
+        expect(r.directional_score).toHaveProperty('response_success_rate')
+        expect(r.directional_score).toHaveProperty('average_confidence')
+        expect(r.directional_score).toHaveProperty('average_latency_ms')
         expect(r.directional_score).toHaveProperty('buy_count')
         expect(r.directional_score).toHaveProperty('sell_count')
         expect(r.directional_score).toHaveProperty('hold_count')
@@ -496,6 +501,21 @@ describe('handleHistoryCompare', () => {
       expect(result.meta).toHaveProperty('requested_step', 10)
       expect(result.meta.evaluation_count).toBeLessThanOrEqual(20)
       expect(result.meta).toHaveProperty('metric_type', 'next_closed_bar_direction')
+      expect(result.meta).toHaveProperty('metric_version', 'directional-eval-v2')
+      expect(result.meta).toHaveProperty('average_agreement_rate')
+    })
+
+    it('uses an explicit evenly distributed sample size for the new client', async () => {
+      const result = await handleHistoryCompare(1, {
+        symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1,
+        start_time: '2026-07-01', end_time: '2026-07-02', sample_size: 8,
+      })
+      expect(result.status).toBe('success')
+      expect(result.meta.sample_size).toBe(8)
+      expect(result.meta.evaluation_count).toBe(8)
+      expect(result.meta.estimated_model_calls).toBe(16)
+      expect(result.results[0].signals[0]).toHaveProperty('decision_time')
+      expect(result.results[0].signals[0]).toHaveProperty('outcome_time')
     })
 
     it('evaluates a signal against the next unseen candle and records losses', async () => {
@@ -539,6 +559,11 @@ describe('POST /ai/model-compare/history route', () => {
     expect(routes).toContain('startHistoryCompareJob(req.user.id, req.body || {})')
     expect(routes).toContain("router.get('/ai/model-compare/history/:jobId'")
     expect(routes).toContain("router.delete('/ai/model-compare/history/:jobId'")
+  })
+
+  it('exposes a lightweight recent-job list', () => {
+    expect(routes).toContain("router.get('/ai/model-compare/history', authMiddleware")
+    expect(routes).toContain('listHistoryCompareJobs')
   })
 })
 

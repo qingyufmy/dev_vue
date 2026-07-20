@@ -2653,6 +2653,29 @@ const migrations = [
     async up() {
       await queryRun('UPDATE close_config SET enabled = 0 WHERE enabled <> 0')
     }
+  },
+  {
+    id: '107_model_compare_job_history',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_compare_jobs (
+        id CHAR(36) PRIMARY KEY,
+        user_id INT NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        stage VARCHAR(32) NOT NULL DEFAULT 'queued',
+        progress_percent INT NOT NULL DEFAULT 0,
+        completed_steps INT NOT NULL DEFAULT 0,
+        total_steps INT NOT NULL DEFAULT 0,
+        params_json LONGTEXT NOT NULL,
+        result_json LONGTEXT DEFAULT NULL,
+        error_code VARCHAR(255) DEFAULT NULL,
+        cancel_requested TINYINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        INDEX idx_model_compare_user_created (user_id, created_at),
+        INDEX idx_model_compare_status_updated (status, updated_at)
+      )`)
+    }
   }
 ]
 

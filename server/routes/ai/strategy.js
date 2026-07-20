@@ -23,6 +23,7 @@ const _chanMaxHistoryHints = new Map()
 const TIMEFRAME_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080 }
 const HISTORY_COMPARE_MIN_CONTEXT = 20
 const HISTORY_COMPARE_MAX_STEPS = 20
+const HISTORY_COMPARE_MIN_STEPS = 4
 const HISTORY_COMPARE_MAX_KLINES = 5000
 
 function parseCompareTimeUtcMs(value) {
@@ -61,6 +62,29 @@ function compareVisibleRates(rates, decisionUtcMs, timeframe, count, includeChan
   })
   const requested = Math.max(Number(count) || 100, includeChan ? CHAN_HISTORY_COUNT : 0)
   return closed.slice(-Math.min(requested, CHAN_MAX_HISTORY_COUNT))
+}
+
+function buildHistoryCompareSteps(klineCount, requestedSampleSize) {
+  const first = HISTORY_COMPARE_MIN_CONTEXT - 1
+  const last = klineCount - 2
+  if (last < first) return []
+  const available = last - first + 1
+  const target = Math.min(available, Math.max(
+    HISTORY_COMPARE_MIN_STEPS,
+    Math.min(HISTORY_COMPARE_MAX_STEPS, Number(requestedSampleSize) || 12)
+  ))
+  if (target === 1) return [last]
+  return [...new Set(Array.from({ length: target }, (_, index) =>
+    Math.round(first + ((last - first) * index) / (target - 1))
+  ))]
+}
+
+function wilsonLowerBound(correct, total, z = 1.2815515655446004) {
+  if (!total) return 0
+  const p = correct / total
+  const z2 = z * z
+  return (p + z2 / (2 * total) - z * Math.sqrt((p * (1 - p) + z2 / (4 * total)) / total))
+    / (1 + z2 / total)
 }
 
 function rememberChanMaxHistory(key) {
@@ -659,7 +683,7 @@ export async function handleAnalyzeCompare(userId, params) {
 }
 
 export async function handleHistoryCompare(userId, params, options = {}) {
-  const { symbol, timeframe, model_ids, strategy_id, start_time, end_time, step } = params
+  const { symbol, timeframe, model_ids, strategy_id, start_time, end_time, step, sample_size } = params
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false
 
@@ -723,9 +747,12 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const klines = requestedRates
   if (klines.length <= HISTORY_COMPARE_MIN_CONTEXT) return { status: 'error', message: 'insufficient_kline_data_for_compare' }
 
-  const requestedInterval = Math.max(1, Math.min(50, Number(step) || 10))
-  const eligibleDecisionCount = klines.length - HISTORY_COMPARE_MIN_CONTEXT
-  const klineInterval = Math.max(requestedInterval, Math.ceil(eligibleDecisionCount / HISTORY_COMPARE_MAX_STEPS))
+  // `step` remains accepted for older clients. New clients request an explicit,
+  // evenly distributed sample size so the evaluation covers the whole range.
+  const requestedSampleSize = sample_size == null
+    ? Math.max(HISTORY_COMPARE_MIN_STEPS, Math.min(HISTORY_COMPARE_MAX_STEPS,
+      Math.ceil((klines.length - HISTORY_COMPARE_MIN_CONTEXT) / Math.max(1, Number(step) || 10))))
+    : Math.max(HISTORY_COMPARE_MIN_STEPS, Math.min(HISTORY_COMPARE_MAX_STEPS, Number(sample_size) || 12))
 
   const prompt = strategy.system_prompt || ''
   await onProgress({ stage: 'market_ready', progress_percent: 10, completed_steps: 0, total_steps: 0 })
@@ -750,16 +777,16 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       validModels.push(profileResult.value)
     }
   }
+  if (validModels.length < 2) {
+    return { status: 'error', message: 'insufficient_available_models', model_errors: modelErrors }
+  }
 
   const modelSignals = {}
   for (const { modelId } of validModels) {
     modelSignals[modelId] = []
   }
 
-  const steps = []
-  for (let i = HISTORY_COMPARE_MIN_CONTEXT - 1; i < klines.length - 1; i += klineInterval) {
-    steps.push(i)
-  }
+  const steps = buildHistoryCompareSteps(klines.length, requestedSampleSize)
   await onProgress({ stage: 'models_ready', progress_percent: 15, completed_steps: 0, total_steps: steps.length })
 
   for (let stepNumber = 0; stepNumber < steps.length; stepNumber++) {
@@ -809,7 +836,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     market.missing_timeframes = missingTimeframes
     if (policy.useChanAnalysis) market.chan = strategyTimeframes[requestedTimeframe]?.summary?.chan
 
-    const inferenceTasks = validModels.map(({ modelId, resolved }) => {
+    const inferenceTasks = validModels.map(async ({ modelId, resolved }) => {
       const config = {
         ...resolved.model,
         system_prompt: prompt,
@@ -826,11 +853,17 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _ai_volume_max: 1.0,
         _ai_volume_step: 0.01,
       }
-      return maybeAiSignal(null, config, market, prompt).then(signal => ({
-        modelId, signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
-      })).catch(error => ({
-        modelId, error: error.message || 'inference_failed',
-      }))
+      const startedAt = Date.now()
+      try {
+        const signal = await maybeAiSignal(null, config, market, prompt)
+        return {
+          modelId,
+          latencyMs: Date.now() - startedAt,
+          signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
+        }
+      } catch (error) {
+        return { modelId, latencyMs: Date.now() - startedAt, error: error.message || 'inference_failed' }
+      }
     })
 
     const results = await Promise.all(inferenceTasks)
@@ -841,7 +874,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
 
       if (result.error) {
         modelSignals[result.modelId].push({
-          time: outcomeKline.time, signal_type: 'error', confidence: 0, next_bar_move: 0, error: result.error,
+          decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+          signal_type: 'error', confidence: 0, next_bar_move: 0,
+          latency_ms: result.latencyMs || 0, error: result.error,
         })
         continue
       }
@@ -850,7 +885,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
         modelSignals[result.modelId].push({
-          time: outcomeKline.time, signal_type: 'error', confidence: 0, next_bar_move: 0,
+          decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+          signal_type: 'error', confidence: 0, next_bar_move: 0, latency_ms: result.latencyMs || 0,
           error: signal?.reasoning || 'inference_failed',
         })
         continue
@@ -861,7 +897,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       else if (direction === 'sell') nextBarMove = openPrice - closePrice
 
       modelSignals[result.modelId].push({
-        time: outcomeKline.time, signal_type: direction, confidence: signal.confidence || 0, next_bar_move: nextBarMove,
+        decision_time: klines[stepIdx].time, outcome_time: outcomeKline.time, time: outcomeKline.time,
+        signal_type: direction, confidence: signal.confidence || 0, next_bar_move: nextBarMove,
+        latency_ms: result.latencyMs || 0,
       })
     }
     await onProgress({
@@ -881,8 +919,19 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     const holdCount = signals.filter(s => s.signal_type === 'hold').length
     const correctCount = signals.filter(s => s.next_bar_move > 0).length
     const incorrectCount = signals.filter(s => s.next_bar_move < 0).length
+    const flatCount = signals.filter(s => ['buy', 'sell'].includes(s.signal_type) && s.next_bar_move === 0).length
     const errorCount = signals.filter(s => s.signal_type === 'error').length
     const tradeCount = buyCount + sellCount
+    const successfulCount = signals.length - errorCount
+    const responseSuccessRate = signals.length > 0 ? (successfulCount / signals.length) * 100 : 0
+    const actionRate = successfulCount > 0 ? (tradeCount / successfulCount) * 100 : 0
+    const averageConfidence = successfulCount > 0
+      ? signals.filter(s => s.signal_type !== 'error').reduce((sum, s) => sum + Number(s.confidence || 0), 0) / successfulCount
+      : 0
+    const averageLatency = signals.length > 0
+      ? signals.reduce((sum, s) => sum + Number(s.latency_ms || 0), 0) / signals.length
+      : 0
+    const qualityScore = wilsonLowerBound(correctCount, tradeCount) * (0.7 + 0.3 * responseSuccessRate / 100) * 100
 
     modelResults.push({
       model_id: modelId,
@@ -895,7 +944,14 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         total_move: Number(totalMove.toFixed(10)),
         correct_count: correctCount,
         incorrect_count: incorrectCount,
+        flat_count: flatCount,
         directional_accuracy: tradeCount > 0 ? Number(((correctCount / tradeCount) * 100).toFixed(1)) : 0,
+        direction_quality_score: Number(qualityScore.toFixed(1)),
+        actionable_count: tradeCount,
+        action_rate: Number(actionRate.toFixed(1)),
+        response_success_rate: Number(responseSuccessRate.toFixed(1)),
+        average_confidence: Number((averageConfidence * 100).toFixed(1)),
+        average_latency_ms: Math.round(averageLatency),
         avg_next_bar_move: tradeCount > 0 ? Number((totalMove / tradeCount).toFixed(10)) : 0,
         buy_count: buyCount,
         sell_count: sellCount,
@@ -905,18 +961,39 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     })
   }
 
+  const agreementByStep = steps.map((_, index) => {
+    const directions = modelResults.map(result => result.signals[index]?.signal_type)
+      .filter(direction => direction && direction !== 'error')
+    const counts = directions.reduce((acc, direction) => {
+      acc[direction] = (acc[direction] || 0) + 1
+      return acc
+    }, {})
+    const maximum = Math.max(0, ...Object.values(counts))
+    return directions.length ? maximum / directions.length : 0
+  })
+  const averageAgreement = agreementByStep.length
+    ? agreementByStep.reduce((sum, value) => sum + value, 0) / agreementByStep.length
+    : 0
+
   return {
     status: 'success',
     results: [...modelResults, ...modelErrors],
     meta: {
       symbol, timeframe, strategy_id: Number(strategy_id),
-      kline_count: klines.length, step: klineInterval,
-      requested_step: requestedInterval,
+      kline_count: klines.length,
+      sample_size: requestedSampleSize,
+      requested_step: step == null ? null : Math.max(1, Math.min(50, Number(step) || 10)),
+      step: steps.length > 1 ? Math.round((steps[steps.length - 1] - steps[0]) / (steps.length - 1)) : null,
       evaluation_count: steps.length,
       max_evaluation_count: HISTORY_COMPARE_MAX_STEPS,
+      estimated_model_calls: steps.length * validModels.length,
+      average_agreement_rate: Number((averageAgreement * 100).toFixed(1)),
+      high_agreement_count: agreementByStep.filter(value => value >= 0.75).length,
+      disagreement_count: agreementByStep.filter(value => value < 0.5).length,
       market_source: selectedWindow.window?.marketMeta?.source || null,
       start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
       metric_type: 'next_closed_bar_direction',
+      metric_version: 'directional-eval-v2',
       strategy_timeframes: planItems.map(item => item.timeframe),
       chan_enabled: policy.useChanAnalysis,
     },
@@ -925,7 +1002,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
 
 const historyCompareJobs = new Map()
 
-function publicHistoryCompareJob(job) {
+function safeCompareJson(value, fallback = null) {
+  if (value == null || value === '') return fallback
+  if (typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+function publicHistoryCompareJob(job, { includeResult = true } = {}) {
   return {
     id: job.id,
     status: job.status,
@@ -933,27 +1016,67 @@ function publicHistoryCompareJob(job) {
     progress_percent: job.progress_percent,
     completed_steps: job.completed_steps,
     total_steps: job.total_steps,
-    result: job.status === 'succeeded' ? job.result : null,
+    result: includeResult && job.status === 'succeeded' ? job.result : null,
     error: job.error,
+    params: job.params || null,
     created_at: job.created_at,
     updated_at: job.updated_at,
   }
 }
 
-function cleanupHistoryCompareJobs() {
-  const cutoff = Date.now() - 60 * 60_000
-  for (const [id, job] of historyCompareJobs) {
-    if (job.updated_at_ms < cutoff && !['queued', 'running', 'cancelling'].includes(job.status)) historyCompareJobs.delete(id)
+function historyCompareJobFromRow(row) {
+  if (!row) return null
+  return {
+    id: String(row.id),
+    user_id: Number(row.user_id),
+    status: row.status,
+    stage: row.stage,
+    progress_percent: Number(row.progress_percent || 0),
+    completed_steps: Number(row.completed_steps || 0),
+    total_steps: Number(row.total_steps || 0),
+    params: safeCompareJson(row.params_json, {}),
+    result: safeCompareJson(row.result_json, null),
+    error: row.error_code || null,
+    cancel_requested: Boolean(row.cancel_requested),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    updated_at_ms: Date.parse(row.updated_at) || Date.now(),
   }
+}
+
+async function persistHistoryCompareJob(job, { insert = false } = {}) {
+  const values = [
+    job.id, job.user_id, job.status, job.stage, job.progress_percent || 0,
+    job.completed_steps || 0, job.total_steps || 0, JSON.stringify(job.params || {}),
+    job.result ? JSON.stringify(job.result) : null, job.error || null,
+    job.cancel_requested ? 1 : 0,
+  ]
+  if (insert) {
+    await queryRun(`INSERT INTO ai_model_compare_jobs
+      (id, user_id, status, stage, progress_percent, completed_steps, total_steps,
+       params_json, result_json, error_code, cancel_requested, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`, values)
+    return
+  }
+  await queryRun(`UPDATE ai_model_compare_jobs SET status = ?, stage = ?, progress_percent = ?,
+    completed_steps = ?, total_steps = ?, result_json = ?, error_code = ?, cancel_requested = ?,
+    completed_at = CASE WHEN ? IN ('succeeded','failed','cancelled') THEN NOW() ELSE completed_at END,
+    updated_at = NOW() WHERE id = ? AND user_id = ?`, [
+    job.status, job.stage, job.progress_percent || 0, job.completed_steps || 0, job.total_steps || 0,
+    job.result ? JSON.stringify(job.result) : null, job.error || null, job.cancel_requested ? 1 : 0,
+    job.status, job.id, job.user_id,
+  ])
 }
 
 export async function startHistoryCompareJob(userId, params) {
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') throw new Error('admin_only')
-  cleanupHistoryCompareJobs()
   const active = [...historyCompareJobs.values()].find(job => job.user_id === Number(userId)
     && ['queued', 'running', 'cancelling'].includes(job.status))
-  if (active) return publicHistoryCompareJob(active)
+  if (active) {
+    if (JSON.stringify(active.params) === JSON.stringify(params)) return publicHistoryCompareJob(active)
+    throw new Error('history_compare_job_already_running')
+  }
   const now = new Date().toISOString()
   const job = {
     id: crypto.randomUUID(),
@@ -965,22 +1088,26 @@ export async function startHistoryCompareJob(userId, params) {
     total_steps: 0,
     result: null,
     error: null,
+    params,
     cancel_requested: false,
     created_at: now,
     updated_at: now,
     updated_at_ms: Date.now(),
   }
   historyCompareJobs.set(job.id, job)
+  await persistHistoryCompareJob(job, { insert: true })
   queueMicrotask(async () => {
-    job.status = 'running'
-    job.stage = 'preparing'
-    job.updated_at = new Date().toISOString()
-    job.updated_at_ms = Date.now()
     try {
+      job.status = 'running'
+      job.stage = 'preparing'
+      job.updated_at = new Date().toISOString()
+      job.updated_at_ms = Date.now()
+      await persistHistoryCompareJob(job)
       const result = await handleHistoryCompare(userId, params, {
         shouldCancel: () => job.cancel_requested,
         onProgress: async progress => {
           Object.assign(job, progress, { updated_at: new Date().toISOString(), updated_at_ms: Date.now() })
+          await persistHistoryCompareJob(job)
         },
       })
       if (job.cancel_requested || result.status === 'cancelled') {
@@ -1003,27 +1130,73 @@ export async function startHistoryCompareJob(userId, params) {
     }
     job.updated_at = new Date().toISOString()
     job.updated_at_ms = Date.now()
+    try {
+      await persistHistoryCompareJob(job)
+    } catch (error) {
+      console.error(`[ModelCompare] Failed to persist final job state ${job.id}:`, error.message)
+    }
   })
   return publicHistoryCompareJob(job)
 }
 
-export function getHistoryCompareJob(userId, jobId) {
-  cleanupHistoryCompareJobs()
-  const job = historyCompareJobs.get(String(jobId))
+export async function getHistoryCompareJob(userId, jobId) {
+  let job = historyCompareJobs.get(String(jobId))
+  if (!job) {
+    const row = await queryOne('SELECT * FROM ai_model_compare_jobs WHERE id = ? AND user_id = ?', [String(jobId), Number(userId)])
+    job = historyCompareJobFromRow(row)
+  }
   if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+  if (['queued', 'running', 'cancelling'].includes(job.status) && !historyCompareJobs.has(job.id)) {
+    job.status = 'failed'
+    job.stage = 'failed'
+    job.error = 'history_compare_interrupted'
+    await persistHistoryCompareJob(job)
+  }
   return publicHistoryCompareJob(job)
 }
 
-export function cancelHistoryCompareJob(userId, jobId) {
+export async function cancelHistoryCompareJob(userId, jobId) {
   const job = historyCompareJobs.get(String(jobId))
-  if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+  if (!job || job.user_id !== Number(userId)) return getHistoryCompareJob(userId, jobId)
   if (['succeeded', 'failed', 'cancelled'].includes(job.status)) return publicHistoryCompareJob(job)
   job.cancel_requested = true
   job.status = job.status === 'queued' ? 'cancelled' : 'cancelling'
   job.stage = job.status
   job.updated_at = new Date().toISOString()
   job.updated_at_ms = Date.now()
+  await persistHistoryCompareJob(job)
   return publicHistoryCompareJob(job)
+}
+
+export async function listHistoryCompareJobs(userId, limit = 10) {
+  const rows = await queryAll(`SELECT id, user_id, status, stage, progress_percent,
+    completed_steps, total_steps, params_json, error_code, cancel_requested, created_at, updated_at
+    FROM ai_model_compare_jobs WHERE user_id = ?
+    ORDER BY created_at DESC LIMIT ?`, [Number(userId), Math.max(1, Math.min(30, Number(limit) || 10))])
+  const jobs = rows.map(historyCompareJobFromRow).filter(Boolean)
+  for (const job of jobs) {
+    if (['queued', 'running', 'cancelling'].includes(job.status) && !historyCompareJobs.has(job.id)) {
+      job.status = 'failed'
+      job.stage = 'failed'
+      job.error = 'history_compare_interrupted'
+      await persistHistoryCompareJob(job)
+    }
+  }
+  return jobs
+    .map(job => publicHistoryCompareJob(job, { includeResult: false }))
+}
+
+export async function deleteHistoryCompareJob(userId, jobId) {
+  const active = historyCompareJobs.get(String(jobId))
+  if (active && ['queued', 'running', 'cancelling'].includes(active.status)) {
+    return cancelHistoryCompareJob(userId, jobId)
+  }
+  const result = await queryRun(`DELETE FROM ai_model_compare_jobs
+    WHERE id = ? AND user_id = ? AND status IN ('succeeded','failed','cancelled')`,
+  [String(jobId), Number(userId)])
+  if (!Number(result?.changes || 0)) throw new Error('history_compare_job_not_found')
+  historyCompareJobs.delete(String(jobId))
+  return { id: String(jobId), status: 'deleted' }
 }
 
 export const __historyCompareJobsTest = {

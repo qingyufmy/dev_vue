@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260720d" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260720e" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -741,37 +741,79 @@
         </section>
 
         <section id="model-compare" class="tab-panel admin-only" style="display:none">
-          <div class="workspace-page">
-            <header class="workspace-header calm-page-header">
-              <div><span class="page-eyebrow">管理员工具</span><h1>历史多模型对比</h1><p>选择时间范围与模型，回测对比各模型在同一段行情上的信号表现。</p></div>
+          <div class="workspace-page model-compare-workspace">
+            <header class="workspace-header compare-workspace-header">
+              <div>
+                <span class="page-eyebrow">模型评估实验室</span>
+                <h1>模型对比</h1>
+                <p>让多个模型读取同一份历史行情，比较方向判断质量、稳定性和响应表现。</p>
+              </div>
+              <div class="compare-method-badge"><i data-lucide="shield-check" size="16"></i><span><strong>只读评估</strong><small>不会生成信号或执行交易</small></span></div>
             </header>
 
-            <section class="workspace-panel">
-              <div class="settings-grid">
-                <label><span>交易品种</span><input id="cmpSymbol" type="text" placeholder="例: XAUUSD" value="XAUUSD"></label>
-                <label><span>K线周期</span><select id="cmpTimeframe"><option value="M1">M1</option><option value="M5">M5</option><option value="M15" selected>M15</option><option value="M30">M30</option><option value="H1">H1</option><option value="H4">H4</option><option value="D1">D1</option></select></label>
-                <label><span>开始时间</span><input id="cmpStartTime" type="datetime-local"></label>
-                <label><span>结束时间</span><input id="cmpEndTime" type="datetime-local"></label>
-                <label><span>推理策略</span><select id="cmpStrategy"><option value="">请选择策略</option></select></label>
-                <label><span>采样步长</span><input id="cmpStep" type="number" min="1" max="50" value="10" title="每N根K线采样一次"></label>
-              </div>
-            </section>
+            <div class="compare-workspace-grid">
+              <aside class="compare-config-card" aria-label="新建模型对比任务">
+                <div class="compare-card-heading"><span>新建任务</span><strong>设置对比条件</strong></div>
+                <div class="compare-form-stack">
+                  <label class="compare-field"><span>推理策略</span><select id="cmpStrategy"><option value="">请选择策略</option></select></label>
+                  <div class="compare-field-pair">
+                    <label class="compare-field"><span>交易品种</span><select id="cmpSymbol"><option value="">先选择策略</option></select></label>
+                    <label class="compare-field"><span>评估周期</span><select id="cmpTimeframe"><option value="">先选择策略</option></select></label>
+                  </div>
+                  <fieldset class="compare-range-field">
+                    <legend>行情范围</legend>
+                    <div class="compare-range-presets" role="group" aria-label="快捷选择行情范围">
+                      <button type="button" data-cmp-range="1">近 24 小时</button>
+                      <button type="button" data-cmp-range="3">近 3 天</button>
+                      <button type="button" class="active" data-cmp-range="7">近 7 天</button>
+                    </div>
+                    <div class="compare-field-pair">
+                      <label class="compare-field"><span>开始时间</span><input id="cmpStartTime" type="datetime-local"></label>
+                      <label class="compare-field"><span>结束时间</span><input id="cmpEndTime" type="datetime-local"></label>
+                    </div>
+                  </fieldset>
+                  <label class="compare-field"><span>评估深度</span>
+                    <select id="cmpSampleSize">
+                      <option value="8">快速 · 8 个行情切片</option>
+                      <option value="12" selected>标准 · 12 个行情切片</option>
+                      <option value="20">深入 · 20 个行情切片</option>
+                    </select>
+                    <small>系统会在完整区间内均匀抽样，避免只评估前半段行情。</small>
+                  </label>
+                </div>
+                <div class="compare-call-estimate"><i data-lucide="calculator" size="16"></i><span>预计调用</span><strong id="cmpCallEstimate">--</strong><small>次模型请求</small></div>
+                <button id="cmpRunBtn" class="btn btn-primary compare-primary-action" disabled><i data-lucide="play" size="16"></i>开始评估</button>
+                <p id="cmpStatus" class="cmp-status-text" aria-live="polite"></p>
+              </aside>
 
-            <section class="workspace-panel">
-              <div class="section-heading"><div><h2>选择对比模型</h2><p>勾选 2~5 个模型进行对比</p></div><span id="cmpModelHint" class="cmp-hint"></span></div>
-              <div id="cmpModelGroup" class="cmp-model-checkboxes"></div>
-            </section>
+              <main class="compare-main-column">
+                <section class="workspace-panel compare-model-panel">
+                  <div class="section-heading"><div><span class="section-kicker">步骤 2</span><h2>选择对比模型</h2><p>选择 2–5 个可用模型；所有模型使用完全相同的策略与行情上下文。</p></div><span id="cmpModelHint" class="cmp-hint"></span></div>
+                  <div id="cmpModelGroup" class="cmp-model-checkboxes"></div>
+                </section>
 
-            <div class="compare-actions" style="padding:16px 0">
-              <button id="cmpRunBtn" class="btn btn-primary" disabled><i data-lucide="play" size="16"></i>开始对比</button>
-              <span id="cmpStatus" class="cmp-status-text" style="margin-left:12px;font-size:13px;color:var(--text-secondary)"></span>
+                <section id="cmpProgressBar" class="compare-progress-panel hidden" aria-live="polite">
+                  <div class="compare-progress-head"><div><span>任务运行中</span><strong id="cmpProgressLabel">正在准备...</strong></div><span id="cmpProgressPercent">0%</span></div>
+                  <div class="cmp-progress-track"><div id="cmpProgressFill" class="cmp-progress-fill" style="width:0%"></div></div>
+                  <div class="compare-stage-list" aria-hidden="true"><span data-cmp-stage="preparing">准备行情</span><span data-cmp-stage="models_ready">检查模型</span><span data-cmp-stage="evaluating">逐段评估</span><span data-cmp-stage="completed">生成结论</span></div>
+                </section>
+
+                <section id="cmpResults" class="compare-results-shell hidden">
+                  <div id="cmpResultsSummary" class="cmp-results-summary"></div>
+                  <div id="cmpResultsTableWrap" class="cmp-results-table-wrap"></div>
+                  <div id="cmpResultsTimeline" class="cmp-results-timeline"></div>
+                </section>
+
+                <section id="cmpEmptyState" class="compare-empty-state">
+                  <i data-lucide="git-compare-arrows" size="24"></i>
+                  <div><strong>等待创建对比任务</strong><p>完成左侧条件设置并选择模型后，这里会展示结论、指标和逐次决策差异。</p></div>
+                </section>
+              </main>
             </div>
-            <div id="cmpProgressBar" class="cmp-progress-bar hidden"><div id="cmpProgressFill" class="cmp-progress-fill" style="width:0%"></div><span id="cmpProgressLabel" class="cmp-progress-label">准备中...</span></div>
 
-            <section id="cmpResults" class="hidden">
-              <div id="cmpResultsSummary" class="cmp-results-summary"></div>
-              <div id="cmpResultsTableWrap" class="cmp-results-table-wrap"></div>
-              <div id="cmpResultsTimeline" class="cmp-results-timeline"></div>
+            <section class="workspace-panel compare-history-panel">
+              <div class="section-heading"><div><h2>最近任务</h2><p>结果会保留，服务器重启后仍可重新查看。</p></div><button id="cmpRefreshHistory" class="btn btn-secondary btn-sm" type="button"><i data-lucide="refresh-cw" size="15"></i>刷新</button></div>
+              <div id="cmpHistoryList" class="compare-history-list"><div class="workspace-skeleton"></div></div>
             </section>
           </div>
         </section>
@@ -1012,7 +1054,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260720d"></script>
+    <script src="/ai/app.js?v=20260720e"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

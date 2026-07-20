@@ -969,6 +969,9 @@ const API_ERROR_MESSAGES = {
   symbol_not_supported_by_strategy: "所选品种不在该策略支持范围内",
   history_compare_job_not_created: "历史模型对比任务创建失败",
   history_compare_job_not_found: "历史模型对比任务不存在或已过期",
+  history_compare_job_already_running: "已有模型对比任务正在运行，请等待完成或先取消",
+  history_compare_interrupted: "服务器重启导致任务中断，请重新发起评估",
+  insufficient_available_models: "可用模型不足两个，请检查模型状态和凭据",
   history_compare_failed: "历史模型对比执行失败",
   history_compare_cancelled: "历史模型对比已取消",
 };
@@ -4416,6 +4419,7 @@ async function populateModelCompareSelect() {
 }
 
 async function loadModelCompare() {
+  const previousSelection = new Set([...document.querySelectorAll("[data-cmp-model]:checked")].map(cb => Number(cb.value)));
   if (!state.modelProfiles?.length) {
     try {
       const data = await api(`/api/ai/model-profiles${profileScopeQuery()}`);
@@ -4423,45 +4427,52 @@ async function loadModelCompare() {
     } catch { state.modelProfiles = []; }
   }
   const group = $("cmpModelGroup");
-  const hint = $("cmpModelHint");
   if (group) {
     const profiles = (state.modelProfiles || []).filter(p => p.status === "active");
     if (!profiles.length) {
-      group.innerHTML = '<span style="color:var(--text-secondary)">无可用模型，请先在模型管理中创建</span>';
+      group.innerHTML = '<div class="compare-inline-empty"><i data-lucide="circle-alert" size="18"></i><span>没有可用模型，请先到模型管理完成配置。</span></div>';
     } else {
-      group.innerHTML = profiles.map((p, i) => `<label class="model-compare-checkbox"><input type="checkbox" value="${Number(p.id)}" data-cmp-model ${i === 0 ? "checked" : ""}><span>${escapeHtml(p.model_name)}</span><small>${escapeHtml(modelProviderLabel(p.provider))}</small></label>`).join("");
-      group.querySelectorAll("[data-cmp-model]").forEach(cb => cb.addEventListener("change", () => {
-        const count = group.querySelectorAll("[data-cmp-model]:checked").length;
-        if (hint) hint.textContent = count >= 2 ? `已选 ${count} 个模型` : count === 1 ? "再选至少 1 个模型" : "";
-        $("cmpRunBtn").disabled = count < 2;
+      group.innerHTML = profiles.map((profile, index) => {
+        const checked = previousSelection.size ? previousSelection.has(Number(profile.id)) : index < 2;
+        return `<label class="compare-model-card">
+          <input type="checkbox" value="${Number(profile.id)}" data-cmp-model ${checked ? "checked" : ""}>
+          <span class="compare-model-check"><i data-lucide="check" size="14"></i></span>
+          <span class="compare-model-copy"><strong>${escapeHtml(profile.model_name)}</strong><small>${escapeHtml(modelProviderLabel(profile.provider))}${profile.thinking_enabled ? " · 深度思考" : ""}</small></span>
+          <span class="compare-model-state">可用</span>
+        </label>`;
+      }).join("");
+      group.querySelectorAll("[data-cmp-model]").forEach(cb => cb.addEventListener("change", event => {
+        const selected = group.querySelectorAll("[data-cmp-model]:checked");
+        if (selected.length > 5) {
+          event.target.checked = false;
+          toast("最多选择 5 个模型", "warning");
+        }
+        updateHistoryCompareReadiness();
       }));
     }
   }
-  if (hint) {
-    const count = group?.querySelectorAll("[data-cmp-model]:checked").length || 0;
-    hint.textContent = count >= 2 ? `已选 ${count} 个模型` : count === 1 ? "再选至少 1 个模型" : "";
-    $("cmpRunBtn").disabled = count < 2;
-  }
   const sel = $("cmpStrategy");
-  if (sel && !sel.options.length) {
+  if (sel && !_historyCompareStrategies.length) {
     try {
       const data = await api("/api/ai/strategies?include_inactive=1");
       const active = (data.strategies || []).filter(s => s.visibility_status === "active" && Number(s.is_active));
       _historyCompareStrategies = active;
       sel.innerHTML = '<option value="">请选择策略</option>' + active.map(s => `<option value="${s.id}">${escapeHtml(s.title)}</option>`).join("");
-      sel.onchange = syncHistoryCompareStrategyInputs;
+      sel.onchange = () => { syncHistoryCompareStrategyInputs(); updateHistoryCompareReadiness(); };
     } catch { sel.innerHTML = '<option value="">加载失败</option>'; }
   }
   setDefaultCompareDates();
+  updateHistoryCompareReadiness();
+  await loadHistoryCompareJobs();
   initIcons();
 }
 
-function setDefaultCompareDates() {
+function setDefaultCompareDates(days = 7, force = false) {
   const now = new Date(), beijing = new Date(now.getTime() + 8 * 3600000);
   const fmt = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}T${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
-  const end = new Date(beijing), start = new Date(end.getTime() - 7 * 24 * 3600000);
-  if ($("cmpEndTime")) $("cmpEndTime").value = fmt(end);
-  if ($("cmpStartTime")) $("cmpStartTime").value = fmt(start);
+  const end = new Date(beijing), start = new Date(end.getTime() - days * 24 * 3600000);
+  if ($("cmpEndTime") && (force || !$("cmpEndTime").value)) $("cmpEndTime").value = fmt(end);
+  if ($("cmpStartTime") && (force || !$("cmpStartTime").value)) $("cmpStartTime").value = fmt(start);
 }
 
 let _historyCompareJobId = null;
@@ -4470,18 +4481,60 @@ let _historyCompareStrategies = [];
 function syncHistoryCompareStrategyInputs() {
   const strategyId = Number($("cmpStrategy")?.value || 0);
   const strategy = _historyCompareStrategies.find(item => Number(item.id) === strategyId);
-  if (!strategy) return;
-  const symbols = parseJsonField(strategy.symbols_json, []);
-  if (symbols.length && $("cmpSymbol")) $("cmpSymbol").value = symbols[0];
+  const symbolSelect = $("cmpSymbol");
+  const timeframeSelect = $("cmpTimeframe");
+  if (!strategy) {
+    if (symbolSelect) symbolSelect.innerHTML = '<option value="">先选择策略</option>';
+    if (timeframeSelect) timeframeSelect.innerHTML = '<option value="">先选择策略</option>';
+    return;
+  }
+  const parsedSymbols = parseJsonField(strategy.symbols_json, []);
+  const symbols = Array.isArray(parsedSymbols) ? parsedSymbols : [];
+  if (symbolSelect) symbolSelect.innerHTML = symbols.length
+    ? symbols.map(symbol => `<option value="${escapeHtml(symbol)}">${escapeHtml(symbol)}</option>`).join("")
+    : '<option value="">策略未配置品种</option>';
   const plan = parseJsonField(strategy.market_data_plan_json, {});
   const timeframes = Array.isArray(plan.timeframes)
     ? plan.timeframes.map(item => String(item.timeframe || "").toUpperCase()).filter(Boolean)
     : [];
-  if ($("cmpTimeframe") && timeframes.length) {
-    $("cmpTimeframe").innerHTML = timeframes.map(tf => `<option value="${escapeHtml(tf)}">${escapeHtml(tf)}</option>`).join("");
+  if (timeframeSelect && timeframes.length) {
+    timeframeSelect.innerHTML = timeframes.map(tf => `<option value="${escapeHtml(tf)}">${escapeHtml(tf)}</option>`).join("");
     const primaryTimeframe = String(plan.primary_timeframe || "").toUpperCase();
-    $("cmpTimeframe").value = timeframes.includes(primaryTimeframe) ? primaryTimeframe : timeframes[0];
+    timeframeSelect.value = timeframes.includes(primaryTimeframe) ? primaryTimeframe : timeframes[0];
   }
+}
+
+function updateHistoryCompareReadiness() {
+  const count = document.querySelectorAll("[data-cmp-model]:checked").length;
+  const complete = Boolean($("cmpStrategy")?.value && $("cmpSymbol")?.value && $("cmpTimeframe")?.value
+    && $("cmpStartTime")?.value && $("cmpEndTime")?.value && count >= 2 && count <= 5);
+  const hint = $("cmpModelHint");
+  if (hint) {
+    hint.textContent = count >= 2 ? `已选择 ${count} 个` : count === 1 ? "还需选择 1 个" : "请选择 2–5 个";
+    hint.classList.toggle("active", count >= 2 && count <= 5);
+  }
+  const calls = Number($("cmpSampleSize")?.value || 12) * count;
+  if ($("cmpCallEstimate")) $("cmpCallEstimate").textContent = count ? String(calls) : "--";
+  if ($("cmpRunBtn") && !_historyCompareJobId) $("cmpRunBtn").disabled = !complete;
+  return complete;
+}
+
+function setHistoryCompareProgress(job) {
+  const progress = Math.max(0, Math.min(100, Number(job?.progress_percent || 0)));
+  if ($("cmpProgressFill")) $("cmpProgressFill").style.width = `${progress}%`;
+  if ($("cmpProgressPercent")) $("cmpProgressPercent").textContent = `${progress}%`;
+  const stageLabels = {
+    queued:"等待后台执行", preparing:"正在准备历史行情", market_ready:"历史行情已就绪",
+    models_ready:"模型配置已就绪", evaluating:"正在逐段评估", cancelling:"正在安全取消",
+    completed:"正在生成结论", failed:"任务失败", cancelled:"任务已取消",
+  };
+  const stepsText = job?.total_steps ? ` · ${job.completed_steps || 0}/${job.total_steps}` : "";
+  if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = `${stageLabels[job?.stage] || "正在处理"}${stepsText}`;
+  document.querySelectorAll("[data-cmp-stage]").forEach(node => {
+    const order = ["preparing", "models_ready", "evaluating", "completed"];
+    const activeIndex = order.indexOf(job?.stage === "market_ready" ? "preparing" : job?.stage);
+    node.classList.toggle("active", order.indexOf(node.dataset.cmpStage) <= activeIndex);
+  });
 }
 
 async function runHistoryCompare() {
@@ -4495,49 +4548,40 @@ async function runHistoryCompare() {
     }
     return;
   }
+  if (!updateHistoryCompareReadiness()) return toast("请先完整设置策略、行情范围和至少两个模型", "warning");
   const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
-  const timeframe = $("cmpTimeframe")?.value || "M15";
+  const timeframe = $("cmpTimeframe")?.value;
   const strategyId = Number($("cmpStrategy")?.value || 0);
   const modelIds = [...document.querySelectorAll("[data-cmp-model]:checked")].map(cb => Number(cb.value)).filter(id => id > 0);
-  const step = Number($("cmpStep")?.value) || 10;
-  if (!symbol) return showToast("请输入交易品种", "error");
-  if (!strategyId) return showToast("请选择推理策略", "error");
-  if (modelIds.length < 2) return showToast("至少选择 2 个模型", "error");
+  const sampleSize = Number($("cmpSampleSize")?.value) || 12;
   const startTime = $("cmpStartTime")?.value ? $("cmpStartTime").value + ":00" : "";
   const endTime = $("cmpEndTime")?.value ? $("cmpEndTime").value + ":00" : "";
   if (!startTime || !endTime) return showToast("请选择时间范围", "error");
   const btn = $("cmpRunBtn");
   if (btn) {
     btn.disabled = false;
-    btn.innerHTML = '<i data-lucide="square" size="16"></i>取消对比';
+    btn.innerHTML = '<i data-lucide="square" size="16"></i>取消任务';
   }
   $("cmpProgressBar")?.classList.remove("hidden");
+  $("cmpEmptyState")?.classList.add("hidden");
   if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "2%";
   if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "正在提交对比任务...";
   try {
     const data = await api("/api/ai/model-compare/history", {
-      method: "POST", body: { symbol, timeframe, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime, step },
+      method: "POST", body: { symbol, timeframe, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime, sample_size: sampleSize },
     });
     _historyCompareJobId = data.job?.id || null;
     if (!_historyCompareJobId) throw new Error("history_compare_job_not_created");
     let job = data.job;
     while (["queued", "running", "cancelling"].includes(job.status)) {
-      const progress = Math.max(2, Math.min(99, Number(job.progress_percent || 0)));
-      if ($("cmpProgressFill")) $("cmpProgressFill").style.width = `${progress}%`;
-      const stageLabels = {
-        queued:"等待后台执行", preparing:"正在准备历史行情", market_ready:"历史行情已就绪",
-        models_ready:"模型配置已就绪", evaluating:"正在逐段评估", cancelling:"正在取消",
-      };
-      if ($("cmpProgressLabel")) {
-        const stepsText = job.total_steps ? ` · ${job.completed_steps || 0}/${job.total_steps}` : "";
-        $("cmpProgressLabel").textContent = `${stageLabels[job.stage] || "正在处理"}${stepsText}`;
-      }
+      setHistoryCompareProgress(job);
       await new Promise(resolve => setTimeout(resolve, 1000));
       job = (await api(`/api/ai/model-compare/history/${encodeURIComponent(_historyCompareJobId)}`, { timeout:10000 })).job;
     }
     if (job.status === "succeeded" && job.result?.status === "success") {
       if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "100%";
       if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "方向评估完成";
+      if ($("cmpProgressPercent")) $("cmpProgressPercent").textContent = "100%";
       renderHistoryCompareResults(job.result.results || [], job.result.meta || {});
     } else if (job.status === "cancelled") {
       if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "任务已取消";
@@ -4545,15 +4589,15 @@ async function runHistoryCompare() {
     } else {
       throw new Error(apiErrorMessage(job.error || "history_compare_failed"));
     }
-  } catch (e) { showToast("请求失败: " + e.message, "error"); }
+  } catch (e) { showToast("模型对比失败：" + apiErrorMessage(e.message), "error"); }
   finally {
     _historyCompareJobId = null;
     if (btn) {
       btn.disabled = document.querySelectorAll("[data-cmp-model]:checked").length < 2;
-      btn.innerHTML = '<i data-lucide="play" size="16"></i>开始对比';
+      btn.innerHTML = '<i data-lucide="play" size="16"></i>开始评估';
     }
     initIcons();
-    setTimeout(() => $("cmpProgressBar")?.classList.add("hidden"), 2000);
+    await loadHistoryCompareJobs();
   }
 }
 
@@ -4561,30 +4605,32 @@ function renderHistoryCompareResults(results, meta) {
   const container = $("cmpResults");
   if (!container) return;
   const valid = results.filter(r => r.status === "success");
-  const sorted = [...valid].sort((a, b) => (b.directional_score?.directional_accuracy || 0) - (a.directional_score?.directional_accuracy || 0));
-  const avgAccuracy = valid.length ? (valid.reduce((s, r) => s + (r.directional_score?.directional_accuracy || 0), 0) / valid.length).toFixed(1) : "0";
-  let summaryHtml = `<div class="insight-strip" style="margin-bottom:16px">
-    <div class="insight-card"><span class="insight-value">${results.length}</span><span class="insight-label">模型总数</span></div>
-    <div class="insight-card"><span class="insight-value">${valid.length}</span><span class="insight-label">成功返回</span></div>
-    ${sorted.length ? `<div class="insight-card"><span class="insight-value">${escapeHtml(sorted[0].model_name)}</span><span class="insight-label">方向准确率最高</span></div>` : ""}
-    <div class="insight-card"><span class="insight-value">${avgAccuracy}%</span><span class="insight-label">平均方向准确率</span></div>
-  </div>`;
-  if (meta) {
-    summaryHtml += `<div class="workspace-panel" style="font-size:12px;color:var(--text-secondary);margin-bottom:12px"><strong>说明：</strong>这里比较的是模型对下一根已收盘 K 线方向的判断，不是交易回测，不包含挂单触发、止损止盈、点差、滑点和风控结果。<br>品种：<strong>${escapeHtml(meta.symbol||"")}</strong> · 评估周期：<strong>${escapeHtml(meta.timeframe||"")}</strong> · 策略周期：<strong>${escapeHtml((meta.strategy_timeframes||[]).join("、")||"--")}</strong> · 缠论：<strong>${meta.chan_enabled ? "启用" : "关闭"}</strong> · K线数：<strong>${meta.kline_count||0}</strong> · 实际步长：<strong>${meta.step||"--"}</strong></div>`;
-  }
+  const sorted = [...valid].sort((a, b) => (b.directional_score?.direction_quality_score || 0) - (a.directional_score?.direction_quality_score || 0));
+  const leader = sorted[0];
+  const failedModels = results.filter(result => result.status !== "success").length;
+  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${leader ? `${escapeHtml(leader.model_name)} 的方向判断更稳定` : "暂无可用结论"}</h2><p>“方向质量分”对小样本准确率进行了保守修正，适合用于横向比较，不代表真实交易收益。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(meta.timeframe || "")}</span></header>
+    <div class="compare-summary-grid">
+      <div><span>领先模型</span><strong>${leader ? escapeHtml(leader.model_name) : "--"}</strong><small>方向质量分 ${leader?.directional_score?.direction_quality_score ?? 0}</small></div>
+      <div><span>平均一致度</span><strong>${Number(meta.average_agreement_rate || 0).toFixed(1)}%</strong><small>模型给出相同方向的程度</small></div>
+      <div><span>评估切片</span><strong>${meta.evaluation_count || 0}</strong><small>均匀覆盖所选行情区间</small></div>
+      <div><span>异常模型</span><strong>${failedModels}</strong><small>${failedModels ? "部分结果不可用" : "全部正常返回"}</small></div>
+    </div>
+    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>每个模型在相同历史时点读取相同上下文，评估的是下一根已收盘 K 线方向，并按开收方向比对。这里不是交易回测，不包含挂单触发、止损止盈、点差、滑点和风控结果。共读取 ${meta.kline_count || 0} 根 K 线，实际发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (sorted.length) {
-    tableHtml = '<div class="workspace-panel"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;border-bottom:1px solid var(--border-subtle)"><th style="padding:8px">模型</th><th>提供商</th><th>信号数</th><th>买</th><th>卖</th><th>观望</th><th>错误</th><th>方向准确率</th><th>累计方向幅度</th><th>平均幅度</th></tr></thead><tbody>';
-    for (const r of sorted) {
+    tableHtml = '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>模型排名</h2><p>综合查看质量、覆盖率和服务稳定性，不应只看单一准确率。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>有效出手</th><th>响应成功率</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
+    sorted.forEach((r, index) => {
       const score = r.directional_score;
-      const scoreColor = score.total_move > 0 ? "color:#22c55e" : score.total_move < 0 ? "color:#ef4444" : "";
-      tableHtml += `<tr style="border-bottom:1px solid var(--border-subtle,.06)">
-        <td style="padding:8px">${escapeHtml(r.model_name)}</td><td>${escapeHtml(modelProviderLabel(r.provider))}</td>
-        <td>${r.signal_count}</td><td>${score.buy_count}</td><td>${score.sell_count}</td><td>${score.hold_count}</td><td>${score.error_count}</td>
-        <td>${score.directional_accuracy}%</td><td style="${scoreColor}">${score.total_move.toFixed(4)}</td><td style="${scoreColor}">${score.avg_next_bar_move.toFixed(6)}</td></tr>`;
-    }
-    tableHtml += '</tbody></table></div>';
+      tableHtml += `<tr><td><div class="compare-rank-model"><span>${index + 1}</span><div><strong>${escapeHtml(r.model_name)}</strong><small>${escapeHtml(modelProviderLabel(r.provider))}</small></div></div></td>
+        <td><strong class="compare-quality-score">${score.direction_quality_score ?? 0}</strong></td>
+        <td>${score.directional_accuracy}% <small class="compare-cell-note">${score.correct_count}/${score.actionable_count}</small></td>
+        <td>${score.action_rate}% <small class="compare-cell-note">${score.actionable_count} 次</small></td>
+        <td>${score.response_success_rate}%${score.error_count ? `<small class="compare-cell-note danger">${score.error_count} 次异常</small>` : ""}</td>
+        <td>${score.average_confidence}%</td><td>${score.average_latency_ms ? `${(score.average_latency_ms / 1000).toFixed(1)} 秒` : "--"}</td>
+        <td><div class="compare-signal-mix" title="买 ${score.buy_count}，卖 ${score.sell_count}，观望 ${score.hold_count}"><span class="buy" style="flex:${score.buy_count}"></span><span class="sell" style="flex:${score.sell_count}"></span><span class="hold" style="flex:${score.hold_count}"></span></div><small class="compare-cell-note">${score.buy_count} / ${score.sell_count} / ${score.hold_count}</small></td></tr>`;
+    });
+    tableHtml += '</tbody></table></div></section>';
   }
   $("cmpResultsTableWrap").innerHTML = tableHtml;
   const validWithSignals = valid.filter(r => r.signals?.length);
@@ -4593,32 +4639,73 @@ function renderHistoryCompareResults(results, meta) {
     const allTimes = new Set();
     validWithSignals.forEach(r => r.signals.forEach(s => allTimes.add(s.time)));
     const times = [...allTimes].sort();
-    const colors = ["#d4af37","#3b82f6","#10b981","#ef4444","#a855f7","#f59e0b","#06b6d4","#ec4899"];
-    const models = validWithSignals.map((r, i) => ({ ...r, color: colors[i % colors.length] }));
-    const dirIcon = { buy: "▲", sell: "▼", hold: "●", error: "✖" };
-    const dirColor = { buy: "#22c55e", sell: "#ef4444", hold: "#eab308", error: "#6b7280" };
-    timelineHtml = '<div class="workspace-panel"><div class="section-heading"><h2>信号时间线</h2></div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">';
-    models.forEach(m => { timelineHtml += `<span style="display:flex;align-items:center;gap:4px;font-size:12px"><span style="width:8px;height:8px;border-radius:50%;background:${m.color}"></span>${escapeHtml(m.model_name)}</span>`; });
-    timelineHtml += '</div><div style="max-height:400px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>';
+    const models = validWithSignals;
+    const directionLabel = { buy: "做多", sell: "做空", hold: "观望", error: "异常" };
+    timelineHtml = '<section class="compare-decision-panel"><div class="section-heading"><div><h2>逐次决策差异</h2><p>按决策时间查看各模型方向，颜色只表示方向，不表示盈亏。</p></div><div class="compare-direction-legend"><span class="buy">做多</span><span class="sell">做空</span><span class="hold">观望</span><span class="error">异常</span></div></div><div class="compare-table-scroll"><table class="cmp-table compare-decision-table"><thead><tr><th>决策时间</th>';
+    models.forEach(model => { timelineHtml += `<th>${escapeHtml(model.model_name)}</th>`; });
+    timelineHtml += '</tr></thead><tbody>';
     for (const time of times) {
-      timelineHtml += `<tr style="border-bottom:1px solid var(--border-subtle,.06)"><td style="padding:4px 8px;white-space:nowrap;color:var(--text-secondary)">${String(time).replace("T"," ").slice(5,16)}</td>`;
+      timelineHtml += `<tr><td>${String(time).replace("T"," ").slice(5,16)}</td>`;
       for (const m of models) {
         const sig = m.signals.find(s => s.time === time);
         if (sig) {
           const dir = sig.signal_type;
-          const c = dirColor[dir] || "#6b7280";
           const tip = `${directionText(dir)}${sig.next_bar_move ? ` · 下一根方向幅度 ${sig.next_bar_move.toFixed(4)}` : ""}`;
-          timelineHtml += `<td style="padding:4px 8px;text-align:center" title="${escapeHtml(tip)}"><span style="color:${c}">${dirIcon[dir]||"?"}</span></td>`;
+          timelineHtml += `<td title="${escapeHtml(tip)}"><span class="compare-direction-chip ${dir}">${directionLabel[dir] || "未知"}</span></td>`;
         } else {
-          timelineHtml += '<td style="padding:4px 8px;text-align:center;color:var(--text-secondary)">-</td>';
+          timelineHtml += '<td><span class="compare-direction-chip empty">--</span></td>';
         }
       }
       timelineHtml += "</tr>";
     }
-    timelineHtml += "</tbody></table></div></div>";
+    timelineHtml += "</tbody></table></div></section>";
   }
   $("cmpResultsTimeline").innerHTML = timelineHtml;
   container.classList.remove("hidden");
+  $("cmpEmptyState")?.classList.add("hidden");
+  initIcons();
+}
+
+async function loadHistoryCompareJobs() {
+  const list = $("cmpHistoryList");
+  if (!list) return;
+  try {
+    const data = await api("/api/ai/model-compare/history?limit=10");
+    const jobs = data.jobs || [];
+    if (!jobs.length) {
+      list.innerHTML = '<div class="compare-inline-empty"><i data-lucide="history" size="18"></i><span>还没有历史任务。</span></div>';
+    } else {
+      const statusText = { queued:"等待中", running:"运行中", cancelling:"取消中", succeeded:"已完成", failed:"失败", cancelled:"已取消" };
+      list.innerHTML = jobs.map(job => {
+        const params = job.params || {};
+        const models = Array.isArray(params.model_ids) ? params.model_ids.length : 0;
+        return `<article class="compare-history-item" data-job-id="${escapeHtml(job.id)}">
+          <div class="compare-history-status ${escapeHtml(job.status)}"><i data-lucide="${job.status === "succeeded" ? "check" : job.status === "failed" ? "circle-alert" : job.status === "cancelled" ? "ban" : "loader-circle"}" size="16"></i></div>
+          <div><strong>${escapeHtml(params.symbol || "未知品种")} · ${escapeHtml(params.timeframe || "--")}</strong><span>${models} 个模型 · ${params.sample_size || "--"} 个切片 · ${String(job.created_at || "").replace("T"," ").slice(0,16)}</span></div>
+          <span class="compare-history-badge ${escapeHtml(job.status)}">${statusText[job.status] || job.status}</span>
+          ${job.status === "succeeded" ? '<button type="button" class="btn btn-secondary btn-sm" data-cmp-open>查看结果</button>' : ""}
+          ${["failed","cancelled","succeeded"].includes(job.status) ? '<button type="button" class="icon-btn" data-cmp-delete aria-label="删除这条对比记录"><i data-lucide="trash-2" size="15"></i></button>' : ""}
+        </article>`;
+      }).join("");
+      list.querySelectorAll("[data-cmp-open]").forEach(button => button.addEventListener("click", async () => {
+        const id = button.closest("[data-job-id]")?.dataset.jobId;
+        try {
+          const job = (await api(`/api/ai/model-compare/history/${encodeURIComponent(id)}`)).job;
+          if (job?.result) renderHistoryCompareResults(job.result.results || [], job.result.meta || {});
+        } catch (error) { toast(`读取结果失败：${apiErrorMessage(error.message)}`, "error"); }
+      }));
+      list.querySelectorAll("[data-cmp-delete]").forEach(button => button.addEventListener("click", async () => {
+        const id = button.closest("[data-job-id]")?.dataset.jobId;
+        try {
+          await api(`/api/ai/model-compare/history/${encodeURIComponent(id)}?mode=delete`, { method:"DELETE" });
+          await loadHistoryCompareJobs();
+        } catch (error) { toast(`删除失败：${apiErrorMessage(error.message)}`, "error"); }
+      }));
+    }
+  } catch (error) {
+    list.innerHTML = `<div class="compare-inline-empty danger"><i data-lucide="circle-alert" size="18"></i><span>历史任务加载失败：${escapeHtml(apiErrorMessage(error.message))}</span></div>`;
+  }
+  initIcons();
 }
 
 function getSelectedModelIds() {
@@ -5947,6 +6034,15 @@ function bindEvents() {
     if (event.target === $("compareResultsModal")) setCompareResultsModal(false);
   });
   $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
+  $("cmpRefreshHistory")?.addEventListener("click", loadHistoryCompareJobs);
+  ["cmpSymbol", "cmpTimeframe", "cmpStartTime", "cmpEndTime", "cmpSampleSize"].forEach(id => {
+    $(id)?.addEventListener("change", updateHistoryCompareReadiness);
+  });
+  document.querySelectorAll("[data-cmp-range]").forEach(button => button.addEventListener("click", () => {
+    document.querySelectorAll("[data-cmp-range]").forEach(item => item.classList.toggle("active", item === button));
+    setDefaultCompareDates(Number(button.dataset.cmpRange) || 7, true);
+    updateHistoryCompareReadiness();
+  }));
   document.querySelectorAll("[data-strategy-timeframe]").forEach(input => input.addEventListener("change", () => {
     const tf = input.dataset.strategyTimeframe;
     const countInput = document.querySelector(`[data-strategy-kline="${tf}"]`);
