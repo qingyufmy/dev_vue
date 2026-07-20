@@ -510,6 +510,43 @@ describe('handleHistoryCompare', () => {
       }
     })
 
+    it('treats an unknown signal type as an invalid model response', async () => {
+      maybeAiSignal.mockResolvedValue({
+        signal_type:'buy_now', confidence:0.8, analysis:'a', reasoning:'r', _inference_source:'ai',
+      })
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', step:25,
+      })
+      expect(result.status).toBe('success')
+      expect(result.results.every(item => item.status === 'error')).toBe(true)
+      expect(result.results[0]).toMatchObject({
+        error:'model_compare_no_valid_response',
+        directional_score:{ response_success_rate:0, error_count:expect.any(Number) },
+      })
+      expect(result.results[0].signals.every(signal =>
+        signal.signal_type === 'error' && signal.error === 'invalid_model_signal_type')).toBe(true)
+    })
+
+    it('does not report agreement when fewer than two models have valid responses', async () => {
+      maybeAiSignal.mockImplementation(async (_db, config) => {
+        if (config._model_profile_id === 10) throw new Error('llm_timeout')
+        return {
+          signal_type:'buy', entry_method:'market', confidence:0.8,
+          analysis:'a', reasoning:'r', _inference_source:'ai',
+        }
+      })
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', step:25,
+      })
+      expect(result.meta.average_agreement_rate).toBe(0)
+      expect(result.meta.agreement_comparable_count).toBe(0)
+      expect(result.meta.agreement_insufficient_count).toBe(result.meta.evaluation_count)
+      expect(result.meta.high_agreement_count).toBe(0)
+      expect(result.meta.disagreement_count).toBe(0)
+    })
+
     it('includes meta with kline_count and step', async () => {
       const result = await handleHistoryCompare(1, { symbol: 'XAUUSD', timeframe: 'M30', model_ids: [10, 20], strategy_id: 1, start_time: '2026-07-01', end_time: '2026-07-02', step: 10 })
       expect(result.meta).toHaveProperty('symbol', 'XAUUSD')
@@ -521,6 +558,8 @@ describe('handleHistoryCompare', () => {
       expect(result.meta).toHaveProperty('metric_type', 'next_closed_bar_direction')
       expect(result.meta).toHaveProperty('metric_version', 'directional-eval-v2')
       expect(result.meta).toHaveProperty('average_agreement_rate')
+      expect(result.meta).toHaveProperty('agreement_comparable_count')
+      expect(result.meta).toHaveProperty('agreement_insufficient_count')
       expect(result.meta).toHaveProperty('execution_timezone_offset_minutes', 180)
     })
 

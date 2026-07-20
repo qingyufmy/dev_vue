@@ -41,8 +41,8 @@ function parseCompareTimeUtcMs(value) {
 
 function comparisonDirection(signalType) {
   const normalized = String(signalType || '').toLowerCase()
-  if (normalized.startsWith('buy')) return 'buy'
-  if (normalized.startsWith('sell')) return 'sell'
+  if (['buy', 'buy_limit', 'buy_stop', 'buy_stop_limit'].includes(normalized)) return 'buy'
+  if (['sell', 'sell_limit', 'sell_stop', 'sell_stop_limit'].includes(normalized)) return 'sell'
   return normalized === 'hold' ? 'hold' : 'unknown'
 }
 
@@ -1029,6 +1029,15 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         continue
       }
       const direction = comparisonDirection(signal.signal_type)
+      if (direction === 'unknown') {
+        modelSignals[result.modelId].push({
+          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
+          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
+          signal_type:'error', confidence:0, next_bar_move:0, latency_ms:result.latencyMs || 0,
+          error:'invalid_model_signal_type',
+        })
+        continue
+      }
       let nextBarMove = 0
       if (direction === 'buy') nextBarMove = closePrice - openPrice
       else if (direction === 'sell') nextBarMove = openPrice - closePrice
@@ -1168,7 +1177,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       model_id: modelId,
       model_name: resolved.model.model_name,
       provider: resolved.model.provider || resolved.model.api_provider,
-      status: 'success',
+      status: successfulCount > 0 ? 'success' : 'error',
+      error: successfulCount > 0 ? null : 'model_compare_no_valid_response',
       signal_count: signals.length,
       signals,
       account_simulation:accountSimulation,
@@ -1196,15 +1206,17 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const agreementByStep = steps.map((_, index) => {
     const directions = modelResults.map(result => result.signals[index]?.signal_type)
       .filter(direction => direction && direction !== 'error')
+    if (directions.length < 2) return null
     const counts = directions.reduce((acc, direction) => {
       acc[direction] = (acc[direction] || 0) + 1
       return acc
     }, {})
     const maximum = Math.max(0, ...Object.values(counts))
-    return directions.length ? maximum / directions.length : 0
+    return maximum / directions.length
   })
-  const averageAgreement = agreementByStep.length
-    ? agreementByStep.reduce((sum, value) => sum + value, 0) / agreementByStep.length
+  const comparableAgreementSteps = agreementByStep.filter(value => value != null)
+  const averageAgreement = comparableAgreementSteps.length
+    ? comparableAgreementSteps.reduce((sum, value) => sum + value, 0) / comparableAgreementSteps.length
     : 0
   const successfulAccountReplay = modelResults.find(result => result.account_simulation?.status === 'success')
   const unavailableAccountReplay = modelResults.find(result => result.account_simulation?.status === 'unavailable')
@@ -1231,8 +1243,10 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         : HISTORY_COMPARE_MAX_STEPS,
       estimated_model_calls: steps.length * validModels.length,
       average_agreement_rate: Number((averageAgreement * 100).toFixed(1)),
-      high_agreement_count: agreementByStep.filter(value => value >= 0.75).length,
-      disagreement_count: agreementByStep.filter(value => value < 0.5).length,
+      agreement_comparable_count: comparableAgreementSteps.length,
+      agreement_insufficient_count: agreementByStep.length - comparableAgreementSteps.length,
+      high_agreement_count: comparableAgreementSteps.filter(value => value >= 0.75).length,
+      disagreement_count: comparableAgreementSteps.filter(value => value < 0.5).length,
       market_source: selectedWindow.window?.marketMeta?.source || null,
       start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
       metric_type: 'next_closed_bar_direction',

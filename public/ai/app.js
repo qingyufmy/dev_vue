@@ -979,6 +979,8 @@ const API_ERROR_MESSAGES = {
   insufficient_available_models: "可用模型不足两个，请检查模型状态和凭据",
   history_compare_failed: "历史模型对比执行失败",
   history_compare_cancelled: "历史模型对比已取消",
+  invalid_model_signal_type: "模型返回了无法识别的交易方向",
+  model_compare_no_valid_response: "该模型在本次评估中没有产生有效响应",
   backtest_instrument_incomplete: "交易品种合约参数不完整",
   backtest_execution_candles_unavailable: "缺少用于订单回放的 M1 历史行情",
   backtest_symbol_snapshot_unavailable: "桥接端未返回交易品种合约参数",
@@ -4913,11 +4915,20 @@ function renderHistoryCompareResults(results, meta) {
   const replaySorted = [...replayModels].sort((a, b) => Number(b.account_simulation.net_profit || 0) - Number(a.account_simulation.net_profit || 0));
   const replayLeader = replaySorted[0];
   const failedModels = results.filter(result => result.status !== "success").length;
+  const comparableAgreementCount = meta.agreement_comparable_count == null
+    ? Number(meta.evaluation_count || 0)
+    : Number(meta.agreement_comparable_count || 0);
+  const agreementValue = comparableAgreementCount > 0
+    ? `${Number(meta.average_agreement_rate || 0).toFixed(1)}%`
+    : "--";
+  const agreementNote = comparableAgreementCount > 0
+    ? `${comparableAgreementCount} 个时点具备至少两个有效响应`
+    : "有效模型不足，无法计算一致度";
   let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${leader ? `${escapeHtml(leader.model_name)} 的方向判断更稳定` : "暂无可用结论"}</h2><p>方向评估与资金回放分开计算：前者比较判断质量，后者按模型给出的订单参数回放成交与资金变化。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(meta.timeframe || "")}</span></header>
     <div class="compare-summary-grid">
       <div><span>方向领先</span><strong>${leader ? escapeHtml(leader.model_name) : "--"}</strong><small>方向质量分 ${leader?.directional_score?.direction_quality_score ?? 0}</small></div>
       <div><span>资金回放领先</span><strong>${replayLeader ? escapeHtml(replayLeader.model_name) : "--"}</strong><small>${replayLeader ? `净收益 ${Number(replayLeader.account_simulation.net_profit || 0).toFixed(2)}` : "执行数据暂不可用"}</small></div>
-      <div><span>平均一致度</span><strong>${Number(meta.average_agreement_rate || 0).toFixed(1)}%</strong><small>模型给出相同方向的程度</small></div>
+      <div><span>平均一致度</span><strong>${agreementValue}</strong><small>${agreementNote}</small></div>
       <div><span>${isContinuous ? "决策时点" : "评估切片"}</span><strong>${meta.evaluation_count || 0}</strong><small>${isContinuous ? "逐根策略主周期闭合" : "均匀覆盖所选行情区间"}</small></div>
     </div>
     <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>${isContinuous
