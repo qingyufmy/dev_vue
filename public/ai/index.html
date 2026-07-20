@@ -371,12 +371,12 @@
             <section class="workspace-panel form-modal-dialog model-profile-dialog" tabindex="-1">
               <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div><button id="cancelModelProfileBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="settings-grid">
-                <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="gpt">OpenAI compatible</option><option value="kimi">Kimi 开放平台</option><option value="kimi_code">Kimi Code 订阅（个人）</option><option value="qwen">Qwen</option><option value="zhipu">智谱</option><option value="doubao">豆包</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option></select><small id="profileProviderHelp" class="field-help"></small></label>
+                <label><span>供应商</span><select id="profileProvider"><option value="deepseek">DeepSeek</option><option value="volcengine_agent_plan">火山方舟 Agent Plan</option><option value="openai_compatible">自定义 OpenAI 兼容</option></select><small id="profileProviderHelp" class="field-help"></small></label>
                 <label><span>模型名称</span><input id="profileModelName" value="deepseek-chat" autocomplete="off"></label>
                 <label><span>API 地址</span><input id="profileBaseUrl" value="https://api.deepseek.com" autocomplete="off"></label>
                 <label><span>API Key</span><input id="profileApiKey" type="password" autocomplete="new-password" placeholder="编辑时留空表示不更换"></label>
                 <label><span>Temperature</span><input id="profileTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label>
-                <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="65536" step="100" value="2000"></label>
+                <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="65536" step="100" value="8000"></label>
               </div>
               <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button></div>
             </section>
@@ -912,6 +912,7 @@
         <div class="manual-inference-body">
           <div class="manual-run-fields"><label><span>推理策略</span><select id="analyzeStrategy" required><option value="">请选择策略</option></select><small class="field-help">只显示当前可用于推理的策略</small></label><label><span>分析品种</span><select id="analyzeSymbol" required disabled><option value="">请先选择策略</option></select><small class="field-help">只显示当前策略支持的品种</small></label></div>
           <div id="manualStrategySummary" class="strategy-run-summary empty"><strong>尚未选择策略</strong><span>选择后显示行情计划、入场方式与模型来源。</span></div>
+          <div class="model-compare-select hidden"><div class="model-compare-header"><i data-lucide="layers" size="16"></i><strong>模型选择</strong><small>勾选 ≥2 个模型开启对比推理模式</small></div><div id="modelCompareCheckboxGroup" class="model-compare-grid"></div><div id="modelCompareHint" class="model-compare-hint"></div></div>
           <div class="execution-mode-row"><div><strong>结果处理方式</strong><small>建议先查看结果，再手动复核执行。</small></div><label id="manualAutoExecuteControl" class="manual-auto-execute"><input id="manualAutoExecute" type="checkbox"><span class="mode-option safe">只生成建议</span><span class="mode-option live">风控通过后自动执行</span></label></div>
           <div id="manualAutoExecuteNotice" class="inline-alert danger hidden" role="alert"><i data-lucide="triangle-alert" size="18"></i><span>本次推理可能产生真实订单，提交前会再次确认。</span></div>
           <div id="manualInferenceStatus" class="manual-inference-status hidden" role="status"><span class="status-spinner" aria-hidden="true"></span><div><strong>正在生成交易建议</strong><small>正在获取行情、计算指标并调用模型，请保持页面打开。</small></div></div>
