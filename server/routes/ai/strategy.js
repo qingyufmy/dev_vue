@@ -6,6 +6,7 @@ import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, 
 import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, RiskReject, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
+import { resolveOwnedModelProfileForRuntime } from './model-profiles.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun, buildPersonalMemoryRetrievalContext } from './memory-system.js'
 import { retrievePlatformExperience } from './platform-experience.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
@@ -485,4 +486,95 @@ export async function handleAnalyze(userId, params) {
 
   signal = attachSignalPresentation(signal)
   return { status: 'success', signal, market }
+}
+
+export async function handleAnalyzeCompare(userId, params) {
+  const { symbol, model_ids, strategy_id, session_id = 'default' } = params
+  if (!symbol) return { status: 'error', message: 'symbol required' }
+  if (!Array.isArray(model_ids) || model_ids.length < 2 || model_ids.length > 5) {
+    return { status: 'error', message: 'model_ids must be an array of 2-5 model profile IDs' }
+  }
+
+  const uniqueIds = [...new Set(model_ids.map(Number))]
+  if (uniqueIds.length < 2 || uniqueIds.length > 5) {
+    return { status: 'error', message: 'model_ids must contain 2-5 unique IDs' }
+  }
+
+  const strategy = await getStrategyById(Number(strategy_id) || 0, userId, 'user', { forExecution: false })
+  const prompt = strategy?.system_prompt || ''
+  const policy = parseStrategyPolicy(strategy)
+  const primaryTf = policy.marketDataPlan?.primary_timeframe || 'M30'
+  const tags = (policy.marketDataPlan?.timeframes || []).map(item => ({ tf: item.timeframe, count: item.kline_count }))
+  if (tags.length === 0) tags.push({ tf: primaryTf, count: 100 })
+
+  const ratesResp = await platformRates(userId, { symbol, timeframe: primaryTf, count: 100 })
+  if (!ratesResp || ratesResp.status === 'error') return { status: 'error', message: 'Failed to get rates' }
+  const rates = ratesResp.rates || []
+  if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
+
+  let market = calculateMarketData(symbol, primaryTf, rates.slice(-100), null, [], {})
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, null, [], prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta)
+  if (!policy.useChanAnalysis && strategy?.scope === 'platform') {
+    market = buildSharedMarketSnapshot(market, {
+      standardSymbol: symbol,
+      volumeMin: 0.01,
+      volumeMax: 1.0,
+      marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
+    })
+  }
+
+  const profileResults = await Promise.allSettled(
+    uniqueIds.map(async (modelId) => {
+      const resolved = await resolveOwnedModelProfileForRuntime(modelId, userId)
+      if (!resolved.model || !resolved.model.api_key_encrypted) {
+        throw new Error(resolved.error || 'model_profile_not_found_or_inactive')
+      }
+      return { modelId, resolved }
+    })
+  )
+
+  const validModels = []
+  const results = []
+  for (let i = 0; i < uniqueIds.length; i++) {
+    const profileResult = profileResults[i]
+    const modelId = uniqueIds[i]
+    if (profileResult.status === 'rejected' || !profileResult.value) {
+      results.push({ model_id: modelId, status: 'error', error: profileResult.reason?.message || 'model_profile_resolution_failed' })
+    } else {
+      validModels.push(profileResult.value)
+    }
+  }
+
+  const inferenceTasks = validModels.map(({ modelId, resolved }) => {
+    const config = {
+      ...resolved.model,
+      system_prompt: prompt,
+      _userId: userId,
+      _usage: 'manual',
+      _model_shared: resolved.credential_source === 'platform_shared',
+      _model_profile_id: resolved.model_profile_id,
+      _credential_source: resolved.credential_source,
+      _allowed_entry_methods: policy.entryMethods,
+      _market_data_plan: policy.marketDataPlan,
+      _use_chan_analysis: policy.useChanAnalysis,
+      _market_only: strategy?.scope === 'platform',
+      _ai_volume_min: 0.01,
+      _ai_volume_max: 1.0,
+      _ai_volume_step: 0.01,
+    }
+    return maybeAiSignal(null, config, market, prompt).then(signal => {
+      signal._inference_source = signal._inference_source || 'unknown'
+      return { model_id: modelId, status: 'success', signal }
+    }).catch(error => {
+      return { model_id: modelId, status: 'error', error: error.message || 'inference_failed' }
+    })
+  })
+
+  const inferenceResults = await Promise.allSettled(inferenceTasks)
+  for (const r of inferenceResults) {
+    if (r.status === 'fulfilled') results.push(r.value)
+    else results.push({ model_id: null, status: 'error', error: r.reason?.message || 'unknown_error' })
+  }
+
+  return { ok: true, results, market_snapshot: market }
 }
