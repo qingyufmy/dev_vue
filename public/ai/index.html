@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721b" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721c" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -760,6 +760,20 @@
                     <label class="compare-field"><span>交易品种</span><select id="cmpSymbol"><option value="">先选择策略</option></select></label>
                     <div class="compare-field"><span>评估基准</span><div id="cmpStrategyBaseline" class="compare-readonly-value">由策略自动决定</div></div>
                   </div>
+                  <fieldset class="compare-mode-field">
+                    <legend>评估方式</legend>
+                    <div class="compare-mode-options">
+                      <label>
+                        <input type="radio" name="cmpEvaluationMode" value="sampled" checked>
+                        <span><i data-lucide="scan-line" size="15"></i><strong>快速抽样</strong><small>均匀选取代表性行情</small></span>
+                      </label>
+                      <label>
+                        <input type="radio" name="cmpEvaluationMode" value="continuous">
+                        <span><i data-lucide="chart-no-axes-combined" size="15"></i><strong>连续回测</strong><small>逐根策略主周期决策</small></span>
+                      </label>
+                    </div>
+                    <p id="cmpEvaluationModeHint">适合快速比较模型方向质量和订单表现。</p>
+                  </fieldset>
                   <fieldset class="compare-range-field">
                     <legend>行情范围</legend>
                     <div class="compare-range-presets" role="group" aria-label="快捷选择行情范围">
@@ -772,7 +786,7 @@
                       <label class="compare-field"><span>结束时间</span><input id="cmpEndTime" type="datetime-local"></label>
                     </div>
                   </fieldset>
-                  <label class="compare-field"><span>评估深度</span>
+                  <label id="cmpSampleDepthField" class="compare-field"><span>评估深度</span>
                     <select id="cmpSampleSize">
                       <option value="8">快速 · 8 个行情切片</option>
                       <option value="12" selected>标准 · 12 个行情切片</option>
@@ -797,7 +811,7 @@
                     <p>M1 行情会按时间推进同一个虚拟账户，同时处理挂单、并发持仓、浮动盈亏、保证金和强平。</p>
                   </details>
                 </div>
-                <div class="compare-call-estimate"><i data-lucide="calculator" size="16"></i><span>预计调用</span><strong id="cmpCallEstimate">--</strong><small>次模型请求</small></div>
+                <div class="compare-call-estimate"><i data-lucide="calculator" size="16"></i><span>预计调用</span><strong id="cmpCallEstimate">--</strong><small id="cmpCallEstimateUnit">次模型请求</small></div>
                 <button id="cmpRunBtn" class="btn btn-primary compare-primary-action" disabled><i data-lucide="play" size="16"></i>开始评估</button>
                 <p id="cmpStatus" class="cmp-status-text" aria-live="polite"></p>
               </aside>
@@ -1070,7 +1084,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721b"></script>
+    <script src="/ai/app.js?v=20260721c"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

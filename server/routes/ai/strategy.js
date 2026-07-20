@@ -26,6 +26,7 @@ const HISTORY_COMPARE_MIN_CONTEXT = 20
 const HISTORY_COMPARE_MAX_STEPS = 20
 const HISTORY_COMPARE_MIN_STEPS = 4
 const HISTORY_COMPARE_MAX_KLINES = 5000
+const HISTORY_COMPARE_MAX_CONTINUOUS_STEPS = 120
 
 function parseCompareTimeUtcMs(value) {
   const raw = String(value || '').trim()
@@ -78,6 +79,11 @@ function buildHistoryCompareSteps(klineCount, requestedSampleSize) {
   return [...new Set(Array.from({ length: target }, (_, index) =>
     Math.round(first + ((last - first) * index) / (target - 1))
   ))]
+}
+
+function buildContinuousHistoryCompareSteps(klineCount) {
+  const count = Math.max(0, Number(klineCount) - 1)
+  return Array.from({ length:count }, (_, index) => index)
 }
 
 function wilsonLowerBound(correct, total, z = 1.2815515655446004) {
@@ -756,6 +762,9 @@ export async function handleAnalyzeCompare(userId, params) {
 
 export async function handleHistoryCompare(userId, params, options = {}) {
   const { symbol, model_ids, strategy_id, start_time, end_time, step, sample_size } = params
+  const evaluationMode = params.evaluation_mode == null || params.evaluation_mode === 'sampled'
+    ? 'sampled'
+    : params.evaluation_mode === 'continuous' ? 'continuous' : null
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false
 
@@ -765,6 +774,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   if (!symbol) return { status: 'error', message: 'symbol required' }
   if (!strategy_id) return { status: 'error', message: 'strategy required' }
   if (!start_time || !end_time) return { status: 'error', message: 'start_time and end_time required' }
+  if (!evaluationMode) return { status:'error', message:'invalid_history_evaluation_mode' }
   if (!Array.isArray(model_ids) || model_ids.length < 2 || model_ids.length > 5) {
     return { status: 'error', message: 'model_ids must be an array of 2-5 model profile IDs' }
   }
@@ -819,7 +829,12 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     return { status: 'error', message: 'history_compare_range_too_large' }
   }
   const klines = requestedRates
-  if (klines.length <= HISTORY_COMPARE_MIN_CONTEXT) return { status: 'error', message: 'insufficient_kline_data_for_compare' }
+  if (evaluationMode === 'sampled' && klines.length <= HISTORY_COMPARE_MIN_CONTEXT) {
+    return { status: 'error', message: 'insufficient_kline_data_for_compare' }
+  }
+  if (evaluationMode === 'continuous' && klines.length < 2) {
+    return { status:'error', message:'insufficient_kline_data_for_compare' }
+  }
 
   // `step` remains accepted for older clients. New clients request an explicit,
   // evenly distributed sample size so the evaluation covers the whole range.
@@ -827,6 +842,38 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     ? Math.max(HISTORY_COMPARE_MIN_STEPS, Math.min(HISTORY_COMPARE_MAX_STEPS,
       Math.ceil((klines.length - HISTORY_COMPARE_MIN_CONTEXT) / Math.max(1, Number(step) || 10))))
     : Math.max(HISTORY_COMPARE_MIN_STEPS, Math.min(HISTORY_COMPARE_MAX_STEPS, Number(sample_size) || 12))
+  const steps = evaluationMode === 'continuous'
+    ? buildContinuousHistoryCompareSteps(klines.length)
+    : buildHistoryCompareSteps(klines.length, requestedSampleSize)
+  if (evaluationMode === 'continuous' && steps.length > HISTORY_COMPARE_MAX_CONTINUOUS_STEPS) {
+    return {
+      status:'error',
+      message:'continuous_backtest_range_too_large',
+      evaluation_count:steps.length,
+      max_evaluation_count:HISTORY_COMPARE_MAX_CONTINUOUS_STEPS,
+    }
+  }
+
+  // Validate every decision point before resolving or calling any model. A
+  // continuous backtest is only meaningful when all strategy timeframes have
+  // the minimum closed-candle context at every evaluated primary-bar close.
+  for (const stepIdx of steps) {
+    const currentRateUtcMs = compareRateUtcMs(klines[stepIdx])
+    const decisionUtcMs = currentRateUtcMs + (TIMEFRAME_MINUTES[requestedTimeframe] || 1) * 60_000
+    const missingTimeframes = historyWindows.filter(item => {
+      const sourceRates = Array.isArray(item.window?.periodRates) ? item.window.periodRates : []
+      return compareVisibleRates(sourceRates, decisionUtcMs, item.timeframe, item.kline_count, policy.useChanAnalysis)
+        .length < Math.min(20, item.kline_count)
+    }).map(item => item.timeframe)
+    if (missingTimeframes.length) {
+      return {
+        status:'error',
+        message:'history_compare_strategy_context_incomplete',
+        missing_timeframes:missingTimeframes,
+        decision_time_utc_msc:decisionUtcMs,
+      }
+    }
+  }
 
   const prompt = strategy.system_prompt || ''
   await onProgress({ stage: 'market_ready', progress_percent: 10, completed_steps: 0, total_steps: 0 })
@@ -860,7 +907,6 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     modelSignals[modelId] = []
   }
 
-  const steps = buildHistoryCompareSteps(klines.length, requestedSampleSize)
   await onProgress({ stage: 'models_ready', progress_percent: 15, completed_steps: 0, total_steps: steps.length })
 
   for (let stepNumber = 0; stepNumber < steps.length; stepNumber++) {
@@ -1156,11 +1202,14 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     meta: {
       symbol, timeframe:requestedTimeframe, strategy_id: Number(strategy_id),
       kline_count: klines.length,
-      sample_size: requestedSampleSize,
+      evaluation_mode:evaluationMode,
+      sample_size:evaluationMode === 'sampled' ? requestedSampleSize : null,
       requested_step: step == null ? null : Math.max(1, Math.min(50, Number(step) || 10)),
       step: steps.length > 1 ? Math.round((steps[steps.length - 1] - steps[0]) / (steps.length - 1)) : null,
       evaluation_count: steps.length,
-      max_evaluation_count: HISTORY_COMPARE_MAX_STEPS,
+      max_evaluation_count:evaluationMode === 'continuous'
+        ? HISTORY_COMPARE_MAX_CONTINUOUS_STEPS
+        : HISTORY_COMPARE_MAX_STEPS,
       estimated_model_calls: steps.length * validModels.length,
       average_agreement_rate: Number((averageAgreement * 100).toFixed(1)),
       high_agreement_count: agreementByStep.filter(value => value >= 0.75).length,
@@ -1262,6 +1311,7 @@ export async function startHistoryCompareJob(userId, params) {
     : null
   const normalizedParams = {
     ...(params || {}),
+    evaluation_mode:params?.evaluation_mode == null ? 'sampled' : params.evaluation_mode,
     timeframe:strategy ? parseStrategyPolicy(strategy).marketDataPlan.primary_timeframe : null,
     backtest:{
       ...normalizeBacktestOptions(params?.backtest || {}),

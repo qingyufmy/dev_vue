@@ -466,8 +466,8 @@ describe('handleHistoryCompare', () => {
         return {
           status: 'success',
           market_meta: { source: 'mysql_period_cache', timezone_offset_minutes: 180 },
-          rates: Array.from({ length: 50 }, (_, i) => ({
-            time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
+          rates: Array.from({ length: 90 }, (_, i) => ({
+            time: new Date(Date.UTC(2026, 6, 1, 0, (i - 40) * 30)).toISOString(),
             open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
           })),
         }
@@ -530,6 +530,67 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.estimated_model_calls).toBe(16)
       expect(result.results[0].signals[0]).toHaveProperty('decision_time')
       expect(result.results[0].signals[0]).toHaveProperty('outcome_time')
+    })
+
+    it('evaluates every eligible primary candle in continuous mode', async () => {
+      const result = await handleHistoryCompare(1, {
+        symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1,
+        start_time: '2026-07-01', end_time: '2026-07-02',
+        evaluation_mode: 'continuous',
+      })
+      expect(result.status).toBe('success')
+      expect(result.meta.evaluation_mode).toBe('continuous')
+      expect(result.meta.sample_size).toBeNull()
+      expect(result.meta.evaluation_count).toBe(result.meta.kline_count - 1)
+      expect(result.meta.max_evaluation_count).toBe(120)
+      expect(result.meta.estimated_model_calls).toBe(result.meta.evaluation_count * 2)
+    })
+
+    it('rejects an oversized continuous range before calling any model', async () => {
+      const baseImplementation = mockMt5Bridge.getMockImplementation()
+      mockMt5Bridge.mockImplementation(async (userId, action, params) => {
+        if (action !== 'rates') return baseImplementation(userId, action, params)
+        return {
+          status: 'success',
+          market_meta: { source: 'mysql_period_cache', timezone_offset_minutes: 180 },
+          rates: Array.from({ length: 170 }, (_, i) => ({
+            time: new Date(Date.UTC(2026, 6, 1, 0, (i - 20) * 30)).toISOString(),
+            open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
+          })),
+        }
+      })
+      maybeAiSignal.mockClear()
+      const result = await handleHistoryCompare(1, {
+        symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1,
+        start_time: '2026-07-01', end_time: '2026-07-05',
+        evaluation_mode: 'continuous',
+      })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('continuous_backtest_range_too_large')
+      expect(result.evaluation_count).toBeGreaterThan(120)
+      expect(result.max_evaluation_count).toBe(120)
+      expect(maybeAiSignal).not.toHaveBeenCalled()
+    })
+
+    it('validates all strategy timeframe context before continuous model calls', async () => {
+      mockMt5Bridge.mockResolvedValue({
+        status: 'success',
+        market_meta: { source: 'mysql_period_cache', timezone_offset_minutes: 180 },
+        rates: Array.from({ length: 10 }, (_, i) => ({
+          time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
+          open: 2000 + i, high: 2010 + i, low: 1990 + i, close: 2005 + i, tick_volume: 100,
+        })),
+      })
+      maybeAiSignal.mockClear()
+      const result = await handleHistoryCompare(1, {
+        symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1,
+        start_time: '2026-07-01', end_time: '2026-07-02',
+        evaluation_mode: 'continuous',
+      })
+      expect(result.status).toBe('error')
+      expect(result.message).toBe('history_compare_strategy_context_incomplete')
+      expect(result.missing_timeframes).toEqual(['M30'])
+      expect(maybeAiSignal).not.toHaveBeenCalled()
     })
 
     it('evaluates a signal against the next unseen candle and records losses', async () => {
@@ -636,6 +697,15 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('抽样资金曲线')
     expect(frontend).toContain('execution_timezone_offset_minutes')
     expect(frontend).toContain('bindCompareEquityChart(replaySorted, meta)')
+  })
+
+  it('supports an explicitly confirmed continuous mode with a hard decision cap', () => {
+    expect(frontend).toContain('cmpEvaluationMode')
+    expect(frontend).toContain('确认开始连续回测')
+    expect(frontend).toContain('evaluation_mode:evaluationMode')
+    expect(frontend).toContain('HISTORY_COMPARE_CONTINUOUS_LIMIT = 120')
+    expect(frontend).toContain('连续回测资金曲线')
+    expect(frontend).toContain('逐根主周期连续决策 + M1 OHLC 执行回放')
   })
 
   it('shows localized failure details in recent comparison jobs', () => {
