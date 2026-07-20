@@ -1,4 +1,4 @@
-// ai/strategy.js — 策略上下文 + 执行 + 分析
+﻿// ai/strategy.js — 策略上下文 + 执行 + 分析
 
 import { queryOne, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
@@ -489,8 +489,9 @@ export async function handleAnalyze(userId, params) {
 }
 
 export async function handleAnalyzeCompare(userId, params) {
-  const { symbol, model_ids, strategy_id, session_id = 'default' } = params
+  const { symbol, model_ids, strategy_id } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
+  if (!strategy_id) return { ok: false, error: 'strategy_id_required' }
   if (!Array.isArray(model_ids) || model_ids.length < 2 || model_ids.length > 5) {
     return { status: 'error', message: 'model_ids must be an array of 2-5 model profile IDs' }
   }
@@ -500,21 +501,33 @@ export async function handleAnalyzeCompare(userId, params) {
     return { status: 'error', message: 'model_ids must contain 2-5 unique IDs' }
   }
 
-  const strategy = await getStrategyById(Number(strategy_id) || 0, userId, 'user', { forExecution: false })
-  const prompt = strategy?.system_prompt || ''
+  const strategy = await getStrategyById(Number(strategy_id), userId, 'user', { forExecution: false })
+  if (!strategy) return { ok: false, error: 'strategy_not_found' }
+
+  const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
+  if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { ok: false, error: 'symbol_not_supported_by_strategy' }
+
+  const prompt = strategy.system_prompt || ''
   const policy = parseStrategyPolicy(strategy)
   const primaryTf = policy.marketDataPlan?.primary_timeframe || 'M30'
   const tags = (policy.marketDataPlan?.timeframes || []).map(item => ({ tf: item.timeframe, count: item.kline_count }))
   if (tags.length === 0) tags.push({ tf: primaryTf, count: 100 })
+  const primaryTag = tags.find(item => item.tf === primaryTf) || tags[0]
+  const primaryCount = primaryTag?.count || 100
+  const primaryHistoryCount = resolveChanHistoryCount(userId, symbol, primaryTf, primaryCount, policy.useChanAnalysis)
 
-  const ratesResp = await platformRates(userId, { symbol, timeframe: primaryTf, count: 100 })
+  const ratesResp = await platformRates(userId, { symbol, timeframe: primaryTf, count: primaryHistoryCount })
   if (!ratesResp || ratesResp.status === 'error') return { status: 'error', message: 'Failed to get rates' }
   const rates = ratesResp.rates || []
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
-  let market = calculateMarketData(symbol, primaryTf, rates.slice(-100), null, [], {})
+  let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), null, [], {})
   market.strategy_context = await buildStrategyContextFromTags(userId, symbol, null, [], prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta)
-  if (!policy.useChanAnalysis && strategy?.scope === 'platform') {
+  market.requested_timeframes = market.strategy_context.required_timeframes
+  market.used_timeframes = market.strategy_context.used_timeframes
+  market.missing_timeframes = market.strategy_context.missing_timeframes
+  await attachAtrAnchor(userId, symbol, market, primaryTf)
+  if (!policy.useChanAnalysis && strategy.scope === 'platform') {
     market = buildSharedMarketSnapshot(market, {
       standardSymbol: symbol,
       volumeMin: 0.01,
@@ -557,7 +570,7 @@ export async function handleAnalyzeCompare(userId, params) {
       _allowed_entry_methods: policy.entryMethods,
       _market_data_plan: policy.marketDataPlan,
       _use_chan_analysis: policy.useChanAnalysis,
-      _market_only: strategy?.scope === 'platform',
+      _market_only: strategy.scope === 'platform',
       _ai_volume_min: 0.01,
       _ai_volume_max: 1.0,
       _ai_volume_step: 0.01,
@@ -570,10 +583,9 @@ export async function handleAnalyzeCompare(userId, params) {
     })
   })
 
-  const inferenceResults = await Promise.allSettled(inferenceTasks)
+  const inferenceResults = await Promise.all(inferenceTasks)
   for (const r of inferenceResults) {
-    if (r.status === 'fulfilled') results.push(r.value)
-    else results.push({ model_id: null, status: 'error', error: r.reason?.message || 'unknown_error' })
+    results.push(r)
   }
 
   return { ok: true, results, market_snapshot: market }

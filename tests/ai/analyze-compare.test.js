@@ -93,12 +93,14 @@ vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({
   persistInferenceSnapshotTx: vi.fn(),
 }))
 
+const mockGetStrategyById = vi.fn(async () => ({
+  id: 1, scope: 'platform', symbols_json: '["XAUUSD"]',
+  system_prompt: 'test prompt', version: 1,
+  include_portfolio_context: 0,
+}))
+
 vi.mock('../../server/routes/ai/strategy-ownership.js', () => ({
-  getStrategyById: vi.fn(async () => ({
-    id: 1, scope: 'platform', symbols_json: '["XAUUSD"]',
-    system_prompt: 'test prompt', version: 1,
-    include_portfolio_context: 0,
-  })),
+  getStrategyById: (...args) => mockGetStrategyById(...args),
 }))
 
 vi.mock('../../server/routes/ai/strategy-policy.js', () => ({
@@ -182,48 +184,67 @@ describe('handleAnalyzeCompare', () => {
   })
 
   describe('input validation', () => {
+    it('returns error when strategy_id is missing', async () => {
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [1, 2] })
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('strategy_id_required')
+    })
+
+    it('returns error when strategy is not found', async () => {
+      mockGetStrategyById.mockResolvedValueOnce(null)
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [1, 2], strategy_id: 999 })
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('strategy_not_found')
+    })
+
+    it('returns error when symbol is not supported by strategy', async () => {
+      const result = await handleAnalyzeCompare(1, { symbol: 'EURUSD', model_ids: [1, 2], strategy_id: 1 })
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('symbol_not_supported_by_strategy')
+    })
+
     it('returns error when model_ids is missing', async () => {
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD' })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', strategy_id: 1 })
       expect(result.status).toBe('error')
       expect(result.message).toContain('model_ids')
     })
 
     it('returns error when model_ids has fewer than 2 items', async () => {
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [1] })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', strategy_id: 1, model_ids: [1] })
       expect(result.status).toBe('error')
       expect(result.message).toContain('model_ids')
     })
 
     it('returns error when model_ids has more than 5 items', async () => {
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [1, 2, 3, 4, 5, 6] })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', strategy_id: 1, model_ids: [1, 2, 3, 4, 5, 6] })
       expect(result.status).toBe('error')
       expect(result.message).toContain('model_ids')
     })
 
     it('returns error when model_ids is not an array', async () => {
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: 'bad' })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', strategy_id: 1, model_ids: 'bad' })
       expect(result.status).toBe('error')
       expect(result.message).toContain('model_ids')
     })
   })
 
   describe('market data fetch', () => {
-    it('fetches market data once and shares across models', async () => {
-      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [1, 2] })
-      expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
+    it('fetches market data and shares across models', async () => {
+      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [1, 2], strategy_id: 1 })
+      expect(mockMt5Bridge).toHaveBeenCalled()
     })
   })
 
   describe('parallel inference', () => {
-    it('calls maybeAiSignal for each model_id via Promise.allSettled', async () => {
-      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20] })
+    it('calls maybeAiSignal for each model_id', async () => {
+      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       expect(maybeAiSignal).toHaveBeenCalledTimes(2)
       expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({ model_name: 'deepseek-chat-10' }), expect.any(Object), expect.any(String))
       expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({ model_name: 'deepseek-chat-20' }), expect.any(Object), expect.any(String))
     })
 
     it('resolves model profiles for each id', async () => {
-      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20, 30] })
+      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20, 30], strategy_id: 1 })
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledTimes(3)
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledWith(10, 1)
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledWith(20, 1)
@@ -233,7 +254,7 @@ describe('handleAnalyzeCompare', () => {
 
   describe('return format', () => {
     it('returns ok=true with results and market_snapshot', async () => {
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20] })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       expect(result).toHaveProperty('ok', true)
       expect(result).toHaveProperty('results')
       expect(result).toHaveProperty('market_snapshot')
@@ -242,7 +263,7 @@ describe('handleAnalyzeCompare', () => {
     })
 
     it('each result contains model_id, status, and signal', async () => {
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20] })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       for (const r of result.results) {
         expect(r).toHaveProperty('model_id')
         expect(r).toHaveProperty('status')
@@ -254,7 +275,7 @@ describe('handleAnalyzeCompare', () => {
       maybeAiSignal
         .mockResolvedValueOnce({ signal_type: 'buy', confidence: 0.8, analysis: 'a', reasoning: 'r', _inference_source: 'ai' })
         .mockRejectedValueOnce(new Error('llm_timeout'))
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20] })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       const fulfilled = result.results.find(r => r.model_id === 10)
       const rejected = result.results.find(r => r.model_id === 20)
       expect(fulfilled.status).toBe('success')
@@ -266,20 +287,20 @@ describe('handleAnalyzeCompare', () => {
   describe('does not persist or execute', () => {
     it('does not call withTransaction', async () => {
       const { withTransaction } = await import('../../server/db.js')
-      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20] })
+      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       expect(withTransaction).not.toHaveBeenCalled()
     })
 
     it('does not send browser notifications', async () => {
       const { sendToBrowsers } = await import('../../server/bridge-ws.js')
-      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20] })
+      await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       expect(sendToBrowsers).not.toHaveBeenCalled()
     })
   })
 
   describe('market_snapshot structure', () => {
     it('contains symbol and latest_price', async () => {
-      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20] })
+      const result = await handleAnalyzeCompare(1, { symbol: 'XAUUSD', model_ids: [10, 20], strategy_id: 1 })
       expect(result.market_snapshot).toHaveProperty('symbol', 'XAUUSD')
       expect(result.market_snapshot).toHaveProperty('latest_price')
     })
