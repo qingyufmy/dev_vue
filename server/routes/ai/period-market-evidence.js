@@ -40,7 +40,11 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
     .sort((a, b) => a - b)
     .filter((time, index, values) => index === 0 || time !== values[index - 1])
   if (!interval || !sorted.length) return { complete:false, endpoint_complete:false, internal_gap_count:0, max_gap_ms:0 }
-  const endpointComplete = sorted[0] <= Number(startUtcMs) + interval && sorted.at(-1) >= Number(endUtcMs) - interval * 2
+  const startCovered = sorted[0] <= Number(startUtcMs) + interval
+    || crossesWeekend(Number(startUtcMs), sorted[0])
+  const endCovered = sorted.at(-1) >= Number(endUtcMs) - interval * 2
+    || crossesWeekend(sorted.at(-1), Number(endUtcMs))
+  const endpointComplete = startCovered && endCovered
   // 黄金、外汇每天可能存在短暂维护休市。只把超过两小时且不跨周末的缺口视为异常，
   // 避免将正常休市误判成缓存损坏，同时仍能识别桥接长时间断开造成的大段缺失。
   const toleratedGap = Math.max(interval * 3, 2 * 3600000)
@@ -77,7 +81,7 @@ function timeframePlan(strategy, sourceEvidence) {
   return [...new Set(inferred.map(item => String(item).toUpperCase()).filter(item => REVIEW_TIMEFRAME_MS[item]))].slice(0, 4)
 }
 
-export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtcMs, endUtcMs) {
+export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtcMs, endUtcMs, options = {}) {
   const count = requiredReviewCandleCount(startUtcMs, endUtcMs, timeframe)
   const interval = REVIEW_TIMEFRAME_MS[timeframe]
   const readStored = async sourceIds => {
@@ -119,7 +123,13 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
     rows = await readStored(relatedSourceIds)
     marketMeta = hydrated.market_meta || {}
   }
-  rows = rows.filter(row => isReviewGridAligned(row.time_utc_msc, startUtcMs, timeframe))
+  // Daily/monthly reviews use a fixed period boundary and may require strict
+  // grid alignment. Model comparison accepts arbitrary minute ranges, so its
+  // already-normalized stored candles must not be aligned to the user's start
+  // minute (for example 23:47), otherwise every H1/H4 candle is discarded.
+  if (options.alignToPeriodStart !== false) {
+    rows = rows.filter(row => isReviewGridAligned(row.time_utc_msc, startUtcMs, timeframe))
+  }
   const rates = rows.map(row => ({ ...row, time_utc_msc:Number(row.time_utc_msc), open:Number(row.open), high:Number(row.high), low:Number(row.low), close:Number(row.close), tick_volume:Number(row.tick_volume || 0) }))
   const periodRates = rates.filter(rate => rate.time_utc_msc >= startUtcMs && rate.time_utc_msc < endUtcMs)
   if (!periodRates.length) throw new Error('period_market_candles_unavailable')

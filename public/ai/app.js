@@ -963,6 +963,8 @@ const API_ERROR_MESSAGES = {
   "model_ids must contain 2-5 unique IDs": "请选择 2 至 5 个不同模型",
   invalid_history_time_range: "历史评估时间范围无效",
   history_market_data_unavailable: "历史行情暂不可用，请确认桥接和行情缓存状态",
+  period_market_candles_unavailable: "所选区间内没有可用的完整历史 K 线，请调整时间范围后重试",
+  period_market_source_unavailable: "历史行情源暂不可用，请检查管理员桥接和行情缓存",
   insufficient_kline_data_for_compare: "所选时间范围内的完整 K 线不足",
   history_compare_range_too_large: "所选范围包含超过 5000 根 K 线，请缩短时间范围或使用更大周期",
   timeframe_not_supported_by_strategy: "所选周期不在该策略的行情数据方案中",
@@ -4556,7 +4558,7 @@ async function runHistoryCompare() {
   const sampleSize = Number($("cmpSampleSize")?.value) || 12;
   const startTime = $("cmpStartTime")?.value ? $("cmpStartTime").value + ":00" : "";
   const endTime = $("cmpEndTime")?.value ? $("cmpEndTime").value + ":00" : "";
-  if (!startTime || !endTime) return showToast("请选择时间范围", "error");
+  if (!startTime || !endTime) return toast("请选择时间范围", "error");
   const btn = $("cmpRunBtn");
   if (btn) {
     btn.disabled = false;
@@ -4589,7 +4591,7 @@ async function runHistoryCompare() {
     } else {
       throw new Error(apiErrorMessage(job.error || "history_compare_failed"));
     }
-  } catch (e) { showToast("模型对比失败：" + apiErrorMessage(e.message), "error"); }
+  } catch (e) { toast("模型对比失败：" + apiErrorMessage(e.message), "error"); }
   finally {
     _historyCompareJobId = null;
     if (btn) {

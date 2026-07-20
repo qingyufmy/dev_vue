@@ -729,7 +729,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   try {
     historyWindows = await Promise.all(planItems.map(async item => ({
       ...item,
-      window: await loadPeriodMarketWindow(userId, symbol, item.timeframe, startUtcMs - warmupMs, endUtcMs),
+      window: await loadPeriodMarketWindow(userId, symbol, item.timeframe, startUtcMs - warmupMs, endUtcMs, {
+        alignToPeriodStart: false,
+      }),
     })))
   } catch (error) {
     return { status: 'error', message: error.message || 'history_market_data_unavailable' }

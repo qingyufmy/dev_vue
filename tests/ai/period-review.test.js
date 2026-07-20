@@ -258,6 +258,13 @@ describe('period market evidence', () => {
     expect(assessReviewCandleCoverage([
       { time_utc_msc:friday }, { time_utc_msc:monday - 3600000 },
     ], friday, monday, 'H1')).toMatchObject({ complete:true, internal_gap_count:0 })
+
+    const weekendStart = Date.parse('2026-07-17T23:47:00Z')
+    const sundayOpen = Date.parse('2026-07-19T22:00:00Z')
+    const mondayEnd = Date.parse('2026-07-20T15:47:00Z')
+    expect(assessReviewCandleCoverage([
+      { time_utc_msc:sundayOpen }, { time_utc_msc:Date.parse('2026-07-20T15:00:00Z') },
+    ], weekendStart, mondayEnd, 'H1')).toMatchObject({ complete:true, endpoint_complete:true })
   })
 
   it('removes raw daily candles from the monthly digest but preserves structural conclusions', () => {
