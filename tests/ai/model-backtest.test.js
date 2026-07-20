@@ -315,4 +315,113 @@ describe('model comparison account replay', () => {
       net_profit:-600,
     })
   })
+
+  it('rejects volume that violates the broker lot step', () => {
+    const result = simulateVirtualAccount(
+      [sample({ recommended_volume:0.105 })],
+      [candle(0), candle(1)],
+      instrument,
+      { starting_balance:10_000, leverage:100 },
+    )
+    expect(result).toMatchObject({
+      closed_trade_count:0,
+      rejected_order_count:1,
+      broker_constraint_rejected_count:1,
+    })
+    expect(result.trades[0]).toMatchObject({
+      status:'rejected',
+      reason:'broker_contract_constraint',
+      broker_reason:'volume_step_mismatch',
+    })
+  })
+
+  it('enforces the broker aggregate directional volume limit', () => {
+    const result = simulateVirtualAccount(
+      [
+        sample({ take_profit_1_price:150 }),
+        { ...sample({ take_profit_1_price:150 }), decision_time:'2026-07-20T00:00:00.000Z' },
+      ],
+      [candle(0), candle(1)],
+      { ...instrument, volume_limit:0.1 },
+      { starting_balance:10_000, leverage:100, max_concurrent_positions:5 },
+    )
+    expect(result).toMatchObject({
+      maximum_concurrent_positions:1,
+      broker_constraint_rejected_count:1,
+      rejected_order_count:1,
+    })
+    expect(result.trades.some(record => record.broker_reason === 'directional_volume_limit_exceeded')).toBe(true)
+  })
+
+  it('enforces the broker symbol trade direction mode', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        signal_type:'sell',
+        recommended_volume:0.1,
+        stop_loss_price:105,
+        take_profit_1_price:95,
+      })],
+      [candle(0), candle(1)],
+      { ...instrument, trade_mode:1 },
+      { starting_balance:10_000, leverage:100 },
+    )
+    expect(result.trades[0]).toMatchObject({
+      status:'rejected',
+      reason:'broker_contract_constraint',
+      broker_reason:'symbol_long_only',
+    })
+  })
+
+  it('rejects an entry method disabled by the broker order-mode flags', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        signal_type:'buy_limit',
+        entry_method:'limit',
+        limit_price:99,
+      })],
+      [candle(0), candle(1)],
+      { ...instrument, order_mode:1 | 16 | 32 },
+      { starting_balance:10_000, leverage:100 },
+    )
+    expect(result.trades[0]).toMatchObject({
+      status:'rejected',
+      reason:'broker_contract_constraint',
+      broker_reason:'entry_method_not_allowed',
+    })
+  })
+
+  it('rejects stops that are closer than the broker minimum stop level', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        stop_loss_price:99.5,
+        take_profit_1_price:105,
+      })],
+      [candle(0), candle(1)],
+      { ...instrument, trade_stops_level:100 },
+      { starting_balance:10_000, leverage:100 },
+    )
+    expect(result.trades[0]).toMatchObject({
+      status:'rejected',
+      reason:'broker_contract_constraint',
+      broker_reason:'stop_loss_too_close',
+    })
+  })
+
+  it('falls back to the live symbol spread when historical candles omit spread', () => {
+    const result = simulateVirtualAccount(
+      [sample()],
+      [
+        candle(0, { spread:undefined }),
+        candle(1, { high:106, close:105, spread:undefined }),
+      ],
+      { ...instrument, spread:10 },
+      { starting_balance:10_000, leverage:100 },
+    )
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      entry_price:100.1,
+      exit_price:105,
+      net_profit:49,
+    })
+  })
 })

@@ -91,13 +91,28 @@ export function normalizeBacktestInstrument(instrument = {}) {
     tick_size: tickSize,
     tick_value: tickValue,
     contract_size: finite(instrument.contract_size),
+    trade_mode:finite(instrument.trade_mode),
+    trade_exemode:finite(instrument.trade_exemode),
+    trade_stops_level:Math.max(0, finite(instrument.trade_stops_level) || 0),
+    trade_freeze_level:Math.max(0, finite(instrument.trade_freeze_level) || 0),
+    filling_mode:finite(instrument.filling_mode),
+    order_mode:finite(instrument.order_mode),
+    spread:Math.max(0, finite(instrument.spread) || 0),
+    spread_float:Boolean(instrument.spread_float),
     volume_min: volumeMin,
     volume_max: volumeMax,
     volume_step: volumeStep,
+    volume_limit:Math.max(0, finite(instrument.volume_limit) || 0),
     currency_profit: instrument.currency_profit || null,
     currency_margin:instrument.currency_margin || null,
     margin_initial:finite(instrument.margin_initial),
+    margin_maintenance:finite(instrument.margin_maintenance),
+    margin_hedged:finite(instrument.margin_hedged),
     trade_calc_mode:finite(instrument.trade_calc_mode),
+    swap_mode:finite(instrument.swap_mode),
+    swap_rollover3days:finite(instrument.swap_rollover3days),
+    swap_long:finite(instrument.swap_long),
+    swap_short:finite(instrument.swap_short),
   }
 }
 
@@ -133,8 +148,71 @@ function normalizeIntent(sample, options) {
 const rounded = (value, digits = 8) => Number(Number(value || 0).toFixed(digits))
 
 function spreadPrice(candle, instrument) {
-  const spreadPoints = Math.max(0, finite(candle?.spread) || 0)
+  const candleSpread = finite(candle?.spread)
+  const spreadPoints = Math.max(0, candleSpread == null ? instrument.spread || 0 : candleSpread)
   return spreadPoints * instrument.point
+}
+
+function brokerOrderViolation(intent, candle, instrument, pending = [], positions = []) {
+  const tradeMode = instrument.trade_mode
+  if (tradeMode === 0 || tradeMode === 3) return 'symbol_not_open_for_new_positions'
+  if (tradeMode === 1 && intent.direction !== 'buy') return 'symbol_long_only'
+  if (tradeMode === 2 && intent.direction !== 'sell') return 'symbol_short_only'
+  if (instrument.order_mode != null) {
+    const requiredOrderFlag = intent.method === 'market' ? 1
+      : intent.method === 'limit' ? 2
+        : intent.method === 'stop' ? 4
+          : intent.method === 'stop_limit' ? 8
+            : 0
+    if (!requiredOrderFlag || (instrument.order_mode & requiredOrderFlag) === 0) return 'entry_method_not_allowed'
+    if ((instrument.order_mode & 16) === 0) return 'stop_loss_not_allowed'
+    if ((instrument.order_mode & 32) === 0) return 'take_profit_not_allowed'
+  }
+
+  const volumeTolerance = Math.max(1e-9, instrument.volume_step * 1e-6)
+  if (intent.volume < instrument.volume_min - volumeTolerance
+    || intent.volume > instrument.volume_max + volumeTolerance) {
+    return 'volume_out_of_range'
+  }
+  const volumeSteps = (intent.volume - instrument.volume_min) / instrument.volume_step
+  if (Math.abs(volumeSteps - Math.round(volumeSteps)) > 1e-6) return 'volume_step_mismatch'
+  if (instrument.volume_limit > 0) {
+    const directionalExposure = [...pending, ...positions]
+      .filter(item => item.direction === intent.direction)
+      .reduce((sum, item) => sum + Number(item.volume || 0), 0)
+    if (directionalExposure + intent.volume > instrument.volume_limit + volumeTolerance) {
+      return 'directional_volume_limit_exceeded'
+    }
+  }
+
+  const minimumDistance = instrument.trade_stops_level * instrument.point
+  if (!(minimumDistance > 0)) return null
+  const bid = finite(candle?.open)
+  if (!(bid > 0)) return 'reference_quote_unavailable'
+  const ask = bid + spreadPrice(candle, instrument)
+  const entryReference = intent.method === 'market'
+    ? (intent.direction === 'buy' ? ask : bid)
+    : intent.method === 'stop_limit'
+      ? intent.stop_limit_price
+      : intent.trigger_price
+  if (!(entryReference > 0)) return 'entry_reference_invalid'
+
+  if (intent.method === 'limit') {
+    if (intent.direction === 'buy' && ask - intent.trigger_price < minimumDistance - 1e-9) return 'pending_price_too_close'
+    if (intent.direction === 'sell' && intent.trigger_price - bid < minimumDistance - 1e-9) return 'pending_price_too_close'
+  }
+  if (intent.method === 'stop' || intent.method === 'stop_limit') {
+    if (intent.direction === 'buy' && intent.trigger_price - ask < minimumDistance - 1e-9) return 'pending_price_too_close'
+    if (intent.direction === 'sell' && bid - intent.trigger_price < minimumDistance - 1e-9) return 'pending_price_too_close'
+  }
+  if (intent.direction === 'buy') {
+    if (entryReference - intent.stop_loss < minimumDistance - 1e-9) return 'stop_loss_too_close'
+    if (intent.take_profit - entryReference < minimumDistance - 1e-9) return 'take_profit_too_close'
+  } else {
+    if (intent.stop_loss - entryReference < minimumDistance - 1e-9) return 'stop_loss_too_close'
+    if (entryReference - intent.take_profit < minimumDistance - 1e-9) return 'take_profit_too_close'
+  }
+  return null
 }
 
 function fillEntry(intent, candle, instrument, options, state) {
@@ -517,6 +595,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   let positionLimitRejectedCount = 0
   let pendingLimitRejectedCount = 0
   let stopLimitDeferredCount = 0
+  let brokerConstraintRejectedCount = 0
 
   const recordAccount = (candle, event = null) => {
     const account = summarizeAccount(balance, positions, candle, instrument)
@@ -554,7 +633,20 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   for (const candle of orderedCandles) {
     while (intentIndex < intents.length && intents[intentIndex].decision_time_utc_msc <= candle._time) {
       const intent = intents[intentIndex++]
-      if (pending.length >= options.max_pending_orders) {
+      const brokerViolation = brokerOrderViolation(intent, candle, instrument, pending, positions)
+      if (brokerViolation) {
+        brokerConstraintRejectedCount += 1
+        records.push({
+          status:'rejected',
+          reason:'broker_contract_constraint',
+          broker_reason:brokerViolation,
+          signal_index:intent.signal_index,
+          decision_time_utc_msc:intent.decision_time_utc_msc,
+          direction:intent.direction,
+          entry_method:intent.method,
+          volume:intent.volume,
+        })
+      } else if (pending.length >= options.max_pending_orders) {
         pendingLimitRejectedCount += 1
         records.push({
           status:'rejected',
@@ -751,6 +843,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
     margin_rejected_count:marginRejectedCount,
     position_limit_rejected_count:positionLimitRejectedCount,
     pending_limit_rejected_count:pendingLimitRejectedCount,
+    broker_constraint_rejected_count:brokerConstraintRejectedCount,
     stop_limit_same_bar_deferred_count:stopLimitDeferredCount,
     rejected_order_count:records.filter(record => record.status === 'rejected').length,
     expired_order_count:records.filter(record => record.status === 'expired').length,
