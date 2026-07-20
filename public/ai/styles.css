@@ -8069,6 +8069,13 @@ a.signal-link:hover {
 .compare-model-state { color:var(--status-success); font-size:10px; }
 .compare-inline-empty { display:flex; align-items:center; gap:9px; min-height:52px; padding:12px; border:1px dashed var(--border-default); border-radius:var(--radius-md); color:var(--text-muted); font-size:12px; }
 .compare-inline-empty.danger { color:var(--status-danger); }
+.compare-model-errors { display:grid; gap:12px; margin-bottom:14px; padding:14px 16px; border:1px solid rgba(251,113,133,.28); border-radius:12px; background:rgba(127,29,29,.12); color:var(--text-primary); }
+.compare-model-errors > div, .compare-model-errors > div > span, .compare-model-errors li { display:flex; align-items:center; gap:9px; }
+.compare-model-errors > div { color:#fda4af; }
+.compare-model-errors > div > span { align-items:flex-start; flex-direction:column; gap:2px; }
+.compare-model-errors small, .compare-model-errors li span { color:var(--text-muted); font-size:12px; }
+.compare-model-errors ul { display:grid; gap:7px; margin:0; padding:0; list-style:none; }
+.compare-model-errors li { justify-content:space-between; flex-wrap:wrap; padding:8px 10px; border-radius:8px; background:rgba(15,23,42,.42); }
 .compare-progress-panel { padding:16px 18px; border:1px solid rgba(212,175,55,.25); border-radius:var(--radius-xl); background:rgba(212,175,55,.035); }
 .compare-progress-head { display:flex; justify-content:space-between; gap:16px; margin-bottom:11px; }
 .compare-progress-head > div { display:flex; flex-direction:column; gap:2px; }

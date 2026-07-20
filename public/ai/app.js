@@ -4931,7 +4931,8 @@ function renderHistoryCompareResults(results, meta) {
   const replayModels = valid.filter(result => result.account_simulation?.status === "success");
   const replaySorted = [...replayModels].sort((a, b) => Number(b.account_simulation.net_profit || 0) - Number(a.account_simulation.net_profit || 0));
   const replayLeader = replaySorted[0];
-  const failedModels = results.filter(result => result.status !== "success").length;
+  const failedResults = results.filter(result => result.status !== "success");
+  const failedModels = failedResults.length;
   const comparableAgreementCount = meta.agreement_comparable_count == null
     ? Number(meta.evaluation_count || 0)
     : Number(meta.agreement_comparable_count || 0);
@@ -4955,6 +4956,15 @@ function renderHistoryCompareResults(results, meta) {
       : "当前属于抽样决策 + M1 OHLC 执行回放，并非逐根主周期连续决策。"}同一分钟内同时触及止损和止盈时采用“止损优先”；跳空触发和跳空止损按更差的开盘成交价计算；Stop Limit 在同柱内无法确认先后顺序时延后到下一根；保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照，并按合约模式映射到历史成交价，缺少可靠参数时会拒绝该笔模拟订单并明确标记，不会伪装成“资金不足”。保证金强平按方向不利的盘中极值进行保守检查。隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick 和完整账户级风控，因此不能等同真实成交收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
+  if (failedResults.length) {
+    const failedDetails = failedResults.map(result => {
+      const signalError = result.signals?.find(signal => signal.error)?.error;
+      const reason = signalError || result.error || "history_compare_failed";
+      const modelName = result.model_name || `模型 #${result.model_id || "--"}`;
+      return `<li><strong>${escapeHtml(modelName)}</strong><span>${escapeHtml(apiErrorMessage(reason))}</span></li>`;
+    }).join("");
+    tableHtml += `<section class="compare-model-errors" role="alert"><div><i data-lucide="triangle-alert" size="18"></i><span><strong>${failedResults.length} 个模型未完成有效评估</strong><small>异常模型不参与排名与一致度计算</small></span></div><ul>${failedDetails}</ul></section>`;
+  }
   if (replaySorted.length) {
     tableHtml += renderCompareEquityChart(replaySorted, meta);
     tableHtml += `<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>${isContinuous ? "连续账户资金回测" : "抽样账户资金回放"}</h2><p>同一模型的全部${isContinuous ? "连续决策" : "抽样"}信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">${isContinuous ? "逐根决策" : "抽样信号"} · ${escapeHtml(meta.execution_timeframe || "M1")} 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>交易成本</th><th>保证金状态</th><th>未触发 / 同柱待定 / 歧义</th></tr></thead><tbody>`;
