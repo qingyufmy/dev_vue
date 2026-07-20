@@ -219,4 +219,100 @@ describe('model comparison account replay', () => {
     })
     expect(result.trades.some(record => record.reason === 'max_concurrent_positions_reached')).toBe(true)
   })
+
+  it('uses the worse opening price when a stop entry gaps beyond its trigger', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        signal_type:'buy_stop',
+        entry_method:'stop',
+        limit_price:101,
+        stop_loss_price:95,
+        take_profit_1_price:110,
+      })],
+      [
+        candle(0, { open:103, high:104, low:102, close:103 }),
+        candle(1, { open:109, high:111, low:108, close:110 }),
+      ],
+      instrument,
+      { starting_balance:10_000, leverage:100, slippage_points:10 },
+    )
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      entry_price:103.1,
+      exit_reason:'take_profit',
+      exit_price:110,
+      net_profit:69,
+    })
+  })
+
+  it('uses the worse opening price when price gaps through a stop loss', () => {
+    const result = simulateVirtualAccount(
+      [sample()],
+      [
+        candle(0),
+        candle(1, { open:90, high:91, low:89, close:90 }),
+      ],
+      instrument,
+      { starting_balance:10_000, leverage:100 },
+    )
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      exit_reason:'stop_loss',
+      exit_price:90,
+      net_profit:-100,
+    })
+  })
+
+  it('defers an intrabar stop-limit activation because OHLC cannot prove event order', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        signal_type:'buy_stop_limit',
+        entry_method:'stop_limit',
+        limit_price:101,
+        stop_limit_price:100,
+        stop_loss_price:95,
+        take_profit_1_price:110,
+      })],
+      [
+        candle(0, { open:100, high:102, low:99, close:100 }),
+        candle(1, { open:100, high:100.5, low:99.5, close:100 }),
+      ],
+      instrument,
+      { starting_balance:10_000, leverage:100 },
+    )
+    expect(result.stop_limit_same_bar_deferred_count).toBe(1)
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      entry_time_utc_msc:Date.UTC(2026, 6, 20, 0, 1),
+      entry_price:100,
+      exit_reason:'data_end',
+    })
+  })
+
+  it('applies stop-out at the adverse intrabar extreme even when the candle closes recovered', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        recommended_volume:1,
+        stop_loss_price:50,
+        take_profit_1_price:150,
+      })],
+      [
+        candle(0),
+        candle(1, { open:100, high:101, low:94, close:100 }),
+      ],
+      instrument,
+      { starting_balance:1_000, leverage:10, stop_out_level_pct:50 },
+    )
+    expect(result).toMatchObject({
+      stop_out_count:1,
+      lowest_margin_level_pct:40,
+      ending_balance:400,
+      intrabar_margin_mode:'conservative_directional_extremes',
+    })
+    expect(result.trades[0]).toMatchObject({
+      exit_reason:'margin_stop_out',
+      exit_price:94,
+      net_profit:-600,
+    })
+  })
 })
