@@ -855,6 +855,30 @@ describe('historical comparison execution windows', () => {
   })
 })
 
+describe('historical comparison time range normalization', () => {
+  it('converts legacy MT5 wall time to explicit UTC before persisting a job', () => {
+    const range = __historyCompareJobsTest.normalizeTimeRange(
+      '2026-07-20T18:47:00',
+      '2026-07-20T19:47:00',
+      180,
+      Date.UTC(2026, 6, 20, 17, 0),
+    )
+    expect(range).toMatchObject({
+      startTime:'2026-07-20T15:47:00.000Z',
+      endTime:'2026-07-20T16:47:00.000Z',
+    })
+  })
+
+  it('rejects a stale client that submits an end time in the future', () => {
+    expect(() => __historyCompareJobsTest.normalizeTimeRange(
+      '2026-07-13T23:47:00',
+      '2026-07-20T23:47:00',
+      180,
+      Date.UTC(2026, 6, 20, 15, 47, 23),
+    )).toThrow('history_compare_end_time_in_future')
+  })
+})
+
 describe('historical comparison frontend contract', () => {
   const frontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 

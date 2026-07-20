@@ -962,6 +962,7 @@ const API_ERROR_MESSAGES = {
   "model_ids must be an array of 2-5 model profile IDs": "请选择 2 至 5 个模型",
   "model_ids must contain 2-5 unique IDs": "请选择 2 至 5 个不同模型",
   invalid_history_time_range: "历史评估时间范围无效",
+  history_compare_end_time_in_future: "结束时间晚于当前 MT5 时间，请刷新时间范围后重试",
   history_market_data_unavailable: "历史行情暂不可用，请确认桥接和行情缓存状态",
   period_market_candles_unavailable: "所选区间内没有可用的完整历史 K 线，请调整时间范围后重试",
   period_market_source_unavailable: "历史行情源暂不可用，请检查管理员桥接和行情缓存",

@@ -28,6 +28,7 @@ const HISTORY_COMPARE_MIN_STEPS = 4
 const HISTORY_COMPARE_MAX_KLINES = 5000
 const HISTORY_COMPARE_MAX_CONTINUOUS_STEPS = 120
 const DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
+const HISTORY_COMPARE_FUTURE_TOLERANCE_MS = 5 * 60_000
 
 function normalizeCompareTimezoneOffset(value) {
   const numeric = Number(value)
@@ -52,6 +53,23 @@ function parseCompareTimeUtcMs(value, timezoneOffsetMinutes = DEFAULT_MT5_TIMEZO
     : raw.includes(' ') ? raw.replace(' ', 'T') : `${raw}T00:00:00`
   const parsed = Date.parse(hasTimezone ? normalized : `${normalized}${timezoneOffsetSuffix(timezoneOffsetMinutes)}`)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizeHistoryCompareTimeRange(startTime, endTime, timezoneOffsetMinutes, nowMs = Date.now()) {
+  const startUtcMs = parseCompareTimeUtcMs(startTime, timezoneOffsetMinutes)
+  const endUtcMs = parseCompareTimeUtcMs(endTime, timezoneOffsetMinutes)
+  if (!startUtcMs || !endUtcMs || endUtcMs <= startUtcMs) {
+    throw new Error('invalid_history_time_range')
+  }
+  if (endUtcMs > Number(nowMs) + HISTORY_COMPARE_FUTURE_TOLERANCE_MS) {
+    throw new Error('history_compare_end_time_in_future')
+  }
+  return {
+    startUtcMs,
+    endUtcMs,
+    startTime:new Date(startUtcMs).toISOString(),
+    endTime:new Date(endUtcMs).toISOString(),
+  }
 }
 
 async function resolveCompareTimezoneOffset(value) {
@@ -891,11 +909,15 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   strategyRuntimeSnapshot.runtime_config_sha256 = comparisonFingerprint(strategyRuntimeSnapshot)
 
   const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params.timezone_offset_minutes)
-  const startUtcMs = parseCompareTimeUtcMs(start_time, selectionTimezoneOffsetMinutes)
-  const endUtcMs = parseCompareTimeUtcMs(end_time, selectionTimezoneOffsetMinutes)
-  if (!startUtcMs || !endUtcMs || endUtcMs <= startUtcMs) {
-    return { status: 'error', message: 'invalid_history_time_range' }
+  let normalizedTimeRange
+  try {
+    normalizedTimeRange = normalizeHistoryCompareTimeRange(
+      start_time, end_time, selectionTimezoneOffsetMinutes
+    )
+  } catch (error) {
+    return { status:'error', message:error.message || 'invalid_history_time_range' }
   }
+  const { startUtcMs, endUtcMs } = normalizedTimeRange
   const warmupMs = planItems.reduce((max, item) => Math.max(max,
     TIMEFRAME_MINUTES[item.timeframe] * item.kline_count * 2 * 60_000), 0)
   let historyWindows
@@ -1551,8 +1573,15 @@ export async function startHistoryCompareJob(userId, params) {
   const strategy = params?.strategy_id
     ? await getStrategyById(Number(params.strategy_id), userId, 'admin', { forExecution:false })
     : null
+  const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params?.timezone_offset_minutes)
+  const normalizedTimeRange = normalizeHistoryCompareTimeRange(
+    params?.start_time, params?.end_time, selectionTimezoneOffsetMinutes
+  )
   const normalizedParams = {
     ...(params || {}),
+    start_time:normalizedTimeRange.startTime,
+    end_time:normalizedTimeRange.endTime,
+    timezone_offset_minutes:selectionTimezoneOffsetMinutes,
     evaluation_mode:params?.evaluation_mode == null ? 'sampled' : params.evaluation_mode,
     timeframe:strategy ? parseStrategyPolicy(strategy).marketDataPlan.primary_timeframe : null,
     backtest:{
@@ -1719,5 +1748,8 @@ export const __historyCompareJobsTest = {
   },
   executionWindows(modelSignals, endUtcMs, maxHoldingHours) {
     return historyExecutionWindows(modelSignals, endUtcMs, maxHoldingHours)
+  },
+  normalizeTimeRange(startTime, endTime, timezoneOffsetMinutes, nowMs) {
+    return normalizeHistoryCompareTimeRange(startTime, endTime, timezoneOffsetMinutes, nowMs)
   },
 }
