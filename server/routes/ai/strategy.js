@@ -1108,6 +1108,10 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     stop_out_level_pct:useBridgeAccountSettings && bridgeStopOutUsesPercent && bridgeStopOut > 0
       ? bridgeStopOut
       : backtestOptions.stop_out_level_pct,
+    timezone_offset_minutes:Number.isFinite(Number(backtestContext.timezone_offset_minutes))
+      ? Number(backtestContext.timezone_offset_minutes)
+      : backtestOptions.timezone_offset_minutes,
+    account_currency:backtestContext.account?.currency || backtestOptions.account_currency,
   })
 
   const modelResults = []

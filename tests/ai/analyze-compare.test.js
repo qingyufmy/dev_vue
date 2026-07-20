@@ -502,6 +502,11 @@ describe('handleHistoryCompare', () => {
         expect(r.directional_score).toHaveProperty('buy_count')
         expect(r.directional_score).toHaveProperty('sell_count')
         expect(r.directional_score).toHaveProperty('hold_count')
+        expect(r.account_simulation.options).toMatchObject({
+          timezone_offset_minutes:180,
+          account_currency:'USD',
+          apply_swap:true,
+        })
       }
     })
 
@@ -687,7 +692,7 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('方向评估与资金回放分开计算')
     expect(frontend).toContain('抽样账户资金回放')
     expect(frontend).toContain('挂单、并发持仓、浮动盈亏、手续费、保证金和强平')
-    expect(frontend).toContain('尚未接入真实逐笔 Tick、隔夜利息和完整账户级风控')
+    expect(frontend).toContain('尚未接入真实逐笔 Tick 和完整账户级风控')
     expect(frontend).toContain('并非逐根主周期 K 线连续触发策略的完整回测')
   })
 
@@ -697,6 +702,14 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('保证金按方向不利的盘中极值进行保守检查')
     expect(frontend).toContain('未触发 / 同柱待定 / 歧义')
     expect(frontend).toContain('stop_limit_same_bar_deferred_count')
+  })
+
+  it('shows commission and MT5-timezone swap accounting separately', () => {
+    expect(frontend).toContain('隔夜利息按 MT5 服务器时区跨日计提')
+    expect(frontend).toContain('币种无法可靠换算时会明确标记为“部分未计入”')
+    expect(frontend).toContain('simulation.total_commission')
+    expect(frontend).toContain('simulation.total_swap')
+    expect(frontend).toContain('simulation.swap_status === "partial"')
   })
 
   it('renders an accessible multi-model equity curve with MT5 time tooltips', () => {

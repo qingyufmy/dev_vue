@@ -4887,12 +4887,12 @@ function renderHistoryCompareResults(results, meta) {
       ? "每个模型在每根策略主周期 K 线闭合后读取相同的完整多周期上下文并作出决策。"
       : "每个模型在相同的均匀抽样历史时点读取相同上下文。"}方向质量按下一根主周期 K 线评估；虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序处理市价、限价、突破与 Stop Limit 订单，并让同一模型的挂单、并发持仓、浮动盈亏、手续费、保证金和强平共享同一份资金。杠杆与强平线优先读取 MT5 账户元数据。${isContinuous
       ? "当前属于逐根主周期连续决策 + M1 OHLC 执行回放。"
-      : "当前属于抽样决策 + M1 OHLC 执行回放，并非逐根主周期连续决策。"}同一分钟内同时触及止损和止盈时采用“止损优先”；跳空触发和跳空止损按更差的开盘成交价计算；Stop Limit 在同柱内无法确认先后顺序时延后到下一根；保证金按方向不利的盘中极值进行保守检查。尚未接入真实逐笔 Tick、隔夜利息和完整账户级风控，因此不能等同真实成交收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
+      : "当前属于抽样决策 + M1 OHLC 执行回放，并非逐根主周期连续决策。"}同一分钟内同时触及止损和止盈时采用“止损优先”；跳空触发和跳空止损按更差的开盘成交价计算；Stop Limit 在同柱内无法确认先后顺序时延后到下一根；保证金按方向不利的盘中极值进行保守检查。隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick 和完整账户级风控，因此不能等同真实成交收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (replaySorted.length) {
     tableHtml += renderCompareEquityChart(replaySorted, meta);
-    tableHtml += `<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>${isContinuous ? "连续账户资金回测" : "抽样账户资金回放"}</h2><p>同一模型的全部${isContinuous ? "连续决策" : "抽样"}信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">${isContinuous ? "逐根决策" : "抽样信号"} · ${escapeHtml(meta.execution_timeframe || "M1")} 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>保证金状态</th><th>未触发 / 同柱待定 / 歧义</th></tr></thead><tbody>`;
+    tableHtml += `<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>${isContinuous ? "连续账户资金回测" : "抽样账户资金回放"}</h2><p>同一模型的全部${isContinuous ? "连续决策" : "抽样"}信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">${isContinuous ? "逐根决策" : "抽样信号"} · ${escapeHtml(meta.execution_timeframe || "M1")} 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>交易成本</th><th>保证金状态</th><th>未触发 / 同柱待定 / 歧义</th></tr></thead><tbody>`;
     replaySorted.forEach(result => {
       const simulation = result.account_simulation;
       tableHtml += `<tr><td><strong>${escapeHtml(result.model_name)}</strong><small class="compare-cell-note">${escapeHtml(modelProviderLabel(result.provider))}</small></td>
@@ -4902,6 +4902,7 @@ function renderHistoryCompareResults(results, meta) {
         <td>${simulation.closed_trade_count || 0} / ${Number(simulation.win_rate || 0).toFixed(1)}%</td>
         <td>${Number(simulation.max_drawdown || 0).toFixed(2)} <small class="compare-cell-note">${Number(simulation.max_drawdown_pct || 0).toFixed(2)}%</small></td>
         <td>${simulation.profit_factor == null ? "∞" : Number(simulation.profit_factor || 0).toFixed(2)}</td>
+        <td><strong>手续费 ${Number(simulation.total_commission || 0).toFixed(2)}</strong><small class="compare-cell-note ${simulation.swap_status === "partial" ? "danger" : ""}">隔夜 ${Number(simulation.total_swap || 0).toFixed(2)}${simulation.swap_status === "partial" ? " · 部分未计入" : ""}</small></td>
         <td><strong>${simulation.lowest_margin_level_pct == null ? "--" : `${Number(simulation.lowest_margin_level_pct).toFixed(1)}%`}</strong><small class="compare-cell-note">峰值 ${simulation.maximum_concurrent_positions || 0} 仓 · 强平 ${simulation.stop_out_count || 0} · 拒绝 ${simulation.rejected_order_count || 0}</small></td>
         <td>${simulation.expired_order_count || 0} / ${simulation.stop_limit_same_bar_deferred_count || 0} / ${simulation.ambiguous_bar_count || 0}</td></tr>`;
     });

@@ -424,4 +424,61 @@ describe('model comparison account replay', () => {
       net_profit:49,
     })
   })
+
+  it('charges triple points-based swap at MT5 server rollover', () => {
+    const decisionTime = Date.UTC(2026, 6, 22, 20, 59)
+    const result = simulateVirtualAccount(
+      [{ ...sample({ take_profit_1_price:150 }), decision_time:new Date(decisionTime).toISOString() }],
+      [
+        { ...candle(0), time_utc_msc:decisionTime },
+        { ...candle(1), time_utc_msc:Date.UTC(2026, 6, 22, 21, 0) },
+      ],
+      {
+        ...instrument,
+        swap_mode:1,
+        swap_rollover3days:3,
+        swap_long:-10,
+        swap_short:5,
+      },
+      { starting_balance:10_000, leverage:100, timezone_offset_minutes:180, account_currency:'USD' },
+    )
+    expect(result).toMatchObject({
+      ending_balance:9_997,
+      net_profit:-3,
+      total_swap:-3,
+      swap_status:'ready',
+      swap_rollover_count:1,
+      swap_unapplied_rollover_count:0,
+    })
+    expect(result.trades[0]).toMatchObject({ swap:-3, net_profit:-3 })
+  })
+
+  it('marks swap as partial instead of silently assuming zero when currency conversion is unavailable', () => {
+    const decisionTime = Date.UTC(2026, 6, 22, 20, 59)
+    const result = simulateVirtualAccount(
+      [{ ...sample({ take_profit_1_price:150 }), decision_time:new Date(decisionTime).toISOString() }],
+      [
+        { ...candle(0), time_utc_msc:decisionTime },
+        { ...candle(1), time_utc_msc:Date.UTC(2026, 6, 22, 21, 0) },
+      ],
+      {
+        ...instrument,
+        currency_base:'XAU',
+        currency_margin:'EUR',
+        swap_mode:3,
+        swap_rollover3days:3,
+        swap_long:-2,
+        swap_short:1,
+      },
+      { starting_balance:10_000, leverage:100, timezone_offset_minutes:180, account_currency:'USD' },
+    )
+    expect(result).toMatchObject({
+      ending_balance:10_000,
+      total_swap:0,
+      swap_status:'partial',
+      swap_rollover_count:0,
+      swap_unapplied_rollover_count:1,
+    })
+    expect(result.trades[0]).toMatchObject({ swap:0, net_profit:0 })
+  })
 })

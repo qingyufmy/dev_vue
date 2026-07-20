@@ -8,9 +8,13 @@ const DEFAULTS = Object.freeze({
   max_concurrent_positions: 5,
   max_pending_orders: 20,
   market_entry_ttl_minutes: 5,
+  timezone_offset_minutes: 0,
+  account_currency: '',
+  apply_swap: true,
 })
 
 const finite = value => {
+  if (value == null || value === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
 }
@@ -65,6 +69,9 @@ export function normalizeBacktestOptions(options = {}) {
     max_concurrent_positions:Math.round(clamp(options.max_concurrent_positions, 1, 100, DEFAULTS.max_concurrent_positions)),
     max_pending_orders:Math.round(clamp(options.max_pending_orders, 1, 1000, DEFAULTS.max_pending_orders)),
     market_entry_ttl_minutes:clamp(options.market_entry_ttl_minutes, 1, 1440, DEFAULTS.market_entry_ttl_minutes),
+    timezone_offset_minutes:clamp(options.timezone_offset_minutes, -14 * 60, 14 * 60, DEFAULTS.timezone_offset_minutes),
+    account_currency:String(options.account_currency || DEFAULTS.account_currency).trim().toUpperCase(),
+    apply_swap:options.apply_swap !== false,
   }
 }
 
@@ -103,6 +110,7 @@ export function normalizeBacktestInstrument(instrument = {}) {
     volume_max: volumeMax,
     volume_step: volumeStep,
     volume_limit:Math.max(0, finite(instrument.volume_limit) || 0),
+    currency_base:instrument.currency_base || null,
     currency_profit: instrument.currency_profit || null,
     currency_margin:instrument.currency_margin || null,
     margin_initial:finite(instrument.margin_initial),
@@ -113,6 +121,15 @@ export function normalizeBacktestInstrument(instrument = {}) {
     swap_rollover3days:finite(instrument.swap_rollover3days),
     swap_long:finite(instrument.swap_long),
     swap_short:finite(instrument.swap_short),
+    swap_daily_multipliers:[
+      finite(instrument.swap_sunday),
+      finite(instrument.swap_monday),
+      finite(instrument.swap_tuesday),
+      finite(instrument.swap_wednesday),
+      finite(instrument.swap_thursday),
+      finite(instrument.swap_friday),
+      finite(instrument.swap_saturday),
+    ],
   }
 }
 
@@ -473,6 +490,84 @@ function grossProfit(direction, volume, entryPrice, exitPrice, instrument) {
   return rounded(move / instrument.tick_size * instrument.tick_value * volume)
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function rolloverEvents(previousUtcMs, currentUtcMs, timezoneOffsetMinutes) {
+  if (!(currentUtcMs > previousUtcMs)) return []
+  const offsetMs = timezoneOffsetMinutes * 60_000
+  const previousServerMs = previousUtcMs + offsetMs
+  const currentServerMs = currentUtcMs + offsetMs
+  let boundaryServerMs = (Math.floor(previousServerMs / DAY_MS) + 1) * DAY_MS
+  const events = []
+  while (boundaryServerMs <= currentServerMs) {
+    const rolloverFromDay = new Date(boundaryServerMs - DAY_MS).getUTCDay()
+    events.push({
+      time_utc_msc:boundaryServerMs - offsetMs,
+      rollover_from_day:rolloverFromDay,
+    })
+    boundaryServerMs += DAY_MS
+  }
+  return events
+}
+
+function swapMultiplier(instrument, rolloverFromDay) {
+  const explicit = instrument.swap_daily_multipliers?.[rolloverFromDay]
+  if (explicit != null) return explicit
+  if (rolloverFromDay === 0 || rolloverFromDay === 6) return 0
+  return rolloverFromDay === instrument.swap_rollover3days ? 3 : 1
+}
+
+function profitCurrencyRate(instrument) {
+  if (!(instrument.contract_size > 0) || !(instrument.tick_size > 0) || !(instrument.tick_value > 0)) return null
+  return instrument.tick_value / (instrument.tick_size * instrument.contract_size)
+}
+
+function currencyToDepositRate(currency, price, instrument, options) {
+  const requested = String(currency || '').toUpperCase()
+  if (!requested || !options.account_currency) return null
+  if (requested === options.account_currency) return 1
+  const profitRate = profitCurrencyRate(instrument)
+  if (!(profitRate > 0)) return null
+  if (requested === String(instrument.currency_profit || '').toUpperCase()) return profitRate
+  if (requested === String(instrument.currency_base || '').toUpperCase() && price > 0) return price * profitRate
+  if (requested === String(instrument.currency_margin || '').toUpperCase()) {
+    if (requested === String(instrument.currency_base || '').toUpperCase() && price > 0) return price * profitRate
+    if (requested === String(instrument.currency_profit || '').toUpperCase()) return profitRate
+  }
+  return null
+}
+
+function swapCharge(position, candle, instrument, options, multiplier) {
+  if (!options.apply_swap || multiplier === 0 || instrument.swap_mode === 0) return { amount:0, status:'ready' }
+  const swapValue = position.direction === 'buy' ? instrument.swap_long : instrument.swap_short
+  if (swapValue == null || instrument.swap_mode == null) return { amount:null, status:'metadata_unavailable' }
+  const price = markPrice(position.direction, candle, instrument)
+  if (!(price > 0)) return { amount:null, status:'price_unavailable' }
+  let amountPerLot = null
+  if ([1, 7, 8].includes(instrument.swap_mode)) {
+    amountPerLot = swapValue * instrument.point / instrument.tick_size * instrument.tick_value
+  } else if (instrument.swap_mode === 2) {
+    const rate = currencyToDepositRate(instrument.currency_base, price, instrument, options)
+    if (rate != null) amountPerLot = swapValue * rate
+  } else if (instrument.swap_mode === 3) {
+    const rate = currencyToDepositRate(instrument.currency_margin, price, instrument, options)
+    if (rate != null) amountPerLot = swapValue * rate
+  } else if (instrument.swap_mode === 4) {
+    amountPerLot = swapValue
+  } else if (instrument.swap_mode === 9) {
+    const rate = currencyToDepositRate(instrument.currency_profit, price, instrument, options)
+    if (rate != null) amountPerLot = swapValue * rate
+  } else if ([5, 6].includes(instrument.swap_mode)) {
+    const interestPrice = instrument.swap_mode === 6 ? position.entry_price : price
+    const rate = currencyToDepositRate(instrument.currency_profit, interestPrice, instrument, options)
+    if (rate != null && instrument.contract_size > 0) {
+      amountPerLot = interestPrice * instrument.contract_size * (swapValue / 100) / 360 * rate
+    }
+  }
+  if (amountPerLot == null) return { amount:null, status:'currency_conversion_unavailable' }
+  return { amount:rounded(amountPerLot * position.volume * multiplier), status:'ready' }
+}
+
 function requiredMargin(volume, entryPrice, instrument, options) {
   if (instrument.margin_initial > 0) return rounded(instrument.margin_initial * volume)
   if (!(instrument.contract_size > 0) || !(options.leverage > 0)) return null
@@ -510,7 +605,8 @@ function closeVirtualPosition(position, exitPrice, exitTime, reason, ambiguous, 
   const gross = grossProfit(position.direction, position.volume, position.entry_price, exitPrice, instrument)
   const exitCommission = rounded(options.commission_per_lot * position.volume / 2)
   const totalCommission = rounded(position.entry_commission + exitCommission)
-  const net = rounded(gross - totalCommission)
+  const swap = rounded(position.swap || 0)
+  const net = rounded(gross - totalCommission + swap)
   return {
     balance:rounded(balance + gross - exitCommission),
     trade:{
@@ -533,6 +629,7 @@ function closeVirtualPosition(position, exitPrice, exitTime, reason, ambiguous, 
       margin:position.margin,
       gross_profit:gross,
       commission:totalCommission,
+      swap,
       net_profit:net,
     },
   }
@@ -596,6 +693,10 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   let pendingLimitRejectedCount = 0
   let stopLimitDeferredCount = 0
   let brokerConstraintRejectedCount = 0
+  let previousCandle = null
+  let totalSwap = 0
+  let swapRolloverCount = 0
+  let swapUnappliedRolloverCount = 0
 
   const recordAccount = (candle, event = null) => {
     const account = summarizeAccount(balance, positions, candle, instrument)
@@ -631,6 +732,24 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   }
 
   for (const candle of orderedCandles) {
+    if (previousCandle && positions.length) {
+      for (const rollover of rolloverEvents(previousCandle._time, candle._time, options.timezone_offset_minutes)) {
+        const multiplier = swapMultiplier(instrument, rollover.rollover_from_day)
+        for (const position of positions) {
+          const charge = swapCharge(position, previousCandle, instrument, options, multiplier)
+          if (charge.amount == null) {
+            swapUnappliedRolloverCount += 1
+            continue
+          }
+          swapRolloverCount += 1
+          if (charge.amount !== 0) {
+            balance = rounded(balance + charge.amount)
+            position.swap = rounded((position.swap || 0) + charge.amount)
+            totalSwap = rounded(totalSwap + charge.amount)
+          }
+        }
+      }
+    }
     while (intentIndex < intents.length && intents[intentIndex].decision_time_utc_msc <= candle._time) {
       const intent = intents[intentIndex++]
       const brokerViolation = brokerOrderViolation(intent, candle, instrument, pending, positions)
@@ -743,6 +862,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
         horizon_end_utc_msc:intent.horizon_end_utc_msc,
         margin,
         entry_commission:entryCommission,
+        swap:0,
       }
       positions.push(position)
       maximumConcurrentPositions = Math.max(maximumConcurrentPositions, positions.length)
@@ -779,6 +899,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
       stressedAccount = summarizeAccount(balance, positions, candle, instrument, adverseMarkPrice)
     }
     recordAccount(candle)
+    previousCandle = candle
   }
 
   const lastCandle = orderedCandles.at(-1)
@@ -818,6 +939,7 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
   const grossLossTotal = Math.abs(losses.reduce((sum, trade) => sum + trade.net_profit, 0))
   const netProfit = rounded(balance - options.starting_balance)
   const finalAccount = summarizeAccount(balance, [], lastCandle, instrument)
+  const totalCommission = rounded(closed.reduce((sum, trade) => sum + Number(trade.commission || 0), 0))
   return {
     status:'success',
     simulation_mode:'event_driven_virtual_account',
@@ -829,6 +951,15 @@ export function simulateVirtualAccount(samples = [], candles = [], rawInstrument
     ending_balance:rounded(balance),
     ending_equity:finalAccount.equity,
     net_profit:netProfit,
+    total_commission:totalCommission,
+    total_swap:rounded(totalSwap),
+    swap_status:options.apply_swap === false
+      ? 'disabled'
+      : swapUnappliedRolloverCount > 0
+        ? 'partial'
+        : swapRolloverCount > 0 ? 'ready' : 'not_applicable',
+    swap_rollover_count:swapRolloverCount,
+    swap_unapplied_rollover_count:swapUnappliedRolloverCount,
     return_pct:rounded(netProfit / options.starting_balance * 100, 4),
     closed_trade_count:closed.length,
     win_count:wins.length,
