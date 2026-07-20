@@ -2,6 +2,7 @@ import {
   normalizeBacktestInstrument,
   normalizeBacktestOptions,
   simulateSignalReplay,
+  simulateVirtualAccount,
 } from '../../server/routes/ai/model-backtest.js'
 
 const instrument = {
@@ -129,5 +130,93 @@ describe('model comparison account replay', () => {
     expect(result.trades[0].commission).toBe(0.7)
     expect(result.trades[0].net_profit).toBe(48.3)
     expect(result.ending_balance).toBe(10_048.3)
+  })
+
+  it('keeps multiple signals in one event-driven account with concurrent positions', () => {
+    const result = simulateVirtualAccount(
+      [
+        sample(),
+        { ...sample(), decision_time:'2026-07-20T00:01:00.000Z' },
+      ],
+      [candle(0), candle(1), candle(2, { high:106, close:105 })],
+      instrument,
+      { starting_balance:10_000, leverage:100, max_concurrent_positions:5 },
+    )
+    expect(result).toMatchObject({
+      status:'success',
+      simulation_mode:'event_driven_virtual_account',
+      realism_level:'m1_ohlc_margin_account',
+      maximum_concurrent_positions:2,
+      closed_trade_count:2,
+      win_count:2,
+      ending_balance:10_100,
+    })
+    expect(result.equity_curve.some(point => point.open_positions === 2)).toBe(true)
+  })
+
+  it('rejects an order when the shared account has insufficient free margin', () => {
+    const result = simulateVirtualAccount(
+      [sample({ recommended_volume:1 })],
+      [candle(0), candle(1)],
+      instrument,
+      { starting_balance:100, leverage:1 },
+    )
+    expect(result).toMatchObject({
+      status:'success',
+      ending_balance:100,
+      closed_trade_count:0,
+      rejected_order_count:1,
+      margin_rejected_count:1,
+    })
+    expect(result.trades[0]).toMatchObject({
+      status:'rejected',
+      reason:'insufficient_free_margin',
+      required_margin:10_000,
+    })
+  })
+
+  it('liquidates the worst position when margin level reaches the MT5 stop-out line', () => {
+    const result = simulateVirtualAccount(
+      [sample({
+        recommended_volume:1,
+        stop_loss_price:50,
+        take_profit_1_price:150,
+      })],
+      [candle(0), candle(1, { open:100, high:100, low:94, close:94 })],
+      instrument,
+      { starting_balance:1_000, leverage:10, stop_out_level_pct:50 },
+    )
+    expect(result).toMatchObject({
+      status:'success',
+      stop_out_count:1,
+      lowest_margin_level_pct:40,
+      ending_balance:400,
+      max_drawdown:600,
+      max_drawdown_pct:60,
+    })
+    expect(result.trades[0]).toMatchObject({
+      status:'closed',
+      exit_reason:'margin_stop_out',
+      exit_price:94,
+      net_profit:-600,
+    })
+  })
+
+  it('enforces the configured concurrent-position ceiling', () => {
+    const result = simulateVirtualAccount(
+      [
+        sample({ take_profit_1_price:150 }),
+        { ...sample({ take_profit_1_price:150 }), decision_time:'2026-07-20T00:01:00.000Z' },
+      ],
+      [candle(0), candle(1), candle(2)],
+      instrument,
+      { starting_balance:10_000, leverage:100, max_concurrent_positions:1 },
+    )
+    expect(result).toMatchObject({
+      maximum_concurrent_positions:1,
+      position_limit_rejected_count:1,
+      rejected_order_count:1,
+    })
+    expect(result.trades.some(record => record.reason === 'max_concurrent_positions_reached')).toBe(true)
   })
 })

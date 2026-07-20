@@ -617,12 +617,19 @@ describe('historical comparison frontend contract', () => {
   it('polls background jobs and supports cancellation', () => {
     expect(frontend).toContain('/api/ai/model-compare/history/${encodeURIComponent(jobId)}')
     expect(frontend).toContain('{ method:"DELETE" }')
+    expect(frontend).not.toContain('showToast(')
   })
 
-  it('presents directional evaluation separately from standardized account replay', () => {
+  it('presents directional evaluation separately from the event-driven virtual account', () => {
     expect(frontend).toContain('方向准确率')
     expect(frontend).toContain('方向评估与资金回放分开计算')
-    expect(frontend).toContain('模拟账户资金')
-    expect(frontend).toContain('尚未模拟并发持仓、保证金、强平和账户级风控')
+    expect(frontend).toContain('虚拟账户资金')
+    expect(frontend).toContain('挂单、并发持仓、浮动盈亏、手续费、保证金和强平')
+    expect(frontend).toContain('尚未接入真实逐笔 Tick 和完整账户级风控')
+  })
+
+  it('shows localized failure details in recent comparison jobs', () => {
+    expect(frontend).toContain('失败原因：${escapeHtml(apiErrorMessage(job.error))}')
+    expect(frontend).toContain('所选区间内没有可用的完整历史 K 线')
   })
 })

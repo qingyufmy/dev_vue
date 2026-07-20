@@ -3,6 +3,11 @@ const DEFAULTS = Object.freeze({
   commission_per_lot: 0,
   slippage_points: 0,
   max_holding_hours: 24,
+  leverage: 100,
+  stop_out_level_pct: 50,
+  max_concurrent_positions: 5,
+  max_pending_orders: 20,
+  market_entry_ttl_minutes: 5,
 })
 
 const finite = value => {
@@ -55,6 +60,11 @@ export function normalizeBacktestOptions(options = {}) {
     commission_per_lot: clamp(options.commission_per_lot, 0, 10_000, DEFAULTS.commission_per_lot),
     slippage_points: clamp(options.slippage_points, 0, 100_000, DEFAULTS.slippage_points),
     max_holding_hours: clamp(options.max_holding_hours, 1, 24 * 30, DEFAULTS.max_holding_hours),
+    leverage:clamp(options.leverage, 1, 5000, DEFAULTS.leverage),
+    stop_out_level_pct:clamp(options.stop_out_level_pct, 0, 1000, DEFAULTS.stop_out_level_pct),
+    max_concurrent_positions:Math.round(clamp(options.max_concurrent_positions, 1, 100, DEFAULTS.max_concurrent_positions)),
+    max_pending_orders:Math.round(clamp(options.max_pending_orders, 1, 1000, DEFAULTS.max_pending_orders)),
+    market_entry_ttl_minutes:clamp(options.market_entry_ttl_minutes, 1, 1440, DEFAULTS.market_entry_ttl_minutes),
   }
 }
 
@@ -85,6 +95,9 @@ export function normalizeBacktestInstrument(instrument = {}) {
     volume_max: volumeMax,
     volume_step: volumeStep,
     currency_profit: instrument.currency_profit || null,
+    currency_margin:instrument.currency_margin || null,
+    margin_initial:finite(instrument.margin_initial),
+    trade_calc_mode:finite(instrument.trade_calc_mode),
   }
 }
 
@@ -338,5 +351,368 @@ export function simulateSignalReplay(samples = [], candles = [], rawInstrument =
     skipped_signal_count:skippedSignals,
     trades,
     equity_curve:equityCurve,
+  }
+}
+
+function markPrice(direction, candle, instrument) {
+  const close = finite(candle?.close)
+  if (!(close > 0)) return null
+  return direction === 'buy' ? close : close + spreadPrice(candle, instrument)
+}
+
+function grossProfit(direction, volume, entryPrice, exitPrice, instrument) {
+  const move = direction === 'buy' ? exitPrice - entryPrice : entryPrice - exitPrice
+  return rounded(move / instrument.tick_size * instrument.tick_value * volume)
+}
+
+function requiredMargin(volume, entryPrice, instrument, options) {
+  if (instrument.margin_initial > 0) return rounded(instrument.margin_initial * volume)
+  if (!(instrument.contract_size > 0) || !(options.leverage > 0)) return null
+  return rounded(entryPrice * instrument.contract_size * volume / options.leverage)
+}
+
+function summarizeAccount(balance, positions, candle, instrument) {
+  let floating = 0
+  let margin = 0
+  for (const position of positions) {
+    const price = markPrice(position.direction, candle, instrument)
+    if (price != null) floating += grossProfit(position.direction, position.volume, position.entry_price, price, instrument)
+    margin += position.margin
+  }
+  const equity = balance + floating
+  const freeMargin = equity - margin
+  return {
+    balance:rounded(balance),
+    equity:rounded(equity),
+    floating_profit:rounded(floating),
+    margin:rounded(margin),
+    free_margin:rounded(freeMargin),
+    margin_level_pct:margin > 0 ? rounded(equity / margin * 100, 4) : null,
+  }
+}
+
+function closeVirtualPosition(position, exitPrice, exitTime, reason, ambiguous, balance, options, instrument) {
+  const gross = grossProfit(position.direction, position.volume, position.entry_price, exitPrice, instrument)
+  const exitCommission = rounded(options.commission_per_lot * position.volume / 2)
+  const totalCommission = rounded(position.entry_commission + exitCommission)
+  const net = rounded(gross - totalCommission)
+  return {
+    balance:rounded(balance + gross - exitCommission),
+    trade:{
+      status:'closed',
+      position_id:position.id,
+      signal_index:position.signal_index,
+      direction:position.direction,
+      entry_method:position.entry_method,
+      volume:position.volume,
+      decision_time_utc_msc:position.decision_time_utc_msc,
+      entry_time_utc_msc:position.entry_time_utc_msc,
+      exit_time_utc_msc:exitTime,
+      entry_price:position.entry_price,
+      exit_price:rounded(exitPrice),
+      stop_loss:position.stop_loss,
+      take_profit:position.take_profit,
+      take_profit_tier:position.take_profit_tier,
+      exit_reason:reason,
+      same_bar_ambiguous:Boolean(ambiguous),
+      margin:position.margin,
+      gross_profit:gross,
+      commission:totalCommission,
+      net_profit:net,
+    },
+  }
+}
+
+function compactEquityCurve(points, maximum = 600) {
+  if (points.length <= maximum) return points
+  const lastIndex = points.length - 1
+  const indexes = new Set([0, lastIndex])
+  for (let index = 1; index < maximum - 1; index += 1) {
+    indexes.add(Math.round(index * lastIndex / (maximum - 1)))
+  }
+  return [...indexes].sort((a, b) => a - b).map(index => points[index])
+}
+
+export function simulateVirtualAccount(samples = [], candles = [], rawInstrument = {}, rawOptions = {}) {
+  const options = normalizeBacktestOptions(rawOptions)
+  const instrument = normalizeBacktestInstrument(rawInstrument)
+  if (!instrument.valid || !(instrument.contract_size > 0 || instrument.margin_initial > 0)) {
+    const missing = [...instrument.missing]
+    if (!(instrument.contract_size > 0 || instrument.margin_initial > 0)) missing.push('contract_size_or_margin_initial')
+    return {
+      status:'unavailable',
+      reason:'backtest_instrument_incomplete',
+      missing_instrument_fields:[...new Set(missing)],
+      options,
+    }
+  }
+  const orderedCandles = [...candles]
+    .map(candle => ({ ...candle, _time:rateTime(candle) }))
+    .filter(candle => candle._time && [candle.open, candle.high, candle.low, candle.close].map(Number).every(Number.isFinite))
+    .sort((a, b) => a._time - b._time)
+  if (!orderedCandles.length) {
+    return { status:'unavailable', reason:'backtest_execution_candles_unavailable', options }
+  }
+
+  const intents = []
+  let skippedSignals = 0
+  for (let index = 0; index < samples.length; index += 1) {
+    const normalized = normalizeIntent(samples[index], options)
+    if (normalized) intents.push({ ...normalized, signal_index:index, state:{ stop_triggered:false } })
+    else if (directionOf(samples[index]?.signal_type)) skippedSignals += 1
+  }
+  intents.sort((a, b) => a.decision_time_utc_msc - b.decision_time_utc_msc)
+
+  const pending = []
+  const positions = []
+  const records = []
+  const rawCurve = []
+  let intentIndex = 0
+  let nextPositionId = 1
+  let balance = options.starting_balance
+  let peakEquity = balance
+  let maximumDrawdown = 0
+  let maximumDrawdownPct = 0
+  let lowestMarginLevel = null
+  let maximumConcurrentPositions = 0
+  let stopOutCount = 0
+  let marginRejectedCount = 0
+  let positionLimitRejectedCount = 0
+  let pendingLimitRejectedCount = 0
+
+  const recordAccount = (candle, event = null) => {
+    const account = summarizeAccount(balance, positions, candle, instrument)
+    peakEquity = Math.max(peakEquity, account.equity)
+    const drawdown = Math.max(0, peakEquity - account.equity)
+    const drawdownPct = peakEquity > 0 ? drawdown / peakEquity * 100 : 0
+    maximumDrawdown = Math.max(maximumDrawdown, drawdown)
+    maximumDrawdownPct = Math.max(maximumDrawdownPct, drawdownPct)
+    if (account.margin_level_pct != null) {
+      lowestMarginLevel = lowestMarginLevel == null
+        ? account.margin_level_pct
+        : Math.min(lowestMarginLevel, account.margin_level_pct)
+    }
+    rawCurve.push({
+      time_utc_msc:candle._time,
+      ...account,
+      drawdown:rounded(drawdown),
+      drawdown_pct:rounded(drawdownPct, 4),
+      open_positions:positions.length,
+      pending_orders:pending.length,
+      event,
+    })
+    return account
+  }
+
+  const closePositionAt = (position, price, candle, reason, ambiguous = false) => {
+    const closed = closeVirtualPosition(position, price, candle._time, reason, ambiguous, balance, options, instrument)
+    balance = closed.balance
+    records.push(closed.trade)
+    const positionIndex = positions.findIndex(item => item.id === position.id)
+    if (positionIndex >= 0) positions.splice(positionIndex, 1)
+    return closed.trade
+  }
+
+  for (const candle of orderedCandles) {
+    while (intentIndex < intents.length && intents[intentIndex].decision_time_utc_msc <= candle._time) {
+      const intent = intents[intentIndex++]
+      if (pending.length >= options.max_pending_orders) {
+        pendingLimitRejectedCount += 1
+        records.push({
+          status:'rejected',
+          reason:'max_pending_orders_reached',
+          signal_index:intent.signal_index,
+          decision_time_utc_msc:intent.decision_time_utc_msc,
+          direction:intent.direction,
+          entry_method:intent.method,
+          volume:intent.volume,
+        })
+      } else {
+        pending.push(intent)
+      }
+    }
+
+    for (const position of [...positions]) {
+      const exit = detectExit(position, position.entry_price, candle, instrument)
+      if (exit) closePositionAt(position, exit.price, candle, exit.reason, exit.ambiguous)
+    }
+
+    for (const intent of [...pending]) {
+      const marketExpired = intent.method === 'market'
+        && candle._time > intent.decision_time_utc_msc + options.market_entry_ttl_minutes * 60_000
+      const pendingExpired = intent.method !== 'market' && candle._time > intent.expiry_time_utc_msc
+      if (marketExpired || pendingExpired || candle._time > intent.horizon_end_utc_msc) {
+        pending.splice(pending.indexOf(intent), 1)
+        records.push({
+          status:'expired',
+          reason:marketExpired ? 'market_entry_expired' : 'pending_not_triggered',
+          signal_index:intent.signal_index,
+          decision_time_utc_msc:intent.decision_time_utc_msc,
+          expiry_time_utc_msc:intent.method === 'market'
+            ? intent.decision_time_utc_msc + options.market_entry_ttl_minutes * 60_000
+            : intent.expiry_time_utc_msc,
+          direction:intent.direction,
+          entry_method:intent.method,
+          volume:intent.volume,
+        })
+        continue
+      }
+      const entryPrice = fillEntry(intent, candle, instrument, options, intent.state)
+      if (!(entryPrice > 0)) continue
+      pending.splice(pending.indexOf(intent), 1)
+      if (positions.length >= options.max_concurrent_positions) {
+        positionLimitRejectedCount += 1
+        records.push({
+          status:'rejected',
+          reason:'max_concurrent_positions_reached',
+          signal_index:intent.signal_index,
+          decision_time_utc_msc:intent.decision_time_utc_msc,
+          direction:intent.direction,
+          entry_method:intent.method,
+          volume:intent.volume,
+          requested_entry_price:rounded(entryPrice),
+        })
+        continue
+      }
+      const margin = requiredMargin(intent.volume, entryPrice, instrument, options)
+      const accountBefore = summarizeAccount(balance, positions, candle, instrument)
+      const entryCommission = rounded(options.commission_per_lot * intent.volume / 2)
+      if (!(margin >= 0) || accountBefore.free_margin - entryCommission + 1e-9 < margin) {
+        marginRejectedCount += 1
+        records.push({
+          status:'rejected',
+          reason:'insufficient_free_margin',
+          signal_index:intent.signal_index,
+          decision_time_utc_msc:intent.decision_time_utc_msc,
+          direction:intent.direction,
+          entry_method:intent.method,
+          volume:intent.volume,
+          requested_entry_price:rounded(entryPrice),
+          required_margin:margin,
+          free_margin:accountBefore.free_margin,
+        })
+        continue
+      }
+      balance = rounded(balance - entryCommission)
+      const position = {
+        id:nextPositionId++,
+        signal_index:intent.signal_index,
+        direction:intent.direction,
+        entry_method:intent.method,
+        volume:intent.volume,
+        decision_time_utc_msc:intent.decision_time_utc_msc,
+        entry_time_utc_msc:candle._time,
+        entry_price:rounded(entryPrice),
+        stop_loss:intent.stop_loss,
+        take_profit:intent.take_profit,
+        take_profit_tier:intent.take_profit_tier,
+        horizon_end_utc_msc:intent.horizon_end_utc_msc,
+        margin,
+        entry_commission:entryCommission,
+      }
+      positions.push(position)
+      maximumConcurrentPositions = Math.max(maximumConcurrentPositions, positions.length)
+      const immediateExit = detectExit(position, position.entry_price, candle, instrument)
+      if (immediateExit) closePositionAt(position, immediateExit.price, candle, immediateExit.reason, immediateExit.ambiguous)
+    }
+
+    for (const position of [...positions]) {
+      if (candle._time >= position.horizon_end_utc_msc) {
+        const price = markPrice(position.direction, candle, instrument)
+        if (price > 0) closePositionAt(position, price, candle, 'holding_horizon_end')
+      }
+    }
+
+    let account = summarizeAccount(balance, positions, candle, instrument)
+    if (account.margin_level_pct != null) {
+      lowestMarginLevel = lowestMarginLevel == null
+        ? account.margin_level_pct
+        : Math.min(lowestMarginLevel, account.margin_level_pct)
+    }
+    while (positions.length && account.margin_level_pct != null
+      && account.margin_level_pct <= options.stop_out_level_pct) {
+      const worst = [...positions].sort((left, right) => {
+        const leftPrice = markPrice(left.direction, candle, instrument)
+        const rightPrice = markPrice(right.direction, candle, instrument)
+        return grossProfit(left.direction, left.volume, left.entry_price, leftPrice, instrument)
+          - grossProfit(right.direction, right.volume, right.entry_price, rightPrice, instrument)
+      })[0]
+      const price = markPrice(worst.direction, candle, instrument)
+      closePositionAt(worst, price, candle, 'margin_stop_out')
+      stopOutCount += 1
+      account = summarizeAccount(balance, positions, candle, instrument)
+    }
+    recordAccount(candle)
+  }
+
+  const lastCandle = orderedCandles.at(-1)
+  for (const position of [...positions]) {
+    const price = markPrice(position.direction, lastCandle, instrument)
+    if (price > 0) closePositionAt(position, price, lastCandle, 'data_end')
+  }
+  for (const intent of pending.splice(0)) {
+    records.push({
+      status:'not_evaluated',
+      reason:'future_candles_unavailable',
+      signal_index:intent.signal_index,
+      decision_time_utc_msc:intent.decision_time_utc_msc,
+      direction:intent.direction,
+      entry_method:intent.method,
+      volume:intent.volume,
+    })
+  }
+  if (positions.length === 0) recordAccount(lastCandle, 'simulation_complete')
+  for (; intentIndex < intents.length; intentIndex += 1) {
+    const intent = intents[intentIndex]
+    records.push({
+      status:'not_evaluated',
+      reason:'future_candles_unavailable',
+      signal_index:intent.signal_index,
+      decision_time_utc_msc:intent.decision_time_utc_msc,
+      direction:intent.direction,
+      entry_method:intent.method,
+      volume:intent.volume,
+    })
+  }
+
+  const closed = records.filter(record => record.status === 'closed')
+  const wins = closed.filter(trade => trade.net_profit > 0)
+  const losses = closed.filter(trade => trade.net_profit < 0)
+  const grossProfitTotal = wins.reduce((sum, trade) => sum + trade.net_profit, 0)
+  const grossLossTotal = Math.abs(losses.reduce((sum, trade) => sum + trade.net_profit, 0))
+  const netProfit = rounded(balance - options.starting_balance)
+  const finalAccount = summarizeAccount(balance, [], lastCandle, instrument)
+  return {
+    status:'success',
+    simulation_mode:'event_driven_virtual_account',
+    realism_level:'m1_ohlc_margin_account',
+    execution_resolution:null,
+    options,
+    instrument,
+    starting_balance:rounded(options.starting_balance),
+    ending_balance:rounded(balance),
+    ending_equity:finalAccount.equity,
+    net_profit:netProfit,
+    return_pct:rounded(netProfit / options.starting_balance * 100, 4),
+    closed_trade_count:closed.length,
+    win_count:wins.length,
+    loss_count:losses.length,
+    win_rate:closed.length ? rounded(wins.length / closed.length * 100, 2) : 0,
+    profit_factor:grossLossTotal > 0 ? rounded(grossProfitTotal / grossLossTotal, 4) : grossProfitTotal > 0 ? null : 0,
+    max_drawdown:rounded(maximumDrawdown),
+    max_drawdown_pct:rounded(maximumDrawdownPct, 4),
+    lowest_margin_level_pct:lowestMarginLevel == null ? null : rounded(lowestMarginLevel, 4),
+    maximum_concurrent_positions:maximumConcurrentPositions,
+    stop_out_count:stopOutCount,
+    margin_rejected_count:marginRejectedCount,
+    position_limit_rejected_count:positionLimitRejectedCount,
+    pending_limit_rejected_count:pendingLimitRejectedCount,
+    rejected_order_count:records.filter(record => record.status === 'rejected').length,
+    expired_order_count:records.filter(record => record.status === 'expired').length,
+    not_evaluated_count:records.filter(record => record.status === 'not_evaluated').length,
+    ambiguous_bar_count:closed.filter(trade => trade.same_bar_ambiguous).length,
+    skipped_signal_count:skippedSignals,
+    trades:records,
+    equity_curve:compactEquityCurve(rawCurve),
   }
 }

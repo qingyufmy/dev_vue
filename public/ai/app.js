@@ -4567,6 +4567,8 @@ async function runHistoryCompare() {
     commission_per_lot:Number($("cmpCommissionPerLot")?.value || 0),
     slippage_points:Number($("cmpSlippagePoints")?.value || 0),
     max_holding_hours:Number($("cmpMaxHoldingHours")?.value || 24),
+    max_concurrent_positions:Number($("cmpMaxConcurrentPositions")?.value || 5),
+    use_bridge_account_settings:true,
   };
   if (!startTime || !endTime) return toast("请选择时间范围", "error");
   const btn = $("cmpRunBtn");
@@ -4630,11 +4632,11 @@ function renderHistoryCompareResults(results, meta) {
       <div><span>平均一致度</span><strong>${Number(meta.average_agreement_rate || 0).toFixed(1)}%</strong><small>模型给出相同方向的程度</small></div>
       <div><span>评估切片</span><strong>${meta.evaluation_count || 0}</strong><small>均匀覆盖所选行情区间</small></div>
     </div>
-    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>每个模型在相同历史时点读取相同上下文。方向质量按下一根主周期 K 线评估；资金回放使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线模拟市价、限价、突破与 Stop Limit 订单，执行模型推荐止损和止盈档位，并计入设定的手续费与滑点。当前为“独立信号回放”，尚未模拟并发持仓、保证金、强平和账户级风控，因此不能等同真实账户收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
+    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>每个模型在相同历史时点读取相同上下文。方向质量按下一根主周期 K 线评估；虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序处理市价、限价、突破与 Stop Limit 订单，并让同一模型的挂单、并发持仓、浮动盈亏、手续费、保证金和强平共享同一份资金。杠杆与强平线优先读取 MT5 账户元数据。当前仍是 M1 OHLC 路径模拟，同一分钟内同时触及止损和止盈时采用保守的“止损优先”，尚未接入真实逐笔 Tick 和完整账户级风控，因此不能等同真实成交收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，发起 ${meta.estimated_model_calls || 0} 次模型请求；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (replaySorted.length) {
-    tableHtml += '<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>模拟账户资金</h2><p>按时间顺序结算每个已成交信号，展示标准化订单回放后的资金表现。</p></div><span class="compare-result-scope">阶段 1 · 暂不含保证金</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>未触发 / 歧义</th></tr></thead><tbody>';
+    tableHtml += '<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>虚拟账户资金</h2><p>同一模型的全部信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">事件驱动 · M1 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>保证金状态</th><th>未触发 / 歧义</th></tr></thead><tbody>';
     replaySorted.forEach(result => {
       const simulation = result.account_simulation;
       tableHtml += `<tr><td><strong>${escapeHtml(result.model_name)}</strong><small class="compare-cell-note">${escapeHtml(modelProviderLabel(result.provider))}</small></td>
@@ -4644,6 +4646,7 @@ function renderHistoryCompareResults(results, meta) {
         <td>${simulation.closed_trade_count || 0} / ${Number(simulation.win_rate || 0).toFixed(1)}%</td>
         <td>${Number(simulation.max_drawdown || 0).toFixed(2)} <small class="compare-cell-note">${Number(simulation.max_drawdown_pct || 0).toFixed(2)}%</small></td>
         <td>${simulation.profit_factor == null ? "∞" : Number(simulation.profit_factor || 0).toFixed(2)}</td>
+        <td><strong>${simulation.lowest_margin_level_pct == null ? "--" : `${Number(simulation.lowest_margin_level_pct).toFixed(1)}%`}</strong><small class="compare-cell-note">峰值 ${simulation.maximum_concurrent_positions || 0} 仓 · 强平 ${simulation.stop_out_count || 0} · 拒绝 ${simulation.margin_rejected_count || 0}</small></td>
         <td>${simulation.expired_order_count || 0} / ${simulation.ambiguous_bar_count || 0}</td></tr>`;
     });
     tableHtml += "</tbody></table></div></section>";
@@ -4713,9 +4716,12 @@ async function loadHistoryCompareJobs() {
       list.innerHTML = jobs.map(job => {
         const params = job.params || {};
         const models = Array.isArray(params.model_ids) ? params.model_ids.length : 0;
+        const failureReason = job.status === "failed" && job.error
+          ? `<small class="compare-cell-note danger">失败原因：${escapeHtml(apiErrorMessage(job.error))}</small>`
+          : "";
         return `<article class="compare-history-item" data-job-id="${escapeHtml(job.id)}">
           <div class="compare-history-status ${escapeHtml(job.status)}"><i data-lucide="${job.status === "succeeded" ? "check" : job.status === "failed" ? "circle-alert" : job.status === "cancelled" ? "ban" : "loader-circle"}" size="16"></i></div>
-          <div><strong>${escapeHtml(params.symbol || "未知品种")} · ${escapeHtml(params.timeframe || "--")}</strong><span>${models} 个模型 · ${params.sample_size || "--"} 个切片 · ${String(job.created_at || "").replace("T"," ").slice(0,16)}</span></div>
+          <div><strong>${escapeHtml(params.symbol || "未知品种")} · ${escapeHtml(params.timeframe || "--")}</strong><span>${models} 个模型 · ${params.sample_size || "--"} 个切片 · ${String(job.created_at || "").replace("T"," ").slice(0,16)}</span>${failureReason}</div>
           <span class="compare-history-badge ${escapeHtml(job.status)}">${statusText[job.status] || job.status}</span>
           ${job.status === "succeeded" ? '<button type="button" class="btn btn-secondary btn-sm" data-cmp-open>查看结果</button>' : ""}
           ${["failed","cancelled","succeeded"].includes(job.status) ? '<button type="button" class="icon-btn" data-cmp-delete aria-label="删除这条对比记录"><i data-lucide="trash-2" size="15"></i></button>' : ""}
@@ -6070,7 +6076,7 @@ function bindEvents() {
   $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
   $("cmpRefreshHistory")?.addEventListener("click", loadHistoryCompareJobs);
   ["cmpSymbol", "cmpStartTime", "cmpEndTime", "cmpSampleSize", "cmpStartingBalance",
-    "cmpCommissionPerLot", "cmpSlippagePoints", "cmpMaxHoldingHours"].forEach(id => {
+    "cmpCommissionPerLot", "cmpSlippagePoints", "cmpMaxHoldingHours", "cmpMaxConcurrentPositions"].forEach(id => {
     $(id)?.addEventListener("change", updateHistoryCompareReadiness);
   });
   document.querySelectorAll("[data-cmp-range]").forEach(button => button.addEventListener("click", () => {

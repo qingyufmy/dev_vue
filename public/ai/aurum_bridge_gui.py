@@ -837,13 +837,16 @@ class BridgeWorker(QThread):
                 continue
             instruments[symbol] = {
                 "name": info.name, "digits": int(info.digits), "trade_mode": int(info.trade_mode),
+                "trade_calc_mode": int(getattr(info, "trade_calc_mode", 0) or 0),
                 "point": float(info.point), "tick_size": float(getattr(info, "trade_tick_size", 0) or 0),
                 "tick_value": float(getattr(info, "trade_tick_value", 0) or 0),
                 "contract_size": float(getattr(info, "trade_contract_size", 0) or 0),
+                "margin_initial": float(getattr(info, "margin_initial", 0) or 0),
                 "volume_min": float(getattr(info, "volume_min", 0) or 0),
                 "volume_max": float(getattr(info, "volume_max", 0) or 0),
                 "volume_step": float(getattr(info, "volume_step", 0) or 0),
                 "currency_profit": str(getattr(info, "currency_profit", "") or ""),
+                "currency_margin": str(getattr(info, "currency_margin", "") or ""),
             }
 
         broker_calculation = None
@@ -884,6 +887,11 @@ class BridgeWorker(QThread):
                 "balance": float(acc.balance), "equity": float(acc.equity), "credit": float(acc.credit),
                 "profit": float(acc.profit), "margin": float(acc.margin), "margin_free": float(acc.margin_free),
                 "margin_level": float(getattr(acc, "margin_level", 0) or 0),
+                "leverage": int(getattr(acc, "leverage", 0) or 0),
+                "margin_mode": int(getattr(acc, "margin_mode", 0) or 0),
+                "margin_so_mode": int(getattr(acc, "margin_so_mode", 0) or 0),
+                "margin_so_call": float(getattr(acc, "margin_so_call", 0) or 0),
+                "margin_so_so": float(getattr(acc, "margin_so_so", 0) or 0),
             },
             "positions": position_rows, "pending": pending_rows, "instruments": instruments,
             "increment": {
@@ -1262,17 +1270,24 @@ class BridgeWorker(QThread):
                         "balance": float(acc.balance),
                         "equity": float(acc.equity),
                         "leverage": int(acc.leverage),
+                        "margin_mode": int(getattr(acc, "margin_mode", 0) or 0),
+                        "margin_so_mode": int(getattr(acc, "margin_so_mode", 0) or 0),
+                        "margin_so_call": float(getattr(acc, "margin_so_call", 0) or 0),
+                        "margin_so_so": float(getattr(acc, "margin_so_so", 0) or 0),
                     },
                     "instrument": {
                         "name": info.name, "digits": int(info.digits), "trade_mode": int(info.trade_mode),
+                        "trade_calc_mode": int(getattr(info, "trade_calc_mode", 0) or 0),
                         "point": float(info.point),
                         "tick_size": float(getattr(info, "trade_tick_size", 0) or 0),
                         "tick_value": float(getattr(info, "trade_tick_value", 0) or 0),
                         "contract_size": float(getattr(info, "trade_contract_size", 0) or 0),
+                        "margin_initial": float(getattr(info, "margin_initial", 0) or 0),
                         "volume_min": float(getattr(info, "volume_min", 0) or 0),
                         "volume_max": float(getattr(info, "volume_max", 0) or 0),
                         "volume_step": float(getattr(info, "volume_step", 0) or 0),
                         "currency_profit": str(getattr(info, "currency_profit", "") or ""),
+                        "currency_margin": str(getattr(info, "currency_margin", "") or ""),
                     },
                 }
             elif action == "order_lookup":

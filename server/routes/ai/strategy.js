@@ -15,7 +15,7 @@ import { parseStrategyPolicy } from './strategy-policy.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
-import { normalizeBacktestOptions, simulateSignalReplay } from './model-backtest.js'
+import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backtest.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -1045,6 +1045,18 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     }
   }
 
+  const bridgeLeverage = Number(backtestContext.account?.leverage)
+  const bridgeStopOut = Number(backtestContext.account?.margin_so_so)
+  const bridgeStopOutUsesPercent = Number(backtestContext.account?.margin_so_mode || 0) === 0
+  const useBridgeAccountSettings = params.backtest?.use_bridge_account_settings !== false
+  const runtimeBacktestOptions = normalizeBacktestOptions({
+    ...backtestOptions,
+    leverage:useBridgeAccountSettings && bridgeLeverage > 0 ? bridgeLeverage : backtestOptions.leverage,
+    stop_out_level_pct:useBridgeAccountSettings && bridgeStopOutUsesPercent && bridgeStopOut > 0
+      ? bridgeStopOut
+      : backtestOptions.stop_out_level_pct,
+  })
+
   const modelResults = []
   for (const { modelId, resolved } of validModels) {
     const signals = modelSignals[modelId]
@@ -1068,11 +1080,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       : 0
     const qualityScore = wilsonLowerBound(correctCount, tradeCount) * (0.7 + 0.3 * responseSuccessRate / 100) * 100
     const accountSimulation = backtestContext.status === 'ready'
-      ? simulateSignalReplay(signals, backtestContext.execution_candles, backtestContext.instrument, backtestOptions)
+      ? simulateVirtualAccount(signals, backtestContext.execution_candles, backtestContext.instrument, runtimeBacktestOptions)
       : {
         status:'unavailable',
         reason:backtestContext.reason,
-        options:backtestOptions,
+        options:runtimeBacktestOptions,
       }
     if (accountSimulation.status === 'success') {
       accountSimulation.execution_resolution = backtestContext.execution_timeframe
@@ -1150,12 +1162,16 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
       metric_type: 'next_closed_bar_direction',
       metric_version: 'directional-eval-v2',
-      account_simulation_type:'isolated_signal_replay',
-      account_simulation_version:'account-replay-v1',
+      account_simulation_type:'event_driven_virtual_account',
+      account_simulation_version:'account-replay-v2',
       account_simulation_status:accountSimulationStatus,
       account_simulation_reason:accountSimulationReason,
       execution_timeframe:backtestContext.execution_timeframe,
-      backtest_options:backtestOptions,
+      backtest_options:runtimeBacktestOptions,
+      backtest_account_source:useBridgeAccountSettings
+        && (bridgeLeverage > 0 || (bridgeStopOutUsesPercent && bridgeStopOut > 0))
+        ? 'bridge_account_metadata'
+        : 'configured_defaults',
       strategy_timeframes: planItems.map(item => item.timeframe),
       chan_enabled: policy.useChanAnalysis,
     },
@@ -1239,7 +1255,10 @@ export async function startHistoryCompareJob(userId, params) {
   const normalizedParams = {
     ...(params || {}),
     timeframe:strategy ? parseStrategyPolicy(strategy).marketDataPlan.primary_timeframe : null,
-    backtest:normalizeBacktestOptions(params?.backtest || {}),
+    backtest:{
+      ...normalizeBacktestOptions(params?.backtest || {}),
+      use_bridge_account_settings:params?.backtest?.use_bridge_account_settings !== false,
+    },
   }
   const active = [...historyCompareJobs.values()].find(job => job.user_id === Number(userId)
     && ['queued', 'running', 'cancelling'].includes(job.status))
