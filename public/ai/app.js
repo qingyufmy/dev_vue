@@ -4608,6 +4608,64 @@ function setHistoryCompareProgress(job) {
   });
 }
 
+function resetHistoryCompareControls() {
+  const btn = $("cmpRunBtn");
+  if (btn) {
+    btn.disabled = document.querySelectorAll("[data-cmp-model]:checked").length < 2;
+    btn.innerHTML = '<i data-lucide="play" size="16"></i>开始评估';
+  }
+  initIcons();
+}
+
+async function monitorHistoryCompareJob(jobId, initialJob = null) {
+  if (!jobId) return;
+  _historyCompareJobId = String(jobId);
+  const btn = $("cmpRunBtn");
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="square" size="16"></i>取消任务';
+  }
+  $("cmpProgressBar")?.classList.remove("hidden");
+  let job = initialJob;
+  let consecutivePollFailures = 0;
+  try {
+    if (!job) {
+      job = (await api(`/api/ai/model-compare/history/${encodeURIComponent(jobId)}`, { timeout:10000 })).job;
+    }
+    while (["queued", "running", "cancelling"].includes(job?.status)) {
+      setHistoryCompareProgress(job);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      try {
+        job = (await api(`/api/ai/model-compare/history/${encodeURIComponent(jobId)}`, { timeout:10000 })).job;
+        consecutivePollFailures = 0;
+      } catch (error) {
+        consecutivePollFailures += 1;
+        if (consecutivePollFailures >= 3) throw error;
+        if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = `连接短暂中断，正在重试（${consecutivePollFailures}/3）`;
+      }
+    }
+    if (job?.status === "succeeded" && job.result?.status === "success") {
+      if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "100%";
+      if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = job.params?.evaluation_mode === "continuous"
+        ? "连续回测完成"
+        : "快速抽样完成";
+      if ($("cmpProgressPercent")) $("cmpProgressPercent").textContent = "100%";
+      renderHistoryCompareResults(job.result.results || [], job.result.meta || {});
+    } else if (job?.status === "cancelled") {
+      if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "任务已取消";
+      toast("历史模型对比已取消", "warning");
+    } else {
+      throw new Error(apiErrorMessage(job?.error || "history_compare_failed"));
+    }
+  } catch (error) {
+    toast("模型对比失败：" + apiErrorMessage(error.message), "error");
+  } finally {
+    if (_historyCompareJobId === String(jobId)) _historyCompareJobId = null;
+    resetHistoryCompareControls();
+    await loadHistoryCompareJobs({ resumeActive:false });
+  }
+}
+
 async function runHistoryCompare() {
   if (_historyCompareJobId) {
     const jobId = _historyCompareJobId;
@@ -4672,33 +4730,11 @@ async function runHistoryCompare() {
     });
     _historyCompareJobId = data.job?.id || null;
     if (!_historyCompareJobId) throw new Error("history_compare_job_not_created");
-    let job = data.job;
-    while (["queued", "running", "cancelling"].includes(job.status)) {
-      setHistoryCompareProgress(job);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      job = (await api(`/api/ai/model-compare/history/${encodeURIComponent(_historyCompareJobId)}`, { timeout:10000 })).job;
-    }
-    if (job.status === "succeeded" && job.result?.status === "success") {
-      if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "100%";
-      if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = evaluationMode === "continuous"
-        ? "连续回测完成"
-        : "快速抽样完成";
-      if ($("cmpProgressPercent")) $("cmpProgressPercent").textContent = "100%";
-      renderHistoryCompareResults(job.result.results || [], job.result.meta || {});
-    } else if (job.status === "cancelled") {
-      if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "任务已取消";
-      toast("历史模型对比已取消", "warning");
-    } else {
-      throw new Error(apiErrorMessage(job.error || "history_compare_failed"));
-    }
-  } catch (e) { toast("模型对比失败：" + apiErrorMessage(e.message), "error"); }
-  finally {
+    await monitorHistoryCompareJob(_historyCompareJobId, data.job);
+  } catch (e) {
+    toast("模型对比失败：" + apiErrorMessage(e.message), "error");
     _historyCompareJobId = null;
-    if (btn) {
-      btn.disabled = document.querySelectorAll("[data-cmp-model]:checked").length < 2;
-      btn.innerHTML = '<i data-lucide="play" size="16"></i>开始评估';
-    }
-    initIcons();
+    resetHistoryCompareControls();
     await loadHistoryCompareJobs();
   }
 }
@@ -4971,12 +5007,13 @@ function renderHistoryCompareResults(results, meta) {
   initIcons();
 }
 
-async function loadHistoryCompareJobs() {
+async function loadHistoryCompareJobs({ resumeActive = true } = {}) {
   const list = $("cmpHistoryList");
   if (!list) return;
   try {
     const data = await api("/api/ai/model-compare/history?limit=10");
     const jobs = data.jobs || [];
+    const activeJob = jobs.find(job => ["queued", "running", "cancelling"].includes(job.status));
     if (!jobs.length) {
       list.innerHTML = '<div class="compare-inline-empty"><i data-lucide="history" size="18"></i><span>还没有历史任务。</span></div>';
     } else {
@@ -5013,6 +5050,9 @@ async function loadHistoryCompareJobs() {
           await loadHistoryCompareJobs();
         } catch (error) { toast(`删除失败：${apiErrorMessage(error.message)}`, "error"); }
       }));
+    }
+    if (resumeActive && activeJob && !_historyCompareJobId) {
+      void monitorHistoryCompareJob(activeJob.id, activeJob);
     }
   } catch (error) {
     list.innerHTML = `<div class="compare-inline-empty danger"><i data-lucide="circle-alert" size="18"></i><span>历史任务加载失败：${escapeHtml(apiErrorMessage(error.message))}</span></div>`;

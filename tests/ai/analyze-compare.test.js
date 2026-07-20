@@ -687,6 +687,20 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).not.toContain('showToast(')
   })
 
+  it('reattaches to an active background job after reloading the page', () => {
+    expect(frontend).toContain('async function monitorHistoryCompareJob')
+    expect(frontend).toContain('const activeJob = jobs.find')
+    expect(frontend).toContain('void monitorHistoryCompareJob(activeJob.id, activeJob)')
+    expect(frontend).toContain('consecutivePollFailures >= 3')
+  })
+
+  it('reconciles interrupted jobs and releases terminal in-memory state', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    expect(backend).toContain('async function reconcileInterruptedHistoryCompareJobs')
+    expect(backend).toContain("stale.error = 'history_compare_interrupted'")
+    expect(backend).toContain('historyCompareJobs.delete(job.id)')
+  })
+
   it('presents directional evaluation separately from the event-driven virtual account', () => {
     expect(frontend).toContain('方向准确率')
     expect(frontend).toContain('方向评估与资金回放分开计算')

@@ -1307,6 +1307,20 @@ async function persistHistoryCompareJob(job, { insert = false } = {}) {
   ])
 }
 
+async function reconcileInterruptedHistoryCompareJobs(userId) {
+  const rows = await queryAll(`SELECT * FROM ai_model_compare_jobs
+    WHERE user_id = ? AND status IN ('queued','running','cancelling')`, [Number(userId)])
+  for (const row of rows || []) {
+    const stale = historyCompareJobFromRow(row)
+    if (!stale || historyCompareJobs.has(stale.id)) continue
+    stale.status = 'failed'
+    stale.stage = 'failed'
+    stale.error = 'history_compare_interrupted'
+    stale.cancel_requested = false
+    await persistHistoryCompareJob(stale)
+  }
+}
+
 export async function startHistoryCompareJob(userId, params) {
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') throw new Error('admin_only')
@@ -1322,6 +1336,7 @@ export async function startHistoryCompareJob(userId, params) {
       use_bridge_account_settings:params?.backtest?.use_bridge_account_settings !== false,
     },
   }
+  await reconcileInterruptedHistoryCompareJobs(userId)
   const active = [...historyCompareJobs.values()].find(job => job.user_id === Number(userId)
     && ['queued', 'running', 'cancelling'].includes(job.status))
   if (active) {
@@ -1346,9 +1361,26 @@ export async function startHistoryCompareJob(userId, params) {
     updated_at_ms: Date.now(),
   }
   historyCompareJobs.set(job.id, job)
-  await persistHistoryCompareJob(job, { insert: true })
+  try {
+    await persistHistoryCompareJob(job, { insert: true })
+  } catch (error) {
+    historyCompareJobs.delete(job.id)
+    throw error
+  }
   queueMicrotask(async () => {
     try {
+      if (job.cancel_requested || job.status === 'cancelled') {
+        job.status = 'cancelled'
+        job.stage = 'cancelled'
+        job.updated_at = new Date().toISOString()
+        job.updated_at_ms = Date.now()
+        try {
+          await persistHistoryCompareJob(job)
+        } finally {
+          historyCompareJobs.delete(job.id)
+        }
+        return
+      }
       job.status = 'running'
       job.stage = 'preparing'
       job.updated_at = new Date().toISOString()
@@ -1385,6 +1417,8 @@ export async function startHistoryCompareJob(userId, params) {
       await persistHistoryCompareJob(job)
     } catch (error) {
       console.error(`[ModelCompare] Failed to persist final job state ${job.id}:`, error.message)
+    } finally {
+      if (['succeeded', 'failed', 'cancelled'].includes(job.status)) historyCompareJobs.delete(job.id)
     }
   })
   return publicHistoryCompareJob(job)
