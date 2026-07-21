@@ -151,6 +151,11 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
     omitted.push('rendered_system_prompt_body')
   }
   if (byteLength(stored) > maxBytes) throw new Error('inference_snapshot_exceeds_hard_limit')
+  // Trimming only the duplicated visualization K-line prefix does not remove
+  // the actual model input: the rendered prompts and technical snapshot are
+  // still retained verbatim. Treat only omitted prompt/snapshot bodies as a
+  // loss of review evidence.
+  const criticalOmissions = omitted.filter(field => field !== 'klines_before_retained_window')
   return {
     ...input,
     systemPrompt: stored.system_prompt,
@@ -159,7 +164,7 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
     klines: stored.klines,
     promptHash: sha256(`${full.system_prompt}\n${full.user_prompt}`),
     contentHash,
-    evidenceStatus: omitted.length ? 'incomplete' : 'complete',
+    evidenceStatus: criticalOmissions.length ? 'incomplete' : 'complete',
     omittedFields: omitted,
     byteSize: byteLength(stored),
   }

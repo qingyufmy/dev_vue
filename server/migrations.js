@@ -2676,6 +2676,54 @@ const migrations = [
         INDEX idx_model_compare_status_updated (status, updated_at)
       )`)
     }
+  },
+  {
+    id: '108_review_compacted_snapshot_evidence',
+    async up() {
+      await queryRun(`UPDATE inference_snapshots SET evidence_status = 'complete'
+        WHERE evidence_status = 'incomplete'
+          AND JSON_VALID(omitted_fields_json)
+          AND JSON_LENGTH(omitted_fields_json) = 1
+          AND JSON_CONTAINS(omitted_fields_json, JSON_QUOTE('klines_before_retained_window'))
+          AND system_prompt NOT LIKE '[evidence omitted;%'
+          AND user_prompt NOT LIKE '[evidence omitted;%'
+          AND market_snapshot_json NOT LIKE '%"evidence_ref"%'`)
+      await queryRun(`UPDATE trade_review_cases review_case
+        JOIN inference_snapshots snap ON snap.signal_id = review_case.signal_id
+        SET review_case.status = 'evidence_pending', review_case.evidence_status = 'pending',
+          review_case.evidence_reason = 'evidence_rebuild_required', review_case.updated_at = NOW()
+        WHERE review_case.current_version_id IS NULL
+          AND review_case.evidence_reason LIKE '%inference_snapshot_incomplete%'
+          AND snap.evidence_status = 'complete'`)
+      await queryRun(`UPDATE period_review_cases period_case
+        SET period_case.status = 'evidence_pending', period_case.evidence_status = 'pending',
+          period_case.evidence_reason = 'evidence_rebuild_required', period_case.updated_at = NOW()
+        WHERE period_case.current_version_id IS NULL
+          AND EXISTS (SELECT 1 FROM period_review_sources source
+            JOIN trade_review_cases review_case ON review_case.id = source.trade_review_case_id
+            WHERE source.period_case_id = period_case.id
+              AND review_case.evidence_reason = 'evidence_rebuild_required')`)
+    }
+  },
+  {
+    id: '109_review_compacted_snapshot_followup',
+    async up() {
+      // A running old process may still write a legacy classification between
+      // migration 108 and the deployment restart. Reconcile that narrow race;
+      // new snapshots are classified correctly by prepareInferenceSnapshot.
+      await queryRun(`UPDATE inference_snapshots SET evidence_status = 'complete'
+        WHERE evidence_status = 'incomplete'
+          AND JSON_VALID(omitted_fields_json)
+          AND JSON_LENGTH(omitted_fields_json) = 1
+          AND JSON_CONTAINS(omitted_fields_json, JSON_QUOTE('klines_before_retained_window'))`)
+      await queryRun(`UPDATE trade_review_cases review_case
+        JOIN inference_snapshots snap ON snap.signal_id = review_case.signal_id
+        SET review_case.status = 'evidence_pending', review_case.evidence_status = 'pending',
+          review_case.evidence_reason = 'evidence_rebuild_required', review_case.updated_at = NOW()
+        WHERE review_case.current_version_id IS NULL
+          AND review_case.evidence_reason LIKE '%inference_snapshot_incomplete%'
+          AND snap.evidence_status = 'complete'`)
+    }
   }
 ]
 

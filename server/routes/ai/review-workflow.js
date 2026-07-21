@@ -115,7 +115,7 @@ async function loadEvidence(outcomeId) {
     WHERE so.id = ? ORDER BY snap.id DESC LIMIT 1`, [outcomeId])
   if (!row) throw new Error('outcome_not_found')
   const deals = await queryAll('SELECT * FROM signal_outcome_deals WHERE outcome_id = ? ORDER BY deal_time, id', [outcomeId])
-  const assessment = assessReviewEvidence(row, deals)
+  const coreAssessment = assessReviewEvidence(row, deals)
   const snapshot = row.snapshot_id ? { id: row.snapshot_id, strategy_id: row.snapshot_strategy_id,
     strategy_version: Number(row.snapshot_strategy_version || 1), strategy_scope: row.snapshot_strategy_scope,
     system_prompt: row.system_prompt, user_prompt: row.user_prompt, prompt_hash: row.prompt_hash,
@@ -129,6 +129,10 @@ async function loadEvidence(outcomeId) {
   let marketPath = { status: 'partial', reason: 'market_path_unavailable', timeframes: {}, metrics: null, hash: null }
   try { marketPath = await buildReviewMarketPath({ userId: row.user_id, symbol: row.symbol, signal: signal || {}, snapshot: snapshot || {}, deals }) }
   catch (error) { marketPath.reason = safeError(error) }
+  const assessment = {
+    complete:coreAssessment.complete && marketPath.status === 'complete',
+    reasons:[...coreAssessment.reasons, ...(marketPath.status === 'complete' ? [] : ['holding_market_path_incomplete'])],
+  }
   const refs = {
     original_signal: { type: 'ai_signal', id: row.signal_id },
     inference_snapshot: { type: 'inference_snapshot', id: row.snapshot_id, hash: row.snapshot_content_hash },

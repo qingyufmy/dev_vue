@@ -434,7 +434,7 @@ async function upsertDailyGroup(group, clock) {
   }
   const prepared = []
   for (const outcome of group.outcomes) prepared.push({ outcome, ...(await prepareTradeEvidence(outcome)) })
-  const complete = prepared.every(item => item.status === 'complete' && item.evidence)
+  const tradeEvidenceComplete = prepared.every(item => item.status === 'complete' && item.evidence)
   const reasons = [...new Set(prepared.flatMap(item => String(item.reason || '').split(',')).filter(Boolean))]
   const sources = prepared.map(item => ({ outcome_id: Number(item.outcome.id), trade_review_case_id: Number(item.reviewCase?.id || 0) || null,
     evidence_hash: item.reviewCase?.evidence_hash || null, evidence: compactPeriodTradeEvidence(item.evidence) }))
@@ -451,8 +451,11 @@ async function upsertDailyGroup(group, clock) {
   }
   evidence.period_market = await buildDailyPeriodMarketEvidence({ userId:group.userId, strategyId:group.strategyId,
     symbols:group.outcomes.map(item => item.symbol), startUtcMs:group.startUtcMs, endUtcMs:group.endUtcMs, sources })
-  evidence.source_quality = { complete:complete && evidence.period_market.status === 'complete',
-    trade_evidence_complete:complete, period_market_status:evidence.period_market.status,
+  const periodMarketComplete = evidence.period_market.status === 'complete'
+  const complete = tradeEvidenceComplete && periodMarketComplete
+  if (!periodMarketComplete) reasons.push('period_market_incomplete')
+  evidence.source_quality = { complete,
+    trade_evidence_complete:tradeEvidenceComplete, period_market_status:evidence.period_market.status,
     period_market_reason:evidence.period_market.reason || null }
   const evidenceHash = sha256(JSON.stringify(evidence))
   const now = beijingNow()

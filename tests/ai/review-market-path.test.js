@@ -19,7 +19,7 @@ describe('review holding market path', () => {
       { entry_type: 0, volume: 1, price: 100, raw_json: JSON.stringify({ time_utc_msc: 1000 }) },
       { entry_type: 1, volume: 1, price: 94, raw_json: JSON.stringify({ time_utc_msc: 3000 }) },
     ]
-    const result = calculateHoldingPathMetrics({ rates: series, deals, direction: 'sell_limit', signal: {
+    const result = calculateHoldingPathMetrics({ rates: series, deals, direction: 'sell_limit', timeframeIntervalMs:1000, signal: {
       take_profit_1_price: 95, take_profit_2_price: 90, stop_loss_price: 107,
     } })
     expect(result.status).toBe('complete')
@@ -27,6 +27,19 @@ describe('review holding market path', () => {
     expect(result.max_adverse_excursion).toBe(8)
     expect(result.take_profit_touched).toEqual([true, false, false])
     expect(result.stop_loss_touched).toBe(true)
+  })
+
+  it('includes the candle that already opened when a short holding period starts', () => {
+    const result = calculateHoldingPathMetrics({
+      rates:[{ time_utc_msc:0, high:105, low:95 }, { time_utc_msc:3600000, high:110, low:90 }],
+      deals:[
+        { entry_type:0, volume:1, price:100, raw_json:JSON.stringify({ time_utc_msc:10 * 60000 }) },
+        { entry_type:1, volume:1, price:102, raw_json:JSON.stringify({ time_utc_msc:20 * 60000 }) },
+      ],
+      direction:'buy', timeframeIntervalMs:3600000,
+    })
+    expect(result.status).toBe('complete')
+    expect(result.bars_held).toBe(1)
   })
 
   it('keeps only holding path plus context and calculates Chan evidence', async () => {
@@ -45,5 +58,24 @@ describe('review holding market path', () => {
     expect(result.timeframes.M5.chan).toBeTruthy()
     expect(result.hash).toMatch(/^[a-f0-9]{64}$/)
   })
-})
 
+  it('reads persisted historical windows without requiring a connected bridge', async () => {
+    const series = rates(140)
+    const deals = [
+      { entry_type:0, volume:1, price:4000, raw_json:JSON.stringify({ time_msc:series[90].time_utc_msc + 180 * 60000 }) },
+      { entry_type:1, volume:1, price:4002, raw_json:JSON.stringify({ time_msc:series[105].time_utc_msc + 180 * 60000 }) },
+    ]
+    let requestedWindow = null
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
+      signal:{ signal_type:'buy_limit', timeframe:'M5' }, snapshot:{ klines:{ M5:series.slice(-60) } }, deals,
+      timezoneOffsetMinutes:180,
+      loadWindow:async (_userId, _symbol, timeframe, startUtcMs, endUtcMs, options) => {
+        requestedWindow = { timeframe, startUtcMs, endUtcMs, options }
+        return { rates:series, marketMeta:{ source:'mysql_period_cache', timezone_offset_minutes:180 } }
+      },
+    })
+    expect(requestedWindow).toMatchObject({ timeframe:'M5', options:{ alignToPeriodStart:false } })
+    expect(result.status).toBe('complete')
+    expect(result.metrics.status).toBe('complete')
+  })
+})

@@ -2242,6 +2242,21 @@ function renderExecutionDecisions(rows, pagination = {}) {
 }
 
 function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", queued:"已进入队列", preparing:"准备证据", model_request:"AI 分析中", validating:"校验结果", repairing:"修复输出", retry_wait:"等待重试", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", succeeded:"生成完成", deferred:"稍后处理" })[value] || value; }
+
+function periodReviewEvidenceReasonText(value) {
+  const labels = {
+    inference_snapshot_incomplete:"推理快照缺少关键内容",
+    historical_prompt_missing:"推理时使用的提示词缺失",
+    holding_market_path_incomplete:"开仓至平仓的行情路径尚未补齐",
+    period_market_incomplete:"当日完整行情与结构证据尚未补齐",
+    evidence_rebuild_required:"证据规则已升级，系统正在自动重建",
+    execution_deals_missing:"成交明细尚未同步完整",
+  };
+  const parts = String(value || "").split(",").map(item => item.trim()).filter(Boolean);
+  if (!parts.length) return "关键证据尚未完整，系统会自动重试";
+  return [...new Set(parts.map(item => labels[item]
+    || (/bridge not connected/i.test(item) ? "管理员桥接未连接，暂时无法补齐历史行情" : item)))].join("；");
+}
 function periodReviewEffectiveStatus(item) {
   if (item.job_status === "leased") return item.progress_stage || "generating";
   if (item.job_status === "queued" && item.next_attempt_at) return "retry_wait";
@@ -2324,6 +2339,12 @@ function renderReviewCases() {
   const statusClass = status => status === "approved" ? "success" : ["failed", "incomplete", "needs_revision"].includes(status) ? "danger" : "warning";
   const pending = new Set(["evidence_pending", "incomplete", "ready", "generating", "failed"]);
   const items = state.reviewCases.filter(item => !state.reviewFilter || (state.reviewFilter === "pending" ? pending.has(item.status) : item.status === state.reviewFilter));
+  const dailyVersionSets = new Map();
+  for (const item of state.reviewCases.filter(row => row.period_type === "daily")) {
+    const key = [item.period_key, item.trading_account_id, item.strategy_id].join(":");
+    if (!dailyVersionSets.has(key)) dailyVersionSets.set(key, new Set());
+    dailyVersionSets.get(key).add(Number(item.strategy_version || 1));
+  }
   host.innerHTML = items.length ? items.map(item => {
     const selected = Number(item.id) === Number(state.selectedReviewId);
     const effectiveStatus = periodReviewEffectiveStatus(item);
@@ -2331,12 +2352,15 @@ function renderReviewCases() {
     const stats = item.statistics || {};
     const isMonthly = item.period_type === "monthly";
     const profit = Number(stats.net_profit || 0);
+    const versionKey = [item.period_key, item.trading_account_id, item.strategy_id].join(":");
+    const hasVersionSplit = !isMonthly && (dailyVersionSets.get(versionKey)?.size || 0) > 1;
     return `<button class="workspace-row review-case-button ${selected ? 'selected' : ''} ${Number(item.is_unread) ? 'is-unread' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}">
       <span class="review-unread-dot ${Number(item.is_unread) ? '' : 'hidden'}" aria-label="未读复盘"></span>
       <span class="review-case-leading ${statusClass(item.status)}"><i data-lucide="${icon}" size="16"></i></span>
       <span class="workspace-row-main">
-        <span class="workspace-row-title"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
-        <span class="review-case-strategy">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} <small>v${Number(item.strategy_version || 1)}</small></span>
+        <span class="workspace-row-title"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="review-version-badge">v${Number(item.strategy_version || 1)}</span><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
+        <span class="review-case-strategy">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</span>
+        ${hasVersionSplit ? '<span class="review-version-split-note"><i data-lucide="git-branch" size="12"></i>当天策略升级，按版本分别复盘</span>' : ''}
         <span class="workspace-row-meta"><span>${isMonthly ? `${Number(stats.trading_days || 0)} 个交易日` : `${Number(stats.trade_count || item.source_count || 0)} 笔交易`}</span><span class="${profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''}">净收益 ${fmt(profit, 2)}</span></span>
       </span>
       <span class="review-case-arrow" aria-hidden="true"><i data-lucide="chevron-right" size="16"></i></span>
@@ -2378,7 +2402,7 @@ async function openReviewDetail(id) {
   const pathCoverage = Object.entries(pathEvidence.coverage || {});
   const excursion = (value) => Number.isFinite(Number(value)) ? `${fmt(Number(value), 2)}%` : "--";
   detail.innerHTML = `<header class="review-detail-header"><div class="review-detail-title"><span class="review-detail-icon"><i data-lucide="clipboard-check" size="19"></i></span><div><span class="review-section-kicker">复盘详情</span><h2>复盘 #${Number(review.id)}</h2><p>版本 ${escapeHtml(current?.version_no || '--')} · 信号 #${escapeHtml(review.signal_id || '--')}</p></div></div><div class="review-detail-status"><span class="status-chip ${review.status === 'approved' ? 'success' : ['failed','incomplete','needs_revision'].includes(review.status) ? 'danger' : 'warning'}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div></header>
-    ${review.evidence_status !== 'complete' ? `<div class="source-notice"><span><strong>证据缺失：</strong>${escapeHtml(review.evidence_reason || '关键证据不完整')}</span></div>` : ''}
+    ${review.evidence_status !== 'complete' ? `<div class="source-notice"><span><strong>证据准备中：</strong>${escapeHtml(periodReviewEvidenceReasonText(review.evidence_reason))}</span></div>` : ''}
     <section class="review-outcome-strip" aria-label="交易结果"><div class="review-outcome-main ${profitClass}"><span>净利润</span><strong>${fmt(outcome.net_profit, 2)}</strong><small>账户货币</small></div><div class="review-outcome-metric"><span>成交手数</span><strong>${fmt(outcome.closed_volume, 2)}</strong><small>已平仓</small></div><div class="review-outcome-metric"><span>结论置信度</span><strong>${confidencePercent}%</strong><small>AI 复盘判断</small></div><p><i data-lucide="info" size="14"></i>盈亏是结果，不直接代表当时的决策质量。</p></section>
     <section class="review-path-summary ${pathEvidence.status === 'complete' ? 'is-complete' : 'is-partial'}">
       <header><div><span class="review-section-kicker">持仓路径证据</span><h3>从开仓到平仓的行情表现</h3></div><span class="status-chip ${pathEvidence.status === 'complete' ? 'success' : 'warning'}">${pathEvidence.status === 'complete' ? '证据完整' : '部分可用'}</span></header>
@@ -2564,7 +2588,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       <div class="period-review-decision-row"><label class="review-field"><span>决策质量</span><select data-period-review-field="decision_quality" ${editable ? '' : 'disabled'}>${Object.entries(periodDecisionLabels).map(([value,label]) => `<option value="${value}" ${content.decision_quality === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="review-field"><span>结论置信度</span><div class="confidence-input"><input data-period-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${editable ? '' : 'disabled'}><small>0 到 1</small></div></label></div>
       <div class="period-review-edit-grid">${editableGroups.map(([key,label]) => `<label class="review-field"><span>${label}</span><textarea data-period-review-field="${key}" data-field-type="lines" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(periodReviewLines(content[key]))}</textarea><small>每行一条，保持简短且可执行</small></label>`).join('')}</div>
       <textarea id="reviewContentEditor" hidden>${escapeHtml(JSON.stringify(content))}</textarea>
-    </section>` : `<div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="${review.status === 'failed' ? 'circle-alert' : 'loader-circle'}" size="20"></i></span><strong>${review.status === 'failed' ? '复盘生成失败' : '复盘正在准备'}</strong><span>${escapeHtml(review.status === 'failed' ? periodReviewFailureText(review.last_error_code) : review.evidence_reason || '系统会在证据完整后自动生成，无需手动重复提交。')}</span></div>`}
+    </section>` : `<div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="${review.status === 'failed' ? 'circle-alert' : 'loader-circle'}" size="20"></i></span><strong>${review.status === 'failed' ? '复盘生成失败' : '复盘正在准备'}</strong><span>${escapeHtml(review.status === 'failed' ? periodReviewFailureText(review.last_error_code) : periodReviewEvidenceReasonText(review.evidence_reason))}</span></div>`}
     ${current ? `<section class="period-review-evidence-grid">
       ${periodReviewListBlock(isMonthly ? '跨日模式' : '逐笔判断', assessments.map(item => `${isMonthly ? item.period_case_id : item.outcome_id} · ${periodDecisionLabels[item.decision_quality] || item.decision_quality}：${item.summary || ''}`), isMonthly ? 'calendar-range' : 'receipt-text')}
       ${isMonthly ? periodReviewListBlock('长期记忆候选', (content.memory_candidates || []).map(item => item.lesson), 'brain-circuit') : periodReviewListBlock('缠论结构诊断', diagnostics.map(item => `${chanIssueLabels[item.issue_source] || item.issue_source}：${item.explanation || '无补充说明'}`), 'git-branch')}

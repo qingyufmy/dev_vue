@@ -101,6 +101,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(routes).toContain("WHERE id = ? AND user_id = ?")
     expect(app).toContain('Number(summary.daily_total || 0)')
     expect(app).toContain('Number(summary.monthly_total || 0)')
+    expect(app).toContain('function periodReviewEvidenceReasonText(value)')
+    expect(app).toContain('当天策略升级，按版本分别复盘')
+    expect(css).toContain('.review-version-split-note')
   })
 
   it('uses cursor pagination and request versions to prevent stale inference list data', () => {

@@ -105,6 +105,7 @@ describe('inference snapshot evidence', () => {
     expect(retained.every(count => count > 50 && count < 1000)).toBe(true)
     expect(Math.max(...retained) - Math.min(...retained)).toBeLessThanOrEqual(1)
     expect(result.omittedFields).toContain('klines_before_retained_window')
+    expect(result.evidenceStatus).toBe('complete')
     expect(result.byteSize).toBeLessThanOrEqual(300 * 1024)
   })
 
