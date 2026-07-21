@@ -43,13 +43,14 @@ async function checkConfirmations() {
         const adapter = getAdapter(row.chain)
         const confirmations = await adapter.getConfirmations(row.tx_hash)
 
-          if (confirmations >= row.required_confirmations) {
-          const r = await queryRun(
-            `UPDATE crypto_watch_list SET confirmations = ?, status = 'confirmed' WHERE id = ? AND status = 'confirming'`,
-            [confirmations, row.id]
-          )
-          if (!r.changes) continue
-          await activateMembership(row.order_id, row.user_id)
+        if (confirmations >= row.required_confirmations) {
+          const activated = await activateMembership(row.order_id, row.user_id)
+          if (activated) {
+            await queryRun(
+              `UPDATE crypto_watch_list SET confirmations = ?, status = 'confirmed' WHERE id = ? AND status = 'confirming'`,
+              [confirmations, row.id]
+            )
+          }
         } else {
           await queryRun(
             `UPDATE crypto_watch_list SET confirmations = ? WHERE id = ?`,
@@ -66,18 +67,22 @@ async function checkConfirmations() {
 }
 
 async function activateMembership(orderId, userId) {
-  const order = await queryOne('SELECT plan, period, plan_label, amount FROM orders WHERE order_id = ?', [orderId])
+  const order = await queryOne('SELECT plan, period, plan_label, amount, status FROM orders WHERE order_id = ? AND user_id = ?', [orderId, userId])
   if (!order) return
+  if (order.status === 'paid') return true
+  if (order.status && order.status !== 'pending') return false
 
   const now = beijingNow()
 
   // Wrap order update + user plan update in transaction to prevent crash between them
   const activated = await withTransaction(async (run) => {
     const r = await run(
-      `UPDATE orders SET status = 'paid', status_label = '已完成', paid_at = ? WHERE order_id = ? AND status != 'paid'`,
-      [now, orderId]
+      `UPDATE orders SET status = 'paid', status_label = '已完成', paid_at = ? WHERE order_id = ? AND user_id = ? AND status = 'pending'`,
+      [now, orderId, userId]
     )
-    if (!r.changes) return false
+    const result = Array.isArray(r) ? r[0] : r
+    const changes = result?.affectedRows ?? result?.changes ?? 0
+    if (!changes) return false
 
     const user = await queryOne('SELECT plan_expires_at FROM users WHERE id = ?', [userId])
     let baseDate = null
@@ -98,18 +103,20 @@ async function activateMembership(orderId, userId) {
     return
   }
 
-  try {
-    await queryRun(
-      `INSERT INTO notifications (user_id, type, title, message) VALUES (?, 'system', '支付成功', ?)`,
-      [userId, `您已成功开通 ${order.plan_label || order.plan} 会员，有效期至 ${activated}`]
-    )
-  } catch (e) {
-    console.error('[Monitor] Notification error:', e.message)
-  }
-
-  await processReferralCommission(userId, order.amount, order.plan, order.plan_label, order.period)
-
   console.log(`[Monitor] Membership activated: user ${userId} -> ${order.plan} (expires ${activated})`)
+  void (async () => {
+    try {
+      await queryRun(
+        `INSERT INTO notifications (user_id, type, title, message) VALUES (?, 'system', '支付成功', ?)`,
+        [userId, `您已成功开通 ${order.plan_label || order.plan} 会员，有效期至 ${activated}`]
+      )
+    } catch (e) {
+      console.error('[Monitor] Notification error:', e.message)
+    }
+    await processReferralCommission(userId, order.amount, order.plan, order.plan_label, order.period)
+  })().catch(err => console.error('[Monitor] Post-payment side effect error:', err.message))
+
+  return activated
 }
 
 async function checkExpiry() {
@@ -117,7 +124,7 @@ async function checkExpiry() {
     const now = beijingNow()
 
     const expiredWatches = await queryAll(
-      `SELECT order_id FROM crypto_watch_list WHERE status IN ('pending', 'confirming') AND expires_at < ?`,
+      `SELECT order_id FROM crypto_watch_list WHERE status = 'pending' AND expires_at < ?`,
       [now]
     )
 
@@ -130,7 +137,12 @@ async function checkExpiry() {
     }
 
     const expiredOrders = await queryAll(
-      `SELECT order_id FROM orders WHERE status = 'pending' AND crypto_expires_at IS NOT NULL AND crypto_expires_at < ?`,
+      `SELECT o.order_id FROM orders o
+       WHERE o.status = 'pending' AND o.crypto_expires_at IS NOT NULL AND o.crypto_expires_at < ?
+         AND NOT EXISTS (
+           SELECT 1 FROM crypto_watch_list w
+           WHERE w.order_id = o.order_id AND w.status = 'confirming'
+         )`,
       [now]
     )
 
@@ -162,7 +174,7 @@ async function fallbackPoll() {
         `SELECT w.id, w.chain, w.address, w.expected_amount, w.status, w.order_id, w.user_id, o.created_at
          FROM crypto_watch_list w
          JOIN orders o ON o.order_id = w.order_id
-         WHERE w.status = 'pending' AND w.chain = ? AND w.expires_at > ?`,
+         WHERE w.status = 'pending' AND o.status = 'pending' AND w.chain = ? AND w.expires_at > ?`,
         [chainName, now]
       )
 
@@ -189,7 +201,7 @@ async function fallbackPoll() {
             console.log(`[Monitor] Detected ${chainName} payment: ${tx.hash} (${tx.amount} USDT) for address ${row.address}`)
             try {
               await queryRun(
-                `UPDATE crypto_watch_list SET tx_hash = ?, status = 'confirming', confirmations = 0 WHERE id = ?`,
+                `UPDATE crypto_watch_list SET tx_hash = ?, status = 'confirming', confirmations = 0 WHERE id = ? AND status = 'pending'`,
                 [tx.hash, row.id]
               )
             } catch (dupErr) {
@@ -210,11 +222,12 @@ async function fallbackPoll() {
   }
 }
 
-const SCAN_FUNCTIONS = {
-  TRON: async (adapter, address, expectedAmount, createdAt, excludeHashes) => {
+export async function scanTronPayment(adapter, address, expectedAmount, createdAt, excludeHashes) {
     const apiKey = await getCryptoWalletApiKey('TRON')
     const baseUrl = adapter.getApiBaseUrl()
-    const url = `${baseUrl}/v1/accounts/${address}/transactions/trc20?limit=20&contract_address=${USDT_CONTRACTS.TRON}`
+    const createdMs = parseBeijing(createdAt)?.getTime() ?? 0
+    if (!createdMs) { console.error(`[Monitor] TRON: failed to parse createdAt: ${createdAt}`); return null }
+    const url = `${baseUrl}/v1/accounts/${address}/transactions/trc20?limit=200&only_confirmed=true&min_timestamp=${createdMs}&contract_address=${USDT_CONTRACTS.TRON}`
     const resp = await fetch(url, {
       headers: { 'TRON-PRO-API-KEY': apiKey, 'Accept': 'application/json' }
     })
@@ -222,20 +235,26 @@ const SCAN_FUNCTIONS = {
     const data = await resp.json()
     if (!data.data) return null
 
-    const createdMs = parseBeijing(createdAt)?.getTime() ?? 0
-    if (!createdMs) { console.error(`[Monitor] TRON: failed to parse createdAt: ${createdAt}`); return null }
-    const expected = parseFloat(expectedAmount)
+    const amountText = String(expectedAmount).trim()
+    if (!/^\d+(\.\d{1,6})?$/.test(amountText)) return null
+    const [whole, fraction = ''] = amountText.split('.')
+    const expectedUnits = BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0'))
     for (const tx of data.data) {
       if (excludeHashes?.has(tx.transaction_id)) continue
       if (tx.to !== address) continue
       if (tx.block_timestamp && tx.block_timestamp < createdMs) continue
-      const amount = parseInt(tx.value) / 1e6
-      if (amount === expected) {
+      let actualUnits
+      try { actualUnits = BigInt(tx.value) } catch { continue }
+      if (actualUnits === expectedUnits) {
+        const amount = Number(actualUnits) / 1e6
         return { hash: tx.transaction_id, amount }
       }
     }
     return null
-  },
+}
+
+const SCAN_FUNCTIONS = {
+  TRON: scanTronPayment,
 
   ETH: async (adapter, address, expectedAmount, createdAt, excludeHashes) => {
     const apiKey = await getCryptoWalletApiKey('ETH')

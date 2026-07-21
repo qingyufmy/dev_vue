@@ -28,26 +28,23 @@ class TronAdapter extends BaseChainAdapter {
 
   async getTransaction(txHash) {
     try {
-      const url = `${this.getApiBaseUrl()}/v1/transactions/${txHash}`
+      const url = `${this.getApiBaseUrl()}/walletsolidity/gettransactioninfobyid`
       const headers = await this.getApiHeaders()
-      const resp = await fetch(url, { headers })
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: txHash }),
+      })
       if (!resp.ok) return null
       const data = await resp.json()
-      if (!data.ret || data.ret.length === 0) return null
-
-      const contract = data.raw_data?.contract?.[0]
-      const param = contract?.parameter?.value
-      const status = data.ret[0].contractResult === 'SUCCESS' ? 'success' : 'failed'
-      const blockNum = data.block_header?.raw_data?.number || 0
+      if (!data.id || !data.blockNumber) return null
+      if (data.receipt?.result && data.receipt.result !== 'SUCCESS') return null
 
       return {
         hash: txHash,
-        from: param?.ownerAddress || '',
-        to: param?.toAddress || '',
-        value: param?.amount || 0,
-        blockNumber: blockNum,
-        confirmations: 0,
-        status,
+        blockNumber: data.blockNumber,
+        confirmations: this.getRequiredConfirmations(),
+        status: 'success',
       }
     } catch {
       return null
@@ -55,19 +52,8 @@ class TronAdapter extends BaseChainAdapter {
   }
 
   async getConfirmations(txHash) {
-    try {
-      const tx = await this.getTransaction(txHash)
-      if (!tx || !tx.blockNumber) return 0
-
-      const headers = await this.getApiHeaders()
-      const nowResp = await fetch(`${this.getApiBaseUrl()}/wallet/getnowblock`, { headers })
-      if (!nowResp.ok) return 0
-      const nowBlock = await nowResp.json()
-      const currentBlock = nowBlock.block_header?.raw_data?.number || 0
-      return Math.max(0, currentBlock - tx.blockNumber)
-    } catch {
-      return 0
-    }
+    const tx = await this.getTransaction(txHash)
+    return tx ? this.getRequiredConfirmations() : 0
   }
 
   buildTransferEventFilter(watchedAddresses) {

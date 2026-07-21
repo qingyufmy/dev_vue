@@ -2,10 +2,9 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { queryOne, queryRun, queryAll, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
-import { deriveAddress, getAddressCount, saveAddress, getRequiredConfirmations } from '../crypto/wallet.js'
+import { getRequiredConfirmations, validateAddress } from '../crypto/wallet.js'
 import { adapters } from '../crypto/chains/index.js'
 import { generatePaymentQR } from '../crypto/qr.js'
-import { addWatchAddress } from '../crypto/monitor.js'
 import { getFixedAddressForChain, generateUniqueAmount, resetFixedAddressCache } from '../crypto/fixed-address.js'
 import { calculatePlanExpiry, processReferralCommission } from '../utils.js'
 
@@ -55,7 +54,7 @@ async function getPlans() {
 
 const PERIOD_LABELS = { month: '月付', year: '年付', lifetime: '终身' }
 
-const SUPPORTED_CHAINS = ['ETH', 'BSC', 'TRON', 'SOL', 'TRC20', 'ERC20', 'BEP20', 'SPL']
+const SUPPORTED_CHAINS = ['TRON', 'TRC20']
 
 const CHAIN_MAP = {
   'TRC20': 'TRON', 'ERC20': 'ETH', 'BEP20': 'BSC', 'SPL': 'SOL',
@@ -66,7 +65,7 @@ async function getPaymentMode() {
   const row = await queryOne(
     "SELECT value FROM system_config WHERE category = 'crypto_wallet' AND `key` = 'payment_mode'"
   )
-  return row?.value || 'dynamic'
+  return row?.value || 'fixed'
 }
 
 router.get('/plans', async (req, res) => {
@@ -167,13 +166,27 @@ router.post('/payment', authMiddleware, async (req, res) => {
 
     const finalAmount = Math.max(0, amount - referralCredit)
 
+    const paymentMode = await getPaymentMode()
+    if (paymentMode !== 'fixed') {
+      return res.json({ ok: false, error: '当前仅支持固定地址 TRC-20 支付' })
+    }
+
+    const fixedAddress = await getFixedAddressForChain('TRON')
+    if (!validateAddress('TRON', fixedAddress)) {
+      return res.json({ ok: false, error: 'TRC-20 收款地址未配置或格式无效，请联系管理员' })
+    }
+
     const existingOrder = await queryOne(
       `SELECT order_id, order_no, crypto_address, crypto_amount, crypto_expires_at, crypto_chain
-       FROM orders
-       WHERE user_id = ? AND plan = ? AND period = ? AND crypto_chain = ? AND status = 'pending'
-         AND crypto_expires_at > DATE_ADD(NOW(), INTERVAL 15 MINUTE)
+       FROM orders o
+       WHERE o.user_id = ? AND o.plan = ? AND o.period = ? AND o.crypto_chain = ? AND o.status = 'pending'
+         AND o.crypto_expires_at > DATE_ADD(NOW(), INTERVAL 15 MINUTE)
+         AND EXISTS (
+           SELECT 1 FROM crypto_watch_list w
+           WHERE w.order_id = o.order_id AND w.status IN ('pending', 'confirming')
+         )
        ORDER BY created_at DESC LIMIT 1`,
-      [req.user.id, plan, periodKey, crypto_chain]
+      [req.user.id, plan, periodKey, chainKey]
     )
 
     if (existingOrder) {
@@ -183,14 +196,14 @@ router.post('/payment', authMiddleware, async (req, res) => {
         label: `${planInfo.name} ${PERIOD_LABELS[periodKey] || '月付'}`,
         orderNo: existingOrder.order_no,
         orderId: existingOrder.order_id,
-        crypto_chain,
+        crypto_chain: chainKey,
         crypto_address: existingOrder.crypto_address,
         crypto_amount: parseFloat(existingOrder.crypto_amount),
         usd_amount: finalAmount.toFixed(2),
         expires_at: existingOrder.crypto_expires_at,
         required_confirmations: getRequiredConfirmations(chainKey),
         qr_code: qrCode,
-        payment_mode: await getPaymentMode(),
+        payment_mode: paymentMode,
         reused: true,
       })
     }
@@ -224,55 +237,32 @@ router.post('/payment', authMiddleware, async (req, res) => {
     const expiresAtDate = new Date(Date.now() + 30 * 60 * 1000 + 8 * 3600_000)
     const expiresAt = `${expiresAtDate.getUTCFullYear()}-${String(expiresAtDate.getUTCMonth()+1).padStart(2,'0')}-${String(expiresAtDate.getUTCDate()).padStart(2,'0')} ${String(expiresAtDate.getUTCHours()).padStart(2,'0')}:${String(expiresAtDate.getUTCMinutes()).padStart(2,'0')}:${String(expiresAtDate.getUTCSeconds()).padStart(2,'0')}`
 
-    const paymentMode = await getPaymentMode()
-    let address, usdtAmount, mode
-
-    if (paymentMode === 'fixed') {
-      address = await getFixedAddressForChain(chainKey)
-      if (!address) {
-        return res.json({ ok: false, error: '固定地址未配置，请在管理后台设置' })
-      }
-      usdtAmount = await generateUniqueAmount(baseUsdtAmount, orderId, plan, periodKey)
-      mode = 'fixed'
-    } else {
-      let index = await getAddressCount(chainKey)
-      let saved = false
-      for (let attempt = 0; attempt < 5 && !saved; attempt++) {
-        try {
-          address = deriveAddress(chainKey, index)
-          await saveAddress(chainKey, index, address)
-          saved = true
-        } catch (e) {
-          if (e.message?.includes('Duplicate')) {
-            index++
-          } else {
-            throw e
-          }
-        }
-      }
-      if (!saved) throw new Error('地址生成失败，请重试')
-      usdtAmount = parseFloat(baseUsdtAmount.toFixed(2))
-      mode = 'dynamic'
-    }
+    const address = fixedAddress
+    let usdtAmount
+    const mode = 'fixed'
 
     await withTransaction(async (run) => {
+      usdtAmount = await generateUniqueAmount(baseUsdtAmount, orderId, plan, periodKey, {
+        chain: chainKey,
+        address,
+        run,
+      })
+
       await run(`
         INSERT INTO orders (order_no, order_id, user_id, plan, plan_label, period, period_label, amount, amount_confirmed, status, status_label, payment_method, crypto_chain, crypto_address, crypto_amount, crypto_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', '待支付', 'crypto', ?, ?, ?, ?)
-      `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, crypto_chain, address, usdtAmount, expiresAt])
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '待支付', 'crypto', ?, ?, ?, ?)
+      `, [orderNo, orderId, req.user.id, plan, planInfo.name, periodKey, PERIOD_LABELS[periodKey] || period, amount, finalAmount, chainKey, address, usdtAmount, expiresAt])
+
+      await run(
+        `INSERT INTO crypto_watch_list
+           (order_id, user_id, chain, address, expected_amount, status, required_confirmations, expires_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [orderId, req.user.id, chainKey, address, usdtAmount, requiredConfirmations, expiresAt]
+      )
 
       if (referralCredit > 0) {
         await run("UPDATE users SET referral_credit = GREATEST(0, referral_credit - ?), updated_at = NOW() WHERE id = ?", [referralCredit, req.user.id])
       }
-    })
-
-    await addWatchAddress({
-      orderId,
-      userId: req.user.id,
-      chain: chainKey,
-      address,
-      expectedAmount: usdtAmount,
-      expiresAt,
     })
 
     let qrCode = null
@@ -287,7 +277,7 @@ router.post('/payment', authMiddleware, async (req, res) => {
       label: `${planInfo.name} ${PERIOD_LABELS[periodKey] || '月付'}`,
       orderNo,
       orderId,
-      crypto_chain,
+      crypto_chain: chainKey,
       crypto_address: address,
       crypto_amount: usdtAmount,
       usd_amount: finalAmount.toFixed(2),

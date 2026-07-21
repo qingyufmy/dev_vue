@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn()
+const mockQueryAll = vi.fn()
 const mockWithTransaction = vi.fn()
 
 vi.mock('../server/db.js', () => ({
   get queryOne() { return mockQueryOne },
   get queryRun() { return mockQueryRun },
+  get queryAll() { return mockQueryAll },
   get withTransaction() { return mockWithTransaction },
 }))
 
@@ -20,6 +22,7 @@ vi.mock('../server/crypto/wallet.js', () => ({
   getAddressCount: vi.fn(() => 0),
   saveAddress: vi.fn(),
   getRequiredConfirmations: vi.fn(() => 19),
+  validateAddress: vi.fn(() => true),
 }))
 
 vi.mock('../server/crypto/chains/index.js', () => ({
@@ -77,8 +80,13 @@ describe('payment.js — GET /payment preview', () => {
   beforeEach(() => {
     mockQueryOne.mockReset()
     mockQueryRun.mockReset()
+    mockQueryRun.mockImplementation((sql) => sql.trim().startsWith('SELECT')
+      ? Promise.resolve([[]])
+      : Promise.resolve({ insertId: 1, changes: 1 }))
+    mockQueryAll.mockReset()
+    mockQueryAll.mockResolvedValue([{ key: 'fixed_tron_address', value: 'TTestAddress12345678901234567890' }])
     mockWithTransaction.mockReset()
-    mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
+    mockWithTransaction.mockImplementation((fn) => fn(mockQueryRun))
   })
 
   it('缺少 preview 参数返回错误', async () => {
@@ -129,8 +137,13 @@ describe('payment.js — POST /payment', () => {
   beforeEach(() => {
     mockQueryOne.mockReset()
     mockQueryRun.mockReset()
+    mockQueryAll.mockReset()
+    mockQueryAll.mockResolvedValue([{ key: 'fixed_tron_address', value: 'TTestAddress12345678901234567890' }])
     mockWithTransaction.mockReset()
-    mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
+    mockQueryRun.mockImplementation((sql) => sql.trim().startsWith('SELECT')
+      ? Promise.resolve([[]])
+      : Promise.resolve({ insertId: 1, changes: 1 }))
+    mockWithTransaction.mockImplementation((fn) => fn(mockQueryRun))
   })
 
   it('未知套餐返回错误', async () => {
@@ -181,24 +194,26 @@ describe('payment.js — POST /payment', () => {
     expect(json.crypto_amount).toBeGreaterThan(0)
     expect(json.expires_at).toBeDefined()
     expect(json.qr_code).toBeDefined()
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO crypto_watch_list'),
+      expect.arrayContaining(['TRON', 'TTestAddress12345678901234567890', 19])
+    )
   })
 
-  it('支持 ETH 链创建订单', async () => {
+  it('拒绝 ETH 链创建订单', async () => {
     mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('post', '/payment', {
       plan: 'plus', period: 'month', crypto_chain: 'ETH'
     })
-    expect(json.ok).toBe(true)
-    expect(json.crypto_chain).toBe('ETH')
+    expect(json.ok).toBe(false)
   })
 
-  it('支持 SOL 链创建订单', async () => {
+  it('拒绝 SOL 链创建订单', async () => {
     mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('post', '/payment', {
       plan: 'plus', period: 'yearly', crypto_chain: 'SOL'
     })
-    expect(json.ok).toBe(true)
-    expect(json.crypto_chain).toBe('SOL')
+    expect(json.ok).toBe(false)
   })
 })
 
@@ -206,6 +221,8 @@ describe('payment.js — GET /payment/status/:orderId', () => {
   beforeEach(() => {
     mockQueryOne.mockReset()
     mockQueryRun.mockReset()
+    mockQueryAll.mockReset()
+    mockQueryAll.mockResolvedValue([{ key: 'fixed_tron_address', value: 'TTestAddress12345678901234567890' }])
     mockWithTransaction.mockReset()
     mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
   })
