@@ -280,7 +280,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const legacySignalsTarget = tabId === "signals"')
     expect(app).toContain('function setAnalystView(target)')
     expect(html).not.toContain('id="strategyEnabled"')
-    expect(html).toContain('可见状态同时控制策略是否可用于手动和自动推理')
+    expect(html).toContain('可见状态同时控制策略是否可用于手动和自动分析')
     expect(html).toContain('id="subscriptionSymbolsDropdown"')
     expect(html).toContain('id="subscriptionSymbolOptions"')
     expect(html).not.toContain('id="subscriptionSymbols"')
@@ -299,7 +299,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).not.toContain('initAutoSymbolsSelector')
     expect(app).toContain('selectedSubscriptionSymbols()')
     expect(app).toContain('const available = (state.strategies || []).filter(canExecute)')
-    expect(html).toContain('只显示当前可用于推理的策略')
+    expect(html).toContain('只显示当前可用于分析的策略')
   })
 
   it('opens strategy, subscription and model forms as accessible responsive modals', () => {

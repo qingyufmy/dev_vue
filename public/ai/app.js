@@ -518,7 +518,7 @@ function setAutoBadgeText(el, label) {
     const track = document.createElement('span');
     track.className = 'auto-runtime-track';
     track.setAttribute('role', 'progressbar');
-    track.setAttribute('aria-label', '自动推理进度');
+    track.setAttribute('aria-label', '自动分析进度');
     track.setAttribute('aria-valuemin', '0');
     track.setAttribute('aria-valuemax', '100');
     track.setAttribute('aria-valuenow', '0');
@@ -631,13 +631,13 @@ function renderAutoProgress(cycles, ptName) {
   const primary = [...cycles].sort((a, b) => Number(b.progress_seq || 0) - Number(a.progress_seq || 0))[0];
   const progress = Math.round(cycles.reduce((sum, cycle) => sum + displayedAutoProgress(cycle, cycle.stage === 'complete'), 0) / Math.max(1, count));
   const symbols = cycles.map(cycle => cycle.symbol).filter(Boolean);
-  const label = count > 1 ? `${count} 个品种推理中` : `${primary?.symbol || '自动推理'} · ${primary?.stage_label || '正在处理'}`;
+  const label = count > 1 ? `${count} 个品种分析中` : `${primary?.symbol || '自动分析'} · ${primary?.stage_label || '正在处理'}`;
   const elapsed = autoProgressElapsed(primary?.started_at);
   const stage = count > 1
     ? `${symbols.slice(0, 3).join(' · ')}${symbols.length > 3 ? ` 等 ${symbols.length} 项` : ''}${elapsed ? ` · ${elapsed}` : ''}`
     : `已用时 ${elapsed || '00:00'}`;
   const details = cycles.map(cycle => `${cycle.symbol || '未知品种'}：${cycle.stage_label || '正在处理'} ${Math.round(Number(cycle.progress_percent || 0))}%`).join('\n');
-  const title = `策略：${ptName || '未选择'}\n状态：正在推理\n${details}\n点击可停止后续自动推理`;
+  const title = `策略：${ptName || '未选择'}\n状态：正在分析\n${details}\n点击可停止后续自动分析`;
   applyAutoBadge(label, 'running', title, { mode: primary?.stage === 'complete' ? 'complete' : 'running', stage, progress });
 }
 
@@ -663,7 +663,7 @@ function renderAutoAnalyzeBadge(s) {
   const flash = state.autoProgressFlash;
   if (flash && flash.expiresAt > Date.now()) {
     const success = flash.status === 'success';
-    const flashLabel = success ? `${flash.symbol || '自动推理'} · 推理完成` : `${flash.symbol || '自动推理'} · 推理未完成`;
+    const flashLabel = success ? `${flash.symbol || '自动分析'} · 分析完成` : `${flash.symbol || '自动分析'} · 分析未完成`;
     const flashStage = success ? '信号与执行建议已更新' : autoReasonText(flash.reason || 'exception');
     applyAutoBadge(flashLabel, success ? 'running' : 'danger', flashStage, {
       mode: success ? 'complete' : 'error',
@@ -678,15 +678,15 @@ function renderAutoAnalyzeBadge(s) {
   }
 
   if (!s.enabled) {
-    label = '自动推理关闭';
+    label = '自动分析关闭';
     type = 'neutral';
-    title = '状态：自动推理关闭';
+    title = '状态：自动分析关闭';
   } else if (s.paused_reason === 'weekly_flatten_window') {
-    label = '自动推理暂停 · 周末清仓';
+    label = '自动分析暂停 · 周末清仓';
     type = 'warning';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：周末清仓期间暂停`;
   } else if (s.in_flight) {
-    const stageLabel = s.stage_label || (s.stage === 'running' ? '正在推理' : '调度中');
+    const stageLabel = s.stage_label || (s.stage === 'running' ? '正在分析' : '调度中');
     renderAutoProgress([{
       cycle_id: 'runtime-fallback', symbol: symbols[0] || '', stage: s.stage || 'running',
       stage_label: stageLabel, progress_percent: Number(s.progress_percent || 46),
@@ -694,7 +694,7 @@ function renderAutoAnalyzeBadge(s) {
     }], ptName);
     return;
   } else if (s.paused_reason && isMarketClosedReason(s.paused_reason)) {
-    label = '自动推理暂停 · 休市';
+    label = '自动分析暂停 · 休市';
     type = 'warning';
     const msState = s.market_state || {};
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：休市暂停`;
@@ -705,13 +705,13 @@ function renderAutoAnalyzeBadge(s) {
     const min = Math.floor(remaining / 60);
     const sec = remaining % 60;
     const countdown = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-    label = `自动推理开启 · 下次 ${countdown}`;
+    label = `自动分析开启 · 下次 ${countdown}`;
     type = 'active';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启\n下次运行：等待倒计时结束`;
     if (s.paused_reason) title += `\n内部状态：${autoReasonText(s.paused_reason)}`;
     if (s.market_state) title += `\n市场状态：${autoReasonText(s.market_state.reason)}`;
   } else {
-    label = '自动推理开启';
+    label = '自动分析开启';
     type = 'active';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启`;
     if (s.paused_reason) title += `\n内部状态：${autoReasonText(s.paused_reason)}`;
@@ -974,7 +974,7 @@ const API_ERROR_MESSAGES = {
   admin_only: "仅管理员可以使用此功能",
   "symbol required": "请选择交易品种",
   "timeframe required": "请选择 K 线周期",
-  "strategy required": "请选择推理策略",
+  "strategy required": "请选择交易策略",
   "start_time and end_time required": "请选择完整的开始和结束时间",
   "model_ids must be an array of 2-5 model profile IDs": "请选择 2 至 5 个模型",
   "model_ids must contain 2-5 unique IDs": "请选择 2 至 5 个不同模型",
@@ -1002,7 +1002,7 @@ const API_ERROR_MESSAGES = {
   snapshot_compare_minimum_not_met: "至少需要选择 2 条历史信号快照",
   snapshot_compare_limit_exceeded: "一次最多选择 30 条历史信号快照",
   snapshot_compare_selection_invalid: "所选快照不存在、无权访问或推理证据不完整",
-  snapshot_compare_strategy_mismatch: "所选快照不属于同一推理策略",
+  snapshot_compare_strategy_mismatch: "所选快照不属于同一交易策略",
   snapshot_compare_strategy_version_mismatch: "所选快照的策略版本不同，请按版本分别评估",
   snapshot_compare_symbol_mismatch: "所选快照的交易品种不同，请按品种分别评估",
   snapshot_compare_schema_mismatch: "所选快照的输出格式版本不同，请分开评估",
@@ -1077,7 +1077,7 @@ function renderObserverSwitchStates({ tradeEnabled, autoEnabled } = {}) {
   );
   setBadge(
     "autoAnalyzeMode",
-    autoKnown ? `自动推理${autoEnabled ? "开启" : "关闭"} · 只读` : "自动推理状态未知 · 只读",
+    autoKnown ? `自动分析${autoEnabled ? "开启" : "关闭"} · 只读` : "自动分析状态未知 · 只读",
     autoEnabled === true ? "active" : "neutral",
   );
   state.autoEnabled = autoEnabled === true;
@@ -1106,7 +1106,7 @@ function syncAiAccess(access) {
 
 function apiErrorMessage(code) {
   const raw = String(code || "未知错误");
-  if (raw.startsWith('active_subscription_conflict:')) return '已有其他策略启用自动推理，请先关闭原订阅或确认切换';
+  if (raw.startsWith('active_subscription_conflict:')) return '已有其他策略启用自动分析，请先关闭原订阅或确认切换';
   if (API_ERROR_MESSAGES[raw]) return API_ERROR_MESSAGES[raw];
   return raw
     .replace(/The operation was aborted due to timeout/gi, "模型请求超时")
@@ -1225,7 +1225,7 @@ async function handleAccountTransferred(msg = {}) {
   state._accountContextGeneration = Number(state._accountContextGeneration || 0) + 1;
   clearAccountContextCaches();
   state.autoEnabled = false;
-  toast("此 MT5 账户已由另一个平台账号重新连接，当前账号的自动推理和交易发送已关闭", "warning");
+  toast("此 MT5 账户已由另一个平台账号重新连接，当前账号的自动分析和交易发送已关闭", "warning");
   await Promise.allSettled([loadStatus(), loadStrategyCatalog(), refreshTabData(activeTabId())]);
 }
 
@@ -1438,7 +1438,7 @@ function updateMarketStatus(tradeMode) {
     return;
   }
   const map = {
-    0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动推理已暂停'],
+    0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动分析已暂停'],
     4: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
   };
   const [cls, label, badgeType, tip] = map[tradeMode] || ['unknown', '未知', 'neutral', '未知状态'];
@@ -1734,7 +1734,7 @@ function handleHeartbeat(msg) {
       state.autoRuntime.enabled = msg.auto_reasoning_enabled;
       renderAutoAnalyzeBadge(state.autoRuntime);
     } else if (!msg.auto_reasoning_enabled) {
-      setBadge("autoAnalyzeMode", "自动推理关闭", "neutral");
+      setBadge("autoAnalyzeMode", "自动分析关闭", "neutral");
     }
   }
 
@@ -1842,7 +1842,7 @@ function updateModelProviderHelp(provider) {
   help.textContent = provider === "kimi_code"
     ? "订阅接口支持关闭思考模式；管理员配置为平台模型后，可按用途选择是否共享。"
     : provider === "kimi"
-      ? "开放平台按量计费，适合正式自动推理与客户使用。"
+      ? "开放平台按量计费，适合正式自动分析与客户使用。"
       : "";
   if ($("profileTemperature")) $("profileTemperature").disabled = provider === "kimi_code";
   if ($("profileThinkingHelp")) $("profileThinkingHelp").textContent = provider === "kimi_code"
@@ -1873,7 +1873,7 @@ function renderModelProfiles() {
 async function loadModelManagement() {
   const host = $("modelProfilesList");
   if (host) host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
-  setText("modelEffectiveSource", "正在解析…");
+  setText("modelEffectiveSource", "正在选择…");
   const notice = $("modelSourceNotice");
   if (notice) notice.innerHTML = '<span><strong>模型来源：</strong>正在向服务端确认当前可用配置…</span>';
   const usage = state.user?.role === "admin" ? "auto_platform" : "manual";
@@ -2018,7 +2018,7 @@ async function loadStrategyCatalog() {
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
     const memoryMode = linked.some(sub => sub.memory_mode === "disabled") ? "部分订阅关闭记忆" : memory;
     const canEdit = (item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id)) || (item.scope === 'platform' && state.user?.role === 'admin');
-    const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动推理已启用' : '自动推理未启用'} · ${escapeHtml(subscriptionTakeProfitModeLabel(sub.take_profit_mode))} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
+    const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动分析已启用' : '自动分析未启用'} · ${escapeHtml(subscriptionTakeProfitModeLabel(sub.take_profit_mode))} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
     const primarySubscription = linked.find(sub => Number(sub.execution_enabled)) || linked[0];
     const subscriptionButton = primarySubscription
       ? `<button class="btn btn-primary btn-sm" data-subscription-action="edit" data-subscription-id="${primarySubscription.id}"><i data-lucide="settings-2" size="14"></i>编辑订阅</button>`
@@ -2028,7 +2028,7 @@ async function loadStrategyCatalog() {
     const subscriptionsBlock = linked.length ? `<section class="strategy-subscriptions"><div class="strategy-subscriptions-head"><span><i data-lucide="radio-tower" size="15"></i>执行订阅</span><small>${linked.length} 个</small></div>${subRows}</section>` : '<div class="quiet-empty">还没有执行订阅</div>';
     const description = item.description || (item.scope === "private" ? "我的自定义分析策略" : "平台提供的分析策略");
     return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>技术分析</small><strong>${escapeHtml(chanText)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>账户上下文</small><strong>${escapeHtml(portfolioText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
-  }).join("") : '<div class="empty-state"><strong>当前筛选下没有策略</strong><span>切换筛选条件，或新建一套自己的推理策略。</span></div>';
+  }).join("") : '<div class="empty-state"><strong>当前筛选下没有策略</strong><span>切换筛选条件，或新建一套自己的交易策略。</span></div>';
   populateManualStrategySelector();
   initIcons();
 }
@@ -2090,7 +2090,7 @@ function renderStrategyModelOptions(scope, selectedId = "") {
   select.value = selectedId ? String(selectedId) : "";
   if (selectedId && !select.value) select.insertAdjacentHTML("beforeend", `<option value="${Number(selectedId)}" selected>已绑定模型 #${Number(selectedId)}（当前不可用）</option>`);
   const help = $("strategyModelHelp");
-  if (help) help.textContent = platform ? "可绑定一个平台模型用于自动推理；留空时使用平台默认模型。" : "可绑定自己的模型；留空时按模型管理中的默认与共享规则解析。";
+  if (help) help.textContent = platform ? "可绑定一个平台模型用于自动分析；留空时使用平台默认模型。" : "可绑定自己的模型；留空时按模型管理中的默认与共享规则自动选择。";
 }
 
 function openStrategyEditor(strategy = null) {
@@ -2273,7 +2273,7 @@ async function saveSubscriptionEditor() {
   const otherActive = (state.strategySubscriptions || []).find(item => Number(item.execution_enabled) && Number(item.id) !== id);
   let replaceActive = false;
   if (executionEnabled && otherActive) {
-    replaceActive = confirm(`当前已有“${otherActive.strategy_title || `订阅 #${otherActive.id}`}”在自动推理。是否关闭原订阅并切换到当前策略？`);
+    replaceActive = confirm(`当前已有“${otherActive.strategy_title || `订阅 #${otherActive.id}`}”在自动分析。是否关闭原订阅并切换到当前策略？`);
     if (!replaceActive) return;
   }
   const strategy = (state.strategies || []).find(item => Number(item.id) === Number(editor.dataset.strategyId));
@@ -3432,7 +3432,7 @@ async function loadStatus() {
     };
     state.autoEnabled = scheduler.enabled;
   } catch {
-    setBadge("autoAnalyzeMode", "自动推理状态未知", "warning");
+    setBadge("autoAnalyzeMode", "自动分析状态未知", "warning");
   }
 
 }
@@ -3513,16 +3513,16 @@ async function handleAutoToggle() {
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   const activeCycles = activeAutoProgressCycles(state.autoRuntime);
-  const closeTitle = activeCycles.length ? "停止后续自动推理" : "关闭自动推理";
+  const closeTitle = activeCycles.length ? "停止后续自动分析" : "关闭自动分析";
   const closeMessage = activeCycles.length
-    ? `当前有 ${activeCycles.length} 个品种正在推理。关闭后不会再开始新任务，已经提交给模型的任务仍会安全完成。`
-    : "确认关闭自动推理？关闭后将停止自动 AI 分析和信号推送。";
+    ? `当前有 ${activeCycles.length} 个品种正在分析。关闭后不会再开始新任务，已经提交给模型的任务仍会安全完成。`
+    : "确认关闭自动分析？关闭后将停止 AI 行情分析和交易建议推送。";
   if (state.autoEnabled && !await showConfirm(closeTitle, closeMessage, { confirmText: activeCycles.length ? "停止后续任务" : "关闭", danger: true })) return;
   _autoToggleLock = true;
   try {
     const result = await wsApi('toggle_auto');
     await loadStatus();
-    toast(result.message || (result.enabled ? '自动推理已开启' : '自动推理已关闭'), 'success');
+    toast(result.message || (result.enabled ? '自动分析已开启' : '自动分析已关闭'), 'success');
   } catch (e) {
     toast('切换失败: ' + e.message, 'error');
   } finally {
@@ -4714,7 +4714,7 @@ async function runAnalysis() {
   const strategyId = Number($("analyzeStrategy")?.value || 0);
   const autoExecute = Boolean($("manualAutoExecute")?.checked);
   if (!strategyId) {
-    toast("请选择推理策略", "warning");
+    toast("请选择交易策略", "warning");
     $("analyzeStrategy")?.focus();
     return;
   }
@@ -5050,7 +5050,7 @@ async function loadModelCompareSnapshots({ resetPage = false } = {}) {
   if (!strategyId || !symbol) {
     _modelCompareSnapshots = [];
     _compareSnapshotTotal = 0;
-    list.innerHTML = '<div class="compare-inline-empty"><i data-lucide="mouse-pointer-2" size="18"></i><span>先选择推理策略和交易品种。</span></div>';
+    list.innerHTML = '<div class="compare-inline-empty"><i data-lucide="mouse-pointer-2" size="18"></i><span>先选择交易策略和交易品种。</span></div>';
     renderModelCompareSnapshots();
     return;
   }
@@ -5762,7 +5762,7 @@ async function runAnalysisCompare() {
   const symbol = $("analyzeSymbol").value;
   const strategyId = Number($("analyzeStrategy")?.value || 0);
   const modelIds = getSelectedModelIds();
-  if (!strategyId) { toast("请选择推理策略", "warning"); $("analyzeStrategy")?.focus(); return; }
+  if (!strategyId) { toast("请选择交易策略", "warning"); $("analyzeStrategy")?.focus(); return; }
   if (!symbol) { toast("请选择策略支持的品种", "warning"); return; }
   if (modelIds.length < 2) { toast("对比模式至少需要选择 2 个模型", "warning"); return; }
 
@@ -7413,7 +7413,7 @@ function bindEvents() {
       if (!subscription) return;
       try {
         if (subscriptionAction.dataset.subscriptionAction === "edit") openSubscriptionEditor(strategy || { id:subscription.strategy_id, scope:subscription.strategy_scope }, subscription);
-        else if (subscriptionAction.dataset.subscriptionAction === "delete" && confirm("确认删除这个订阅？如果这是最后一个有效订阅，自动推理会同步关闭。")) {
+        else if (subscriptionAction.dataset.subscriptionAction === "delete" && confirm("确认删除这个订阅？如果这是最后一个有效订阅，自动分析会同步关闭。")) {
           const deleted = await api(`/api/ai/subscriptions/${subscription.id}`, { method:"DELETE" });
           if (deleted.scheduler) {
             state.autoEnabled = Boolean(deleted.scheduler.enabled);
@@ -8072,7 +8072,7 @@ async function renderAdminDashboard(el, d, userListResp) {
     '',
     '<div class="stats-grid">',
     '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="radio"></i>WSS</div><div class="stat-val" data-field="wss">' + wssCount + '</div><div class="stat-sub">在线桥接</div></div>',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="cpu"></i>推理</div><div class="stat-val" data-field="autoReason">' + (ar.auto_reasoning_users||0) + '</div><div class="stat-sub">自动推理用户</div></div>',
+    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="cpu"></i>分析</div><div class="stat-val" data-field="autoReason">' + (ar.auto_reasoning_users||0) + '</div><div class="stat-sub">自动分析用户</div></div>',
     '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="zap"></i>交易</div><div class="stat-val" data-field="tradeEnabled">' + (ar.trade_enabled_users||0) + '</div><div class="stat-sub">自动交易用户</div></div>',
     '  <div class="stat-cell"><div class="stat-label"><i data-lucide="users"></i>用户</div><div class="stat-val" data-field="totalUsers">' + (us.total_users||0) + '</div><div class="stat-sub" data-field="userBreakdown">Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0) + '</div></div>',
     '  <div class="stat-cell"><div class="stat-label"><i data-lucide="user-plus"></i>新增</div><div class="stat-val" data-field="todayNew">' + (us.today_new||0) + '</div><div class="stat-sub">今日注册</div></div>',
@@ -8295,7 +8295,7 @@ async function renderAdminDashboard(el, d, userListResp) {
         '<div class="user-detail-grid">' +
         '<div class="user-detail-field"><span class="f-label">桥接状态</span><span class="f-value">' + (br.connected ? (br.alive ? '<span style="color:#22c55e">● 在线</span>' : '<span style="color:#f59e0b">● 无心跳</span>') : '<span style="color:var(--text-muted)">○ 离线</span>') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">交易发送</span><span class="f-value">' + (s.trade_send_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">自动推理</span><span class="f-value">' + (s.auto_reasoning_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">自动分析</span><span class="f-value">' + (s.auto_reasoning_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">调度器</span><span class="f-value">' + (sc.enabled ? '<span style="color:#22c55e">启用</span>' : '未启用') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">监控品种</span><span class="f-value">' + (sc.symbols || '--') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">上次运行</span><span class="f-value">' + (sc.last_run_at ? formatTimeAgo(sc.last_run_at) : '--') + '</span></div>' +

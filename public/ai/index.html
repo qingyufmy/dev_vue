@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721zq" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721zr" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -271,7 +271,7 @@
               </div>
               <div id="signalExpiredMask" class="signal-expired-mask">
                 <i data-lucide="clock-3" size="30"></i>
-                <p>此信号已过期，等待新一轮 AI 推理</p>
+                <p>此建议已过期，等待新一轮 AI 分析</p>
                 <button class="btn btn-primary" data-tab-jump="ai-analyze">查看AI分析</button>
               </div>
               <div id="latestSignal" class="signal-body" aria-live="polite">
@@ -300,7 +300,7 @@
                   <div class="signal-execution-copy">
                     <span>执行状态</span>
                     <strong id="sigExecutionState">暂无信号</strong>
-                    <p id="sigActionHint">等待策略生成新的推理结果</p>
+                    <p id="sigActionHint">等待策略生成新的分析结果</p>
                   </div>
                   <div class="signal-compact-metric">
                     <span>建议手数</span>
@@ -313,7 +313,7 @@
                 </section>
 
                 <section class="signal-price-grid" aria-label="信号关键价格">
-                  <div class="signal-price-item primary"><span>推理参考价</span><strong id="sigReferencePrice" class="num">--</strong></div>
+                  <div class="signal-price-item primary"><span>分析参考价</span><strong id="sigReferencePrice" class="num">--</strong></div>
                   <div class="signal-price-item current"><span>当前成交参考</span><strong id="sigCurrentPrice" class="num">--</strong></div>
                   <div class="signal-price-item risk"><span>止损价</span><strong id="sigStopLoss" class="num">--</strong></div>
                   <div class="signal-price-item target"><span>目标价</span><strong id="sigTakeProfit" class="num">--</strong></div>
@@ -360,15 +360,15 @@
           <div id="model-management" class="model-strategy-panel" role="tabpanel" aria-labelledby="modelStrategyModelsTab" data-model-strategy-panel="models" hidden>
           <div class="workspace-page">
             <header class="workspace-header model-strategy-toolbar compact-section-header">
-              <div><h2>模型管理</h2><p>手动推理、自动推理和复盘任务共用这里的模型解析规则。</p></div>
+              <div><h2>模型管理</h2><p>手动分析、自动分析和复盘任务共用这里的模型选择规则。</p></div>
               <div class="toolbar-actions"><span id="modelCatalogSummary" class="catalog-summary">正在加载模型…</span><button id="addModelProfileBtn" class="btn btn-primary"><i data-lucide="plus" size="16"></i>添加模型</button></div>
             </header>
             <section class="insight-strip model-insight-strip" aria-label="模型概览">
-              <div class="insight-item primary"><span>当前生效模型</span><strong id="modelEffectiveSource">正在解析…</strong><small>由服务端按任务与权限确定</small></div>
+              <div class="insight-item primary"><span>当前生效模型</span><strong id="modelEffectiveSource">正在选择…</strong><small>由服务端按任务与权限确定</small></div>
               <div class="insight-item"><span>已配置</span><strong id="modelCountStat" class="num">--</strong><small>模型总数</small></div>
               <div class="insight-item"><span>连接可用</span><strong id="modelActiveStat" class="num">--</strong><small>可参与模型解析</small></div>
             </section>
-            <div id="modelSourceNotice" class="source-notice compact-notice" role="status">正在解析当前模型来源…</div>
+            <div id="modelSourceNotice" class="source-notice compact-notice" role="status">正在确认当前模型来源…</div>
             <div id="modelProfileEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="modelEditorTitle">
             <section class="workspace-panel form-modal-dialog model-profile-dialog" tabindex="-1">
               <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div><button id="cancelModelProfileBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
@@ -380,7 +380,7 @@
                 <label><span>Temperature</span><input id="profileTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label>
                 <label><span>最大输出 Token</span><input id="profileMaxTokens" type="number" min="100" max="65536" step="100" value="8000"></label>
                 <label><span>请求超时（秒）</span><input id="profileRequestTimeout" type="number" min="30" max="600" step="10" value="" placeholder="默认 120"><small class="field-help">慢速模型可调高；留空使用默认 120 秒</small></label>
-                <label class="inline-check-card"><input id="profileThinkingEnabled" type="checkbox" checked><span><strong>启用思考模式</strong><small id="profileThinkingHelp">复杂任务更稳，但推理耗时更长</small></span></label>
+                <label class="inline-check-card"><input id="profileThinkingEnabled" type="checkbox" checked><span><strong>启用深度思考</strong><small id="profileThinkingHelp">复杂行情判断更稳，但分析耗时更长</small></span></label>
               </div>
               <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button></div>
             </section>
@@ -389,7 +389,7 @@
             <section id="platformModelPolicy" class="workspace-panel admin-only" style="display:none">
               <div class="section-heading"><div><h2>平台共享与配额</h2><p>共享凭据只用于已开启的用途，并受用户日配额限制。</p></div><button id="savePlatformPolicyBtn" class="btn btn-primary btn-sm">保存策略</button></div>
               <div class="policy-switches">
-                <label><input id="shareForManual" type="checkbox"><span>手动推理</span></label><label><input id="shareForAuto" type="checkbox"><span>自动推理</span></label><label><input id="shareForReview" type="checkbox"><span>复盘生成</span></label><label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
+                <label><input id="shareForManual" type="checkbox"><span>手动分析</span></label><label><input id="shareForAuto" type="checkbox"><span>自动分析</span></label><label><input id="shareForReview" type="checkbox"><span>复盘生成</span></label><label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
               </div>
               <div id="platformSharingProviderNotice" class="source-notice compact-notice" role="status">当前默认平台模型可按上方用途选择是否共享；Kimi Code 订阅也遵循相同设置。</div>
               <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
@@ -400,12 +400,12 @@
           <div id="ai-config" class="model-strategy-panel active" role="tabpanel" aria-labelledby="modelStrategyStrategiesTab" data-model-strategy-panel="strategies">
           <div class="strategy-workspace">
             <section class="workspace-panel strategy-command-panel" aria-labelledby="strategyWorkspaceTitle">
-              <header class="workspace-header model-strategy-toolbar strategy-control-header"><div><span class="section-kicker">当前工作区</span><h2 id="strategyWorkspaceTitle">推理策略</h2><p>一套策略统一行情、模型、入场方式与自动运行设置。</p></div><div class="toolbar-actions"><span id="strategyCatalogSummary" class="catalog-summary">正在加载策略…</span><button id="addPrivateStrategyBtn" class="btn btn-primary btn-sm"><i data-lucide="plus" size="15"></i>新建策略</button></div></header>
+              <header class="workspace-header model-strategy-toolbar strategy-control-header"><div><span class="section-kicker">当前工作区</span><h2 id="strategyWorkspaceTitle">交易策略</h2><p>一套策略统一行情、模型、入场方式与自动运行设置。</p></div><div class="toolbar-actions"><span id="strategyCatalogSummary" class="catalog-summary">正在加载策略…</span><button id="addPrivateStrategyBtn" class="btn btn-primary btn-sm"><i data-lucide="plus" size="15"></i>新建策略</button></div></header>
               <div class="strategy-summary-panel" aria-label="策略概览">
                 <div class="strategy-summary-item"><span>全部策略</span><strong id="strategyTotalStat" class="num">--</strong><small>平台与我的策略</small></div>
-                <div class="strategy-summary-item"><span>当前可用</span><strong id="strategyAvailableStat" class="num">--</strong><small>可用于推理</small></div>
+                <div class="strategy-summary-item"><span>当前可用</span><strong id="strategyAvailableStat" class="num">--</strong><small>可用于分析</small></div>
                 <div class="strategy-summary-item is-running"><span>自动运行</span><strong id="strategyRunningStat" class="num">--</strong><small>已启用的订阅</small></div>
-                <div class="strategy-model-summary"><div class="strategy-model-icon" aria-hidden="true"><i data-lucide="cpu" size="18"></i></div><div><span>当前推理模型</span><strong id="strategyModelSource">正在解析…</strong></div><button class="text-action" data-tab-jump="model-management">管理模型<i data-lucide="arrow-right" size="13"></i></button></div>
+                <div class="strategy-model-summary"><div class="strategy-model-icon" aria-hidden="true"><i data-lucide="cpu" size="18"></i></div><div><span>当前分析模型</span><strong id="strategyModelSource">正在选择…</strong></div><button class="text-action" data-tab-jump="model-management">管理模型<i data-lucide="arrow-right" size="13"></i></button></div>
               </div>
             </section>
             <div class="workspace-filter-bar" role="group" aria-label="筛选策略">
@@ -419,9 +419,9 @@
               <div class="section-heading"><div><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="strategy-editor-sections">
                 <fieldset class="strategy-form-section"><legend><span class="section-step">01</span>基本信息</legend><p>定义策略身份、可见范围和可分析品种。</p>
-                  <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label><label id="strategyScopeField" class="admin-only is-readonly"><span>策略范围</span><input id="strategyScope" value="platform" readonly aria-readonly="true"><small id="strategyScopeHelp" class="field-help">管理员只维护平台策略；管理员账户不建立私有策略或个人记忆。</small></label><label id="strategyVisibilityField" class="admin-only"><span>可见状态</span><select id="strategyVisibility"><option value="active">上线（可用于推理）</option><option value="draft">草稿（不可用于推理）</option><option value="archived">归档（不可用于推理）</option></select><small class="field-help">可见状态同时控制策略是否可用于手动和自动推理。</small></label></div>
+                  <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label><label id="strategyScopeField" class="admin-only is-readonly"><span>策略范围</span><input id="strategyScope" value="platform" readonly aria-readonly="true"><small id="strategyScopeHelp" class="field-help">管理员只维护平台策略；管理员账户不建立私有策略或个人记忆。</small></label><label id="strategyVisibilityField" class="admin-only"><span>可见状态</span><select id="strategyVisibility"><option value="active">上线（可用于分析）</option><option value="draft">草稿（不可用于分析）</option><option value="archived">归档（不可用于分析）</option></select><small class="field-help">可见状态同时控制策略是否可用于手动和自动分析。</small></label></div>
                 </fieldset>
-                <fieldset class="strategy-form-section"><legend><span class="section-step">02</span>行情数据方案</legend><p>手动与自动推理共用这组周期和 K 线数量；主周期用于信号有效期和结果标识。</p>
+                <fieldset class="strategy-form-section"><legend><span class="section-step">02</span>行情数据方案</legend><p>手动与自动分析共用这组周期和 K 线数量；主周期用于建议有效期和结果标识。</p>
                   <div id="strategyMarketPlan" class="market-plan-grid">
                     <div class="market-plan-head"><span>启用</span><span>周期</span><span>K 线数量</span><span>主周期</span></div>
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M1" aria-label="启用 M1"><strong>M1</strong><input type="number" data-strategy-kline="M1" min="10" max="500" step="10" value="100" aria-label="M1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M1" aria-label="将 M1 设为主周期"></div>
@@ -445,8 +445,8 @@
                     <label><input type="checkbox" data-strategy-entry-method="stop_limit" checked><span><strong>突破限价</strong><small>突破触发后再挂限价单</small></span></label>
                   </div>
                 </fieldset>
-                <fieldset class="strategy-form-section"><legend><span class="section-step">04</span>推理与模型</legend><p>提示词只描述分析方法，手数、点差、价格偏差等硬限制由风控中心负责。</p>
-                  <div class="settings-grid"><label><span>绑定模型</span><select id="strategyModelProfile"><option value="">按默认与共享规则解析</option></select><small id="strategyModelHelp" class="field-help">可绑定自己的模型；留空时按模型管理规则解析。</small></label><label><span>自动推理间隔（分钟）</span><input id="strategyInterval" type="number" min="1" value="5"></label></div>
+                <fieldset class="strategy-form-section"><legend><span class="section-step">04</span>分析与模型</legend><p>分析提示词只描述判断方法，手数、点差、价格偏差等硬限制由 AI 风控师负责。</p>
+                  <div class="settings-grid"><label><span>绑定模型</span><select id="strategyModelProfile"><option value="">按默认与共享规则选择</option></select><small id="strategyModelHelp" class="field-help">可绑定自己的模型；留空时按模型管理规则自动选择。</small></label><label><span>自动分析间隔（分钟）</span><input id="strategyInterval" type="number" min="1" value="5"></label></div>
                   <label id="strategyPortfolioContextField" class="strategy-capability-toggle user-only" for="strategyIncludePortfolioContext">
                     <input id="strategyIncludePortfolioContext" type="checkbox">
                     <span><strong>向模型提供当前持仓与挂单</strong><small>仅适用于你的私有策略。开启后，推理会读取你当前 MT5 的持仓和挂单，用于避免重复入场、方向冲突和挂单冲突；账户余额与模型凭据不会传入。桥接数据不完整时，本次推理会停止，不会用空数据继续判断。</small></span>
@@ -465,7 +465,7 @@
                 <label><span>止盈执行方式</span><select id="subscriptionTakeProfitMode"><option value="ai_recommended">跟随 AI 推荐</option><option value="conservative">保守目标（TP1）</option><option value="standard">标准目标（TP2）</option><option value="trend">趋势目标（TP3）</option></select><small class="field-help">默认由 AI 根据本次行情选择。固定档位仅覆盖自动执行目标；系统仍会校验止盈方向和价格有效性。</small></label>
               </div>
               <section class="subscription-runtime-panel" aria-labelledby="subscriptionRuntimeTitle">
-                <div class="subscription-runtime-heading"><div><strong id="subscriptionRuntimeTitle">自动推理</strong><small>每个用户同一时间只能启用一个自动推理订阅。</small></div><label class="inline-check-card"><input id="subscriptionExecutionEnabled" type="checkbox"><span><strong>启用自动推理</strong><small>生成信号，并在通过风控后自动执行。</small></span></label></div>
+                <div class="subscription-runtime-heading"><div><strong id="subscriptionRuntimeTitle">自动分析</strong><small>每个用户同一时间只能启用一个自动分析订阅。</small></div><label class="inline-check-card"><input id="subscriptionExecutionEnabled" type="checkbox"><span><strong>启用自动分析</strong><small>生成交易建议，并在通过风控后自动执行。</small></span></label></div>
                 <div class="subscription-schedule-toggle"><label class="inline-check"><input id="subscriptionScheduleEnabled" type="checkbox"><span>限制运行时间段</span></label><span>未开启时跟随市场交易时间运行</span></div>
                 <div id="subscriptionScheduleSettings" class="subscription-schedule-settings hidden">
                   <div class="schedule-field"><span>运行星期</span><div class="weekday-options" role="group" aria-label="选择运行星期"><label><input type="checkbox" data-schedule-weekday="1"><span>一</span></label><label><input type="checkbox" data-schedule-weekday="2"><span>二</span></label><label><input type="checkbox" data-schedule-weekday="3"><span>三</span></label><label><input type="checkbox" data-schedule-weekday="4"><span>四</span></label><label><input type="checkbox" data-schedule-weekday="5"><span>五</span></label><label><input type="checkbox" data-schedule-weekday="6"><span>六</span></label><label><input type="checkbox" data-schedule-weekday="0"><span>日</span></label></div></div>
@@ -741,7 +741,7 @@
               <aside class="compare-config-card" aria-label="新建模型对比任务">
                 <div class="compare-card-heading"><span>新建任务</span><strong>设置对比条件</strong></div>
                 <div class="compare-form-stack">
-                  <label class="compare-field"><span>推理策略</span><select id="cmpStrategy"><option value="">请选择策略</option></select></label>
+                  <label class="compare-field"><span>交易策略</span><select id="cmpStrategy"><option value="">请选择策略</option></select></label>
                   <div class="compare-field-pair">
                     <label class="compare-field"><span>交易品种</span><select id="cmpSymbol"><option value="">先选择策略</option></select></label>
                     <div class="compare-field"><span>评估基准</span><div id="cmpStrategyBaseline" class="compare-readonly-value">由策略自动决定</div></div>
@@ -1035,20 +1035,20 @@
     <div id="manualInferenceModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="manualInferenceTitle">
       <div class="order-confirm-dialog manual-inference-dialog">
         <div class="order-confirm-head">
-          <div><strong id="manualInferenceTitle">开始手动推理</strong><small>策略会自动确定周期、K 线数量和模型</small></div>
+          <div><strong id="manualInferenceTitle">发起AI分析</strong><small>策略会自动确定周期、K 线数量和模型</small></div>
           <button id="manualInferenceClose" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x" size="16"></i></button>
         </div>
         <div class="manual-inference-body">
-          <div class="manual-run-fields"><label><span>推理策略</span><select id="analyzeStrategy" required><option value="">请选择策略</option></select><small class="field-help">只显示当前可用于推理的策略</small></label><label><span>分析品种</span><select id="analyzeSymbol" required disabled><option value="">请先选择策略</option></select><small class="field-help">只显示当前策略支持的品种</small></label></div>
+          <div class="manual-run-fields"><label><span>交易策略</span><select id="analyzeStrategy" required><option value="">请选择策略</option></select><small class="field-help">只显示当前可用于分析的策略</small></label><label><span>分析品种</span><select id="analyzeSymbol" required disabled><option value="">请先选择策略</option></select><small class="field-help">只显示当前策略支持的品种</small></label></div>
           <div id="manualStrategySummary" class="strategy-run-summary empty"><strong>尚未选择策略</strong><span>选择后显示行情计划、入场方式与模型来源。</span></div>
-          <div class="model-compare-select hidden"><div class="model-compare-header"><i data-lucide="layers" size="16"></i><strong>模型选择</strong><small>勾选 ≥2 个模型开启对比推理模式</small></div><div id="modelCompareCheckboxGroup" class="model-compare-grid"></div><div id="modelCompareHint" class="model-compare-hint"></div></div>
+          <div class="model-compare-select hidden"><div class="model-compare-header"><i data-lucide="layers" size="16"></i><strong>模型选择</strong><small>勾选至少 2 个模型进行同场分析对比</small></div><div id="modelCompareCheckboxGroup" class="model-compare-grid"></div><div id="modelCompareHint" class="model-compare-hint"></div></div>
           <div class="execution-mode-row"><div><strong>结果处理方式</strong><small>建议先查看结果，再手动复核执行。</small></div><label id="manualAutoExecuteControl" class="manual-auto-execute"><input id="manualAutoExecute" type="checkbox"><span class="mode-option safe">只生成建议</span><span class="mode-option live">风控通过后自动执行</span></label></div>
-          <div id="manualAutoExecuteNotice" class="inline-alert danger hidden" role="alert"><i data-lucide="triangle-alert" size="18"></i><span>本次推理可能产生真实订单，提交前会再次确认。</span></div>
+          <div id="manualAutoExecuteNotice" class="inline-alert danger hidden" role="alert"><i data-lucide="triangle-alert" size="18"></i><span>本次分析可能产生真实订单，提交前会再次确认。</span></div>
           <div id="manualInferenceStatus" class="manual-inference-status hidden" role="status"><span class="status-spinner" aria-hidden="true"></span><div><strong>正在生成交易建议</strong><small>正在获取行情、计算指标并调用模型，请保持页面打开。</small></div></div>
         </div>
         <div class="order-confirm-actions">
           <button id="manualInferenceCancel" class="btn" type="button">关闭</button>
-          <button id="runAnalysisBtn" class="btn btn-primary" type="button"><i data-lucide="play" size="16"></i>开始推理</button>
+          <button id="runAnalysisBtn" class="btn btn-primary" type="button"><i data-lucide="play" size="16"></i>开始分析</button>
         </div>
       </div>
     </div>
@@ -1100,7 +1100,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721zq"></script>
+    <script src="/ai/app.js?v=20260721zr"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">
