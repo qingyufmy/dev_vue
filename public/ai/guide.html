@@ -120,7 +120,7 @@ tr:nth-child(even) td{ background:#F4F6FA; }
 <nav class="sidebar">
   <div class="sidebar-header">
     <h1>量见</h1>
-    <p>使用手册 V1.1</p>
+    <p>使用手册 V1.2</p>
   </div>
   <div class="sidebar-scroll">
     <div class="nav-group">
@@ -144,8 +144,8 @@ tr:nth-child(even) td{ background:#F4F6FA; }
     <div class="nav-group">
       <div class="nav-group-title">AI 实验室</div>
       <a class="nav-item" href="#ch7">进阶操作指南</a>
-      <a class="nav-item sub" href="#ch7-1">模型与推理配置</a>
-      <a class="nav-item sub" href="#ch7-2">手动推理与执行</a>
+      <a class="nav-item sub" href="#ch7-1">AI 策略师配置</a>
+      <a class="nav-item sub" href="#ch7-2">AI 分析与执行</a>
       <a class="nav-item sub" href="#ch7-3">挂单与订单类型</a>
       <a class="nav-item sub" href="#ch7-4">止损保护与复盘</a>
       <a class="nav-item sub" href="#ch7-5">风控审计</a>
@@ -180,7 +180,7 @@ tr:nth-child(even) td{ background:#F4F6FA; }
   <div class="sub">平台功能操作 · 学习规范 · AI 交易实验室指南 · 合规与风险披露</div>
   <div class="tagline">循道而量，以诚相见</div>
   <div class="meta">
-    <b>文档版本</b>　V1.1（基于 V1.0 全面修订）　|　<b>更新日期</b>　2026 年 07 月 14 日<br>
+    <b>文档版本</b>　V1.2　|　<b>更新日期</b>　2026 年 07 月 21 日<br>
     <b>官网地址</b>　https://www.cnfxtrade.com　|　<b>适用对象</b>　平台新老学员 · 金融交易技术学习者 · AI 量化分析爱好者
   </div>
 </div>
@@ -194,6 +194,7 @@ tr:nth-child(even) td{ background:#F4F6FA; }
 <h3>1.2　版本与更新信息</h3>
 <table class="changelog">
 <tr><th style="width:80px">版本</th><th style="width:120px">日期</th><th>主要变更</th></tr>
+<tr><td>V1.2</td><td>2026-07-21</td><td>按用户任务重构 AI 交易实验室导航；信号与分析合并至 AI 分析师；统一自动分析、策略配置、交易、风控和复盘操作说明。</td></tr>
 <tr><td>V1.1</td><td>2026-07-14</td><td>修正章节编号；修正数据边界表述（4.3）；修正自动推理频率描述；新增「会员体系与订阅支付」章节；新增「AI 交易实验室进阶操作」专章；全流程补充模拟账户引导与风险前置提示。</td></tr>
 <tr><td>V1.0</td><td>2026-07-11</td><td>首个正式版本。</td></tr>
 </table>
@@ -271,7 +272,7 @@ tr:nth-child(even) td{ background:#F4F6FA; }
 <tr><th style="width:100px">等级</th><th>课程与内容</th><th>AI 交易实验室</th></tr>
 <tr><td class="c"><b>免费用户</b></td><td>五大免费入门课程体系、最近更新专区、量见语录、社区</td><td class="c">无访问权限</td></tr>
 <tr><td class="c"><b>Plus 会员</b></td><td>免费内容 + 核心视频课程、案例教学</td><td class="c">观摩模式（可看分析 / 信号 / 报表，不可执行）</td></tr>
-<tr><td class="c"><b>Pro 会员</b></td><td>全部内容</td><td class="c">全功能（桥接绑定、自动推理、信号执行、模型配置、风控参数、完整复盘）</td></tr>
+<tr><td class="c"><b>Pro 会员</b></td><td>全部内容</td><td class="c">全功能（桥接绑定、自动分析、订单执行、策略与模型配置、风控参数、完整复盘）</td></tr>
 </table>
 
 <h3>5.2　订阅与支付方式</h3>
@@ -300,15 +301,15 @@ tr:nth-child(even) td{ background:#F4F6FA; }
 <p>AI 交易实验室为平台高阶核心功能：依托 AI 大模型自动解析黄金等主流品种行情，智能生成标准化交易信号，支持对接 MT5 终端实现信号预览与订单执行，主打 <b>AI 自动化分析、去情绪化决策、数据量化风控</b>，让普通用户学习专业机构的量化交易逻辑。</p>
 
 <h4>6.1.1　新手快速上手流程（Pro 会员）</h4>
-<div class="box tip"><span class="bt">学习期黄金法则：模拟先行 · 手动先行</span>强烈建议首次使用连接 <b>MT5 模拟账户</b>，并按「先手动推理复核 → 熟悉后再考虑自动执行」的顺序进阶。直接在真实账户上开启自动执行，不是学习，是冒险。</div>
+<div class="box tip"><span class="bt">学习期黄金法则：模拟先行 · 手动先行</span>强烈建议首次使用连接 <b>MT5 模拟账户</b>，并按「先发起 AI 分析并复核 → 熟悉后再考虑自动执行」的顺序进阶。直接在真实账户上开启自动执行，不是学习，是冒险。</div>
 <div class="step"><div class="sn">1</div><div class="sc"><b>登录系统</b>进入 AI 交易实验室页面，使用 Pro 认证账号登录。</div></div>
 <div class="step"><div class="sn">2</div><div class="sc"><b>连接 MT5 Bridge</b>点击左上角「观摩模式-请连接您的 MT5」，在弹出页面下载 AURUM_Bridge.exe 桥接客户端，在安装 MT5 的电脑运行并登录，页面显示「MT5 桥接-已连接」即绑定成功（单账号仅支持单设备桥接）。<b>建议使用模拟账户。</b></div></div>
-<div class="step"><div class="sn">3</div><div class="sc"><b>手动推理体验</b>在「AI 推理」页选择品种与周期，生成第一条信号，完整阅读其分析与推理内容，对照 K 线验证。</div></div>
-<div class="step"><div class="sn">4</div><div class="sc"><b>（进阶）开启自动推理</b>打开顶部自动推理开关。系统按你设定的<b>循环间隔</b>（可配置，单位分钟）基于 M5 周期数据自动扫描并生成信号，休市时段自动暂停。是否自动执行由「自动执行信号」开关单独控制。</div></div>
+<div class="step"><div class="sn">3</div><div class="sc"><b>首次分析体验</b>进入「AI 分析师」，选择交易策略及其支持的品种，发起第一条 AI 分析，阅读执行建议并对照 K 线证据复核。</div></div>
+<div class="step"><div class="sn">4</div><div class="sc"><b>（进阶）开启自动分析</b>打开顶部自动分析开关。系统按照策略配置的运行间隔与行情周期自动生成分析，休市时自动暂停。是否自动下单由策略订阅中的「自动执行」设置和顶部订单权限共同控制。</div></div>
 
 <h4>6.1.2　界面功能分区</h4>
-<p><b>顶部状态栏</b>：桥接状态、交易发送、自动推理、市场状态（交易中 / 休市 / 检测中）四大全局控制。<br>
-<b>左侧导航栏</b>：概览（实时行情 + 持仓）、AI 推理（手动周期分析）、交易（持仓管理）、历史（交易 / 信号 / 盈亏记录）、配置（模型 / 风控 / 参数设置）、审计（全操作日志）。</p>
+<p><b>顶部状态栏</b>：依次展示 MT5 连接、自动分析、自动下单权限与市场状态；关键权限可直接查看，观摩模式下仅展示真实状态、不可修改。<br>
+<b>左侧导航栏</b>：工作台负责总览；「AI 交易团队」集中提供 AI 策略师、AI 分析师、AI 交易员、AI 风控师和 AI 复盘师；交易档案保存历史记录，管理员另有平台管理入口。</p>
 
 <h4>6.1.3　AI 信号卡片</h4>
 <p>信号卡片包含交易方向（BUY / SELL / HOLD）、置信度、止损与三档止盈价位、建议手数、信号有效期。<b>HOLD 观望信号不可执行</b>；过期信号需等待新一轮推理。支持手动执行（默认）与自动执行（可开启）两种模式。完整操作细节见<b>第 7 章</b>。</p>
@@ -349,7 +350,7 @@ tr:nth-child(even) td{ background:#F4F6FA; }
 <h2 class="ch" id="ch7"><span class="num">7</span><span class="tt">AI 交易实验室 · 进阶操作指南</span></h2>
 <p>本章面向 Pro 会员，覆盖实验室从模型配置到风控审计的完整操作链路。<b>所有 AI 信号、推理与演示内容仅供学习参考，不构成投资建议。</b></p>
 
-<h3 id="ch7-1">7.1　模型与推理配置</h3>
+<h3 id="ch7-1">7.1　AI 策略师配置</h3>
 <p>实验室不内置模型额度——你使用<b>自己的 AI 模型 API Key</b>，数据与成本自主可控（管理员开启模型共享时，未配置用户可使用共享模型）。支持 DeepSeek、GPT、Kimi、Qwen、Zhipu、DouBao 等主流大模型切换。</p>
 <table>
 <tr><th style="width:140px">配置项</th><th>说明与建议</th></tr>
@@ -361,12 +362,12 @@ tr:nth-child(even) td{ background:#F4F6FA; }
 <tr><td><b>系统提示词</b></td><td>发送给 AI 模型的角色设定与分析规则，可使用平台模板或自定义（见 7.2）。</td></tr>
 </table>
 
-<h3 id="ch7-2">7.2　数据周期标签（提示词进阶）</h3>
-<p>手动推理时，你选择的周期与 K 线数量会自动注入为 <code>{{MTF:M15:100}}</code> 形式的标签；如需额外周期数据，可在提示词中手动添加，格式：<code>{{MTF:周期:数量}}</code>。</p>
-<div class="box tip"><span class="bt">周期排序经验</span>把<b>小时级周期（H1 / H4）放在标签最前面</b>。排在首位的周期是「主周期」，是系统止损标尺等参考基准的来源——若以 M5 等小周期打头，止损参考会被压缩到市场噪音级别，极易被正常波动扫损。</div>
+<h3 id="ch7-2">7.2　AI 分析与执行</h3>
+<p>行情周期、K 线数量、缠论指标和允许的入场方式由交易策略统一配置。发起 AI 分析时只需选择策略及其支持的品种，系统会自动准备对应行情与结构证据，无需手工编写周期标签。</p>
+<div class="box tip"><span class="bt">先看建议，再决定是否执行</span>AI 分析师把方向、置信度、入场方式、止损止盈和结构证据集中展示；订单是否放行仍由 AI 风控师按账户状态与规则独立判断。</div>
 
-<h3>7.3　手动推理：生成与复核</h3>
-<div class="step"><div class="sn">1</div><div class="sc"><b>生成信号</b>在「信号生成」区选择品种、周期（M1–D1）、K 线数量，点击生成，等待模型返回（界面显示耗时）。</div></div>
+<h3>7.3　发起分析与复核</h3>
+<div class="step"><div class="sn">1</div><div class="sc"><b>发起分析</b>在「AI 分析师」点击「发起 AI 分析」，选择交易策略和支持的品种，提交后等待模型返回。</div></div>
 <div class="step"><div class="sn">2</div><div class="sc"><b>阅读推理</b>查看信号方向、置信度、止损与 TP1/TP2/TP3，重点精读<b>分析（analysis）与推理（reasoning）</b>——逐条对照 K 线，验证模型描述的结构是否真实存在。这是实验室最核心的学习动作。</div></div>
 <div class="step"><div class="sn">3</div><div class="sc"><b>复核执行</b>认可后点击「复核执行」，经确认弹窗发送至 MT5；不认可则作为教学案例记录。信号有<b>有效期</b>，过期不可执行。</div></div>
 
@@ -409,10 +410,10 @@ tr:nth-child(even) td{ background:#F4F6FA; }
 
 <h3 id="ch7-6">7.8　实验室常见问题</h3>
 <ul>
-<li><b>信号很久不更新？</b>检查自动推理开关、模型 API Key 有效性与额度、桥接在线状态；手动生成一次查看报错信息。</li>
+<li><b>分析很久不更新？</b>检查自动分析开关、模型 API Key 有效性与额度、桥接在线状态；手动发起一次 AI 分析查看报错信息。</li>
 <li><b>挂单一直不成交？</b>限价单需价格回调触及；到有效期自动撤销属正常。</li>
 <li><b>换模型 / 换提示词会影响历史吗？</b>不会，历史记录不变，新配置只影响之后的推理。</li>
-<li><b>忘了关自动执行？</b>在「自动推理配置」中关闭「自动执行信号」；在场订单需在持仓管理中另行处理。</li>
+<li><b>忘了关自动执行？</b>在 AI 策略师的订阅设置中关闭「自动执行」，或关闭顶部自动下单权限；在场订单需在 AI 交易员中另行处理。</li>
 <li><b>模型 / 网络异常时会乱下单吗？</b>不会——异常时系统自动降级为观望（HOLD），宁可不做，不做错。</li>
 </ul>
 
