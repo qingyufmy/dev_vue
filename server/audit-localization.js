@@ -113,6 +113,8 @@ const VALUE_LABELS = {
   'Invalid stops': 'MT5 止损或止盈价格无效',
   'R5_SCHEMA_STOP_LIMIT_PRICE': 'Stop Limit 触发后限价无效',
   'R1.7_STOP_LIMIT_RELATION': 'Stop Limit 触发价与触发后限价关系错误',
+  'R3.4_MARGIN_DATA_INCOMPLETE': 'MT5 无法计算本次订单所需保证金',
+  'R3.4_PROJECTED_MARGIN_LEVEL': '下单后的预计保证金水平低于要求',
 }
 
 const ACTION_CODES = new Map(Object.entries(ACTION_LABELS).map(([code, label]) => [label, code]))

@@ -8,7 +8,7 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   DEFAULT_RISK_POLICY, RISK_RULES, evaluateCoreRisk, isRelaxation,
-  resolveEffectiveRiskPolicy, submitRiskPolicyChanges, persistRiskDecision, weekendProtectionState,
+  normalizePlatformRiskConfig, resolveEffectiveRiskPolicy, submitRiskPolicyChanges, persistRiskDecision, weekendProtectionState,
 } from '../../server/routes/ai/risk-policy.js'
 
 const nowMs = Date.parse('2026-07-15T13:00:00Z')
@@ -52,23 +52,24 @@ describe('L1/L4/L5 core risk gate', () => {
     }))
   })
 
-  it('does not reuse MT5 native loss calculation after the gate changes SL', () => {
+  it('preserves the AI stop loss and reuses the matching MT5 native loss calculation', () => {
     const result = run({ request: { sl: 1995 }, brokerCalculation: {
       symbol: 'XAUUSD.a', order_type: 'buy', volume: 0.03,
       entry_price: 2000.2, sl: 1995, loss_to_sl: 1,
     } })
     expect(result.rule_results).toContainEqual(expect.objectContaining({
       code: 'R1.10_REAL_RISK',
-      details: expect.objectContaining({ calculation_source: 'symbol_tick_metadata' }),
+      details: expect.objectContaining({ calculation_source: 'mt5_order_calc_profit' }),
     }))
+    expect(result.approved_order.sl).toBe(1995)
   })
 
-  it('widens a tight SL, scales volume down, and fully rechecks', () => {
+  it('does not rewrite a tight AI stop loss', () => {
     const result = run({ request: { sl: 1995 } })
-    expect(result.decision_status).toBe('adjust')
-    expect(result.approved_order.sl).toBe(1990.2)
-    expect(result.approved_order.volume).toBe(0.01)
-    expect(result.rule_results.some(item => item.code === 'R1.3_SL_WIDEN_VOLUME_DOWN')).toBe(true)
+    expect(result.decision_status).toBe('pass')
+    expect(result.approved_order.sl).toBe(1995)
+    expect(result.approved_order.volume).toBe(0.03)
+    expect(result.rule_results.some(item => item.code === 'R1.3_SL_WIDEN_VOLUME_DOWN')).toBe(false)
   })
 
   it('does not scale the minimum lot to zero for a sub-tick ATR rounding difference', () => {
@@ -101,7 +102,7 @@ describe('L1/L4/L5 core risk gate', () => {
     [{ signal_type: 'buy_limit', entry_method: 'limit', limit_price: null }, 'R5_SCHEMA_PENDING_PRICE'],
     [{ sl: null }, 'R1.2_STOP_LOSS_REQUIRED'],
     [{ sl: 2010 }, 'R1.6_SL_TP_DIRECTION'],
-    [{ volume: 0.06 }, 'R1.9_AI_VOLUME_OUT_OF_RANGE'],
+    [{ volume: 100.01 }, 'R1.9_AI_VOLUME_OUT_OF_RANGE'],
   ])('rejects invalid schema or core boundary %#', (fields, code) => {
     expect(run({ request: fields }).reject_code).toBe(code)
   })
@@ -113,8 +114,8 @@ describe('L1/L4/L5 core risk gate', () => {
   it('separates market drift from pending deviation', () => {
     expect(run({ request: { reference_price: 1990 } }).reject_code).toBe('R4.6_MARKET_SIGNAL_DRIFT')
     const pending = run({ request: {
-      signal_type: 'buy_limit', entry_method: 'limit', limit_price: 1985,
-      sl: 1975, tp: 2015, reference_price: 2000,
+      signal_type: 'buy_limit', entry_method: 'limit', limit_price: 1975,
+      sl: 1965, tp: 2015, reference_price: 2000,
     } })
     expect(pending.reject_code).toBe('R1.7_PENDING_DEVIATION')
   })
@@ -125,7 +126,7 @@ describe('L1/L4/L5 core risk gate', () => {
       sl: 1988, tp: 2015, reference_price: 2000,
     }, policy: { pending_price_deviation_pct: 1 } })
     expect(result.decision_status).toBe('adjust')
-    expect(result.approved_order).toMatchObject({ entry_method: 'limit', pending_valid_minutes: 240 })
+    expect(result.approved_order).toMatchObject({ entry_method: 'limit', pending_valid_minutes: 180 })
   })
 
   it('enforces stop-limit trigger direction and post-trigger limit relation', () => {
@@ -149,11 +150,11 @@ describe('L1/L4/L5 core risk gate', () => {
   })
 
   it('rejects stale quotes, expired signals, wide spread, and weekend opens', () => {
-    const stale = run({ quote: { time_msc: nowMs - 11_000 } })
+    const stale = run({ quote: { time_msc: nowMs - 16_000 } })
     expect(stale.reject_code).toBe('R4.4_QUOTE_STALE')
-    expect(stale.rule_results.at(-1).details).toMatchObject({ quote_age_seconds:11, maximum_seconds:10 })
+    expect(stale.rule_results.at(-1).details).toMatchObject({ quote_age_seconds:16, maximum_seconds:15 })
     expect(run({ request: { signal_created_at: '2026-07-15T12:40:00Z' } }).reject_code).toBe('R4.3_SIGNAL_EXPIRED')
-    expect(run({ quote: { ask: 2001.1 } }).reject_code).toBe('R4.5_SPREAD_TOO_WIDE')
+    expect(run({ quote: { ask: 2001.3 } }).reject_code).toBe('R4.5_SPREAD_TOO_WIDE')
     expect(run({ nowMs: Date.parse('2026-07-18T02:00:00Z'), quote: { time_msc: Date.parse('2026-07-18T02:00:00Z') }, request: { signal_created_at: '2026-07-18T01:59:00Z' } }).reject_code).toBe('R4.2_WEEKEND_PROTECTION')
   })
 
@@ -181,7 +182,7 @@ describe('L1/L4/L5 core risk gate', () => {
       request:{ signal_created_at:'2026-07-17T19:29:00Z' } })
     expect(utcPlus2.decision_status).toBe('pass')
     const utcPlus3 = run({ nowMs:utcTime, quote:{ time_msc:utcTime, timezone_offset_minutes:180 },
-      request:{ signal_created_at:'2026-07-17T19:29:00Z' } })
+      request:{ signal_created_at:'2026-07-17T19:29:00Z' }, policy:{ weekend_close_minutes:120 } })
     expect(utcPlus3.reject_code).toBe('R4.2_WEEKEND_PROTECTION')
     expect(utcPlus3.rule_results.at(-1).details).toMatchObject({ timezone_offset_minutes:180, mt5_time:'22:30' })
   })
@@ -198,7 +199,7 @@ describe('L1/L4/L5 core risk gate', () => {
     } })
     expect(shadow.decision_status).toBe('pass')
     expect(shadow.rule_results).toContainEqual(expect.objectContaining({ code: 'R4.6_MARKET_SIGNAL_DRIFT', outcome: 'shadow_reject' }))
-    const forced = run({ request: { volume: 0.06 }, ruleModes: {
+    const forced = run({ request: { volume: 100.01 }, ruleModes: {
       'R1.9_AI_VOLUME_OUT_OF_RANGE': { mode: 'shadow', forced: false },
     } })
     expect(forced.reject_code).toBe('R1.9_AI_VOLUME_OUT_OF_RANGE')
@@ -225,6 +226,22 @@ describe('versioned policy semantics', () => {
     expect(isRelaxation('max_position_size', 0.03, 0.02)).toBe(false)
     expect(isRelaxation('min_rr', 1.5, 1.2)).toBe(true)
     expect(RISK_RULES.require_stop_loss.locked).toBe(true)
+    expect(DEFAULT_RISK_POLICY).not.toHaveProperty('observation_hours')
+    expect(DEFAULT_RISK_POLICY).not.toHaveProperty('ai_volume_step')
+  })
+
+  it('normalizes administrator ranges so users cannot cross the platform safety boundary', () => {
+    const normalized = normalizePlatformRiskConfig({
+      currentValues: DEFAULT_RISK_POLICY,
+      valueChanges: { max_risk_per_trade_pct: 1, min_margin_level_pct: 300 },
+      controlChanges: {
+        max_risk_per_trade_pct: { allowed_min:0.01, allowed_max:20 },
+        min_margin_level_pct: { allowed_min:0, allowed_max:100000 },
+      },
+    })
+    expect(normalized.controls.max_risk_per_trade_pct.allowed_max).toBe(1)
+    expect(normalized.controls.min_margin_level_pct.allowed_min).toBe(300)
+    expect(() => normalizePlatformRiskConfig({ valueChanges:{ observation_hours:72 } })).toThrow('unknown_risk_field:observation_hours')
   })
 
   it('applies tightening and relaxation immediately in one version while retaining field audits', async () => {
@@ -252,13 +269,13 @@ describe('versioned policy semantics', () => {
       if (sql.includes("scope = 'account'")) return { id: 2 }
       if (sql.includes('risk_policy_versions')) return params[0] === 1
         ? { id: 11, config_json: '{"max_position_size":0.04}' }
-        : { id: 12, config_json: '{"max_position_size":0.03,"min_rr":1.4,"market_signal_drift_atr":0.4}' }
+        : { id: 12, config_json: '{"max_position_size":0.08,"min_rr":1.4,"market_signal_drift_atr":0.4,"daily_loss_limit_pct":5}' }
       if (sql.includes('risk_profiles')) return { config_json: '{"max_position_size":0.02,"min_rr":1.6}' }
       return null
     })
     db.queryAll.mockResolvedValue([])
     const result = await resolveEffectiveRiskPolicy({ userId: 5, tradingAccountId: 6, riskProfileId: 7, legacyConfig: { max_position_size: 0.05 } })
-    expect(result.policy).toMatchObject({ max_position_size: 0.02, min_rr: 1.6, market_signal_drift_atr: 0.4 })
+    expect(result.policy).toMatchObject({ max_position_size: 0.02, min_rr: 1.6, market_signal_drift_atr: 0.4, daily_loss_limit_pct:3 })
     expect(result.policyVersionIds).toEqual([11, 12])
   })
 })

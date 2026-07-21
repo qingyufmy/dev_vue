@@ -11,7 +11,6 @@ import { sha256 } from './inference-snapshots.js'
 import { normalizeEntryMethods, signalTypesForEntryMethods } from './strategy-policy.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
-const SL_CLAMP = { K_MIN: 1.0, K_MAX: 3.0 }
 const TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
 
 export function formatPendingValidUntilUtc(validMinutes, nowMs = Date.now()) {
@@ -789,25 +788,9 @@ export function normalizeAiSignal(parsed, config, market) {
           ? round2(anchorPrice - fallbackSlDistance) : round2(anchorPrice + fallbackSlDistance)
       }
 
-      const originalSlDistance = Math.abs(Number(parsed.stop_loss_price) - anchorPrice)
-      const minSlDistance = atr * SL_CLAMP.K_MIN
-      const maxSlDistance = atr * SL_CLAMP.K_MAX
-      if (Number.isFinite(originalSlDistance) && originalSlDistance < minSlDistance) {
-        const adjustedVolume = Math.floor((recommendedVolume * originalSlDistance / minSlDistance) * 100 + 1e-9) / 100
-        if (adjustedVolume < 0.01) {
-          console.log(`[LLM] SL widening would require volume below 0.01: dist=${originalSlDistance.toFixed(2)} min=${minSlDistance.toFixed(2)}, holding`)
-          return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type:'sl_widen_min_lot_hold', reason:'sl_widen_min_lot_hold', original_signal_type:signalType, original_entry_method:entryMethod, from:round2(originalSlDistance), to:round2(minSlDistance) } }
-        }
-        parsed.stop_loss_price = isBuySide
-          ? round2(anchorPrice - minSlDistance) : round2(anchorPrice + minSlDistance)
-        recommendedVolume = adjustedVolume
-        parsed.normalization_info = { type: 'sl_widened', from: round2(originalSlDistance), to: round2(minSlDistance), volume: recommendedVolume }
-        console.log(`[LLM] SL widened: ${originalSlDistance.toFixed(2)} -> ${minSlDistance.toFixed(2)}, volume=${recommendedVolume}`)
-      } else if (Number.isFinite(originalSlDistance) && originalSlDistance > maxSlDistance) {
-        console.log(`[LLM] SL too far: ${originalSlDistance.toFixed(2)} > ${maxSlDistance.toFixed(2)}, holding`)
-        return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type:'sl_too_far_hold', reason:'sl_too_far_hold', original_signal_type:signalType, original_entry_method:entryMethod, distance:round2(originalSlDistance), max:round2(maxSlDistance) } }
-      }
-
+      // Preserve a model-provided stop loss. The versioned risk gate validates
+      // the maximum distance and sizes the order from the actual loss amount;
+      // normalization must not silently create a different trade thesis.
       const finalSlDistance = Math.abs(Number(parsed.stop_loss_price) - anchorPrice)
       if (!parsed.take_profit_1_price) {
         parsed.take_profit_1_price = isBuySide

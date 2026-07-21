@@ -767,6 +767,11 @@ function localizeReason(reason) {
   const text = String(reason || "").trim();
   if (!text) return "";
   if (REASON_MAP[text]) return REASON_MAP[text];
+  if (text.startsWith("risk_relaxation_not_allowed:")) return "该设置不能突破平台安全边界；如需更宽松的规则，请联系管理员调整平台值";
+  if (text.startsWith("invalid_global_risk_range:")) return "用户允许范围无效，请检查上下限及平台安全边界";
+  if (text.startsWith("invalid_global_risk_lock:")) return "平台锁定值必须位于用户允许范围内";
+  if (text.startsWith("risk_field_locked:") || text.startsWith("risk_field_not_configurable:")) return "该规则由平台或系统统一管理，当前账号不能修改";
+  if (text === "invalid_global_risk_core_limits") return "单笔手数上限和单笔风险上限必须大于 0";
   if (text.startsWith("Invalid live quote for ")) {
     return `${text.replace("Invalid live quote for ", "")} 报价无效，已阻止下单`;
   }
@@ -2117,11 +2122,11 @@ const RISK_LABELS = {
   observation_hours:"新账户观察期", observation_max_lot:"观察期最大手数",
 };
 const RISK_GROUPS = [
-  ["入场与止损", ["require_stop_loss","sl_atr_min","sl_atr_max","min_rr","pending_valid_minutes"]],
-  ["手数与单笔风险", ["ai_volume_min","ai_volume_max","ai_volume_step","max_position_size","max_risk_per_trade_pct","observation_max_lot"]],
-  ["价格与成交", ["pending_price_deviation_pct","pending_price_deviation_atr","market_signal_drift_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds","signal_ttl_seconds","weekend_close_minutes"]],
-  ["频率与敞口", ["max_directional_exposure_lots","min_open_interval_seconds","max_daily_open_count","dedup_window_seconds","dedup_price_atr"]],
-  ["亏损与账户保护", ["daily_loss_limit_pct","consecutive_loss_limit","loss_cooldown_minutes","max_drawdown_pct","min_margin_level_pct","max_notional_exposure_pct","observation_hours"]],
+  ["交易结构", ["sl_atr_max","min_rr","pending_valid_minutes"]],
+  ["手数与单笔风险", ["max_position_size","max_risk_per_trade_pct"]],
+  ["价格与成交质量", ["pending_price_deviation_pct","pending_price_deviation_atr","market_signal_drift_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds","signal_ttl_seconds","weekend_close_minutes"]],
+  ["频率与敞口", ["max_directional_exposure_lots","min_open_interval_seconds","max_daily_open_count"]],
+  ["亏损与账户保护", ["daily_loss_limit_pct","consecutive_loss_limit","loss_cooldown_minutes","max_drawdown_pct","min_margin_level_pct"]],
 ];
 const RISK_SAFETY_LABELS = {
   lower:"数值越低越严格", higher:"数值越高越严格", subset:"只能缩小允许范围",
@@ -2134,7 +2139,7 @@ const RISK_ROLLOUT_LABELS = {
   "R1.7_PENDING_DEVIATION":"挂单价格偏离", "R2.1_DIRECTIONAL_EXPOSURE":"同向持仓敞口", "R2.2_MIN_OPEN_INTERVAL":"最小开仓间隔",
   "R2.3_DAILY_OPEN_COUNT":"每日开仓次数", "R2.4_PRICE_TIME_DUPLICATE":"重复价格与时间窗口", "R3.1_DAILY_LOSS_LIMIT":"每日亏损上限",
   "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损冷却", "R3.2_LOSS_COOLDOWN":"亏损后冷却", "R3.3_MAX_DRAWDOWN":"最大回撤",
-  "R3.4_MARGIN_LEVEL":"最低保证金水平", "R3.4_NOTIONAL_EXPOSURE":"最大名义敞口", "R4.2_WEEKEND_PROTECTION":"周末保护",
+  "R3.4_MARGIN_LEVEL":"当前保证金水平", "R3.4_PROJECTED_MARGIN_LEVEL":"下单后预计保证金水平", "R4.2_WEEKEND_PROTECTION":"周末保护",
   "R4.3_SIGNAL_EXPIRED":"信号有效期", "R4.4_QUOTE_STALE":"报价时效", "R4.5_SPREAD_TOO_WIDE":"最大点差", "R4.6_MARKET_SIGNAL_DRIFT":"市价信号漂移",
 };
 function riskRolloutLabel(code) { return RISK_ROLLOUT_LABELS[code] || "未命名风控规则"; }
@@ -2161,6 +2166,7 @@ const RISK_DECISION_LABELS = {
   "R2.4_PRICE_TIME_DUPLICATE":"检测到重复价格和时间窗口订单", "R3.1_DAILY_LOSS_LIMIT":"达到每日亏损上限",
   "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损触发冷却", "R3.2_LOSS_COOLDOWN":"账户仍处于亏损冷却期",
   "R3.3_MAX_DRAWDOWN":"达到最大回撤上限", "R3.4_MARGIN_LEVEL":"保证金水平低于要求",
+  "R3.4_MARGIN_DATA_INCOMPLETE":"MT5 无法计算预计保证金", "R3.4_PROJECTED_MARGIN_LEVEL":"下单后的预计保证金水平低于要求",
   "R3.4_NOTIONAL_DATA_INCOMPLETE":"名义敞口数据不完整", "R3.4_NOTIONAL_EXPOSURE":"名义敞口超过上限",
   "R3_ACCOUNT_HALTED":"账户风控已暂停", "R3_RISK_DATA_INCOMPLETE":"账户风险数据不完整",
   "R6_ACCOUNT_NOT_FOUND":"未找到交易账户",
@@ -2207,26 +2213,34 @@ function resultRiskReason(result = {}) {
   return rule ? riskRuleDescription(rule.code, rule.details || {}) : "";
 }
 function rolloutStatusLabel(value) { return ({ completed:"已完成", succeeded:"成功", failed:"失败", running:"执行中", pending:"等待中" })[value] || value || "未执行"; }
-function formatRiskValue(key, value) { if (value == null) return "--"; if (key.endsWith("_pct")) return `${Number(value)}%`; if (key.endsWith("_ms")) return `${Number(value)} ms`; return String(value); }
+function riskUnit(meta = {}) { return meta.unit_label || ({ percent:"%", lot:"手", minute:"分钟", second:"秒", count:"次/日", point:"点", ATR:"ATR 倍", ratio:"倍", hour:"小时" })[meta.unit] || ""; }
+function formatRiskValue(key, value, meta = {}) {
+  if (value == null) return "--";
+  const unit = riskUnit(meta);
+  return `${Number.isFinite(Number(value)) ? Number(value) : value}${unit ? ` ${unit}` : ""}`;
+}
 
-function riskBoundaryText(key, control) {
-  if (control?.locked_value != null) return `平台锁定：${formatRiskValue(key, control.locked_value)}`;
+function riskBoundaryText(key, control, meta = {}) {
+  if (control?.locked_value != null) return `平台锁定：${formatRiskValue(key, control.locked_value, meta)}`;
   if (control?.user_editable === false) return "平台管理，不可修改";
-  if (control?.allowed_min != null || control?.allowed_max != null) return `${control.allowed_min ?? "−∞"} ～ ${control.allowed_max ?? "+∞"}`;
+  if (control?.allowed_min != null || control?.allowed_max != null) return `${formatRiskValue(key, control.allowed_min ?? "−∞", meta)} ～ ${formatRiskValue(key, control.allowed_max ?? "+∞", meta)}`;
   return "按平台规则约束";
 }
 
 function renderRiskPolicyGroup(title, keys, row, metadata) {
   const policy = row.effective?.policy || {}, accountValues = row.effective?.accountValues || {};
   const platform = row.effective?.platformPolicy || {}, controls = row.effective?.controls || {};
-  return `<details class="risk-policy-group"><summary><span><strong>${escapeHtml(title)}</strong><small>${keys.length} 项规则</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="risk-rule-table"><div class="risk-rule-row risk-rule-head"><span>规则</span><span>我的设置</span><span>平台边界</span><span>最终生效</span></div>${keys.map(key => {
+  const visibleKeys = keys.filter(key => metadata[key]?.configurable !== false && metadata[key]?.user_editable !== false);
+  if (!visibleKeys.length) return "";
+  return `<details class="risk-policy-group"><summary><span><strong>${escapeHtml(title)}</strong><small>${visibleKeys.length} 项可调规则</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="risk-rule-table"><div class="risk-rule-row risk-rule-head"><span>规则</span><span>我的设置</span><span>平台边界</span><span>最终生效</span></div>${visibleKeys.map(key => {
     const meta = metadata[key] || {}, control = controls[key] || {}, own = accountValues[key];
     const editable = meta.type === "number" && control.user_editable !== false && control.locked_value == null;
+    const unit = riskUnit(meta);
     const ownControl = editable
-      ? `<input type="number" step="any" data-user-risk-field="${key}" value="${own == null ? "" : escapeHtml(own)}" placeholder="继承 ${escapeHtml(formatRiskValue(key, platform[key]))}" aria-label="${escapeHtml(RISK_LABELS[key] || key)}的用户设置">`
-      : `<span class="risk-inherited">${own == null ? "不可修改" : escapeHtml(formatRiskValue(key, own))}</span>`;
-    const boundary = meta.locked ? `平台强制：${formatRiskValue(key, platform[key])}` : riskBoundaryText(key, control);
-    return `<div class="risk-rule-row"><span class="risk-rule-name"><strong>${escapeHtml(RISK_LABELS[key] || meta.label || key)}</strong><small>${escapeHtml(meta.code || "")}</small></span><span>${ownControl}</span><span class="risk-boundary">${escapeHtml(boundary)}</span><strong class="risk-effective">${escapeHtml(formatRiskValue(key, policy[key]))}</strong></div>`;
+      ? `<span class="risk-input-with-unit"><input type="number" step="any" min="${escapeHtml(control.allowed_min ?? meta.allowed_min ?? '')}" max="${escapeHtml(control.allowed_max ?? meta.allowed_max ?? '')}" data-user-risk-field="${key}" value="${own == null ? "" : escapeHtml(own)}" placeholder="继承平台值" aria-label="${escapeHtml(RISK_LABELS[key] || key)}的用户设置"><em>${escapeHtml(unit)}</em></span>`
+      : `<span class="risk-inherited">${own == null ? "不可修改" : escapeHtml(formatRiskValue(key, own, meta))}</span>`;
+    const boundary = meta.locked ? `平台强制：${formatRiskValue(key, platform[key], meta)}` : riskBoundaryText(key, control, meta);
+    return `<div class="risk-rule-row"><span class="risk-rule-name"><strong>${escapeHtml(RISK_LABELS[key] || meta.label || key)}</strong><small>${escapeHtml(meta.description || "用户只能设置比平台更严格的值")}</small></span><span>${ownControl}</span><span class="risk-boundary">${escapeHtml(boundary)}</span><strong class="risk-effective">${escapeHtml(formatRiskValue(key, policy[key], meta))}</strong></div>`;
   }).join("")}</div></details>`;
 }
 
@@ -2784,8 +2798,16 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
 async function loadAdminRiskCenter() {
   const [data, rolloutData] = await Promise.all([api("/api/ai/admin/risk-center"), api("/api/ai/admin/rollout-health")]); state.globalRiskSnapshot = data;
   const raw = parseJsonField(data.platform_policy_version?.config_json, {}), current = { ...(data.defaults || {}), ...(raw.values || raw.defaults || raw) }, controls = raw.controls || {}, meta = data.rule_metadata || {};
-  const editable = Object.keys(data.defaults || {}).filter(key => typeof data.defaults[key] === "number");
-  const renderGlobalRiskRow = key => { const control = controls[key] || {}, direction = RISK_SAFETY_LABELS[meta[key]?.safety_direction] || "平台规则"; return `<details class="global-risk-row"><summary><span class="global-risk-name"><strong>${escapeHtml(RISK_LABELS[key] || key)}</strong><small>${escapeHtml(direction)} · ${meta[key]?.locked ? '系统强制，不可放宽' : `当前默认 ${escapeHtml(current[key])}`}</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="global-risk-fields"><label><span>平台默认值</span><input data-global-risk-field="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(current[key])}"></label><label><span>用户允许的最小值</span><input data-global-risk-min="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_min ?? meta[key]?.allowed_min ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label><span>用户允许的最大值</span><input data-global-risk-max="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(control.allowed_max ?? meta[key]?.allowed_max ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label><label><span>平台锁定值</span><input data-global-risk-lock="${escapeHtml(key)}" type="number" step="any" placeholder="不锁定" value="${escapeHtml(control.locked_value ?? '')}" ${meta[key]?.locked ? 'disabled' : ''}></label></div></details>`; };
+  const editable = Object.keys(data.defaults || {}).filter(key => typeof data.defaults[key] === "number" && meta[key]?.configurable !== false);
+  const renderUnitInput = ({ key, dataAttr, value, disabled = false, placeholder = "" }) => {
+    const unit = riskUnit(meta[key] || {});
+    return `<span class="risk-input-with-unit"><input ${dataAttr}="${escapeHtml(key)}" type="number" step="any" value="${escapeHtml(value ?? '')}" placeholder="${escapeHtml(placeholder)}" ${disabled ? 'disabled' : ''}><em>${escapeHtml(unit)}</em></span>`;
+  };
+  const renderGlobalRiskRow = key => {
+    const rule = meta[key] || {}, control = controls[key] || {}, direction = RISK_SAFETY_LABELS[rule.safety_direction] || "平台规则";
+    const userConfigurable = rule.user_editable !== false && !rule.locked;
+    return `<details class="global-risk-row"><summary><span class="global-risk-name"><strong>${escapeHtml(RISK_LABELS[key] || key)}</strong><small>${escapeHtml(rule.description || direction)}</small></span><span class="risk-default-pill">平台边界 ${escapeHtml(formatRiskValue(key, current[key], rule))}</span><i data-lucide="chevron-down" size="15"></i></summary><div class="global-risk-fields"><label><span><strong>平台安全边界</strong><small>${escapeHtml(direction)}</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-field', value:current[key] })}</label>${userConfigurable ? `<label><span><strong>用户可选最小值</strong><small>用户只能在安全方向内调整</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-min', value:control.allowed_min ?? rule.allowed_min })}</label><label><span><strong>用户可选最大值</strong><small>不会允许突破平台边界</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-max', value:control.allowed_max ?? rule.allowed_max })}</label><label><span><strong>平台锁定值</strong><small>填写后所有用户统一使用</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-lock', value:control.locked_value, placeholder:'不锁定' })}</label>` : `<div class="risk-system-note"><i data-lucide="shield-check" size="16"></i><span><strong>仅平台管理</strong><small>该项涉及系统时效或执行安全，不开放给普通用户修改。</small></span></div>`}</div></details>`;
+  };
   $("globalRiskEditor").innerHTML = `<div class="global-risk-groups">${RISK_GROUPS.map(([title, keys], index) => { const rows = keys.filter(key => editable.includes(key)); return rows.length ? `<details class="workspace-panel global-risk-group" ${index === 0 ? 'open' : ''}><summary><span><strong>${escapeHtml(title)}</strong><small>${rows.length} 项平台规则</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="global-risk-group-body">${rows.map(renderGlobalRiskRow).join("")}</div></details>` : ""; }).join("")}</div>`;
   $("adminRiskAccounts").innerHTML = (data.accounts || []).map(account => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.nickname || account.login_account)} <span class="status-chip ${account.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(account.halt_status || '未初始化')}</span></div><div class="workspace-row-meta"><span>回撤 ${escapeHtml(account.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(account.consecutive_losses ?? '--')}</span><span>冷却至 ${escapeHtml(account.cooldown_until || '--')}</span><span>Kill Switch ${account.user_kill_switch ? '开启' : '关闭'}</span><span>数据 ${account.data_complete ? '完整' : `不完整：${escapeHtml(riskDataIncompleteText(account.data_incomplete_reason))}`}</span></div></div></article>`).join("") || '<div class="empty-state">暂无账户风险状态</div>';
   const global = data.global_control || {}, globalEnabled = Boolean(global.global_kill_switch);
@@ -6826,7 +6848,7 @@ function bindEvents() {
   $("cancelModelProfileBtn")?.addEventListener("click", () => closeFormModal($("modelProfileEditor")));
   $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(localizeReason(error.message), "error")));
   $("savePlatformPolicyBtn")?.addEventListener("click", () => savePlatformPolicy().catch(error => toast(error.message, "error")));
-  $("saveGlobalRiskBtn")?.addEventListener("click", () => saveGlobalRisk().catch(error => toast(error.message, "error")));
+  $("saveGlobalRiskBtn")?.addEventListener("click", () => saveGlobalRisk().catch(error => toast(localizeReason(error.message), "error")));
   $("saveUserFeatureFlagsBtn")?.addEventListener("click", () => saveUserFeatureFlags().catch(error => toast(error.message, "error")));
   $("saveGlobalFeatureFlagsBtn")?.addEventListener("click", () => saveGlobalFeatureFlags().catch(error => toast(error.message, "error")));
   $("globalKillSwitchBtn")?.addEventListener("click", async event => {
@@ -7118,9 +7140,8 @@ function bindEvents() {
     if (riskSave) {
       const panel = riskSave.closest("[data-risk-account]"), changes = {};
       panel?.querySelectorAll("[data-user-risk-field]").forEach(input => {
-        if (input.value.trim() !== "") changes[input.dataset.userRiskField] = Number(input.value);
+        changes[input.dataset.userRiskField] = input.value.trim() === "" ? null : Number(input.value);
       });
-      if (!Object.keys(changes).length) { toast("没有需要保存的自定义风控", "warning"); return; }
       try { await api(`/api/ai/risk-center/${Number(riskSave.dataset.riskSave)}`, { method:"PUT", body:{ changes, reason:"用户从风控中心更新" } }); toast("用户风控已立即生效", "success"); await loadRiskCenter(); }
       catch (error) { toast(error.message,"error"); } return;
     }

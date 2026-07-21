@@ -6910,7 +6910,50 @@ a.signal-link:hover {
 }
 
 .risk-rule-name small {
-  display: none;
+  display: block;
+  max-width: 34rem;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.risk-input-with-unit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.risk-input-with-unit:focus-within {
+  border-color: rgba(241, 213, 109, .7);
+  box-shadow: 0 0 0 2px rgba(241, 213, 109, .12);
+}
+
+.risk-input-with-unit input {
+  width: 100%;
+  min-width: 0;
+  border: 0 !important;
+  border-radius: 0;
+  box-shadow: none !important;
+}
+
+.risk-input-with-unit em {
+  display: inline-flex;
+  min-width: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 9px;
+  border-left: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-style: normal;
+  white-space: nowrap;
 }
 
 .review-memory-workspace {
@@ -7147,6 +7190,18 @@ a.signal-link:hover {
   padding: 0 12px;
 }
 
+.global-risk-row > summary .risk-default-pill {
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid rgba(212, 175, 55, .2);
+  border-radius: 999px;
+  background: rgba(212, 175, 55, .06);
+  color: #e7cf72;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .global-risk-fields {
   display: grid;
   grid-template-columns: 1fr;
@@ -7283,6 +7338,41 @@ a.signal-link:hover {
   box-shadow: none;
   transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
+
+.global-risk-fields label > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.global-risk-fields label > span:first-child strong {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.global-risk-fields label > span:first-child small {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.risk-system-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid rgba(56, 189, 248, .18);
+  border-radius: 8px;
+  background: rgba(56, 189, 248, .045);
+  color: #7dd3fc;
+}
+
+.risk-system-note span {
+  display: grid;
+  gap: 3px;
+}
+
+.risk-system-note strong { color: var(--text-primary); font-size: 11px; }
+.risk-system-note small { color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
 
 #review-memory .review-case-button.is-unread { background: rgba(19, 39, 58, .78); }
 

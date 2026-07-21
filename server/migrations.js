@@ -2764,6 +2764,62 @@ const migrations = [
           REFERENCES ai_market_benchmark_sets(id) ON DELETE CASCADE
       )`)
     }
+  },
+  {
+    id: '111_simplify_risk_policy_boundaries',
+    async up() {
+      const sets = await queryAll("SELECT id FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")
+      if (sets[0]) {
+        const versions = await queryAll('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1', [sets[0].id])
+        let raw = {}
+        try { raw = versions[0]?.config_json ? JSON.parse(versions[0].config_json) : {} } catch {}
+        const values = {
+          ...(raw.values || raw.defaults || raw),
+          sl_atr_max:4, min_rr:1.1, pending_price_deviation_pct:1, pending_price_deviation_atr:2,
+          pending_valid_minutes:180, max_position_size:0.05, max_risk_per_trade_pct:1,
+          signal_ttl_seconds:300, max_quote_age_seconds:15, max_spread_points:120,
+          market_signal_drift_atr:0.5, broker_slippage_points:30, weekend_close_minutes:60,
+          max_directional_exposure_lots:0.1, min_open_interval_seconds:30, max_daily_open_count:20,
+          dedup_window_seconds:180, dedup_price_atr:0.05, daily_loss_limit_pct:3,
+          consecutive_loss_limit:3, loss_cooldown_minutes:60, max_drawdown_pct:8,
+          min_margin_level_pct:300,
+        }
+        for (const key of ['sl_atr_min','ai_volume_min','ai_volume_max','ai_volume_step','max_notional_exposure_pct','observation_hours','observation_max_lot']) delete values[key]
+        const controls = {
+          sl_atr_max:{ allowed_min:0.5, allowed_max:4, locked_value:null, user_editable:true },
+          min_rr:{ allowed_min:1.1, allowed_max:10, locked_value:null, user_editable:true },
+          pending_price_deviation_pct:{ allowed_min:0.01, allowed_max:1, locked_value:null, user_editable:true },
+          pending_price_deviation_atr:{ allowed_min:0.1, allowed_max:2, locked_value:null, user_editable:true },
+          pending_valid_minutes:{ allowed_min:5, allowed_max:180, locked_value:null, user_editable:true },
+          max_position_size:{ allowed_min:0.001, allowed_max:0.05, locked_value:null, user_editable:true },
+          max_risk_per_trade_pct:{ allowed_min:0.01, allowed_max:1, locked_value:null, user_editable:true },
+          max_spread_points:{ allowed_min:1, allowed_max:120, locked_value:null, user_editable:true },
+          market_signal_drift_atr:{ allowed_min:0.01, allowed_max:0.5, locked_value:null, user_editable:true },
+          broker_slippage_points:{ allowed_min:0, allowed_max:30, locked_value:null, user_editable:true },
+          weekend_close_minutes:{ allowed_min:60, allowed_max:2880, locked_value:null, user_editable:true },
+          max_directional_exposure_lots:{ allowed_min:0.001, allowed_max:0.1, locked_value:null, user_editable:true },
+          min_open_interval_seconds:{ allowed_min:30, allowed_max:86400, locked_value:null, user_editable:true },
+          max_daily_open_count:{ allowed_min:1, allowed_max:20, locked_value:null, user_editable:true },
+          daily_loss_limit_pct:{ allowed_min:0.1, allowed_max:3, locked_value:null, user_editable:true },
+          consecutive_loss_limit:{ allowed_min:1, allowed_max:3, locked_value:null, user_editable:true },
+          loss_cooldown_minutes:{ allowed_min:60, allowed_max:10080, locked_value:null, user_editable:true },
+          max_drawdown_pct:{ allowed_min:0.1, allowed_max:8, locked_value:null, user_editable:true },
+          min_margin_level_pct:{ allowed_min:300, allowed_max:100000, locked_value:null, user_editable:true },
+        }
+        const now = new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').slice(0, 19)
+        const nextVersion = Number(versions[0]?.version_no || 0) + 1
+        const inserted = await queryRun(`INSERT INTO risk_policy_versions
+          (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)
+          VALUES (?, ?, ?, 0, '风控规则分层与默认值优化', ?, ?)`,
+        [sets[0].id, nextVersion, JSON.stringify({ values, controls }), now, now])
+        await queryRun('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [inserted.insertId, now, sets[0].id])
+      }
+      await queryRun("DELETE FROM risk_rule_rollouts WHERE rule_code IN ('account_review','R3.4_NOTIONAL_EXPOSURE')")
+      await queryRun("UPDATE trading_accounts SET observe_status = 'active', observed_until = NULL WHERE observe_status = 'observing'")
+      await queryRun(`INSERT INTO risk_rule_rollouts (rule_code, mode, forced_enforce, updated_at)
+        VALUES ('R3.4_PROJECTED_MARGIN_LEVEL', 'enforce', 0, NOW())
+        ON DUPLICATE KEY UPDATE mode = VALUES(mode), forced_enforce = VALUES(forced_enforce), updated_at = VALUES(updated_at)`)
+    }
   }
 ]
 

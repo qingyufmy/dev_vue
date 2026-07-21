@@ -371,6 +371,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(loadRiskCenter.indexOf('initIcons();')).toBeGreaterThan(loadRiskCenter.indexOf('class="risk-status-icon"'))
   })
 
+  it('shows risk units and hides retired observation and AI step settings', () => {
+    expect(app).toContain('function riskUnit(meta = {})')
+    expect(app).toContain('class="risk-input-with-unit"')
+    const groups = app.slice(app.indexOf('const RISK_GROUPS'), app.indexOf('const RISK_SAFETY_LABELS'))
+    expect(groups).not.toContain('observation_hours')
+    expect(groups).not.toContain('ai_volume_step')
+    expect(groups).not.toContain('max_notional_exposure_pct')
+    expect(css).toContain('.risk-default-pill')
+  })
+
   it('keeps the overview signal card focused on the current decision and execution summary', () => {
     const start = html.indexOf('id="signalCard"')
     const end = html.indexOf('class="card grid-area-positions"', start)

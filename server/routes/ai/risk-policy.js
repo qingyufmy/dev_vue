@@ -4,41 +4,41 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { stripBrokerSuffix } from './utils.js'
 import { riskRuleIsEnforced } from './rollout-governance.js'
 
-const rule = (code, type, unit, safety, value, min, max, locked, label) => ({ code, type, unit, safety_direction: safety, default_value: value, allowed_min: min, allowed_max: max, locked, label })
+const rule = (code, type, unit, safety, value, min, max, locked, label, options = {}) => ({
+  code, type, unit, unit_label: options.unit_label || unit, safety_direction: safety,
+  default_value: value, allowed_min: min, allowed_max: max, locked, label,
+  user_editable: options.user_editable ?? !locked,
+  configurable: options.configurable ?? true,
+  category: options.category || 'account',
+  description: options.description || '',
+})
 
 export const RISK_RULES = Object.freeze({
-  allowed_symbols: rule('R1.1', 'set', 'symbol', 'subset', ['*'], null, null, false, '允许交易品种'),
-  require_stop_loss: rule('R1.2', 'boolean', 'bool', 'locked_true', true, true, true, true, '强制止损'),
-  sl_atr_min: rule('R1.3', 'number', 'ATR', 'higher', 1, 0.2, 5, false, '最小止损距离'),
-  sl_atr_max: rule('R1.4', 'number', 'ATR', 'lower', 3, 0.5, 10, false, '最大止损距离'),
-  min_rr: rule('R1.5', 'number', 'ratio', 'higher', 1.2, 0.5, 10, false, '最低盈亏比'),
-  pending_price_deviation_pct: rule('R1.7A', 'number', 'percent', 'lower', 0.5, 0.01, 10, false, '挂单价格偏离百分比'),
-  pending_price_deviation_atr: rule('R1.7B', 'number', 'ATR', 'lower', 2, 0.1, 10, false, '挂单价格偏离 ATR'),
-  pending_valid_minutes: rule('R1.8', 'number', 'minute', 'lower', 240, 5, 1440, false, '挂单默认有效期'),
-  ai_volume_min: rule('R1.9A', 'number', 'lot', 'locked', 0.01, 0.001, 100, true, 'AI 建议最小手数'),
-  ai_volume_max: rule('R1.9B', 'number', 'lot', 'locked', 0.05, 0.001, 100, true, 'AI 建议最大手数'),
-  ai_volume_step: rule('R1.9C', 'number', 'lot', 'locked', 0.01, 0.001, 100, true, 'AI 建议手数步进'),
-  max_position_size: rule('R1.9D', 'number', 'lot', 'lower', 0.05, 0.001, 100, false, '账户单笔最大手数'),
-  max_risk_per_trade_pct: rule('R1.10', 'number', 'percent', 'lower', 2, 0.01, 20, false, '单笔最大风险比例'),
-  signal_ttl_seconds: rule('R4.3', 'number', 'second', 'lower', 900, 5, 86400, false, '信号有效期'),
-  max_quote_age_seconds: rule('R4.4', 'number', 'second', 'lower', 10, 1, 300, false, '报价最大年龄'),
-  max_spread_points: rule('R4.5', 'number', 'point', 'lower', 100, 1, 100000, false, '最大点差'),
-  market_signal_drift_atr: rule('R4.6', 'number', 'ATR', 'lower', 0.3, 0.01, 5, false, '市价信号价格漂移'),
-  broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '经纪商成交滑点'),
-  weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 120, 0, 2880, false, 'MT5周末收盘提前量'),
-  max_directional_exposure_lots: rule('R2.1', 'number', 'lot', 'lower', 0.1, 0.001, 1000, false, '同向最大敞口'),
-  min_open_interval_seconds: rule('R2.2', 'number', 'second', 'higher', 60, 0, 86400, false, '最小开仓间隔'),
-  max_daily_open_count: rule('R2.3', 'number', 'count', 'lower', 10, 1, 10000, false, '每日成功开仓次数'),
-  dedup_window_seconds: rule('R2.4A', 'number', 'second', 'higher', 300, 0, 86400, false, '重复订单时间窗'),
-  dedup_price_atr: rule('R2.4B', 'number', 'ATR', 'higher', 0.1, 0, 5, false, '重复订单价格距离'),
-  daily_loss_limit_pct: rule('R3.1', 'number', 'percent', 'lower', 5, 0.1, 100, false, '每日最大亏损'),
-  consecutive_loss_limit: rule('R3.2A', 'number', 'count', 'lower', 3, 1, 100, false, '连续亏损次数'),
-  loss_cooldown_minutes: rule('R3.2B', 'number', 'minute', 'higher', 120, 1, 10080, false, '连续亏损冷却'),
-  max_drawdown_pct: rule('R3.3', 'number', 'percent', 'lower', 10, 0.1, 100, false, '最大回撤'),
-  min_margin_level_pct: rule('R3.4A', 'number', 'percent', 'higher', 200, 0, 100000, false, '最低保证金水平'),
-  max_notional_exposure_pct: rule('R3.4B', 'number', 'percent', 'lower', 300, 1, 100000, false, '最大名义敞口'),
-  observation_hours: rule('R6.4A', 'number', 'hour', 'higher', 72, 0, 8760, false, '新账户观察期'),
-  observation_max_lot: rule('R6.4B', 'number', 'lot', 'lower', 0.01, 0.001, 100, false, '观察期最大手数'),
+  allowed_symbols: rule('R1.1', 'set', 'symbol', 'subset', ['*'], null, null, false, '允许交易品种', { user_editable:false, category:'platform', description:'平台允许自动执行的品种范围' }),
+  require_stop_loss: rule('R1.2', 'boolean', 'bool', 'locked_true', true, true, true, true, '强制止损', { unit_label:'开/关', category:'system', description:'所有自动执行订单必须包含有效止损' }),
+  sl_atr_max: rule('R1.4', 'number', 'ATR', 'lower', 4, 0.5, 10, false, '最大止损距离', { unit_label:'ATR 倍', description:'拦截明显超出行情波动范围的止损' }),
+  min_rr: rule('R1.5', 'number', 'ratio', 'higher', 1.1, 0.5, 10, false, '最低盈亏比', { unit_label:'倍', description:'实际入场、止损和止盈之间的最低收益风险比' }),
+  pending_price_deviation_pct: rule('R1.7A', 'number', 'percent', 'lower', 1, 0.01, 10, false, '挂单价格偏离百分比', { unit_label:'%', description:'挂单触发价相对当前报价的最大距离' }),
+  pending_price_deviation_atr: rule('R1.7B', 'number', 'ATR', 'lower', 2, 0.1, 10, false, '挂单价格偏离 ATR', { unit_label:'ATR 倍', description:'与百分比上限取更严格的结果' }),
+  pending_valid_minutes: rule('R1.8', 'number', 'minute', 'lower', 180, 5, 1440, false, '挂单默认有效期', { unit_label:'分钟', description:'模型未指定时使用；策略可设置更短期限' }),
+  max_position_size: rule('R1.9D', 'number', 'lot', 'lower', 0.05, 0.001, 100, false, '单笔最大手数', { unit_label:'手', description:'任何单笔订单都不能突破的平台手数上限' }),
+  max_risk_per_trade_pct: rule('R1.10', 'number', 'percent', 'lower', 1, 0.01, 20, false, '单笔最大风险比例', { unit_label:'%', description:'按真实止损亏损金额占账户净值计算' }),
+  signal_ttl_seconds: rule('R4.3', 'number', 'second', 'lower', 300, 5, 86400, false, '信号有效期', { unit_label:'秒', user_editable:false, category:'platform', description:'防止执行已经过时的 AI 信号' }),
+  max_quote_age_seconds: rule('R4.4', 'number', 'second', 'lower', 15, 1, 300, false, '报价最大年龄', { unit_label:'秒', user_editable:false, category:'system', description:'使用桥接标准化后的 UTC 报价时间检查' }),
+  max_spread_points: rule('R4.5', 'number', 'point', 'lower', 120, 1, 100000, false, '最大点差', { unit_label:'点', description:'超过该点差时不新增风险' }),
+  market_signal_drift_atr: rule('R4.6', 'number', 'ATR', 'lower', 0.5, 0.01, 5, false, '市价信号价格漂移', { unit_label:'ATR 倍', description:'当前成交价偏离推理参考价的最大幅度' }),
+  broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '下单允许价格偏差', { unit_label:'点', description:'发送给 MT5 的允许成交偏差，不代表实际成交滑点' }),
+  weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 60, 0, 2880, false, '周末收盘提前保护', { unit_label:'分钟', description:'在 MT5 周末收盘前提前停止新增风险' }),
+  max_directional_exposure_lots: rule('R2.1', 'number', 'lot', 'lower', 0.1, 0.001, 1000, false, '同向最大敞口', { unit_label:'手', description:'同品种同方向持仓、挂单和执行预占的合计上限' }),
+  min_open_interval_seconds: rule('R2.2', 'number', 'second', 'higher', 30, 0, 86400, false, '最小开仓间隔', { unit_label:'秒', description:'限制账户连续新增仓位的最短间隔' }),
+  max_daily_open_count: rule('R2.3', 'number', 'count', 'lower', 20, 1, 10000, false, '每日开仓次数', { unit_label:'次/日', description:'按 MT5 交易日统计成功开仓次数' }),
+  dedup_window_seconds: rule('R2.4A', 'number', 'second', 'higher', 180, 0, 86400, false, '重复订单时间窗', { unit_label:'秒', user_editable:false, category:'system', description:'系统内部的第二层重复下单保护' }),
+  dedup_price_atr: rule('R2.4B', 'number', 'ATR', 'higher', 0.05, 0, 5, false, '重复订单价格距离', { unit_label:'ATR 倍', user_editable:false, category:'system', description:'系统内部重复订单价格相似度' }),
+  daily_loss_limit_pct: rule('R3.1', 'number', 'percent', 'lower', 3, 0.1, 100, false, '每日最大亏损', { unit_label:'%', description:'已实现净亏损加当前浮亏占日初净值的比例' }),
+  consecutive_loss_limit: rule('R3.2A', 'number', 'count', 'lower', 3, 1, 100, false, '连续亏损次数', { unit_label:'笔', description:'按完整平仓持仓统计，不按成交明细重复计数' }),
+  loss_cooldown_minutes: rule('R3.2B', 'number', 'minute', 'higher', 60, 1, 10080, false, '连续亏损冷却', { unit_label:'分钟', description:'达到连续亏损次数后暂停新增风险' }),
+  max_drawdown_pct: rule('R3.3', 'number', 'percent', 'lower', 8, 0.1, 100, false, '最大回撤', { unit_label:'%', description:'经资金流校正后的净值高水位回撤' }),
+  min_margin_level_pct: rule('R3.4A', 'number', 'percent', 'higher', 300, 0, 100000, false, '最低预计保证金水平', { unit_label:'%', description:'使用 MT5 预计保证金计算下单后的保证金水平' }),
 })
 
 export const DEFAULT_RISK_POLICY = Object.freeze(Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => [key, Array.isArray(meta.default_value) ? [...meta.default_value] : meta.default_value])))
@@ -71,6 +71,7 @@ function mergeKnown(base, override) {
 
 function buildPlatformControls(rawConfig = {}) {
   const configured = rawConfig.controls || rawConfig._controls || {}
+  const platformValues = mergeKnown(DEFAULT_RISK_POLICY, rawConfig.values || rawConfig.defaults || rawConfig)
   return Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => {
     const input = configured[key] || {}
     const allowedMin = meta.type === 'number' && finite(input.allowed_min) != null
@@ -79,10 +80,13 @@ function buildPlatformControls(rawConfig = {}) {
       ? Math.min(meta.allowed_max, finite(input.allowed_max)) : meta.allowed_max
     const lockedValue = input.locked_value === null || input.locked_value === undefined
       ? null : normalizeValue(key, input.locked_value)
+    let effectiveMin = allowedMin, effectiveMax = allowedMax
+    if (meta.type === 'number' && meta.safety_direction === 'lower') effectiveMax = Math.min(effectiveMax, Number(platformValues[key]))
+    if (meta.type === 'number' && meta.safety_direction === 'higher') effectiveMin = Math.max(effectiveMin, Number(platformValues[key]))
     return [key, {
       default_value: input.default_value === undefined ? meta.default_value : normalizeValue(key, input.default_value),
-      allowed_min: allowedMin, allowed_max: allowedMax, locked_value: lockedValue,
-      user_editable: meta.locked ? false : input.user_editable !== false,
+      allowed_min: effectiveMin, allowed_max: effectiveMax, locked_value: lockedValue,
+      user_editable: meta.locked || !meta.configurable || !meta.user_editable ? false : input.user_editable !== false,
     }]
   }))
 }
@@ -101,7 +105,7 @@ function applyAccountConfig(base, rawConfig, controls) {
     if (value === undefined) continue
     if (meta.type === 'number') value = Math.min(control.allowed_max, Math.max(control.allowed_min, value))
     if (meta.type === 'set' && !result[key].includes('*')) value = value.filter(item => result[key].includes(item))
-    result[key] = value
+    result[key] = stricter(key, result[key], value)
   }
   result.require_stop_loss = true
   return result
@@ -129,6 +133,37 @@ export function isRelaxation(key, oldValue, newValue) {
     return (newValue || []).some(value => !oldSet.has(value))
   }
   return false
+}
+
+export function normalizePlatformRiskConfig({ currentValues = {}, currentControls = {}, valueChanges = {}, controlChanges = {} } = {}) {
+  const values = mergeKnown(DEFAULT_RISK_POLICY, currentValues)
+  for (const [key, raw] of Object.entries(valueChanges || {})) {
+    const meta = RISK_RULES[key]
+    if (!meta) throw new Error(`unknown_risk_field:${key}`)
+    if (!meta.configurable) throw new Error(`risk_field_not_configurable:${key}`)
+    const value = normalizeValue(key, raw)
+    if (value === undefined || (meta.type === 'number' && Number(value) !== Number(raw))) throw new Error(`invalid_risk_value:${key}`)
+    values[key] = value
+  }
+  const controls = { ...(currentControls || {}) }
+  for (const [key, input] of Object.entries(controlChanges || {})) {
+    const meta = RISK_RULES[key]
+    if (!meta) throw new Error(`unknown_risk_field:${key}`)
+    if (meta.type !== 'number' || !meta.configurable || !meta.user_editable) throw new Error(`risk_field_not_user_configurable:${key}`)
+    let min = Number(input.allowed_min ?? meta.allowed_min)
+    let max = Number(input.allowed_max ?? meta.allowed_max)
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < meta.allowed_min || max > meta.allowed_max || min > max) throw new Error(`invalid_global_risk_range:${key}`)
+    if (meta.safety_direction === 'lower') max = Math.min(max, Number(values[key]))
+    if (meta.safety_direction === 'higher') min = Math.max(min, Number(values[key]))
+    let locked = input.locked_value
+    if (locked !== null && locked !== undefined && locked !== '') {
+      locked = Number(locked)
+      if (!Number.isFinite(locked) || locked < min || locked > max) throw new Error(`invalid_global_risk_lock:${key}`)
+    } else locked = null
+    controls[key] = { allowed_min:min, allowed_max:max, locked_value:locked, user_editable:input.user_editable !== false }
+  }
+  if (Number(values.max_position_size) <= 0 || Number(values.max_risk_per_trade_pct) <= 0) throw new Error('invalid_global_risk_core_limits')
+  return { values, controls }
 }
 
 export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = null, riskProfileId = null, legacyConfig = {}, now = beijingNow() } = {}) {
@@ -176,21 +211,45 @@ export async function submitRiskPolicyChanges({ policySetId, actorId, changes, r
     const [[set]] = await run("SELECT * FROM risk_policy_sets WHERE id = ? AND status = 'active' FOR UPDATE", [policySetId])
     if (!set) throw new Error('risk_policy_set_not_found')
     const [[current]] = await run('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= NOW() ORDER BY version_no DESC LIMIT 1', [policySetId])
-    const currentConfig = mergeKnown(DEFAULT_RISK_POLICY, parseJson(current?.config_json))
-    const applied = {}, auditItems = []
+    const currentRaw = parseJson(current?.config_json)
+    const currentConfig = currentRaw.values || currentRaw.defaults || currentRaw
+    let platformPolicy = { ...DEFAULT_RISK_POLICY }, platformControls = buildPlatformControls()
+    if (set.scope === 'account') {
+      const [[platformSet]] = await run("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id ASC LIMIT 1")
+      if (platformSet) {
+        const [[platformVersion]] = await run('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= NOW() ORDER BY version_no DESC LIMIT 1', [platformSet.id])
+        const platformRaw = parseJson(platformVersion?.config_json)
+        platformPolicy = mergeKnown(platformPolicy, platformRaw.values || platformRaw.defaults || platformRaw)
+        platformControls = buildPlatformControls(platformRaw)
+      }
+    }
+    const applied = {}, removals = new Set(), auditItems = []
     for (const [key, raw] of Object.entries(changes)) {
       const meta = RISK_RULES[key]
       if (!meta) throw new Error(`unknown_risk_field:${key}`)
-      if (meta.locked) throw new Error(`risk_field_locked:${key}`)
+      if (meta.locked || !meta.configurable || !meta.user_editable) throw new Error(`risk_field_locked:${key}`)
+      if (set.scope === 'account' && (raw === null || raw === '')) {
+        removals.add(key)
+        auditItems.push([key, null, 'inherit'])
+        continue
+      }
       const value = normalizeValue(key, raw)
-      if (value === undefined) throw new Error(`invalid_risk_value:${key}`)
+      if (value === undefined || (meta.type === 'number' && Number(value) !== Number(raw))) throw new Error(`invalid_risk_value:${key}`)
+      if (set.scope === 'account') {
+        const control = platformControls[key]
+        if (!control?.user_editable || (meta.type === 'number' && (value < control.allowed_min || value > control.allowed_max))
+          || stricter(key, platformPolicy[key], value) !== value) throw new Error(`risk_relaxation_not_allowed:${key}`)
+      }
       applied[key] = value
-      auditItems.push([key, value, isRelaxation(key, currentConfig[key], value) ? 'relax' : 'tighten'])
+      const prior = currentConfig[key] ?? platformPolicy[key] ?? DEFAULT_RISK_POLICY[key]
+      auditItems.push([key, value, isRelaxation(key, prior, value) ? 'relax' : 'tighten'])
     }
+    const changedFields = [...new Set([...Object.keys(applied), ...removals])]
     let versionId = current?.id || null
-    if (Object.keys(applied).length) {
+    if (changedFields.length) {
       const now = beijingNow()
-      const next = mergeKnown(currentConfig, applied)
+      const next = { ...currentConfig, ...applied }
+      for (const key of removals) delete next[key]
       const [insert] = await run('INSERT INTO risk_policy_versions (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [policySetId, Number(current?.version_no || 0) + 1, JSON.stringify(next), actorId, reason, now, now])
       versionId = insert.insertId
       await run('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [versionId, now, policySetId])
@@ -198,10 +257,10 @@ export async function submitRiskPolicyChanges({ policySetId, actorId, changes, r
         await run(`INSERT INTO risk_policy_change_items
           (policy_set_id, field_code, old_value_json, new_value_json, change_class, status, requested_by, reason, effective_at, created_at)
           VALUES (?, ?, ?, ?, ?, 'applied', ?, ?, ?, ?)`,
-        [policySetId, key, JSON.stringify(currentConfig[key]), JSON.stringify(value), changeClass, actorId, reason, now, now])
+        [policySetId, key, JSON.stringify(currentConfig[key] ?? null), JSON.stringify(value ?? null), changeClass, actorId, reason, now, now])
       }
     }
-    const appliedFields = Object.keys(applied)
+    const appliedFields = changedFields
     return { active_version_id: versionId, applied_fields: appliedFields, immediate_fields: appliedFields, pending_fields: [] }
   })
 }
@@ -278,19 +337,13 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   if (!(atr > 0)) return fail('R1_ATR_REQUIRED')
   let volume = finite(approved.volume)
   if (!(volume > 0)) return fail('R1.9_VOLUME_INVALID')
-  if (ai && (volume < policy.ai_volume_min || volume > policy.ai_volume_max || !aligned(volume, policy.ai_volume_step, policy.ai_volume_min))) return fail('R1.9_AI_VOLUME_OUT_OF_RANGE', { volume })
-  const originalDistance = Math.abs(entry - sl), minDistance = atr * policy.sl_atr_min
-  const priceTolerance = Math.max(Number(instrument.tick_size) || 0, Number(instrument.point) || 0)
-  let adjusted = false
-  // Broker prices are rounded to their minimum tick. A sub-tick difference
-  // must not scale 0.01 lots down to zero merely because of floating-point
-  // arithmetic (for example 16.22 vs 16.220714 on a 0.01-tick symbol).
-  if (originalDistance + priceTolerance < minDistance) {
-    approved.sl = Number((side === 'buy' ? entry - minDistance : entry + minDistance).toFixed(Number(instrument.digits)))
-    volume = floorStep(volume * originalDistance / minDistance, Number(instrument.volume_step))
-    approved.volume = volume; adjusted = true
-    rules.push({ code: 'R1.3_SL_WIDEN_VOLUME_DOWN', outcome: 'adjust', details: { from_sl: sl, to_sl: approved.sl, from_volume: original.volume, to_volume: volume } })
+  const brokerMinVolume = Number(instrument.volume_min), brokerMaxVolume = Number(instrument.volume_max), brokerVolumeStep = Number(instrument.volume_step)
+  if (volume < brokerMinVolume || volume > brokerMaxVolume || !aligned(volume, brokerVolumeStep, brokerMinVolume)) {
+    return fail('R1.9_AI_VOLUME_OUT_OF_RANGE', { volume, minimum:brokerMinVolume, maximum:brokerMaxVolume, step:brokerVolumeStep, source:'mt5_symbol' })
   }
+  let adjusted = false
+  // The gate must not move an AI stop loss because that changes the trading
+  // thesis. Broker minimum stop distance remains an execution-layer check.
   const finalDistance = Math.abs(entry - Number(approved.sl))
   if (finalDistance > atr * policy.sl_atr_max + Number(instrument.tick_size)) {
     const rejected = rolloutReject('R1.4_STOP_LOSS_TOO_FAR'); if (rejected) return rejected
@@ -345,7 +398,7 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   if (!(equity > 0) || !(riskPerLot > 0)) return fail('R1.10_RISK_DATA_INVALID')
   const riskCap = equity * policy.max_risk_per_trade_pct / 100
   volume = floorStep(Math.min(volume, riskCap / riskPerLot), Number(instrument.volume_step))
-  const minimumLot = Math.max(policy.ai_volume_min, Number(instrument.volume_min))
+  const minimumLot = Number(instrument.volume_min)
   if (volume + 1e-9 < minimumLot) return fail('R1.9_BELOW_MINIMUM_AFTER_RISK', { volume, minimum: minimumLot })
   if (volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN')
   if (volume !== Number(approved.volume)) adjusted = true

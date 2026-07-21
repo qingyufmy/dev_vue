@@ -88,7 +88,7 @@ function calculateIncrementalMetrics({ account, positions = [], pending = [], in
       close_time_msc:Number(position.close_time_msc || 0), close_time_utc_msc:Number(position.close_time_utc_msc || 0) })
   }
   const notional = exposureNotional([...positions, ...pending], instruments, account?.currency, fxRates)
-  const dataComplete = snapshot_complete && reasons.length === 0 && equity > 0 && notional != null && dailyLossPct != null && drawdownPct != null
+  const dataComplete = snapshot_complete && reasons.length === 0 && equity > 0 && dailyLossPct != null && drawdownPct != null
   const nextCursor = compareCursor(throughCursor, stateCursor) >= 0 ? throughCursor : stateCursor
   return {
     business_date: businessDate, equity, realized, floating, day_start_equity: dayStartEquity,
@@ -170,7 +170,7 @@ export function calculateAccountRiskMetrics(input = {}) {
   }
   const allItems = [...positions, ...pending]
   const notional = exposureNotional(allItems, instruments, account?.currency, fxRates)
-  const dataComplete = snapshot_complete && equity > 0 && historyComplete(historyToday) && historyComplete(historyAll) && notional != null && dailyLossPct != null && drawdownPct != null
+  const dataComplete = snapshot_complete && equity > 0 && historyComplete(historyToday) && historyComplete(historyAll) && dailyLossPct != null && drawdownPct != null
   return {
     business_date: businessDate, equity, realized, floating, day_start_equity: dayStartEquity,
     daily_loss_pct: dailyLossPct, cumulative_cash_flow: allCash, equity_high_water: highWater,
@@ -224,25 +224,24 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
     const anomalyCode = conflicts.length ? 'duplicate_account_binding'
       : adminPaused ? (matched.anomaly_code || 'account_paused') : null
     const reviewStatus = 'approved'
-    const observeStatus = conflicts.length ? 'frozen' : adminPaused ? 'paused' : 'observing'
+    const observeStatus = conflicts.length ? 'frozen' : adminPaused ? 'paused' : 'active'
     if (!matched) {
       const [insert] = await run(`INSERT INTO trading_accounts
         (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status,
          observed_until, first_verified_at, identity_verified_at, anomaly_code, is_deleted, created_at, updated_at)
-        VALUES (?, ?, ?, '', 'netting', ?, ?, DATE_ADD(NOW(), INTERVAL 72 HOUR), ?, ?, ?, 0, ?, ?)`,
+        VALUES (?, ?, ?, '', 'netting', ?, ?, NULL, ?, ?, ?, 0, ?, ?)`,
       [userId, server, login, reviewStatus, observeStatus, now, now, anomalyCode, now, now])
       matched = { id: insert.insertId, user_id: userId, broker_server: server, login_account: login, review_status: reviewStatus, observe_status: observeStatus }
     } else if (matched.is_deleted) {
       await run(`UPDATE trading_accounts SET is_deleted = 0, review_status = ?, observe_status = ?,
-        observed_until = DATE_ADD(NOW(), INTERVAL 72 HOUR), first_verified_at = COALESCE(first_verified_at, ?),
+        observed_until = NULL, first_verified_at = COALESCE(first_verified_at, ?),
         identity_verified_at = ?, anomaly_code = ?, updated_at = ? WHERE id = ?`,
       [reviewStatus, observeStatus, now, now, anomalyCode, now, matched.id])
       matched = { ...matched, is_deleted: 0, review_status: reviewStatus, observe_status: observeStatus }
     } else {
       await run(`UPDATE trading_accounts SET review_status = ?,
-        observe_status = CASE WHEN ? = 'frozen' THEN 'frozen' WHEN ? = 'paused' THEN 'paused'
-          WHEN observed_until > NOW() THEN 'observing' ELSE 'active' END,
-        first_verified_at = COALESCE(first_verified_at, ?), identity_verified_at = ?, anomaly_code = ?, updated_at = ? WHERE id = ?`,
+        observe_status = CASE WHEN ? = 'frozen' THEN 'frozen' WHEN ? = 'paused' THEN 'paused' ELSE 'active' END,
+        observed_until = NULL, first_verified_at = COALESCE(first_verified_at, ?), identity_verified_at = ?, anomaly_code = ?, updated_at = ? WHERE id = ?`,
       [reviewStatus, observeStatus, observeStatus, now, now, anomalyCode, now, matched.id])
       matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
     }
@@ -251,7 +250,7 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       await run(`UPDATE trading_accounts SET observe_status = 'switched', updated_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [now, ...ids])
       await run(`UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE trading_account_id IN (${ids.map(() => '?').join(',')})`, [now, ...ids])
       await run(`UPDATE trading_accounts SET review_status = ?, observe_status = ?,
-        observed_until = DATE_ADD(NOW(), INTERVAL 72 HOUR), anomaly_code = ?, updated_at = ? WHERE id = ?`,
+        observed_until = NULL, anomaly_code = ?, updated_at = ? WHERE id = ?`,
       [reviewStatus, observeStatus, anomalyCode, now, matched.id])
       matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
     }
@@ -361,23 +360,24 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   if (toNumber(snapshot.account?.margin) > 0 && marginLevel < policy.min_margin_level_pct) {
     const rejected = rolloutBlock('R3.4_MARGIN_LEVEL'); if (rejected) return rejected
   }
-  const orderNotional = exposureNotional([{
-    symbol: request.symbol, volume: request.volume,
-    price: request.limit_price || request.quote_price || request.reference_price,
-  }], snapshot.instruments || {}, snapshot.account?.currency, snapshot.fxRates || {})
-  if (orderNotional == null) return blocked('R3.4_NOTIONAL_DATA_INCOMPLETE')
-  const projectedNotional = metrics.notional + toNumber(reserved?.notional) + orderNotional
-  if (projectedNotional > metrics.equity * policy.max_notional_exposure_pct / 100) {
-    const rejected = rolloutBlock('R3.4_NOTIONAL_EXPOSURE'); if (rejected) return rejected
+  const brokerCalculation = snapshot.broker_calculation || {}
+  const brokerVolume = toNumber(brokerCalculation.volume)
+  const requiredMargin = toNumber(brokerCalculation.required_margin)
+  if (!(brokerVolume > 0) || !(requiredMargin > 0)) return blocked('R3.4_MARGIN_DATA_INCOMPLETE')
+  const orderMargin = requiredMargin / brokerVolume * toNumber(request.volume)
+  const projectedMargin = toNumber(snapshot.account?.margin) + orderMargin
+  const projectedMarginLevel = projectedMargin > 0 ? metrics.equity / projectedMargin * 100 : Number.POSITIVE_INFINITY
+  if (projectedMarginLevel < policy.min_margin_level_pct) {
+    const rejected = rolloutBlock('R3.4_PROJECTED_MARGIN_LEVEL', {
+      current_margin:toNumber(snapshot.account?.margin), order_margin:orderMargin,
+      projected_margin_level_pct:projectedMarginLevel, minimum_pct:policy.min_margin_level_pct,
+    }); if (rejected) return rejected
   }
 
-  const observedUntil = parseBeijing(accountRow.observed_until)?.getTime() || 0
-  let approvedVolume = toNumber(request.volume), adjusted = false
-  if (Date.now() < observedUntil && approvedVolume > policy.observation_max_lot) {
-    approvedVolume = policy.observation_max_lot; adjusted = true
-  }
-  if (approvedVolume < Math.max(policy.ai_volume_min, toNumber(snapshot.instrument?.volume_min))) return blocked('R6.4_OBSERVATION_BELOW_MINIMUM')
-  return { approved_volume: approvedVolume, adjusted, reserved_notional: orderNotional, metrics, shadow_rules: shadowRules }
+  const approvedVolume = toNumber(request.volume)
+  if (approvedVolume < toNumber(snapshot.instrument?.volume_min)) return blocked('R1.9_BELOW_MINIMUM_AFTER_RISK')
+  return { approved_volume: approvedVolume, adjusted:false, reserved_notional:0, metrics, shadow_rules: shadowRules,
+    projected_margin_level_pct:projectedMarginLevel }
 }
 
 export async function recordSuccessfulOpenTx(run, accountId) {

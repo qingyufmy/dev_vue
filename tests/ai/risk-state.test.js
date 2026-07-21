@@ -30,6 +30,7 @@ const snapshot = (overrides = {}) => ({
   account: { equity: 10000, currency: 'USD', margin: 0, margin_level: 0 },
   positions: [], pending: [], historyToday: history(), historyAll: history(),
   instruments: { XAUUSD: instrument }, instrument, fxRates: {}, snapshot_complete: true,
+  broker_calculation: { volume:0.01, required_margin:100 },
   ...overrides,
 })
 const request = { symbol: 'XAUUSD', order_type: 'buy', volume: 0.01, quote_price: 2000, reference_price: 2000, atr_anchor: 10 }
@@ -174,14 +175,14 @@ describe('stateful gate', () => {
 
   it('enforces daily count including active reservations', async () => {
     const result = await evaluateStatefulRiskTx(runner({ reserved: { volume: 0, daily_count: 2, notional: 0 }, successes: 8 }), {
-      userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
+      userId: 2, accountId: 4, intentId: 9, request, policy: { ...DEFAULT_RISK_POLICY, max_daily_open_count:10 }, snapshot: snapshot(),
     })
     expect(result.reject_code).toBe('R2.3_DAILY_OPEN_COUNT')
   })
 
   it('observes an adjustable state rule in shadow mode without blocking the order', async () => {
     const result = await evaluateStatefulRiskTx(runner({ reserved: { volume: 0, daily_count: 2, notional: 0 }, successes: 8 }), {
-      userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
+      userId: 2, accountId: 4, intentId: 9, request, policy: { ...DEFAULT_RISK_POLICY, max_daily_open_count:10 }, snapshot: snapshot(),
       ruleModes: { 'R2.3_DAILY_OPEN_COUNT': { mode: 'shadow', forced: false } },
     })
     expect(result.reject_code).toBeUndefined()
@@ -229,7 +230,7 @@ describe('stateful gate', () => {
     expect(result.reject_code).toBe('R2.4_PRICE_TIME_DUPLICATE')
   })
 
-  it('caps an approved order during observation without increasing it', async () => {
+  it('does not cap an approved order merely because the account is newly connected', async () => {
     const observedRunner = runner()
     observedRunner.mockImplementation(async (sql, params) => {
       if (sql.includes('FROM trading_accounts')) return [[{ ...accountRow, observed_until: '2099-01-01 00:00:00' }], []]
@@ -239,7 +240,27 @@ describe('stateful gate', () => {
       userId: 2, accountId: 4, intentId: 9, request: { ...request, volume: 0.03 },
       policy: { ...DEFAULT_RISK_POLICY, max_directional_exposure_lots: 1 }, snapshot: snapshot(),
     })
-    expect(result).toMatchObject({ adjusted: true, approved_volume: 0.01 })
+    expect(result).toMatchObject({ adjusted: false, approved_volume: 0.03 })
+  })
+
+  it('uses MT5 required margin to reject an order that would breach projected margin level', async () => {
+    const result = await evaluateStatefulRiskTx(runner({ state:{ ...stateRow, day_start_equity:1000, equity_high_water:1000 } }), {
+      userId:2, accountId:4, intentId:9, request,
+      policy:{ ...DEFAULT_RISK_POLICY, max_directional_exposure_lots:1, min_margin_level_pct:300 },
+      snapshot:snapshot({ account:{ equity:1000, currency:'USD', margin:200, margin_level:500 },
+        broker_calculation:{ volume:0.01, required_margin:200 } }),
+    })
+    expect(result.reject_code).toBe('R3.4_PROJECTED_MARGIN_LEVEL')
+    expect(result.details.projected_margin_level_pct).toBe(250)
+  })
+
+  it('fails closed when MT5 cannot calculate the proposed order margin', async () => {
+    const result = await evaluateStatefulRiskTx(runner(), {
+      userId:2, accountId:4, intentId:9, request,
+      policy:{ ...DEFAULT_RISK_POLICY, max_directional_exposure_lots:1 },
+      snapshot:snapshot({ broker_calculation:null }),
+    })
+    expect(result.reject_code).toBe('R3.4_MARGIN_DATA_INCOMPLETE')
   })
 
   it('serializes 20 attempts so reservations cannot exceed the daily limit', async () => {
@@ -266,7 +287,7 @@ describe('stateful gate', () => {
 describe('identity and platform permissions', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('auto-verifies a Bridge account, starts observation and pauses old subscriptions on identity switch', async () => {
+  it('auto-verifies a Bridge account without an artificial observation limit and pauses old subscriptions on identity switch', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
       if (sql.startsWith('SELECT * FROM trading_accounts')) return [[{ id: 1, broker_server: 'Old', login_account: '1', is_deleted: 0 }], []]
@@ -278,7 +299,7 @@ describe('identity and platform permissions', () => {
     const result = await syncTradingAccountIdentity(2, { server: 'New', login: 9 }, 1)
     expect(result).toEqual({ accountId: 2, switched: true, verified: true, anomalyCode: null })
     expect(writes.some(sql => sql.includes('strategy_subscriptions SET execution_enabled = 0'))).toBe(true)
-    expect(writes.some(sql => sql.includes('INSERT INTO trading_accounts') && sql.includes('first_verified_at'))).toBe(true)
+    expect(writes.some(sql => sql.includes('INSERT INTO trading_accounts') && sql.includes('first_verified_at') && sql.includes('NULL'))).toBe(true)
   })
 
   it('freezes a duplicate account identity for administrator handling', async () => {
@@ -307,7 +328,7 @@ describe('identity and platform permissions', () => {
     expect(result).toEqual({ accountId: 7, switched: false, verified: true, anomalyCode: null })
     const accountUpdate = writes.find(write => write.sql.includes('first_verified_at = COALESCE'))
     expect(accountUpdate.params[0]).toBe('approved')
-    expect(accountUpdate.params[1]).toBe('observing')
+    expect(accountUpdate.params[1]).toBe('active')
   })
 
   it('only admins can clear the global kill switch', async () => {

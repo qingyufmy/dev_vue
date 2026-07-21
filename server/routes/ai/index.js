@@ -27,7 +27,7 @@ import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelP
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription } from './strategy-ownership.js'
-import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
+import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, normalizePlatformRiskConfig, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
@@ -460,19 +460,13 @@ router.put('/ai/admin/risk-center', authMiddleware, async (req, res) => {
       const [[current]] = await run('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1 FOR UPDATE', [set[0].id])
       let raw = {}
       try { raw = current?.config_json ? JSON.parse(current.config_json) : {} } catch {}
-      const values = { ...DEFAULT_RISK_POLICY, ...(raw.values || raw.defaults || raw), ...(req.body?.values || req.body?.changes || {}) }
-      const controls = { ...(raw.controls || {}) }
-      for (const [key, input] of Object.entries(req.body?.controls || {})) {
-        const meta = RISK_RULES[key]
-        if (!meta || meta.type !== 'number') continue
-        const min = Math.max(Number(meta.allowed_min), Number(input.allowed_min ?? meta.allowed_min))
-        const max = Math.min(Number(meta.allowed_max), Number(input.allowed_max ?? meta.allowed_max))
-        if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) throw new Error(`invalid_global_risk_range:${key}`)
-        let locked = input.locked_value
-        if (locked !== null && locked !== undefined && locked !== '') locked = Math.min(max, Math.max(min, Number(locked)))
-        else locked = null
-        controls[key] = { allowed_min: min, allowed_max: max, locked_value: locked, user_editable: input.user_editable !== false }
-      }
+      const normalized = normalizePlatformRiskConfig({
+        currentValues:raw.values || raw.defaults || raw,
+        currentControls:raw.controls || {},
+        valueChanges:req.body?.values || req.body?.changes || {},
+        controlChanges:req.body?.controls || {},
+      })
+      const { values, controls } = normalized
       const now = beijingNow()
       const [insert] = await run(`INSERT INTO risk_policy_versions
         (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)

@@ -753,15 +753,14 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     expect(result.stop_loss_price).toBe(3955)
     expect(result.take_profit_1_price).toBe(4020)
   })
-  it('model-provided SL too tight overridden by ATR minimum', () => {
+  it('preserves a model-provided tight SL for the versioned risk gate', () => {
     const result = normalizeAiSignal({
       signal_type: 'buy_limit', confidence: 0.8, recommended_volume: 0.03, limit_price: 3980,
       stop_loss_price: 3975, take_profit_1_price: 4000
     }, config, market)
-    // Anchor ATR=10, K_MIN=1.0: distance 5 is widened to 10 and volume halves.
-    expect(result.stop_loss_price).toBe(3970)
-    expect(result.recommended_volume).toBe(0.01)
-    expect(result.normalization_info.type).toBe('sl_widened')
+    expect(result.stop_loss_price).toBe(3975)
+    expect(result.recommended_volume).toBe(0.03)
+    expect(result.normalization_info?.type).not.toBe('sl_widened')
   })
 
   it('使用小时级锚点派生止损和三档止盈', () => {
@@ -772,14 +771,14 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
     expect(result.take_profit_3_price).toBe(4090)
   })
 
-  it('止损超过3倍锚点时降级为观望', () => {
+  it('模型给出的远止损保留给版本化风控判断', () => {
     const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3940, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
-    expect(result).toMatchObject({ signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, normalization_info: { type: 'sl_too_far_hold' } })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.03, stop_loss_price:3940 })
   })
 
-  it('放宽后所需手数低于0.01时降级为观望', () => {
+  it('不会因为模型止损较近而改写手数或降级观望', () => {
     const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3996, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
-    expect(result).toMatchObject({ signal_type: 'hold', recommended_volume: 0, normalization_info: { type: 'sl_widen_min_lot_hold' } })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.03, stop_loss_price:3996 })
   })
 
   it('小时级ATR不可用时失败关闭', () => {
