@@ -2724,6 +2724,46 @@ const migrations = [
           AND review_case.evidence_reason LIKE '%inference_snapshot_incomplete%'
           AND snap.evidence_status = 'complete'`)
     }
+  },
+  {
+    id: '110_model_compare_benchmarks',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_market_benchmark_sets (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        set_code VARCHAR(96) NOT NULL,
+        name VARCHAR(160) NOT NULL,
+        version INT NOT NULL DEFAULT 1,
+        symbol VARCHAR(32) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'active',
+        description VARCHAR(500) DEFAULT NULL,
+        case_count INT NOT NULL DEFAULT 0,
+        selection_config_json LONGTEXT DEFAULT NULL,
+        fingerprint CHAR(64) NOT NULL,
+        created_by INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_market_benchmark_version (set_code, version),
+        INDEX idx_market_benchmark_symbol_status (symbol, status, version)
+      )`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_market_benchmark_cases (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        benchmark_set_id BIGINT NOT NULL,
+        case_key VARCHAR(128) NOT NULL,
+        title VARCHAR(160) NOT NULL,
+        regime_type VARCHAR(40) NOT NULL,
+        start_time_utc_msc BIGINT NOT NULL,
+        decision_time_utc_msc BIGINT NOT NULL,
+        end_time_utc_msc BIGINT NOT NULL,
+        tags_json LONGTEXT DEFAULT NULL,
+        metrics_json LONGTEXT DEFAULT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_market_benchmark_case (benchmark_set_id, case_key),
+        INDEX idx_market_benchmark_case_time (benchmark_set_id, decision_time_utc_msc),
+        CONSTRAINT fk_market_benchmark_case_set FOREIGN KEY (benchmark_set_id)
+          REFERENCES ai_market_benchmark_sets(id) ON DELETE CASCADE
+      )`)
+    }
   }
 ]
 

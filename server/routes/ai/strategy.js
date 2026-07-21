@@ -16,6 +16,7 @@ import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSIO
 import { saveChanStructureAnchor } from './platform-market-data.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
 import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backtest.js'
+import { resolveBenchmarkRun } from './model-benchmarks.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -173,6 +174,16 @@ function buildHistoryCompareSteps(klineCount, requestedSampleSize) {
 function buildContinuousHistoryCompareSteps(klineCount) {
   const count = Math.max(0, Number(klineCount) - 1)
   return Array.from({ length:count }, (_, index) => index)
+}
+
+export function resolveStrategyEvaluationTimeframe(strategy, planItems) {
+  const configured = [...(planItems || [])]
+    .filter(item => TIMEFRAME_MINUTES[item.timeframe])
+    .sort((a, b) => TIMEFRAME_MINUTES[a.timeframe] - TIMEFRAME_MINUTES[b.timeframe])
+  if (!configured.length) return null
+  const intervalMinutes = Math.max(1, Number(strategy?.interval_minutes) || TIMEFRAME_MINUTES[configured[0].timeframe])
+  const atOrBelow = configured.filter(item => TIMEFRAME_MINUTES[item.timeframe] <= intervalMinutes)
+  return (atOrBelow.at(-1) || configured[0]).timeframe
 }
 
 function wilsonLowerBound(correct, total, z = 1.2815515655446004) {
@@ -858,8 +869,12 @@ export async function handleAnalyzeCompare(userId, params) {
 }
 
 export async function handleHistoryCompare(userId, params, options = {}) {
-  const { symbol, model_ids, strategy_id, start_time, end_time, step, sample_size } = params
-  const evaluationMode = params.evaluation_mode == null || params.evaluation_mode === 'sampled'
+  let { symbol } = params
+  const { model_ids, strategy_id, start_time, end_time, step, sample_size } = params
+  const dataSource = params.data_source === 'benchmark' ? 'benchmark' : 'historical'
+  const evaluationMode = dataSource === 'benchmark'
+    ? 'sampled'
+    : params.evaluation_mode == null || params.evaluation_mode === 'sampled'
     ? 'sampled'
     : params.evaluation_mode === 'continuous' ? 'continuous' : null
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
@@ -869,9 +884,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') return { status: 'error', message: 'admin_only' }
   const modelOwnerId = 0
-  if (!symbol) return { status: 'error', message: 'symbol required' }
   if (!strategy_id) return { status: 'error', message: 'strategy required' }
-  if (!start_time || !end_time) return { status: 'error', message: 'start_time and end_time required' }
+  if (dataSource === 'historical' && (!start_time || !end_time)) return { status: 'error', message: 'start_time and end_time required' }
   if (!evaluationMode) return { status:'error', message:'invalid_history_evaluation_mode' }
   if (!Array.isArray(model_ids) || model_ids.length < 2 || model_ids.length > 5) {
     return { status: 'error', message: 'model_ids must be an array of 2-5 model profile IDs' }
@@ -885,6 +899,17 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const strategy = await getStrategyById(Number(strategy_id), userId, 'admin', { forExecution: false })
   if (!strategy) return { status: 'error', message: 'strategy_not_found' }
 
+  let benchmarkRun = null
+  if (dataSource === 'benchmark') {
+    try {
+      benchmarkRun = await resolveBenchmarkRun(params.benchmark_set_id, sample_size)
+      symbol = benchmarkRun.symbol
+    } catch (error) {
+      return { status:'error', message:error.message || 'benchmark_set_not_found' }
+    }
+  }
+  if (!symbol) return { status: 'error', message: 'symbol required' }
+
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
   const policy = parseStrategyPolicy(strategy)
@@ -896,6 +921,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   if (!requestedTimeframe || !planItems.some(item => item.timeframe === requestedTimeframe)) {
     return { status: 'error', message: 'strategy_primary_timeframe_invalid' }
   }
+  const evaluationTimeframe = resolveStrategyEvaluationTimeframe(strategy, planItems)
+  if (!evaluationTimeframe) return { status:'error', message:'strategy_evaluation_timeframe_invalid' }
   const backtestOptions = normalizeBacktestOptions(params.backtest || {})
   const strategyRuntimeSnapshot = {
     strategy_id:Number(strategy.id),
@@ -905,15 +932,20 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     market_data_plan:policy.marketDataPlan,
     entry_methods:policy.entryMethods,
     use_chan_analysis:Boolean(policy.useChanAnalysis),
+    interval_minutes:Number(strategy.interval_minutes || 0),
   }
   strategyRuntimeSnapshot.runtime_config_sha256 = comparisonFingerprint(strategyRuntimeSnapshot)
 
   const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params.timezone_offset_minutes)
   let normalizedTimeRange
   try {
-    normalizedTimeRange = normalizeHistoryCompareTimeRange(
-      start_time, end_time, selectionTimezoneOffsetMinutes
-    )
+    normalizedTimeRange = dataSource === 'benchmark'
+      ? normalizeHistoryCompareTimeRange(
+        new Date(benchmarkRun.start_time_utc_msc).toISOString(),
+        new Date(benchmarkRun.end_time_utc_msc).toISOString(),
+        selectionTimezoneOffsetMinutes
+      )
+      : normalizeHistoryCompareTimeRange(start_time, end_time, selectionTimezoneOffsetMinutes)
   } catch (error) {
     return { status:'error', message:error.message || 'invalid_history_time_range' }
   }
@@ -934,13 +966,14 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const marketDataEvidence = historyWindows.map(item =>
     comparisonRatesEvidence(item.timeframe, item.window?.periodRates))
   const selectedWindow = historyWindows.find(item => item.timeframe === requestedTimeframe)
-  const primaryDurationMs = (TIMEFRAME_MINUTES[requestedTimeframe] || 1) * 60_000
+  const evaluationWindow = historyWindows.find(item => item.timeframe === evaluationTimeframe)
+  const evaluationDurationMs = (TIMEFRAME_MINUTES[evaluationTimeframe] || 1) * 60_000
   const evaluationCutoffUtcMs = Math.min(endUtcMs, Date.now())
-  const requestedRates = Array.isArray(selectedWindow?.window?.periodRates)
-    ? selectedWindow.window.periodRates.filter(rate => {
+  const requestedRates = Array.isArray(evaluationWindow?.window?.periodRates)
+    ? evaluationWindow.window.periodRates.filter(rate => {
       const utcMs = compareRateUtcMs(rate)
       return utcMs != null && utcMs >= startUtcMs
-        && utcMs + primaryDurationMs <= evaluationCutoffUtcMs
+        && utcMs + evaluationDurationMs <= evaluationCutoffUtcMs
     })
     : []
   if (requestedRates.length > HISTORY_COMPARE_MAX_KLINES) {
@@ -960,14 +993,38 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     ? Math.max(HISTORY_COMPARE_MIN_STEPS, Math.min(HISTORY_COMPARE_MAX_STEPS,
       Math.ceil((klines.length - HISTORY_COMPARE_MIN_CONTEXT) / Math.max(1, Number(step) || 10))))
     : Math.max(HISTORY_COMPARE_MIN_STEPS, Math.min(HISTORY_COMPARE_MAX_STEPS, Number(sample_size) || 12))
-  const steps = evaluationMode === 'continuous'
-    ? buildContinuousHistoryCompareSteps(klines.length)
-    : buildHistoryCompareSteps(klines.length, requestedSampleSize)
-  if (evaluationMode === 'continuous' && steps.length > HISTORY_COMPARE_MAX_CONTINUOUS_STEPS) {
+  const steps = dataSource === 'benchmark'
+    ? []
+    : evaluationMode === 'continuous'
+      ? buildContinuousHistoryCompareSteps(klines.length)
+      : buildHistoryCompareSteps(klines.length, requestedSampleSize)
+  const decisionPoints = dataSource === 'benchmark'
+    ? benchmarkRun.cases.map(benchmarkCase => {
+      const outcomeKline = klines.find(rate => compareRateUtcMs(rate) >= benchmarkCase.decision_time_utc_msc)
+      return outcomeKline ? {
+        decisionUtcMs:compareRateUtcMs(outcomeKline),
+        outcomeKline,
+        benchmarkCase:{
+          ...benchmarkCase,
+          source_decision_time_utc_msc:benchmarkCase.decision_time_utc_msc,
+          aligned_decision_time_utc_msc:compareRateUtcMs(outcomeKline),
+        },
+      } : null
+    }).filter(Boolean)
+    : steps.map(stepIdx => ({
+      stepIdx,
+      decisionUtcMs:compareRateUtcMs(klines[stepIdx]) + evaluationDurationMs,
+      outcomeKline:klines[stepIdx + 1],
+      benchmarkCase:null,
+    })).filter(item => item.outcomeKline)
+  if (dataSource === 'benchmark' && decisionPoints.length !== benchmarkRun.cases.length) {
+    return { status:'error', message:'benchmark_outcome_candles_incomplete' }
+  }
+  if (evaluationMode === 'continuous' && decisionPoints.length > HISTORY_COMPARE_MAX_CONTINUOUS_STEPS) {
     return {
       status:'error',
       message:'continuous_backtest_range_too_large',
-      evaluation_count:steps.length,
+      evaluation_count:decisionPoints.length,
       max_evaluation_count:HISTORY_COMPARE_MAX_CONTINUOUS_STEPS,
     }
   }
@@ -975,9 +1032,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   // Validate every decision point before resolving or calling any model. A
   // continuous backtest is only meaningful when all strategy timeframes have
   // the minimum closed-candle context at every evaluated primary-bar close.
-  for (const stepIdx of steps) {
-    const currentRateUtcMs = compareRateUtcMs(klines[stepIdx])
-    const decisionUtcMs = currentRateUtcMs + (TIMEFRAME_MINUTES[requestedTimeframe] || 1) * 60_000
+  for (const decisionPoint of decisionPoints) {
+    const decisionUtcMs = decisionPoint.decisionUtcMs
     const missingTimeframes = historyWindows.filter(item => {
       const sourceRates = Array.isArray(item.window?.periodRates) ? item.window.periodRates : []
       return compareVisibleRates(sourceRates, decisionUtcMs, item.timeframe, item.kline_count, policy.useChanAnalysis)
@@ -1039,13 +1095,12 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }]))
   const decisionInputEvidence = new Map()
 
-  await onProgress({ stage: 'models_ready', progress_percent: 15, completed_steps: 0, total_steps: steps.length })
+  await onProgress({ stage: 'models_ready', progress_percent: 15, completed_steps: 0, total_steps: decisionPoints.length })
 
-  for (let stepNumber = 0; stepNumber < steps.length; stepNumber++) {
+  for (let stepNumber = 0; stepNumber < decisionPoints.length; stepNumber++) {
     if (shouldCancel()) return { status: 'cancelled', message: 'history_compare_cancelled' }
-    const stepIdx = steps[stepNumber]
-    const currentRateUtcMs = compareRateUtcMs(klines[stepIdx])
-    const decisionUtcMs = currentRateUtcMs + (TIMEFRAME_MINUTES[requestedTimeframe] || 1) * 60_000
+    const decisionPoint = decisionPoints[stepNumber]
+    const decisionUtcMs = decisionPoint.decisionUtcMs
     const strategyTimeframes = {}
     const missingTimeframes = []
     for (const item of historyWindows) {
@@ -1157,15 +1212,17 @@ export async function handleHistoryCompare(userId, params, options = {}) {
 
     const results = await Promise.all(inferenceTasks)
     for (const result of results) {
-      const outcomeKline = klines[stepIdx + 1]
+      const outcomeKline = decisionPoint.outcomeKline
+      const outcomeUtcMs = compareRateUtcMs(outcomeKline)
+      const outcomeTime = outcomeUtcMs == null ? null : new Date(outcomeUtcMs).toISOString()
       const openPrice = Number(outcomeKline.open)
       const closePrice = Number(outcomeKline.close)
 
       if (result.error) {
         modelSignals[result.modelId].push({
-          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
-          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
-          signal_type: 'error', confidence: 0, next_bar_move: 0,
+          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
+          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
+          signal_type: 'error', decision_class:'model_error', confidence: 0, next_bar_move: 0,
           latency_ms: result.latencyMs || 0, error: result.error,
         })
         continue
@@ -1175,9 +1232,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
         modelSignals[result.modelId].push({
-          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
-          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
-          signal_type: 'error', confidence: 0, next_bar_move: 0, latency_ms: result.latencyMs || 0,
+          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
+          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
+          signal_type: 'error', decision_class:'model_error', confidence: 0, next_bar_move: 0, latency_ms: result.latencyMs || 0,
           error: signal?.reasoning || 'inference_failed',
         })
         continue
@@ -1185,9 +1242,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       const direction = comparisonDirection(signal.signal_type)
       if (direction === 'unknown') {
         modelSignals[result.modelId].push({
-          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
-          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
-          signal_type:'error', confidence:0, next_bar_move:0, latency_ms:result.latencyMs || 0,
+          decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
+          decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
+          signal_type:'error', decision_class:'model_error', confidence:0, next_bar_move:0, latency_ms:result.latencyMs || 0,
           error:'invalid_model_signal_type',
         })
         continue
@@ -1195,12 +1252,25 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       let nextBarMove = 0
       if (direction === 'buy') nextBarMove = closePrice - openPrice
       else if (direction === 'sell') nextBarMove = openPrice - closePrice
+      const decisionClass = direction === 'hold' && signal.normalization_info
+        ? 'system_downgraded'
+        : direction === 'hold' ? 'model_hold' : 'actionable'
 
       modelSignals[result.modelId].push({
-        decision_time:new Date(decisionUtcMs).toISOString(), outcome_time: outcomeKline.time, time: outcomeKline.time,
-        decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:compareRateUtcMs(outcomeKline),
-        signal_type: direction, confidence: signal.confidence || 0, next_bar_move: nextBarMove,
+        decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
+        decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
+        signal_type: direction, decision_class:decisionClass,
+        confidence: signal.confidence || 0, next_bar_move: nextBarMove,
         latency_ms: result.latencyMs || 0,
+        normalization_info:signal.normalization_info || null,
+        decision_summary:boundedComparisonError(signal.decision_summary || signal.analysis || '', '', 600),
+        reasoning:boundedComparisonError(signal.reasoning || '', '', 800),
+        benchmark_case:decisionPoint.benchmarkCase ? {
+          id:decisionPoint.benchmarkCase.id,
+          title:decisionPoint.benchmarkCase.title,
+          regime_type:decisionPoint.benchmarkCase.regime_type,
+          regime_label:decisionPoint.benchmarkCase.regime_label,
+        } : null,
         order_intent: direction === 'buy' || direction === 'sell' ? {
           signal_type:signal.signal_type,
           entry_method:signal.entry_method,
@@ -1219,9 +1289,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     }
     await onProgress({
       stage: 'evaluating',
-      progress_percent: 15 + Math.round(((stepNumber + 1) / Math.max(1, steps.length)) * 80),
+      progress_percent: 15 + Math.round(((stepNumber + 1) / Math.max(1, decisionPoints.length)) * 80),
       completed_steps: stepNumber + 1,
-      total_steps: steps.length,
+      total_steps: decisionPoints.length,
     })
   }
 
@@ -1241,8 +1311,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     await onProgress({
       stage:'backtesting',
       progress_percent:96,
-      completed_steps:steps.length,
-      total_steps:steps.length,
+      completed_steps:decisionPoints.length,
+      total_steps:decisionPoints.length,
     })
     const [executionResult, symbolResult] = await Promise.allSettled([
       loadHistoryExecutionCandles(userId, symbol,
@@ -1298,17 +1368,19 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     const totalMove = signals.reduce((sum, s) => sum + s.next_bar_move, 0)
     const buyCount = signals.filter(s => s.signal_type === 'buy').length
     const sellCount = signals.filter(s => s.signal_type === 'sell').length
-    const holdCount = signals.filter(s => s.signal_type === 'hold').length
+    const holdCount = signals.filter(s => s.decision_class === 'model_hold').length
+    const downgradedCount = signals.filter(s => s.decision_class === 'system_downgraded').length
     const correctCount = signals.filter(s => s.next_bar_move > 0).length
     const incorrectCount = signals.filter(s => s.next_bar_move < 0).length
     const flatCount = signals.filter(s => ['buy', 'sell'].includes(s.signal_type) && s.next_bar_move === 0).length
     const errorCount = signals.filter(s => s.signal_type === 'error').length
     const tradeCount = buyCount + sellCount
-    const successfulCount = signals.length - errorCount
+    const successfulCount = tradeCount + holdCount
+    const completedModelResponses = successfulCount + downgradedCount
     const responseSuccessRate = signals.length > 0 ? (successfulCount / signals.length) * 100 : 0
     const actionRate = successfulCount > 0 ? (tradeCount / successfulCount) * 100 : 0
     const averageConfidence = successfulCount > 0
-      ? signals.filter(s => s.signal_type !== 'error').reduce((sum, s) => sum + Number(s.confidence || 0), 0) / successfulCount
+      ? signals.filter(s => ['actionable', 'model_hold'].includes(s.decision_class)).reduce((sum, s) => sum + Number(s.confidence || 0), 0) / successfulCount
       : 0
     const averageLatency = signals.length > 0
       ? signals.reduce((sum, s) => sum + Number(s.latency_ms || 0), 0) / signals.length
@@ -1331,8 +1403,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       model_id: modelId,
       model_name: resolved.model.model_name,
       provider: resolved.model.provider || resolved.model.api_provider,
-      status: successfulCount > 0 ? 'success' : 'error',
-      error: successfulCount > 0 ? null : 'model_compare_no_valid_response',
+      status: completedModelResponses > 0 ? 'success' : 'error',
+      error: completedModelResponses > 0 ? null : 'model_compare_no_valid_response',
       signal_count: signals.length,
       signals,
       runtime_model:modelRuntimeSnapshots[modelId],
@@ -1354,14 +1426,17 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         buy_count: buyCount,
         sell_count: sellCount,
         hold_count: holdCount,
+        downgraded_count:downgradedCount,
+        invalid_count:downgradedCount + errorCount,
         error_count: errorCount,
       },
     })
   }
 
-  const agreementByStep = steps.map((_, index) => {
-    const directions = modelResults.map(result => result.signals[index]?.signal_type)
-      .filter(direction => direction && direction !== 'error')
+  const agreementByStep = decisionPoints.map((_, index) => {
+    const directions = modelResults.map(result => result.signals[index])
+      .filter(signal => ['actionable', 'model_hold'].includes(signal?.decision_class))
+      .map(signal => signal.signal_type)
     if (directions.length < 2) return null
     const counts = directions.reduce((acc, direction) => {
       acc[direction] = (acc[direction] || 0) + 1
@@ -1396,7 +1471,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     token_count:0,
   })
   const reproducibilityEvidence = {
-    run_version:'history-compare-v4',
+    run_version:'history-compare-v5',
     reproducibility_level:'input_auditable_model_nondeterministic',
     strategy:strategyRuntimeSnapshot,
     models:Object.values(modelRuntimeSnapshots),
@@ -1417,6 +1492,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     decision_inputs:[...decisionInputEvidence.values()]
       .sort((a, b) => a.decision_time_utc_msc - b.decision_time_utc_msc),
     backtest_options:runtimeBacktestOptions,
+    benchmark:dataSource === 'benchmark' ? {
+      set_id:benchmarkRun.benchmark.id,
+      name:benchmarkRun.benchmark.name,
+      version:benchmarkRun.benchmark.version,
+      fingerprint:benchmarkRun.benchmark.fingerprint,
+      case_ids:benchmarkRun.cases.map(item => item.id),
+    } : null,
   }
   reproducibilityEvidence.evidence_sha256 = comparisonFingerprint(reproducibilityEvidence)
 
@@ -1424,17 +1506,21 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     status: 'success',
     results: [...modelResults, ...modelErrors],
     meta: {
-      symbol, timeframe:requestedTimeframe, strategy_id: Number(strategy_id),
+      symbol, timeframe:requestedTimeframe, evaluation_timeframe:evaluationTimeframe,
+      strategy_id:Number(strategy_id), data_source:dataSource,
+      benchmark_set:dataSource === 'benchmark' ? benchmarkRun.benchmark : null,
       kline_count: klines.length,
       evaluation_mode:evaluationMode,
-      sample_size:evaluationMode === 'sampled' ? requestedSampleSize : null,
+      sample_size:evaluationMode === 'sampled' ? decisionPoints.length : null,
       requested_step: step == null ? null : Math.max(1, Math.min(50, Number(step) || 10)),
-      step: steps.length > 1 ? Math.round((steps[steps.length - 1] - steps[0]) / (steps.length - 1)) : null,
-      evaluation_count: steps.length,
+      step:dataSource === 'historical' && steps.length > 1
+        ? Math.round((steps[steps.length - 1] - steps[0]) / (steps.length - 1))
+        : null,
+      evaluation_count:decisionPoints.length,
       max_evaluation_count:evaluationMode === 'continuous'
         ? HISTORY_COMPARE_MAX_CONTINUOUS_STEPS
         : HISTORY_COMPARE_MAX_STEPS,
-      estimated_model_calls: steps.length * validModels.length,
+      estimated_model_calls:decisionPoints.length * validModels.length,
       actual_model_calls:providerUsageTotals.provider_request_count,
       repair_model_calls:providerUsageTotals.repair_request_count,
       successful_model_calls:providerUsageTotals.successful_request_count,
@@ -1446,9 +1532,10 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       high_agreement_count: comparableAgreementSteps.filter(value => value >= 0.75).length,
       disagreement_count: comparableAgreementSteps.filter(value => value < 0.5).length,
       market_source: selectedWindow.window?.marketMeta?.source || null,
-      start_time: klines[0]?.time, end_time: klines[klines.length - 1]?.time,
-      metric_type: 'next_closed_bar_direction',
-      metric_version: 'directional-eval-v2',
+      start_time:compareRateUtcMs(klines[0]) == null ? null : new Date(compareRateUtcMs(klines[0])).toISOString(),
+      end_time:compareRateUtcMs(klines.at(-1)) == null ? null : new Date(compareRateUtcMs(klines.at(-1))).toISOString(),
+      metric_type:'next_evaluation_bar_direction',
+      metric_version:'directional-eval-v3',
       account_simulation_type:'event_driven_virtual_account',
       account_simulation_version:'account-replay-v3',
       account_simulation_status:accountSimulationStatus,
@@ -1573,17 +1660,32 @@ export async function startHistoryCompareJob(userId, params) {
   const strategy = params?.strategy_id
     ? await getStrategyById(Number(params.strategy_id), userId, 'admin', { forExecution:false })
     : null
+  const dataSource = params?.data_source === 'benchmark' ? 'benchmark' : 'historical'
+  const benchmarkRun = dataSource === 'benchmark'
+    ? await resolveBenchmarkRun(params?.benchmark_set_id, params?.sample_size)
+    : null
   const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params?.timezone_offset_minutes)
   const normalizedTimeRange = normalizeHistoryCompareTimeRange(
-    params?.start_time, params?.end_time, selectionTimezoneOffsetMinutes
+    benchmarkRun ? new Date(benchmarkRun.start_time_utc_msc).toISOString() : params?.start_time,
+    benchmarkRun ? new Date(benchmarkRun.end_time_utc_msc).toISOString() : params?.end_time,
+    selectionTimezoneOffsetMinutes
   )
+  const strategyPolicy = strategy ? parseStrategyPolicy(strategy) : null
+  const strategyPlanItems = strategyPolicy?.marketDataPlan?.timeframes?.map(item => ({
+    timeframe:String(item.timeframe || '').toUpperCase(),
+    kline_count:Math.max(20, Number(item.kline_count) || 100),
+  })).filter(item => TIMEFRAME_MINUTES[item.timeframe]) || []
   const normalizedParams = {
     ...(params || {}),
+    data_source:dataSource,
+    benchmark_set_id:benchmarkRun?.benchmark?.id || null,
+    symbol:benchmarkRun?.symbol || params?.symbol,
     start_time:normalizedTimeRange.startTime,
     end_time:normalizedTimeRange.endTime,
     timezone_offset_minutes:selectionTimezoneOffsetMinutes,
-    evaluation_mode:params?.evaluation_mode == null ? 'sampled' : params.evaluation_mode,
-    timeframe:strategy ? parseStrategyPolicy(strategy).marketDataPlan.primary_timeframe : null,
+    evaluation_mode:dataSource === 'benchmark' ? 'sampled' : (params?.evaluation_mode == null ? 'sampled' : params.evaluation_mode),
+    timeframe:strategyPolicy?.marketDataPlan?.primary_timeframe || null,
+    evaluation_timeframe:strategy ? resolveStrategyEvaluationTimeframe(strategy, strategyPlanItems) : null,
     backtest:{
       ...normalizeBacktestOptions(params?.backtest || {}),
       use_bridge_account_settings:params?.backtest?.use_bridge_account_settings !== false,

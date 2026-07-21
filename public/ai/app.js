@@ -982,6 +982,26 @@ const API_ERROR_MESSAGES = {
   history_compare_cancelled: "历史模型对比已取消",
   invalid_model_signal_type: "模型返回了无法识别的交易方向",
   model_compare_no_valid_response: "该模型在本次评估中没有产生有效响应",
+  benchmark_set_not_found: "经典行情基准集不存在或已停用",
+  benchmark_market_data_insufficient: "缓存中的 M5 行情不足以生成经典行情集",
+  benchmark_market_regimes_insufficient: "当前行情覆盖的市场形态不足，请扩大生成范围后重试",
+  benchmark_outcome_candles_incomplete: "经典行情案例的后续 K 线不完整，请重新生成基准集",
+  invalid_benchmark_time_range: "经典行情生成范围无效",
+  symbol_required: "请选择交易品种",
+  pending_price_required: "挂单缺少有效触发价",
+  pending_reference_price_unavailable: "当前行情参考价不可用",
+  pending_price_direction_invalid: "挂单触发价方向与当前价格不符",
+  stop_limit_price_required: "Stop Limit 缺少触发后的限价",
+  stop_limit_price_relation_invalid: "Stop Limit 触发价与限价关系无效",
+  invalid_signal_type: "模型返回了不支持的信号类型",
+  invalid_entry_method: "模型返回了不支持的入场方式",
+  signal_entry_mismatch: "信号类型与入场方式不一致",
+  entry_method_not_allowed_by_strategy: "入场方式不在策略允许范围内",
+  ai_volume_out_of_platform_range: "AI 建议手数超出平台范围",
+  confidence_below_risk_threshold: "置信度低于策略风险阈值",
+  atr_anchor_unavailable_hold: "缺少可靠 ATR 锚点",
+  sl_widen_min_lot_hold: "扩大止损后所需手数低于最小值",
+  sl_too_far_hold: "止损距离超出允许范围",
   backtest_instrument_incomplete: "交易品种合约参数不完整",
   backtest_execution_candles_unavailable: "缺少用于订单回放的 M1 历史行情",
   backtest_symbol_snapshot_unavailable: "桥接端未返回交易品种合约参数",
@@ -4499,6 +4519,8 @@ async function loadModelCompare() {
     } catch { sel.innerHTML = '<option value="">加载失败</option>'; }
   }
   setDefaultCompareDates();
+  updateHistoryCompareSourceUI();
+  if (sel?.value) syncHistoryCompareStrategyInputs();
   updateHistoryCompareReadiness();
   await loadHistoryCompareJobs();
   initIcons();
@@ -4532,6 +4554,8 @@ function compareWallTimeToUtcIso(value) {
 let _historyCompareJobId = null;
 let _historyCompareStrategies = [];
 let _historyComparePrimaryTimeframe = "";
+let _historyCompareEvaluationTimeframe = "";
+let _modelCompareBenchmarks = [];
 const HISTORY_COMPARE_CONTINUOUS_LIMIT = 120;
 const HISTORY_COMPARE_CONFIRM_CALLS = 20;
 const COMPARE_TIMEFRAME_MINUTES = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440 };
@@ -4542,26 +4566,109 @@ function historyCompareEvaluationMode() {
     : "sampled";
 }
 
+function historyCompareDataSource() {
+  return document.querySelector('input[name="cmpDataSource"]:checked')?.value === "historical"
+    ? "historical"
+    : "benchmark";
+}
+
+function resolveClientEvaluationTimeframe(strategy, timeframes) {
+  const configured = [...timeframes]
+    .filter(timeframe => COMPARE_TIMEFRAME_MINUTES[timeframe])
+    .sort((a, b) => COMPARE_TIMEFRAME_MINUTES[a] - COMPARE_TIMEFRAME_MINUTES[b]);
+  if (!configured.length) return "";
+  const interval = Math.max(1, Number(strategy?.interval_minutes) || COMPARE_TIMEFRAME_MINUTES[configured[0]]);
+  return configured.filter(timeframe => COMPARE_TIMEFRAME_MINUTES[timeframe] <= interval).at(-1) || configured[0];
+}
+
 function historyCompareEstimate() {
   const mode = historyCompareEvaluationMode();
+  const source = historyCompareDataSource();
   const modelCount = document.querySelectorAll("[data-cmp-model]:checked").length;
-  if (mode === "sampled") {
+  if (source === "benchmark" || mode === "sampled") {
     const decisionCount = Number($("cmpSampleSize")?.value || 12);
-    return { mode, modelCount, decisionCount, calls:decisionCount * modelCount, rangeValid:true };
+    return { source, mode:"sampled", modelCount, decisionCount, calls:decisionCount * modelCount, rangeValid:true };
   }
   const start = new Date($("cmpStartTime")?.value || "").getTime();
   const end = new Date($("cmpEndTime")?.value || "").getTime();
-  const timeframeMinutes = COMPARE_TIMEFRAME_MINUTES[_historyComparePrimaryTimeframe];
+  const timeframeMinutes = COMPARE_TIMEFRAME_MINUTES[_historyCompareEvaluationTimeframe];
   const rangeValid = Number.isFinite(start) && Number.isFinite(end) && end > start && timeframeMinutes > 0;
   const decisionCount = rangeValid ? Math.max(1, Math.ceil((end - start) / (timeframeMinutes * 60_000))) : 0;
-  return { mode, modelCount, decisionCount, calls:decisionCount * modelCount, rangeValid };
+  return { source, mode, modelCount, decisionCount, calls:decisionCount * modelCount, rangeValid };
+}
+
+function updateHistoryCompareSourceUI() {
+  const source = historyCompareDataSource();
+  $("cmpBenchmarkPanel")?.classList.toggle("hidden", source !== "benchmark");
+  $("cmpHistoricalRange")?.classList.toggle("hidden", source !== "historical");
+  $("cmpEvaluationModeField")?.classList.toggle("hidden", source !== "historical");
+  const sampleHint = $("cmpSampleDepthHint");
+  if (sampleHint) sampleHint.textContent = source === "benchmark"
+    ? "从各类经典行情中均衡抽取，避免某一种市场状态占比过高。"
+    : "系统会在完整区间内均匀抽样，避免只评估前半段行情。";
+}
+
+async function loadModelCompareBenchmarks() {
+  const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
+  const select = $("cmpBenchmarkSet");
+  const summary = $("cmpBenchmarkSummary");
+  if (!select) return;
+  if (!symbol) {
+    _modelCompareBenchmarks = [];
+    select.innerHTML = '<option value="">先选择策略和品种</option>';
+    if (summary) summary.innerHTML = "<span>等待选择策略和品种</span>";
+    return;
+  }
+  select.disabled = true;
+  select.innerHTML = '<option value="">正在加载...</option>';
+  try {
+    const data = await api(`/api/ai/model-compare/benchmarks?symbol=${encodeURIComponent(symbol)}`);
+    _modelCompareBenchmarks = data.benchmarks || [];
+    select.innerHTML = _modelCompareBenchmarks.length
+      ? _modelCompareBenchmarks.map((item, index) => `<option value="${Number(item.id)}" ${index === 0 ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")
+      : '<option value="">暂无基准集，请先生成</option>';
+    updateModelCompareBenchmarkSummary();
+  } catch (error) {
+    _modelCompareBenchmarks = [];
+    select.innerHTML = '<option value="">加载失败</option>';
+    if (summary) summary.innerHTML = `<span class="danger">${escapeHtml(apiErrorMessage(error.message))}</span>`;
+  } finally {
+    select.disabled = false;
+    updateHistoryCompareReadiness();
+  }
+}
+
+function updateModelCompareBenchmarkSummary() {
+  const selected = _modelCompareBenchmarks.find(item => Number(item.id) === Number($("cmpBenchmarkSet")?.value));
+  const summary = $("cmpBenchmarkSummary");
+  if (!summary) return;
+  summary.innerHTML = selected
+    ? `<strong>${selected.case_count || 0} 个固定案例</strong><span>趋势、反转、假突破与震荡 · 指纹 ${escapeHtml(String(selected.fingerprint || "").slice(0, 10))}</span>`
+    : "<span>生成后可在不同模型、不同时间重复使用同一组行情。</span>";
+}
+
+async function generateModelCompareBenchmark() {
+  const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
+  if (!symbol) return toast("请先选择策略和品种", "warning");
+  const button = $("cmpGenerateBenchmark");
+  if (button) { button.disabled = true; button.innerHTML = '<i data-lucide="loader-circle" size="15"></i>正在生成'; }
+  try {
+    await api("/api/ai/model-compare/benchmarks", { method:"POST", body:{ symbol, case_count:30 } });
+    toast("经典行情基准集已生成", "success");
+    await loadModelCompareBenchmarks();
+  } catch (error) {
+    toast("生成失败：" + apiErrorMessage(error.message), "error");
+  } finally {
+    if (button) { button.disabled = false; button.innerHTML = '<i data-lucide="sparkles" size="15"></i>生成新版本'; }
+    initIcons();
+  }
 }
 
 function updateHistoryCompareModeUI() {
   const estimate = historyCompareEstimate();
   const sampleField = $("cmpSampleDepthField");
   const hint = $("cmpEvaluationModeHint");
-  sampleField?.classList.toggle("hidden", estimate.mode === "continuous");
+  sampleField?.classList.toggle("hidden", estimate.source === "historical" && estimate.mode === "continuous");
   if (!hint) return;
   hint.classList.remove("warning");
   if (estimate.mode === "sampled") {
@@ -4573,11 +4680,11 @@ function updateHistoryCompareModeUI() {
     return;
   }
   if (estimate.decisionCount > HISTORY_COMPARE_CONTINUOUS_LIMIT) {
-    hint.textContent = `自然时间约 ${estimate.decisionCount} 根 ${_historyComparePrimaryTimeframe || "主周期"} K 线；实际闭合 K 线超过 ${HISTORY_COMPARE_CONTINUOUS_LIMIT} 根时，后台会在调用模型前拒绝并提示缩短范围。`;
+    hint.textContent = `自然时间约 ${estimate.decisionCount} 根 ${_historyCompareEvaluationTimeframe || "决策周期"} K 线；实际闭合 K 线超过 ${HISTORY_COMPARE_CONTINUOUS_LIMIT} 根时，后台会在调用模型前拒绝并提示缩短范围。`;
     hint.classList.add("warning");
     return;
   }
-  hint.textContent = `将逐根评估约 ${estimate.decisionCount} 个 ${_historyComparePrimaryTimeframe || "主周期"} 决策点；模型请求明显多于快速抽样。`;
+  hint.textContent = `将逐根评估约 ${estimate.decisionCount} 个 ${_historyCompareEvaluationTimeframe || "决策周期"} 决策点；模型请求明显多于快速抽样。`;
 }
 
 function syncHistoryCompareStrategyInputs() {
@@ -4587,9 +4694,11 @@ function syncHistoryCompareStrategyInputs() {
   const baseline = $("cmpStrategyBaseline");
   if (!strategy) {
     _historyComparePrimaryTimeframe = "";
+    _historyCompareEvaluationTimeframe = "";
     if (symbolSelect) symbolSelect.innerHTML = '<option value="">先选择策略</option>';
     if (baseline) baseline.textContent = "由策略自动决定";
     updateHistoryCompareModeUI();
+    void loadModelCompareBenchmarks();
     return;
   }
   const parsedSymbols = parseJsonField(strategy.symbols_json, []);
@@ -4603,17 +4712,22 @@ function syncHistoryCompareStrategyInputs() {
     : [];
   const primaryTimeframe = String(plan.primary_timeframe || timeframes[0] || "").toUpperCase();
   _historyComparePrimaryTimeframe = primaryTimeframe;
-  if (baseline) baseline.textContent = primaryTimeframe
-    ? `${primaryTimeframe} · 策略主周期`
+  _historyCompareEvaluationTimeframe = resolveClientEvaluationTimeframe(strategy, timeframes);
+  if (baseline) baseline.textContent = primaryTimeframe && _historyCompareEvaluationTimeframe
+    ? `分析 ${primaryTimeframe} · 决策 ${_historyCompareEvaluationTimeframe} · 每 ${Number(strategy.interval_minutes) || COMPARE_TIMEFRAME_MINUTES[_historyCompareEvaluationTimeframe]} 分钟`
     : "策略未配置主周期";
   updateHistoryCompareModeUI();
+  void loadModelCompareBenchmarks();
 }
 
 function updateHistoryCompareReadiness() {
   const count = document.querySelectorAll("[data-cmp-model]:checked").length;
   const estimate = historyCompareEstimate();
+  const sourceReady = estimate.source === "benchmark"
+    ? Boolean($("cmpBenchmarkSet")?.value)
+    : Boolean($("cmpStartTime")?.value && $("cmpEndTime")?.value && estimate.rangeValid);
   const complete = Boolean($("cmpStrategy")?.value && $("cmpSymbol")?.value
-    && $("cmpStartTime")?.value && $("cmpEndTime")?.value && estimate.rangeValid
+    && sourceReady
     && count >= 2 && count <= 5);
   const hint = $("cmpModelHint");
   if (hint) {
@@ -4627,6 +4741,7 @@ function updateHistoryCompareReadiness() {
     ? "次上限估算"
     : "次模型请求";
   updateHistoryCompareModeUI();
+  updateHistoryCompareSourceUI();
   if ($("cmpRunBtn") && !_historyCompareJobId) $("cmpRunBtn").disabled = !complete;
   return complete;
 }
@@ -4722,11 +4837,12 @@ async function runHistoryCompare() {
     }
     return;
   }
-  if (!updateHistoryCompareReadiness()) return toast("请先完整设置策略、行情范围和至少两个模型", "warning");
+  if (!updateHistoryCompareReadiness()) return toast("请先完整设置策略、行情来源和至少两个模型", "warning");
   const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
   const strategyId = Number($("cmpStrategy")?.value || 0);
   const modelIds = [...document.querySelectorAll("[data-cmp-model]:checked")].map(cb => Number(cb.value)).filter(id => id > 0);
-  const evaluationMode = historyCompareEvaluationMode();
+  const dataSource = historyCompareDataSource();
+  const evaluationMode = dataSource === "benchmark" ? "sampled" : historyCompareEvaluationMode();
   const estimate = historyCompareEstimate();
   const sampleSize = Number($("cmpSampleSize")?.value) || 12;
   const startTime = compareWallTimeToUtcIso($("cmpStartTime")?.value);
@@ -4739,7 +4855,9 @@ async function runHistoryCompare() {
     max_concurrent_positions:Number($("cmpMaxConcurrentPositions")?.value || 5),
     use_bridge_account_settings:true,
   };
-  if (!startTime || !endTime) return toast("请选择时间范围", "error");
+  const benchmarkSetId = Number($("cmpBenchmarkSet")?.value || 0);
+  if (dataSource === "historical" && (!startTime || !endTime)) return toast("请选择时间范围", "error");
+  if (dataSource === "benchmark" && !benchmarkSetId) return toast("请选择或生成经典行情基准集", "error");
   if (evaluationMode === "continuous" || estimate.calls >= HISTORY_COMPARE_CONFIRM_CALLS) {
     const continuous = evaluationMode === "continuous";
     const confirmed = await showConfirm(
@@ -4750,8 +4868,9 @@ async function runHistoryCompare() {
       {
         confirmText:continuous ? "开始连续回测" : "确认并开始",
         detailRows:[
-          ["策略主周期", _historyComparePrimaryTimeframe || "--"],
-          [continuous ? "自然时间估算" : "评估切片", `约 ${estimate.decisionCount} 个决策点`],
+          ["行情来源", dataSource === "benchmark" ? "经典行情基准集" : "自选历史行情"],
+          ["分析 / 决策周期", `${_historyComparePrimaryTimeframe || "--"} / ${_historyCompareEvaluationTimeframe || "--"}`],
+          [continuous ? "自然时间估算" : "评估案例", `约 ${estimate.decisionCount} 个决策点`],
           ["模型请求估算", `约 ${estimate.calls} 次`],
         ],
       },
@@ -4771,6 +4890,8 @@ async function runHistoryCompare() {
     const data = await api("/api/ai/model-compare/history", {
       method: "POST", body: {
         symbol, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime,
+        data_source:dataSource,
+        benchmark_set_id:dataSource === "benchmark" ? benchmarkSetId : null,
         timezone_offset_minutes:Number.isFinite(Number(state.mt5TimezoneOffsetMinutes))
           ? Number(state.mt5TimezoneOffsetMinutes)
           : 180,
@@ -4993,6 +5114,9 @@ function renderHistoryCompareResults(results, meta) {
   const modelTokenCount = Number(meta.model_token_count || 0);
   const evidenceFingerprint = String(meta.reproducibility?.evidence_sha256 || "");
   const strategyVersion = Number(meta.reproducibility?.strategy?.strategy_version || 1);
+  const dataSourceLabel = meta.data_source === "benchmark" ? "经典行情集" : "自选历史";
+  const evaluationTimeframe = meta.evaluation_timeframe || meta.timeframe || "--";
+  const downgradedTotal = valid.reduce((sum, result) => sum + Number(result.directional_score?.downgraded_count || 0), 0);
   const conclusion = !leader
     ? "本次没有模型给出可评估方向"
     : directionHasUniqueLeader
@@ -5004,20 +5128,19 @@ function renderHistoryCompareResults(results, meta) {
   const replayLeaderLabel = !replayLeader
     ? "没有形成模拟成交"
     : replayHasUniqueLeader ? escapeHtml(replayLeader.model_name) : `${replayLeaderTies.length} 个模型并列`;
-  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${conclusion}</h2><p>方向评估与资金回放分开计算：前者比较判断质量，后者按模型给出的订单参数回放成交与资金变化。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(meta.timeframe || "")}</span></header>
+  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${conclusion}</h2><p>方向评估与资金回放分开计算；系统降级不会再伪装成模型主动观望。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(dataSourceLabel)}</span></header>
     <div class="compare-summary-grid">
       <div><span>方向领先</span><strong>${directionLeaderLabel}</strong><small>${leader ? `方向质量分 ${directionLeaderScore.toFixed(1)}` : "本次只有观望或异常响应"}</small></div>
       <div><span>资金回放领先</span><strong>${replayLeaderLabel}</strong><small>${replayLeader ? `净收益 ${replayLeaderProfit.toFixed(2)}` : replayModels.length ? "订单均未成交" : "执行数据暂不可用"}</small></div>
       <div><span>平均一致度</span><strong>${agreementValue}</strong><small>${agreementNote}</small></div>
-      <div><span>${isContinuous ? "决策时点" : "评估切片"}</span><strong>${meta.evaluation_count || 0}</strong><small>${isContinuous ? "逐根策略主周期闭合" : "均匀覆盖所选行情区间"}</small></div>
+      <div><span>${isContinuous ? "决策时点" : "评估案例"}</span><strong>${meta.evaluation_count || 0}</strong><small>分析 ${escapeHtml(meta.timeframe || "--")} · 决策 ${escapeHtml(evaluationTimeframe)}</small></div>
+      <div><span>系统降级</span><strong>${downgradedTotal}</strong><small>格式或交易约束未通过，不计为观望</small></div>
       <div><span>实际模型调用</span><strong>${actualModelCalls}</strong><small>格式修复 ${repairModelCalls} 次 · ${modelTokenCount.toLocaleString("zh-CN")} Token</small></div>
       <div title="${escapeHtml(evidenceFingerprint)}"><span>运行证据</span><strong>${evidenceFingerprint ? evidenceFingerprint.slice(0, 12) : "--"}</strong><small>策略 v${strategyVersion} · 输入与行情已留指纹</small></div>
     </div>
-    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>${isContinuous
-      ? "每个模型在每根策略主周期 K 线闭合后读取相同的完整多周期上下文并作出决策。"
-      : "每个模型在相同的均匀抽样历史时点读取相同上下文。"}方向质量按下一根主周期 K 线评估；虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序处理市价、限价、突破与 Stop Limit 订单，并让同一模型的挂单、并发持仓、浮动盈亏、手续费、保证金和强平共享同一份资金。杠杆与强平线优先读取 MT5 账户元数据。${isContinuous
-      ? "当前属于逐根主周期连续决策 + M1 OHLC 执行回放。"
-      : "当前属于抽样决策 + M1 OHLC 执行回放，并非逐根主周期连续决策。"}同一分钟内同时触及止损和止盈时采用“止损优先”；跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，无法确认先后顺序的触价延后到下一根 M1 K 线判断；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照，并按合约模式映射到历史成交价。这里使用的是当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；缺少可靠参数时会拒绝该笔模拟订单并明确标记，不会伪装成“资金不足”。保证金强平按方向不利的盘中极值进行保守检查。隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick 和完整账户级风控，因此不能等同真实成交收益。共读取 ${meta.kline_count || 0} 根主周期 K 线，实际调用 ${actualModelCalls} 次（其中格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；缠论结构${meta.chan_enabled ? "已启用" : "未启用"}；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情、执行数据和逐决策输入的 SHA-256 指纹；模型输出具有随机性，因此指纹一致也不代表输出必然完全相同。</p></details>`;
+    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>${meta.data_source === "benchmark"
+      ? `本次使用固定版本经典行情集，在趋势、反转、假突破和震荡案例间均衡抽取；相同基准指纹可用于跨模型重复比较。`
+      : isContinuous ? "每个模型在每个策略决策周期闭合点读取相同的完整多周期上下文。" : "每个模型在相同的均匀抽样历史时点读取相同上下文。"} 方向质量按下一根 ${escapeHtml(evaluationTimeframe)} K 线评估，而 ${escapeHtml(meta.timeframe || "--")} 仍作为策略主分析周期。模型主动返回观望才计入观望；模型原本给出交易、但因格式或交易约束校验被系统改为观望的结果单独标记为“系统降级”，不参与响应成功率、一致度和平均置信度。虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序回放订单，${isContinuous ? "属于逐根主周期连续决策 + M1 OHLC 执行回放" : "属于抽样决策 + M1 OHLC 执行回放"}。跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，顺序不明确时采用保守处理；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照；使用当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；保证金强平按方向不利的盘中极值进行保守检查。手续费和隔夜成本分开统计，隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick，资金结果不等同真实成交收益。共读取 ${meta.kline_count || 0} 根决策周期 K 线，实际调用 ${actualModelCalls} 次（格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情和逐决策输入指纹。模型输出具有随机性，因此相同证据指纹不保证输出完全一致。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (failedResults.length) {
@@ -5063,7 +5186,7 @@ function renderHistoryCompareResults(results, meta) {
     tableHtml += '<section class="compare-inline-empty"><i data-lucide="circle-minus" size="18"></i><span>本次模型均未给出可执行方向，因此没有产生模拟成交。</span></section>';
   }
   if (sorted.length) {
-    tableHtml += '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>方向质量排名</h2><p>综合查看质量、覆盖率和服务稳定性，不应只看单一准确率。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>有效出手</th><th>响应成功率</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
+    tableHtml += '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>方向质量排名</h2><p>模型主动观望与系统校验降级分开统计，避免“全是观望”的假象。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>有效出手</th><th>响应成功率</th><th>系统降级</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
     sorted.forEach((r, index) => {
       const score = r.directional_score;
       tableHtml += `<tr><td><div class="compare-rank-model"><span>${index + 1}</span><div><strong>${escapeHtml(r.model_name)}</strong><small>${escapeHtml(modelProviderLabel(r.provider))}</small></div></div></td>
@@ -5071,6 +5194,7 @@ function renderHistoryCompareResults(results, meta) {
         <td>${score.directional_accuracy}% <small class="compare-cell-note">${score.correct_count}/${score.actionable_count}</small></td>
         <td>${score.action_rate}% <small class="compare-cell-note">${score.actionable_count} 次</small></td>
         <td>${score.response_success_rate}%${score.error_count ? `<small class="compare-cell-note danger">${score.error_count} 次异常</small>` : ""}</td>
+        <td>${score.downgraded_count || 0}<small class="compare-cell-note ${score.downgraded_count ? "danger" : ""}">${score.downgraded_count ? "未计入观望" : "无"}</small></td>
         <td>${score.average_confidence}%</td><td>${score.average_latency_ms ? `${(score.average_latency_ms / 1000).toFixed(1)} 秒` : "--"}</td>
         <td><div class="compare-signal-mix" title="买 ${score.buy_count}，卖 ${score.sell_count}，观望 ${score.hold_count}"><span class="buy" style="flex:${score.buy_count}"></span><span class="sell" style="flex:${score.sell_count}"></span><span class="hold" style="flex:${score.hold_count}"></span></div><small class="compare-cell-note">${score.buy_count} / ${score.sell_count} / ${score.hold_count}</small></td></tr>`;
     });
@@ -5082,20 +5206,32 @@ function renderHistoryCompareResults(results, meta) {
   let timelineHtml = "";
   if (validWithSignals.length) {
     const allTimes = new Set();
-    validWithSignals.forEach(r => r.signals.forEach(s => allTimes.add(s.time)));
-    const times = [...allTimes].sort();
+    const signalTimeKey = signal => String(signal.decision_time_utc_msc || signal.decision_time || signal.time || "");
+    validWithSignals.forEach(r => r.signals.forEach(s => {
+      const key = signalTimeKey(s);
+      if (key) allTimes.add(key);
+    }));
+    const times = [...allTimes].sort((a, b) => {
+      const aValue = Number(a), bValue = Number(b);
+      return Number.isFinite(aValue) && Number.isFinite(bValue) ? aValue - bValue : a.localeCompare(b);
+    });
     const models = validWithSignals;
-    const directionLabel = { buy: "做多", sell: "做空", hold: "观望", error: "异常" };
-    timelineHtml = '<section class="compare-decision-panel"><div class="section-heading"><div><h2>逐次决策差异</h2><p>按决策时间查看各模型方向，颜色只表示方向，不表示盈亏。</p></div><div class="compare-direction-legend"><span class="buy">做多</span><span class="sell">做空</span><span class="hold">观望</span><span class="error">异常</span></div></div><div class="compare-table-scroll"><table class="cmp-table compare-decision-table"><thead><tr><th>决策时间</th>';
+    const directionLabel = { buy: "做多", sell: "做空", hold: "观望", error: "异常", downgraded:"系统降级" };
+    timelineHtml = '<section class="compare-decision-panel"><div class="section-heading"><div><h2>逐次决策差异</h2><p>系统降级表示模型尝试交易，但输出未通过格式或交易约束校验。</p></div><div class="compare-direction-legend"><span class="buy">做多</span><span class="sell">做空</span><span class="hold">观望</span><span class="downgraded">系统降级</span><span class="error">异常</span></div></div><div class="compare-table-scroll"><table class="cmp-table compare-decision-table"><thead><tr><th>决策时间</th>';
     models.forEach(model => { timelineHtml += `<th>${escapeHtml(model.model_name)}</th>`; });
     timelineHtml += '</tr></thead><tbody>';
     for (const time of times) {
-      timelineHtml += `<tr><td>${String(time).replace("T"," ").slice(5,16)}</td>`;
+      const numericTime = Number(time);
+      const timeLabel = Number.isFinite(numericTime) && numericTime > 0
+        ? `${formatCompareChartTime(numericTime, meta.selection_timezone_offset_minutes)} MT5`
+        : String(time).replace("T"," ").slice(5,16);
+      timelineHtml += `<tr><td>${escapeHtml(timeLabel)}</td>`;
       for (const m of models) {
-        const sig = m.signals.find(s => s.time === time);
+        const sig = m.signals.find(s => signalTimeKey(s) === time);
         if (sig) {
-          const dir = sig.signal_type;
-          const tip = `${directionText(dir)}${sig.next_bar_move ? ` · 下一根方向幅度 ${sig.next_bar_move.toFixed(4)}` : ""}`;
+          const dir = sig.decision_class === "system_downgraded" ? "downgraded" : sig.signal_type;
+          const reason = sig.normalization_info?.reason || sig.normalization_info?.type || sig.normalization_info?.original_signal_type || "";
+          const tip = `${directionLabel[dir] || directionText(dir)}${reason ? ` · ${apiErrorMessage(reason)}` : ""}${sig.next_bar_move ? ` · 下一根方向幅度 ${sig.next_bar_move.toFixed(4)}` : ""}`;
           timelineHtml += `<td title="${escapeHtml(tip)}"><span class="compare-direction-chip ${dir}">${directionLabel[dir] || "未知"}</span></td>`;
         } else {
           timelineHtml += '<td><span class="compare-direction-chip empty">--</span></td>';
@@ -5126,9 +5262,10 @@ async function loadHistoryCompareJobs({ resumeActive = true } = {}) {
         const params = job.params || {};
         const models = Array.isArray(params.model_ids) ? params.model_ids.length : 0;
         const isContinuous = params.evaluation_mode === "continuous";
+        const sourceLabel = params.data_source === "benchmark" ? "经典行情" : "自选历史";
         const evaluationLabel = isContinuous
           ? "连续回测 · 最多 120 个决策点"
-          : `${params.sample_size || "--"} 个抽样切片`;
+          : `${params.sample_size || "--"} 个评估案例`;
         const failureReason = job.status === "failed" && job.error
           ? `<small class="compare-cell-note danger">失败原因：${escapeHtml(apiErrorMessage(job.error))}</small>`
           : "";
@@ -5137,7 +5274,7 @@ async function loadHistoryCompareJobs({ resumeActive = true } = {}) {
           : String(job.created_at || "").replace("T"," ").slice(0,16);
         return `<article class="compare-history-item" data-job-id="${escapeHtml(job.id)}">
           <div class="compare-history-status ${escapeHtml(job.status)}"><i data-lucide="${job.status === "succeeded" ? "check" : job.status === "failed" ? "circle-alert" : job.status === "cancelled" ? "ban" : "loader-circle"}" size="16"></i></div>
-          <div><strong>${escapeHtml(params.symbol || "未知品种")} · ${escapeHtml(params.timeframe || "--")}</strong><span>${models} 个模型 · ${evaluationLabel} · ${escapeHtml(createdTime)}</span>${failureReason}</div>
+          <div><strong>${escapeHtml(params.symbol || "未知品种")} · ${escapeHtml(params.timeframe || "--")} 分析 / ${escapeHtml(params.evaluation_timeframe || params.timeframe || "--")} 决策</strong><span>${sourceLabel} · ${models} 个模型 · ${evaluationLabel} · ${escapeHtml(createdTime)}</span>${failureReason}</div>
           <span class="compare-history-badge ${escapeHtml(job.status)}">${statusText[job.status] || job.status}</span>
           ${job.status === "succeeded" ? '<button type="button" class="btn btn-secondary btn-sm" data-cmp-open>查看结果</button>' : ""}
           ${["failed","cancelled","succeeded"].includes(job.status) ? '<button type="button" class="icon-btn" data-cmp-delete aria-label="删除这条对比记录"><i data-lucide="trash-2" size="15"></i></button>' : ""}
@@ -6494,6 +6631,11 @@ function bindEvents() {
   });
   $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
   $("cmpRefreshHistory")?.addEventListener("click", loadHistoryCompareJobs);
+  $("cmpGenerateBenchmark")?.addEventListener("click", generateModelCompareBenchmark);
+  $("cmpBenchmarkSet")?.addEventListener("change", () => {
+    updateModelCompareBenchmarkSummary();
+    updateHistoryCompareReadiness();
+  });
   ["cmpSymbol", "cmpStartTime", "cmpEndTime", "cmpSampleSize", "cmpStartingBalance",
     "cmpCommissionPerLot", "cmpSlippagePoints", "cmpMaxHoldingHours", "cmpMaxConcurrentPositions"].forEach(id => {
     $(id)?.addEventListener("change", updateHistoryCompareReadiness);
@@ -6504,6 +6646,13 @@ function bindEvents() {
       updateHistoryCompareReadiness();
     });
   });
+  document.querySelectorAll('input[name="cmpDataSource"]').forEach(input => {
+    input.addEventListener("change", () => {
+      updateHistoryCompareSourceUI();
+      updateHistoryCompareReadiness();
+    });
+  });
+  $("cmpSymbol")?.addEventListener("change", () => { void loadModelCompareBenchmarks(); });
   document.querySelectorAll("[data-cmp-range]").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll("[data-cmp-range]").forEach(item => item.classList.toggle("active", item === button));
     setDefaultCompareDates(Number(button.dataset.cmpRange) || 7, true);

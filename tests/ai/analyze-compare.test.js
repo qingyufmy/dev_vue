@@ -173,6 +173,7 @@ import {
   __historyCompareJobsTest,
   handleAnalyzeCompare,
   handleHistoryCompare,
+  resolveStrategyEvaluationTimeframe,
 } from '../../server/routes/ai/strategy.js'
 import { maybeAiSignal } from '../../server/routes/ai/llm.js'
 const defaultMaybeAiSignalImplementation = maybeAiSignal.getMockImplementation()
@@ -563,6 +564,8 @@ describe('handleHistoryCompare', () => {
         expect(r.directional_score).toHaveProperty('buy_count')
         expect(r.directional_score).toHaveProperty('sell_count')
         expect(r.directional_score).toHaveProperty('hold_count')
+        expect(r.directional_score).toHaveProperty('downgraded_count')
+        expect(r.directional_score).toHaveProperty('invalid_count')
         expect(r.account_simulation.options).toMatchObject({
           timezone_offset_minutes:180,
           account_currency:'USD',
@@ -627,13 +630,36 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.kline_count).toBeLessThanOrEqual(50)
       expect(result.meta).toHaveProperty('requested_step', 10)
       expect(result.meta.evaluation_count).toBeLessThanOrEqual(20)
-      expect(result.meta).toHaveProperty('metric_type', 'next_closed_bar_direction')
-      expect(result.meta).toHaveProperty('metric_version', 'directional-eval-v2')
+      expect(result.meta).toHaveProperty('metric_type', 'next_evaluation_bar_direction')
+      expect(result.meta).toHaveProperty('metric_version', 'directional-eval-v3')
       expect(result.meta).toHaveProperty('average_agreement_rate')
       expect(result.meta).toHaveProperty('agreement_comparable_count')
       expect(result.meta).toHaveProperty('agreement_insufficient_count')
       expect(result.meta).toHaveProperty('execution_timezone_offset_minutes', 180)
       expect(result.meta).toHaveProperty('selection_timezone_offset_minutes', 180)
+    })
+
+    it('serializes production cache timestamps even when candles have no legacy time field', async () => {
+      const baseImplementation = mockMt5Bridge.getMockImplementation()
+      mockMt5Bridge.mockImplementation(async (...args) => {
+        const response = await baseImplementation(...args)
+        if (args[1] !== 'rates') return response
+        return {
+          ...response,
+          rates:response.rates.map(({ time, ...rate }) => ({
+            ...rate,
+            time_utc_msc:new Date(time).getTime(),
+          })),
+        }
+      })
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      })
+      expect(result.status).toBe('success')
+      expect(result.meta.start_time).toMatch(/^2026-/)
+      expect(result.meta.end_time).toMatch(/^2026-/)
+      expect(result.results[0].signals.every(signal => signal.time?.startsWith('2026-'))).toBe(true)
     })
 
     it('uses an explicit evenly distributed sample size for the new client', async () => {
@@ -649,7 +675,7 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.repair_model_calls).toBe(0)
       expect(result.meta.model_token_count).toBe(16 * 123)
       expect(result.meta.reproducibility).toMatchObject({
-        run_version:'history-compare-v4',
+        run_version:'history-compare-v5',
         reproducibility_level:'input_auditable_model_nondeterministic',
         strategy:{
           strategy_id:1,
@@ -823,6 +849,12 @@ describe('POST /ai/model-compare/history route', () => {
     expect(routes).toContain('listHistoryCompareJobs')
   })
 
+  it('exposes admin benchmark set list and generation endpoints', () => {
+    expect(routes).toContain("router.get('/ai/model-compare/benchmarks', authMiddleware")
+    expect(routes).toContain("router.post('/ai/model-compare/benchmarks', authMiddleware")
+    expect(routes).toContain('createClassicBenchmarkSet(req.user.id')
+  })
+
   it('normalizes persisted Beijing DATETIME values before MT5 display', () => {
     const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
     expect(backend).toContain('function compareJobUtcMs(value)')
@@ -880,6 +912,16 @@ describe('historical comparison time range normalization', () => {
 })
 
 describe('historical comparison frontend contract', () => {
+  it('offers a reproducible classic-market source separately from ad-hoc history', () => {
+    const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
+    expect(html).toContain('name="cmpDataSource" value="benchmark"')
+    expect(html).toContain('id="cmpBenchmarkSet"')
+    expect(html).toContain('经典行情集')
+    expect(frontend).toContain('/api/ai/model-compare/benchmarks')
+    expect(frontend).toContain('data_source:dataSource')
+    expect(frontend).toContain('系统降级')
+  })
+
   const frontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 
   it('polls background jobs and supports cancellation', () => {
@@ -909,19 +951,28 @@ describe('historical comparison frontend contract', () => {
 
   it('uses only fully closed historical candles and ignores live Chan anchors', () => {
     const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
-    expect(backend).toContain('utcMs + primaryDurationMs <= evaluationCutoffUtcMs')
+    expect(backend).toContain('utcMs + evaluationDurationMs <= evaluationCutoffUtcMs')
     expect(backend).toContain('last_bar_closed:true')
     expect(backend).toContain('chan_structure_anchor_utc_msc:null')
     expect(backend).toContain('const exclusiveEnd = boundedEnd < endUtcMs ? boundedEnd + 60_000 : boundedEnd')
+  })
+
+  it('uses the strategy run interval as the decision clock while retaining the primary analysis timeframe', () => {
+    expect(resolveStrategyEvaluationTimeframe({ interval_minutes:5 }, [
+      { timeframe:'H1' }, { timeframe:'M15' }, { timeframe:'M5' }, { timeframe:'H4' },
+    ])).toBe('M5')
+    expect(resolveStrategyEvaluationTimeframe({ interval_minutes:15 }, [
+      { timeframe:'H1' }, { timeframe:'M15' }, { timeframe:'M5' },
+    ])).toBe('M15')
   })
 
   it('presents directional evaluation separately from the event-driven virtual account', () => {
     expect(frontend).toContain('方向准确率')
     expect(frontend).toContain('方向评估与资金回放分开计算')
     expect(frontend).toContain('抽样账户资金回放')
-    expect(frontend).toContain('挂单、并发持仓、浮动盈亏、手续费、保证金和强平')
-    expect(frontend).toContain('尚未接入真实逐笔 Tick 和完整账户级风控')
-    expect(frontend).toContain('并非逐根主周期 K 线连续触发策略的完整回测')
+    expect(frontend).toContain('系统降级不会再伪装成模型主动观望')
+    expect(frontend).toContain('尚未接入真实逐笔 Tick')
+    expect(frontend).toContain('决策周期')
   })
 
   it('does not invent a leading model when every response holds, no order trades, or scores tie', () => {

@@ -37,6 +37,7 @@ import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
   retryPeriodReviewDerivation } from './period-review.js'
+import { listModelBenchmarkSets, createClassicBenchmarkSet } from './model-benchmarks.js'
 
 const router = Router()
 
@@ -164,6 +165,18 @@ router.post('/ai/analyze-compare', authMiddleware, async (req, res) => {
 
 router.post('/ai/model-compare/history', authMiddleware, async (req, res) => {
   try { res.status(202).json({ ok: true, job: await startHistoryCompareJob(req.user.id, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/model-compare/benchmarks', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try { res.json({ ok:true, benchmarks:await listModelBenchmarkSets(req.query.symbol || null) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/model-compare/benchmarks', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try { res.status(201).json({ ok:true, benchmark:await createClassicBenchmarkSet(req.user.id, req.body || {}) }) }
   catch (error) { reviewError(res, error) }
 })
 

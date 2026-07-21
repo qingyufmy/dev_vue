@@ -491,7 +491,11 @@ export function normalizeAiSignal(parsed, config, market) {
     recommended_volume: 0, limit_price: null, stop_limit_price: null,
     recommended_take_profit_tier: null,
     pending_valid_minutes: 0, pending_valid_until: null,
-    normalization_info: { type: 'l5_schema_hold', reason },
+    normalization_info: {
+      type: 'l5_schema_hold', reason,
+      original_signal_type:String(parsed.signal_type || 'unknown').toLowerCase(),
+      original_entry_method:String(parsed.entry_method || '').toLowerCase() || null,
+    },
   })
   const pendingSchemaHold = (reason, details = {}) => {
     const reasonLabels = {
@@ -506,7 +510,12 @@ export function normalizeAiSignal(parsed, config, market) {
       trigger_condition: '',
       invalidation_condition: '等待下一轮行情更新后重新评估入场方式和价格。',
       reasoning: `系统校验未通过：${reasonLabels[reason] || '挂单价格结构无效'}。AI 原始入场建议未进入执行链路。`,
-      normalization_info: { type: 'l5_schema_hold', reason, ...details },
+      normalization_info: {
+        type:'l5_schema_hold', reason,
+        original_signal_type:String(parsed.signal_type || 'unknown').toLowerCase(),
+        original_entry_method:String(parsed.entry_method || '').toLowerCase() || null,
+        ...details,
+      },
     }
   }
   let signalType = String(parsed.signal_type || 'hold').toLowerCase()
@@ -545,7 +554,7 @@ export function normalizeAiSignal(parsed, config, market) {
   if (entryMethod === 'limit' || entryMethod === 'stop' || entryMethod === 'stop_limit') {
     if (!limitPrice || !Number.isFinite(limitPrice) || limitPrice <= 0) {
       console.log(`[LLM] Missing/invalid limit_price for ${entryMethod}, rejecting signal (not falling back to market)`)
-      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_minutes: 0, pending_valid_until: null, recommended_volume: 0 }
+      return schemaHold('pending_price_required')
     }
   }
 
@@ -631,6 +640,8 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.confidence = round2(Math.max(0.05, Math.min(0.95, calibrated)))
 
   if (signalType !== 'hold' && parsed.confidence < risk.minConfidence) {
+    const originalSignalType = signalType
+    const originalConfidence = parsed.confidence
     signalType = 'hold'
     parsed.signal_type = 'hold'
     parsed.recommended_volume = 0
@@ -638,6 +649,13 @@ export function normalizeAiSignal(parsed, config, market) {
     parsed.limit_price = null
     parsed.stop_limit_price = null
     parsed.pending_valid_until = null
+    parsed.normalization_info = {
+      type:'confidence_below_risk_threshold',
+      reason:'confidence_below_risk_threshold',
+      original_signal_type:originalSignalType,
+      original_confidence:originalConfidence,
+      minimum_confidence:risk.minConfidence,
+    }
     return parsed
   }
 
@@ -650,7 +668,7 @@ export function normalizeAiSignal(parsed, config, market) {
     const atr = Number(market.atr_anchor) || 0
     if (!(atr > 0)) {
       console.log(`[LLM] Closed hourly ATR unavailable for ${signalType}, holding`)
-      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type: 'atr_anchor_unavailable_hold' } }
+      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type:'atr_anchor_unavailable_hold', reason:'atr_anchor_unavailable_hold', original_signal_type:signalType, original_entry_method:entryMethod } }
     }
     if (atr > 0 && anchorPrice > 0) {
       const fallbackSlDistance = atr * risk.slAtrMult
@@ -666,7 +684,7 @@ export function normalizeAiSignal(parsed, config, market) {
         const adjustedVolume = Math.floor((recommendedVolume * originalSlDistance / minSlDistance) * 100 + 1e-9) / 100
         if (adjustedVolume < 0.01) {
           console.log(`[LLM] SL widening would require volume below 0.01: dist=${originalSlDistance.toFixed(2)} min=${minSlDistance.toFixed(2)}, holding`)
-          return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type: 'sl_widen_min_lot_hold', from: round2(originalSlDistance), to: round2(minSlDistance) } }
+          return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type:'sl_widen_min_lot_hold', reason:'sl_widen_min_lot_hold', original_signal_type:signalType, original_entry_method:entryMethod, from:round2(originalSlDistance), to:round2(minSlDistance) } }
         }
         parsed.stop_loss_price = isBuySide
           ? round2(anchorPrice - minSlDistance) : round2(anchorPrice + minSlDistance)
@@ -675,7 +693,7 @@ export function normalizeAiSignal(parsed, config, market) {
         console.log(`[LLM] SL widened: ${originalSlDistance.toFixed(2)} -> ${minSlDistance.toFixed(2)}, volume=${recommendedVolume}`)
       } else if (Number.isFinite(originalSlDistance) && originalSlDistance > maxSlDistance) {
         console.log(`[LLM] SL too far: ${originalSlDistance.toFixed(2)} > ${maxSlDistance.toFixed(2)}, holding`)
-        return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type: 'sl_too_far_hold', distance: round2(originalSlDistance), max: round2(maxSlDistance) } }
+        return { ...parsed, signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type:'sl_too_far_hold', reason:'sl_too_far_hold', original_signal_type:signalType, original_entry_method:entryMethod, distance:round2(originalSlDistance), max:round2(maxSlDistance) } }
       }
 
       const finalSlDistance = Math.abs(Number(parsed.stop_loss_price) - anchorPrice)
@@ -732,7 +750,7 @@ export function normalizeAiSignal(parsed, config, market) {
     // Reject if SL or TP1 are missing
     if (!parsed.stop_loss_price || !parsed.take_profit_1_price) {
       console.log(`[LLM] Missing SL/TP for ${signalType} (atr=${atr}), rejecting`)
-      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', limit_price: null, stop_limit_price: null, pending_valid_until: null, recommended_volume: 0 }
+      return schemaHold('missing_valid_sl_or_tp')
     }
     const recommendedTier = Number(parsed.recommended_take_profit_tier || (strictInference ? 0 : 1))
     if (![1, 2, 3].includes(recommendedTier) || !parsed[`take_profit_${recommendedTier}_price`]) {

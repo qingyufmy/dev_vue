@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721v" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721w" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -760,7 +760,26 @@
                     <label class="compare-field"><span>交易品种</span><select id="cmpSymbol"><option value="">先选择策略</option></select></label>
                     <div class="compare-field"><span>评估基准</span><div id="cmpStrategyBaseline" class="compare-readonly-value">由策略自动决定</div></div>
                   </div>
-                  <fieldset class="compare-mode-field">
+                  <fieldset class="compare-mode-field compare-source-field">
+                    <legend>行情来源</legend>
+                    <div class="compare-mode-options">
+                      <label>
+                        <input type="radio" name="cmpDataSource" value="benchmark" checked>
+                        <span><i data-lucide="library-big" size="15"></i><strong>经典行情集</strong><small>固定案例，可重复对比</small></span>
+                      </label>
+                      <label>
+                        <input type="radio" name="cmpDataSource" value="historical">
+                        <span><i data-lucide="calendar-range" size="15"></i><strong>自选历史</strong><small>验证特定市场区间</small></span>
+                      </label>
+                    </div>
+                    <p>建议优先使用经典行情集，避免随机日期恰好没有策略触发条件。</p>
+                  </fieldset>
+                  <section id="cmpBenchmarkPanel" class="compare-benchmark-panel">
+                    <label class="compare-field"><span>经典行情版本</span><select id="cmpBenchmarkSet"><option value="">正在加载...</option></select></label>
+                    <div id="cmpBenchmarkSummary" class="compare-benchmark-summary"><span>等待选择策略和品种</span></div>
+                    <button id="cmpGenerateBenchmark" type="button" class="btn btn-secondary btn-sm"><i data-lucide="sparkles" size="15"></i>生成新版本</button>
+                  </section>
+                  <fieldset id="cmpEvaluationModeField" class="compare-mode-field hidden">
                     <legend>评估方式</legend>
                     <div class="compare-mode-options">
                       <label>
@@ -774,7 +793,7 @@
                     </div>
                     <p id="cmpEvaluationModeHint">适合快速比较模型方向质量和订单表现。</p>
                   </fieldset>
-                  <fieldset class="compare-range-field">
+                  <fieldset id="cmpHistoricalRange" class="compare-range-field hidden">
                     <legend>行情范围</legend>
                     <div class="compare-range-presets" role="group" aria-label="快捷选择行情范围">
                       <button type="button" data-cmp-range="1">近 24 小时</button>
@@ -792,7 +811,7 @@
                       <option value="12" selected>标准 · 12 个行情切片</option>
                       <option value="20">深入 · 20 个行情切片</option>
                     </select>
-                    <small>系统会在完整区间内均匀抽样，避免只评估前半段行情。</small>
+                    <small id="cmpSampleDepthHint">从各类经典行情中均衡抽取，避免某一种市场状态占比过高。</small>
                   </label>
                   <details class="compare-simulation-settings">
                     <summary><span>资金模拟参数</span><small>订单回放 · M1 执行</small></summary>
@@ -1084,7 +1103,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721v"></script>
+    <script src="/ai/app.js?v=20260721w"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">
