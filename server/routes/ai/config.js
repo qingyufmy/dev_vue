@@ -1,7 +1,7 @@
 // ai/config.js — 配置管理 + 风控 + 审计
 
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from '../../db.js'
-import { round2, round3, stripBrokerSuffix } from './utils.js'
+import { round2, stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge, computeAtr14 } from './market-data.js'
 import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
@@ -330,65 +330,6 @@ export async function getDeliveryExecuteRiskConfig(userId) {
   }
 }
 
-export function validateTradeRequest(config, account, request) {
-  const symbol = String(request.symbol || '').toUpperCase()
-  const orderType = String(request.order_type || '').toLowerCase()
-  const volume = parseFloat(request.volume || 0)
-  const maxPosition = parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE)
-
-  if (!symbol) throw new RiskReject('missing_symbol')
-  if (request.source === 'ai' && String(request.signal_type || '').toLowerCase() === 'hold') {
-    throw new RiskReject('hold_signal_cannot_execute')
-  }
-  if (!['buy', 'sell'].includes(orderType)) throw new RiskReject('invalid_order_type', { order_type: orderType })
-  if (volume <= 0) throw new RiskReject('invalid_volume', { volume })
-  if (volume > maxPosition) throw new RiskReject('volume_exceeds_config_limit', { volume, max_position_size: maxPosition })
-
-  const referencePrice = request.reference_price
-  const quotePrice = request.quote_price
-  if (request.source === 'ai' && referencePrice && quotePrice && (request.entry_method || 'market') === 'market') {
-    const reference = parseFloat(referencePrice)
-    const current = parseFloat(quotePrice)
-    if (reference > 0) {
-      const slippagePct = Math.abs(current - reference) / reference * 100
-      if (slippagePct > 0.08) {
-        throw new RiskReject('signal_price_slippage_exceeded', {
-          reference_price: reference, quote_price: current,
-          slippage_pct: round3(slippagePct), limit_pct: 0.08,
-        })
-      }
-    }
-  }
-
-  if (request.confirm !== true) throw new RiskReject('confirmation_required')
-
-  const equity = parseFloat(account.equity || 0)
-  if (equity <= 0) throw new RiskReject('invalid_account_equity', { equity: account.equity })
-
-  // Pending order price direction validation
-  const entryMethod = request.entry_method || 'market'
-  if (entryMethod !== 'market' && entryMethod !== 'observe' && request.source === 'ai') {
-    const lp = parseFloat(request.limit_price || 0)
-    const ref = parseFloat(request.reference_price || 0)
-    if (lp > 0 && ref > 0) {
-      if (entryMethod === 'limit' && orderType === 'buy' && lp >= ref) throw new RiskReject('buy_limit_price_too_high', { limit_price: lp, reference: ref })
-      if (entryMethod === 'limit' && orderType === 'sell' && lp <= ref) throw new RiskReject('sell_limit_price_too_low', { limit_price: lp, reference: ref })
-      if (entryMethod === 'stop' && orderType === 'buy' && lp <= ref) throw new RiskReject('buy_stop_price_too_low', { limit_price: lp, reference: ref })
-      if (entryMethod === 'stop' && orderType === 'sell' && lp >= ref) throw new RiskReject('sell_stop_price_too_high', { limit_price: lp, reference: ref })
-      if (entryMethod === 'stop_limit') {
-        const stopLimit = parseFloat(request.stop_limit_price || 0)
-        if (!(stopLimit > 0)) throw new RiskReject('stop_limit_price_required')
-        if (orderType === 'buy' && lp <= ref) throw new RiskReject('buy_stop_limit_trigger_too_low', { trigger_price: lp, reference: ref })
-        if (orderType === 'sell' && lp >= ref) throw new RiskReject('sell_stop_limit_trigger_too_high', { trigger_price: lp, reference: ref })
-        if (orderType === 'buy' && stopLimit > lp) throw new RiskReject('buy_stop_limit_price_above_trigger', { trigger_price: lp, stop_limit_price: stopLimit })
-        if (orderType === 'sell' && stopLimit < lp) throw new RiskReject('sell_stop_limit_price_below_trigger', { trigger_price: lp, stop_limit_price: stopLimit })
-      }
-    }
-  }
-
-  return { symbol, order_type: orderType, volume, max_position_size: maxPosition, account_equity: equity }
-}
-
 const TAKE_PROFIT_MODE_TIERS = Object.freeze({ conservative: 1, standard: 2, trend: 3 })
 
 export function normalizeTakeProfitMode(value) {
@@ -507,6 +448,7 @@ export async function executeOrderCore(userId, config, request, action, options 
     config,
     options,
     validateRequest: async (legacyConfig, account, prepared, context) => {
+      if (prepared.confirm !== true) throw new RiskReject('confirmation_required')
       const resolved = await resolveEffectiveRiskPolicy({
         userId,
         tradingAccountId: context.tradingAccountId ?? options.tradingAccountId ?? prepared.trading_account_id ?? null,
@@ -518,7 +460,6 @@ export async function executeOrderCore(userId, config, request, action, options 
       const decisionId = await persistRiskDecision(context.intentId, decision, resolved.policyVersionIds)
       if (decision.decision_status === 'reject') throw new RiskReject(decision.reject_code, { risk_decision_id: decisionId, rules: decision.rule_results })
       return {
-        ...validateTradeRequest(legacyConfig, account, decision.approved_order),
         approved_order: decision.approved_order,
         original_order: decision.original_order,
         rule_results: decision.rule_results,

@@ -27,7 +27,7 @@ export const RISK_RULES = Object.freeze({
   max_quote_age_seconds: rule('R4.4', 'number', 'second', 'lower', 15, 1, 300, false, '报价最大年龄', { unit_label:'秒', user_editable:false, category:'system', description:'使用桥接标准化后的 UTC 报价时间检查' }),
   max_spread_points: rule('R4.5', 'number', 'point', 'lower', 120, 1, 100000, false, '最大点差', { unit_label:'点', description:'超过该点差时不新增风险' }),
   market_signal_drift_atr: rule('R4.6', 'number', 'ATR', 'lower', 0.5, 0.01, 5, false, '市价信号价格漂移', { unit_label:'ATR 倍', description:'当前成交价偏离推理参考价的最大幅度' }),
-  broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '下单允许价格偏差', { unit_label:'点', description:'发送给 MT5 的允许成交偏差，不代表实际成交滑点' }),
+  broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '下单允许价格偏差', { unit_label:'MT5 点', description:'传给 MT5 order_send.deviation 的整数点数；不是百分比，也不是实际成交滑点' }),
   weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 60, 0, 2880, false, '周末收盘提前保护', { unit_label:'分钟', description:'在 MT5 周末收盘前提前停止新增风险' }),
   max_directional_exposure_lots: rule('R2.1', 'number', 'lot', 'lower', 0.1, 0.001, 1000, false, '同向最大敞口', { unit_label:'手', description:'同品种同方向持仓、挂单和执行预占的合计上限' }),
   min_open_interval_seconds: rule('R2.2', 'number', 'second', 'higher', 30, 0, 86400, false, '最小开仓间隔', { unit_label:'秒', description:'限制账户连续新增仓位的最短间隔' }),

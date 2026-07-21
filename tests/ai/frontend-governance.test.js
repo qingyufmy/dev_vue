@@ -381,6 +381,12 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.risk-default-pill')
   })
 
+  it('labels MT5 deviation as order price tolerance instead of execution slippage', () => {
+    expect(app).toContain('broker_slippage_points:"下单允许价格偏差"')
+    expect(app).toContain('已应用下单允许价格偏差（MT5 点）')
+    expect(app).not.toContain('broker_slippage_points:"成交滑点"')
+  })
+
   it('keeps the overview signal card focused on the current decision and execution summary', () => {
     const start = html.indexOf('id="signalCard"')
     const end = html.indexOf('class="card grid-area-positions"', start)

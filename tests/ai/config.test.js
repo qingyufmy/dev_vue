@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { RiskReject, validateTradeRequest, signalOrderPayload, buildBridgeOrderCall } from '../../server/routes/ai/config.js'
+import { RiskReject, signalOrderPayload, buildBridgeOrderCall } from '../../server/routes/ai/config.js'
 
 describe('RiskReject', () => {
   it('创建风险拒绝错误', () => {
@@ -9,92 +9,6 @@ describe('RiskReject', () => {
     expect(err instanceof Error).toBe(true)
   })
 })
-
-describe('validateTradeRequest', () => {
-  const baseConfig = { max_position_size: 0.05 }
-  const baseAccount = { equity: 10000 }
-
-  it('有效的 buy 请求通过', () => {
-    const request = {
-      symbol: 'XAUUSD',
-      order_type: 'buy',
-      volume: 0.03,
-      confirm: true,
-      source: 'manual'
-    }
-    const result = validateTradeRequest(baseConfig, baseAccount, request)
-    expect(result.symbol).toBe('XAUUSD')
-    expect(result.order_type).toBe('buy')
-    expect(result.volume).toBe(0.03)
-  })
-
-  it('缺少 symbol 拒绝', () => {
-    const request = { order_type: 'buy', volume: 0.03, confirm: true }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
-      .toThrow(RiskReject)
-  })
-
-  it('hold 信号不能执行', () => {
-    const request = {
-      symbol: 'XAUUSD',
-      order_type: 'buy',
-      volume: 0.03,
-      confirm: true,
-      source: 'ai',
-      signal_type: 'hold'
-    }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
-      .toThrow('hold_signal_cannot_execute')
-  })
-
-  it('volume 超过限制拒绝', () => {
-    const request = {
-      symbol: 'XAUUSD',
-      order_type: 'buy',
-      volume: 0.1,
-      confirm: true
-    }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
-      .toThrow('volume_exceeds_config_limit')
-  })
-
-  it('未确认拒绝', () => {
-    const request = {
-      symbol: 'XAUUSD',
-      order_type: 'buy',
-      volume: 0.03,
-      confirm: false
-    }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
-      .toThrow('confirmation_required')
-  })
-
-  it('equity 为 0 拒绝', () => {
-    const request = {
-      symbol: 'XAUUSD',
-      order_type: 'buy',
-      volume: 0.03,
-      confirm: true
-    }
-    expect(() => validateTradeRequest(baseConfig, { equity: 0 }, request))
-      .toThrow('invalid_account_equity')
-  })
-
-  it('滑点超过限制拒绝', () => {
-    const request = {
-      symbol: 'XAUUSD',
-      order_type: 'buy',
-      volume: 0.03,
-      confirm: true,
-      source: 'ai',
-      reference_price: 2000,
-      quote_price: 2010 // 0.5% 滑点
-    }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
-      .toThrow('signal_price_slippage_exceeded')
-  })
-})
-
 describe('signalOrderPayload', () => {
   it('生成正确的订单载荷', () => {
     const signal = {
@@ -238,42 +152,5 @@ describe('buildBridgeOrderCall', () => {
     const after = before + 5
     expect(result.bridgeParams.expiration).toBeGreaterThanOrEqual(before)
     expect(result.bridgeParams.expiration).toBeLessThanOrEqual(after)
-  })
-})
-
-describe('validateTradeRequest - slippage skip for pending', () => {
-  const baseConfig = { max_position_size: 0.05 }
-  const baseAccount = { equity: 10000 }
-
-  it('市价单触发滑点校验', () => {
-    const request = {
-      symbol: 'XAUUSD', order_type: 'buy', volume: 0.01,
-      source: 'ai', entry_method: 'market',
-      reference_price: 4000, quote_price: 4010,
-      confirm: true,
-    }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
-      .toThrow(RiskReject)
-  })
-
-  it('挂单跳过滑点校验', () => {
-    const request = {
-      symbol: 'XAUUSD', order_type: 'buy', volume: 0.01,
-      source: 'ai', entry_method: 'limit', limit_price: 3980,
-      reference_price: 4000, quote_price: 4010,
-      confirm: true,
-    }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, request))
-      .not.toThrow()
-  })
-
-  it('拒绝方向错误或第二价格缺失的 sell stop limit', () => {
-    const base = {
-      symbol: 'XAUUSD', order_type: 'sell', volume: 0.01, source: 'ai',
-      entry_method: 'stop_limit', limit_price: 4010, stop_limit_price: 4015,
-      reference_price: 4000, confirm: true,
-    }
-    expect(() => validateTradeRequest(baseConfig, baseAccount, base)).toThrow('sell_stop_limit_trigger_too_high')
-    expect(() => validateTradeRequest(baseConfig, baseAccount, { ...base, limit_price:3990, stop_limit_price:null })).toThrow('stop_limit_price_required')
   })
 })
