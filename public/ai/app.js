@@ -9,6 +9,9 @@ const state = {
   symbols: [],
   signals: [],
   selectedSignal: null,
+  latestSignalId: null,
+  analysisSelectionMode: "follow_latest",
+  analysisSelectionSource: "initial",
   _lastGatewayLive: false,
   backgroundSyncTimer: null,
   lastQuote: null,
@@ -914,8 +917,7 @@ function showSignalNotification(signal) {
   node.style.cursor = "pointer";
   node.onclick = () => {
     node.remove();
-    openAnalysisFromHistory(signal.id);
-    setTab("ai-analyze");
+    openAnalysisFromHistory(signal.id, { source:"notification", followLatest:true });
   };
   host.appendChild(node);
   setTimeout(() => node.remove(), 8000);
@@ -1212,7 +1214,11 @@ function connectBridgeStatusWs(onReady) {
       } else if (msg.type === 'signal_execution_updated') {
         // Execution can complete after the signal itself was pushed. Reload the
         // same signal so pending/executed state disables duplicate submission.
-        loadSignals().catch(() => {});
+        loadSignals({ skipResultRender:true }).then(() => {
+          if (sameSignalId(state.selectedSignal?.id, msg.signal_id)) {
+            return openAnalysisFromHistory(msg.signal_id, { navigate:false, forceRefresh:true, preserveSelectionMode:true });
+          }
+        }).catch(() => {});
       } else if (msg.type === 'weekly_flatten_state') {
         const noticeKey = `${msg.cycle || ''}:${msg.status || ''}:${msg.reason || ''}`;
         if (state._weeklyFlattenNoticeKey !== noticeKey) {
@@ -1411,6 +1417,48 @@ function handleBridgeData(msg) {
 let _lastSignalRefreshTs = 0;
 let _lastSignalId = null;
 
+function sameSignalId(left, right) {
+  return left != null && right != null && String(left) === String(right);
+}
+
+function setAnalysisSelectionIntent(signalId, options = {}) {
+  const source = options.source || "inference-list";
+  const forcePinned = options.forcePinned === true || ["history", "ticket", "trade"].includes(source);
+  const forceFollow = options.followLatest === true || ["auto-follow", "notification"].includes(source);
+  const isLatest = sameSignalId(signalId, state.latestSignalId ?? _lastSignalId);
+  state.analysisSelectionMode = forcePinned ? "pinned" : (forceFollow || isLatest ? "follow_latest" : "pinned");
+  state.analysisSelectionSource = source;
+}
+
+function shouldAutoFollowNewSignal(previousLatestId) {
+  if (activeTabId() !== "ai-analyze" || state.analysisSelectionMode !== "follow_latest") return false;
+  const selectedId = state.selectedSignal?.id;
+  if (selectedId == null && previousLatestId == null) return true;
+  return sameSignalId(selectedId, previousLatestId);
+}
+
+async function refreshForNewSignal(signalId, signalMeta = null) {
+  const previousLatestId = state.latestSignalId ?? _lastSignalId;
+  if (sameSignalId(signalId, previousLatestId)) return;
+  const autoFollow = shouldAutoFollowNewSignal(previousLatestId);
+
+  state.latestSignalId = signalId;
+  _lastSignalId = signalId;
+  await loadSignals({ skipResultRender:true });
+
+  const incoming = state.signals.find(item => sameSignalId(item.id, signalId)) || signalMeta;
+  if (incoming) showSignalNotification(incoming);
+  if (!autoFollow || !incoming) {
+    highlightActiveAnalysis(state.selectedSignal?.id);
+    return;
+  }
+
+  setAnalysisSelectionIntent(signalId, { source:"auto-follow", followLatest:true });
+  await openAnalysisFromHistory(signalId, { navigate:false, source:"auto-follow", followLatest:true });
+  const activeItem = document.querySelector(`[data-analysis-id="${CSS.escape(String(signalId))}"]`);
+  if (activeItem) activeItem.scrollIntoView({ behavior:"smooth", block:"nearest" });
+}
+
 // UI-only timer: refresh signal timing displays every second (no network calls)
 let _statusRefreshCounter = 0;
 let _uiTimerInterval = null;
@@ -1464,50 +1512,29 @@ async function _maybeRefreshSignal() {
     const latest = data.signal || null;
 
     if (!latest) {
-      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.selectedSignal = null; state.signals = []; renderAnalysisHistory([]); renderSignalRows(); }
+      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.latestSignalId = null; state.selectedSignal = null; state.signals = []; renderAnalysisHistory([]); renderSignalRows(); }
       return;
     }
 
     // ID unchanged — UI timer handles timing display, nothing to do
-    if (latest.id === _lastSignalId) return;
+    if (sameSignalId(latest.id, state.latestSignalId ?? _lastSignalId)) return;
 
     // New signal detected — reuse the known-good click handler
-    _lastSignalId = latest.id;
-
     // CLOSE signal → invalidate history cache (new closed order)
     if (latest.signal_type === 'close') {
       _historyCache = null;
       _historyChartCache = null;
     }
 
-    await loadSignals({ skipResultRender:true, selectLatest:true });
-    if (state.selectedSignal) {
-      showSignalNotification(state.selectedSignal);
-      if (activeTabId() === "ai-analyze") {
-        openAnalysisFromHistory(state.selectedSignal.id);
-        const firstItem = document.querySelector(".analysis-history-item");
-        if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }
-    }
+    await refreshForNewSignal(latest.id, latest);
   } catch (e) { console.error('[Inference] latest signal refresh failed:', e); }
 }
 
 // Handle new signal pushed from server (replaces polling)
 async function handleNewSignal(msg) {
   try {
-    if (msg.signal_id != null) _lastSignalId = msg.signal_id;
-    // Refresh signal list
-    await loadSignals({ skipResultRender:true, selectLatest:true });
-
-    // Show notification for new signal
-    if (state.selectedSignal) {
-      showSignalNotification(state.selectedSignal);
-      if (activeTabId() === "ai-analyze") {
-        openAnalysisFromHistory(state.selectedSignal.id);
-        const firstItem = document.querySelector(".analysis-history-item");
-        if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }
-    }
+    if (msg.signal_id == null) return;
+    await refreshForNewSignal(msg.signal_id, msg.signal || null);
   } catch (e) { console.error('[Inference] pushed signal refresh failed:', e); }
 }
 
@@ -3601,7 +3628,7 @@ async function loadCloseSignalTickets() {
 function ticketCell(ticket, signalTickets) {
   const signalId = signalTickets[String(ticket)];
   if (signalId) {
-    return `<td class="num"><a href="#" class="signal-link" onclick="event.preventDefault(); openAnalysisFromHistory(${signalId})">${escapeHtml(ticket)}</a></td>`;
+    return `<td class="num"><a href="#" class="signal-link" onclick="event.preventDefault(); openAnalysisFromHistory(${signalId}, { source:'history', forcePinned:true })">${escapeHtml(ticket)}</a></td>`;
   }
   return `<td class="num">${escapeHtml(ticket)}</td>`;
 }
@@ -4436,6 +4463,11 @@ async function runAnalysis() {
     const best = result?.signal;
     if (!best) throw new Error("未返回有效信号");
     const elapsed = Math.round(performance.now() - started);
+    if (best.id != null) {
+      state.latestSignalId = best.id;
+      _lastSignalId = best.id;
+      setAnalysisSelectionIntent(best.id, { source:"manual", followLatest:true });
+    }
     renderSignal(best, elapsed);
     setManualInferenceModal(false);
     showSignalNotification(best);
@@ -5684,6 +5716,7 @@ async function navigateToSignalByTicket(ticket) {
     const data = await wsApi("signal_by_ticket", { ticket });
     if (data.status === "success" && data.signal) {
       const signal = data.signal;
+      setAnalysisSelectionIntent(signal.id, { source:"ticket", forcePinned:true });
       state.selectedSignal = signal;
       setTab("ai-analyze");
       renderSignal(signal, null);
@@ -5895,6 +5928,8 @@ async function openAnalysisFromHistory(signalId, options = {}) {
   const forceRefresh = options.forceRefresh ?? navigate;
   let signal = state.signals.find((item) => String(item.id) === requestedId);
 
+  if (!options.preserveSelectionMode) setAnalysisSelectionIntent(signalId, options);
+
   // Select immediately: a late response for the previous signal may update its
   // list cache, but must never reclaim the currently visible detail panel.
   state.selectedSignal = signal || { id: signalId };
@@ -5992,14 +6027,21 @@ async function loadSignals(options = {}) {
   state.analysisHistoryOffset = state.signals.length;
   state.analysisHistoryHasMore = hasMore;
 
-  // Sync _lastSignalId so _maybeRefreshSignal doesn't re-fetch unnecessarily
-  if (state.signals.length > 0 && !options.append) _lastSignalId = state.signals[0].id;
+  // The server-sorted first row is the canonical latest signal. Keep it
+  // separate from the selected row because history navigation may inject an
+  // older signal at the top of the visible list.
+  if (state.signals.length > 0 && !options.append) {
+    state.latestSignalId = state.signals[0].id;
+    _lastSignalId = state.signals[0].id;
+  }
 
   // Preserve selected signal if it still exists, otherwise use latest
   const previousSelected = state.selectedSignal;
   const selectedId = previousSelected?.id;
   const stillExists = selectedId ? state.signals.find(s => String(s.id) === String(selectedId)) : null;
-  let activeSignal = options.selectLatest ? (state.signals[0] || null) : (stillExists || state.signals[0] || null);
+  let activeSignal = options.selectLatest
+    ? (state.signals[0] || null)
+    : (stillExists || previousSelected || state.signals[0] || null);
   if (stillExists && previousSelected?.detail_loaded && String(activeSignal?.id) === String(selectedId)) {
     // Keep heavyweight detail fields, but let the freshly loaded list row win
     // for user-specific execution state (pending ticket, delivery result, etc.).
@@ -6165,7 +6207,7 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
     const exitPrice = row.exit_price ?? row.price;
     const closeInfo = closeTickets[String(ticket)];
     const exitPriceCell = closeInfo
-      ? `<td class="num"><a href="#" class="signal-link close-price-link" onclick="event.preventDefault(); openAnalysisFromHistory(${closeInfo.signalId})" title="点击查看平仓分析">${escapeHtml(raw(closeInfo.price ?? exitPrice))}</a></td>`
+      ? `<td class="num"><a href="#" class="signal-link close-price-link" onclick="event.preventDefault(); openAnalysisFromHistory(${closeInfo.signalId}, { source:'history', forcePinned:true })" title="点击查看平仓分析">${escapeHtml(raw(closeInfo.price ?? exitPrice))}</a></td>`
       : `<td class="num">${escapeHtml(raw(exitPrice))}</td>`;
     return `
     <tr data-ticket="${escapeHtml(String(ticket))}">

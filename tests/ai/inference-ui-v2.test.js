@@ -67,6 +67,23 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('state.selectedSignal = previousSelected')
   })
 
+  it('only follows a new signal while the user is still following the canonical latest signal', () => {
+    expect(app).toContain('analysisSelectionMode: "follow_latest"')
+    expect(app).toContain('function shouldAutoFollowNewSignal(previousLatestId)')
+    expect(app).toContain('sameSignalId(selectedId, previousLatestId)')
+    expect(app).toContain('state.latestSignalId = state.signals[0].id')
+    expect(app).toContain('await refreshForNewSignal(latest.id, latest)')
+    expect(app).toContain('await refreshForNewSignal(msg.signal_id, msg.signal || null)')
+  })
+
+  it('pins signals opened from history or ticket navigation across background refreshes', () => {
+    expect(app).toContain('["history", "ticket", "trade"].includes(source)')
+    expect(app).toContain("source:'history', forcePinned:true")
+    expect(app).toContain('source:"ticket", forcePinned:true')
+    expect(app).toContain('preserveSelectionMode:true')
+    expect(app).toContain('stillExists || previousSelected || state.signals[0] || null')
+  })
+
   it('keeps revoked platform experience out of the active library and exposes a collapsed archive', () => {
     expect(app).toContain('const currentItems = items.filter(item => item.status !== "revoked")')
     expect(app).toContain('class="platform-experience-archive"')
