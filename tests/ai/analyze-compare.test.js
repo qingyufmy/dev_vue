@@ -169,6 +169,11 @@ vi.mock('../../server/routes/ai/model-profiles.js', () => ({
   resolveOwnedModelProfileForRuntime: (...args) => mockResolveOwnedModelProfileForRuntime(...args),
 }))
 
+const mockResolveModelSnapshotSelection = vi.fn()
+vi.mock('../../server/routes/ai/model-snapshot-samples.js', () => ({
+  resolveModelSnapshotSelection: (...args) => mockResolveModelSnapshotSelection(...args),
+}))
+
 import {
   __historyCompareJobsTest,
   handleAnalyzeCompare,
@@ -530,6 +535,51 @@ describe('handleHistoryCompare', () => {
       }), expect.any(Object), expect.any(String))
     })
 
+    it('replays the exact stored prompts for selected closed-trade snapshots', async () => {
+      const samples = [0, 1].map(index => ({
+        snapshot_id:101 + index,
+        signal_id:501 + index,
+        strategy_id:1,
+        strategy_version:4,
+        symbol:'XAUUSD',
+        output_schema_version:'schema-v4',
+        system_prompt:`stored-system-${index}`,
+        user_prompt:`stored-user-${index}`,
+        prompt_hash:`prompt-${index}`,
+        content_hash:`content-${index}`,
+        market_snapshot:{ symbol:'XAUUSD', timeframe:'M30', primary_timeframe:'M30', latest_price:2000 + index },
+        klines:{ M30:[{
+          time:new Date(Date.UTC(2026, 6, 1, 0, index * 30)).toISOString(),
+          open:2000, high:2010, low:1990, close:2005,
+        }] },
+        original_signal_type:'buy',
+        net_profit:index ? -10 : 20,
+      }))
+      mockResolveModelSnapshotSelection.mockResolvedValue({
+        samples,
+        snapshot_ids:[101, 102],
+        strategy_id:1,
+        strategy_version:4,
+        symbol:'XAUUSD',
+        output_schema_version:'schema-v4',
+        fingerprint:'selection-hash',
+      })
+
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        data_source:'snapshots', snapshot_ids:[101, 102],
+      })
+
+      expect(result.status).toBe('success')
+      expect(result.meta.data_source).toBe('snapshots')
+      expect(result.meta.snapshot_selection.snapshot_ids).toEqual([101, 102])
+      expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
+        _comparison_replay_system_prompt:'stored-system-0',
+        _comparison_replay_user_prompt:'stored-user-0',
+        _comparison_replay_output_schema_version:'schema-v4',
+      }), expect.any(Object), expect.any(String))
+    })
+
     it('passes a shared abort signal to every model and exits when it is cancelled', async () => {
       const controller = new AbortController()
       maybeAiSignal.mockImplementation(async (_db, config) => {
@@ -878,10 +928,9 @@ describe('POST /ai/model-compare/history route', () => {
     expect(routes).toContain('listHistoryCompareJobs')
   })
 
-  it('exposes admin benchmark set list and generation endpoints', () => {
-    expect(routes).toContain("router.get('/ai/model-compare/benchmarks', authMiddleware")
-    expect(routes).toContain("router.post('/ai/model-compare/benchmarks', authMiddleware")
-    expect(routes).toContain('createClassicBenchmarkSet(req.user.id')
+  it('exposes the admin historical-snapshot selection endpoint', () => {
+    expect(routes).toContain("router.get('/ai/model-compare/snapshots', authMiddleware")
+    expect(routes).toContain('listModelSnapshotSamples(req.user.id')
   })
 
   it('normalizes persisted Beijing DATETIME values before MT5 display', () => {
@@ -941,13 +990,13 @@ describe('historical comparison time range normalization', () => {
 })
 
 describe('historical comparison frontend contract', () => {
-  it('offers a reproducible classic-market source separately from ad-hoc history', () => {
+  it('offers selectable historical inference snapshots separately from ad-hoc history', () => {
     const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
-    expect(html).toContain('name="cmpDataSource" value="benchmark"')
-    expect(html).toContain('id="cmpBenchmarkSet"')
-    expect(html).toContain('经典行情集')
-    expect(html).toContain('value="30"')
-    expect(frontend).toContain('/api/ai/model-compare/benchmarks')
+    expect(html).toContain('name="cmpDataSource" value="snapshots"')
+    expect(html).toContain('id="cmpSnapshotList"')
+    expect(html).toContain('历史信号快照')
+    expect(frontend).toContain('/api/ai/model-compare/snapshots')
+    expect(frontend).toContain('snapshot_ids:dataSource === "snapshots"')
     expect(frontend).toContain('部分完成')
     expect(frontend).toContain('data_source:dataSource')
     expect(frontend).toContain('约束异常')

@@ -998,11 +998,15 @@ const API_ERROR_MESSAGES = {
   history_compare_cancelled: "历史模型对比已取消",
   invalid_model_signal_type: "模型返回了无法识别的交易方向",
   model_compare_no_valid_response: "该模型在本次评估中没有产生有效响应",
-  benchmark_set_not_found: "经典行情基准集不存在或已停用",
-  benchmark_market_data_insufficient: "缓存中的 M5 行情不足以生成经典行情集",
-  benchmark_market_regimes_insufficient: "当前行情覆盖的市场形态不足，请扩大生成范围后重试",
-  benchmark_outcome_candles_incomplete: "经典行情案例的后续 K 线不完整，请重新生成基准集",
-  invalid_benchmark_time_range: "经典行情生成范围无效",
+  snapshot_compare_minimum_not_met: "至少需要选择 2 条历史信号快照",
+  snapshot_compare_limit_exceeded: "一次最多选择 30 条历史信号快照",
+  snapshot_compare_selection_invalid: "所选快照不存在、无权访问或推理证据不完整",
+  snapshot_compare_strategy_mismatch: "所选快照不属于同一推理策略",
+  snapshot_compare_strategy_version_mismatch: "所选快照的策略版本不同，请按版本分别评估",
+  snapshot_compare_symbol_mismatch: "所选快照的交易品种不同，请按品种分别评估",
+  snapshot_compare_schema_mismatch: "所选快照的输出格式版本不同，请分开评估",
+  snapshot_compare_decision_time_missing: "快照缺少可靠的历史决策时间",
+  snapshot_compare_outcome_candles_incomplete: "部分快照缺少信号产生后的行情，暂时无法评分",
   symbol_required: "请选择交易品种",
   pending_price_required: "挂单缺少有效触发价",
   pending_reference_price_unavailable: "当前行情参考价不可用",
@@ -4829,7 +4833,13 @@ let _historyCompareJobId = null;
 let _historyCompareStrategies = [];
 let _historyComparePrimaryTimeframe = "";
 let _historyCompareEvaluationTimeframe = "";
-let _modelCompareBenchmarks = [];
+let _modelCompareSnapshots = [];
+let _selectedCompareSnapshotIds = new Set();
+let _selectedCompareSnapshotMeta = new Map();
+let _compareSnapshotPage = 1;
+let _compareSnapshotTotal = 0;
+const COMPARE_SNAPSHOT_PAGE_SIZE = 10;
+const COMPARE_SNAPSHOT_MAX_SELECTION = 30;
 const HISTORY_COMPARE_CONTINUOUS_LIMIT = 120;
 const HISTORY_COMPARE_CONFIRM_CALLS = 20;
 const COMPARE_TIMEFRAME_MINUTES = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440 };
@@ -4843,7 +4853,7 @@ function historyCompareEvaluationMode() {
 function historyCompareDataSource() {
   return document.querySelector('input[name="cmpDataSource"]:checked')?.value === "historical"
     ? "historical"
-    : "benchmark";
+    : "snapshots";
 }
 
 function resolveClientEvaluationTimeframe(strategy, timeframes) {
@@ -4859,7 +4869,11 @@ function historyCompareEstimate() {
   const mode = historyCompareEvaluationMode();
   const source = historyCompareDataSource();
   const modelCount = document.querySelectorAll("[data-cmp-model]:checked").length;
-  if (source === "benchmark" || mode === "sampled") {
+  if (source === "snapshots") {
+    const decisionCount = _selectedCompareSnapshotIds.size;
+    return { source, mode:"sampled", modelCount, decisionCount, calls:decisionCount * modelCount, rangeValid:decisionCount >= 2 };
+  }
+  if (mode === "sampled") {
     const decisionCount = Number($("cmpSampleSize")?.value || 12);
     return { source, mode:"sampled", modelCount, decisionCount, calls:decisionCount * modelCount, rangeValid:true };
   }
@@ -4873,76 +4887,137 @@ function historyCompareEstimate() {
 
 function updateHistoryCompareSourceUI() {
   const source = historyCompareDataSource();
-  $("cmpBenchmarkPanel")?.classList.toggle("hidden", source !== "benchmark");
+  $("cmpSnapshotSummary")?.classList.toggle("hidden", source !== "snapshots");
+  $("cmpSnapshotPanel")?.classList.toggle("hidden", source !== "snapshots");
   $("cmpHistoricalRange")?.classList.toggle("hidden", source !== "historical");
   $("cmpEvaluationModeField")?.classList.toggle("hidden", source !== "historical");
+  $("cmpSampleDepthField")?.classList.toggle("hidden", source === "snapshots");
   const sampleHint = $("cmpSampleDepthHint");
-  if (sampleHint) sampleHint.textContent = source === "benchmark"
-    ? "建议先用 8 个案例初筛，再用 12–30 个案例复评入围模型。"
-    : "系统会在完整区间内均匀抽样，避免只评估前半段行情。";
+  if (sampleHint) sampleHint.textContent = "系统会在完整区间内均匀抽样，避免只评估前半段行情。";
 }
 
-async function loadModelCompareBenchmarks() {
+function compareSnapshotDirectionLabel(value) {
+  const direction = String(value || "").toLowerCase();
+  if (direction.startsWith("buy")) return "做多";
+  if (direction.startsWith("sell")) return "做空";
+  return direction === "hold" ? "观望" : "未知";
+}
+
+function compareSnapshotTime(value) {
+  if (!value) return "--";
+  return String(value).replace("T", " ").slice(0, 16);
+}
+
+function selectedSnapshotVersion() {
+  const selected = _selectedCompareSnapshotMeta.values().next().value;
+  return selected ? Number(selected.strategy_version || 1) : null;
+}
+
+function updateCompareSnapshotSelectionSummary() {
+  const count = _selectedCompareSnapshotIds.size;
+  const version = selectedSnapshotVersion();
+  setText("cmpSnapshotSelectedCount", count ? `已选择 ${count} 条快照${version ? ` · 策略 v${version}` : ""}` : "尚未选择快照");
+  setText("cmpSnapshotSelectionHint", count
+    ? "评估任务会冻结这些快照，刷新页面不会改变本次样本"
+    : "请在右侧选择至少 2 条证据完整的历史信号");
+  if ($("cmpClearSnapshots")) $("cmpClearSnapshots").disabled = count === 0;
+  updateHistoryCompareReadiness();
+}
+
+function clearCompareSnapshotSelection({ render = true } = {}) {
+  _selectedCompareSnapshotIds = new Set();
+  _selectedCompareSnapshotMeta = new Map();
+  if (render) renderModelCompareSnapshots();
+  updateCompareSnapshotSelectionSummary();
+}
+
+function renderModelCompareSnapshots() {
+  const list = $("cmpSnapshotList");
+  if (!list) return;
+  const lockedVersion = selectedSnapshotVersion();
+  if (!_modelCompareSnapshots.length) {
+    list.innerHTML = '<div class="compare-inline-empty"><i data-lucide="archive-x" size="18"></i><span>当前策略和品种还没有可用于对比的已平仓推理快照。</span></div>';
+  } else {
+    list.innerHTML = _modelCompareSnapshots.map(item => {
+      const id = Number(item.snapshot_id);
+      const checked = _selectedCompareSnapshotIds.has(id);
+      const versionMismatch = lockedVersion != null && Number(item.strategy_version || 1) !== lockedVersion;
+      const profit = Number(item.net_profit || 0);
+      const resultClass = profit > 0 ? "positive" : profit < 0 ? "negative" : "flat";
+      return `<label class="compare-snapshot-row ${checked ? "selected" : ""} ${versionMismatch ? "version-locked" : ""}">
+        <input type="checkbox" data-cmp-snapshot value="${id}" ${checked ? "checked" : ""} ${versionMismatch ? "disabled" : ""}>
+        <span class="compare-snapshot-check"><i data-lucide="check" size="13"></i></span>
+        <span class="compare-snapshot-main"><strong>信号 #${Number(item.signal_id)} · ${escapeHtml(compareSnapshotDirectionLabel(item.original_signal_type))}</strong><small>${escapeHtml(compareSnapshotTime(item.signal_created_at))} · 原模型 ${escapeHtml(item.model_name || "--")}</small></span>
+        <span class="compare-snapshot-version">v${Number(item.strategy_version || 1)}</span>
+        <span class="compare-snapshot-result ${resultClass}">${profit > 0 ? "+" : ""}${profit.toFixed(2)}</span>
+        <span class="compare-snapshot-meta">${Number(item.trade_count || 0)} 笔成交 · ${Number(item.closed_volume || 0).toFixed(2)} 手</span>
+      </label>`;
+    }).join("");
+    list.querySelectorAll("[data-cmp-snapshot]").forEach(input => input.addEventListener("change", () => {
+      const id = Number(input.value);
+      if (input.checked) {
+        if (_selectedCompareSnapshotIds.size >= COMPARE_SNAPSHOT_MAX_SELECTION) {
+          input.checked = false;
+          toast(`每次最多选择 ${COMPARE_SNAPSHOT_MAX_SELECTION} 条历史信号快照`, "warning");
+          return;
+        }
+        _selectedCompareSnapshotIds.add(id);
+        const item = _modelCompareSnapshots.find(sample => Number(sample.snapshot_id) === id);
+        if (item) _selectedCompareSnapshotMeta.set(id, item);
+      } else {
+        _selectedCompareSnapshotIds.delete(id);
+        _selectedCompareSnapshotMeta.delete(id);
+      }
+      renderModelCompareSnapshots();
+      updateCompareSnapshotSelectionSummary();
+    }));
+  }
+  const totalPages = Math.max(1, Math.ceil(_compareSnapshotTotal / COMPARE_SNAPSHOT_PAGE_SIZE));
+  setText("cmpSnapshotResultCount", `共 ${_compareSnapshotTotal} 条可用快照`);
+  setText("cmpSnapshotPage", `第 ${_compareSnapshotPage} / ${totalPages} 页`);
+  if ($("cmpSnapshotPrev")) $("cmpSnapshotPrev").disabled = _compareSnapshotPage <= 1;
+  if ($("cmpSnapshotNext")) $("cmpSnapshotNext").disabled = _compareSnapshotPage >= totalPages;
+  initIcons();
+}
+
+async function loadModelCompareSnapshots({ resetPage = false } = {}) {
+  const strategyId = Number($("cmpStrategy")?.value || 0);
   const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
-  const select = $("cmpBenchmarkSet");
-  const summary = $("cmpBenchmarkSummary");
-  if (!select) return;
-  if (!symbol) {
-    _modelCompareBenchmarks = [];
-    select.innerHTML = '<option value="">先选择策略和品种</option>';
-    if (summary) summary.innerHTML = "<span>等待选择策略和品种</span>";
+  const list = $("cmpSnapshotList");
+  if (!list) return;
+  if (resetPage) _compareSnapshotPage = 1;
+  if (!strategyId || !symbol) {
+    _modelCompareSnapshots = [];
+    _compareSnapshotTotal = 0;
+    list.innerHTML = '<div class="compare-inline-empty"><i data-lucide="mouse-pointer-2" size="18"></i><span>先选择推理策略和交易品种。</span></div>';
+    renderModelCompareSnapshots();
     return;
   }
-  select.disabled = true;
-  select.innerHTML = '<option value="">正在加载...</option>';
+  list.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
+  const result = $("cmpSnapshotResult")?.value || "all";
   try {
-    const data = await api(`/api/ai/model-compare/benchmarks?symbol=${encodeURIComponent(symbol)}`);
-    _modelCompareBenchmarks = data.benchmarks || [];
-    select.innerHTML = _modelCompareBenchmarks.length
-      ? _modelCompareBenchmarks.map((item, index) => `<option value="${Number(item.id)}" ${index === 0 ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")
-      : '<option value="">暂无基准集，请先生成</option>';
-    updateModelCompareBenchmarkSummary();
+    const query = new URLSearchParams({ strategy_id:String(strategyId), symbol, result,
+      page:String(_compareSnapshotPage), page_size:String(COMPARE_SNAPSHOT_PAGE_SIZE) });
+    const data = await api(`/api/ai/model-compare/snapshots?${query}`);
+    _modelCompareSnapshots = data.samples || [];
+    _compareSnapshotTotal = Number(data.pagination?.total || 0);
+    renderModelCompareSnapshots();
   } catch (error) {
-    _modelCompareBenchmarks = [];
-    select.innerHTML = '<option value="">加载失败</option>';
-    if (summary) summary.innerHTML = `<span class="danger">${escapeHtml(apiErrorMessage(error.message))}</span>`;
-  } finally {
-    select.disabled = false;
-    updateHistoryCompareReadiness();
-  }
-}
-
-function updateModelCompareBenchmarkSummary() {
-  const selected = _modelCompareBenchmarks.find(item => Number(item.id) === Number($("cmpBenchmarkSet")?.value));
-  const summary = $("cmpBenchmarkSummary");
-  if (!summary) return;
-  summary.innerHTML = selected
-    ? `<strong>${selected.case_count || 0} 个固定案例</strong><span>趋势、反转、假突破与震荡 · 指纹 ${escapeHtml(String(selected.fingerprint || "").slice(0, 10))}</span>`
-    : "<span>生成后可在不同模型、不同时间重复使用同一组行情。</span>";
-}
-
-async function generateModelCompareBenchmark() {
-  const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
-  if (!symbol) return toast("请先选择策略和品种", "warning");
-  const button = $("cmpGenerateBenchmark");
-  if (button) { button.disabled = true; button.innerHTML = '<i data-lucide="loader-circle" size="15"></i>正在生成'; }
-  try {
-    await api("/api/ai/model-compare/benchmarks", { method:"POST", body:{ symbol, case_count:30 } });
-    toast("经典行情基准集已生成", "success");
-    await loadModelCompareBenchmarks();
-  } catch (error) {
-    toast("生成失败：" + apiErrorMessage(error.message), "error");
-  } finally {
-    if (button) { button.disabled = false; button.innerHTML = '<i data-lucide="sparkles" size="15"></i>生成新版本'; }
+    _modelCompareSnapshots = [];
+    _compareSnapshotTotal = 0;
+    list.innerHTML = `<div class="compare-inline-empty danger"><i data-lucide="circle-alert" size="18"></i><span>快照读取失败：${escapeHtml(apiErrorMessage(error.message))}</span></div>`;
+    setText("cmpSnapshotResultCount", "读取失败");
     initIcons();
   }
+  updateCompareSnapshotSelectionSummary();
 }
 
 function updateHistoryCompareModeUI() {
   const estimate = historyCompareEstimate();
   const sampleField = $("cmpSampleDepthField");
   const hint = $("cmpEvaluationModeHint");
-  sampleField?.classList.toggle("hidden", estimate.source === "historical" && estimate.mode === "continuous");
+  sampleField?.classList.toggle("hidden", estimate.source === "snapshots"
+    || (estimate.source === "historical" && estimate.mode === "continuous"));
   if (!hint) return;
   hint.classList.remove("warning");
   if (estimate.mode === "sampled") {
@@ -4962,6 +5037,7 @@ function updateHistoryCompareModeUI() {
 }
 
 function syncHistoryCompareStrategyInputs() {
+  clearCompareSnapshotSelection({ render:false });
   const strategyId = Number($("cmpStrategy")?.value || 0);
   const strategy = _historyCompareStrategies.find(item => Number(item.id) === strategyId);
   const symbolSelect = $("cmpSymbol");
@@ -4972,7 +5048,7 @@ function syncHistoryCompareStrategyInputs() {
     if (symbolSelect) symbolSelect.innerHTML = '<option value="">先选择策略</option>';
     if (baseline) baseline.textContent = "由策略自动决定";
     updateHistoryCompareModeUI();
-    void loadModelCompareBenchmarks();
+    void loadModelCompareSnapshots({ resetPage:true });
     return;
   }
   const parsedSymbols = parseJsonField(strategy.symbols_json, []);
@@ -4991,14 +5067,14 @@ function syncHistoryCompareStrategyInputs() {
     ? `分析 ${primaryTimeframe} · 决策 ${_historyCompareEvaluationTimeframe} · 每 ${Number(strategy.interval_minutes) || COMPARE_TIMEFRAME_MINUTES[_historyCompareEvaluationTimeframe]} 分钟`
     : "策略未配置主周期";
   updateHistoryCompareModeUI();
-  void loadModelCompareBenchmarks();
+  void loadModelCompareSnapshots({ resetPage:true });
 }
 
 function updateHistoryCompareReadiness() {
   const count = document.querySelectorAll("[data-cmp-model]:checked").length;
   const estimate = historyCompareEstimate();
-  const sourceReady = estimate.source === "benchmark"
-    ? Boolean($("cmpBenchmarkSet")?.value)
+  const sourceReady = estimate.source === "snapshots"
+    ? _selectedCompareSnapshotIds.size >= 2
     : Boolean($("cmpStartTime")?.value && $("cmpEndTime")?.value && estimate.rangeValid);
   const complete = Boolean($("cmpStrategy")?.value && $("cmpSymbol")?.value
     && sourceReady
@@ -5024,8 +5100,11 @@ function setHistoryCompareProgress(job) {
   const progress = Math.max(0, Math.min(100, Number(job?.progress_percent || 0)));
   if ($("cmpProgressFill")) $("cmpProgressFill").style.width = `${progress}%`;
   if ($("cmpProgressPercent")) $("cmpProgressPercent").textContent = `${progress}%`;
+  const snapshotMode = job?.params?.data_source === "snapshots";
   const stageLabels = {
-    queued:"等待后台执行", preparing:"正在准备历史行情", market_ready:"历史行情已就绪",
+    queued:"等待后台执行",
+    preparing:snapshotMode ? "正在校验历史信号快照" : "正在准备历史行情",
+    market_ready:snapshotMode ? "历史信号快照已就绪" : "历史行情已就绪",
     models_ready:"模型配置已就绪",
     evaluating:job?.params?.evaluation_mode === "continuous" ? "正在逐根连续回测" : "正在逐段抽样评估",
     backtesting:"正在回放订单与资金",
@@ -5116,7 +5195,7 @@ async function runHistoryCompare() {
   const strategyId = Number($("cmpStrategy")?.value || 0);
   const modelIds = [...document.querySelectorAll("[data-cmp-model]:checked")].map(cb => Number(cb.value)).filter(id => id > 0);
   const dataSource = historyCompareDataSource();
-  const evaluationMode = dataSource === "benchmark" ? "sampled" : historyCompareEvaluationMode();
+  const evaluationMode = dataSource === "snapshots" ? "sampled" : historyCompareEvaluationMode();
   const estimate = historyCompareEstimate();
   const sampleSize = Number($("cmpSampleSize")?.value) || 12;
   const startTime = compareWallTimeToUtcIso($("cmpStartTime")?.value);
@@ -5129,9 +5208,8 @@ async function runHistoryCompare() {
     max_concurrent_positions:Number($("cmpMaxConcurrentPositions")?.value || 5),
     use_bridge_account_settings:true,
   };
-  const benchmarkSetId = Number($("cmpBenchmarkSet")?.value || 0);
   if (dataSource === "historical" && (!startTime || !endTime)) return toast("请选择时间范围", "error");
-  if (dataSource === "benchmark" && !benchmarkSetId) return toast("请选择或生成经典行情基准集", "error");
+  if (dataSource === "snapshots" && _selectedCompareSnapshotIds.size < 2) return toast("请至少选择 2 条历史信号快照", "error");
   if (evaluationMode === "continuous" || estimate.calls >= HISTORY_COMPARE_CONFIRM_CALLS) {
     const continuous = evaluationMode === "continuous";
     const confirmed = await showConfirm(
@@ -5142,7 +5220,7 @@ async function runHistoryCompare() {
       {
         confirmText:continuous ? "开始连续回测" : "确认并开始",
         detailRows:[
-          ["行情来源", dataSource === "benchmark" ? "经典行情基准集" : "自选历史行情"],
+          ["行情来源", dataSource === "snapshots" ? "历史信号快照" : "自选历史行情"],
           ["分析 / 决策周期", `${_historyComparePrimaryTimeframe || "--"} / ${_historyCompareEvaluationTimeframe || "--"}`],
           [continuous ? "自然时间估算" : "评估案例", `约 ${estimate.decisionCount} 个决策点`],
           ["模型请求估算", `约 ${estimate.calls} 次`],
@@ -5165,12 +5243,12 @@ async function runHistoryCompare() {
       method: "POST", body: {
         symbol, model_ids: modelIds, strategy_id: strategyId, start_time: startTime, end_time: endTime,
         data_source:dataSource,
-        benchmark_set_id:dataSource === "benchmark" ? benchmarkSetId : null,
+        snapshot_ids:dataSource === "snapshots" ? [..._selectedCompareSnapshotIds] : null,
         timezone_offset_minutes:Number.isFinite(Number(state.mt5TimezoneOffsetMinutes))
           ? Number(state.mt5TimezoneOffsetMinutes)
           : 180,
         evaluation_mode:evaluationMode,
-        sample_size:evaluationMode === "sampled" ? sampleSize : null,
+        sample_size:dataSource === "historical" && evaluationMode === "sampled" ? sampleSize : null,
         backtest,
       },
     });
@@ -5390,7 +5468,7 @@ function renderHistoryCompareResults(results, meta) {
   const modelTokenCount = Number(meta.model_token_count || 0);
   const evidenceFingerprint = String(meta.reproducibility?.evidence_sha256 || "");
   const strategyVersion = Number(meta.reproducibility?.strategy?.strategy_version || 1);
-  const dataSourceLabel = meta.data_source === "benchmark" ? "经典行情集" : "自选历史";
+  const dataSourceLabel = meta.data_source === "snapshots" ? "历史信号快照" : "自选历史";
   const evaluationTimeframe = meta.evaluation_timeframe || meta.timeframe || "--";
   const constraintInvalidTotal = valid.reduce((sum, result) => sum
     + Number(result.directional_score?.constraint_invalid_count || 0)
@@ -5416,9 +5494,9 @@ function renderHistoryCompareResults(results, meta) {
       <div><span>实际模型调用</span><strong>${actualModelCalls}</strong><small>格式修复 ${repairModelCalls} 次 · ${modelTokenCount.toLocaleString("zh-CN")} Token</small></div>
       <div title="${escapeHtml(evidenceFingerprint)}"><span>运行证据</span><strong>${evidenceFingerprint ? evidenceFingerprint.slice(0, 12) : "--"}</strong><small>策略 v${strategyVersion} · 输入与行情已留指纹</small></div>
     </div>
-    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>${meta.data_source === "benchmark"
-      ? `本次使用固定版本经典行情集，在趋势、反转、假突破和震荡案例间均衡抽取；相同基准指纹可用于跨模型重复比较。`
-      : isContinuous ? "每个模型在每个策略决策周期闭合点读取相同的完整多周期上下文。" : "每个模型在相同的均匀抽样历史时点读取相同上下文。"} 方向质量按下一根 ${escapeHtml(evaluationTimeframe)} K 线评估，而 ${escapeHtml(meta.timeframe || "--")} 仍作为策略主分析周期。模型原始做多、做空和观望均会保留；格式、入场方式或价格关系不符合策略约束时单独标记为“约束异常”，仅禁止该建议进入虚拟成交。实盘账户状态、冷却、报价时效和 ATR 风控不参与模型排名。虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序回放订单，${isContinuous ? "属于逐根主周期连续决策 + M1 OHLC 执行回放" : "属于抽样决策 + M1 OHLC 执行回放"}。跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，顺序不明确时采用保守处理；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照；使用当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；保证金强平按方向不利的盘中极值进行保守检查。手续费和隔夜成本分开统计，隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick，资金结果不等同真实成交收益。共读取 ${meta.kline_count || 0} 根决策周期 K 线，实际调用 ${actualModelCalls} 次（格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情和逐决策输入指纹。模型输出具有随机性，因此相同证据指纹不保证输出完全一致。</p></details>`;
+    <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>${meta.data_source === "snapshots"
+      ? `本次重放自主选择的真实历史信号快照。各模型读取完全相同的原始提示词、K 线、缠论结构和当时已注入的记忆；原模型结论与实际交易结果不会进入模型输入。`
+      : isContinuous ? "每个模型在每个策略决策周期闭合点读取相同的完整多周期上下文。" : "每个模型在相同的均匀抽样历史时点读取相同上下文。"} 方向质量按下一根 ${escapeHtml(evaluationTimeframe)} K 线评估，而 ${escapeHtml(meta.timeframe || "--")} 仍作为策略主分析周期。模型原始做多、做空和观望均会保留；格式、入场方式或价格关系不符合策略约束时单独标记为“约束异常”，仅禁止该建议进入虚拟成交。实盘账户状态、冷却、报价时效和 ATR 风控不参与模型排名。虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序回放订单，${isContinuous ? "属于逐根主周期连续决策 + M1 OHLC 执行回放" : "属于抽样决策 + M1 OHLC 执行回放"}。跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，顺序不明确时采用保守处理；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照；使用当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；保证金强平按方向不利的盘中极值进行保守检查。手续费和隔夜成本分开统计，隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick，资金结果不等同真实成交收益。共读取 ${meta.kline_count || 0} 根${meta.data_source === "snapshots" ? "快照证据" : "决策周期"} K 线，实际调用 ${actualModelCalls} 次（格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情和逐决策输入指纹。模型输出具有随机性，因此相同证据指纹不保证输出完全一致。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (failedResults.length) {
@@ -5551,10 +5629,10 @@ async function loadHistoryCompareJobs({ resumeActive = true } = {}) {
         const params = job.params || {};
         const models = Array.isArray(params.model_ids) ? params.model_ids.length : 0;
         const isContinuous = params.evaluation_mode === "continuous";
-        const sourceLabel = params.data_source === "benchmark" ? "经典行情" : "自选历史";
+        const sourceLabel = params.data_source === "snapshots" ? "历史快照" : "自选历史";
         const evaluationLabel = isContinuous
           ? "连续回测 · 最多 120 个决策点"
-          : `${params.sample_size || "--"} 个评估案例`;
+          : `${params.data_source === "snapshots" ? (params.snapshot_ids?.length || 0) : (params.sample_size || "--")} 个评估案例`;
         const failureReason = job.status === "failed" && job.error
           ? `<small class="compare-cell-note danger">失败原因：${escapeHtml(apiErrorMessage(job.error))}</small>`
           : "";
@@ -6936,10 +7014,29 @@ function bindEvents() {
   });
   $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
   $("cmpRefreshHistory")?.addEventListener("click", loadHistoryCompareJobs);
-  $("cmpGenerateBenchmark")?.addEventListener("click", generateModelCompareBenchmark);
-  $("cmpBenchmarkSet")?.addEventListener("change", () => {
-    updateModelCompareBenchmarkSummary();
-    updateHistoryCompareReadiness();
+  $("cmpRefreshSnapshots")?.addEventListener("click", () => { void loadModelCompareSnapshots(); });
+  $("cmpSnapshotResult")?.addEventListener("change", () => { void loadModelCompareSnapshots({ resetPage:true }); });
+  $("cmpClearSnapshots")?.addEventListener("click", () => clearCompareSnapshotSelection());
+  $("cmpSelectSnapshotPage")?.addEventListener("click", () => {
+    const version = selectedSnapshotVersion();
+    _modelCompareSnapshots.filter(item => version == null || Number(item.strategy_version || 1) === version).forEach(item => {
+      if (_selectedCompareSnapshotIds.size >= COMPARE_SNAPSHOT_MAX_SELECTION) return;
+      const id = Number(item.snapshot_id);
+      _selectedCompareSnapshotIds.add(id);
+      _selectedCompareSnapshotMeta.set(id, item);
+    });
+    renderModelCompareSnapshots();
+    updateCompareSnapshotSelectionSummary();
+  });
+  $("cmpSnapshotPrev")?.addEventListener("click", () => {
+    if (_compareSnapshotPage <= 1) return;
+    _compareSnapshotPage -= 1;
+    void loadModelCompareSnapshots();
+  });
+  $("cmpSnapshotNext")?.addEventListener("click", () => {
+    if (_compareSnapshotPage * COMPARE_SNAPSHOT_PAGE_SIZE >= _compareSnapshotTotal) return;
+    _compareSnapshotPage += 1;
+    void loadModelCompareSnapshots();
   });
   ["cmpSymbol", "cmpStartTime", "cmpEndTime", "cmpSampleSize", "cmpStartingBalance",
     "cmpCommissionPerLot", "cmpSlippagePoints", "cmpMaxHoldingHours", "cmpMaxConcurrentPositions"].forEach(id => {
@@ -6957,7 +7054,10 @@ function bindEvents() {
       updateHistoryCompareReadiness();
     });
   });
-  $("cmpSymbol")?.addEventListener("change", () => { void loadModelCompareBenchmarks(); });
+  $("cmpSymbol")?.addEventListener("change", () => {
+    clearCompareSnapshotSelection({ render:false });
+    void loadModelCompareSnapshots({ resetPage:true });
+  });
   document.querySelectorAll("[data-cmp-range]").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll("[data-cmp-range]").forEach(item => item.classList.toggle("active", item === button));
     setDefaultCompareDates(Number(button.dataset.cmpRange) || 7, true);

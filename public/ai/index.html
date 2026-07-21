@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721zl" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721zm" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -746,7 +746,7 @@
               <div>
                 <span class="page-eyebrow">模型评估实验室</span>
                 <h1>模型对比</h1>
-                <p>让多个模型读取同一份历史行情，比较方向判断质量、稳定性和响应表现。</p>
+              <p>让多个模型读取同一份历史推理证据，比较方向判断质量、稳定性和响应表现。</p>
               </div>
               <div class="compare-method-badge"><i data-lucide="shield-check" size="16"></i><span><strong>只读评估</strong><small>不会生成信号或执行交易</small></span></div>
             </header>
@@ -764,20 +764,20 @@
                     <legend>行情来源</legend>
                     <div class="compare-mode-options">
                       <label>
-                        <input type="radio" name="cmpDataSource" value="benchmark" checked>
-                        <span><i data-lucide="library-big" size="15"></i><strong>经典行情集</strong><small>固定案例，可重复对比</small></span>
+                        <input type="radio" name="cmpDataSource" value="snapshots" checked>
+                        <span><i data-lucide="archive-restore" size="15"></i><strong>历史信号快照</strong><small>真实推理现场，可自主选择</small></span>
                       </label>
                       <label>
                         <input type="radio" name="cmpDataSource" value="historical">
                         <span><i data-lucide="calendar-range" size="15"></i><strong>自选历史</strong><small>验证特定市场区间</small></span>
                       </label>
                     </div>
-                    <p>建议优先使用经典行情集，避免随机日期恰好没有策略触发条件。</p>
+                    <p>历史快照会重放模型当时实际看到的提示词、K 线与结构证据，不会向待测模型透露原结论和交易结果。</p>
                   </fieldset>
-                  <section id="cmpBenchmarkPanel" class="compare-benchmark-panel">
-                    <label class="compare-field"><span>经典行情版本</span><select id="cmpBenchmarkSet"><option value="">正在加载...</option></select></label>
-                    <div id="cmpBenchmarkSummary" class="compare-benchmark-summary"><span>等待选择策略和品种</span></div>
-                    <button id="cmpGenerateBenchmark" type="button" class="btn btn-secondary btn-sm"><i data-lucide="sparkles" size="15"></i>生成新版本</button>
+                  <section id="cmpSnapshotSummary" class="compare-snapshot-summary">
+                    <i data-lucide="list-checks" size="16"></i>
+                    <div><strong id="cmpSnapshotSelectedCount">尚未选择快照</strong><span id="cmpSnapshotSelectionHint">请在右侧选择至少 2 条证据完整的历史信号</span></div>
+                    <button id="cmpClearSnapshots" type="button" class="btn btn-secondary btn-sm" disabled>清空</button>
                   </section>
                   <fieldset id="cmpEvaluationModeField" class="compare-mode-field hidden">
                     <legend>评估方式</legend>
@@ -837,6 +837,16 @@
               </aside>
 
               <main class="compare-main-column">
+                <section id="cmpSnapshotPanel" class="workspace-panel compare-snapshot-panel">
+                  <div class="section-heading"><div><h2>选择历史信号快照</h2><p>只展示当前管理员账户中已平仓、归因完成且推理证据完整的信号；选择后会锁定同一策略版本。</p></div><span id="cmpSnapshotResultCount" class="cmp-hint">正在读取...</span></div>
+                  <div class="compare-snapshot-toolbar">
+                    <label class="compare-field"><span>交易结果</span><select id="cmpSnapshotResult"><option value="all">全部结果</option><option value="profit">仅盈利</option><option value="loss">仅亏损</option><option value="flat">持平</option></select></label>
+                    <div class="compare-snapshot-actions"><button id="cmpSelectSnapshotPage" type="button" class="btn btn-secondary btn-sm">选择本页</button><button id="cmpRefreshSnapshots" type="button" class="icon-btn" aria-label="刷新历史信号快照"><i data-lucide="refresh-cw" size="15"></i></button></div>
+                  </div>
+                  <div id="cmpSnapshotList" class="compare-snapshot-list"><div class="workspace-skeleton"></div></div>
+                  <div class="compare-snapshot-pager"><button id="cmpSnapshotPrev" type="button" class="btn btn-secondary btn-sm" disabled>上一页</button><span id="cmpSnapshotPage">第 1 页</span><button id="cmpSnapshotNext" type="button" class="btn btn-secondary btn-sm" disabled>下一页</button></div>
+                </section>
+
                 <section class="workspace-panel compare-model-panel">
                   <div class="section-heading"><div><span class="section-kicker">步骤 2</span><h2>选择对比模型</h2><p>选择 2–5 个可用模型；所有模型使用完全相同的策略与行情上下文。</p></div><span id="cmpModelHint" class="cmp-hint"></span></div>
                   <div id="cmpModelGroup" class="cmp-model-checkboxes"></div>
@@ -1104,7 +1114,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721zl"></script>
+    <script src="/ai/app.js?v=20260721zm"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

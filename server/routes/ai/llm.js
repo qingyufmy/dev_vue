@@ -363,7 +363,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       ? /\{\{USE_CHAN\}\}/.test(effectivePrompt)
       : Boolean(config._use_chan_analysis)
     const promptWithChanRules = useChan ? `${fullPrompt}\n\n${CHAN_DIVERGENCE_RULE}` : fullPrompt
-    const cleanPrompt = promptWithChanRules.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
+    const replaySystemPrompt = typeof config._comparison_replay_system_prompt === 'string'
+      ? config._comparison_replay_system_prompt.trim()
+      : ''
+    const cleanPrompt = replaySystemPrompt || promptWithChanRules.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
     console.log(`[LLM] Chan analysis: ${useChan ? 'enabled' : 'disabled'}`)
 
     const aiPayload = config._market_only ? { ...market } : {
@@ -414,12 +417,14 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       usage: config._usage || 'manual',
       strategyId: config._strategyId || null,
     } : null
-    const renderedUserPrompt = '市场数据 JSON：\n' + JSON.stringify(aiPayload)
+    const renderedUserPrompt = typeof config._comparison_replay_user_prompt === 'string'
+      ? config._comparison_replay_user_prompt
+      : '市场数据 JSON：\n' + JSON.stringify(aiPayload)
     if (typeof config._onInferencePrepared === 'function') {
       config._onInferencePrepared({
         systemPrompt: cleanPrompt,
         userPrompt: renderedUserPrompt,
-        outputSchemaVersion: sha256(outputFormat),
+        outputSchemaVersion: config._comparison_replay_output_schema_version || sha256(outputFormat),
         aiPayload,
       })
     }

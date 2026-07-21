@@ -605,6 +605,36 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).toContain('禁止仅以时间、有效期或过期为理由输出 cancel_pending')
   })
 
+  it('模型对比快照重放使用原始提示词而不是重新渲染当前行情', async () => {
+    mockFetch.mockResolvedValue({
+      ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
+        signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+        analysis:'等待确认', reasoning:'原始证据不足',
+      }) } }] }),
+    })
+    let evidence
+    await maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      _comparison_mode:true,
+      _comparison_replay_system_prompt:'stored system prompt',
+      _comparison_replay_user_prompt:'stored user prompt',
+      _comparison_replay_output_schema_version:'stored-schema-v4',
+      _onInferencePrepared:value => { evidence = value },
+    }, { symbol:'XAUUSD', timeframe:'M5', latest_price:2000, strategy_context:{ timeframes:{} } })
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body.messages).toEqual([
+      { role:'system', content:'stored system prompt' },
+      { role:'user', content:'stored user prompt' },
+    ])
+    expect(evidence).toMatchObject({
+      systemPrompt:'stored system prompt',
+      userPrompt:'stored user prompt',
+      outputSchemaVersion:'stored-schema-v4',
+    })
+  })
+
   it('共享推理只渲染市场白名单并回传可复现提示词证据', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
