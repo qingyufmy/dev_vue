@@ -22,7 +22,7 @@ Run focused tests with `npx vitest run tests/ai/strategy.test.js`. Build the Win
 
 ## Coding Style & Naming Conventions
 
-Use two-space indentation, semicolon-free JavaScript, and ESM `import`/`export`. Follow existing names: `camelCase` for functions and variables, `PascalCase` for classes, and kebab-case module filenames. Keep UI copy in Chinese and internal error codes stable. Use parameterized SQL placeholders; never concatenate user input. Prefer small route modules and shared helpers over duplicating AI, risk, or time logic.
+Use two-space indentation, semicolon-free JavaScript, and ESM `import`/`export`. Follow existing names: `camelCase` for functions and variables, `PascalCase` for classes, and kebab-case module filenames. No repository-wide formatter or linter is configured, so match nearby code and run `node --check` on edited JavaScript. Keep UI copy in Chinese and internal error codes stable. Use parameterized SQL placeholders; never concatenate user input.
 
 ## Testing Guidelines
 
