@@ -536,6 +536,10 @@ describe('handleHistoryCompare', () => {
     })
 
     it('replays the exact stored prompts for selected closed-trade snapshots', async () => {
+      mockGetStrategyById.mockResolvedValueOnce({
+        id:1, scope:'platform', symbols_json:'["XAUUSD"]', system_prompt:'current-v5-prompt',
+        version:5, include_portfolio_context:0, interval_minutes:30,
+      })
       const samples = [0, 1].map(index => ({
         snapshot_id:101 + index,
         signal_id:501 + index,
@@ -543,14 +547,24 @@ describe('handleHistoryCompare', () => {
         strategy_version:4,
         symbol:'XAUUSD',
         output_schema_version:'schema-v4',
-        system_prompt:`stored-system-${index}`,
-        user_prompt:`stored-user-${index}`,
+        strategy_scope:'private',
+        system_prompt:`stored-system-${index}\nentry_method 只允许 stop_limit`,
+        user_prompt:JSON.stringify({ strategy_context:{ timeframes:{
+          M5:{ klines:Array(60).fill({ close:2000 }) },
+          H1:{ klines:Array(40).fill({ close:2000 }) },
+        } } }),
         prompt_hash:`prompt-${index}`,
         content_hash:`content-${index}`,
         signal_created_at:index ? '2026-07-01 08:45:00' : '2026-07-01 08:15:00',
-        market_snapshot:{ symbol:'XAUUSD', timeframe:'M30', primary_timeframe:'M30', latest_price:2000 + index },
-        klines:{ M30:[{
+        market_snapshot:{
+          symbol:'XAUUSD', timeframe:'H1', primary_timeframe:'H1', latest_price:2000 + index,
+          strategy_context:{ chan_structures:{ M5:{ status:'ok' } } },
+        },
+        klines:{ M5:[{
           time:new Date(Date.UTC(2026, 6, 1, 0, index * 30)).toISOString(),
+          open:2000, high:2010, low:1990, close:2005,
+        }], H1:[{
+          time:new Date(Date.UTC(2026, 6, 1, 0, 0)).toISOString(),
           open:2000, high:2010, low:1990, close:2005,
         }] },
         original_signal_type:'buy',
@@ -575,11 +589,23 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.data_source).toBe('snapshots')
       expect(result.meta.snapshot_selection.snapshot_ids).toEqual([101, 102])
       expect(result.meta.reproducibility.strategy.strategy_version).toBe(4)
+      expect(result.meta.reproducibility.evaluator_strategy.strategy_version).toBe(4)
+      expect(result.meta.evaluation_timeframe).toBe('M5')
       expect(result.results[0].signals[0].decision_time_utc_msc).toBe(Date.UTC(2026, 6, 1, 0, 15))
       expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
-        _comparison_replay_system_prompt:'stored-system-0',
-        _comparison_replay_user_prompt:'stored-user-0',
+        _comparison_replay_system_prompt:'stored-system-0\nentry_method 只允许 stop_limit',
+        _comparison_replay_user_prompt:samples[0].user_prompt,
         _comparison_replay_output_schema_version:'schema-v4',
+        _allowed_entry_methods:['stop_limit'],
+        _market_data_plan:{
+          primary_timeframe:'H1',
+          timeframes:[
+            { timeframe:'M5', kline_count:60 },
+            { timeframe:'H1', kline_count:40 },
+          ],
+        },
+        _use_chan_analysis:true,
+        _market_only:false,
       }), expect.any(Object), expect.any(String))
     })
 
@@ -651,7 +677,7 @@ describe('handleHistoryCompare', () => {
       })
       expect(result.results[0].directional_score).toMatchObject({
         buy_count:expect.any(Number), hold_count:0, constraint_invalid_count:expect.any(Number),
-        executable_count:0, output_compliance_rate:0,
+        executable_count:0, output_compliance_rate:0, average_confidence:80,
       })
       expect(result.meta.account_simulation_status).toBe('not_applicable')
     })

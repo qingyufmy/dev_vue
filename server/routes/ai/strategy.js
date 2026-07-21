@@ -181,10 +181,8 @@ function snapshotTimeframes(samples = []) {
     .sort((a, b) => TIMEFRAME_MINUTES[a] - TIMEFRAME_MINUTES[b])
 }
 
-function resolveSnapshotEvaluationTimeframe(snapshotRun, preferred = 'M5') {
-  const available = snapshotTimeframes(snapshotRun?.samples)
-  const normalizedPreferred = String(preferred || '').toUpperCase()
-  return available.includes(normalizedPreferred) ? normalizedPreferred : available[0] || null
+function resolveLockedSnapshotEvaluationTimeframe(snapshotRun) {
+  return snapshotTimeframes(snapshotRun?.samples)[0] || null
 }
 
 function snapshotPrimaryTimeframe(snapshotRun, fallback = 'M5') {
@@ -1023,7 +1021,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     || resolveStrategyEvaluationTimeframe(strategy, planItems) || '').toUpperCase()
   if (snapshotRun) requestedTimeframe = snapshotPrimaryTimeframe(snapshotRun, requestedTimeframe)
   const evaluationTimeframe = snapshotRun
-    ? resolveSnapshotEvaluationTimeframe(snapshotRun, configuredEvaluationTimeframe)
+    ? resolveLockedSnapshotEvaluationTimeframe(snapshotRun)
     : configuredEvaluationTimeframe
   if (!evaluationTimeframe) return { status:'error', message:'strategy_evaluation_timeframe_invalid' }
   const backtestOptions = normalizeBacktestOptions(params.backtest || {})
@@ -1053,12 +1051,23 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     scope:snapshotRun.samples[0]?.strategy_scope || strategy.scope || null,
     system_prompt_sha256:comparisonFingerprint(snapshotRun.samples[0]?.system_prompt || ''),
     market_data_plan:snapshotPlan,
-    entry_methods:snapshotAllowedEntryMethods(snapshotRun.samples[0], policy.entryMethods),
+    entry_methods:snapshotAllowedEntryMethods(snapshotRun.samples[0], ['market', 'limit', 'stop', 'stop_limit']),
     use_chan_analysis:snapshotChanEnabled,
     interval_minutes:Number(TIMEFRAME_MINUTES[evaluationTimeframe] || 0),
     evidence_source:'inference_snapshot',
   } : evaluatorStrategySnapshot
   strategyRuntimeSnapshot.runtime_config_sha256 = comparisonFingerprint(strategyRuntimeSnapshot)
+  const runtimePolicy = snapshotRun ? {
+    entryMethods:strategyRuntimeSnapshot.entry_methods,
+    marketDataPlan:strategyRuntimeSnapshot.market_data_plan,
+    useChanAnalysis:strategyRuntimeSnapshot.use_chan_analysis,
+    marketOnly:strategyRuntimeSnapshot.scope === 'platform',
+  } : {
+    entryMethods:policy.entryMethods,
+    marketDataPlan:policy.marketDataPlan,
+    useChanAnalysis:policy.useChanAnalysis,
+    marketOnly:strategy.scope === 'platform',
+  }
 
   const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params.timezone_offset_minutes)
   let normalizedTimeRange
@@ -1311,11 +1320,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _model_profile_id: resolved.model_profile_id,
         _credential_source: resolved.credential_source,
         _allowed_entry_methods:decisionPoint.snapshotSample
-          ? snapshotAllowedEntryMethods(decisionPoint.snapshotSample, policy.entryMethods)
-          : policy.entryMethods,
-        _market_data_plan: policy.marketDataPlan,
-        _use_chan_analysis: policy.useChanAnalysis,
-        _market_only: strategy.scope === 'platform',
+          ? snapshotAllowedEntryMethods(decisionPoint.snapshotSample, runtimePolicy.entryMethods)
+          : runtimePolicy.entryMethods,
+        _market_data_plan:runtimePolicy.marketDataPlan,
+        _use_chan_analysis:runtimePolicy.useChanAnalysis,
+        _market_only:runtimePolicy.marketOnly,
         _ai_volume_min: 0.01,
         _ai_volume_max: 1.0,
         _ai_volume_step: 0.01,
@@ -1547,8 +1556,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     const completedModelResponses = successfulCount + downgradedCount
     const responseSuccessRate = signals.length > 0 ? (successfulCount / signals.length) * 100 : 0
     const actionRate = successfulCount > 0 ? (tradeCount / successfulCount) * 100 : 0
-    const averageConfidence = successfulCount > 0
-      ? signals.filter(s => ['actionable', 'model_hold'].includes(s.decision_class)).reduce((sum, s) => sum + Number(s.confidence || 0), 0) / successfulCount
+    const confidenceSignals = signals.filter(s => ['actionable', 'constraint_invalid', 'model_hold'].includes(s.decision_class))
+    const averageConfidence = confidenceSignals.length > 0
+      ? confidenceSignals.reduce((sum, s) => sum + Number(s.confidence || 0), 0) / confidenceSignals.length
       : 0
     const averageLatency = signals.length > 0
       ? signals.reduce((sum, s) => sum + Number(s.latency_ms || 0), 0) / signals.length
@@ -1647,7 +1657,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     run_version:'history-compare-v7',
     reproducibility_level:'input_auditable_model_nondeterministic',
     strategy:strategyRuntimeSnapshot,
-    evaluator_strategy:dataSource === 'snapshots' ? evaluatorStrategySnapshot : null,
+    evaluator_strategy:dataSource === 'snapshots' ? strategyRuntimeSnapshot : null,
     models:Object.values(modelRuntimeSnapshots),
     market_data:marketDataEvidence,
     execution_data:comparisonRatesEvidence(
@@ -1866,7 +1876,7 @@ export async function startHistoryCompareJob(userId, params) {
     ? resolveStrategyEvaluationTimeframe(strategy, strategyPlanItems)
     : null
   const snapshotEvaluationTimeframe = snapshotRun
-    ? resolveSnapshotEvaluationTimeframe(snapshotRun, configuredEvaluationTimeframe)
+    ? resolveLockedSnapshotEvaluationTimeframe(snapshotRun)
     : null
   const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params?.timezone_offset_minutes)
   const snapshotDecisions = snapshotRun?.samples.map(sample => snapshotDecisionPoint(
