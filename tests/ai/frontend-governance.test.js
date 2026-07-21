@@ -104,6 +104,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('function periodReviewEvidenceReasonText(value)')
     expect(app).toContain('当天策略升级，按版本分别复盘')
     expect(css).toContain('.review-version-split-note')
+    expect(app).toContain('class="review-case-metrics"')
+    expect(css).toContain('#review-memory .review-case-button {')
+    expect(css).toContain('.review-case-metrics {')
   })
 
   it('uses cursor pagination and request versions to prevent stale inference list data', () => {

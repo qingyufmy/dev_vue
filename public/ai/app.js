@@ -2354,14 +2354,14 @@ function renderReviewCases() {
     const profit = Number(stats.net_profit || 0);
     const versionKey = [item.period_key, item.trading_account_id, item.strategy_id].join(":");
     const hasVersionSplit = !isMonthly && (dailyVersionSets.get(versionKey)?.size || 0) > 1;
-    return `<button class="workspace-row review-case-button ${selected ? 'selected' : ''} ${Number(item.is_unread) ? 'is-unread' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}">
+    return `<button class="review-case-button ${selected ? 'selected' : ''} ${Number(item.is_unread) ? 'is-unread' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}" aria-label="打开${isMonthly ? '月' : '日'}复盘 ${escapeHtml(item.period_key)}，策略版本 v${Number(item.strategy_version || 1)}，${escapeHtml(reviewStatusLabel(effectiveStatus))}">
       <span class="review-unread-dot ${Number(item.is_unread) ? '' : 'hidden'}" aria-label="未读复盘"></span>
       <span class="review-case-leading ${statusClass(item.status)}"><i data-lucide="${icon}" size="16"></i></span>
-      <span class="workspace-row-main">
-        <span class="workspace-row-title"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="review-version-badge">v${Number(item.strategy_version || 1)}</span><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
+      <span class="review-case-main">
+        <span class="review-case-head"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="review-version-badge">v${Number(item.strategy_version || 1)}</span><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
         <span class="review-case-strategy">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</span>
         ${hasVersionSplit ? '<span class="review-version-split-note"><i data-lucide="git-branch" size="12"></i>当天策略升级，按版本分别复盘</span>' : ''}
-        <span class="workspace-row-meta"><span>${isMonthly ? `${Number(stats.trading_days || 0)} 个交易日` : `${Number(stats.trade_count || item.source_count || 0)} 笔交易`}</span><span class="${profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''}">净收益 ${fmt(profit, 2)}</span></span>
+        <span class="review-case-metrics"><span><small>${isMonthly ? '交易日' : '交易数量'}</small><strong>${isMonthly ? Number(stats.trading_days || 0) : Number(stats.trade_count || item.source_count || 0)}${isMonthly ? ' 天' : ' 笔'}</strong></span><span><small>净收益</small><strong class="${profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''}">${fmt(profit, 2)}</strong></span></span>
       </span>
       <span class="review-case-arrow" aria-hidden="true"><i data-lucide="chevron-right" size="16"></i></span>
     </button>`;
