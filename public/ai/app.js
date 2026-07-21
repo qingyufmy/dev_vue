@@ -1007,6 +1007,25 @@ const API_ERROR_MESSAGES = {
   snapshot_compare_schema_mismatch: "所选快照的输出格式版本不同，请分开评估",
   snapshot_compare_decision_time_missing: "快照缺少可靠的历史决策时间",
   snapshot_compare_outcome_candles_incomplete: "部分快照缺少信号产生后的行情，暂时无法评分",
+  broker_contract_constraint: "订单不符合 MT5 合约约束",
+  pending_price_too_close: "挂单价格距离当时报价过近",
+  market_order_not_allowed: "该合约不允许市价单",
+  limit_order_not_allowed: "该合约不允许限价单",
+  stop_order_not_allowed: "该合约不允许止损挂单",
+  stop_limit_order_not_allowed: "该合约不允许止损限价单",
+  stop_loss_not_allowed: "该合约不允许设置止损",
+  take_profit_not_allowed: "该合约不允许设置止盈",
+  volume_out_of_range: "下单手数超出合约范围",
+  volume_step_mismatch: "下单手数不符合合约步进",
+  directional_volume_limit_exceeded: "同方向下单总手数超过合约限制",
+  reference_quote_unavailable: "缺少可用于回放的参考报价",
+  entry_reference_invalid: "订单入场参考价无效",
+  stop_loss_too_close: "止损距离入场价过近",
+  take_profit_too_close: "止盈距离入场价过近",
+  max_pending_orders_reached: "挂单数量已达模拟上限",
+  max_concurrent_positions_reached: "持仓数量已达模拟上限",
+  margin_calculation_unavailable: "无法可靠计算所需保证金",
+  insufficient_free_margin: "模拟账户可用保证金不足",
   symbol_required: "请选择交易品种",
   pending_price_required: "挂单缺少有效触发价",
   pending_reference_price_unavailable: "当前行情参考价不可用",
@@ -1085,8 +1104,13 @@ function syncAiAccess(access) {
 }
 
 function apiErrorMessage(code) {
-  if (String(code).startsWith('active_subscription_conflict:')) return '已有其他策略启用自动推理，请先关闭原订阅或确认切换';
-  return API_ERROR_MESSAGES[code] || code;
+  const raw = String(code || "未知错误");
+  if (raw.startsWith('active_subscription_conflict:')) return '已有其他策略启用自动推理，请先关闭原订阅或确认切换';
+  if (API_ERROR_MESSAGES[raw]) return API_ERROR_MESSAGES[raw];
+  return raw
+    .replace(/The operation was aborted due to timeout/gi, "模型请求超时")
+    .replace(/request timed out/gi, "模型请求超时")
+    .replace(/\btimeout\b/gi, "请求超时");
 }
 
 async function api(path, options = {}) {
@@ -5467,16 +5491,21 @@ function renderHistoryCompareResults(results, meta) {
   const repairModelCalls = Number(meta.repair_model_calls || 0);
   const modelTokenCount = Number(meta.model_token_count || 0);
   const evidenceFingerprint = String(meta.reproducibility?.evidence_sha256 || "");
-  const strategyVersion = Number(meta.reproducibility?.strategy?.strategy_version || 1);
+  const strategyVersion = Number(meta.snapshot_selection?.strategy_version
+    ?? meta.reproducibility?.strategy?.strategy_version ?? 1);
   const dataSourceLabel = meta.data_source === "snapshots" ? "历史信号快照" : "自选历史";
   const evaluationTimeframe = meta.evaluation_timeframe || meta.timeframe || "--";
   const constraintInvalidTotal = valid.reduce((sum, result) => sum
     + Number(result.directional_score?.constraint_invalid_count || 0)
     + Number(result.directional_score?.downgraded_count || 0), 0);
+  const evaluationCount = Number(meta.evaluation_count || 0);
+  const lowSample = meta.data_source === "snapshots" && evaluationCount < 5;
   const conclusion = !leader
     ? "本次没有模型给出可评估方向"
     : directionHasUniqueLeader
-      ? `${escapeHtml(leader.model_name)} 的方向判断更稳定`
+      ? lowSample
+        ? `${escapeHtml(leader.model_name)} 暂时领先，但样本不足`
+        : `${escapeHtml(leader.model_name)} 的方向判断更稳定`
       : "多个模型的方向质量暂时并列";
   const directionLeaderLabel = !leader
     ? "无可评估方向"
@@ -5485,6 +5514,7 @@ function renderHistoryCompareResults(results, meta) {
     ? "没有形成模拟成交"
     : replayHasUniqueLeader ? escapeHtml(replayLeader.model_name) : `${replayLeaderTies.length} 个模型并列`;
   let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${conclusion}</h2><p>保留模型原始方向；输出约束校验与虚拟资金回放分开计算。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(dataSourceLabel)}</span></header>
+    ${lowSample ? `<div class="compare-sample-warning"><i data-lucide="flask-conical" size="17"></i><span><strong>当前仅 ${evaluationCount} 个案例，只能验证模型与回放链路</strong><small>至少选择 5 个案例后再比较方向质量；正式选择模型建议使用 10 个以上。</small></span></div>` : ""}
     <div class="compare-summary-grid">
       <div><span>方向领先</span><strong>${directionLeaderLabel}</strong><small>${leader ? `方向质量分 ${directionLeaderScore.toFixed(1)}` : "本次只有观望或异常响应"}</small></div>
       <div><span>资金回放领先</span><strong>${replayLeaderLabel}</strong><small>${replayLeader ? `净收益 ${replayLeaderProfit.toFixed(2)}` : replayModels.length ? "订单均未成交" : "执行数据暂不可用"}</small></div>
@@ -5496,7 +5526,7 @@ function renderHistoryCompareResults(results, meta) {
     </div>
     <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>${meta.data_source === "snapshots"
       ? `本次重放自主选择的真实历史信号快照。各模型读取完全相同的原始提示词、K 线、缠论结构和当时已注入的记忆；原模型结论与实际交易结果不会进入模型输入。`
-      : isContinuous ? "每个模型在每个策略决策周期闭合点读取相同的完整多周期上下文。" : "每个模型在相同的均匀抽样历史时点读取相同上下文。"} 方向质量按下一根 ${escapeHtml(evaluationTimeframe)} K 线评估，而 ${escapeHtml(meta.timeframe || "--")} 仍作为策略主分析周期。模型原始做多、做空和观望均会保留；格式、入场方式或价格关系不符合策略约束时单独标记为“约束异常”，仅禁止该建议进入虚拟成交。实盘账户状态、冷却、报价时效和 ATR 风控不参与模型排名。虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序回放订单，${isContinuous ? "属于逐根主周期连续决策 + M1 OHLC 执行回放" : "属于抽样决策 + M1 OHLC 执行回放"}。跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，顺序不明确时采用保守处理；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照；使用当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；保证金强平按方向不利的盘中极值进行保守检查。手续费和隔夜成本分开统计，隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick，资金结果不等同真实成交收益。共读取 ${meta.kline_count || 0} 根${meta.data_source === "snapshots" ? "快照证据" : "决策周期"} K 线，实际调用 ${actualModelCalls} 次（格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情和逐决策输入指纹。模型输出具有随机性，因此相同证据指纹不保证输出完全一致。</p></details>`;
+      : isContinuous ? "每个模型在每个策略决策周期闭合点读取相同的完整多周期上下文。" : "每个模型在相同的均匀抽样历史时点读取相同上下文。"} 方向质量按下一根 ${escapeHtml(evaluationTimeframe)} K 线评估，而 ${escapeHtml(meta.timeframe || "--")} 仍作为策略主分析周期。模型原始做多、做空和观望均会保留；格式、入场方式或价格关系不符合策略约束时单独标记为“约束异常”，仅禁止该建议进入虚拟成交。实盘账户状态、冷却、报价时效和 ATR 风控不参与模型排名。虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序回放订单，${isContinuous ? "属于逐根主周期连续决策 + M1 OHLC 执行回放" : "属于抽样决策 + M1 OHLC 执行回放"}。跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，顺序不明确时采用保守处理；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照；使用当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；保证金强平按方向不利的盘中极值进行保守检查。手续费和隔夜成本分开统计，隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick，资金结果不等同真实成交收益。模型实际读取 ${meta.model_input_kline_count || meta.kline_count || 0} 根 K 线${meta.archived_visualization_kline_count ? `；另保存 ${meta.archived_visualization_kline_count} 根图表证据用于复核` : ""}。实际调用 ${actualModelCalls} 次（格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情和逐决策输入指纹。模型输出具有随机性，因此相同证据指纹不保证输出完全一致。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (failedResults.length) {
@@ -5513,7 +5543,9 @@ function renderHistoryCompareResults(results, meta) {
     tableHtml += `<section class="compare-model-errors compare-model-warnings"><div><i data-lucide="circle-alert" size="18"></i><span><strong>${partialResults.length} 个模型仅部分完成</strong><small>有效结果仍参与排名，缺失时点会降低响应成功率和方向质量分</small></span></div><ul>${partialDetails}</ul></section>`;
   }
   if (replaySorted.length) {
-    tableHtml += renderCompareEquityChart(replaySorted, meta);
+    tableHtml += replayRanked.length
+      ? renderCompareEquityChart(replayRanked, meta)
+      : '<section class="compare-inline-empty"><i data-lucide="circle-minus" size="18"></i><span>本次没有形成已平仓模拟交易，不绘制无意义的平直资金曲线；下表仍保留挂单拒绝与未触发原因。</span></section>';
     tableHtml += `<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>${isContinuous ? "连续账户资金回测" : "抽样账户资金回放"}</h2><p>同一模型的全部${isContinuous ? "连续决策" : "抽样"}信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">${isContinuous ? "逐根决策" : "抽样信号"} · ${escapeHtml(meta.execution_timeframe || "M1")} 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>交易成本</th><th>保证金状态</th><th>未触发 / 同柱待定 / 歧义</th></tr></thead><tbody>`;
     replaySorted.forEach(result => {
       const simulation = result.account_simulation;
@@ -5528,6 +5560,13 @@ function renderHistoryCompareResults(results, meta) {
       };
       const marginStatus = marginStatusLabels[simulation.margin_calculation_status] || "计算方式未知";
       const marginStatusDanger = ["partial", "unavailable"].includes(simulation.margin_calculation_status);
+      const rejectionReasons = [...new Set((simulation.trades || [])
+        .filter(record => record.status === "rejected")
+        .map(record => apiErrorMessage(record.broker_reason || record.reason)))]
+        .filter(Boolean);
+      const rejectionNote = rejectionReasons.length
+        ? `<small class="compare-cell-note danger" title="${escapeHtml(rejectionReasons.join("；"))}">拒绝原因：${escapeHtml(rejectionReasons.join("；"))}</small>`
+        : "";
       tableHtml += `<tr><td><strong>${escapeHtml(result.model_name)}</strong><small class="compare-cell-note">${escapeHtml(modelProviderLabel(result.provider))}</small></td>
         <td>${Number(simulation.ending_balance || 0).toFixed(2)} <small class="compare-cell-note">${escapeHtml(simulation.account_currency || "")}</small></td>
         <td class="${Number(simulation.net_profit || 0) >= 0 ? "compare-profit-positive" : "compare-profit-negative"}">${Number(simulation.net_profit || 0).toFixed(2)}</td>
@@ -5536,7 +5575,7 @@ function renderHistoryCompareResults(results, meta) {
         <td>${Number(simulation.max_drawdown || 0).toFixed(2)} <small class="compare-cell-note">${Number(simulation.max_drawdown_pct || 0).toFixed(2)}%</small></td>
         <td>${simulation.profit_factor == null ? "∞" : Number(simulation.profit_factor || 0).toFixed(2)}</td>
         <td><strong>手续费 ${Number(simulation.total_commission || 0).toFixed(2)}</strong><small class="compare-cell-note ${simulation.swap_status === "partial" ? "danger" : ""}">隔夜 ${Number(simulation.total_swap || 0).toFixed(2)}${simulation.swap_status === "partial" ? " · 部分未计入" : ""}</small></td>
-        <td><strong>${simulation.lowest_margin_level_pct == null ? "--" : `${Number(simulation.lowest_margin_level_pct).toFixed(1)}%`}</strong><small class="compare-cell-note ${marginStatusDanger ? "danger" : ""}">${marginStatus}${simulation.margin_calculation_unavailable_count ? ` · ${simulation.margin_calculation_unavailable_count} 笔未计算` : ""}</small><small class="compare-cell-note">峰值 ${simulation.maximum_concurrent_positions || 0} 仓 · 强平 ${simulation.stop_out_count || 0} · 拒绝 ${simulation.rejected_order_count || 0}</small></td>
+        <td><strong>${simulation.lowest_margin_level_pct == null ? "--" : `${Number(simulation.lowest_margin_level_pct).toFixed(1)}%`}</strong><small class="compare-cell-note ${marginStatusDanger ? "danger" : ""}">${marginStatus}${simulation.margin_calculation_unavailable_count ? ` · ${simulation.margin_calculation_unavailable_count} 笔未计算` : ""}</small><small class="compare-cell-note">峰值 ${simulation.maximum_concurrent_positions || 0} 仓 · 强平 ${simulation.stop_out_count || 0} · 拒绝 ${simulation.rejected_order_count || 0}</small>${rejectionNote}</td>
         <td>${simulation.expired_order_count || 0} / ${sameBarDeferredCount} / ${simulation.ambiguous_bar_count || 0}</td></tr>`;
     });
     tableHtml += "</tbody></table></div></section>";
@@ -5565,7 +5604,7 @@ function renderHistoryCompareResults(results, meta) {
     tableHtml += '</tbody></table></div></section>';
   }
   $("cmpResultsTableWrap").innerHTML = tableHtml;
-  bindCompareEquityChart(replaySorted, meta);
+  bindCompareEquityChart(replayRanked, meta);
   const validWithSignals = valid.filter(r => r.signals?.length);
   let timelineHtml = "";
   if (validWithSignals.length) {

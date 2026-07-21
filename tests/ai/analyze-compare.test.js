@@ -547,6 +547,7 @@ describe('handleHistoryCompare', () => {
         user_prompt:`stored-user-${index}`,
         prompt_hash:`prompt-${index}`,
         content_hash:`content-${index}`,
+        signal_created_at:index ? '2026-07-01 08:45:00' : '2026-07-01 08:15:00',
         market_snapshot:{ symbol:'XAUUSD', timeframe:'M30', primary_timeframe:'M30', latest_price:2000 + index },
         klines:{ M30:[{
           time:new Date(Date.UTC(2026, 6, 1, 0, index * 30)).toISOString(),
@@ -573,6 +574,8 @@ describe('handleHistoryCompare', () => {
       expect(result.status).toBe('success')
       expect(result.meta.data_source).toBe('snapshots')
       expect(result.meta.snapshot_selection.snapshot_ids).toEqual([101, 102])
+      expect(result.meta.reproducibility.strategy.strategy_version).toBe(4)
+      expect(result.results[0].signals[0].decision_time_utc_msc).toBe(Date.UTC(2026, 6, 1, 0, 15))
       expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
         _comparison_replay_system_prompt:'stored-system-0',
         _comparison_replay_user_prompt:'stored-user-0',
@@ -754,7 +757,7 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.repair_model_calls).toBe(0)
       expect(result.meta.model_token_count).toBe(16 * 123)
       expect(result.meta.reproducibility).toMatchObject({
-        run_version:'history-compare-v6',
+        run_version:'history-compare-v7',
         reproducibility_level:'input_auditable_model_nondeterministic',
         strategy:{
           strategy_id:1,
@@ -942,6 +945,18 @@ describe('POST /ai/model-compare/history route', () => {
 })
 
 describe('historical comparison execution windows', () => {
+  it('uses the persisted inference instant and aligns only the next evaluation candle', () => {
+    const point = __historyCompareJobsTest.snapshotDecisionPoint({
+      signal_created_at:'2026-07-20 10:15:07',
+      klines:{ H1:[{ time:'2026-07-20 05:00:00' }] },
+    }, 'M5', 180)
+    expect(point).toEqual({
+      decisionUtcMs:Date.UTC(2026, 6, 20, 2, 15, 7),
+      outcomeOpenUtcMs:Date.UTC(2026, 6, 20, 2, 20),
+      timeframe:'M5',
+    })
+  })
+
   it('includes the M1 candle at the configured holding horizon', () => {
     const decisionTime = Date.UTC(2026, 6, 20, 10, 0, 0)
     const evaluationEnd = decisionTime + 4 * 60 * 60 * 1000
@@ -1094,7 +1109,7 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('role="img"')
     expect(frontend).toContain('抽样资金曲线')
     expect(frontend).toContain('execution_timezone_offset_minutes')
-    expect(frontend).toContain('bindCompareEquityChart(replaySorted, meta)')
+    expect(frontend).toContain('bindCompareEquityChart(replayRanked, meta)')
   })
 
   it('supports an explicitly confirmed continuous mode with a hard decision cap', () => {
@@ -1120,6 +1135,16 @@ describe('historical comparison frontend contract', () => {
     expect(frontend).toContain('meta.reproducibility?.evidence_sha256')
     expect(frontend).toContain('输入与行情已留指纹')
     expect(frontend).toContain('模型输出具有随机性')
+  })
+
+  it('labels low-sample snapshot rankings and explains replay rejection reasons', () => {
+    expect(frontend).toContain('当前仅 ${evaluationCount} 个案例')
+    expect(frontend).toContain('至少选择 5 个案例后再比较方向质量')
+    expect(frontend).toContain('模型实际读取 ${meta.model_input_kline_count || meta.kline_count || 0} 根 K 线')
+    expect(frontend).toContain('record.broker_reason || record.reason')
+    expect(frontend).toContain('挂单价格距离当时报价过近')
+    expect(frontend).toContain('meta.snapshot_selection?.strategy_version')
+    expect(frontend).toContain('模型请求超时')
   })
 
   it('shows localized failure details in recent comparison jobs', () => {
