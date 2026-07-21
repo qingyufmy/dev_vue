@@ -465,6 +465,18 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.trading-workspace .trading-grid > .card[hidden]')
   })
 
+  it('frames risk and review workspaces around the decisions users need to make', () => {
+    expect(html).toContain('data-workspace-target="status"><i data-lucide="shield-check" size="15"></i>能否交易')
+    expect(html).toContain('data-workspace-target="rules"><i data-lucide="sliders-horizontal" size="15"></i>我的限制')
+    expect(html).toContain('data-workspace-target="decisions"><i data-lucide="list-checks" size="15"></i>风控记录')
+    expect(html).toContain('class="insight-strip review-insight-strip"')
+    expect(html).toContain('id="reviewJobInsight"')
+    expect(html).toContain('进行中 / 失败')
+    expect(html).toContain('data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘')
+    expect(app).toContain('jobInsight.classList.toggle("danger", failed > 0)')
+    expect(css).toContain('.review-insight-strip')
+  })
+
   it('renders inference charts from the selected inference snapshot on demand', () => {
     expect(app).toContain('signal?.inference_snapshot')
     expect(app).toContain('仅展示推理发生时的数据')

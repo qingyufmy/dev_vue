@@ -2438,7 +2438,7 @@ async function loadRiskCenter() {
   const haltedRows = rows.filter(row => row.risk_state?.halt_status !== "active");
   const incompleteRows = rows.filter(row => row.risk_state?.data_complete === false || Number(row.risk_state?.data_complete) === 0);
   const overview = $("riskOverview");
-  if (overview) overview.innerHTML = `<div class="insight-item ${haltedRows.length ? 'danger' : 'success'}"><span>交易状态</span><strong>${haltedRows.length ? `${haltedRows.length} 个账户暂停` : '可以交易'}</strong><small>${haltedRows.length ? '请查看下方具体原因' : '未发现账户级停止条件'}</small></div><div class="insight-item"><span>交易账户</span><strong class="num">${rows.length}</strong><small>已登记账户</small></div><div class="insight-item success"><span>规则应用</span><strong>立即生效</strong><small>保存后下一笔风控计算直接使用</small></div><div class="insight-item ${incompleteRows.length ? 'warning' : ''}"><span>数据完整性</span><strong>${incompleteRows.length ? `${incompleteRows.length} 个异常` : '正常'}</strong><small>账户与行情风控数据</small></div>`;
+  if (overview) overview.innerHTML = `<div class="insight-item ${haltedRows.length ? 'danger' : 'success'}"><span>现在能否交易</span><strong>${haltedRows.length ? `${haltedRows.length} 个账户暂停` : '可以交易'}</strong><small>${haltedRows.length ? '请查看下方具体原因' : '未发现停止新开仓的条件'}</small></div><div class="insight-item ${incompleteRows.length ? 'warning' : ''}"><span>交易账户</span><strong class="num">${rows.length}</strong><small>${incompleteRows.length ? `${incompleteRows.length} 个账户数据异常` : '账户和行情数据正常'}</small></div><div class="insight-item success"><span>修改规则后</span><strong>立即生效</strong><small>下一笔订单直接使用新限制</small></div>`;
   const statusHost = $("riskStatusList");
   if (statusHost) statusHost.innerHTML = rows.length ? rows.map(row => {
     const stateInfo = row.risk_state || {}, active = stateInfo.halt_status === "active", dataComplete = !(stateInfo.data_complete === false || Number(stateInfo.data_complete) === 0);
@@ -2519,6 +2519,11 @@ function renderReviewSummary(summary = state.reviewSummary) {
   setText("reviewPendingStat", Number(summary.pending_confirmation || 0));
   setText("reviewGeneratingStat", Number(summary.generating || 0));
   setText("reviewFailedStat", failed);
+  const jobInsight = $("reviewJobInsight");
+  if (jobInsight) {
+    jobInsight.classList.toggle("danger", failed > 0);
+    jobInsight.classList.toggle("warning", failed === 0 && Number(summary.generating || 0) > 0);
+  }
   setText("reviewAllCount", Number(summary.total || 0));
   setText("reviewDailyCount", Number(summary.daily_total || 0));
   setText("reviewMonthlyCount", Number(summary.monthly_total || 0));
@@ -3991,10 +3996,10 @@ function applyRoleUI() {
   document.querySelectorAll('.user-only').forEach(el => {
     el.style.display = isAdmin ? 'none' : '';
   });
-  setText("memoryTabLabel", isAdmin ? "平台记忆" : "我的记忆");
+  setText("memoryTabLabel", isAdmin ? "平台记忆" : "策略记忆");
   setText("memoryActiveLabel", isAdmin ? "已发布记忆" : "有效记忆");
-  setText("memoryActiveHelp", isAdmin ? "可用于平台策略" : "可用于后续推理");
-  setText("memorySectionTitle", isAdmin ? "平台策略记忆" : "我的交易记忆");
+  setText("memoryActiveHelp", isAdmin ? "可用于平台策略" : "可用于后续分析");
+  setText("memorySectionTitle", isAdmin ? "平台策略记忆" : "我的策略记忆");
   setText("memorySectionDescription", isAdmin
     ? "来自观摩账户复盘的策略记忆先进入候选区，经发布后才会用于其绑定的平台策略。"
     : "这里只保留你已经确认的经验，可以随时暂停或撤销。");

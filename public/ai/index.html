@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721zs" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721zt" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -617,11 +617,11 @@
           <div class="workspace-page risk-workspace">
             <header class="workspace-header calm-page-header"><div><span class="page-eyebrow">账户安全与交易边界</span><h1>AI风控师</h1><p>先确认账户是否可以交易，再按需查看个人限制和放行记录。</p></div><button class="btn btn-secondary" data-action="refresh-risk-center"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
             <section id="riskOverview" class="insight-strip risk-overview-strip" aria-label="风险状态概览"><div class="workspace-skeleton"></div></section>
-            <div class="workspace-subtabs" role="tablist" aria-label="风控中心视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="risk" data-workspace-target="status"><i data-lucide="activity" size="15"></i>当前状态</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="rules"><i data-lucide="sliders-horizontal" size="15"></i>我的规则</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="decisions"><i data-lucide="list-checks" size="15"></i>执行记录</button></div>
+            <div class="workspace-subtabs" role="tablist" aria-label="AI风控师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="risk" data-workspace-target="status"><i data-lucide="shield-check" size="15"></i>能否交易</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="rules"><i data-lucide="sliders-horizontal" size="15"></i>我的限制</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="risk" data-workspace-target="decisions"><i data-lucide="list-checks" size="15"></i>风控记录</button></div>
             <section class="workspace-subpanel active" data-workspace-panel="risk" data-workspace-view="status"><div id="riskStatusList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
             <section class="workspace-subpanel" data-workspace-panel="risk" data-workspace-view="rules" hidden><div class="risk-legend compact"><span><i class="legend-dot effective"></i>最终有效</span><span><i class="legend-dot user"></i>我的设置</span><span><i class="legend-dot platform"></i>平台边界</span><span><i class="legend-dot effective"></i>保存后立即生效</span></div><div id="riskAccountsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
             <section class="workspace-panel workspace-subpanel" data-workspace-panel="risk" data-workspace-view="decisions" hidden>
-              <div class="section-heading"><div><h2>最近执行决策</h2><p>优先显示风控结论和具体原因，计算明细按需查看。</p></div></div>
+              <div class="section-heading"><div><h2>最近风控记录</h2><p>每次下单是否放行、调整或拒绝，以及具体原因都记录在这里。</p></div></div>
               <div id="executionDecisionList" class="workspace-list"><div class="workspace-skeleton"></div></div>
               <div id="executionDecisionPager" class="pager" aria-label="执行决策分页"></div>
             </section>
@@ -631,9 +631,9 @@
         <section id="review-memory" class="tab-panel">
           <div class="workspace-page review-memory-workspace">
             <header class="workspace-header calm-page-header"><div><span class="page-eyebrow">复盘、总结与策略记忆</span><h1>AI复盘师</h1><p>确认日月复盘，把真正有价值的结论沉淀为后续分析可用的策略记忆。</p></div><button class="btn btn-secondary" data-action="refresh-review-memory"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
-            <section class="insight-strip" aria-label="复盘与记忆概览"><div class="insight-item primary"><span>待我确认</span><strong id="reviewPendingStat" class="num">--</strong><small>需要阅读的复盘</small></div><div class="insight-item"><span>生成中</span><strong id="reviewGeneratingStat" class="num">--</strong><small>后台正在处理</small></div><div class="insight-item"><span>生成失败</span><strong id="reviewFailedStat" class="num">--</strong><small>可查看原因或重试</small></div><div class="insight-item"><span id="memoryActiveLabel">有效记忆</span><strong id="memoryActiveStat" class="num">--</strong><small id="memoryActiveHelp">可用于后续推理</small></div></section>
+            <section class="insight-strip review-insight-strip" aria-label="复盘与记忆概览"><div class="insight-item primary"><span>待我处理</span><strong id="reviewPendingStat" class="num">--</strong><small>阅读并确认复盘结论</small></div><div id="reviewJobInsight" class="insight-item"><span>生成任务</span><strong class="review-job-counts"><span id="reviewGeneratingStat" class="num">--</span><em>/</em><span id="reviewFailedStat" class="num">--</span></strong><small>进行中 / 失败</small></div><div class="insight-item"><span id="memoryActiveLabel">有效记忆</span><strong id="memoryActiveStat" class="num">--</strong><small id="memoryActiveHelp">可用于后续分析</small></div></section>
             <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
-            <div class="workspace-subtabs" role="tablist" aria-label="复盘与记忆视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>周期复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">我的记忆</span></button></div>
+            <div class="workspace-subtabs" role="tablist" aria-label="AI复盘师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">策略记忆</span></button></div>
             <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout period-review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>策略复盘</h2></div><span class="review-queue-hint">按日、按月沉淀</span></div><div class="review-period-tabs" role="tablist" aria-label="复盘周期筛选"><button class="active" data-review-period="">全部 <span id="reviewAllCount">0</span></button><button data-review-period="daily">日复盘 <span id="reviewDailyCount">0</span></button><button data-review-period="monthly">月复盘 <span id="reviewMonthlyCount">0</span></button></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" data-review-filter="">全部</button><button data-review-filter="pending">待生成</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="calendar-search" size="22"></i></span><strong>选择一个复盘周期</strong><span>查看系统统计、校对 AI 结论，确认后再沉淀为策略记忆。</span></div></aside></div></section>
             <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
               <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only" style="display:none"></div><div id="platformExperienceEvaluation" class="platform-experience-evaluation admin-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
@@ -1103,7 +1103,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721zs"></script>
+    <script src="/ai/app.js?v=20260721zt"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">
