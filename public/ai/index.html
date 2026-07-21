@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721zr" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721zs" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -402,9 +402,8 @@
             <section class="workspace-panel strategy-command-panel" aria-labelledby="strategyWorkspaceTitle">
               <header class="workspace-header model-strategy-toolbar strategy-control-header"><div><span class="section-kicker">当前工作区</span><h2 id="strategyWorkspaceTitle">交易策略</h2><p>一套策略统一行情、模型、入场方式与自动运行设置。</p></div><div class="toolbar-actions"><span id="strategyCatalogSummary" class="catalog-summary">正在加载策略…</span><button id="addPrivateStrategyBtn" class="btn btn-primary btn-sm"><i data-lucide="plus" size="15"></i>新建策略</button></div></header>
               <div class="strategy-summary-panel" aria-label="策略概览">
-                <div class="strategy-summary-item"><span>全部策略</span><strong id="strategyTotalStat" class="num">--</strong><small>平台与我的策略</small></div>
-                <div class="strategy-summary-item"><span>当前可用</span><strong id="strategyAvailableStat" class="num">--</strong><small>可用于分析</small></div>
-                <div class="strategy-summary-item is-running"><span>自动运行</span><strong id="strategyRunningStat" class="num">--</strong><small>已启用的订阅</small></div>
+                <div class="strategy-summary-item is-running"><span>正在自动运行</span><strong id="strategyRunningStat" class="num">--</strong><small>已启用的分析订阅</small></div>
+                <div class="strategy-summary-item"><span>可用策略</span><strong class="strategy-count-pair"><span id="strategyAvailableStat" class="num">--</span><em>/</em><span id="strategyTotalStat" class="num">--</span></strong><small>可用 / 全部</small></div>
                 <div class="strategy-model-summary"><div class="strategy-model-icon" aria-hidden="true"><i data-lucide="cpu" size="18"></i></div><div><span>当前分析模型</span><strong id="strategyModelSource">正在选择…</strong></div><button class="text-action" data-tab-jump="model-management">管理模型<i data-lucide="arrow-right" size="13"></i></button></div>
               </div>
             </section>
@@ -542,8 +541,12 @@
             <div><span>可用保证金</span><strong id="tradeAccountFreeMargin" class="num">--</strong></div>
             <button class="card-action-btn" data-action="refresh-trading-page"><i data-lucide="refresh-cw" size="12"></i>刷新账户</button>
           </div>
+          <div class="workspace-subtabs trading-view-tabs" role="tablist" aria-label="AI交易员视图">
+            <button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="trading" data-workspace-target="orders"><i data-lucide="briefcase-business" size="15"></i>订单管理</button>
+            <button type="button" role="tab" aria-selected="false" tabindex="-1" data-workspace-tab="trading" data-workspace-target="manual"><i data-lucide="mouse-pointer-click" size="15"></i>手动下单</button>
+          </div>
           <div class="trading-grid">
-            <div class="card observer-action-panel">
+            <div class="card observer-action-panel workspace-subpanel trading-manual-panel" data-workspace-panel="trading" data-workspace-view="manual" hidden>
               <div class="card-header">
                 <span class="card-title">手动交易</span>
                 <button class="card-action-btn" data-action="refresh-quote"><i data-lucide="refresh-cw" size="12"></i>报价</button>
@@ -581,7 +584,7 @@
                 <button id="sellBtn" class="btn btn-sell"><span><i data-lucide="arrow-down-right" size="16"></i>卖出</span><strong id="sellBtnPrice" class="order-btn-price num">--</strong></button>
               </div>
             </div>
-            <div class="card">
+            <div class="card workspace-subpanel active" data-workspace-panel="trading" data-workspace-view="orders">
               <div class="card-header">
                 <span class="card-title">持仓管理</span>
                 <button class="card-action-btn" data-action="refresh-positions"><i data-lucide="refresh-cw" size="12"></i>持仓</button>
@@ -593,7 +596,7 @@
                 </table>
               </div>
             </div>
-            <div class="card">
+            <div class="card workspace-subpanel active" data-workspace-panel="trading" data-workspace-view="orders">
               <div class="card-header">
                 <span class="card-title">挂单管理</span>
                 <button class="card-action-btn" data-action="refresh-pending"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
@@ -1100,7 +1103,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721zr"></script>
+    <script src="/ai/app.js?v=20260721zs"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

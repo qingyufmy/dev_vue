@@ -455,6 +455,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.topbar-context-status .status-badge')
   })
 
+  it('separates order management from manual trading and keeps the active strategy summary focused', () => {
+    expect(html).toContain('data-workspace-tab="trading" data-workspace-target="orders"')
+    expect(html).toContain('data-workspace-tab="trading" data-workspace-target="manual"')
+    expect(html.match(/data-workspace-panel="trading" data-workspace-view="orders"/g)).toHaveLength(2)
+    expect(html).toContain('class="card observer-action-panel workspace-subpanel trading-manual-panel"')
+    expect(html).toContain('正在自动运行')
+    expect(html).toContain('class="strategy-count-pair"')
+    expect(css).toContain('.trading-workspace .trading-grid > .card[hidden]')
+  })
+
   it('renders inference charts from the selected inference snapshot on demand', () => {
     expect(app).toContain('signal?.inference_snapshot')
     expect(app).toContain('仅展示推理发生时的数据')

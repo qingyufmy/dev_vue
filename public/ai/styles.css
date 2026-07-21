@@ -5987,6 +5987,30 @@ a.signal-link:hover {
   margin-bottom: 0;
 }
 
+.trading-view-tabs {
+  align-self: flex-start;
+}
+
+.trading-workspace .trading-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.trading-workspace .trading-grid > .card {
+  grid-column: auto;
+  grid-row: auto;
+  margin: 0;
+}
+
+.trading-workspace .trading-grid > .card[hidden] {
+  display: none;
+}
+
+.trading-manual-panel {
+  width: min(100%, 760px);
+}
+
 .strategy-control-header {
   min-height: 86px;
   padding: 15px 18px 14px;
@@ -6021,7 +6045,7 @@ a.signal-link:hover {
 
 .strategy-summary-panel {
   display: grid;
-  grid-template-columns: repeat(3, minmax(112px, .55fr)) minmax(300px, 1.8fr);
+  grid-template-columns: minmax(150px, .65fr) minmax(150px, .65fr) minmax(300px, 1.7fr);
   min-width: 0;
 }
 
@@ -7022,6 +7046,19 @@ a.signal-link:hover {
   font-family: var(--font-ui);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.strategy-count-pair {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.strategy-count-pair em {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 500;
 }
 
 .risk-input-with-unit {
@@ -8042,7 +8079,7 @@ a.signal-link:hover {
   .insight-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .insight-item:nth-child(odd) { border-left: 0; }
   .insight-item:nth-child(n + 3) { border-top: 1px solid var(--calm-border); }
-  .strategy-summary-panel { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .strategy-summary-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .strategy-model-summary {
     grid-column: 1 / -1;
     border-top: 1px solid var(--calm-border);
