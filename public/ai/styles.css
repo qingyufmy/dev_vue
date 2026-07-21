@@ -648,6 +648,7 @@ button {
 
 .sidebar {
   grid-area: sidebar;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -722,6 +723,7 @@ button {
 .main {
   grid-area: main;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-6);
   background:
@@ -8185,11 +8187,11 @@ a.signal-link:hover {
 .compare-snapshot-toolbar .compare-field { width:min(220px,100%); }
 .compare-snapshot-actions { display:flex; align-items:center; gap:8px; }
 .compare-snapshot-list { display:flex; flex-direction:column; min-height:180px; border-top:1px solid var(--border-subtle); }
-.compare-snapshot-row { display:grid; grid-template-columns:22px minmax(180px,1fr) auto minmax(76px,auto); grid-template-areas:"check main version result" ". meta meta meta"; column-gap:10px; row-gap:4px; align-items:center; min-height:62px; padding:10px 8px; border-bottom:1px solid var(--border-subtle); cursor:pointer; transition:background-color .16s ease; }
+.compare-snapshot-row { position:relative; display:grid; grid-template-columns:22px minmax(180px,1fr) auto minmax(76px,auto); grid-template-areas:"check main version result" ". meta meta meta"; column-gap:10px; row-gap:4px; align-items:center; min-height:62px; padding:10px 8px; border-bottom:1px solid var(--border-subtle); cursor:pointer; transition:background-color .16s ease; }
 .compare-snapshot-row:hover { background:rgba(148,163,184,.045); }
 .compare-snapshot-row.selected { background:rgba(212,175,55,.055); }
 .compare-snapshot-row.version-locked { cursor:not-allowed; opacity:.48; }
-.compare-snapshot-row > input { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+.compare-snapshot-row > input { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); opacity:0; pointer-events:none; }
 .compare-snapshot-check { grid-area:check; display:grid; width:20px; height:20px; place-items:center; border:1px solid var(--border-strong); border-radius:5px; color:transparent; }
 .compare-snapshot-row:has(input:checked) .compare-snapshot-check { border-color:var(--gold-primary); background:var(--gold-primary); color:#111827; }
 .compare-snapshot-row:has(input:focus-visible) .compare-snapshot-check { box-shadow:0 0 0 3px rgba(212,175,55,.16); }

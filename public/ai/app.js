@@ -4955,6 +4955,20 @@ function clearCompareSnapshotSelection({ render = true } = {}) {
   updateCompareSnapshotSelectionSummary();
 }
 
+function syncModelCompareSnapshotSelection() {
+  const lockedVersion = selectedSnapshotVersion();
+  document.querySelectorAll("[data-cmp-snapshot]").forEach(input => {
+    const id = Number(input.value);
+    const item = _modelCompareSnapshots.find(sample => Number(sample.snapshot_id) === id);
+    const checked = _selectedCompareSnapshotIds.has(id);
+    const versionMismatch = lockedVersion != null && Number(item?.strategy_version || 1) !== lockedVersion;
+    input.checked = checked;
+    input.disabled = versionMismatch;
+    input.closest(".compare-snapshot-row")?.classList.toggle("selected", checked);
+    input.closest(".compare-snapshot-row")?.classList.toggle("version-locked", versionMismatch);
+  });
+}
+
 function renderModelCompareSnapshots() {
   const list = $("cmpSnapshotList");
   if (!list) return;
@@ -4992,7 +5006,7 @@ function renderModelCompareSnapshots() {
         _selectedCompareSnapshotIds.delete(id);
         _selectedCompareSnapshotMeta.delete(id);
       }
-      renderModelCompareSnapshots();
+      syncModelCompareSnapshotSelection();
       updateCompareSnapshotSelectionSummary();
     }));
   }

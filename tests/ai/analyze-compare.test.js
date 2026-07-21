@@ -1019,6 +1019,14 @@ describe('historical comparison frontend contract', () => {
 
   const frontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 
+  it('keeps snapshot selection inside the application scroll container', () => {
+    const styles = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
+    expect(frontend).toContain('function syncModelCompareSnapshotSelection()')
+    expect(frontend).toContain('syncModelCompareSnapshotSelection();\n      updateCompareSnapshotSelectionSummary();')
+    expect(styles).toMatch(/\.main\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+    expect(styles).toMatch(/\.compare-snapshot-row\s*\{[^}]*position:\s*relative;/s)
+  })
+
   it('polls background jobs and supports cancellation', () => {
     expect(frontend).toContain('/api/ai/model-compare/history/${encodeURIComponent(jobId)}')
     expect(frontend).toContain('{ method:"DELETE" }')
