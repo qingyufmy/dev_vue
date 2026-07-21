@@ -225,6 +225,18 @@ describe('scheduler wait cadence', () => {
   })
 })
 
+describe('fixed schedule slots', () => {
+  it('aligns the next run to the next five-minute wall-clock boundary', () => {
+    const at = Date.parse('2026-07-21T12:03:40.000Z')
+    expect(__schedulerTest.secondsUntilNextScheduleSlot(5, at)).toBe(80)
+  })
+
+  it('moves a completed boundary to the following slot', () => {
+    const at = Date.parse('2026-07-21T12:05:00.000Z')
+    expect(__schedulerTest.secondsUntilNextScheduleSlot(5, at)).toBe(300)
+  })
+})
+
 describe('resolveEffectiveSymbols (Fix 3)', () => {
   it('NULL returns strategy all symbols', async () => {
     const { resolveEffectiveSymbols } = await import('../../server/routes/ai/config.js')

@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { gzipSync, gunzipSync } from 'node:zlib'
 import { beijingNow, queryOne } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
 
@@ -8,6 +9,8 @@ const ACCOUNT_PRIVATE_KEY = new Set([
   'account', 'balance', 'equity', 'credit', 'margin', 'free_margin', 'margin_level',
   'positions', 'pending_orders', 'profit', 'total_profit', 'risk_level', 'personal_risk',
 ])
+const COMPRESSED_JSON_PREFIX = 'gzip-base64:'
+const SNAPSHOT_COMPRESSION_MIN_BYTES = 4096
 
 export function sha256(value) {
   return crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex')
@@ -90,6 +93,27 @@ function stripEmbeddedKlines(market) {
 
 function byteLength(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8')
+}
+
+export function encodeSnapshotJson(value, minimumBytes = SNAPSHOT_COMPRESSION_MIN_BYTES) {
+  const json = JSON.stringify(value ?? {})
+  if (Buffer.byteLength(json, 'utf8') < minimumBytes) return json
+  const compressed = `${COMPRESSED_JSON_PREFIX}${gzipSync(json, { level: 6 }).toString('base64')}`
+  return Buffer.byteLength(compressed, 'utf8') < Buffer.byteLength(json, 'utf8') ? compressed : json
+}
+
+export function parseSnapshotJson(value, fallback = {}) {
+  if (value == null || value === '') return fallback
+  if (typeof value === 'object') return value
+  try {
+    const text = String(value)
+    const json = text.startsWith(COMPRESSED_JSON_PREFIX)
+      ? gunzipSync(Buffer.from(text.slice(COMPRESSED_JSON_PREFIX.length), 'base64')).toString('utf8')
+      : text
+    return JSON.parse(json)
+  } catch {
+    return fallback
+  }
 }
 
 function fitKlinesToSnapshotBudget(stored, maxBytes, minimumBars = 50) {
@@ -181,23 +205,17 @@ export async function persistInferenceSnapshotTx(run, input) {
     row.signalId || null, row.strategyId ?? null, row.strategyVersion || 1, row.strategyScope, row.ownerUserId || 0,
     row.standardSymbol, row.marketSource, row.systemPrompt, row.userPrompt, row.promptHash,
     row.modelProfileId || null, row.provider || null, row.modelName || null, row.credentialSource || 'none',
-    row.outputSchemaVersion, JSON.stringify(row.klines || {}), JSON.stringify(row.marketSnapshot || {}),
+    row.outputSchemaVersion, encodeSnapshotJson(row.klines || {}), JSON.stringify(row.marketSnapshot || {}),
     row.memoryMode || 'off', row.evidenceStatus, JSON.stringify(row.omittedFields), row.contentHash, row.byteSize,
     row.createdAt || beijingNow(),
   ])
   return result.insertId
 }
 
-function parseJson(value, fallback) {
-  if (value == null || value === '') return fallback
-  if (typeof value === 'object') return value
-  try { return JSON.parse(value) } catch { return fallback }
-}
-
 export function inferenceVisualizationSnapshot(row) {
   if (!row) return null
-  const klines = parseJson(row.klines_json, {})
-  const marketSnapshot = clean(parseJson(row.market_snapshot_json, {}))
+  const klines = parseSnapshotJson(row.klines_json, {})
+  const marketSnapshot = clean(parseSnapshotJson(row.market_snapshot_json, {}))
   const frames = marketSnapshot?.strategy_context?.timeframes || {}
   for (const value of Object.values(frames)) {
     if (value && typeof value === 'object') delete value.klines
@@ -208,7 +226,7 @@ export function inferenceVisualizationSnapshot(row) {
     standard_symbol: row.standard_symbol || null,
     market_source: row.market_source || null,
     evidence_status: row.evidence_status || 'incomplete',
-    omitted_fields: parseJson(row.omitted_fields_json, []),
+    omitted_fields: parseSnapshotJson(row.omitted_fields_json, []),
     klines,
     market_snapshot: marketSnapshot,
     created_at: row.created_at || null,

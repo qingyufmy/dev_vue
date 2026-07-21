@@ -169,6 +169,10 @@ async function trackedModelRequest({
 }) {
   let usageLogId = null
   let providerRequestStarted = false
+  const startedAt = Date.now()
+  const requestBody = JSON.stringify(body)
+  const requestBytes = Buffer.byteLength(requestBody, 'utf8')
+  let responseBytes = 0
   try {
     if (usageContext) {
       const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
@@ -187,7 +191,7 @@ async function trackedModelRequest({
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: requestBody,
       signal: requestSignal,
       redirect: 'error',
     })
@@ -196,12 +200,13 @@ async function trackedModelRequest({
       throw new Error(phase === 'repair' && !code.startsWith('kimi_code_') ? code.replace(/^LLM/, 'LLM repair') : code)
     }
     const data = await response.json()
+    responseBytes = Buffer.byteLength(JSON.stringify(data), 'utf8')
     const reportedTokens = extractTokenCount(data)
     const fallbackTokens = Math.ceil((JSON.stringify(body).length + JSON.stringify(data).length) / 4)
     const tokenCount = reportedTokens || fallbackTokens
     if (usageLogId) {
       try {
-        await finishModelUsage(usageLogId, { tokenCount, status: 'success' })
+        await finishModelUsage(usageLogId, { tokenCount, status: 'success', requestBytes, responseBytes, durationMs: Date.now() - startedAt })
       } catch (logError) {
         // The reservation remains at its conservative estimate. Do not repeat a
         // provider call merely because post-call accounting could not finalize.
@@ -209,12 +214,13 @@ async function trackedModelRequest({
       }
       usageLogId = null
     }
-    await emitProviderTelemetry(onProviderUsage, { phase, status: 'success', tokenCount })
+    await emitProviderTelemetry(onProviderUsage, { phase, status: 'success', tokenCount, requestBytes, responseBytes, durationMs: Date.now() - startedAt })
     return { response, data }
   } catch (error) {
     if (usageLogId) {
       try {
-        await finishModelUsage(usageLogId, { tokenCount: 0, status: 'error', errorCode: error.message })
+        await finishModelUsage(usageLogId, { tokenCount: 0, status: 'error', errorCode: error.message,
+          requestBytes, responseBytes, durationMs: Date.now() - startedAt })
       } catch (logError) {
         console.error('[LLM] Failed to finalize usage log:', logError.message)
       }
@@ -222,6 +228,7 @@ async function trackedModelRequest({
     if (providerRequestStarted) {
       await emitProviderTelemetry(onProviderUsage, {
         phase, status: 'error', tokenCount: 0, errorCode: error.message,
+        requestBytes, responseBytes, durationMs: Date.now() - startedAt,
       })
     }
     throw error

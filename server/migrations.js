@@ -2952,6 +2952,21 @@ const migrations = [
         [serverKey, login, row.user_id, row.id, verifiedAt, beijingNow(), beijingNow()])
       }
     }
+  },
+  {
+    id: '116_inference_storage_and_network_metrics',
+    async up() {
+      const wanted = {
+        request_bytes: 'BIGINT NOT NULL DEFAULT 0',
+        response_bytes: 'BIGINT NOT NULL DEFAULT 0',
+        duration_ms: 'INT NOT NULL DEFAULT 0',
+      }
+      const columns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_usage_logs'`)).map(row => row.COLUMN_NAME))
+      for (const [name, definition] of Object.entries(wanted)) {
+        if (!columns.has(name)) await queryRun(`ALTER TABLE ai_model_usage_logs ADD COLUMN ${name} ${definition}`)
+      }
+    }
   }
 ]
 

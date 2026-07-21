@@ -142,6 +142,8 @@ describe('requestJsonObject', () => {
     expect(onProviderUsage).toHaveBeenCalledTimes(2)
     expect(onProviderUsage.mock.calls.every(([event]) =>
       event.status === 'success' && event.tokenCount > 0)).toBe(true)
+    expect(onProviderUsage.mock.calls.every(([event]) =>
+      event.requestBytes > 0 && event.responseBytes > 0 && event.durationMs >= 0)).toBe(true)
   })
 
   it('JSON 结构校验失败时要求模型修复并再次校验', async () => {

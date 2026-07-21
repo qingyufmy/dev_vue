@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { queryAll, queryOne } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
+import { parseSnapshotJson } from './inference-snapshots.js'
 
 const MIN_SELECTED_SNAPSHOTS = 2
 const MAX_SELECTED_SNAPSHOTS = 30
@@ -143,8 +144,8 @@ export async function resolveModelSnapshotSelection(userId, snapshotIds, expecte
     user_prompt:row.user_prompt,
     prompt_hash:row.prompt_hash,
     content_hash:row.content_hash,
-    market_snapshot:parseJson(row.market_snapshot_json, {}),
-    klines:parseJson(row.klines_json, {}),
+    market_snapshot:parseSnapshotJson(row.market_snapshot_json, {}),
+    klines:parseSnapshotJson(row.klines_json, {}),
     memory_mode:row.memory_mode || 'off',
   }))
   const fingerprint = crypto.createHash('sha256').update(JSON.stringify(samples.map(sample => ({

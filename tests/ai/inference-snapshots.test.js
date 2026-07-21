@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   buildSharedMarketSnapshot,
   inferenceVisualizationSnapshot,
+  encodeSnapshotJson,
+  parseSnapshotJson,
   prepareInferenceSnapshot,
   persistInferenceSnapshotTx,
   sanitizeInferenceEvidence,
@@ -37,6 +39,14 @@ describe('shared market inference boundary', () => {
 })
 
 describe('inference snapshot evidence', () => {
+  it('compresses large K-line JSON and reads both compressed and legacy rows', () => {
+    const value = { M5: Array.from({ length: 500 }, (_, index) => ({ time:index, open:4000, high:4002, low:3998, close:4001 })) }
+    const encoded = encodeSnapshotJson(value)
+    expect(encoded.startsWith('gzip-base64:')).toBe(true)
+    expect(parseSnapshotJson(encoded)).toEqual(value)
+    expect(parseSnapshotJson(JSON.stringify(value))).toEqual(value)
+    expect(Buffer.byteLength(encoded)).toBeLessThan(Buffer.byteLength(JSON.stringify(value)) * 0.4)
+  })
   it('builds a chart-safe client snapshot without prompts', () => {
     const result = inferenceVisualizationSnapshot({
       id: 8,
@@ -120,5 +130,15 @@ describe('inference snapshot evidence', () => {
     expect(id).toBe(7)
     expect(run.mock.calls[0][0]).not.toMatch(/api_key|authorization/i)
     expect(JSON.stringify(run.mock.calls[0][1])).not.toContain('Bearer')
+  })
+
+  it('persists large K-line evidence in compressed form', async () => {
+    const run = vi.fn().mockResolvedValue([{ insertId: 8 }])
+    await persistInferenceSnapshotTx(run, {
+      signalId:2, strategyId:3, strategyScope:'platform', standardSymbol:'XAUUSD', marketSource:'platform_market_bridge',
+      systemPrompt:'s', userPrompt:'u', outputSchemaVersion:'v1', credentialSource:'platform_primary',
+      klines:{ M5:Array.from({ length:300 }, (_, index) => ({ time:index, open:1, high:2, low:0, close:1 })) },
+    })
+    expect(run.mock.calls[0][1][15]).toMatch(/^gzip-base64:/)
   })
 })

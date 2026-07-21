@@ -408,8 +408,10 @@ describe('model usage accounting', () => {
 
   it('finalizes a reservation with actual tokens and status', async () => {
     mockQueryRun.mockResolvedValueOnce({ changes: 1 })
-    await finishModelUsage(44, { tokenCount: 321, status: 'error', errorCode: 'provider_timeout' })
-    expect(mockQueryRun).toHaveBeenCalledWith(expect.stringContaining("request_status = 'reserved'"), [321, 'error', 'provider_timeout', 44])
+    await finishModelUsage(44, { tokenCount: 321, status: 'error', errorCode: 'provider_timeout',
+      requestBytes:1200, responseBytes:300, durationMs:4500 })
+    expect(mockQueryRun).toHaveBeenCalledWith(expect.stringContaining("request_status = 'reserved'"),
+      [321, 'error', 'provider_timeout', 1200, 300, 4500, 44])
   })
 
   it('recovers abandoned reservations without discarding their reserved quota', async () => {

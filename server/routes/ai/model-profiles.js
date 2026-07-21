@@ -382,14 +382,17 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
   })
 }
 
-export async function finishModelUsage(logId, { tokenCount = 0, status = 'success', errorCode = null } = {}) {
+export async function finishModelUsage(logId, { tokenCount = 0, status = 'success', errorCode = null,
+  requestBytes = 0, responseBytes = 0, durationMs = 0 } = {}) {
   if (!logId) return
   const safeTokens = Math.max(0, Math.trunc(Number(tokenCount) || 0))
   await queryRun(
     `UPDATE ai_model_usage_logs
-     SET token_count = ?, request_status = ?, error_code = ?
+     SET token_count = ?, request_status = ?, error_code = ?, request_bytes = ?, response_bytes = ?, duration_ms = ?
      WHERE id = ? AND request_status = 'reserved'`,
-    [safeTokens, status, errorCode ? String(errorCode).slice(0, 128) : null, logId]
+    [safeTokens, status, errorCode ? String(errorCode).slice(0, 128) : null,
+      Math.max(0, Math.trunc(Number(requestBytes) || 0)), Math.max(0, Math.trunc(Number(responseBytes) || 0)),
+      Math.max(0, Math.trunc(Number(durationMs) || 0)), logId]
   )
 }
 

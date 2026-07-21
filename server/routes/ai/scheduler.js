@@ -648,6 +648,12 @@ function schedulerWaitLabel(reason) {
   return labels[reason] || `等待条件恢复（${reason}）`
 }
 
+function secondsUntilNextScheduleSlot(intervalMinutes, nowMs = Date.now()) {
+  const intervalMs = Math.max(1, Number(intervalMinutes) || 5) * 60_000
+  const elapsed = ((Number(nowMs) % intervalMs) + intervalMs) % intervalMs
+  return Math.max(1, Math.ceil((intervalMs - elapsed) / 1000))
+}
+
 function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSnapshot) {
   for (const key in autoSchedulerState) {
     const st = autoSchedulerState[key]
@@ -663,7 +669,9 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSn
             cycle_id: cycleSnapshot?.cycleId || '',
             seq: Number(cycleSnapshot?.progressSeq || 0) + 1,
             progress_percent: status === 'success' ? 100 : Number(cycleSnapshot?.progressPercent || 0),
-            next_run_in_seconds: status === 'success' ? (st.intervalMinutes || 5) * 60 : Math.round(retryDelayMs(reason) / 1000),
+            next_run_in_seconds: status === 'success'
+              ? Number(cycleSnapshot?.nextRunInSeconds || st.nextRunInSeconds || 0)
+              : Math.round(retryDelayMs(reason) / 1000),
           })
         } catch (e) { console.warn('[Scheduler] Failed to send progress_done to browser:', e.message) }
       }
@@ -991,7 +999,10 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       // Stop lock renewal timer
       if (lockGuard.renewTimer) clearInterval(lockGuard.renewTimer)
       // Atomic finalize: cooldown + release lock in one Lua eval
-      const cooldownSecs = cycleStatus === 'success' ? st.intervalMinutes * 60
+      // Successful cycles align to the next wall-clock slot (for example
+      // 20:25, 20:30) instead of waiting a full interval after the model
+      // returns. Model latency therefore no longer accumulates as drift.
+      const cooldownSecs = cycleStatus === 'success' ? secondsUntilNextScheduleSlot(st.intervalMinutes)
         : cycleStatus === 'blocked' ? Math.round(retryDelayMs(cycleReason) / 1000)
         : Math.round(retryDelayMs(cycleReason) / 1000)
       st.nextRunInSeconds = cooldownSecs
@@ -1007,6 +1018,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         cycleId: st.cycleId,
         progressSeq: st.progressSeq,
         progressPercent: st.progressPercent,
+        nextRunInSeconds: cooldownSecs,
       }
       st.inFlight = false
       st.stage = 'idle'
@@ -2422,4 +2434,5 @@ export const __schedulerTest = {
   retryDelayMs,
   shouldLogSchedulerWait,
   schedulerWaitLabel,
+  secondsUntilNextScheduleSlot,
 }

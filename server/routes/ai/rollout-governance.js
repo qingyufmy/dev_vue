@@ -154,7 +154,9 @@ async function metric(sql, params = []) {
 export async function getAiRolloutHealth() {
   const [modelUsage, intents, uncertain, rejects, outcomes, reviews, compression, memory, cost, paired, flags, riskRules, credentialRun] = await Promise.all([
     metric(`SELECT credential_source, request_status, COALESCE(error_code, '') AS error_code, COUNT(*) AS count,
-      SUM(token_count) AS tokens FROM ai_model_usage_logs WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+      SUM(token_count) AS tokens, COALESCE(SUM(request_bytes), 0) AS request_bytes,
+      COALESCE(SUM(response_bytes), 0) AS response_bytes, COALESCE(AVG(duration_ms), 0) AS avg_duration_ms
+      FROM ai_model_usage_logs WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
       GROUP BY credential_source, request_status, COALESCE(error_code, '')`),
     metric(`SELECT status, COUNT(*) AS count FROM order_intents WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) GROUP BY status`),
     metric(`SELECT COUNT(*) AS count, COALESCE(MAX(TIMESTAMPDIFF(SECOND, updated_at, NOW())), 0) AS oldest_seconds
@@ -167,7 +169,9 @@ export async function getAiRolloutHealth() {
     metric(`SELECT status, COUNT(*) AS count, COALESCE(MAX(TIMESTAMPDIFF(SECOND, updated_at, NOW())), 0) AS oldest_seconds
       FROM memory_compression_jobs WHERE status IN ('queued','leased','failed') GROUP BY status`),
     metric(`SELECT status, COUNT(*) AS count, COALESCE(SUM(token_count), 0) AS tokens FROM experience_memory_items GROUP BY status`),
-    metric(`SELECT credential_source, COUNT(*) AS requests, COALESCE(SUM(token_count), 0) AS tokens FROM ai_model_usage_logs
+    metric(`SELECT credential_source, COUNT(*) AS requests, COALESCE(SUM(token_count), 0) AS tokens,
+      COALESCE(SUM(request_bytes), 0) AS request_bytes, COALESCE(SUM(response_bytes), 0) AS response_bytes,
+      COALESCE(AVG(duration_ms), 0) AS avg_duration_ms FROM ai_model_usage_logs
       WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) GROUP BY credential_source`),
     metric(`SELECT status, COUNT(*) AS count FROM ai_paired_inference_runs
       WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) GROUP BY status`),

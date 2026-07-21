@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
-import { sha256 } from './inference-snapshots.js'
+import { parseSnapshotJson, sha256 } from './inference-snapshots.js'
 import { isAiFeatureEnabled } from './rollout-governance.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { buildReviewMarketPath } from './review-market-path.js'
@@ -121,7 +121,7 @@ async function loadEvidence(outcomeId) {
     system_prompt: row.system_prompt, user_prompt: row.user_prompt, prompt_hash: row.prompt_hash,
     model_profile_id: row.inference_model_profile_id, provider: row.inference_provider,
     model_name: row.inference_model_name, credential_source: row.inference_credential_source,
-    market_snapshot: parse(row.market_snapshot_json, {}), klines: parse(row.klines_json, {}), content_hash: row.snapshot_content_hash } : null
+    market_snapshot: parse(row.market_snapshot_json, {}), klines: parseSnapshotJson(row.klines_json, {}), content_hash: row.snapshot_content_hash } : null
   const signal = row.signal_id ? { id: row.signal_id, signal_type: row.signal_type, timeframe: row.signal_timeframe,
     confidence: row.confidence, recommended_volume: row.recommended_volume, analysis: row.analysis, reasoning: row.reasoning,
     stop_loss_price: row.stop_loss_price, take_profit_1_price: row.take_profit_1_price,
