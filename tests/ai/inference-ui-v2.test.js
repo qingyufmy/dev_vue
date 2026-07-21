@@ -77,6 +77,17 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('await refreshForNewSignal(msg.signal_id, msg.signal || null)')
   })
 
+  it('keeps the home monitor on the canonical latest signal and refreshes it in fullscreen', () => {
+    expect(app).toContain('dashboardSignal: null')
+    expect(app).toContain('async function loadDashboardSignal(signalId, fallbackSignal = null, options = {})')
+    expect(app).toContain('announceDashboardSignal:true')
+    expect(app).toContain('state.dashboardSignal = signal || null')
+    expect(app).toContain('document.fullscreenElement === card')
+    expect(app).toContain('await card.requestFullscreen()')
+    expect(app).toContain('function renderSignalMonitorDetails(signal)')
+    expect(app).toContain('完整分析')
+  })
+
   it('pins signals opened from history or ticket navigation across background refreshes', () => {
     expect(app).toContain('["history", "ticket", "trade"].includes(source)')
     expect(app).toContain("source:'history', forcePinned:true")

@@ -1673,6 +1673,25 @@ textarea:focus {
   flex: 0 0 auto;
 }
 
+.signal-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.signal-monitor-sync,
+.signal-monitor-exit,
+.signal-monitor-details {
+  display: none;
+}
+
+.signal-monitor-action,
+.signal-monitor-exit {
+  min-height: 36px;
+}
+
 .signal-live-badge {
   display: inline-flex;
   align-items: center;
@@ -2014,6 +2033,560 @@ textarea:focus {
 .signal-generated-meta strong {
   color: var(--text-primary);
   font-size: 11px;
+}
+
+/* Latest AI advice — dedicated second-screen monitor mode */
+.signal-monitor-fallback-active {
+  overflow: hidden !important;
+}
+
+.card-signal.is-signal-monitor:not(:fullscreen) {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) {
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  padding: clamp(18px, 2vw, 32px);
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-base);
+  box-shadow: none;
+  animation: none;
+  overscroll-behavior: contain;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor)::backdrop {
+  background: var(--bg-base);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor)::before {
+  position: fixed;
+  z-index: 20;
+  height: 3px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-card-header {
+  position: sticky;
+  top: calc(clamp(18px, 2vw, 32px) * -1);
+  z-index: 12;
+  min-height: 64px;
+  margin: calc(clamp(18px, 2vw, 32px) * -1) calc(clamp(18px, 2vw, 32px) * -1) var(--space-5);
+  padding: clamp(14px, 1.5vw, 22px) clamp(18px, 2vw, 32px);
+  border-bottom-color: var(--border-default);
+  background: color-mix(in srgb, var(--bg-base) 94%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-heading-icon {
+  width: 42px;
+  height: 42px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-heading-copy strong {
+  font-size: clamp(17px, 1.25vw, 22px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-heading-copy small {
+  font-size: 12px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-detail-action,
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-action {
+  display: none;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-sync,
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-exit {
+  display: inline-flex;
+  align-items: center;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-sync {
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--status-connected-border);
+  border-radius: var(--radius-pill);
+  background: var(--status-connected-bg);
+  color: var(--status-connected);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-sync svg {
+  animation: pulse-dot-green 2s ease-in-out infinite;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-exit {
+  min-height: 42px;
+  padding-inline: 14px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-body {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-4);
+  padding: 0;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-decision-panel {
+  grid-column: span 7;
+  min-height: 180px;
+  padding: clamp(20px, 2vw, 30px);
+  border: 1px solid color-mix(in srgb, var(--signal-border) 32%, var(--border-default));
+  background: color-mix(in srgb, var(--signal-border) 7%, var(--bg-card));
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-meta-row {
+  margin-bottom: var(--space-5);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-symbol {
+  font-size: clamp(24px, 2vw, 34px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-tf-badge {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-direction-text {
+  font-size: clamp(42px, 4vw, 68px);
+  letter-spacing: -.035em;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-direction {
+  font-size: clamp(16px, 1.3vw, 21px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-confidence-block {
+  width: min(230px, 36%);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-confidence-value {
+  font-size: clamp(30px, 2.6vw, 44px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-bar-track {
+  height: 7px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-strip {
+  grid-column: span 5;
+  grid-template-columns: 1fr 1fr;
+  min-height: 180px;
+  align-content: stretch;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-copy {
+  grid-column: 1 / -1;
+  border-right: 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-copy,
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-compact-metric {
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-5);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-copy strong {
+  font-size: clamp(20px, 1.7vw, 28px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-copy p {
+  max-width: none;
+  overflow: visible;
+  font-size: 13px;
+  line-height: 1.5;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-compact-metric strong {
+  font-size: clamp(18px, 1.5vw, 24px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-price-grid {
+  grid-column: span 9;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-price-item {
+  display: flex;
+  min-height: 92px;
+  justify-content: center;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-5);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-price-item strong {
+  font-size: clamp(20px, 1.7vw, 28px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-generated-meta {
+  grid-column: span 3;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input-softer);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-generated-meta strong {
+  font-size: clamp(16px, 1.3vw, 21px);
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(330px, .65fr);
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.signal-monitor-main,
+.signal-monitor-rail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.monitor-surface {
+  min-width: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.monitor-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.monitor-section-heading span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.monitor-section-heading small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.signal-monitor-summary > strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: clamp(20px, 1.6vw, 27px);
+  line-height: 1.45;
+}
+
+.signal-monitor-summary .direction-bias {
+  margin-top: var(--space-5);
+}
+
+.signal-monitor-evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.signal-monitor-evidence ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.signal-monitor-evidence .risk .monitor-section-heading {
+  color: var(--color-warning);
+}
+
+.signal-monitor-conditions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--border-default);
+}
+
+.signal-monitor-conditions > div {
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-card);
+}
+
+.signal-monitor-conditions span,
+.signal-monitor-order-grid span,
+.signal-monitor-meta span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.signal-monitor-conditions strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.signal-monitor-narrative {
+  min-height: 220px;
+}
+
+.signal-monitor-narrative > div:last-child {
+  max-height: min(33vh, 360px);
+  padding-right: var(--space-3);
+  overflow: auto;
+  scrollbar-color: var(--border-gold) transparent;
+}
+
+.signal-monitor-narrative strong {
+  display: block;
+  margin: var(--space-3) 0 var(--space-2);
+  color: var(--gold-primary);
+  font-size: 13px;
+}
+
+.signal-monitor-narrative p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.signal-monitor-execution {
+  border-color: color-mix(in srgb, var(--signal-border) 35%, var(--border-default));
+}
+
+.signal-monitor-execution > strong {
+  display: block;
+  color: var(--signal-border);
+  font-size: clamp(22px, 1.8vw, 30px);
+}
+
+.signal-monitor-execution > p {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.signal-monitor-order-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0;
+  overflow: hidden;
+  background: var(--border-default);
+  gap: 1px;
+}
+
+.signal-monitor-order-grid > div {
+  min-height: 84px;
+  padding: var(--space-4);
+  background: var(--bg-card);
+}
+
+.signal-monitor-order-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: clamp(16px, 1.25vw, 20px);
+}
+
+.signal-monitor-order-grid small {
+  display: block;
+  margin-top: 4px;
+  color: var(--gold-primary);
+  font-size: 10px;
+}
+
+.signal-monitor-order-grid .monitor-risk-value {
+  color: var(--color-negative);
+}
+
+.signal-monitor-order-grid .target {
+  color: var(--color-positive);
+}
+
+.signal-monitor-targets > div:last-child {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.signal-monitor-targets > div:last-child > span {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input-softer);
+}
+
+.signal-monitor-targets > div:last-child > span.recommended {
+  border-color: var(--border-gold);
+}
+
+.signal-monitor-targets > div:last-child > span.selected {
+  background: var(--gold-wash);
+}
+
+.signal-monitor-targets small,
+.signal-monitor-targets strong {
+  display: block;
+}
+
+.signal-monitor-targets small {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.signal-monitor-targets strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.signal-monitor-meta {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.signal-monitor-meta > div {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.signal-monitor-meta > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.signal-monitor-meta strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.signal-monitor-empty {
+  display: grid;
+  min-height: 42vh;
+  place-items: center;
+  align-content: center;
+  gap: var(--space-3);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.signal-monitor-empty strong {
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor)[data-status="expired"] .signal-expired-mask {
+  position: static;
+  display: flex;
+  min-height: 58px;
+  flex-direction: row;
+  justify-content: flex-start;
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor)[data-status="expired"] .signal-expired-mask svg {
+  width: 20px;
+  height: 20px;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor)[data-status="expired"] .signal-expired-mask p {
+  max-width: none;
+  margin-right: auto;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor)[data-status="expired"] .signal-body {
+  opacity: 1;
+  pointer-events: auto;
+  user-select: auto;
+}
+
+.card-signal:is(:fullscreen, .is-signal-monitor).signal-monitor-updated {
+  animation: signal-monitor-update 700ms ease-out;
+}
+
+@keyframes signal-monitor-update {
+  0% { box-shadow: inset 0 0 0 2px var(--signal-border), inset 0 0 70px color-mix(in srgb, var(--signal-border) 16%, transparent); }
+  100% { box-shadow: inset 0 0 0 0 transparent, inset 0 0 0 transparent; }
+}
+
+@media (max-width: 1440px) {
+  .signal-monitor-action span {
+    display: none;
+  }
+
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-action span,
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-exit span {
+    display: inline;
+  }
+}
+
+@media (max-width: 1180px) {
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-details {
+    grid-template-columns: 1fr;
+  }
+
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-rail {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-body,
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-rail,
+  .signal-monitor-evidence,
+  .signal-monitor-conditions {
+    grid-template-columns: 1fr;
+  }
+
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-decision-panel,
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-strip,
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-price-grid,
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-generated-meta {
+    grid-column: 1;
+  }
+
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-price-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-header-left .signal-heading-copy small,
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-sync span {
+    display: none;
+  }
 }
 
 .positions-empty {
@@ -4390,7 +4963,9 @@ body.form-modal-open .content-card { animation:none !important; transform:none !
   .badge-dot,
   .price-flash-up,
   .price-flash-down,
-  .toast {
+  .toast,
+  .card-signal:is(:fullscreen, .is-signal-monitor).signal-monitor-updated,
+  .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-sync svg {
     animation: none !important;
     transition: none !important;
   }

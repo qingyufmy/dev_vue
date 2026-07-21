@@ -10,6 +10,7 @@ const state = {
   symbols: [],
   signals: [],
   selectedSignal: null,
+  dashboardSignal: null,
   latestSignalId: null,
   analystView: "detail",
   analysisSelectionMode: "follow_latest",
@@ -1592,7 +1593,7 @@ async function refreshForNewSignal(signalId, signalMeta = null) {
 
   state.latestSignalId = signalId;
   _lastSignalId = signalId;
-  await loadSignals({ skipResultRender:true });
+  await loadSignals({ skipResultRender:true, announceDashboardSignal:true });
 
   const incoming = state.signals.find(item => sameSignalId(item.id, signalId)) || signalMeta;
   if (incoming) showSignalNotification(incoming);
@@ -1614,18 +1615,22 @@ let _uiTimerInterval = null;
 function startUiTimer() {
   if (_uiTimerInterval) return;
   _uiTimerInterval = setInterval(() => {
-    const s = state.selectedSignal;
-    if (s) {
-      setText("sigValidWindow", signalFreshness(s));
-      setText("signalFreshness", signalFreshness(s));
-      setText("analysisValidity", signalFreshness(s));
-      setSignalBadge(s);
-      const stale = signalIsStale(s) && !s.is_executed;
+    const dashboardSignal = state.dashboardSignal;
+    if (dashboardSignal) {
+      setText("sigValidWindow", signalFreshness(dashboardSignal));
+      setSignalBadge(dashboardSignal);
+      const stale = signalIsStale(dashboardSignal) && !dashboardSignal.is_executed;
       const signalCard = $("signalCard");
       if (stale && signalCard?.dataset.status !== "expired") {
         signalCard.dataset.status = "expired";
-        updateSignalPriceFields(s);
+        updateSignalPriceFields(dashboardSignal);
       }
+    }
+    const selectedSignal = state.selectedSignal;
+    if (selectedSignal) {
+      setText("signalFreshness", signalFreshness(selectedSignal));
+      setText("analysisValidity", signalFreshness(selectedSignal));
+      const stale = signalIsStale(selectedSignal) && !selectedSignal.is_executed;
       const btn = $("executeSignalBtn");
       if (btn && stale) btn.disabled = true;
     }
@@ -1660,7 +1665,7 @@ async function _maybeRefreshSignal() {
     const latest = data.signal || null;
 
     if (!latest) {
-      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.latestSignalId = null; state.selectedSignal = null; state.signals = []; renderAnalysisHistory([]); renderSignalRows(); }
+      if (_lastSignalId !== null) { updateSignalDisplay(null); _lastSignalId = null; state.latestSignalId = null; state.signals = []; renderAnalysisHistory([]); renderSignalRows(); }
       return;
     }
 
@@ -1684,6 +1689,45 @@ async function handleNewSignal(msg) {
     if (msg.signal_id == null) return;
     await refreshForNewSignal(msg.signal_id, msg.signal || null);
   } catch (e) { console.error('[Inference] pushed signal refresh failed:', e); }
+}
+
+let _dashboardSignalRequestVersion = 0;
+let _signalMonitorUpdateTimer = null;
+
+async function loadDashboardSignal(signalId, fallbackSignal = null, options = {}) {
+  const requestVersion = ++_dashboardSignalRequestVersion;
+  if (signalId == null) {
+    updateSignalDisplay(null);
+    return;
+  }
+
+  const current = sameSignalId(state.dashboardSignal?.id, signalId) ? state.dashboardSignal : null;
+  let signal = current ? { ...current, ...(fallbackSignal || {}) } : fallbackSignal;
+  if (!signal?.detail_loaded) {
+    try {
+      const data = await wsApi("signal_detail", { signal_id:Number(signalId) });
+      if (data.status === "success" && data.signal) signal = { ...(signal || {}), ...data.signal, detail_loaded:true };
+    } catch (error) {
+      console.warn("[Dashboard] 最新 AI 建议详情读取失败，使用基础数据:", error.message);
+    }
+  }
+  if (requestVersion !== _dashboardSignalRequestVersion || !signal) return;
+  updateSignalDisplay(signal, { announceNew:options.announceNew === true });
+}
+
+function flashSignalMonitorUpdate() {
+  const card = $("signalCard");
+  const sync = $("signalMonitorSync")?.querySelector("span");
+  if (!card || document.fullscreenElement !== card) return;
+  card.classList.remove("signal-monitor-updated");
+  void card.offsetWidth;
+  card.classList.add("signal-monitor-updated");
+  if (sync) sync.textContent = "新建议已同步";
+  clearTimeout(_signalMonitorUpdateTimer);
+  _signalMonitorUpdateTimer = setTimeout(() => {
+    card.classList.remove("signal-monitor-updated");
+    if (sync) sync.textContent = "实时同步";
+  }, 2400);
 }
 
 // Handle heartbeat reply — MT5 connection status
@@ -4068,12 +4112,154 @@ function applyRoleUI() {
 }
 
 // [disabled] 智能平仓
-function updateSignalDisplay(signal) {
+function updateAnalysisExecutionButton(signal) {
+  const button = $("executeSignalBtn");
+  if (!button) return;
+  if (!signal) {
+    button.disabled = true;
+    button.title = "暂无可执行信号";
+    return;
+  }
+  const dir = signalType(signal.signal_type);
+  const advice = signalExecutionAdvice(signal);
+  const executable = advice.executable === true && dir !== "hold" && dir !== "close" && !signal.is_stale;
+  button.disabled = !executable;
+  button.title = executable
+    ? "复核后发送执行请求"
+    : dir === "close" ? "持仓分析信号已自动执行"
+      : signal.is_stale ? "信号已过期，无法执行"
+        : advice.description || (signal.is_executed ? "信号已执行" : "HOLD 观望信号不执行");
+}
+
+function renderSignalMonitorDetails(signal) {
+  const host = $("signalMonitorDetails");
+  if (!host) return;
+  if (!signal) {
+    host.innerHTML = `<div class="signal-monitor-empty"><i data-lucide="radio-tower" size="28"></i><strong>等待新的 AI 建议</strong><span>全屏监看会在新信号到达后自动更新</span></div>`;
+    initIcons();
+    return;
+  }
+
+  const decision = signalDecision(signal);
+  const advice = signalExecutionAdvice(signal);
+  const confidence = confidenceInfo(signal.confidence);
+  const takeProfit = signalTakeProfitSelection(signal);
+  const execution = parseJsonField(signal.execution_result, {});
+  const approved = execution?.risk?.approved_order || execution?.approved_order || parseJsonField(signal.approved_order_json, {});
+  const finalVolume = approved?.volume;
+  const entryLabels = { market:"市价", limit:"限价", stop:"止损挂单", stop_limit:"止损限价" };
+  const entryMethod = entryLabels[signal.entry_method] || (signalType(signal.signal_type) === "hold" ? "观望" : "待确认");
+  const analysis = String(signal.analysis || "").trim();
+  const reasoning = String(signal.reasoning || "").trim();
+  const strategyLabel = signal.prompt_type_name || signal.strategy_name || signal.strategy_title || "当前交易策略";
+  const targetPrice = takeProfit.price || (takeProfit.tier ? signal[`take_profit_${takeProfit.tier}_price`] : null) || signalTakeProfit(signal);
+
+  host.innerHTML = `
+    <div class="signal-monitor-main">
+      <section class="signal-monitor-summary monitor-surface">
+        <div class="monitor-section-heading"><span>一句话结论</span><small>#${escapeHtml(signal.id)} · ${escapeHtml(strategyLabel)}</small></div>
+        <strong>${escapeHtml(decision.summary)}</strong>
+        ${renderDirectionBias(decision)}
+      </section>
+      <div class="signal-monitor-evidence">
+        <section class="monitor-surface"><div class="monitor-section-heading"><span><i data-lucide="check-circle-2" size="16"></i>关键依据</span></div>${renderDecisionList(decision.reasons, "暂无额外依据")}</section>
+        <section class="monitor-surface risk"><div class="monitor-section-heading"><span><i data-lucide="triangle-alert" size="16"></i>市场风险</span></div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
+      </div>
+      ${(decision.trigger || decision.invalidation) ? `<section class="signal-monitor-conditions monitor-surface">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</section>` : ""}
+      <section class="signal-monitor-narrative monitor-surface">
+        <div class="monitor-section-heading"><span><i data-lucide="file-text" size="16"></i>完整分析</span><small>内容可在本区域滚动查看</small></div>
+        <div>${analysis ? `<strong>行情分析</strong><p>${escapeHtml(analysis)}</p>` : `<p class="decision-empty">暂无行情分析正文</p>`}${reasoning ? `<strong>分析依据</strong><p>${escapeHtml(reasoning)}</p>` : ""}</div>
+      </section>
+    </div>
+    <aside class="signal-monitor-rail">
+      <section class="monitor-surface signal-monitor-execution ${escapeHtml(advice.state || "review")}">
+        <div class="monitor-section-heading"><span>执行状态</span><small>${escapeHtml(confidence.label)} 置信度</small></div>
+        <strong>${escapeHtml(advice.title || executionStatus(signal))}</strong>
+        <p>${escapeHtml(advice.description || "")}</p>
+      </section>
+      <section class="monitor-surface signal-monitor-order-grid">
+        <div><span>入场方式</span><strong>${escapeHtml(entryMethod)}</strong></div>
+        <div><span>计划入场</span><strong class="num">${escapeHtml(priceDisplay(signal.limit_price || signal.market_data?.latest_price))}</strong></div>
+        <div><span>止损保护</span><strong class="num monitor-risk-value">${escapeHtml(priceDisplay(signal.stop_loss_price))}</strong></div>
+        <div><span>执行止盈</span><strong class="num target">${escapeHtml(priceDisplay(targetPrice))}</strong><small>${escapeHtml(takeProfit.sourceLabel)}${takeProfit.tier ? ` · TP${takeProfit.tier}` : ""}</small></div>
+        <div><span>AI 建议手数</span><strong class="num">${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
+        <div><span>风控最终手数</span><strong class="num">${finalVolume == null ? "待执行时计算" : escapeHtml(volumeText(finalVolume))}</strong></div>
+      </section>
+      <section class="monitor-surface signal-monitor-targets">
+        <div class="monitor-section-heading"><span>止盈候选</span><small>AI 推荐 TP${escapeHtml(takeProfit.recommendedTier || "--")}</small></div>
+        <div>${[1, 2, 3].map(tier => `<span class="${takeProfit.tier === tier ? "selected" : ""} ${takeProfit.recommendedTier === tier ? "recommended" : ""}"><small>TP${tier}</small><strong class="num">${escapeHtml(priceDisplay(signal[`take_profit_${tier}_price`]))}</strong></span>`).join("")}</div>
+      </section>
+      <section class="monitor-surface signal-monitor-meta">
+        <div><span>当前成交参考</span><strong class="num">${escapeHtml(signalCurrentPriceText(signal))}</strong></div>
+        <div><span>剩余有效期</span><strong class="num">${escapeHtml(signalFreshness(signal))}</strong></div>
+        <div><span>生成时间（MT5）</span><strong class="num">${escapeHtml(signalDisplayTime(signal))}</strong></div>
+      </section>
+    </aside>`;
+  initIcons();
+}
+
+function initSignalMonitor() {
+  const card = $("signalCard");
+  const enterButton = $("signalMonitorFullscreen");
+  const exitButton = $("signalMonitorExit");
+  if (!card || !enterButton || !exitButton) return;
+
+  const leaveFallbackMode = () => {
+    delete card.dataset.monitorFallback;
+    document.body.classList.remove("signal-monitor-fallback-active");
+  };
+  const syncFullscreenState = () => {
+    const active = document.fullscreenElement === card || card.dataset.monitorFallback === "true";
+    card.classList.toggle("is-signal-monitor", active);
+    enterButton.setAttribute("aria-pressed", String(active));
+    if (!active) {
+      card.classList.remove("signal-monitor-updated");
+      const label = $("signalMonitorSync")?.querySelector("span");
+      if (label) label.textContent = "实时同步";
+    }
+    initIcons();
+  };
+
+  enterButton.addEventListener("click", async () => {
+    try {
+      if (state.latestSignalId != null && !sameSignalId(state.dashboardSignal?.id, state.latestSignalId)) {
+        await loadDashboardSignal(state.latestSignalId, state.signals.find(item => sameSignalId(item.id, state.latestSignalId)) || null);
+      }
+      if (!document.fullscreenEnabled || typeof card.requestFullscreen !== "function") throw new Error("浏览器未开放全屏权限");
+      leaveFallbackMode();
+      await card.requestFullscreen();
+    } catch (error) {
+      card.dataset.monitorFallback = "true";
+      document.body.classList.add("signal-monitor-fallback-active");
+      syncFullscreenState();
+      toast("浏览器未允许真全屏，已切换为窗口内监看；可按 F11 隐藏浏览器工具栏", "info");
+    }
+  });
+  exitButton.addEventListener("click", () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else {
+      leaveFallbackMode();
+      syncFullscreenState();
+    }
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && card.dataset.monitorFallback === "true") {
+      leaveFallbackMode();
+      syncFullscreenState();
+    }
+  });
+  document.addEventListener("fullscreenchange", syncFullscreenState);
+  syncFullscreenState();
+}
+
+function updateSignalDisplay(signal, options = {}) {
   const card = $("signalCard");
   if (!card) return;
 
+  const previousSignalId = state.dashboardSignal?.id;
+  state.dashboardSignal = signal || null;
+
   if (!signal) {
-    state.selectedSignal = null;
     setSignalBadge(null);
     card.dataset.direction = "hold";
     card.dataset.status = "empty";
@@ -4091,12 +4277,10 @@ function updateSignalDisplay(signal) {
     setText("sigTime", "等待新信号");
     setText("sigGeneratedAt", "--");
     setText("sigValidWindow", "--");
-    $("executeSignalBtn").disabled = true;
-    $("executeSignalBtn").title = "暂无可执行信号";
+    renderSignalMonitorDetails(null);
     return;
   }
 
-  state.selectedSignal = signal;
   setSignalBadge(signal);
   const dir = signalType(signal.signal_type);
   const confidence = confidenceInfo(signal.confidence);
@@ -4124,13 +4308,8 @@ function updateSignalDisplay(signal) {
   setText("sigTime", signalDisplayTime(signal));
   setText("sigGeneratedAt", signalDisplayTime(signal));
   setText("sigValidWindow", signalFreshness(signal));
-  const executable = advice.executable === true && dir !== "hold" && dir !== "close" && !signal.is_stale;
-  $("executeSignalBtn").disabled = !executable;
-  $("executeSignalBtn").title = executable
-    ? "复核后发送执行请求"
-    : dir === "close" ? "持仓分析信号已自动执行"
-      : signal.is_stale ? "信号已过期，无法执行"
-        : advice.description || (signal.is_executed ? "信号已执行" : "HOLD 观望信号不执行");
+  renderSignalMonitorDetails(signal);
+  if (options.announceNew && previousSignalId != null && !sameSignalId(previousSignalId, signal.id)) flashSignalMonitorUpdate();
 }
 
 function signalFreshness(signal) {
@@ -4577,7 +4756,8 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   if (!signal) {
     destroyInferenceChart();
     _inferenceChartRenderVersion += 1;
-    updateSignalDisplay(null);
+    updateAnalysisExecutionButton(null);
+    if (!state.dashboardSignal) updateSignalDisplay(null);
     const emptyResult = $("analysisResult");
     emptyResult.className = "analysis-result muted-block";
     emptyResult.removeAttribute("aria-busy");
@@ -4589,7 +4769,8 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     return;
   }
 
-  updateSignalDisplay(signal);
+  updateAnalysisExecutionButton(signal);
+  if (!state.dashboardSignal || sameSignalId(signal.id, state.latestSignalId ?? _lastSignalId)) updateSignalDisplay(signal);
   if (elapsedMs !== null && elapsedMs !== undefined) setText("analysisLatency", `${elapsedMs}ms`);
   else if (!options.keepLatency) setText("analysisLatency", "历史记录");
   setText("signalFreshness", signalFreshness(signal));
@@ -6437,6 +6618,13 @@ async function loadSignals(options = {}) {
     state.latestSignalId = state.signals[0].id;
     _lastSignalId = state.signals[0].id;
   }
+  if (!options.append) {
+    if (state.signals[0]) {
+      await loadDashboardSignal(state.signals[0].id, state.signals[0], { announceNew:options.announceDashboardSignal === true });
+    } else {
+      updateSignalDisplay(null);
+    }
+  }
 
   // Preserve selected signal if it still exists, otherwise use latest
   const previousSelected = state.selectedSignal;
@@ -6455,7 +6643,6 @@ async function loadSignals(options = {}) {
 
   if (!options.append && !options.skipResultRender) {
     state.selectedSignal = activeSignal;
-    updateSignalDisplay(activeSignal);
     if (activeSignal) setText("signalFreshness", signalFreshness(activeSignal));
   } else if (!options.append && previousSelected) {
     // A background/list-only refresh must not steal the detail selection. This
@@ -7641,6 +7828,7 @@ function bindEvents() {
 document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   updateSignalDisplay(null);
+  initSignalMonitor();
   initIcons();
   initBridgeModal();
   initKlineChart();

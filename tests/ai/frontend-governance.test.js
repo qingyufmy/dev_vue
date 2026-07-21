@@ -439,8 +439,14 @@ describe('AI governance navigation and DOM contract', () => {
     expect(signalCard).toContain('class="signal-decision-panel"')
     expect(signalCard).toContain('class="signal-execution-strip"')
     expect(signalCard).toContain('id="sigActionHint"')
+    expect(signalCard).toContain('id="signalMonitorFullscreen"')
+    expect(signalCard).toContain('id="signalMonitorExit"')
+    expect(signalCard).toContain('id="signalMonitorDetails"')
+    expect(signalCard).toContain('实时同步')
     expect(signalCard).not.toContain('上次信号摘要')
     expect(signalCard).not.toContain('data-tab-jump="signals"')
+    expect(css).toContain('.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-details')
+    expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
   it('prioritizes essential runtime state and beginner actions on the trading home page', () => {
