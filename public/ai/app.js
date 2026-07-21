@@ -6,6 +6,7 @@ function getCookie(name) {
 const state = {
   token: localStorage.getItem("authToken") || getCookie("ws_token") || "",
   user: null,
+  aiAccess: null,
   symbols: [],
   signals: [],
   selectedSignal: null,
@@ -83,10 +84,8 @@ function createSymbolSelector(inputId, options, opts = {}) {
   const input = document.getElementById(inputId);
   if (!input) return;
   // Check observe mode: disable selector for Plus/Pro-no-bridge
-  const isPlusReadOnly = state.isPlusReadOnly;
-  const isPro = state.user?.plan === 'pro' || state.user?.role === 'admin';
-  const isProNoBridge = isPro && state.user?.role !== 'admin' && state._usingFallback;
-  const isObserveMode = isPlusReadOnly || isProNoBridge;
+  const isPlusReadOnly = state.aiAccess?.reason === 'plus_plan';
+  const isObserveMode = isObserverMode();
   const wrapper = document.createElement("div");
   wrapper.className = "sym-selector";
   input.parentNode.insertBefore(wrapper, input);
@@ -1019,12 +1018,52 @@ const API_ERROR_MESSAGES = {
   margin_calculation_unavailable: "当前品种缺少可靠的保证金计算参数，本笔模拟订单未执行",
 };
 
+const OBSERVER_WS_READ_ACTIONS = new Set([
+  "health", "account", "symbols", "quote", "positions", "rates",
+  "signals_latest_id", "signal_detail", "signals", "signal_tickets",
+  "close_signal_tickets", "history", "history_chart_data", "pending_list",
+  "signal_by_ticket",
+]);
+
+function isObserverMode() { return state.aiAccess?.read_only === true; }
+
+function observerMessage() {
+  return state.aiAccess?.reason === "bridge_offline"
+    ? "当前为观摩模式，请连接 MT5 桥接后再操作"
+    : "Plus 会员为观摩模式，仅支持查看";
+}
+
+function canAccessTab(tabId) {
+  const allowed = state.aiAccess?.allowed_tabs;
+  return !Array.isArray(allowed) || allowed.includes(tabId === "model-management" || tabId === "ai-config" ? "model-strategy" : tabId);
+}
+
+function syncAiAccess(access) {
+  if (!access) return;
+  const previousMode = state.aiAccess?.mode;
+  const previousReason = state.aiAccess?.reason;
+  state.aiAccess = access;
+  state.isPlusReadOnly = access.reason === "plus_plan";
+  document.body.classList.toggle("ai-observer-mode", access.read_only === true);
+  document.body.dataset.aiAccessReason = access.reason || "full";
+  applyRoleUI();
+  if (!canAccessTab(activeTabId())) setTab("dashboard", { skipRefresh:true });
+  if (previousMode && (previousMode !== access.mode || previousReason !== access.reason)) {
+    _historyCache = null;
+    _historyChartCache = null;
+  }
+}
+
 function apiErrorMessage(code) {
   if (String(code).startsWith('active_subscription_conflict:')) return '已有其他策略启用自动推理，请先关闭原订阅或确认切换';
   return API_ERROR_MESSAGES[code] || code;
 }
 
 async function api(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  if (isObserverMode() && path.startsWith("/api/ai/") && method !== "GET") {
+    throw new Error(observerMessage());
+  }
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
@@ -1052,6 +1091,7 @@ const _wsPending = new Map();
 
 function wsApi(action, params = {}, timeoutOverride) {
   return new Promise((resolve, reject) => {
+    if (isObserverMode() && !OBSERVER_WS_READ_ACTIONS.has(action)) return reject(new Error(observerMessage()));
     const ws = state.bridgeWs;
     if (!ws || ws.readyState !== 1) return reject(new Error('WebSocket未连接'));
     const cmdId = `ws_${++_wsCmdId}`;
@@ -1129,6 +1169,7 @@ function connectBridgeStatusWs(onReady) {
             Number.isFinite(Number(quote.bid)) && Number.isFinite(Number(quote.ask))) {
           updateKlineTick(Number(quote.bid), Number(quote.ask), quote);
         }
+        if (isObserverMode()) _maybeRefreshSignal();
       } else if (msg.type === 'data') {
         handleBridgeData(msg);
       } else if (msg.type === 'hb') {
@@ -1509,7 +1550,7 @@ startUiTimer();
 
 async function _maybeRefreshSignal() {
   const now = Date.now();
-  if (now - _lastSignalRefreshTs < 1000) return;
+  if (now - _lastSignalRefreshTs < 5000) return;
   _lastSignalRefreshTs = now;
   try {
     // Lightweight check: only fetch latest signal's ID + minimal fields (~200 bytes)
@@ -1545,6 +1586,7 @@ async function handleNewSignal(msg) {
 
 // Handle heartbeat reply — MT5 connection status
 function handleHeartbeat(msg) {
+  syncAiAccess(msg.access);
   const isLive = msg.mt5_connected && msg.mt5_alive;
   const usingFallback = msg.using_fallback;
   const wasLive = state._lastGatewayLive;
@@ -1621,6 +1663,18 @@ function handleDisconnect(msg) {
     renderAutoAnalyzeBadge({ enabled: !!state.autoEnabled, paused_reason: state.autoEnabled ? 'user_bridge_offline' : 'disabled' });
   }
   state._lastGatewayLive = false;
+  if (state.user?.role !== "admin" && state.user?.plan === "pro") {
+    state._usingFallback = true;
+    setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
+    syncAiAccess({
+      mode:"observer", reason:"bridge_offline", read_only:true, can_download_bridge:true,
+      allowed_tabs:["dashboard","signals","model-strategy","ai-analyze","trading","history"],
+      data_source:"platform_admin_account",
+    });
+    _historyCache = null;
+    _historyChartCache = null;
+    refreshAll().catch(() => {});
+  }
   updateMarketStatus(-1);
 }
 
@@ -1749,6 +1803,7 @@ async function loadModelManagement() {
 }
 
 function openModelEditor(profile = null) {
+  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const editor = $("modelProfileEditor");
   if (!editor) return;
   editor.dataset.modelId = profile?.id || "";
@@ -1918,6 +1973,7 @@ function renderStrategyModelOptions(scope, selectedId = "") {
 }
 
 function openStrategyEditor(strategy = null) {
+  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || "";
   const admin = state.user?.role === "admin";
   $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (admin ? "新建策略" : "新建自定义策略");
@@ -1991,6 +2047,7 @@ function syncMt5ScheduleTimezoneOption() {
 }
 
 function openSubscriptionEditor(strategy, subscription = null) {
+  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   if (!state.tradingAccounts?.length) { toast("请先连接交易桥并完成账户登记", "warning"); return; }
   const editor = $("subscriptionEditor"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
   $("subscriptionAccount").innerHTML = state.tradingAccounts.map(account => `<option value="${Number(account.id)}">${escapeHtml(account.nickname || account.login_account)} · ${escapeHtml(account.broker_server)}</option>`).join("");
@@ -2906,6 +2963,10 @@ async function saveGlobalRisk() {
 function setTab(tabId, options = {}) {
   const modelStrategyTarget = tabId === "model-management" ? "models" : tabId === "ai-config" ? "strategies" : null;
   if (modelStrategyTarget) tabId = "model-strategy";
+  if (!canAccessTab(tabId)) {
+    if (!options.silent) toast("观摩模式下不可访问该页面", "warning");
+    tabId = "dashboard";
+  }
   if (tabId !== "review-memory") stopReviewDetailPolling();
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabId);
@@ -2965,7 +3026,9 @@ async function refreshTabData(tabId) {
   } else if (tabId === "model-strategy") {
     await Promise.allSettled([loadStrategyCatalog(), loadModelManagement()]);
   } else if (tabId === "ai-analyze") {
-    await Promise.allSettled([loadStrategyCatalog(), loadSignals({ skipResultRender:true })]);
+    const tasks = [loadSignals({ skipResultRender:true })];
+    if (!isObserverMode()) tasks.push(loadStrategyCatalog());
+    await Promise.allSettled(tasks);
   } else if (tabId === "risk-center") {
     await loadRiskCenter();
   } else if (tabId === "review-memory") {
@@ -3083,8 +3146,8 @@ async function bootstrap() {
       showApp(false);
       return;
     }
-    state.isPlusReadOnly = plan === 'plus' && role !== 'admin';
-    applyRoleUI();
+    const accessRes = await api("/api/ai/access-context");
+    syncAiAccess(accessRes.access);
     showApp(true);
     checkChangelog();
     // Connect WebSocket FIRST — all data flows through it (with 10s timeout)
@@ -3101,8 +3164,10 @@ async function bootstrap() {
     setTab('dashboard');
     startPresenceHeartbeat();
     await refreshAll();
-    await loadReviewSummary({ announce:false });
-    startReviewSummaryPolling();
+    if (!isObserverMode()) {
+      await loadReviewSummary({ announce:false });
+      startReviewSummaryPolling();
+    }
     // Data loads on-demand: tab switch + manual refresh + bridge data push
     refreshTabData(activeTabId());
   } catch {
@@ -3113,18 +3178,18 @@ async function bootstrap() {
 async function refreshAll() {
   const button = $("refreshAllBtn");
   await withBusy(button, async () => {
-    const results = await Promise.allSettled([
+    const tasks = [
       loadStatus(),
       loadSymbols(),
       loadAccount(),
       loadPositions(),
-      loadStrategyCatalog(),
       loadSignals(),
       loadHistory(),
       loadHistoryChart(),
-      loadAudit(),
       loadKlineData(),
-    ]);
+    ];
+    if (!isObserverMode()) tasks.push(loadStrategyCatalog(), loadAudit());
+    const results = await Promise.allSettled(tasks);
     const rejected = results.find((item) => item.status === "rejected");
     if (rejected && state.token) {
       toast(`部分数据刷新失败：${rejected.reason.message || rejected.reason}`, "warning");
@@ -3135,6 +3200,7 @@ async function refreshAll() {
 async function loadStatus() {
   const health = await wsApi("health");
   const gateway = health.gateway || {};
+  syncAiAccess(gateway.access);
   const isLive = gateway.mode === "live";
   const usingFallback = gateway.using_fallback;
   const wasLive = state._lastGatewayLive;
@@ -3174,6 +3240,14 @@ async function loadStatus() {
   if (typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
   const marketClosed = state.marketTradeMode !== 4;
 
+  if (isObserverMode()) {
+    state.autoRuntime = null;
+    state.autoEnabled = false;
+    setBadge("autoAnalyzeMode", "观摩模式", "neutral");
+    setBadge("tradeMode", "只读观摩", "neutral");
+    return;
+  }
+
   try {
     const auto = await wsApi('auto_status');
     const scheduler = auto.scheduler || {};
@@ -3212,9 +3286,8 @@ async function loadStatus() {
 // ============ Gateway Badge Click ============
 // ============ Gateway Badge Click — MT5 connect/disconnect ============
 async function handleGatewayModeClick() {
-  // Plus users: blocked from bridge download entirely
-  if (state.isPlusReadOnly) {
-    toast("Pro 会员可连接 MT5 账户", "warning");
+  if (isObserverMode() && state.aiAccess?.can_download_bridge !== true) {
+    toast("Plus 会员仅支持观摩，不能下载或连接桥接软件", "warning");
     return;
   }
   // Pro without own bridge: allow bridge download modal
@@ -3329,8 +3402,7 @@ async function loadSymbols() {
 async function loadAccount() {
   const data = await wsApi("account");
   const rawServer = data.server || data.company || "服务器 --";
-  // 观摩账户：服务器名含 Demo 时显示为 Live
-  const server = state._usingFallback ? rawServer.replace(/Demo/gi, 'Live') : rawServer;
+  const server = rawServer;
   const currency = data.currency || "USD";
   state.accountBalance = parseFloat(data.balance) || 0;
   setText("mt5Server", server);
@@ -3731,12 +3803,9 @@ function hideSidebarObserveHint() {
 
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
-  const isPlusReadOnly = state.isPlusReadOnly;
-  const isPro = state.user?.plan === "pro" || isAdmin;
-  // Pro without bridge = has own account but bridge not connected (using admin fallback)
-  const isProNoBridge = isPro && !isAdmin && state._usingFallback;
+  const observer = isObserverMode();
+  const allowedTabs = new Set(state.aiAccess?.allowed_tabs || []);
 
-  // Admin-only UI elements
   document.querySelectorAll('.admin-only').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
   });
@@ -3752,99 +3821,59 @@ function applyRoleUI() {
     : "这里只保留你已经确认的经验，可以随时暂停或撤销。");
   if ($("addPrivateStrategyBtn")) $("addPrivateStrategyBtn").textContent = isAdmin ? "新建策略" : "新建自定义策略";
 
-  // 管理分组：仅桥接已连接时显示
+  // Navigation is an explicit capability list in observer mode. Empty groups
+  // are removed so the sidebar contains exactly the pages the user can open.
+  document.querySelectorAll('.sidebar .nav-item[data-tab]').forEach(item => {
+    const visible = observer
+      ? allowedTabs.has(item.dataset.tab)
+      : (!item.classList.contains('admin-only') || isAdmin);
+    item.style.display = visible ? '' : 'none';
+  });
+  const bottomGroup = document.querySelector('.nav-group-bottom');
+  if (bottomGroup) bottomGroup.style.display = observer ? 'none' : '';
+  document.querySelectorAll('.sidebar > .nav-group:not(.nav-group-bottom)').forEach(group => {
+    const visibleItem = [...group.querySelectorAll('.nav-item')].some(item => item.style.display !== 'none');
+    group.style.display = visibleItem ? '' : 'none';
+  });
+
+  const gatewayBadge = document.getElementById("gatewayMode");
+  if (gatewayBadge) {
+    const canOpenDownload = !observer || state.aiAccess?.can_download_bridge === true;
+    gatewayBadge.classList.toggle("clickable-badge", canOpenDownload);
+    gatewayBadge.title = observer && !canOpenDownload ? "Plus 会员仅可观摩" : "";
+  }
+
+  document.querySelectorAll('.sym-input').forEach(el => {
+    el.disabled = observer;
+    el.title = observer ? observerMessage() : '';
+  });
+
+  for (const id of ["tradeMode", "autoAnalyzeMode"]) {
+    const badge = document.getElementById(id);
+    if (!badge) continue;
+    badge.classList.toggle("clickable-badge", !observer);
+    badge.title = observer ? observerMessage() : "";
+  }
+
+  if (observer) {
+    if (state.aiAccess?.reason === "bridge_offline") {
+      showSidebarObserveHint('观摩模式 · <a href="#" id="sidebarBridgeLink">下载并连接 MT5 桥接</a> 后可使用完整功能');
+      setTimeout(() => {
+        const link = document.getElementById("sidebarBridgeLink");
+        if (link) link.onclick = (event) => { event.preventDefault(); handleGatewayModeClick(); };
+      }, 0);
+    } else {
+      showSidebarObserveHint('Plus 观摩模式 · 当前展示平台观摩账户数据');
+    }
+    return;
+  }
+
+  hideSidebarObserveHint();
   const navGroupManage = document.getElementById('navGroupManage');
   if (navGroupManage) {
     const bridgeConnected = !state._usingFallback && state._lastGatewayLive;
     navGroupManage.style.display = (isAdmin || bridgeConnected) ? '' : 'none';
   }
-
-  // Free users: locked out entirely (proOverlay shown during init)
-
-  // === Plus users: observation-only mode ===
-  // Hide model config tab
-  const modelTabs = document.querySelectorAll('.nav-item[data-tab="model-strategy"]');
-  modelTabs.forEach(modelTab => { modelTab.style.display = isPlusReadOnly ? "none" : ""; });
-
-  // Keep gateway badge clickable for all users — guards in click handlers block action
-  const gatewayBadge = document.getElementById("gatewayMode");
-  if (gatewayBadge) {
-    gatewayBadge.classList.add("clickable-badge");
-    if (isPlusReadOnly) {
-      gatewayBadge.title = "Plus 会员仅可查看";
-    } else if (isProNoBridge) {
-      gatewayBadge.title = "";
-    } else {
-      gatewayBadge.title = "";
-    }
-  }
-
-  // Plus read-only: disable all action buttons, hide bridge download
-  if (isPlusReadOnly) {
-    showSidebarObserveHint('您正在以观摩模式查看实时数据，如需使用 AI 推理和交易功能请 <a href="/membership">升级 Pro</a>');
-    document.querySelectorAll('.card-action-btn, .btn-primary, .btn-danger, .btn-success, #executeSignalBtn, [data-action="execute"], [data-action="close-position"]').forEach(el => {
-      el.disabled = true;
-      el.title = 'Plus 会员仅可查看';
-    });
-    // Disable symbol selectors (observe mode)
-    document.querySelectorAll('.sym-input').forEach(el => {
-      el.disabled = true;
-      el.title = 'Plus 会员仅可查看';
-    });
-    // Keep clickable-badge on all topbar badges (for pointer cursor) — guards in click handlers block action
-    const autoMode = document.getElementById("autoAnalyzeMode");
-    if (autoMode) { autoMode.classList.add("clickable-badge"); autoMode.title = "Plus 会员仅可查看"; }
-    return;
-  }
-
-  // === Pro without bridge: 观摩模式，可打开下载页，模型页只显示自有数据 ===
-  if (isProNoBridge) {
-    showSidebarObserveHint('观摩模式 · 请 <a href="#" id="sidebarBridgeLink">下载并启动MT5桥接</a> 后使用完整功能');
-    // Disable trade-related buttons
-    document.querySelectorAll('[data-action="execute"], [data-action="close-position"]').forEach(el => {
-      el.disabled = true;
-      el.title = '请先连接您的 MT5 账户';
-    });
-    // Disable trade toggle, keep clickable-badge (cursor only, handler guarded)
-    const tradeMode = document.getElementById("tradeMode");
-    if (tradeMode) { tradeMode.classList.add("clickable-badge"); tradeMode.title = "请先连接 MT5 账户"; }
-    // Keep gateway badge clickable (opens bridge download modal)
-    const gatewayBadge2 = document.getElementById("gatewayMode");
-    if (gatewayBadge2) { gatewayBadge2.classList.add("clickable-badge"); gatewayBadge2.title = ""; }
-    // Allow execute button but show disabled state
-    const execBtn = document.getElementById("executeSignalBtn");
-    if (execBtn) { execBtn.disabled = true; execBtn.title = "请先连接 MT5 账户"; }
-    // Disable symbol selectors (observe mode)
-    document.querySelectorAll('.sym-input').forEach(el => {
-      el.disabled = true;
-      el.title = '请先连接您的 MT5 账户';
-    });
-    // Disable auto-inference badge (observation mode)
-    const autoMode = document.getElementById("autoAnalyzeMode");
-    if (autoMode) { autoMode.classList.add("clickable-badge"); autoMode.title = "请先连接您的 MT5 账户"; }
-    // 绑定 sidebar 观摩提示中的下载链接
-    setTimeout(() => {
-      document.getElementById("sidebarBridgeLink")?.addEventListener("click", (e) => {
-        e.preventDefault();
-        handleGatewayModeClick();
-      });
-    }, 100);
-    return;
-  }
-
-  // === Pro with bridge / Admin: full access ===
-  // Hide observation hint
-  hideSidebarObserveHint();
-  // Re-enable symbol selectors
-  document.querySelectorAll('.sym-input').forEach(el => { el.disabled = false; el.title = ''; });
-  const tradeMode = document.getElementById("tradeMode");
-  if (tradeMode) { tradeMode.classList.add("clickable-badge"); tradeMode.title = ""; }
-  const autoMode = document.getElementById("autoAnalyzeMode");
-  if (autoMode) { autoMode.classList.add("clickable-badge"); autoMode.title = ""; }
-  const gatewayBadge3 = document.getElementById("gatewayMode");
-  if (gatewayBadge3) { gatewayBadge3.classList.add("clickable-badge"); gatewayBadge3.title = ""; }
-  // Show model tab
-  modelTabs.forEach(modelTab => { modelTab.style.display = ""; });
 }
 
 // [disabled] 智能平仓
@@ -4485,6 +4514,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
 }
 
 function setManualInferenceModal(open) {
+  if (open && isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const modal = $("manualInferenceModal");
   if (!modal) return;
   modal.classList.toggle("hidden", !open);

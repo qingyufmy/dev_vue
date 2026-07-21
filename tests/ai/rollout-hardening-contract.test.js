@@ -102,14 +102,16 @@ describe('rollout hardening contract', () => {
     expect(bridge).toContain('Failed to synchronize trade state')
   })
 
-  it('shares only market data from the administrator Bridge', () => {
+  it('projects administrator account reads in observer mode without routing writes to it', () => {
     expect(bridge).toContain("_source: 'admin_market_fallback'")
     expect(bridge).toContain("const readActions = ['rates', 'symbols', 'quote']")
-    expect(bridge).not.toContain("ai.mt5Bridge(adminUserId, 'account'")
-    expect(bridge).not.toContain("ai.mt5Bridge(adminUserId, 'positions'")
-    expect(bridge).not.toContain("ai.mt5Bridge(adminId, 'pending_list'")
-    expect(bridge).toContain('const sigUserId = userId')
-    expect(bridge).toContain('getCloseSignalTickets(userId)')
+    expect(bridge).toContain('const dataUserId = access.read_only ? observerSourceUserId : userId')
+    expect(bridge).toContain("observerWsActionAllowed(access, action)")
+    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'account', {}, { noFallback:true })")
+    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'positions', {}, { noFallback:true })")
+    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'pending_list', { symbol }, { noFallback:true })")
+    expect(bridge).toContain("ai.mt5Bridge(userId, 'toggle_trade'")
+    expect(bridge).toContain("ai.executeOrderCore(userId")
   })
 
   it('gives complete history queries a queue-aware Bridge timeout', () => {

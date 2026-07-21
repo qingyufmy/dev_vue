@@ -13,7 +13,8 @@ import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistory
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
   buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
-import { getBridgeDiagnostics } from '../../bridge-ws.js'
+import { getBridgeDiagnostics, getActivePlatformBridgeUserId, isBridgeAlive } from '../../bridge-ws.js'
+import { buildAiAccessContext, observerAccessError, observerHttpRequestAllowed } from './observer-access.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
@@ -73,6 +74,29 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
     serverTime: new Date().toISOString(),
     bridges: getBridgeDiagnostics(),
     recentStatus,
+  })
+})
+
+// AI Lab access is server-authoritative. The frontend consumes the same
+// context for presentation, while this middleware prevents direct API bypass.
+router.use('/ai', authMiddleware, (req, res, next) => {
+  const access = buildAiAccessContext(req.user, { ownBridgeConnected:isBridgeAlive(req.user.id) })
+  req.aiAccess = access
+  const aiPath = String(req.originalUrl || req.url || '').split('?')[0].replace(/^\/api/, '')
+  if (observerHttpRequestAllowed(access, req.method, aiPath)) return next()
+  return res.status(403).json({
+    ok:false,
+    error:observerAccessError(access, { page:req.method === 'GET' }),
+    code:req.method === 'GET' ? 'observer_page_forbidden' : 'observer_read_only',
+    access,
+  })
+})
+
+router.get('/ai/access-context', async (req, res) => {
+  const observerSourceUserId = req.aiAccess?.read_only ? await getActivePlatformBridgeUserId() : null
+  res.json({
+    ok:true,
+    access:{ ...req.aiAccess, observer_source_available:Boolean(observerSourceUserId) },
   })
 })
 

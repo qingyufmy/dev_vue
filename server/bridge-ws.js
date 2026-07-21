@@ -8,6 +8,7 @@ import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/config.js'
 import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
+import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -141,7 +142,10 @@ export async function getActivePlatformBridgeUserId() {
   const configured = await queryOne(`SELECT value FROM system_config
     WHERE category = 'market_data' AND \`key\` = 'platform_market_bridge_user_id' LIMIT 1`).catch(() => null)
   const configuredId = Number(configured?.value)
-  if (configuredId > 0 && bridges.get(configuredId)?.ws?.readyState === 1) return configuredId
+  if (configuredId > 0 && bridges.get(configuredId)?.ws?.readyState === 1) {
+    const configuredUser = await queryOne('SELECT role FROM users WHERE id = ?', [configuredId]).catch(() => null)
+    if (configuredUser?.role === 'admin') return configuredId
+  }
   const cachedAdminId = await getAdminUserId()
   if (cachedAdminId && bridges.get(cachedAdminId)?.ws?.readyState === 1) return cachedAdminId
   const connectedIds = [...bridges.entries()].filter(([, bridge]) => bridge.ws?.readyState === 1).map(([id]) => Number(id))
@@ -224,20 +228,19 @@ function handleBrowser(ws, url) {
   browsers.get(userId).add(ws)
 
   // Handle messages from browser
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     let msg
     try { msg = JSON.parse(data) } catch { return }
 
     if (msg.type === 'hb') {
-      // Heartbeat — reply with MT5 connection status (fall back to admin bridge)
-      let bridge = bridges.get(userId)
-      let usingFallback = false
-      if (!bridge || bridge.ws.readyState !== 1) {
-        if (adminUserId) {
-          bridge = bridges.get(adminUserId)
-          usingFallback = true
-        }
-      }
+      // Heartbeat uses the same access decision as command handling. Plus is
+      // always an observer, even if an old bridge connection still exists.
+      const accessUser = await queryOne('SELECT role, plan, plan_expires_at FROM users WHERE id = ?', [userId]).catch(() => null)
+      const access = buildAiAccessContext(accessUser, { ownBridgeConnected:isBridgeAlive(userId) })
+      const platformBridgeUserId = access.read_only ? await getActivePlatformBridgeUserId() : null
+      const dataUserId = access.read_only ? platformBridgeUserId : userId
+      const bridge = dataUserId ? bridges.get(dataUserId) : null
+      const usingFallback = access.read_only
       const connected = !!(bridge && bridge.ws.readyState === 1)
       const alive = connected && (Date.now() - bridge.lastSeen < 20000)
       // Include switch states from user's own bridge (not meaningful from admin fallback)
@@ -252,6 +255,7 @@ function handleBrowser(ws, url) {
         using_fallback: usingFallback,
         trade_enabled: tradeEnabled,
         auto_reasoning_enabled: autoReasoningEnabled,
+        access,
       }))
     } else if (msg.type === 'command' && msg.action) {
       handleBrowserCommand(ws, userId, msg)
@@ -719,17 +723,18 @@ async function handleBrowserCommand(ws, userId, msg) {
       (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
       FROM users WHERE id = ?`, [userId])
     const isPro = !!user?.has_pro_access
-    const hasAccess = isPro || user?.plan === 'plus'
+    const plusActive = user?.plan === 'plus' && (!user.plan_expires_at || new Date(user.plan_expires_at) >= new Date())
+    const hasAccess = isPro || plusActive
     if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
 
-    // Plus users: read-only, block write operations + analyze (API cost)
-    const writeActions = ['open', 'close', 'toggle_trade', 'execute', 'toggle_auto', 'set_quote_symbol', 'save_close_config', 'run_close_now']
-    if (!isPro && writeActions.includes(action)) {
-      return reply({ status: 'error', message: '升级会员即可解锁交易功能' })
+    const access = buildAiAccessContext(user, { ownBridgeConnected:isBridgeAlive(userId) })
+    if (!observerWsActionAllowed(access, action)) {
+      return reply({ status:'error', code:'observer_read_only', message:observerAccessError(access), access })
     }
-    // Plus users also blocked from analyze/compare (consumes AI API credits)
-    if (!isPro && (action === 'analyze' || action === 'compare')) {
-      return reply({ status: 'error', message: '升级会员即可使用 AI 推理' })
+    const observerSourceUserId = access.read_only ? await getActivePlatformBridgeUserId() : null
+    const dataUserId = access.read_only ? observerSourceUserId : userId
+    if (access.read_only && action !== 'health' && !dataUserId) {
+      return reply({ status:'error', code:'observer_source_offline', message:'管理员观摩账户当前未连接' })
     }
 
     // Block trade operations when bridge is offline or trading is disabled
@@ -747,12 +752,8 @@ async function handleBrowserCommand(ws, userId, msg) {
     let result
     switch (action) {
       case 'health': {
-        let bridge = bridges.get(userId)
-        let usingFallback = false
-        if (!bridge || bridge.ws.readyState !== 1) {
-          const adminId = await getAdminUserId()
-          if (adminId) { bridge = bridges.get(adminId); usingFallback = true }
-        }
+        const bridge = dataUserId ? bridges.get(dataUserId) : null
+        const usingFallback = access.read_only
         const connected = !!(bridge && bridge.ws.readyState === 1)
         const alive = connected && (Date.now() - bridge.lastSeen < 20000)
         const tradeEnabled = !usingFallback && alive && bridge?.tradeEnabled !== false
@@ -763,38 +764,37 @@ async function handleBrowserCommand(ws, userId, msg) {
             mt5_package_available: true,
             live_trading_enabled: tradeEnabled,
             using_fallback: usingFallback,
-            trade_mode: await getBridgeTradeMode(userId),
+            trade_mode: dataUserId ? await getBridgeTradeMode(dataUserId) : -1,
+            access:{ ...access, observer_source_available:Boolean(observerSourceUserId) },
           },
         }
         break
       }
       case 'account': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        if (hasOwnBridge) {
-          result = await ai.mt5Bridge(userId, 'account', {})
+        const hasDataBridge = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
+        if (hasDataBridge) {
+          result = await ai.mt5Bridge(dataUserId, 'account', {}, { noFallback:true })
+          if (access.read_only && result && typeof result === 'object') result.observer_source = true
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
       case 'symbols':
-        result = await ai.mt5Bridge(userId, 'symbols', {})
+        result = await ai.mt5Bridge(dataUserId, 'symbols', {}, { noFallback:true })
         break
       case 'quote': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        if (hasOwnBridge) {
-          result = await ai.mt5Bridge(userId, 'quote', { symbol: params.symbol })
-        } else if (adminUserId && bridges.get(adminUserId)?.ws?.readyState === 1) {
-          result = await ai.mt5Bridge(adminUserId, 'quote', { symbol: params.symbol })
+        if (dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1) {
+          result = await ai.mt5Bridge(dataUserId, 'quote', { symbol: params.symbol }, { noFallback:true })
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
       case 'positions': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        if (hasOwnBridge) {
-          result = await ai.mt5Bridge(userId, 'positions', {})
+        if (dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1) {
+          result = await ai.mt5Bridge(dataUserId, 'positions', {}, { noFallback:true })
+          if (access.read_only && result && typeof result === 'object') result.observer_source = true
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
@@ -854,7 +854,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'history': {
-        const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
+        const bridgeOk = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
         if (bridgeOk) {
           // 直接透传前端参数给桥接软件（含分页、过滤）
           const bridgeParams = {
@@ -866,29 +866,35 @@ async function handleBrowserCommand(ws, userId, msg) {
           }
           if (validHistoryDate(params.entry_from)) bridgeParams.entry_from = params.entry_from
           if (validHistoryDate(params.entry_to)) bridgeParams.entry_to = params.entry_to
-          const range = await resolveHistoryRange(userId, params)
+          const range = await resolveHistoryRange(dataUserId, params)
           if (range.date_from) bridgeParams.date_from = range.date_from
           if (range.date_to) bridgeParams.date_to = range.date_to
 
-          result = await ai.mt5Bridge(userId, 'history', bridgeParams, { timeoutMs: 30000, noFallback: true })
-          if (result && typeof result === 'object') result.history_range = range
+          result = await ai.mt5Bridge(dataUserId, 'history', bridgeParams, { timeoutMs: 30000, noFallback: true })
+          if (result && typeof result === 'object') {
+            result.history_range = range
+            result.observer_source = access.read_only
+          }
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
       }
       case 'history_chart_data': {
-        const bridgeOk = bridges.get(userId)?.ws?.readyState === 1
+        const bridgeOk = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
         if (bridgeOk) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
           const chartParams = { force_refresh: params.force_refresh === true }
-          const range = await resolveHistoryRange(userId, params)
+          const range = await resolveHistoryRange(dataUserId, params)
           if (range.date_from) chartParams.date_from = range.date_from
           if (range.date_to) chartParams.date_to = range.date_to
           if (params.direction) chartParams.direction = params.direction
           if (params.profit_filter) chartParams.profit_filter = params.profit_filter
-          result = await ai.mt5Bridge(userId, 'chart_data', chartParams, { timeoutMs: 30000, noFallback: true })
-          if (result && typeof result === 'object') result.history_range = range
+          result = await ai.mt5Bridge(dataUserId, 'chart_data', chartParams, { timeoutMs: 30000, noFallback: true })
+          if (result && typeof result === 'object') {
+            result.history_range = range
+            result.observer_source = access.read_only
+          }
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
@@ -916,9 +922,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const sessionParam = params.session_id ? [params.session_id] : []
 
         // 观摩模式：用 admin 的信号
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const adminId = await getAdminUserId()
-        const queryUserId = hasOwnBridge ? userId : (adminId || userId)
+        const queryUserId = dataUserId || userId
 
         // Old user signals
         const oldRow = await queryOne(
@@ -961,14 +965,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (!signalId) return reply({ status: 'error', message: 'signal_id required' })
 
         // In observation mode, delivery is stored under admin's userId
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const adminId = await getAdminUserId()
-        const detailUserId = hasOwnBridge ? userId : (adminId || userId)
+        const detailUserId = dataUserId || userId
 
         // Check if user has a delivery for this signal
         const delivery = await queryOne(
-          'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND (user_id = ? OR user_id = ?)',
-          [signalId, userId, detailUserId]
+          'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?',
+          [signalId, detailUserId]
         )
         if (delivery) {
           const row = await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId])
@@ -1025,9 +1027,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const limit = Math.min(Number(params.limit) || 10, 100)
         const beforeId = Number(params.before_id)
         // 观摩模式：始终用 admin 的信号
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        const adminId = await getAdminUserId()
-        const queryUserId = hasOwnBridge ? userId : (adminId || userId)
+        const queryUserId = dataUserId || userId
 
         // Build shared WHERE conditions for both queries
         const sharedConditions = []
@@ -1264,7 +1264,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'signal_tickets': {
         const ticketMap = {}
-        const sigUserId = userId
+        const sigUserId = dataUserId || userId
         // Old signals
         const oldRows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND (source = \'manual\' OR source IS NULL) ORDER BY id DESC LIMIT 200', [sigUserId])
         for (const row of oldRows) {
@@ -1354,20 +1354,20 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'close_signal_tickets': {
-        const map = await ai.getCloseSignalTickets(userId)
+        const map = await ai.getCloseSignalTickets(dataUserId || userId)
         result = { status: 'success', tickets: map }
         break
       }
       case 'pending_list': {
-        const hasOwnBridge = bridges.has(userId) && bridges.get(userId).ws?.readyState === 1
-        if (!hasOwnBridge) {
+        const hasDataBridge = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
+        if (!hasDataBridge) {
           result = { status: 'error', message: '请先连接 MT5 桥接' }
           break
         }
         try {
-          const bridge = bridges.get(userId)
           const symbol = params.symbol ? params.symbol : null
-          const listResult = await ai.mt5Bridge(userId, 'pending_list', { symbol })
+          const listResult = await ai.mt5Bridge(dataUserId, 'pending_list', { symbol }, { noFallback:true })
+          if (access.read_only && listResult && typeof listResult === 'object') listResult.observer_source = true
           result = listResult
         } catch (e) {
           console.error('[BridgeWS] pending_list error:', e.message)
@@ -1399,14 +1399,14 @@ async function handleBrowserCommand(ws, userId, msg) {
           const ticketStr = String(ticket)
           // 1. Direct match in ai_signals (fast path)
           let signal = await queryOne(
-            `SELECT ${sigCols} FROM ai_signals WHERE (pending_ticket = ? OR trade_ticket = ?) ORDER BY id DESC LIMIT 1`,
-            [ticketStr, ticketStr]
+            `SELECT ${sigCols} FROM ai_signals WHERE user_id = ? AND (pending_ticket = ? OR trade_ticket = ?) ORDER BY id DESC LIMIT 1`,
+            [dataUserId || userId, ticketStr, ticketStr]
           )
           // 2. Fallback: search auto_signal_deliveries (multi-user pending orders)
           if (!signal) {
             const deliv = await queryOne(
-              'SELECT signal_id FROM auto_signal_deliveries WHERE pending_ticket = ? ORDER BY id DESC LIMIT 1',
-              [ticketStr]
+              'SELECT signal_id FROM auto_signal_deliveries WHERE user_id = ? AND pending_ticket = ? ORDER BY id DESC LIMIT 1',
+              [dataUserId || userId, ticketStr]
             )
             if (deliv?.signal_id) {
               signal = await queryOne(

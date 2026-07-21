@@ -3,6 +3,10 @@ import { queryOne, queryRun } from '../db.js'
 import { JWT_SECRET, JWT_EXPIRY } from '../config.js'
 
 export function authMiddleware(req, res, next) {
+  // Routers may apply authentication once at a module boundary and again on
+  // individual legacy routes. Reuse the verified user instead of querying it
+  // twice.
+  if (req.user?.id) return next()
   const authHeader = req.headers.authorization
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ ok: false, error: '请先登录' })

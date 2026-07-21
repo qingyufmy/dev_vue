@@ -8339,3 +8339,32 @@ a.signal-link:hover {
   .compare-equity-legend { grid-template-columns:1fr; }
   .compare-equity-chart-frame svg { min-width:640px; }
 }
+.ai-observer-mode #tradeMode,
+.ai-observer-mode #autoAnalyzeMode,
+.ai-observer-mode .observer-action-panel,
+.ai-observer-mode #openManualInferenceBtn,
+.ai-observer-mode #executeSignalBtn,
+.ai-observer-mode #addModelProfileBtn,
+.ai-observer-mode #addPrivateStrategyBtn,
+.ai-observer-mode [data-model-action],
+.ai-observer-mode [data-strategy-action],
+.ai-observer-mode [data-subscription-action],
+.ai-observer-mode [data-close-ticket],
+.ai-observer-mode [data-action="cancel-pending"],
+.ai-observer-mode #savePlatformPolicyBtn {
+  display: none !important;
+}
+
+body[data-ai-access-reason="plus_plan"] [data-tab-jump="ai-config"] {
+  display: none !important;
+}
+
+.ai-observer-mode #trading .data-table th:last-child,
+.ai-observer-mode #trading .data-table td:last-child {
+  display: none;
+}
+
+.ai-observer-mode .sidebar-observe-hint {
+  border-color: color-mix(in srgb, var(--gold-primary) 38%, var(--border-default));
+  background: color-mix(in srgb, var(--gold-primary) 8%, var(--bg-card));
+}
