@@ -85,6 +85,10 @@ describe('daily review grouping', () => {
     expect(shouldRefreshDailyReviewCase(recent, group, sources, Date.parse('2026-07-17T22:00:00Z'))).toMatchObject({ refresh:true, reason:'incomplete_recheck_due' })
     expect(shouldRefreshDailyReviewCase(recent, { ...group, outcomes:[...group.outcomes, { id:9 }] }, sources,
       Date.parse('2026-07-17T21:31:00Z'))).toMatchObject({ refresh:true, reason:'outcome_set_changed' })
+    expect(shouldRefreshDailyReviewCase(recent, group, [
+      { outcome_id:3, source_hash:'old', current_evidence_hash:'new' },
+      { outcome_id:8, source_hash:'same', current_evidence_hash:'same' },
+    ], Date.parse('2026-07-17T21:31:00Z'))).toMatchObject({ refresh:true, reason:'trade_evidence_changed' })
 
     const settled = { evidence_status:'complete', current_version_id:11, updated_at:'2026-07-18 05:00:00' }
     expect(shouldRefreshDailyReviewCase(settled, group, sources, Date.parse('2026-07-19T22:00:00Z'))).toMatchObject({ refresh:false, reason:'finalized_unchanged' })

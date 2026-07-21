@@ -43,6 +43,10 @@ function beijingDateTimeMs(value) {
 export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], asOfUtcMs = Date.now()) {
   if (!reviewCase) return { refresh:true, reason:'new_case' }
   if (!samePeriodOutcomeSet(group?.outcomes || [], sources)) return { refresh:true, reason:'outcome_set_changed' }
+  if (sources.some(source => source.current_evidence_hash
+    && source.current_evidence_hash !== source.source_hash)) {
+    return { refresh:true, reason:'trade_evidence_changed' }
+  }
   const elapsed = Math.max(0, Number(asOfUtcMs) - beijingDateTimeMs(reviewCase.updated_at))
   if (reviewCase.evidence_status !== 'complete') {
     if (isTerminalTradeEvidenceReason(reviewCase.evidence_reason)) return { refresh:false, reason:'terminal_evidence_incomplete' }
@@ -405,7 +409,11 @@ async function upsertDailyGroup(group, clock) {
   [group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion])
   let existingSources = []
   if (existingCase) {
-    existingSources = await queryAll('SELECT outcome_id FROM period_review_sources WHERE period_case_id = ? ORDER BY outcome_id', [existingCase.id])
+    existingSources = await queryAll(`SELECT source.outcome_id, source.source_hash,
+      review_case.evidence_hash AS current_evidence_hash
+      FROM period_review_sources source
+      LEFT JOIN trade_review_cases review_case ON review_case.id = source.trade_review_case_id
+      WHERE source.period_case_id = ? ORDER BY source.outcome_id`, [existingCase.id])
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
