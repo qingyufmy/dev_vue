@@ -243,10 +243,10 @@ function handleBrowser(ws, url) {
       const usingFallback = access.read_only
       const connected = !!(bridge && bridge.ws.readyState === 1)
       const alive = connected && (Date.now() - bridge.lastSeen < 20000)
-      // Include switch states from user's own bridge (not meaningful from admin fallback)
-      const ownBridge = bridges.get(userId)
-      const tradeEnabled = ownBridge && ownBridge.ws.readyState === 1 ? !!ownBridge.tradeEnabled : undefined
-      const autoReasoningEnabled = ownBridge && ownBridge.ws.readyState === 1 ? !!ownBridge.autoReasoningEnabled : undefined
+      // In observer mode the visible switches describe the platform observer
+      // account. Mutations remain blocked by the observer action allowlist.
+      const tradeEnabled = alive ? !!bridge.tradeEnabled : undefined
+      const autoReasoningEnabled = alive ? !!bridge.autoReasoningEnabled : undefined
       ws.send(JSON.stringify({
         type: 'hb',
         seq: msg.seq,
@@ -756,13 +756,19 @@ async function handleBrowserCommand(ws, userId, msg) {
         const usingFallback = access.read_only
         const connected = !!(bridge && bridge.ws.readyState === 1)
         const alive = connected && (Date.now() - bridge.lastSeen < 20000)
-        const tradeEnabled = !usingFallback && alive && bridge?.tradeEnabled !== false
+        const tradeEnabled = usingFallback
+          ? (alive ? bridge?.tradeEnabled !== false : null)
+          : alive && bridge?.tradeEnabled !== false
+        const autoReasoningEnabled = usingFallback
+          ? (alive ? !!bridge?.autoReasoningEnabled : null)
+          : (alive ? !!bridge?.autoReasoningEnabled : false)
         result = {
           status: 'success',
           gateway: {
             mode: alive ? 'live' : 'mock',
             mt5_package_available: true,
             live_trading_enabled: tradeEnabled,
+            auto_reasoning_enabled: autoReasoningEnabled,
             using_fallback: usingFallback,
             trade_mode: dataUserId ? await getBridgeTradeMode(dataUserId) : -1,
             access:{ ...access, observer_source_available:Boolean(observerSourceUserId) },

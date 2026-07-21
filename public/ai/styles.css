@@ -8355,16 +8355,6 @@ a.signal-link:hover {
 .ai-observer-mode #tradeMode.is-readonly,
 .ai-observer-mode #autoAnalyzeMode.is-readonly {
   cursor: not-allowed;
-  border-color: color-mix(in srgb, var(--text-muted) 28%, var(--border-default));
-  color: var(--text-secondary);
-  background: color-mix(in srgb, var(--bg-card) 88%, var(--text-muted));
-  box-shadow: none;
-}
-
-.ai-observer-mode #tradeMode.is-readonly .badge-dot,
-.ai-observer-mode #autoAnalyzeMode.is-readonly .badge-dot {
-  background: var(--text-muted);
-  box-shadow: none;
 }
 
 .ai-observer-mode .observer-action-panel.is-readonly {
@@ -8373,7 +8363,7 @@ a.signal-link:hover {
 }
 
 .ai-observer-mode .observer-action-panel.is-readonly::after {
-  content: "观摩模式 · 手动交易仅展示";
+  content: "观摩模式 · 买入与卖出已锁定";
   position: absolute;
   top: 13px;
   right: 88px;
@@ -8386,7 +8376,7 @@ a.signal-link:hover {
   pointer-events: none;
 }
 
-.ai-observer-mode .observer-action-panel.is-readonly :is(input, select, textarea, button) {
+.ai-observer-mode .observer-action-panel.is-readonly :is(#buyBtn, #sellBtn) {
   cursor: not-allowed;
 }
 

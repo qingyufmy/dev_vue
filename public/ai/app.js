@@ -537,7 +537,9 @@ function applyAutoBadge(label, type, title, visual = {}) {
   const observerClass = isObserverMode() ? ' is-readonly' : ' clickable-badge';
   const newClass = `status-badge status-${type} auto-runtime-control${observerClass}${modeClass}`;
   if (el.className !== newClass) el.className = newClass;
-  el.disabled = isObserverMode();
+  // Observer clicks are handled explicitly so the user receives a clear
+  // read-only explanation instead of an inert native disabled control.
+  el.disabled = false;
   el.setAttribute('aria-disabled', String(isObserverMode()));
   setAutoBadgeText(el, label);
   const stage = el.querySelector('.auto-runtime-stage');
@@ -1037,6 +1039,22 @@ function observerMessage() {
   return state.aiAccess?.reason === "bridge_offline"
     ? "当前为观摩模式，请连接 MT5 桥接后再操作"
     : "Plus 会员为观摩模式，仅支持查看";
+}
+
+function renderObserverSwitchStates({ tradeEnabled, autoEnabled } = {}) {
+  const tradeKnown = typeof tradeEnabled === 'boolean';
+  const autoKnown = typeof autoEnabled === 'boolean';
+  setBadge(
+    "tradeMode",
+    tradeKnown ? `交易发送${tradeEnabled ? "开启" : "关闭"} · 只读` : "交易发送状态未知 · 只读",
+    tradeEnabled === true ? "danger" : "neutral",
+  );
+  setBadge(
+    "autoAnalyzeMode",
+    autoKnown ? `自动推理${autoEnabled ? "开启" : "关闭"} · 只读` : "自动推理状态未知 · 只读",
+    autoEnabled === true ? "active" : "neutral",
+  );
+  state.autoEnabled = autoEnabled === true;
 }
 
 function canAccessTab(tabId) {
@@ -1614,15 +1632,24 @@ function handleHeartbeat(msg) {
 
   // Update trade badge from heartbeat data (bridge just connected/state changed)
   // Note: tradeMode 1-3 are partial trading modes, not "closed"
-  if (!isObserverMode() && typeof msg.trade_enabled === 'boolean') {
-    const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
-    setBadge("tradeMode", tradeText, msg.trade_enabled ? "danger" : "neutral");
+  if (typeof msg.trade_enabled === 'boolean') {
+    if (isObserverMode()) {
+      renderObserverSwitchStates({
+        tradeEnabled: msg.trade_enabled,
+        autoEnabled: typeof msg.auto_reasoning_enabled === 'boolean' ? msg.auto_reasoning_enabled : state.autoEnabled,
+      });
+    } else {
+      const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
+      setBadge("tradeMode", tradeText, msg.trade_enabled ? "danger" : "neutral");
+    }
   } else if (!isLive && !usingFallback) {
     setBadge("tradeMode", "请先启动桥接", "neutral");
   }
 
   // Update auto badge from heartbeat data
-  if (!isObserverMode() && typeof msg.auto_reasoning_enabled === 'boolean') {
+  if (isObserverMode() && typeof msg.auto_reasoning_enabled === 'boolean') {
+    renderObserverSwitchStates({ tradeEnabled: msg.trade_enabled, autoEnabled: msg.auto_reasoning_enabled });
+  } else if (!isObserverMode() && typeof msg.auto_reasoning_enabled === 'boolean') {
     state.autoEnabled = msg.auto_reasoning_enabled;
     // Use renderAutoAnalyzeBadge for consistent display
     if (state.autoRuntime) {
@@ -3248,9 +3275,10 @@ async function loadStatus() {
 
   if (isObserverMode()) {
     state.autoRuntime = null;
-    state.autoEnabled = false;
-    setBadge("autoAnalyzeMode", "自动推理 · 只读", "neutral");
-    setBadge("tradeMode", "交易发送 · 只读", "neutral");
+    renderObserverSwitchStates({
+      tradeEnabled: gateway.live_trading_enabled,
+      autoEnabled: gateway.auto_reasoning_enabled,
+    });
     return;
   }
 
@@ -3812,8 +3840,7 @@ function hideSidebarObserveHint() {
 function setObserverPanelLock(panel, locked) {
   if (!panel) return;
   panel.classList.toggle('is-readonly', locked);
-  panel.setAttribute('aria-disabled', String(locked));
-  panel.querySelectorAll('input, select, textarea, button').forEach(control => {
+  panel.querySelectorAll('#buyBtn, #sellBtn').forEach(control => {
     if (locked) {
       if (!control.hasAttribute('data-observer-was-disabled')) {
         control.dataset.observerWasDisabled = control.disabled ? '1' : '0';
@@ -3885,7 +3912,7 @@ function applyRoleUI() {
     badge.classList.toggle("clickable-badge", !observer);
     badge.classList.toggle("is-readonly", observer);
     badge.setAttribute('aria-disabled', String(observer));
-    if ('disabled' in badge) badge.disabled = observer;
+    if ('disabled' in badge) badge.disabled = false;
     badge.title = observer ? observerMessage() : "";
   }
 

@@ -7,6 +7,7 @@ import {
 
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
+const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 
 describe('AI observer access', () => {
   it('keeps Plus permanently read-only and removes bridge download access', () => {
@@ -51,9 +52,14 @@ describe('AI observer access', () => {
   it('keeps observer controls visible while locking their interactions', () => {
     expect(app).toContain("bottomGroup.style.display = ''")
     expect(app).toContain("document.querySelectorAll('.observer-action-panel').forEach(panel => setObserverPanelLock(panel, observer))")
+    expect(app).toContain("panel.querySelectorAll('#buyBtn, #sellBtn')")
     expect(app).toContain("badge.setAttribute('aria-disabled', String(observer))")
+    expect(app).toContain('renderObserverSwitchStates({')
     expect(css).toContain('.ai-observer-mode .observer-action-panel.is-readonly')
+    expect(css).toContain(':is(#buyBtn, #sellBtn)')
     expect(css).not.toContain('.ai-observer-mode .observer-action-panel,')
     expect(css).not.toContain('.ai-observer-mode #autoAnalyzeMode,')
+    expect(bridgeWs).toContain('auto_reasoning_enabled: autoReasoningEnabled')
+    expect(bridgeWs).toContain('const tradeEnabled = alive ? !!bridge.tradeEnabled : undefined')
   })
 })
