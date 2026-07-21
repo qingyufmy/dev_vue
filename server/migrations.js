@@ -2915,6 +2915,43 @@ const migrations = [
           ON platform_strategy_experience_items (strategy_id, status, memory_tier, platform_version)`)
       }
     }
+  },
+  {
+    id: '115_mt5_account_current_owner',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS mt5_account_bindings (
+        broker_server_key VARCHAR(100) NOT NULL,
+        login_account VARCHAR(50) NOT NULL,
+        current_user_id INT NOT NULL,
+        current_trading_account_id INT NOT NULL,
+        last_verified_at DATETIME NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (broker_server_key, login_account),
+        UNIQUE KEY uk_mt5_binding_account (current_trading_account_id),
+        INDEX idx_mt5_binding_user (current_user_id, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      const rows = await queryAll(`SELECT id, user_id, broker_server, login_account,
+          observe_status, identity_verified_at, updated_at
+        FROM trading_accounts WHERE is_deleted = 0 AND broker_server <> '' AND login_account <> ''
+        ORDER BY CASE WHEN observe_status = 'active' THEN 0 ELSE 1 END,
+          identity_verified_at DESC, updated_at DESC, id DESC`)
+      const seen = new Set()
+      for (const row of rows) {
+        const serverKey = String(row.broker_server || '').trim().toUpperCase()
+        const login = String(row.login_account || '').trim()
+        const key = `${serverKey}\n${login}`
+        if (!serverKey || !login || seen.has(key)) continue
+        seen.add(key)
+        const verifiedAt = row.identity_verified_at || row.updated_at || beijingNow()
+        await queryRun(`INSERT INTO mt5_account_bindings
+          (broker_server_key, login_account, current_user_id, current_trading_account_id, last_verified_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
+            current_user_id = VALUES(current_user_id), current_trading_account_id = VALUES(current_trading_account_id),
+            last_verified_at = VALUES(last_verified_at), updated_at = VALUES(updated_at)`,
+        [serverKey, login, row.user_id, row.id, verifiedAt, beijingNow(), beijingNow()])
+      }
+    }
   }
 ]
 

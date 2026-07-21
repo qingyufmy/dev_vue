@@ -538,6 +538,7 @@ export async function createSubscription(userId, userRole, payload = {}) {
     const takeProfitMode = normalizeTakeProfitMode(payload.take_profit_mode)
     const schedule = normalizeSubscriptionSchedule(payload)
     if (executionEnabled) {
+      if (account.observe_status !== 'active') throw new Error('trading_account_not_active')
       await enforceSingleActiveSubscriptionTx(run, actorId, null, Boolean(payload.replace_active))
       await assertNoExecutionConflictTx(run, accountId, effectiveSymbols(symbolsJson, strategy.symbols_json))
     }
@@ -586,6 +587,7 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
     const schedule = normalizeSubscriptionSchedule(payload, existing)
     const takeProfitMode = normalizeTakeProfitMode(payload.take_profit_mode ?? existing.take_profit_mode)
     if (executionEnabled) {
+      if (account.observe_status !== 'active') throw new Error('trading_account_not_active')
       await enforceSingleActiveSubscriptionTx(run, actorId, id, Boolean(payload.replace_active))
       await assertNoExecutionConflictTx(run, accountId, effectiveSymbols(symbolsJson, strategy.symbols_json), id)
     }

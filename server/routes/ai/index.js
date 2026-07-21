@@ -456,7 +456,8 @@ router.get('/ai/admin/risk-center', authMiddleware, async (req, res) => {
     const exceptions = await queryAll(`SELECT ta.*, u.nickname AS user_nickname, u.email AS user_email
       FROM trading_accounts ta JOIN users u ON u.id = ta.user_id
       WHERE ta.is_deleted = 0 AND (
-        ta.anomaly_code = 'duplicate_account_binding' OR ta.observe_status IN ('frozen', 'paused')
+        ta.anomaly_code IN ('duplicate_account_binding', 'account_trade_permission_required', 'account_transferred')
+        OR ta.observe_status IN ('frozen', 'paused', 'transferred')
       ) ORDER BY ta.updated_at DESC LIMIT 500`)
     const global = await queryAll('SELECT global_kill_switch, reason, changed_by, updated_at FROM global_risk_control WHERE id = 1 LIMIT 1')
     let set = await queryAll("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")

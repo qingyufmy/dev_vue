@@ -309,6 +309,16 @@ describe('subscription transaction and V1 execution constraint', () => {
     expect(sql.some(value => value.includes('INSERT INTO user_bridge_settings'))).toBe(true)
   })
 
+  it('does not enable execution for a transferred MT5 account', async () => {
+    txRun.mockImplementation(sql => {
+      if (sql.includes('FROM trading_accounts')) return [[{ ...ACCOUNT, observe_status:'transferred' }], []]
+      return defaultTx(sql)
+    })
+    await expect(createSubscription(2, 'user', {
+      trading_account_id:10, strategy_id:2, execution_enabled:true,
+    })).rejects.toThrow('trading_account_not_active')
+  })
+
   it('requires an explicit switch before replacing another active auto-inference subscription', async () => {
     txRun.mockImplementation(sql => {
       if (sql.includes('SELECT id FROM strategy_subscriptions')) return [[{ id: 19 }], []]

@@ -369,6 +369,23 @@ describe('AI governance navigation and DOM contract', () => {
     expect(loadRiskCenter.indexOf('initIcons();')).toBeGreaterThan(loadRiskCenter.indexOf('class="risk-status-icon"'))
   })
 
+  it('refreshes every account-scoped view after a live MT5 account switch', () => {
+    expect(app).toContain("msg.type === 'account_switched'")
+    expect(app).toContain("msg.type === 'account_transferred'")
+    expect(bridgeWs).toContain("type: 'account_switched'")
+    expect(bridgeWs).toContain("type: 'account_transferred'")
+    expect(bridgeWs).toContain("previousBridge.ws.close(4004")
+    const start = app.indexOf('async function handleAccountSwitched')
+    const end = app.indexOf('async function handleAccountTransferred', start)
+    const handler = app.slice(start, end)
+    for (const loader of ['loadStatus()', 'loadSymbols()', 'loadAccount()', 'loadPositions()']) {
+      expect(handler).toContain(loader)
+    }
+    expect(handler).toContain('clearAccountContextCaches()')
+    expect(handler).toContain('refreshTabData(activeTabId())')
+    expect(handler).not.toContain('loadHistory(), loadHistoryChart()')
+  })
+
   it('shows risk units and hides retired observation and AI step settings', () => {
     expect(app).toContain('function riskUnit(meta = {})')
     expect(app).toContain('class="risk-input-with-unit"')

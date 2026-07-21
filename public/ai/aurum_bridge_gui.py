@@ -2276,6 +2276,11 @@ class BridgeWorker(QThread):
                         if t.exception() and not isinstance(t.exception(), (websockets.ConnectionClosed, ssl.SSLError, OSError, ConnectionResetError)):
                             raise t.exception()
             except websockets.ConnectionClosed as e:
+                if e.code == 4004:
+                    reason = e.reason or "MT5账户已由另一个平台账号连接"
+                    self.log_signal.emit(f"连接已停止: {reason}")
+                    self.status_signal.emit("MT5账户已切换", "#f59e0b", "请确认当前登录的平台账号")
+                    return
                 if e.code == 4003:
                     reason = e.reason or ''
                     if '会员' in reason or '过期' in reason or 'Pro' in reason:
@@ -2290,6 +2295,11 @@ class BridgeWorker(QThread):
             except Exception as e:
                 self.log_signal.emit(f"会话异常: {self._format_ws_error(e)}")
 
+            if getattr(ws, "close_code", None) == 4004:
+                reason = getattr(ws, "close_reason", "") or "MT5账户已由另一个平台账号连接"
+                self.log_signal.emit(f"连接已停止: {reason}")
+                self.status_signal.emit("MT5账户已切换", "#f59e0b", "请确认当前登录的平台账号")
+                return
             self._ws = None
             if not self.running:
                 break

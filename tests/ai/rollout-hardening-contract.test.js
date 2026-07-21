@@ -146,4 +146,11 @@ describe('rollout hardening contract', () => {
     expect(migrations).toContain('STORED INVISIBLE')
     expect(strategyOwnership).toContain('FROM users WHERE id = ? FOR UPDATE')
   })
+
+  it('tracks one current platform owner for each MT5 server and login identity', () => {
+    expect(migrations).toContain("id: '115_mt5_account_current_owner'")
+    expect(migrations).toContain('CREATE TABLE IF NOT EXISTS mt5_account_bindings')
+    expect(migrations).toContain('PRIMARY KEY (broker_server_key, login_account)')
+    expect(migrations).toContain('current_trading_account_id')
+  })
 })

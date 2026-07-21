@@ -211,20 +211,22 @@ export async function refreshRiskAccountState(userId, accountId, snapshot, polic
 export async function syncTradingAccountIdentity(userId, snapshot, requestedAccountId = null) {
   const server = String(snapshot?.server || '').trim(), login = String(snapshot?.login || '').trim()
   if (!server || !login) throw new Error('trading_account_identity_incomplete')
-  return withTransaction(async run => {
+  const hasTradingAuthority = snapshot?.trade_allowed === true || Number(snapshot?.trade_allowed) === 1
+  const result = await withTransaction(async run => {
     const now = beijingNow()
     const rows = (await run('SELECT * FROM trading_accounts WHERE user_id = ? FOR UPDATE', [userId]))[0]
     const serverKey = server.toUpperCase()
     let matched = rows.find(row => String(row.broker_server).toUpperCase() === serverKey && String(row.login_account) === login)
     const activeDifferent = rows.filter(row => !row.is_deleted && (String(row.broker_server).toUpperCase() !== serverKey || String(row.login_account) !== login))
-    const conflicts = (await run(`SELECT id, user_id FROM trading_accounts
-      WHERE user_id <> ? AND UPPER(broker_server) = ? AND login_account = ? AND is_deleted = 0 FOR UPDATE`,
-    [userId, serverKey, login]))[0]
-    const adminPaused = matched?.observe_status === 'paused' && matched?.anomaly_code !== 'admin_rejected'
-    const anomalyCode = conflicts.length ? 'duplicate_account_binding'
-      : adminPaused ? (matched.anomaly_code || 'account_paused') : null
+    const identityRows = (await run(`SELECT * FROM trading_accounts
+      WHERE UPPER(broker_server) = ? AND login_account = ? AND is_deleted = 0 FOR UPDATE`, [serverKey, login]))[0]
+    const binding = ((await run(`SELECT * FROM mt5_account_bindings
+      WHERE broker_server_key = ? AND login_account = ? FOR UPDATE`, [serverKey, login]))[0] || [])[0] || null
+    const canKeepExistingOwnership = Number(binding?.current_user_id || 0) === Number(userId)
+    const canClaimOwnership = canKeepExistingOwnership || hasTradingAuthority
+    const anomalyCode = canClaimOwnership ? null : 'account_trade_permission_required'
     const reviewStatus = 'approved'
-    const observeStatus = conflicts.length ? 'frozen' : adminPaused ? 'paused' : 'active'
+    const observeStatus = canClaimOwnership ? 'active' : 'frozen'
     if (!matched) {
       const [insert] = await run(`INSERT INTO trading_accounts
         (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status,
@@ -245,6 +247,45 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       [reviewStatus, observeStatus, observeStatus, now, now, anomalyCode, now, matched.id])
       matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
     }
+    if (!canClaimOwnership) {
+      await run(`INSERT INTO risk_account_state (trading_account_id, user_id, halt_status, halt_reason, data_complete, created_at, updated_at)
+        VALUES (?, ?, 'halted', 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 0, ?, ?)
+        ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), halt_status = 'halted',
+          halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', data_complete = 0, updated_at = VALUES(updated_at)`,
+      [matched.id, userId, now, now])
+      return {
+        accountId: Number(matched.id), switched: false, verified: false, anomalyCode,
+        ownershipTransferred: false, previousOwnerUserIds: [],
+      }
+    }
+
+    const previousOwnerUserIds = identityRows
+      .filter(row => Number(row.user_id) !== Number(userId) && row.observe_status !== 'transferred')
+      .map(row => Number(row.user_id)).filter(Boolean)
+    if (binding?.current_user_id && Number(binding.current_user_id) !== Number(userId)) {
+      previousOwnerUserIds.push(Number(binding.current_user_id))
+    }
+    const uniquePreviousOwnerUserIds = [...new Set(previousOwnerUserIds)]
+    const previousAccountIds = identityRows
+      .filter(row => Number(row.user_id) !== Number(userId) && row.observe_status !== 'transferred')
+      .map(row => Number(row.id)).filter(Boolean)
+    if (previousAccountIds.length) {
+      const placeholders = previousAccountIds.map(() => '?').join(',')
+      await run(`UPDATE trading_accounts SET observe_status = 'transferred', anomaly_code = 'account_transferred', updated_at = ?
+        WHERE id IN (${placeholders})`, [now, ...previousAccountIds])
+      await run(`UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ?
+        WHERE trading_account_id IN (${placeholders}) AND is_deleted = 0`, [now, ...previousAccountIds])
+      await run(`UPDATE risk_account_state SET halt_status = 'halted', halt_reason = 'R6_ACCOUNT_TRANSFERRED',
+        data_complete = 0, updated_at = ? WHERE trading_account_id IN (${placeholders})`, [now, ...previousAccountIds])
+    }
+    if (uniquePreviousOwnerUserIds.length) {
+      const placeholders = uniquePreviousOwnerUserIds.map(() => '?').join(',')
+      await run(`UPDATE auto_scheduler SET enabled = 0, updated_at = ? WHERE user_id IN (${placeholders})`, [now, ...uniquePreviousOwnerUserIds])
+      await run(`INSERT INTO user_bridge_settings (user_id, trade_send_enabled, auto_reasoning_enabled, updated_at)
+        SELECT id, 0, 0, ? FROM users WHERE id IN (${placeholders})
+        ON DUPLICATE KEY UPDATE trade_send_enabled = 0, auto_reasoning_enabled = 0, updated_at = VALUES(updated_at)`,
+      [now, ...uniquePreviousOwnerUserIds])
+    }
     if (activeDifferent.length) {
       const ids = activeDifferent.map(row => Number(row.id))
       await run(`UPDATE trading_accounts SET observe_status = 'switched', updated_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [now, ...ids])
@@ -254,16 +295,39 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       [reviewStatus, observeStatus, anomalyCode, now, matched.id])
       matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
     }
+    await run(`INSERT INTO mt5_account_bindings
+      (broker_server_key, login_account, current_user_id, current_trading_account_id, last_verified_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE current_user_id = VALUES(current_user_id),
+        current_trading_account_id = VALUES(current_trading_account_id), last_verified_at = VALUES(last_verified_at),
+        updated_at = VALUES(updated_at)`, [serverKey, login, userId, matched.id, now, now, now])
     await run(`INSERT INTO risk_account_state (trading_account_id, user_id, halt_status, data_complete, created_at, updated_at)
-      VALUES (?, ?, 'active', 0, ?, ?) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), updated_at = VALUES(updated_at)`,
+      VALUES (?, ?, 'active', 0, ?, ?) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id),
+        halt_status = CASE WHEN halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED' THEN 'active' ELSE halt_status END,
+        halt_reason = CASE WHEN halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED' THEN NULL ELSE halt_reason END,
+        updated_at = VALUES(updated_at)`,
     [matched.id, userId, now, now])
     return {
       accountId: Number(matched.id),
       switched: activeDifferent.length > 0 || Boolean(requestedAccountId && Number(requestedAccountId) !== Number(matched.id)),
-      verified: !anomalyCode,
-      anomalyCode,
+      verified: true,
+      anomalyCode: null,
+      ownershipTransferred: uniquePreviousOwnerUserIds.length > 0,
+      previousOwnerUserIds: uniquePreviousOwnerUserIds,
     }
   })
+  if (result.ownershipTransferred) {
+    const detail = JSON.stringify({
+      broker_server:server, login_account:login, new_user_id:Number(userId),
+      previous_user_ids:result.previousOwnerUserIds, trading_account_id:result.accountId,
+      authority:'mt5_trade_allowed',
+    })
+    await logAudit({ userId, action:'mt5_account_ownership_acquired', targetType:'trading_account', targetId:result.accountId, detail })
+    for (const previousUserId of result.previousOwnerUserIds) {
+      await logAudit({ userId:previousUserId, action:'mt5_account_ownership_transferred', targetType:'trading_account', targetId:result.accountId, detail })
+    }
+  }
+  return result
 }
 
 export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId, request, policy, snapshot, ruleModes = {} }) {
@@ -284,7 +348,7 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
       VALUES (?, ?, 'active', 0, ?, ?)`, [accountId, userId, beijingNow(), beijingNow()])
     state = { trading_account_id: accountId, user_id: userId, halt_status: 'active', data_complete: 0 }
   }
-  if (['paused', 'switched', 'frozen'].includes(accountRow.observe_status)) return blocked('R6_ACCOUNT_PAUSED')
+  if (['paused', 'switched', 'frozen', 'transferred'].includes(accountRow.observe_status)) return blocked('R6_ACCOUNT_PAUSED')
   if (state.user_kill_switch) return blocked('R6_USER_KILL_SWITCH')
   if (state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now()) {
     const rejected = rolloutBlock('R3.2_LOSS_COOLDOWN', { until: state.cooldown_until }); if (rejected) return rejected

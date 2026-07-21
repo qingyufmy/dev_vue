@@ -969,6 +969,7 @@ const API_ERROR_MESSAGES = {
   strategy_delete_impact_changed: "策略订阅情况在确认期间发生变化，请重新确认影响范围",
   strategy_delete_active_subscriptions_unconfirmed: "仍有运行中的订阅，必须明确确认停止后才能删除",
   private_strategy_limit_reached: "当前 Pro 账户最多只能创建 1 条自定义策略",
+  trading_account_not_active: "当前 MT5 账户不是活动账户，请重新连接具有交易权限的 MT5 账户",
   admin_only: "仅管理员可以使用此功能",
   "symbol required": "请选择交易品种",
   "timeframe required": "请选择 K 线周期",
@@ -1156,6 +1157,49 @@ function stopRealtimeSync() {
   if (state.backgroundSyncTimer) { clearInterval(state.backgroundSyncTimer); state.backgroundSyncTimer = null; }
 }
 
+function clearAccountContextCaches() {
+  _historyCache = null;
+  _historyChartCache = null;
+  state.lastQuote = null;
+  state.positions = [];
+  state.tradingAccounts = [];
+  state.strategySubscriptions = [];
+  _prevPositionCount = 0;
+  if ($("positionsBody")) $("positionsBody").innerHTML = renderPositionRows([], true);
+  if ($("dashboardPositionsBody")) $("dashboardPositionsBody").innerHTML = renderPositionRows([], false);
+}
+
+async function handleAccountSwitched(msg = {}) {
+  const generation = Number(state._accountContextGeneration || 0) + 1;
+  state._accountContextGeneration = generation;
+  clearAccountContextCaches();
+  const login = msg.account?.login == null ? "" : String(msg.account.login);
+  if (!msg.verified) {
+    toast("当前 MT5 登录没有交易权限，账户数据可查看，但系统不会接管或执行交易", "warning");
+  } else if (msg.ownership_transferred) {
+    toast(`MT5 账户${login ? ` ${login}` : ""}已切换到当前平台账号`, "success");
+  } else if (msg.switched) {
+    toast(`已切换到 MT5 账户${login ? ` ${login}` : ""}，正在刷新账户数据`, "success");
+  }
+  const results = await Promise.allSettled([
+    loadStatus(), loadSymbols(), loadAccount(), loadPositions(),
+  ]);
+  if (generation !== state._accountContextGeneration) return;
+  // Heavy account data (history, chart, pending orders and risk details) stays
+  // demand-driven: refresh only the page the user is currently viewing.
+  await refreshTabData(activeTabId()).catch(() => {});
+  const rejected = results.find(item => item.status === "rejected");
+  if (rejected) console.warn("[AccountSwitch] 部分账户数据刷新失败:", rejected.reason);
+}
+
+async function handleAccountTransferred(msg = {}) {
+  state._accountContextGeneration = Number(state._accountContextGeneration || 0) + 1;
+  clearAccountContextCaches();
+  state.autoEnabled = false;
+  toast("此 MT5 账户已由另一个平台账号重新连接，当前账号的自动推理和交易发送已关闭", "warning");
+  await Promise.allSettled([loadStatus(), loadStrategyCatalog(), refreshTabData(activeTabId())]);
+}
+
 // Real-time bridge status via WebSocket + command channel
 
 
@@ -1201,6 +1245,10 @@ function connectBridgeStatusWs(onReady) {
         handleHeartbeat(msg);
       } else if (msg.type === 'disconnect') {
         handleDisconnect(msg);
+      } else if (msg.type === 'account_switched') {
+        handleAccountSwitched(msg).catch(error => console.warn('[AccountSwitch] 刷新失败:', error.message));
+      } else if (msg.type === 'account_transferred') {
+        handleAccountTransferred(msg).catch(error => console.warn('[AccountTransfer] 刷新失败:', error.message));
       } else if (msg.type === 'auto_state') {
         state.autoEnabled = !!msg.enabled;
         if (!msg.enabled) {
@@ -2270,7 +2318,8 @@ const RISK_DECISION_LABELS = {
   "R3.4_NOTIONAL_DATA_INCOMPLETE":"名义敞口数据不完整", "R3.4_NOTIONAL_EXPOSURE":"名义敞口超过上限",
   "R3_ACCOUNT_HALTED":"账户风控已暂停", "R3_RISK_DATA_INCOMPLETE":"账户风险数据不完整",
   "R6_ACCOUNT_NOT_FOUND":"未找到交易账户",
-  "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
+  "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_ACCOUNT_TRANSFERRED":"MT5账户已切换到其他平台账号",
+  "R6_ACCOUNT_TRADE_PERMISSION_REQUIRED":"MT5账户没有完整交易权限", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
   "R6_USER_KILL_SWITCH":"账户紧急停止已开启", "R6.4_OBSERVATION_BELOW_MINIMUM":"观察期手数低于最小可交易手数",
   "PX.3_BROKER_SLIPPAGE":"已应用旧版下单价格偏差",
   "PX.3_EXECUTION_PRICE_TOLERANCE":"已按百分比换算 MT5 下单偏差",
@@ -2992,7 +3041,12 @@ async function saveGlobalFeatureFlags() {
 
 function renderAccountExceptions(accounts) {
   const host = $("accountExceptionList"); if (!host) return;
-  const reasonLabels = { duplicate_account_binding:"同一交易账户已绑定其他用户", frozen:"账户已冻结", paused:"账户已暂停" };
+  const reasonLabels = {
+    duplicate_account_binding:"同一交易账户已绑定其他用户",
+    account_trade_permission_required:"MT5账户没有完整交易权限",
+    account_transferred:"MT5账户已切换到其他平台账号",
+    frozen:"账户已冻结", paused:"账户已暂停", transferred:"账户已转移",
+  };
   host.innerHTML = accounts.length ? accounts.map(account => {
     const reason = reasonLabels[account.anomaly_code] || reasonLabels[account.observe_status] || account.anomaly_code || "身份状态异常";
     return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.login_account)} <span class="status-chip danger">${escapeHtml(reason)}</span></div><div class="workspace-row-meta"><span>${escapeHtml(account.broker_server)}</span><span>账户状态：${escapeHtml(account.observe_status)}</span><span>首次验证：${escapeHtml(account.first_verified_at || '--')}</span></div></div></article>`;

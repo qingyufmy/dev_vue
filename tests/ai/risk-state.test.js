@@ -290,42 +290,68 @@ describe('identity and platform permissions', () => {
   it('auto-verifies a Bridge account without an artificial observation limit and pauses old subscriptions on identity switch', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
-      if (sql.startsWith('SELECT * FROM trading_accounts')) return [[{ id: 1, broker_server: 'Old', login_account: '1', is_deleted: 0 }], []]
-      if (sql.includes('user_id <>')) return [[], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[{ id: 1, user_id:2, broker_server: 'Old', login_account: '1', is_deleted: 0 }], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[], []]
+      if (sql.includes('FROM mt5_account_bindings')) return [[], []]
       writes.push(sql)
       if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 2 }, []]
       return [{ affectedRows: 1 }, []]
     }))
-    const result = await syncTradingAccountIdentity(2, { server: 'New', login: 9 }, 1)
-    expect(result).toEqual({ accountId: 2, switched: true, verified: true, anomalyCode: null })
+    const result = await syncTradingAccountIdentity(2, { server: 'New', login: 9, trade_allowed:true }, 1)
+    expect(result).toEqual({ accountId: 2, switched: true, verified: true, anomalyCode: null,
+      ownershipTransferred:false, previousOwnerUserIds:[] })
     expect(writes.some(sql => sql.includes('strategy_subscriptions SET execution_enabled = 0'))).toBe(true)
     expect(writes.some(sql => sql.includes('INSERT INTO trading_accounts') && sql.includes('first_verified_at') && sql.includes('NULL'))).toBe(true)
   })
 
-  it('freezes a duplicate account identity for administrator handling', async () => {
+  it('automatically transfers a trade-authorized duplicate MT5 account to the latest user', async () => {
+    const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async sql => {
-      if (sql.startsWith('SELECT * FROM trading_accounts')) return [[], []]
-      if (sql.includes('user_id <>')) return [[{ id: 99, user_id: 8 }], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[{ id:99, user_id:8, observe_status:'active' }], []]
+      if (sql.includes('FROM mt5_account_bindings')) return [[{ current_user_id:8, current_trading_account_id:99 }], []]
+      if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 3 }, []]
+      writes.push(sql)
+      return [{ affectedRows: 1 }, []]
+    }))
+    const result = await syncTradingAccountIdentity(2, { server: 'Demo', login: 123, trade_allowed:true })
+    expect(result).toEqual({ accountId:3, switched:false, verified:true, anomalyCode:null,
+      ownershipTransferred:true, previousOwnerUserIds:[8] })
+    expect(writes.some(sql => sql.includes("observe_status = 'transferred'"))).toBe(true)
+    expect(writes.some(sql => sql.includes('UPDATE auto_scheduler SET enabled = 0'))).toBe(true)
+    expect(db.logAudit).toHaveBeenCalledWith(expect.objectContaining({ action:'mt5_account_ownership_acquired' }))
+  })
+
+  it('does not transfer ownership from a bridge without account trading permission', async () => {
+    db.withTransaction.mockImplementation(async fn => fn(async sql => {
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[{ id:99, user_id:8, observe_status:'active' }], []]
+      if (sql.includes('FROM mt5_account_bindings')) return [[{ current_user_id:8, current_trading_account_id:99 }], []]
       if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 3 }, []]
       return [{ affectedRows: 1 }, []]
     }))
-    const result = await syncTradingAccountIdentity(2, { server: 'Demo', login: 123 })
-    expect(result).toEqual({ accountId: 3, switched: false, verified: false, anomalyCode: 'duplicate_account_binding' })
+    const result = await syncTradingAccountIdentity(2, { server:'Demo', login:123, trade_allowed:false })
+    expect(result).toEqual({ accountId:3, switched:false, verified:false,
+      anomalyCode:'account_trade_permission_required', ownershipTransferred:false, previousOwnerUserIds:[] })
   })
 
   it('clears legacy administrator-review state after Bridge identity verification', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
-      if (sql.startsWith('SELECT * FROM trading_accounts')) return [[{
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[{
         id: 7, broker_server: 'Demo', login_account: '123', is_deleted: 0,
         review_status: 'rejected', observe_status: 'frozen', anomaly_code: 'admin_rejected',
       }], []]
-      if (sql.includes('user_id <>')) return [[], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[{
+        id:7, user_id:2, broker_server:'Demo', login_account:'123', observe_status:'frozen',
+      }], []]
+      if (sql.includes('FROM mt5_account_bindings')) return [[], []]
       writes.push({ sql, params })
       return [{ affectedRows: 1 }, []]
     }))
-    const result = await syncTradingAccountIdentity(2, { server: 'Demo', login: 123 })
-    expect(result).toEqual({ accountId: 7, switched: false, verified: true, anomalyCode: null })
+    const result = await syncTradingAccountIdentity(2, { server: 'Demo', login: 123, trade_allowed:true })
+    expect(result).toEqual({ accountId:7, switched:false, verified:true, anomalyCode:null,
+      ownershipTransferred:false, previousOwnerUserIds:[] })
     const accountUpdate = writes.find(write => write.sql.includes('first_verified_at = COALESCE'))
     expect(accountUpdate.params[0]).toBe('approved')
     expect(accountUpdate.params[1]).toBe('active')

@@ -622,7 +622,32 @@ async function _initBridge(ws, userId, user) {
         currentBridge.accountLogin = account.login
       }
       const ai = await import('./routes/ai/index.js')
-      await ai.syncTradingAccountIdentity(userId, account)
+      const identity = await ai.syncTradingAccountIdentity(userId, account)
+      if (currentBridge?.ws === ws) currentBridge.tradingAccountId = identity.accountId
+      sendToBrowsers(userId, {
+        type: 'account_switched',
+        account: { id:identity.accountId, server:account.server, login:account.login },
+        switched: Boolean(identity.switched),
+        ownership_transferred: Boolean(identity.ownershipTransferred),
+        verified: Boolean(identity.verified),
+        anomaly_code: identity.anomalyCode || null,
+      })
+      for (const previousUserId of identity.previousOwnerUserIds || []) {
+        sendToBrowsers(previousUserId, {
+          type: 'account_transferred',
+          account: { server:account.server, login:account.login },
+          reason: 'new_trade_authorized_bridge_connected',
+        })
+        await ai.stopAutoScheduler(previousUserId).catch(() => {})
+        await ai.removeUserRuntimeAutoSubscription(previousUserId).catch(() => {})
+        const previousBridge = bridges.get(Number(previousUserId))
+        if (previousBridge?.ws?.readyState === 1) {
+          previousBridge.tradeEnabled = false
+          previousBridge.autoReasoningEnabled = false
+          try { await sendBridgeCommand(previousUserId, 'toggle_trade', { enable:false }, 2000, { noFallback:true }) } catch {}
+          try { previousBridge.ws.close(4004, 'MT5 account ownership transferred') } catch {}
+        }
+      }
     } else {
       console.warn(`[BridgeWS] Account identity synchronization skipped user=${userId}:`, account?.message || account?.error || 'identity_unavailable')
     }

@@ -23,6 +23,14 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('self.account_created_at =')
   })
 
+  it('stops reconnecting after the MT5 account is transferred to another platform user', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('if e.code == 4004:')
+    expect(source).toContain('getattr(ws, "close_code", None) == 4004')
+    expect(source).toContain('MT5账户已由另一个平台账号连接')
+    expect(source.indexOf('if e.code == 4004:')).toBeLessThan(source.indexOf('if e.code == 4003:'))
+  })
+
   it('treats an empty date filter as full account history', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     const historyStart = source.indexOf('elif action == "history"')
