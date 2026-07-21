@@ -988,9 +988,6 @@ const API_ERROR_MESSAGES = {
   benchmark_market_data_insufficient: "缓存中的 M5 行情不足以生成经典行情集",
   benchmark_market_regimes_insufficient: "当前行情覆盖的市场形态不足，请扩大生成范围后重试",
   benchmark_outcome_candles_incomplete: "经典行情案例的后续 K 线不完整，请重新生成基准集",
-  benchmark_events_required: "请至少选择一个黄金历史事件",
-  benchmark_event_not_found: "所选历史事件不存在，请刷新后重试",
-  benchmark_event_market_data_insufficient: "所选事件的 MT5 历史 K 线不足，无法生成有效基准集",
   invalid_benchmark_time_range: "经典行情生成范围无效",
   symbol_required: "请选择交易品种",
   pending_price_required: "挂单缺少有效触发价",
@@ -4563,7 +4560,6 @@ async function loadModelCompare() {
   }
   setDefaultCompareDates();
   updateHistoryCompareSourceUI();
-  if (!_modelCompareEvents.length) await loadModelCompareEventCatalog();
   if (sel?.value) syncHistoryCompareStrategyInputs();
   updateHistoryCompareReadiness();
   await loadHistoryCompareJobs();
@@ -4600,7 +4596,6 @@ let _historyCompareStrategies = [];
 let _historyComparePrimaryTimeframe = "";
 let _historyCompareEvaluationTimeframe = "";
 let _modelCompareBenchmarks = [];
-let _modelCompareEvents = [];
 const HISTORY_COMPARE_CONTINUOUS_LIMIT = 120;
 const HISTORY_COMPARE_CONFIRM_CALLS = 20;
 const COMPARE_TIMEFRAME_MINUTES = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440 };
@@ -4653,36 +4648,6 @@ function updateHistoryCompareSourceUI() {
     : "系统会在完整区间内均匀抽样，避免只评估前半段行情。";
 }
 
-function updateModelCompareEventSelection() {
-  const selected = document.querySelectorAll("[data-cmp-event]:checked").length;
-  const symbolReady = Boolean($("cmpSymbol")?.value?.trim());
-  const count = $("cmpEventSelectionCount");
-  const button = $("cmpImportEvents");
-  if (count) count.textContent = _modelCompareEvents.length ? `已选 ${selected}/${_modelCompareEvents.length}` : "暂无案例";
-  if (button) button.disabled = selected === 0 || !symbolReady;
-}
-
-async function loadModelCompareEventCatalog() {
-  const container = $("cmpEventCatalog");
-  if (!container) return;
-  container.innerHTML = '<span class="compare-event-loading">正在加载经典案例...</span>';
-  try {
-    const data = await api("/api/ai/model-compare/benchmark-events");
-    _modelCompareEvents = data.events || [];
-    container.innerHTML = _modelCompareEvents.length ? _modelCompareEvents.map(item => {
-      const sourceUrl = String(item.source_url || "").startsWith("https://") ? item.source_url : "#";
-      const startYear = new Date(Number(item.start_time_utc_msc)).getUTCFullYear();
-      return `<label class="compare-event-card"><input type="checkbox" data-cmp-event value="${escapeHtml(item.id)}" ${item.default_selected ? "checked" : ""}><span class="compare-event-check"><i data-lucide="check" size="13"></i></span><span class="compare-event-copy"><strong>${escapeHtml(item.title)}</strong><small>${startYear} · ${escapeHtml((item.tags || []).join(" · "))}</small></span><a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="查看${escapeHtml(item.title)}的资料来源" title="${escapeHtml(item.source_title || "查看来源")}"><i data-lucide="external-link" size="13"></i></a></label>`;
-    }).join("") : '<span class="compare-event-loading">暂无历史事件案例</span>';
-    container.querySelectorAll("[data-cmp-event]").forEach(input => input.addEventListener("change", updateModelCompareEventSelection));
-  } catch (error) {
-    _modelCompareEvents = [];
-    container.innerHTML = `<span class="compare-event-loading danger">${escapeHtml(apiErrorMessage(error.message))}</span>`;
-  }
-  updateModelCompareEventSelection();
-  initIcons();
-}
-
 async function loadModelCompareBenchmarks() {
   const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
   const select = $("cmpBenchmarkSet");
@@ -4717,9 +4682,8 @@ function updateModelCompareBenchmarkSummary() {
   const selected = _modelCompareBenchmarks.find(item => Number(item.id) === Number($("cmpBenchmarkSet")?.value));
   const summary = $("cmpBenchmarkSummary");
   if (!summary) return;
-  const isEventSet = selected?.selection_config?.catalog_version === "gold-events-v1";
   summary.innerHTML = selected
-    ? `<strong>${selected.case_count || 0} 个固定案例</strong><span>${isEventSet ? `${selected.selection_config?.event_ids?.length || 0} 个黄金历史事件` : "趋势、反转、假突破与震荡"} · 指纹 ${escapeHtml(String(selected.fingerprint || "").slice(0, 10))}</span>`
+    ? `<strong>${selected.case_count || 0} 个固定案例</strong><span>趋势、反转、假突破与震荡 · 指纹 ${escapeHtml(String(selected.fingerprint || "").slice(0, 10))}</span>`
     : "<span>生成后可在不同模型、不同时间重复使用同一组行情。</span>";
 }
 
@@ -4736,29 +4700,6 @@ async function generateModelCompareBenchmark() {
     toast("生成失败：" + apiErrorMessage(error.message), "error");
   } finally {
     if (button) { button.disabled = false; button.innerHTML = '<i data-lucide="sparkles" size="15"></i>生成新版本'; }
-    initIcons();
-  }
-}
-
-async function importModelCompareEvents() {
-  const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
-  const eventIds = [...document.querySelectorAll("[data-cmp-event]:checked")].map(input => input.value);
-  if (!symbol) return toast("请先选择策略和品种", "warning");
-  if (!eventIds.length) return toast("请至少选择一个历史事件", "warning");
-  const button = $("cmpImportEvents");
-  if (button) { button.disabled = true; button.innerHTML = '<i data-lucide="loader-circle" size="15"></i>正在获取 K 线'; }
-  try {
-    const data = await api("/api/ai/model-compare/benchmark-events/import", {
-      method:"POST", body:{ symbol, event_ids:eventIds, cases_per_event:4 },
-    });
-    const skipped = data.import_report?.unavailable_events?.length || 0;
-    toast(skipped ? `历史事件集已生成，${skipped} 个事件因行情缺失未导入` : "黄金历史事件基准集已生成", skipped ? "warning" : "success");
-    await loadModelCompareBenchmarks();
-  } catch (error) {
-    toast("导入失败：" + apiErrorMessage(error.message), "error");
-  } finally {
-    if (button) { button.innerHTML = '<i data-lucide="download" size="15"></i>导入所选事件'; }
-    updateModelCompareEventSelection();
     initIcons();
   }
 }
@@ -6762,7 +6703,6 @@ function bindEvents() {
   $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
   $("cmpRefreshHistory")?.addEventListener("click", loadHistoryCompareJobs);
   $("cmpGenerateBenchmark")?.addEventListener("click", generateModelCompareBenchmark);
-  $("cmpImportEvents")?.addEventListener("click", importModelCompareEvents);
   $("cmpBenchmarkSet")?.addEventListener("change", () => {
     updateModelCompareBenchmarkSummary();
     updateHistoryCompareReadiness();
@@ -6783,7 +6723,7 @@ function bindEvents() {
       updateHistoryCompareReadiness();
     });
   });
-  $("cmpSymbol")?.addEventListener("change", () => { updateModelCompareEventSelection(); void loadModelCompareBenchmarks(); });
+  $("cmpSymbol")?.addEventListener("change", () => { void loadModelCompareBenchmarks(); });
   document.querySelectorAll("[data-cmp-range]").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll("[data-cmp-range]").forEach(item => item.classList.toggle("active", item === button));
     setDefaultCompareDates(Number(button.dataset.cmpRange) || 7, true);

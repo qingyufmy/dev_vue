@@ -882,9 +882,6 @@ describe('POST /ai/model-compare/history route', () => {
     expect(routes).toContain("router.get('/ai/model-compare/benchmarks', authMiddleware")
     expect(routes).toContain("router.post('/ai/model-compare/benchmarks', authMiddleware")
     expect(routes).toContain('createClassicBenchmarkSet(req.user.id')
-    expect(routes).toContain("router.get('/ai/model-compare/benchmark-events', authMiddleware")
-    expect(routes).toContain("router.post('/ai/model-compare/benchmark-events/import', authMiddleware")
-    expect(routes).toContain('createHistoricEventBenchmarkSet(req.user.id')
   })
 
   it('normalizes persisted Beijing DATETIME values before MT5 display', () => {
@@ -949,10 +946,8 @@ describe('historical comparison frontend contract', () => {
     expect(html).toContain('name="cmpDataSource" value="benchmark"')
     expect(html).toContain('id="cmpBenchmarkSet"')
     expect(html).toContain('经典行情集')
-    expect(html).toContain('黄金历史事件库')
     expect(html).toContain('value="30"')
     expect(frontend).toContain('/api/ai/model-compare/benchmarks')
-    expect(frontend).toContain('/api/ai/model-compare/benchmark-events')
     expect(frontend).toContain('部分完成')
     expect(frontend).toContain('data_source:dataSource')
     expect(frontend).toContain('约束异常')

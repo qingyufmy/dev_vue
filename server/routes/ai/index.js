@@ -38,7 +38,7 @@ import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
   retryPeriodReviewDerivation } from './period-review.js'
-import { listModelBenchmarkSets, createClassicBenchmarkSet, listClassicGoldEvents, createHistoricEventBenchmarkSet } from './model-benchmarks.js'
+import { listModelBenchmarkSets, createClassicBenchmarkSet } from './model-benchmarks.js'
 
 const router = Router()
 
@@ -178,17 +178,6 @@ router.get('/ai/model-compare/benchmarks', authMiddleware, async (req, res) => {
 router.post('/ai/model-compare/benchmarks', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
   try { res.status(201).json({ ok:true, benchmark:await createClassicBenchmarkSet(req.user.id, req.body || {}) }) }
-  catch (error) { reviewError(res, error) }
-})
-
-router.get('/ai/model-compare/benchmark-events', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
-  res.json({ ok:true, catalog_version:'gold-events-v1', events:listClassicGoldEvents() })
-})
-
-router.post('/ai/model-compare/benchmark-events/import', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
-  try { res.status(201).json({ ok:true, ...(await createHistoricEventBenchmarkSet(req.user.id, req.body || {})) }) }
   catch (error) { reviewError(res, error) }
 })
 

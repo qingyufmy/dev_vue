@@ -257,21 +257,7 @@ async function maybeCleanupMarketData() {
   await queryRun('DELETE FROM market_clock_samples WHERE sampled_at < DATE_SUB(NOW(), INTERVAL 30 DAY) LIMIT 10000')
   for (const [timeframe, days] of Object.entries(RETENTION_DAYS)) {
     const cutoff = now - days * 86400000
-    await queryRun(`DELETE FROM market_candles WHERE id IN (
-      SELECT id FROM (
-        SELECT candles.id FROM market_candles candles
-        WHERE candles.timeframe = ? AND candles.open_time_utc_msc < ?
-          AND NOT EXISTS (
-            SELECT 1 FROM ai_market_benchmark_cases benchmark_case
-            JOIN ai_market_benchmark_sets benchmark_set ON benchmark_set.id = benchmark_case.benchmark_set_id
-            WHERE benchmark_set.status = 'active' AND BINARY benchmark_set.symbol = BINARY candles.standard_symbol
-              AND candles.timeframe = 'M5'
-              AND candles.open_time_utc_msc >= benchmark_case.start_time_utc_msc - 1209600000
-              AND candles.open_time_utc_msc < benchmark_case.end_time_utc_msc
-          )
-        LIMIT 10000
-      ) cleanup_batch
-    )`, [timeframe, cutoff])
+    await queryRun('DELETE FROM market_candles WHERE timeframe = ? AND open_time_utc_msc < ? LIMIT 10000', [timeframe, cutoff])
   }
 }
 
