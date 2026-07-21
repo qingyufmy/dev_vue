@@ -445,8 +445,11 @@ function setText(id, value) {
 function setBadge(id, text, type, withDot = true) {
   const el = $(id);
   if (!el) return;
-  // Preserve clickable-badge class if present
-  const extra = el.classList.contains("clickable-badge") ? " clickable-badge" : "";
+  // Preserve interaction state applied by the role/access layer.
+  const extra = ["clickable-badge", "is-readonly"]
+    .filter(className => el.classList.contains(className))
+    .map(className => ` ${className}`)
+    .join("");
   el.className = `status-badge status-${type}${extra}`;
   el.innerHTML = `${withDot ? '<span class="badge-dot"></span>' : ""}${escapeHtml(text)}`;
 }
@@ -531,8 +534,11 @@ function applyAutoBadge(label, type, title, visual = {}) {
   if (!el) return;
 
   const modeClass = visual.mode ? ` is-progress is-${visual.mode}` : '';
-  const newClass = `status-badge status-${type} clickable-badge auto-runtime-control${modeClass}`;
+  const observerClass = isObserverMode() ? ' is-readonly' : ' clickable-badge';
+  const newClass = `status-badge status-${type} auto-runtime-control${observerClass}${modeClass}`;
   if (el.className !== newClass) el.className = newClass;
+  el.disabled = isObserverMode();
+  el.setAttribute('aria-disabled', String(isObserverMode()));
   setAutoBadgeText(el, label);
   const stage = el.querySelector('.auto-runtime-stage');
   const percent = el.querySelector('.auto-runtime-percent');
@@ -1608,7 +1614,7 @@ function handleHeartbeat(msg) {
 
   // Update trade badge from heartbeat data (bridge just connected/state changed)
   // Note: tradeMode 1-3 are partial trading modes, not "closed"
-  if (typeof msg.trade_enabled === 'boolean') {
+  if (!isObserverMode() && typeof msg.trade_enabled === 'boolean') {
     const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
     setBadge("tradeMode", tradeText, msg.trade_enabled ? "danger" : "neutral");
   } else if (!isLive && !usingFallback) {
@@ -1616,7 +1622,7 @@ function handleHeartbeat(msg) {
   }
 
   // Update auto badge from heartbeat data
-  if (typeof msg.auto_reasoning_enabled === 'boolean') {
+  if (!isObserverMode() && typeof msg.auto_reasoning_enabled === 'boolean') {
     state.autoEnabled = msg.auto_reasoning_enabled;
     // Use renderAutoAnalyzeBadge for consistent display
     if (state.autoRuntime) {
@@ -3243,8 +3249,8 @@ async function loadStatus() {
   if (isObserverMode()) {
     state.autoRuntime = null;
     state.autoEnabled = false;
-    setBadge("autoAnalyzeMode", "观摩模式", "neutral");
-    setBadge("tradeMode", "只读观摩", "neutral");
+    setBadge("autoAnalyzeMode", "自动推理 · 只读", "neutral");
+    setBadge("tradeMode", "交易发送 · 只读", "neutral");
     return;
   }
 
@@ -3326,6 +3332,7 @@ function initBridgeModal() {
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
 async function handleTradeModeClick() {
+  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   const health = await wsApi("health").catch(() => null);
@@ -3354,6 +3361,7 @@ async function handleTradeModeClick() {
 let _autoToggleLock = false;
 async function handleAutoToggle() {
   if (_autoToggleLock) return;
+  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   const activeCycles = activeAutoProgressCycles(state.autoRuntime);
@@ -3801,6 +3809,29 @@ function hideSidebarObserveHint() {
   if (hint) hint.classList.add("hidden");
 }
 
+function setObserverPanelLock(panel, locked) {
+  if (!panel) return;
+  panel.classList.toggle('is-readonly', locked);
+  panel.setAttribute('aria-disabled', String(locked));
+  panel.querySelectorAll('input, select, textarea, button').forEach(control => {
+    if (locked) {
+      if (!control.hasAttribute('data-observer-was-disabled')) {
+        control.dataset.observerWasDisabled = control.disabled ? '1' : '0';
+        control.dataset.observerTitleBefore = control.title || '';
+      }
+      control.disabled = true;
+      control.title = observerMessage();
+      return;
+    }
+    if (control.hasAttribute('data-observer-was-disabled')) {
+      control.disabled = control.dataset.observerWasDisabled === '1';
+      delete control.dataset.observerWasDisabled;
+      control.title = control.dataset.observerTitleBefore || '';
+      delete control.dataset.observerTitleBefore;
+    }
+  });
+}
+
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
   const observer = isObserverMode();
@@ -3830,7 +3861,7 @@ function applyRoleUI() {
     item.style.display = visible ? '' : 'none';
   });
   const bottomGroup = document.querySelector('.nav-group-bottom');
-  if (bottomGroup) bottomGroup.style.display = observer ? 'none' : '';
+  if (bottomGroup) bottomGroup.style.display = '';
   document.querySelectorAll('.sidebar > .nav-group:not(.nav-group-bottom)').forEach(group => {
     const visibleItem = [...group.querySelectorAll('.nav-item')].some(item => item.style.display !== 'none');
     group.style.display = visibleItem ? '' : 'none';
@@ -3852,8 +3883,13 @@ function applyRoleUI() {
     const badge = document.getElementById(id);
     if (!badge) continue;
     badge.classList.toggle("clickable-badge", !observer);
+    badge.classList.toggle("is-readonly", observer);
+    badge.setAttribute('aria-disabled', String(observer));
+    if ('disabled' in badge) badge.disabled = observer;
     badge.title = observer ? observerMessage() : "";
   }
+
+  document.querySelectorAll('.observer-action-panel').forEach(panel => setObserverPanelLock(panel, observer));
 
   if (observer) {
     if (state.aiAccess?.reason === "bridge_offline") {

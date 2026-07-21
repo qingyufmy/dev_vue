@@ -8339,9 +8339,6 @@ a.signal-link:hover {
   .compare-equity-legend { grid-template-columns:1fr; }
   .compare-equity-chart-frame svg { min-width:640px; }
 }
-.ai-observer-mode #tradeMode,
-.ai-observer-mode #autoAnalyzeMode,
-.ai-observer-mode .observer-action-panel,
 .ai-observer-mode #openManualInferenceBtn,
 .ai-observer-mode #executeSignalBtn,
 .ai-observer-mode #addModelProfileBtn,
@@ -8353,6 +8350,52 @@ a.signal-link:hover {
 .ai-observer-mode [data-action="cancel-pending"],
 .ai-observer-mode #savePlatformPolicyBtn {
   display: none !important;
+}
+
+.ai-observer-mode #tradeMode.is-readonly,
+.ai-observer-mode #autoAnalyzeMode.is-readonly {
+  cursor: not-allowed;
+  border-color: color-mix(in srgb, var(--text-muted) 28%, var(--border-default));
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--text-muted));
+  box-shadow: none;
+}
+
+.ai-observer-mode #tradeMode.is-readonly .badge-dot,
+.ai-observer-mode #autoAnalyzeMode.is-readonly .badge-dot {
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
+.ai-observer-mode .observer-action-panel.is-readonly {
+  position: relative;
+  border-color: color-mix(in srgb, var(--text-muted) 25%, var(--border-default));
+}
+
+.ai-observer-mode .observer-action-panel.is-readonly::after {
+  content: "观摩模式 · 手动交易仅展示";
+  position: absolute;
+  top: 13px;
+  right: 88px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 82%, var(--text-muted));
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.ai-observer-mode .observer-action-panel.is-readonly :is(input, select, textarea, button) {
+  cursor: not-allowed;
+}
+
+@media (max-width: 680px) {
+  .ai-observer-mode .observer-action-panel.is-readonly::after {
+    position: static;
+    display: inline-flex;
+    margin: 0 12px 10px;
+  }
 }
 
 body[data-ai-access-reason="plus_plan"] [data-tab-jump="ai-config"] {

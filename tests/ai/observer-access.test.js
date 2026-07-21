@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   buildAiAccessContext, observerHttpRequestAllowed, observerWsActionAllowed,
   PLUS_OBSERVER_TABS, PRO_OBSERVER_TABS,
 } from '../../server/routes/ai/observer-access.js'
+
+const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 
 describe('AI observer access', () => {
   it('keeps Plus permanently read-only and removes bridge download access', () => {
     const access = buildAiAccessContext({ role:'user', plan:'plus' }, { ownBridgeConnected:true })
     expect(access).toMatchObject({ mode:'observer', reason:'plus_plan', read_only:true, can_download_bridge:false, data_source:'platform_admin_account' })
     expect(access.allowed_tabs).toEqual(PLUS_OBSERVER_TABS)
+    expect(access.allowed_tabs).toContain('feedback')
   })
 
   it('makes offline Pro read-only while retaining bridge download access', () => {
     const access = buildAiAccessContext({ role:'user', plan:'pro' }, { ownBridgeConnected:false })
     expect(access).toMatchObject({ mode:'observer', reason:'bridge_offline', read_only:true, can_download_bridge:true })
     expect(access.allowed_tabs).toEqual(PRO_OBSERVER_TABS)
+    expect(access.allowed_tabs).toContain('feedback')
   })
 
   it('restores full Pro access only when the own bridge is connected', () => {
@@ -40,5 +46,14 @@ describe('AI observer access', () => {
     for (const action of ['analyze', 'open', 'execute', 'toggle_auto', 'audit_logs', 'admin_dashboard']) {
       expect(observerWsActionAllowed(access, action)).toBe(false)
     }
+  })
+
+  it('keeps observer controls visible while locking their interactions', () => {
+    expect(app).toContain("bottomGroup.style.display = ''")
+    expect(app).toContain("document.querySelectorAll('.observer-action-panel').forEach(panel => setObserverPanelLock(panel, observer))")
+    expect(app).toContain("badge.setAttribute('aria-disabled', String(observer))")
+    expect(css).toContain('.ai-observer-mode .observer-action-panel.is-readonly')
+    expect(css).not.toContain('.ai-observer-mode .observer-action-panel,')
+    expect(css).not.toContain('.ai-observer-mode #autoAnalyzeMode,')
   })
 })
