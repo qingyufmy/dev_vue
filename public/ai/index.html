@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721z" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721za" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -775,6 +775,12 @@
                     <p>建议优先使用经典行情集，避免随机日期恰好没有策略触发条件。</p>
                   </fieldset>
                   <section id="cmpBenchmarkPanel" class="compare-benchmark-panel">
+                    <details class="compare-event-library" open>
+                      <summary><span><i data-lucide="landmark" size="15"></i><strong>黄金历史事件库</strong></span><small id="cmpEventSelectionCount">正在加载</small></summary>
+                      <p>按所选事件的起止日期从 MT5 精准获取 K 线；事件结论不会传给模型。</p>
+                      <div id="cmpEventCatalog" class="compare-event-catalog" aria-live="polite"><span class="compare-event-loading">正在加载经典案例...</span></div>
+                      <button id="cmpImportEvents" type="button" class="btn btn-secondary btn-sm" disabled><i data-lucide="download" size="15"></i>导入所选事件</button>
+                    </details>
                     <label class="compare-field"><span>经典行情版本</span><select id="cmpBenchmarkSet"><option value="">正在加载...</option></select></label>
                     <div id="cmpBenchmarkSummary" class="compare-benchmark-summary"><span>等待选择策略和品种</span></div>
                     <button id="cmpGenerateBenchmark" type="button" class="btn btn-secondary btn-sm"><i data-lucide="sparkles" size="15"></i>生成新版本</button>
@@ -810,8 +816,9 @@
                       <option value="8">快速 · 8 个行情切片</option>
                       <option value="12" selected>标准 · 12 个行情切片</option>
                       <option value="20">深入 · 20 个行情切片</option>
+                      <option value="30">完整 · 30 个行情切片</option>
                     </select>
-                    <small id="cmpSampleDepthHint">从各类经典行情中均衡抽取，避免某一种市场状态占比过高。</small>
+                    <small id="cmpSampleDepthHint">建议先用 8 个案例初筛，再用 12–30 个案例复评入围模型。</small>
                   </label>
                   <details class="compare-simulation-settings">
                     <summary><span>资金模拟参数</span><small>订单回放 · M1 执行</small></summary>
@@ -1103,7 +1110,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721z"></script>
+    <script src="/ai/app.js?v=20260721za"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

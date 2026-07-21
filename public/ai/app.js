@@ -988,6 +988,9 @@ const API_ERROR_MESSAGES = {
   benchmark_market_data_insufficient: "缓存中的 M5 行情不足以生成经典行情集",
   benchmark_market_regimes_insufficient: "当前行情覆盖的市场形态不足，请扩大生成范围后重试",
   benchmark_outcome_candles_incomplete: "经典行情案例的后续 K 线不完整，请重新生成基准集",
+  benchmark_events_required: "请至少选择一个黄金历史事件",
+  benchmark_event_not_found: "所选历史事件不存在，请刷新后重试",
+  benchmark_event_market_data_insufficient: "所选事件的 MT5 历史 K 线不足，无法生成有效基准集",
   invalid_benchmark_time_range: "经典行情生成范围无效",
   symbol_required: "请选择交易品种",
   pending_price_required: "挂单缺少有效触发价",
@@ -4560,6 +4563,7 @@ async function loadModelCompare() {
   }
   setDefaultCompareDates();
   updateHistoryCompareSourceUI();
+  if (!_modelCompareEvents.length) await loadModelCompareEventCatalog();
   if (sel?.value) syncHistoryCompareStrategyInputs();
   updateHistoryCompareReadiness();
   await loadHistoryCompareJobs();
@@ -4596,6 +4600,7 @@ let _historyCompareStrategies = [];
 let _historyComparePrimaryTimeframe = "";
 let _historyCompareEvaluationTimeframe = "";
 let _modelCompareBenchmarks = [];
+let _modelCompareEvents = [];
 const HISTORY_COMPARE_CONTINUOUS_LIMIT = 120;
 const HISTORY_COMPARE_CONFIRM_CALLS = 20;
 const COMPARE_TIMEFRAME_MINUTES = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440 };
@@ -4644,8 +4649,38 @@ function updateHistoryCompareSourceUI() {
   $("cmpEvaluationModeField")?.classList.toggle("hidden", source !== "historical");
   const sampleHint = $("cmpSampleDepthHint");
   if (sampleHint) sampleHint.textContent = source === "benchmark"
-    ? "从各类经典行情中均衡抽取，避免某一种市场状态占比过高。"
+    ? "建议先用 8 个案例初筛，再用 12–30 个案例复评入围模型。"
     : "系统会在完整区间内均匀抽样，避免只评估前半段行情。";
+}
+
+function updateModelCompareEventSelection() {
+  const selected = document.querySelectorAll("[data-cmp-event]:checked").length;
+  const symbolReady = Boolean($("cmpSymbol")?.value?.trim());
+  const count = $("cmpEventSelectionCount");
+  const button = $("cmpImportEvents");
+  if (count) count.textContent = _modelCompareEvents.length ? `已选 ${selected}/${_modelCompareEvents.length}` : "暂无案例";
+  if (button) button.disabled = selected === 0 || !symbolReady;
+}
+
+async function loadModelCompareEventCatalog() {
+  const container = $("cmpEventCatalog");
+  if (!container) return;
+  container.innerHTML = '<span class="compare-event-loading">正在加载经典案例...</span>';
+  try {
+    const data = await api("/api/ai/model-compare/benchmark-events");
+    _modelCompareEvents = data.events || [];
+    container.innerHTML = _modelCompareEvents.length ? _modelCompareEvents.map(item => {
+      const sourceUrl = String(item.source_url || "").startsWith("https://") ? item.source_url : "#";
+      const startYear = new Date(Number(item.start_time_utc_msc)).getUTCFullYear();
+      return `<label class="compare-event-card"><input type="checkbox" data-cmp-event value="${escapeHtml(item.id)}" ${item.default_selected ? "checked" : ""}><span class="compare-event-check"><i data-lucide="check" size="13"></i></span><span class="compare-event-copy"><strong>${escapeHtml(item.title)}</strong><small>${startYear} · ${escapeHtml((item.tags || []).join(" · "))}</small></span><a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="查看${escapeHtml(item.title)}的资料来源" title="${escapeHtml(item.source_title || "查看来源")}"><i data-lucide="external-link" size="13"></i></a></label>`;
+    }).join("") : '<span class="compare-event-loading">暂无历史事件案例</span>';
+    container.querySelectorAll("[data-cmp-event]").forEach(input => input.addEventListener("change", updateModelCompareEventSelection));
+  } catch (error) {
+    _modelCompareEvents = [];
+    container.innerHTML = `<span class="compare-event-loading danger">${escapeHtml(apiErrorMessage(error.message))}</span>`;
+  }
+  updateModelCompareEventSelection();
+  initIcons();
 }
 
 async function loadModelCompareBenchmarks() {
@@ -4682,8 +4717,9 @@ function updateModelCompareBenchmarkSummary() {
   const selected = _modelCompareBenchmarks.find(item => Number(item.id) === Number($("cmpBenchmarkSet")?.value));
   const summary = $("cmpBenchmarkSummary");
   if (!summary) return;
+  const isEventSet = selected?.selection_config?.catalog_version === "gold-events-v1";
   summary.innerHTML = selected
-    ? `<strong>${selected.case_count || 0} 个固定案例</strong><span>趋势、反转、假突破与震荡 · 指纹 ${escapeHtml(String(selected.fingerprint || "").slice(0, 10))}</span>`
+    ? `<strong>${selected.case_count || 0} 个固定案例</strong><span>${isEventSet ? `${selected.selection_config?.event_ids?.length || 0} 个黄金历史事件` : "趋势、反转、假突破与震荡"} · 指纹 ${escapeHtml(String(selected.fingerprint || "").slice(0, 10))}</span>`
     : "<span>生成后可在不同模型、不同时间重复使用同一组行情。</span>";
 }
 
@@ -4700,6 +4736,29 @@ async function generateModelCompareBenchmark() {
     toast("生成失败：" + apiErrorMessage(error.message), "error");
   } finally {
     if (button) { button.disabled = false; button.innerHTML = '<i data-lucide="sparkles" size="15"></i>生成新版本'; }
+    initIcons();
+  }
+}
+
+async function importModelCompareEvents() {
+  const symbol = $("cmpSymbol")?.value?.trim().toUpperCase();
+  const eventIds = [...document.querySelectorAll("[data-cmp-event]:checked")].map(input => input.value);
+  if (!symbol) return toast("请先选择策略和品种", "warning");
+  if (!eventIds.length) return toast("请至少选择一个历史事件", "warning");
+  const button = $("cmpImportEvents");
+  if (button) { button.disabled = true; button.innerHTML = '<i data-lucide="loader-circle" size="15"></i>正在获取 K 线'; }
+  try {
+    const data = await api("/api/ai/model-compare/benchmark-events/import", {
+      method:"POST", body:{ symbol, event_ids:eventIds, cases_per_event:4 },
+    });
+    const skipped = data.import_report?.unavailable_events?.length || 0;
+    toast(skipped ? `历史事件集已生成，${skipped} 个事件因行情缺失未导入` : "黄金历史事件基准集已生成", skipped ? "warning" : "success");
+    await loadModelCompareBenchmarks();
+  } catch (error) {
+    toast("导入失败：" + apiErrorMessage(error.message), "error");
+  } finally {
+    if (button) { button.innerHTML = '<i data-lucide="download" size="15"></i>导入所选事件'; }
+    updateModelCompareEventSelection();
     initIcons();
   }
 }
@@ -5139,6 +5198,8 @@ function renderHistoryCompareResults(results, meta) {
     : [];
   const replayHasUniqueLeader = replayLeaderTies.length === 1;
   const failedResults = results.filter(result => result.status !== "success");
+  const partialResults = valid.filter(result => Number(result.directional_score?.response_success_rate || 0) < 100
+    || Number(result.provider_usage?.failed_request_count || 0) > 0);
   const failedModels = failedResults.length;
   const comparableAgreementCount = meta.agreement_comparable_count == null
     ? Number(meta.evaluation_count || 0)
@@ -5194,6 +5255,10 @@ function renderHistoryCompareResults(results, meta) {
     }).join("");
     tableHtml += `<section class="compare-model-errors" role="alert"><div><i data-lucide="triangle-alert" size="18"></i><span><strong>${failedResults.length} 个模型未完成有效评估</strong><small>异常模型不参与排名与一致度计算</small></span></div><ul>${failedDetails}</ul></section>`;
   }
+  if (partialResults.length) {
+    const partialDetails = partialResults.map(result => `<li><strong>${escapeHtml(result.model_name)}</strong><span>有效结果 ${Math.max(0, Number(result.signal_count || 0) - Number(result.directional_score?.error_count || 0))}/${Number(result.signal_count || 0)} · 格式修复 ${Number(result.provider_usage?.repair_request_count || 0)} 次 · API 失败 ${Number(result.provider_usage?.failed_request_count || 0)} 次</span></li>`).join("");
+    tableHtml += `<section class="compare-model-errors compare-model-warnings"><div><i data-lucide="circle-alert" size="18"></i><span><strong>${partialResults.length} 个模型仅部分完成</strong><small>有效结果仍参与排名，缺失时点会降低响应成功率和方向质量分</small></span></div><ul>${partialDetails}</ul></section>`;
+  }
   if (replaySorted.length) {
     tableHtml += renderCompareEquityChart(replaySorted, meta);
     tableHtml += `<section class="compare-ranking-panel compare-account-panel"><div class="section-heading"><div><h2>${isContinuous ? "连续账户资金回测" : "抽样账户资金回放"}</h2><p>同一模型的全部${isContinuous ? "连续决策" : "抽样"}信号共用资金、挂单、仓位和保证金状态。</p></div><span class="compare-result-scope">${isContinuous ? "逐根决策" : "抽样信号"} · ${escapeHtml(meta.execution_timeframe || "M1")} 执行</span></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>模型</th><th>期末资金</th><th>净收益</th><th>收益率</th><th>成交 / 胜率</th><th>最大回撤</th><th>盈利因子</th><th>交易成本</th><th>保证金状态</th><th>未触发 / 同柱待定 / 歧义</th></tr></thead><tbody>`;
@@ -5228,13 +5293,17 @@ function renderHistoryCompareResults(results, meta) {
     tableHtml += '<section class="compare-inline-empty"><i data-lucide="circle-minus" size="18"></i><span>本次模型均未给出可执行方向，因此没有产生模拟成交。</span></section>';
   }
   if (sorted.length) {
-    tableHtml += '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>方向质量排名</h2><p>排名使用模型原始方向；约束异常只影响可执行率和虚拟成交。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>主动出手</th><th>输出合规率</th><th>约束异常</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
+    tableHtml += '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>方向质量排名</h2><p>排名使用模型原始方向；约束异常只影响可执行率和虚拟成交。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>主动出手</th><th>调用质量</th><th>输出合规率</th><th>约束异常</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
     sorted.forEach((r, index) => {
       const score = r.directional_score;
+      const usage = r.provider_usage || {};
+      const partial = Number(score.response_success_rate || 0) < 100 || Number(usage.failed_request_count || 0) > 0;
+      const callQualityLabel = partial ? "部分完成" : Number(usage.repair_request_count || 0) > 0 ? "修复后完整" : "完整";
       tableHtml += `<tr><td><div class="compare-rank-model"><span>${index + 1}</span><div><strong>${escapeHtml(r.model_name)}</strong><small>${escapeHtml(modelProviderLabel(r.provider))}</small></div></div></td>
         <td><strong class="compare-quality-score">${score.direction_quality_score ?? 0}</strong></td>
         <td>${score.directional_accuracy}% <small class="compare-cell-note">${score.correct_count}/${score.actionable_count}</small></td>
         <td>${score.action_rate}% <small class="compare-cell-note">${score.actionable_count} 次</small></td>
+        <td><strong class="${partial ? "compare-call-partial" : "compare-call-complete"}">${callQualityLabel}</strong><small class="compare-cell-note">有效 ${Math.max(0, Number(r.signal_count || 0) - Number(score.error_count || 0))}/${Number(r.signal_count || 0)} · 修复 ${Number(usage.repair_request_count || 0)}</small></td>
         <td>${score.output_compliance_rate ?? score.response_success_rate}%<small class="compare-cell-note">${score.executable_count ?? score.actionable_count} 次可回放</small></td>
         <td>${Number(score.constraint_invalid_count || 0) + Number(score.downgraded_count || 0)}<small class="compare-cell-note ${(score.constraint_invalid_count || score.downgraded_count) ? "danger" : ""}">${(score.constraint_invalid_count || score.downgraded_count) ? "保留原始方向" : "无"}</small></td>
         <td>${score.average_confidence}%</td><td>${score.average_latency_ms ? `${(score.average_latency_ms / 1000).toFixed(1)} 秒` : "--"}</td>
@@ -6693,6 +6762,7 @@ function bindEvents() {
   $("cmpRunBtn")?.addEventListener("click", runHistoryCompare);
   $("cmpRefreshHistory")?.addEventListener("click", loadHistoryCompareJobs);
   $("cmpGenerateBenchmark")?.addEventListener("click", generateModelCompareBenchmark);
+  $("cmpImportEvents")?.addEventListener("click", importModelCompareEvents);
   $("cmpBenchmarkSet")?.addEventListener("change", () => {
     updateModelCompareBenchmarkSummary();
     updateHistoryCompareReadiness();
@@ -6713,7 +6783,7 @@ function bindEvents() {
       updateHistoryCompareReadiness();
     });
   });
-  $("cmpSymbol")?.addEventListener("change", () => { void loadModelCompareBenchmarks(); });
+  $("cmpSymbol")?.addEventListener("change", () => { updateModelCompareEventSelection(); void loadModelCompareBenchmarks(); });
   document.querySelectorAll("[data-cmp-range]").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll("[data-cmp-range]").forEach(item => item.classList.toggle("active", item === button));
     setDefaultCompareDates(Number(button.dataset.cmpRange) || 7, true);

@@ -24,7 +24,7 @@ const CHAN_HISTORY_HINT_LIMIT = 512
 const _chanMaxHistoryHints = new Map()
 const TIMEFRAME_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080 }
 const HISTORY_COMPARE_MIN_CONTEXT = 20
-const HISTORY_COMPARE_MAX_STEPS = 20
+const HISTORY_COMPARE_MAX_STEPS = 30
 const HISTORY_COMPARE_MIN_STEPS = 4
 const HISTORY_COMPARE_MAX_KLINES = 5000
 const HISTORY_COMPARE_MAX_CONTINUOUS_STEPS = 120
@@ -951,16 +951,39 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     return { status:'error', message:error.message || 'invalid_history_time_range' }
   }
   const { startUtcMs, endUtcMs } = normalizedTimeRange
-  const warmupMs = planItems.reduce((max, item) => Math.max(max,
-    TIMEFRAME_MINUTES[item.timeframe] * item.kline_count * 2 * 60_000), 0)
   let historyWindows
   try {
-    historyWindows = await Promise.all(planItems.map(async item => ({
-      ...item,
-      window: await loadPeriodMarketWindow(userId, symbol, item.timeframe, startUtcMs - warmupMs, endUtcMs, {
-        alignToPeriodStart: false,
-      }),
-    })))
+    historyWindows = await Promise.all(planItems.map(async item => {
+      const itemWarmupMs = TIMEFRAME_MINUTES[item.timeframe] * item.kline_count * 2 * 60_000
+      const ranges = dataSource === 'benchmark'
+        ? benchmarkRun.cases.map(benchmarkCase => ({
+          start:benchmarkCase.start_time_utc_msc - itemWarmupMs,
+          end:benchmarkCase.end_time_utc_msc,
+        })).sort((a, b) => a.start - b.start).reduce((merged, range) => {
+          const previous = merged.at(-1)
+          if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end)
+          else merged.push({ ...range })
+          return merged
+        }, [])
+        : [{ start:startUtcMs - itemWarmupMs, end:endUtcMs }]
+      const mergedRates = new Map()
+      const sources = []
+      for (const range of ranges) {
+        const loaded = await loadPeriodMarketWindow(userId, symbol, item.timeframe, range.start, range.end, {
+          alignToPeriodStart:false,
+        })
+        sources.push(loaded.marketMeta?.source || null)
+        for (const rate of loaded.periodRates || []) {
+          const utcMs = compareRateUtcMs(rate)
+          if (utcMs != null) mergedRates.set(utcMs, rate)
+        }
+      }
+      const periodRates = [...mergedRates.values()].sort((a, b) => compareRateUtcMs(a) - compareRateUtcMs(b))
+      return { ...item, window:{
+        periodRates, rates:periodRates,
+        marketMeta:{ source:dataSource === 'benchmark' ? 'benchmark_case_windows' : sources[0], sources:[...new Set(sources.filter(Boolean))] },
+      } }
+    }))
   } catch (error) {
     return { status: 'error', message: error.message || 'history_market_data_unavailable' }
   }

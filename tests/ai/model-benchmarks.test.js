@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { selectClassicBenchmarkCases, __modelBenchmarksTest } from '../../server/routes/ai/model-benchmarks.js'
+import { selectClassicBenchmarkCases, listClassicGoldEvents, __modelBenchmarksTest } from '../../server/routes/ai/model-benchmarks.js'
 
 function windowFromCloses(closes) {
   return closes.map((close, index) => {
@@ -55,5 +55,14 @@ describe('classic model benchmark selection', () => {
   it('rejects a source window that cannot provide context and outcome bars', () => {
     expect(() => selectClassicBenchmarkCases(syntheticRates(30), 12))
       .toThrow('benchmark_market_data_insufficient')
+  })
+
+  it('publishes a curated event catalog with bounded UTC ranges and authoritative sources', () => {
+    const events = listClassicGoldEvents()
+    expect(events.length).toBeGreaterThanOrEqual(8)
+    expect(new Set(events.map(item => item.id)).size).toBe(events.length)
+    expect(events.every(item => item.end_time_utc_msc > item.start_time_utc_msc)).toBe(true)
+    expect(events.every(item => item.source_url.startsWith('https://'))).toBe(true)
+    expect(events.filter(item => item.default_selected).length).toBeGreaterThanOrEqual(4)
   })
 })
