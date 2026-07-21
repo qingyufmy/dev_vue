@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260721zp" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260721zq" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -49,26 +49,24 @@
             <rect x="2" y="7" width="16" height="10" rx="2" fill="var(--gold-primary)"></rect>
             <rect x="5" y="4" width="10" height="5" rx="1.5" fill="var(--gold-light)"></rect>
           </svg>
-          <span class="brand-name">AI交易实验室</span>
+          <span class="brand-copy"><strong class="brand-name">AI交易实验室</strong><small>智能交易工作台</small></span>
         </div>
 
         <div class="topbar-badges">
-          <span id="gatewayMode" class="status-badge status-neutral clickable-badge" title="点击连接/断开MT5">
-            <span class="badge-dot"></span>模拟数据-未连接MT5
-          </span>
-          <span id="tradeMode" class="status-badge status-neutral clickable-badge" title="点击切换交易发送">
-            <span class="badge-dot"></span>交易发送 --
-          </span>
-          <button id="autoAnalyzeMode" type="button" class="status-badge status-neutral clickable-badge auto-runtime-control" title="点击配置自动推理">
-            <span class="badge-dot" aria-hidden="true"></span>
-            <span class="auto-runtime-copy"><span class="badge-text">自动推理 --</span><span class="auto-runtime-stage"></span></span>
-            <span class="auto-runtime-percent" aria-hidden="true"></span>
-            <span class="auto-runtime-track" role="progressbar" aria-label="自动推理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="auto-runtime-fill"></span></span>
-          </button>
-          <span id="marketStatus" class="status-badge status-neutral" title="市场状态：未知">
-            <span class="badge-dot"></span>市场 --
-          </span>
-          <span id="mt5Server" class="status-badge status-neutral">服务器 --</span>
+          <div class="topbar-primary-status" aria-label="核心运行状态">
+            <span id="gatewayMode" class="status-badge status-neutral clickable-badge" title="点击连接或断开 MT5"><span class="badge-dot"></span>MT5 未连接</span>
+            <button id="autoAnalyzeMode" type="button" class="status-badge status-neutral clickable-badge auto-runtime-control" title="点击配置自动分析">
+              <span class="badge-dot" aria-hidden="true"></span>
+              <span class="auto-runtime-copy"><span class="badge-text">自动分析 --</span><span class="auto-runtime-stage"></span></span>
+              <span class="auto-runtime-percent" aria-hidden="true"></span>
+              <span class="auto-runtime-track" role="progressbar" aria-label="自动分析进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="auto-runtime-fill"></span></span>
+            </button>
+            <span id="tradeMode" class="status-badge status-neutral clickable-badge" title="点击切换自动下单权限"><span class="badge-dot"></span>自动下单 --</span>
+          </div>
+          <div class="topbar-context-status" aria-label="行情环境">
+            <span id="marketStatus" class="status-badge status-neutral" title="市场状态：未知"><span class="badge-dot"></span>市场 --</span>
+            <span id="mt5Server" class="status-badge status-neutral">服务器 --</span>
+          </div>
         </div>
 
         <div class="topbar-actions">
@@ -156,6 +154,10 @@
 
       <main class="main">
         <section id="dashboard" class="tab-panel active">
+          <header class="dashboard-intro calm-page-header">
+            <div><span class="page-eyebrow">账户、行情与最新建议</span><h1>交易首页</h1><p>先确认账户连接和交易状态，再查看 AI 建议与当前持仓。</p></div>
+            <div class="dashboard-quick-actions"><button class="btn btn-secondary" data-tab-jump="ai-analyze"><i data-lucide="scan-search" size="15"></i>查看AI分析</button><button class="btn btn-secondary" data-tab-jump="trading"><i data-lucide="briefcase-business" size="15"></i>管理交易</button></div>
+          </header>
           <div class="dashboard-grid">
             <div class="card grid-area-account">
               <div class="card-header">
@@ -1098,7 +1100,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260721zp"></script>
+    <script src="/ai/app.js?v=20260721zq"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

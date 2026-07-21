@@ -219,9 +219,21 @@ button {
   min-width: 168px;
 }
 
-.brand-name {
-  font-size: 18px;
+.brand-copy {
+  display: grid;
+  gap: 2px;
   line-height: 1;
+}
+
+.brand-name {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.brand-copy small {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 500;
 }
 
 .topbar-badges {
@@ -615,11 +627,11 @@ button {
   padding: 5px 12px;
   line-height: initial;
   border-radius: var(--radius-pill);
-  background: linear-gradient(135deg, rgba(18, 22, 35, 0.9), rgba(12, 16, 28, 0.95));
-  border: 1px solid rgba(212, 175, 55, 0.15);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
   white-space: nowrap;
   user-select: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  box-shadow: none;
 }
 
 .topbar-time i {
@@ -975,6 +987,21 @@ button {
     "quote signal"
     "positions positions";
   gap: var(--space-5);
+}
+
+.dashboard-intro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.dashboard-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .grid-area-account {
@@ -4380,6 +4407,10 @@ body.form-modal-open .content-card { animation:none !important; transform:none !
 }
 
 @media (max-width: 1180px) {
+  .topbar-context-status #mt5Server {
+    display: none;
+  }
+
   .app-layout {
     grid-template-columns: 188px 1fr;
   }
@@ -4454,6 +4485,16 @@ body.form-modal-open .content-card { animation:none !important; transform:none !
     order: 3;
     flex-basis: 100%;
     overflow-x: auto;
+  }
+
+  .topbar-primary-status,
+  .topbar-context-status {
+    flex: 0 0 auto;
+  }
+
+  .topbar-context-status {
+    padding-left: 0;
+    border-left: 0;
   }
 
   .sidebar {
@@ -5889,6 +5930,27 @@ a.signal-link:hover {
 
 .analyst-view-panel {
   min-width: 0;
+}
+
+.topbar-primary-status,
+.topbar-context-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.topbar-context-status {
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border-default);
+}
+
+.topbar-context-status .status-badge {
+  padding-inline: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+  font-size: 11px;
 }
 
 .analyst-view-panel[hidden] {

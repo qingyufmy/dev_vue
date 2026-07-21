@@ -443,6 +443,18 @@ describe('AI governance navigation and DOM contract', () => {
     expect(signalCard).not.toContain('data-tab-jump="signals"')
   })
 
+  it('prioritizes essential runtime state and beginner actions on the trading home page', () => {
+    expect(html).toContain('class="topbar-primary-status" aria-label="核心运行状态"')
+    expect(html).toContain('class="topbar-context-status" aria-label="行情环境"')
+    expect(html.indexOf('id="gatewayMode"')).toBeLessThan(html.indexOf('id="autoAnalyzeMode"'))
+    expect(html.indexOf('id="autoAnalyzeMode"')).toBeLessThan(html.indexOf('id="tradeMode"'))
+    expect(html).toContain('class="dashboard-intro calm-page-header"')
+    expect(html).toContain('账户、行情与最新建议')
+    expect(html).toContain('data-tab-jump="ai-analyze"')
+    expect(html).toContain('data-tab-jump="trading"')
+    expect(css).toContain('.topbar-context-status .status-badge')
+  })
+
   it('renders inference charts from the selected inference snapshot on demand', () => {
     expect(app).toContain('signal?.inference_snapshot')
     expect(app).toContain('仅展示推理发生时的数据')
