@@ -33,11 +33,11 @@ const run = (overrides = {}) => evaluateCoreRisk({
 })
 
 describe('L1/L4/L5 core risk gate', () => {
-  it('passes a complete market signal and attaches broker slippage only', () => {
+  it('passes a complete market signal and converts the remaining percentage budget to MT5 points', () => {
     const result = run()
     expect(result.decision_status).toBe('pass')
     expect(result.approved_order.volume).toBe(0.03)
-    expect(result.approved_order.deviation).toBe(30)
+    expect(result.approved_order.deviation).toBe(180)
     expect(result.original_order).not.toHaveProperty('deviation')
   })
 
@@ -76,7 +76,7 @@ describe('L1/L4/L5 core risk gate', () => {
     const result = run({ request: {
       signal_type: 'buy_limit', entry_method: 'limit', limit_price: 1998,
       volume: 0.01, sl: 1988, tp: 2015, atr_anchor: 10.0005,
-    }, policy: { pending_price_deviation_pct: 1 } })
+    } })
     expect(result.decision_status).toBe('adjust')
     expect(result.approved_order.volume).toBe(0.01)
     expect(result.rule_results.some(item => item.code === 'R1.3_SL_WIDEN_VOLUME_DOWN')).toBe(false)
@@ -111,20 +111,38 @@ describe('L1/L4/L5 core risk gate', () => {
     expect(run({ instrument: { tick_value: undefined } }).reject_code).toBe('R1_INSTRUMENT_DATA_INCOMPLETE')
   })
 
-  it('separates market drift from pending deviation', () => {
-    expect(run({ request: { reference_price: 1990 } }).reject_code).toBe('R4.6_MARKET_SIGNAL_DRIFT')
+  it('applies execution deviation to market orders without limiting intentional pending distance', () => {
+    expect(run({ request: { reference_price: 1990 } }).reject_code).toBe('R4.6_EXECUTION_PRICE_DEVIATION')
     const pending = run({ request: {
       signal_type: 'buy_limit', entry_method: 'limit', limit_price: 1975,
       sl: 1965, tp: 2015, reference_price: 2000,
     } })
-    expect(pending.reject_code).toBe('R1.7_PENDING_DEVIATION')
+    expect(pending.decision_status).toBe('adjust')
+    expect(pending.approved_order.deviation).toBe(197)
+  })
+
+  it('uses 0.1 percent as a symmetric price interval and deducts already-used movement', () => {
+    const base = {
+      request:{ reference_price:4073, sl:4060, tp:4100, atr_anchor:20 },
+      quote:{ bid:4073, ask:4073 },
+      policy:{ max_execution_price_deviation_pct:0.1 },
+    }
+    const centered = run(base)
+    expect(centered.decision_status).toBe('pass')
+    expect(centered.approved_order.deviation).toBe(407)
+    const nearUpper = run({ ...base, quote:{ bid:4076.99, ask:4077 } })
+    expect(nearUpper.decision_status).toBe('pass')
+    expect(nearUpper.approved_order.deviation).toBe(7)
+    const outside = run({ ...base, quote:{ bid:4077.07, ask:4077.08 } })
+    expect(outside.reject_code).toBe('R4.6_EXECUTION_PRICE_DEVIATION')
+    expect(outside.rule_results.at(-1).details).toMatchObject({ allowed_min:4068.927, allowed_max:4077.073, maximum_pct:0.1 })
   })
 
   it('defaults pending validity without converting the order to market', () => {
     const result = run({ request: {
       signal_type: 'buy_limit', entry_method: 'limit', limit_price: 1998,
       sl: 1988, tp: 2015, reference_price: 2000,
-    }, policy: { pending_price_deviation_pct: 1 } })
+    } })
     expect(result.decision_status).toBe('adjust')
     expect(result.approved_order).toMatchObject({ entry_method: 'limit', pending_valid_minutes: 180 })
   })
@@ -133,19 +151,19 @@ describe('L1/L4/L5 core risk gate', () => {
     const wrongTrigger = run({ request: {
       order_type: 'sell', signal_type: 'sell_stop_limit', entry_method: 'stop_limit',
       limit_price: 2001, stop_limit_price: 2002, sl: 2012, tp: 1980,
-    }, policy: { pending_price_deviation_pct: 1 } })
+    } })
     expect(wrongTrigger.reject_code).toBe('R1.7_PENDING_DIRECTION')
 
     const wrongLimit = run({ request: {
       order_type: 'sell', signal_type: 'sell_stop_limit', entry_method: 'stop_limit',
       limit_price: 1999, stop_limit_price: 1998, sl: 2012, tp: 1980,
-    }, policy: { pending_price_deviation_pct: 1 } })
+    } })
     expect(wrongLimit.reject_code).toBe('R1.7_STOP_LIMIT_RELATION')
 
     const valid = run({ request: {
       order_type: 'sell', signal_type: 'sell_stop_limit', entry_method: 'stop_limit',
       limit_price: 1999, stop_limit_price: 2000, sl: 2012, tp: 1980,
-    }, policy: { pending_price_deviation_pct: 1 } })
+    } })
     expect(valid.decision_status).not.toBe('reject')
   })
 
@@ -195,10 +213,10 @@ describe('L1/L4/L5 core risk gate', () => {
 
   it('records an adjustable shadow rejection but still enforces mandatory boundaries', () => {
     const shadow = run({ request: { reference_price: 1990 }, ruleModes: {
-      'R4.6_MARKET_SIGNAL_DRIFT': { mode: 'shadow', forced: false },
+      'R4.6_EXECUTION_PRICE_DEVIATION': { mode: 'shadow', forced: false },
     } })
     expect(shadow.decision_status).toBe('pass')
-    expect(shadow.rule_results).toContainEqual(expect.objectContaining({ code: 'R4.6_MARKET_SIGNAL_DRIFT', outcome: 'shadow_reject' }))
+    expect(shadow.rule_results).toContainEqual(expect.objectContaining({ code: 'R4.6_EXECUTION_PRICE_DEVIATION', outcome: 'shadow_reject' }))
     const forced = run({ request: { volume: 100.01 }, ruleModes: {
       'R1.9_AI_VOLUME_OUT_OF_RANGE': { mode: 'shadow', forced: false },
     } })
@@ -253,12 +271,12 @@ describe('versioned policy semantics', () => {
       if (sql.startsWith('INSERT INTO risk_policy_versions')) return [{ insertId: 9 }, []]
       return [{ affectedRows: 1 }, []]
     }))
-    const result = await submitRiskPolicyChanges({ policySetId: 7, actorId: 5, changes: { max_position_size: 0.02, market_signal_drift_atr: 0.5 }, reason: 'test' })
-    expect(result.immediate_fields).toEqual(['max_position_size', 'market_signal_drift_atr'])
-    expect(result.applied_fields).toEqual(['max_position_size', 'market_signal_drift_atr'])
+    const result = await submitRiskPolicyChanges({ policySetId: 7, actorId: 5, changes: { max_position_size: 0.02, max_execution_price_deviation_pct: 0.05 }, reason: 'test' })
+    expect(result.immediate_fields).toEqual(['max_position_size', 'max_execution_price_deviation_pct'])
+    expect(result.applied_fields).toEqual(['max_position_size', 'max_execution_price_deviation_pct'])
     expect(result.pending_fields).toEqual([])
     const versionWrite = writes.find(item => item.sql.startsWith('INSERT INTO risk_policy_versions'))
-    expect(JSON.parse(versionWrite.params[2])).toMatchObject({ max_position_size: 0.02, market_signal_drift_atr: 0.5 })
+    expect(JSON.parse(versionWrite.params[2])).toMatchObject({ max_position_size: 0.02, max_execution_price_deviation_pct: 0.05 })
     expect(writes.some(item => item.sql.includes('risk_policy_change_items'))).toBe(true)
     expect(writes.filter(item => item.sql.includes('risk_policy_change_items')).every(item => item.sql.includes("'applied'"))).toBe(true)
   })
@@ -269,13 +287,13 @@ describe('versioned policy semantics', () => {
       if (sql.includes("scope = 'account'")) return { id: 2 }
       if (sql.includes('risk_policy_versions')) return params[0] === 1
         ? { id: 11, config_json: '{"max_position_size":0.04}' }
-        : { id: 12, config_json: '{"max_position_size":0.08,"min_rr":1.4,"market_signal_drift_atr":0.4,"daily_loss_limit_pct":5}' }
+        : { id: 12, config_json: '{"max_position_size":0.08,"min_rr":1.4,"max_execution_price_deviation_pct":0.08,"daily_loss_limit_pct":5}' }
       if (sql.includes('risk_profiles')) return { config_json: '{"max_position_size":0.02,"min_rr":1.6}' }
       return null
     })
     db.queryAll.mockResolvedValue([])
     const result = await resolveEffectiveRiskPolicy({ userId: 5, tradingAccountId: 6, riskProfileId: 7, legacyConfig: { max_position_size: 0.05 } })
-    expect(result.policy).toMatchObject({ max_position_size: 0.02, min_rr: 1.6, market_signal_drift_atr: 0.4, daily_loss_limit_pct:3 })
+    expect(result.policy).toMatchObject({ max_position_size: 0.02, min_rr: 1.6, max_execution_price_deviation_pct:0.08, daily_loss_limit_pct:3 })
     expect(result.policyVersionIds).toEqual([11, 12])
   })
 })

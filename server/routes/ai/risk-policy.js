@@ -18,16 +18,13 @@ export const RISK_RULES = Object.freeze({
   require_stop_loss: rule('R1.2', 'boolean', 'bool', 'locked_true', true, true, true, true, '强制止损', { unit_label:'开/关', category:'system', description:'所有自动执行订单必须包含有效止损' }),
   sl_atr_max: rule('R1.4', 'number', 'ATR', 'lower', 4, 0.5, 10, false, '最大止损距离', { unit_label:'ATR 倍', description:'拦截明显超出行情波动范围的止损' }),
   min_rr: rule('R1.5', 'number', 'ratio', 'higher', 1.1, 0.5, 10, false, '最低盈亏比', { unit_label:'倍', description:'实际入场、止损和止盈之间的最低收益风险比' }),
-  pending_price_deviation_pct: rule('R1.7A', 'number', 'percent', 'lower', 1, 0.01, 10, false, '挂单价格偏离百分比', { unit_label:'%', description:'挂单触发价相对当前报价的最大距离' }),
-  pending_price_deviation_atr: rule('R1.7B', 'number', 'ATR', 'lower', 2, 0.1, 10, false, '挂单价格偏离 ATR', { unit_label:'ATR 倍', description:'与百分比上限取更严格的结果' }),
   pending_valid_minutes: rule('R1.8', 'number', 'minute', 'lower', 180, 5, 1440, false, '挂单默认有效期', { unit_label:'分钟', description:'模型未指定时使用；策略可设置更短期限' }),
   max_position_size: rule('R1.9D', 'number', 'lot', 'lower', 0.05, 0.001, 100, false, '单笔最大手数', { unit_label:'手', description:'任何单笔订单都不能突破的平台手数上限' }),
   max_risk_per_trade_pct: rule('R1.10', 'number', 'percent', 'lower', 1, 0.01, 20, false, '单笔最大风险比例', { unit_label:'%', description:'按真实止损亏损金额占账户净值计算' }),
   signal_ttl_seconds: rule('R4.3', 'number', 'second', 'lower', 300, 5, 86400, false, '信号有效期', { unit_label:'秒', user_editable:false, category:'platform', description:'防止执行已经过时的 AI 信号' }),
   max_quote_age_seconds: rule('R4.4', 'number', 'second', 'lower', 15, 1, 300, false, '报价最大年龄', { unit_label:'秒', user_editable:false, category:'system', description:'使用桥接标准化后的 UTC 报价时间检查' }),
   max_spread_points: rule('R4.5', 'number', 'point', 'lower', 120, 1, 100000, false, '最大点差', { unit_label:'点', description:'超过该点差时不新增风险' }),
-  market_signal_drift_atr: rule('R4.6', 'number', 'ATR', 'lower', 0.5, 0.01, 5, false, '市价信号价格漂移', { unit_label:'ATR 倍', description:'当前成交价偏离推理参考价的最大幅度' }),
-  broker_slippage_points: rule('PX.3', 'number', 'point', 'lower', 30, 0, 10000, false, '下单允许价格偏差', { unit_label:'MT5 点', description:'传给 MT5 order_send.deviation 的整数点数；不是百分比，也不是实际成交滑点' }),
+  max_execution_price_deviation_pct: rule('R4.6', 'number', 'percent', 'lower', 0.1, 0.001, 5, false, '最大执行价格偏差', { unit_label:'%', description:'以推理参考价为基准限制最终执行价格；系统会将剩余偏差预算换算为 MT5 点数' }),
   weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 60, 0, 2880, false, '周末收盘提前保护', { unit_label:'分钟', description:'在 MT5 周末收盘前提前停止新增风险' }),
   max_directional_exposure_lots: rule('R2.1', 'number', 'lot', 'lower', 0.1, 0.001, 1000, false, '同向最大敞口', { unit_label:'手', description:'同品种同方向持仓、挂单和执行预占的合计上限' }),
   min_open_interval_seconds: rule('R2.2', 'number', 'second', 'higher', 30, 0, 86400, false, '最小开仓间隔', { unit_label:'秒', description:'限制账户连续新增仓位的最短间隔' }),
@@ -405,10 +402,10 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   approved.volume = volume
   pass(rules, 'R1.10_REAL_RISK', { risk_amount: Number((riskPerLot * volume).toFixed(8)), risk_cap: riskCap, calculation_source: calculationSource })
   if (method !== 'market') {
-    const current = side === 'buy' ? ask : bid, deviation = Math.abs(entry - current)
-    const maximum = Math.min(current * policy.pending_price_deviation_pct / 100, atr * policy.pending_price_deviation_atr)
-    if (deviation > maximum + Number(instrument.tick_size)) {
-      const rejected = rolloutReject('R1.7_PENDING_DEVIATION', { deviation, maximum }); if (rejected) return rejected
+    const current = side === 'buy' ? ask : bid
+    const pendingRatio = entry / current
+    if (!Number.isFinite(pendingRatio) || pendingRatio < 0.5 || pendingRatio > 1.5) {
+      return fail('R1.7_PENDING_PRICE_ABNORMAL', { trigger_price:entry, current_price:current, sanity_range_pct:50 })
     }
     if ((method === 'limit' && ((side === 'buy' && entry >= current) || (side === 'sell' && entry <= current))) || (['stop', 'stop_limit'].includes(method) && ((side === 'buy' && entry <= current) || (side === 'sell' && entry >= current)))) return fail('R1.7_PENDING_DIRECTION', { entry_method: method, trigger_price: entry, current_price: current })
     if (method === 'stop_limit') {
@@ -419,8 +416,6 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
       approved.pending_valid_minutes = policy.pending_valid_minutes; adjusted = true
       rules.push({ code: 'R1.8_PENDING_TTL_DEFAULT', outcome: 'default', details: { minutes: policy.pending_valid_minutes } })
     }
-  } else if (ai && Math.abs(entry - Number(approved.reference_price)) > atr * policy.market_signal_drift_atr) {
-    const rejected = rolloutReject('R4.6_MARKET_SIGNAL_DRIFT'); if (rejected) return rejected
   }
   const quoteTime = quoteEpoch(quote?.time_utc_msc ?? quote?.time_msc ?? quote?.time)
   const quoteAgeMs = quoteTime == null ? null : nowMs - quoteTime
@@ -445,8 +440,26 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   if (weekendProtection.protected) {
     const rejected = rolloutReject('R4.2_WEEKEND_PROTECTION', weekendProtection); if (rejected) return rejected
   }
-  approved.deviation = Math.floor(policy.broker_slippage_points)
-  pass(rules, 'PX.3_BROKER_SLIPPAGE', { points: approved.deviation })
+  const deviationReference = method === 'market'
+    ? (finite(approved.reference_price) > 0 ? finite(approved.reference_price) : entry)
+    : entry
+  const deviationBudget = deviationReference * Number(policy.max_execution_price_deviation_pct) / 100
+  const deviationUsed = method === 'market' ? Math.abs(entry - deviationReference) : 0
+  if (method === 'market' && deviationUsed > deviationBudget + 1e-9) {
+    const rejected = rolloutReject('R4.6_EXECUTION_PRICE_DEVIATION', {
+      reference_price:deviationReference, current_price:entry,
+      allowed_min:deviationReference - deviationBudget, allowed_max:deviationReference + deviationBudget,
+      deviation_price:deviationUsed, maximum_pct:Number(policy.max_execution_price_deviation_pct),
+    }); if (rejected) return rejected
+  }
+  const remainingDeviation = Math.max(0, deviationBudget - deviationUsed)
+  approved.deviation = Math.max(0, Math.floor((remainingDeviation + Number(instrument.point) * 1e-9) / Number(instrument.point)))
+  pass(rules, 'PX.3_EXECUTION_PRICE_TOLERANCE', {
+    reference_price:deviationReference, current_price:entry,
+    allowed_min:deviationReference - deviationBudget, allowed_max:deviationReference + deviationBudget,
+    maximum_pct:Number(policy.max_execution_price_deviation_pct), used_price:deviationUsed,
+    remaining_price:remainingDeviation, mt5_points:approved.deviation,
+  })
   return { decision_status: adjusted ? 'adjust' : 'pass', reject_code: null, original_order: original, approved_order: approved, rule_results: rules, risk_amount: Number((riskPerLot * volume).toFixed(8)) }
 }
 

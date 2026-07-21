@@ -144,8 +144,7 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('shows user-editable price controls and separates AI, cap and final execution volume', () => {
-    expect(app).toContain('pending_price_deviation_pct')
-    expect(app).toContain('market_signal_drift_atr')
+    expect(app).toContain('max_execution_price_deviation_pct')
     expect(app).toContain('AI 建议')
     expect(app).toContain('风险上限')
     expect(app).toContain('最终')
@@ -381,10 +380,13 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.risk-default-pill')
   })
 
-  it('labels MT5 deviation as order price tolerance instead of execution slippage', () => {
-    expect(app).toContain('broker_slippage_points:"下单允许价格偏差"')
-    expect(app).toContain('已应用下单允许价格偏差（MT5 点）')
-    expect(app).not.toContain('broker_slippage_points:"成交滑点"')
+  it('shows one percentage execution-deviation setting and hides the retired split controls', () => {
+    const groups = app.slice(app.indexOf('const RISK_GROUPS'), app.indexOf('const RISK_SAFETY_LABELS'))
+    expect(groups).toContain('max_execution_price_deviation_pct')
+    expect(groups).not.toContain('pending_price_deviation_pct')
+    expect(groups).not.toContain('pending_price_deviation_atr')
+    expect(groups).not.toContain('market_signal_drift_atr')
+    expect(groups).not.toContain('broker_slippage_points')
   })
 
   it('keeps the overview signal card focused on the current decision and execution summary', () => {

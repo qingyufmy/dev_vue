@@ -2114,16 +2114,16 @@ async function saveSubscriptionEditor() {
 
 const RISK_LABELS = {
   allowed_symbols:"允许交易品种", require_stop_loss:"强制止损", sl_atr_max:"最大止损距离", min_rr:"最低盈亏比",
-  pending_price_deviation_pct:"挂单价格偏离百分比", pending_price_deviation_atr:"挂单价格偏离 ATR", pending_valid_minutes:"挂单有效期",
+  pending_valid_minutes:"挂单有效期",
   max_position_size:"账户单笔最大手数", max_risk_per_trade_pct:"单笔最大风险",
-  signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", market_signal_drift_atr:"市价信号价格偏离", broker_slippage_points:"下单允许价格偏差", weekend_close_minutes:"MT5周末收盘提前量",
+  signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", max_execution_price_deviation_pct:"最大执行价格偏差", weekend_close_minutes:"MT5周末收盘提前量",
   max_directional_exposure_lots:"同向最大敞口", min_open_interval_seconds:"最小开仓间隔", max_daily_open_count:"每日开仓次数", dedup_window_seconds:"重复订单时间窗", dedup_price_atr:"重复订单价格距离",
   daily_loss_limit_pct:"每日最大亏损", consecutive_loss_limit:"连续亏损次数", loss_cooldown_minutes:"连续亏损冷却", max_drawdown_pct:"最大回撤", min_margin_level_pct:"最低预计保证金水平",
 };
 const RISK_GROUPS = [
   ["交易结构", ["sl_atr_max","min_rr","pending_valid_minutes"]],
   ["手数与单笔风险", ["max_position_size","max_risk_per_trade_pct"]],
-  ["价格与成交质量", ["pending_price_deviation_pct","pending_price_deviation_atr","market_signal_drift_atr","broker_slippage_points","max_spread_points","max_quote_age_seconds","signal_ttl_seconds","weekend_close_minutes"]],
+  ["价格与成交质量", ["max_execution_price_deviation_pct","max_spread_points","max_quote_age_seconds","signal_ttl_seconds","weekend_close_minutes"]],
   ["频率与敞口", ["max_directional_exposure_lots","min_open_interval_seconds","max_daily_open_count"]],
   ["亏损与账户保护", ["daily_loss_limit_pct","consecutive_loss_limit","loss_cooldown_minutes","max_drawdown_pct","min_margin_level_pct"]],
 ];
@@ -2139,7 +2139,7 @@ const RISK_ROLLOUT_LABELS = {
   "R2.3_DAILY_OPEN_COUNT":"每日开仓次数", "R2.4_PRICE_TIME_DUPLICATE":"重复价格与时间窗口", "R3.1_DAILY_LOSS_LIMIT":"每日亏损上限",
   "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损冷却", "R3.2_LOSS_COOLDOWN":"亏损后冷却", "R3.3_MAX_DRAWDOWN":"最大回撤",
   "R3.4_MARGIN_LEVEL":"当前保证金水平", "R3.4_PROJECTED_MARGIN_LEVEL":"下单后预计保证金水平", "R4.2_WEEKEND_PROTECTION":"周末保护",
-  "R4.3_SIGNAL_EXPIRED":"信号有效期", "R4.4_QUOTE_STALE":"报价时效", "R4.5_SPREAD_TOO_WIDE":"最大点差", "R4.6_MARKET_SIGNAL_DRIFT":"市价信号漂移",
+  "R4.3_SIGNAL_EXPIRED":"信号有效期", "R4.4_QUOTE_STALE":"报价时效", "R4.5_SPREAD_TOO_WIDE":"最大点差", "R4.6_EXECUTION_PRICE_DEVIATION":"最大执行价格偏差",
 };
 function riskRolloutLabel(code) { return RISK_ROLLOUT_LABELS[code] || "未命名风控规则"; }
 
@@ -2153,6 +2153,7 @@ const RISK_DECISION_LABELS = {
   "R1.5_TAKE_PROFIT_REQUIRED":"缺少止盈", "R1.5_RR_TOO_LOW":"盈亏比低于最低要求",
   "R1.5_TP_TIER_UPGRADED":"改用满足盈亏比要求的更远止盈档位", "R1.6_SL_TP_DIRECTION":"止损或止盈方向错误",
   "R1.7_PENDING_DEVIATION":"挂单价格偏离当前报价过大", "R1.7_PENDING_DIRECTION":"挂单触发价方向与当前价格关系错误",
+  "R1.7_PENDING_PRICE_ABNORMAL":"挂单触发价明显异常",
   "R1.7_STOP_LIMIT_RELATION":"Stop Limit 触发价与触发后限价关系错误",
   "R1.8_PENDING_TTL_DEFAULT":"使用默认挂单有效期", "R1.9_AI_VOLUME_OUT_OF_RANGE":"AI 建议手数超出平台范围",
   "R1.9_BELOW_MINIMUM_AFTER_RISK":"风险调整后手数低于最小可交易手数", "R1.9_VOLUME_INCREASE_FORBIDDEN":"风控禁止放大 AI 建议手数",
@@ -2160,7 +2161,7 @@ const RISK_DECISION_LABELS = {
   "R1.10_REAL_RISK":"单笔实际风险校验通过", "R4_QUOTE_INVALID":"当前报价无效",
   "R4.2_WEEKEND_PROTECTION":"周末保护时段禁止开仓", "R4.3_SIGNAL_EXPIRED":"推理信号已过期",
   "R4.4_QUOTE_STALE":"MT5 报价已过期或时间异常", "R4.5_SPREAD_TOO_WIDE":"当前点差超过上限",
-  "R4.6_MARKET_SIGNAL_DRIFT":"市价偏离推理参考价过大", "R2.1_DIRECTIONAL_EXPOSURE":"同方向持仓敞口超过上限",
+  "R4.6_MARKET_SIGNAL_DRIFT":"市价偏离推理参考价过大", "R4.6_EXECUTION_PRICE_DEVIATION":"当前价格超出允许执行区间", "R2.1_DIRECTIONAL_EXPOSURE":"同方向持仓敞口超过上限",
   "R2.2_MIN_OPEN_INTERVAL":"距离上次开仓时间过短", "R2.3_DAILY_OPEN_COUNT":"当日开仓次数达到上限",
   "R2.4_PRICE_TIME_DUPLICATE":"检测到重复价格和时间窗口订单", "R3.1_DAILY_LOSS_LIMIT":"达到每日亏损上限",
   "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损触发冷却", "R3.2_LOSS_COOLDOWN":"账户仍处于亏损冷却期",
@@ -2171,7 +2172,8 @@ const RISK_DECISION_LABELS = {
   "R6_ACCOUNT_NOT_FOUND":"未找到交易账户",
   "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
   "R6_USER_KILL_SWITCH":"账户紧急停止已开启", "R6.4_OBSERVATION_BELOW_MINIMUM":"观察期手数低于最小可交易手数",
-  "PX.3_BROKER_SLIPPAGE":"已应用下单允许价格偏差（MT5 点）",
+  "PX.3_BROKER_SLIPPAGE":"已应用旧版下单价格偏差",
+  "PX.3_EXECUTION_PRICE_TOLERANCE":"已按百分比换算 MT5 下单偏差",
 };
 
 function riskDecisionLabel(code) { return RISK_DECISION_LABELS[code] || localizeReason(code) || "未说明原因"; }
@@ -2200,6 +2202,8 @@ function riskRuleDescription(code, details = {}) {
   if (code === "R1.9_BELOW_MINIMUM_AFTER_RISK") return `${label}：计算结果 ${displayRiskNumber(details.volume)} 手，最低 ${displayRiskNumber(details.minimum)} 手`;
   if (code === "R4.4_QUOTE_STALE") return `${label}：报价年龄 ${displayRiskNumber(details.quote_age_seconds, 3)} 秒，允许上限 ${displayRiskNumber(details.maximum_seconds)} 秒`;
   if (code === "R1.7_PENDING_DEVIATION") return `${label}：偏离 ${displayRiskNumber(details.deviation)}，允许上限 ${displayRiskNumber(details.maximum)}`;
+  if (code === "R4.6_EXECUTION_PRICE_DEVIATION") return `${label}：当前 ${displayRiskNumber(details.current_price)}，允许 ${displayRiskNumber(details.allowed_min)} ～ ${displayRiskNumber(details.allowed_max)}（±${displayRiskNumber(details.maximum_pct, 3)}%）`;
+  if (code === "PX.3_EXECUTION_PRICE_TOLERANCE") return `${label}：剩余 ${displayRiskNumber(details.remaining_price, 3)}，发送 ${displayRiskNumber(details.mt5_points, 0)} MT5 点`;
   if (code === "R1.3_SL_WIDEN_VOLUME_DOWN") return `${label}：止损 ${displayRiskNumber(details.from_sl)} → ${displayRiskNumber(details.to_sl)}，手数 ${displayRiskNumber(details.from_volume)} → ${displayRiskNumber(details.to_volume)}`;
   return label;
 }

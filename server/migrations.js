@@ -2820,6 +2820,40 @@ const migrations = [
         VALUES ('R3.4_PROJECTED_MARGIN_LEVEL', 'enforce', 0, NOW())
         ON DUPLICATE KEY UPDATE mode = VALUES(mode), forced_enforce = VALUES(forced_enforce), updated_at = VALUES(updated_at)`)
     }
+  },
+  {
+    id: '112_unify_execution_price_deviation',
+    async up() {
+      const sets = await queryAll("SELECT id, scope FROM risk_policy_sets WHERE status = 'active' ORDER BY id")
+      const now = new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').slice(0, 19)
+      const retiredKeys = ['pending_price_deviation_pct','pending_price_deviation_atr','market_signal_drift_atr','broker_slippage_points']
+      for (const set of sets) {
+        const [latest] = await queryAll('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1', [set.id])
+        if (!latest) continue
+        let raw = {}
+        try { raw = latest.config_json ? JSON.parse(latest.config_json) : {} } catch {}
+        const wrapped = Boolean(raw.values || raw.defaults || raw.controls)
+        const values = { ...(raw.values || raw.defaults || raw) }
+        const controls = { ...(raw.controls || {}) }
+        for (const key of retiredKeys) { delete values[key]; delete controls[key] }
+        if (set.scope === 'platform') {
+          values.max_execution_price_deviation_pct = 0.1
+          controls.max_execution_price_deviation_pct = {
+            allowed_min:0.001, allowed_max:0.1, locked_value:null, user_editable:true,
+          }
+        }
+        const config = wrapped ? { ...raw, values, controls } : values
+        const inserted = await queryRun(`INSERT INTO risk_policy_versions
+          (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)
+          VALUES (?, ?, ?, 0, '统一执行价格偏差为百分比', ?, ?)`,
+        [set.id, Number(latest.version_no || 0) + 1, JSON.stringify(config), now, now])
+        await queryRun('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [inserted.insertId, now, set.id])
+      }
+      await queryRun("DELETE FROM risk_rule_rollouts WHERE rule_code IN ('R1.7_PENDING_DEVIATION','R4.6_MARKET_SIGNAL_DRIFT','PX.3_BROKER_SLIPPAGE')")
+      await queryRun(`INSERT INTO risk_rule_rollouts (rule_code, mode, forced_enforce, updated_at)
+        VALUES ('R4.6_EXECUTION_PRICE_DEVIATION', 'enforce', 0, NOW())
+        ON DUPLICATE KEY UPDATE mode = VALUES(mode), forced_enforce = VALUES(forced_enforce), updated_at = VALUES(updated_at)`)
+    }
   }
 ]
 
