@@ -18,7 +18,7 @@ function normalizedIds(values) {
 
 function publicSample(row) {
   return {
-    snapshot_id:Number(row.snapshot_id),
+    snapshot_id:Number(row.snapshot_id ?? row.id),
     signal_id:Number(row.signal_id),
     strategy_id:Number(row.strategy_id),
     strategy_version:Number(row.strategy_version || 1),
@@ -111,7 +111,8 @@ export async function resolveModelSnapshotSelection(userId, snapshotIds, expecte
   if (ids.length < MIN_SELECTED_SNAPSHOTS) throw new Error('snapshot_compare_minimum_not_met')
   if (ids.length > MAX_SELECTED_SNAPSHOTS) throw new Error('snapshot_compare_limit_exceeded')
   const placeholders = ids.map(() => '?').join(',')
-  const rows = await queryAll(`SELECT snap.*, signal_row.created_at AS signal_created_at,
+  const rows = await queryAll(`SELECT snap.*, snap.id AS snapshot_id,
+      signal_row.created_at AS signal_created_at,
       signal_row.signal_type AS original_signal_type, signal_row.confidence AS original_confidence,
       outcome.net_profit, outcome.closed_volume, outcome.trade_count, outcome.fully_closed_at
     ${SNAPSHOT_SAMPLE_FROM} AND snap.id IN (${placeholders})

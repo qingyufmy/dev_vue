@@ -66,13 +66,18 @@ describe('model comparison historical snapshot samples', () => {
   })
 
   it('freezes a homogeneous selection and returns exact replay evidence', async () => {
-    mockQueryAll.mockResolvedValueOnce([row(1), row(2)])
+    const first = row(1)
+    const second = row(2)
+    delete first.snapshot_id
+    delete second.snapshot_id
+    mockQueryAll.mockResolvedValueOnce([first, second])
 
     const result = await resolveModelSnapshotSelection(9, [2, 1, 2], {
       strategy_id:7, symbol:'XAUUSD',
     })
 
     expect(result.snapshot_ids).toEqual([1, 2])
+    expect(mockQueryAll.mock.calls[0][0]).toContain('snap.id AS snapshot_id')
     expect(result.strategy_version).toBe(4)
     expect(result.output_schema_version).toBe('schema-v4')
     expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/)
