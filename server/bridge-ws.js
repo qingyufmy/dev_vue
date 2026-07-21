@@ -1632,7 +1632,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const u = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
         if (u?.role !== 'admin') { result = { status: 'error', message: '仅管理员可操作' }; break }
 
-        const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList, schedulerData] = await Promise.all([
+        const [userStats, signalStats, signalTypeDist, signalTrend, autoReasonStats, tokenStats, tokenTrend, bridgeList, schedulerData, healthStats] = await Promise.all([
           // 1. User stats
           queryOne(`SELECT
             (SELECT COUNT(*) FROM users) AS total_users,
@@ -1647,6 +1647,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           queryOne(`SELECT
             (SELECT COUNT(*) FROM ai_signals) AS total,
             (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today,
+            (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE() AND is_executed = 1) AS today_executed,
+            (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE() AND signal_type = 'error') AS today_errors,
             (SELECT COUNT(*) FROM ai_signals WHERE YEARWEEK(created_at, 1) = YEARWEEK(NOW(), 1)) AS week,
             (SELECT COUNT(*) FROM ai_signals WHERE is_executed = 1) AS executed,
             (SELECT ROUND(AVG(confidence)*100, 1) FROM ai_signals WHERE signal_type IN ('buy','sell','strong_buy','strong_sell')) AS avg_confidence`),
@@ -1784,7 +1786,17 @@ async function handleBrowserCommand(ws, userId, msg) {
               } catch (e) { console.error('[admin_dashboard] Redis subs count error:', e.message) }
             }
             return { schedulers, dbStats: dbRows }
-          })()
+          })(),
+
+          // 10. Actionable operating health for the administrator workbench.
+          queryOne(`SELECT
+            (SELECT COUNT(*) FROM ai_model_usage_logs WHERE created_at >= CURDATE()) AS model_requests_today,
+            (SELECT COUNT(*) FROM ai_model_usage_logs WHERE created_at >= CURDATE() AND request_status <> 'success') AS model_failures_today,
+            (SELECT ROUND(AVG(duration_ms)) FROM ai_model_usage_logs WHERE created_at >= CURDATE() AND request_status = 'success') AS avg_model_latency_ms,
+            (SELECT COALESCE(SUM(request_bytes + response_bytes), 0) FROM ai_model_usage_logs WHERE created_at >= CURDATE()) AS model_bytes_today,
+            (SELECT COUNT(*) FROM period_review_cases WHERE status IN ('draft', 'edited')) AS reviews_pending,
+            (SELECT COUNT(*) FROM period_review_cases WHERE status = 'failed') AS reviews_failed,
+            (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE() AND decision_status = 'reject') AS risk_rejections_today`)
         ])
 
         result = {
@@ -1798,7 +1810,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             tokenStats: tokenStats || {},
             tokenTrend: tokenTrend || [],
             bridges: bridgeList || [],
-            schedulerData: schedulerData || { schedulers: [], dbStats: [] }
+            schedulerData: schedulerData || { schedulers: [], dbStats: [] },
+            healthStats: healthStats || {}
           }
         }
         break
@@ -1820,7 +1833,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const tid = targetUser.id
         const [targetSettings, targetScheduler, targetSignals, bridgeStatus] = await Promise.all([
           queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [tid]),
-          queryOne('SELECT enabled, last_run_at FROM auto_scheduler WHERE user_id = ?', [tid]),
+          queryOne('SELECT enabled, last_run_at, selected_symbols_json FROM auto_scheduler WHERE user_id = ?', [tid]),
           (async () => {
             const oldStats = await queryOne(`SELECT
               (SELECT COUNT(*) FROM ai_signals WHERE user_id = ?) AS old_total,
@@ -1848,9 +1861,9 @@ async function handleBrowserCommand(ws, userId, msg) {
               lastSignalType = lastDelivery.signal_type; lastSignalAt = lastDelivery.created_at
             }
             return {
-              total_signals: (oldStats?.old_total || 0) + (delivStats?.deliv_total || 0),
-              today_signals: (oldStats?.old_today || 0) + (delivStats?.deliv_today || 0),
-              executed_signals: (oldStats?.old_executed || 0) + (delivStats?.deliv_executed || 0),
+              total_signals: Number(oldStats?.old_total || 0) + Number(delivStats?.deliv_total || 0),
+              today_signals: Number(oldStats?.old_today || 0) + Number(delivStats?.deliv_today || 0),
+              executed_signals: Number(oldStats?.old_executed || 0) + Number(delivStats?.deliv_executed || 0),
               last_signal_type: lastSignalType,
               last_signal_at: lastSignalAt,
             }
@@ -1863,12 +1876,16 @@ async function handleBrowserCommand(ws, userId, msg) {
           })()
         ])
 
+        let selectedSymbols = []
+        try { selectedSymbols = JSON.parse(targetScheduler?.selected_symbols_json || '[]') } catch {}
         result = {
           status: 'success',
           data: {
             user: targetUser,
             settings: targetSettings || { trade_send_enabled: 0, auto_reasoning_enabled: 0 },
-            scheduler: targetScheduler || { enabled: 0, symbols: null, last_run_at: null },
+            scheduler: targetScheduler
+              ? { ...targetScheduler, symbols: selectedSymbols.join('、') || null }
+              : { enabled: 0, symbols: null, last_run_at: null },
             signals: targetSignals || {},
             bridge: bridgeStatus
           }

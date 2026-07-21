@@ -8035,7 +8035,7 @@ function initAnalysisHistoryScroll() {
 }
 
 // ============ Admin Data Dashboard ============
-const _adminDashState = { charts: {}, loaded: false, userList: { page: 1, total: 0, users: [] }, selectedUserId: null, refreshTimer: null };
+const _adminDashState = { charts: {}, loaded: false, activeView:'overview', userList: { page: 1, total: 0, users: [] }, selectedUserId: null, renderUserList:null, refreshTimer: null };
 
 async function loadAdminDashboard(force) {
   if (_adminDashState.loaded && !force) return;
@@ -8063,7 +8063,6 @@ async function loadAdminDashboard(force) {
 async function updateAdminDashboard() {
   const container = $('adminDashContent');
   if (!container || !_adminDashState.loaded) return;
-  const fmt = n => { if (!n || n < 1000) return (n||0).toLocaleString(); if (n < 1000000) return (n/1000).toFixed(1)+'K'; return (n/1000000).toFixed(2)+'M'; };
   try {
     const curPage = _adminDashState.userList?.page || 1;
     const [dashResp, userListResp] = await Promise.all([
@@ -8080,25 +8079,41 @@ async function updateAdminDashboard() {
     set('autoReason', ar.auto_reasoning_users || 0);
     set('tradeEnabled', ar.trade_enabled_users || 0);
     set('totalUsers', us.total_users || 0);
+    set('totalUsersTab', us.total_users || 0);
+    set('totalUsersPanel', us.total_users || 0);
     set('userBreakdown', 'Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0));
     set('todayNew', us.today_new || 0);
     set('onlineNow', us.online_now || 0);
-    set('todayTokens', fmt(tk.today_tokens));
-    set('totalTokens', '累计 ' + fmt(tk.total_tokens));
+    set('todayActive', '今日活跃 ' + (us.today_active || 0) + ' 人');
+    set('schedulerUsers', (ar.auto_scheduler_users || 0) + ' 个订阅运行中');
+    set('todayTokens', formatAdminCompactNumber(tk.today_tokens));
+    set('totalTokens', '累计 ' + formatAdminCompactNumber(tk.total_tokens));
+    set('todayTraffic', '流量 ' + formatAdminBytes(d.healthStats?.model_bytes_today));
 
-    // Update signal mini stats
-    set('sigTotal', ss.total || 0);
     set('sigToday', ss.today || 0);
-    set('sigWeek', ss.week || 0);
-    set('sigExecuted', ss.executed || 0);
+    set('sigTodayExecuted', ss.today_executed || 0);
+    set('sigExecutionRate', (Number(ss.today || 0) > 0 ? Number(ss.today_executed || 0) / Number(ss.today || 0) * 100 : 0).toFixed(1) + '%');
     set('sigConfidence', (ss.avg_confidence||0) + '%');
+
+    const operational = adminOperationalSummary(d);
+    const healthCard = container.querySelector('#opsHealthSummary');
+    if (healthCard) {
+      healthCard.className = `ops-health-card ${operational.tone}`;
+      healthCard.innerHTML = renderAdminHealthSummary(d);
+    }
+    const attentionList = container.querySelector('#opsAttentionList');
+    if (attentionList) attentionList.innerHTML = renderAdminAttention(d);
+    const attentionCount = operational.modelFailures + operational.schedulerErrors + operational.reviewsFailed + operational.signalErrors;
+    set('attentionCount', attentionCount);
+    container.querySelector('[data-field="attentionCount"]')?.classList.toggle('hidden', attentionCount === 0);
+    set('attentionLabel', attentionCount === 0 ? '已清零' : '需要关注');
+    set('schedulerRunning', operational.schedulerRunning);
+    set('schedulerWaiting', operational.schedulerWaiting);
+    set('schedulerErrors', operational.schedulerErrors);
+    setText('dashUpdatedAt', '刚刚更新');
 
     // Update charts in-place (no destroy/recreate)
     const charts = _adminDashState.charts;
-    if (charts.signalType && d.signalTypeDist.length > 0) {
-      charts.signalType.data.datasets[0].data = d.signalTypeDist.map(r => r.cnt);
-      charts.signalType.update('none');
-    }
     if (charts.signalTrend && d.signalTrend.length > 0) {
       charts.signalTrend.data.labels = d.signalTrend.map(r => r.day?.slice(5) || '');
       charts.signalTrend.data.datasets[0].data = d.signalTrend.map(r => r.cnt);
@@ -8115,11 +8130,12 @@ async function updateAdminDashboard() {
     if (schedulerGrid && d.schedulerData) {
       schedulerGrid.innerHTML = renderSchedulerCards(d.schedulerData);
     }
+    initIcons();
 
     // Update user list in-place
     if (userListResp && userListResp.status === 'success') {
       _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
-      renderUserList(userListResp);
+      _adminDashState.renderUserList?.(userListResp);
     }
   } catch (e) {
     console.warn('[admin-dash] update failed:', e.message);
@@ -8154,68 +8170,55 @@ function stopDashAutoRefresh() {
 }
 
 function renderSchedulerCards(data) {
-  if (!data) return '<div class="scheduler-empty">暂无调度器数据</div>';
+  if (!data) return '<div class="ops-empty-state"><i data-lucide="calendar-clock"></i><strong>暂无调度器数据</strong><span>系统尚未返回自动分析运行状态。</span></div>';
   const { schedulers = [], dbStats = [] } = data;
-  
-  // If no active schedulers, show DB stats as fallback
   if (schedulers.length === 0 && dbStats.length === 0) {
-    return '<div class="scheduler-empty">暂无启用的调度器</div>';
+    return '<div class="ops-empty-state"><i data-lucide="calendar-off"></i><strong>暂无启用的自动分析</strong><span>启用策略订阅后，运行状态会显示在这里。</span></div>';
   }
-  
-  // Merge DB stats with runtime state
+
   const cards = [];
-  const runtimeKeys = new Set(schedulers.map(s => s.key));
-  
-  // Add runtime schedulers
   for (const s of schedulers) {
-    const dbInfo = dbStats.find(r => String(r.prompt_type_id) === String(s.prompt_type_id));
-    const symbols = (() => { try { return JSON.parse(dbInfo?.symbols_json || '[]') } catch { return [] } })();
     const statusClass = s.in_flight ? 'running' : s.wait_reason ? 'waiting' : s.running ? 'idle' : 'stopped';
     const statusText = s.in_flight ? '推理中' : s.wait_reason ? waitReasonText(s.wait_reason) : s.running ? '运行中' : '已停止';
     const countdown = s.next_run_in_seconds > 0 ? formatCountdown(s.next_run_in_seconds) : '--';
-    
+
     cards.push(`
-      <div class="scheduler-card">
-        <div class="scheduler-header">
-          <span class="scheduler-title">${escapeHtml(s.prompt_type_name || '策略#' + s.prompt_type_id)}</span>
-          <span class="scheduler-badge ${statusClass}">${statusText}</span>
+      <article class="ops-scheduler-card ${statusClass}">
+        <header>
+          <div class="ops-scheduler-identity"><span class="ops-status-orb" aria-hidden="true"></span><div><strong>${escapeHtml(s.prompt_type_name || '策略#' + s.prompt_type_id)}</strong><span>${escapeHtml(s.symbol || '--')} · 每 ${Number(s.interval_minutes || 5)} 分钟</span></div></div>
+          <span class="ops-state-pill ${statusClass}">${escapeHtml(statusText)}</span>
+        </header>
+        <div class="ops-scheduler-metrics">
+          <div><span>订阅用户</span><strong class="num">${Number(s.subscriber_count || 0)}</strong></div>
+          <div><span>下次运行</span><strong class="num">${escapeHtml(countdown)}</strong></div>
+          <div><span>上次运行</span><strong>${s.last_run_at ? escapeHtml(formatTimeAgo(s.last_run_at)) : '--'}</strong></div>
         </div>
-        <div class="scheduler-detail">
-          <span>品种: ${escapeHtml(s.symbol)}</span>
-          <span>订阅者: ${s.subscriber_count}</span>
-          <span>间隔: ${s.interval_minutes}分钟</span>
-          <span>下次运行: ${countdown}</span>
-          ${s.last_error ? '<span class="scheduler-error">错误: ' + escapeHtml(s.last_error) + '</span>' : ''}
-          ${s.market_reason ? '<span>市场: ' + escapeHtml(s.market_reason) + '</span>' : ''}
-        </div>
-      </div>
+        ${s.last_error ? '<p class="ops-scheduler-message danger"><i data-lucide="circle-alert"></i>' + escapeHtml(s.last_error) + '</p>' : ''}
+        ${!s.last_error && s.market_reason ? '<p class="ops-scheduler-message"><i data-lucide="info"></i>' + escapeHtml(s.market_reason) + '</p>' : ''}
+      </article>
     `);
   }
-  
-  // Add DB-only schedulers (enabled but no runtime state)
+
   for (const db of dbStats) {
-    const runtimeKey = `${db.prompt_type_id}:`;
     const hasRuntime = schedulers.some(s => String(s.prompt_type_id) === String(db.prompt_type_id));
     if (hasRuntime) continue;
-    
     const symbols = (() => { try { return JSON.parse(db.symbols_json || '[]') } catch { return [] } })();
     cards.push(`
-      <div class="scheduler-card">
-        <div class="scheduler-header">
-          <span class="scheduler-title">${escapeHtml(db.prompt_type_name || '策略#' + db.prompt_type_id)}</span>
-          <span class="scheduler-badge waiting">等待中</span>
+      <article class="ops-scheduler-card waiting">
+        <header>
+          <div class="ops-scheduler-identity"><span class="ops-status-orb" aria-hidden="true"></span><div><strong>${escapeHtml(db.prompt_type_name || '策略#' + db.prompt_type_id)}</strong><span>${escapeHtml(symbols.join('、') || '--')} · 每 ${Number(db.interval_minutes || 5)} 分钟</span></div></div>
+          <span class="ops-state-pill waiting">等待连接</span>
+        </header>
+        <div class="ops-scheduler-metrics">
+          <div><span>订阅用户</span><strong class="num">${Number(db.subscriber_count || 0)}</strong></div>
+          <div><span>运行实例</span><strong>未启动</strong></div>
+          <div><span>当前条件</span><strong>等待桥接</strong></div>
         </div>
-        <div class="scheduler-detail">
-          <span>品种: ${escapeHtml(symbols.join(', ') || '--')}</span>
-          <span>订阅者: ${db.subscriber_count}</span>
-          <span>间隔: ${db.interval_minutes || 5}分钟</span>
-          <span class="scheduler-hint">等待桥接连接后启动</span>
-        </div>
-      </div>
+      </article>
     `);
   }
-  
-  return cards.join('') || '<div class="scheduler-empty">暂无启用的调度器</div>';
+
+  return cards.join('') || '<div class="ops-empty-state"><i data-lucide="calendar-off"></i><strong>暂无启用的自动分析</strong></div>';
 }
 
 function waitReasonText(reason) {
@@ -8246,6 +8249,83 @@ function formatCountdown(seconds) {
   return `${pad(target.getHours())}:${pad(target.getMinutes())}:${pad(target.getSeconds())}`;
 }
 
+function formatAdminCompactNumber(value) {
+  const number = Number(value || 0);
+  if (number < 1000) return number.toLocaleString('zh-CN');
+  if (number < 1000000) return `${(number / 1000).toFixed(1)}K`;
+  return `${(number / 1000000).toFixed(2)}M`;
+}
+
+function formatAdminBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function adminOperationalSummary(data = {}) {
+  const health = data.healthStats || {};
+  const schedulers = data.schedulerData?.schedulers || [];
+  const modelRequests = Number(health.model_requests_today || 0);
+  const modelFailures = Number(health.model_failures_today || 0);
+  const schedulerErrors = schedulers.filter(item => item.last_error).length;
+  const schedulerRunning = schedulers.filter(item => item.running && !item.wait_reason).length;
+  const schedulerWaiting = schedulers.filter(item => item.wait_reason).length;
+  const reviewsFailed = Number(health.reviews_failed || 0);
+  const modelSuccessRate = modelRequests > 0 ? Math.max(0, ((modelRequests - modelFailures) / modelRequests) * 100) : 100;
+  const critical = modelRequests >= 3 && modelSuccessRate < 75;
+  const attention = critical || modelFailures > 0 || schedulerErrors > 0 || reviewsFailed > 0;
+  return {
+    tone:critical ? 'critical' : attention ? 'attention' : 'healthy',
+    title:critical ? '存在需要立即处理的异常' : attention ? '有事项需要关注' : '平台运行正常',
+    description:critical ? '模型服务成功率明显下降，请优先检查模型配置与服务日志。' : attention ? '核心服务仍在运行，建议处理下列异常后继续观察。' : '桥接、模型调用与自动分析链路未发现明显异常。',
+    modelRequests,
+    modelFailures,
+    modelSuccessRate,
+    schedulerErrors,
+    schedulerRunning,
+    schedulerWaiting,
+    reviewsFailed,
+    reviewsPending:Number(health.reviews_pending || 0),
+    riskRejections:Number(health.risk_rejections_today || 0),
+    signalErrors:Number(data.signalStats?.today_errors || 0),
+  };
+}
+
+function renderAdminHealthSummary(data) {
+  const summary = adminOperationalSummary(data);
+  const latency = Number(data.healthStats?.avg_model_latency_ms || 0);
+  return `
+    <div class="ops-health-copy">
+      <span class="ops-health-icon"><i data-lucide="${summary.tone === 'healthy' ? 'shield-check' : summary.tone === 'critical' ? 'shield-alert' : 'shield-question'}"></i></span>
+      <div><span class="ops-kicker">平台健康状态</span><h2>${summary.title}</h2><p>${summary.description}</p></div>
+    </div>
+    <div class="ops-health-facts">
+      <div><span>模型成功率</span><strong class="num">${summary.modelSuccessRate.toFixed(1)}%</strong><small>${summary.modelRequests} 次调用</small></div>
+      <div><span>平均响应</span><strong class="num">${latency > 0 ? `${(latency / 1000).toFixed(1)}s` : '--'}</strong><small>今日成功请求</small></div>
+      <div><span>运行调度</span><strong class="num">${summary.schedulerRunning}</strong><small>${summary.schedulerWaiting} 个等待</small></div>
+      <div><span>待确认复盘</span><strong class="num">${summary.reviewsPending}</strong><small>${summary.reviewsFailed} 个失败</small></div>
+    </div>`;
+}
+
+function renderAdminAttention(data) {
+  const summary = adminOperationalSummary(data);
+  const items = [];
+  if (summary.modelFailures > 0) items.push({ tone:'danger', icon:'brain-circuit', title:`今日 ${summary.modelFailures} 次模型调用失败`, meta:`共调用 ${summary.modelRequests} 次，成功率 ${summary.modelSuccessRate.toFixed(1)}%`, action:'model-strategy', label:'检查模型' });
+  if (summary.schedulerErrors > 0) items.push({ tone:'danger', icon:'calendar-x-2', title:`${summary.schedulerErrors} 个自动分析调度器报错`, meta:'打开运行状态可查看最近一次错误', scroll:'scheduler', label:'查看调度' });
+  if (summary.reviewsFailed > 0) items.push({ tone:'warning', icon:'notebook-tabs', title:`${summary.reviewsFailed} 条复盘生成失败`, meta:`另有 ${summary.reviewsPending} 条复盘等待确认`, action:'review-memory', label:'处理复盘' });
+  if (summary.signalErrors > 0) items.push({ tone:'warning', icon:'message-square-warning', title:`今日 ${summary.signalErrors} 条推理结果异常`, meta:'建议核对模型输出和策略约束', action:'ai-analyze', label:'查看分析' });
+  if (summary.riskRejections > 0) items.push({ tone:'info', icon:'shield-ban', title:`今日风控拒绝 ${summary.riskRejections} 次`, meta:'风控拒绝不代表系统异常，可按需复核规则', action:'global-risk', label:'查看风控' });
+  if (!items.length) return '<div class="ops-all-clear"><span><i data-lucide="check"></i></span><div><strong>当前没有待处理异常</strong><p>系统会每 20 秒自动检查一次关键运行指标。</p></div></div>';
+  return items.slice(0, 5).map(item => `
+    <article class="ops-attention-item ${item.tone}">
+      <span class="ops-attention-icon"><i data-lucide="${item.icon}"></i></span>
+      <div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.meta)}</p></div>
+      <button type="button" ${item.action ? `data-admin-jump="${item.action}"` : `data-admin-scroll="${item.scroll}"`}>${item.label}<i data-lucide="arrow-right"></i></button>
+    </article>`).join('');
+}
+
 async function renderAdminDashboard(el, d, userListResp) {
   Object.values(_adminDashState.charts).forEach(c => { try { c.destroy() } catch {} });
   _adminDashState.charts = {};
@@ -8255,111 +8335,105 @@ async function renderAdminDashboard(el, d, userListResp) {
   const buyCnt = (d.signalTypeDist||[]).filter(r => ['buy','strong_buy'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
   const sellCnt = (d.signalTypeDist||[]).filter(r => ['sell','strong_sell'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
   const holdCnt = (d.signalTypeDist||[]).filter(r => r.signal_type==='hold').reduce((s,r)=>s+r.cnt,0);
-  const fmt = n => { if (!n || n < 1000) return (n||0).toLocaleString(); if (n < 1000000) return (n/1000).toFixed(1)+'K'; return (n/1000000).toFixed(2)+'M'; };
+  const healthSummary = adminOperationalSummary(d);
+  const todayExecutionRate = Number(ss.today || 0) > 0 ? (Number(ss.today_executed || 0) / Number(ss.today || 0) * 100).toFixed(1) : '0.0';
 
-  el.innerHTML = [
-    '<div class="dash-header">',
-    '  <div class="dash-title"><i data-lucide="bar-chart-3" size="15"></i>数据看板</div>',
-    '  <div class="dash-actions"><button class="dash-btn" id="dashRefreshBtn"><i data-lucide="refresh-cw" size="12"></i><span class="dash-btn-label">刷新</span><span class="dash-btn-countdown" id="dashCountdown"></span></button></div>',
-    '</div>',
-    '',
-    '<div class="stats-grid">',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="radio"></i>WSS</div><div class="stat-val" data-field="wss">' + wssCount + '</div><div class="stat-sub">在线桥接</div></div>',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="cpu"></i>分析</div><div class="stat-val" data-field="autoReason">' + (ar.auto_reasoning_users||0) + '</div><div class="stat-sub">自动分析用户</div></div>',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="zap"></i>交易</div><div class="stat-val" data-field="tradeEnabled">' + (ar.trade_enabled_users||0) + '</div><div class="stat-sub">自动交易用户</div></div>',
-    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="users"></i>用户</div><div class="stat-val" data-field="totalUsers">' + (us.total_users||0) + '</div><div class="stat-sub" data-field="userBreakdown">Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0) + '</div></div>',
-    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="user-plus"></i>新增</div><div class="stat-val" data-field="todayNew">' + (us.today_new||0) + '</div><div class="stat-sub">今日注册</div></div>',
-    '  <div class="stat-cell"><div class="stat-label"><i data-lucide="activity"></i>在线</div><div class="stat-val" data-field="onlineNow">' + (us.online_now||0) + '</div><div class="stat-sub">5分钟活跃</div></div>',
-    '  <div class="stat-cell gold"><div class="stat-label"><i data-lucide="database"></i>Token</div><div class="stat-val" data-field="todayTokens">' + fmt(tk.today_tokens) + '</div><div class="stat-sub" data-field="totalTokens">累计 ' + fmt(tk.total_tokens) + '</div></div>',
-    '</div>',
+  el.innerHTML = `
+    <div class="ops-shell">
+      <header class="ops-page-header">
+        <div><span class="page-eyebrow">平台运营与服务健康</span><h1>运营中心</h1><p>优先处理异常，再查看用户、自动分析与资源消耗。</p></div>
+        <div class="ops-refresh-meta"><span class="ops-live-dot"><i aria-hidden="true"></i>实时巡检</span><span id="dashUpdatedAt">刚刚更新</span><button class="btn btn-secondary" id="dashRefreshBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新</span><small id="dashCountdown"></small></button></div>
+      </header>
 
-    '<div class="scheduler-grid" id="schedulerGrid">' + renderSchedulerCards(d.schedulerData) + '</div>',
+      <nav class="ops-view-tabs" aria-label="运营中心视图">
+        <button type="button" class="active" data-admin-view="overview" aria-selected="true"><i data-lucide="gauge"></i>运营总览<span class="ops-tab-badge ${healthSummary.tone === 'healthy' ? 'hidden' : ''}" data-field="attentionCount">${healthSummary.modelFailures + healthSummary.schedulerErrors + healthSummary.reviewsFailed + healthSummary.signalErrors}</span></button>
+        <button type="button" data-admin-view="users" aria-selected="false"><i data-lucide="users"></i>用户管理<span class="ops-tab-count" data-field="totalUsersTab">${Number(us.total_users || 0)}</span></button>
+        <button type="button" data-admin-view="release" aria-selected="false"><i data-lucide="megaphone"></i>发布管理</button>
+      </nav>
 
-    '<div class="signal-row">',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(212,175,55,0.1)"><i data-lucide="activity" style="color:var(--gold-primary)"></i></div><div class="sig-info"><span class="sig-lbl">总信号</span><span class="sig-num" data-field="sigTotal">' + (ss.total||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(34,197,94,0.1)"><i data-lucide="trending-up" style="color:#22c55e"></i></div><div class="sig-info"><span class="sig-lbl">今日</span><span class="sig-num" data-field="sigToday">' + (ss.today||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(59,130,246,0.1)"><i data-lucide="calendar" style="color:#60a5fa"></i></div><div class="sig-info"><span class="sig-lbl">本周</span><span class="sig-num" data-field="sigWeek">' + (ss.week||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(168,85,247,0.1)"><i data-lucide="check-circle" style="color:#a78bfa"></i></div><div class="sig-info"><span class="sig-lbl">已执行</span><span class="sig-num" data-field="sigExecuted">' + (ss.executed||0) + '</span></div></div>',
-    '  <div class="signal-mini"><div class="sig-icon" style="background:rgba(251,191,36,0.1)"><i data-lucide="percent" style="color:#fbbf24"></i></div><div class="sig-info"><span class="sig-lbl">置信度</span><span class="sig-num" data-field="sigConfidence">' + (ss.avg_confidence||0) + '%</span></div></div>',
-    '</div>',
-    '',
-    '<div class="charts-row">',
-    '  <div class="chart-cell"><h4>信号方向分布</h4><div class="chart-wrap"><canvas id="adChartSignalType"></canvas></div></div>',
-    '  <div class="chart-cell">',
-    '    <h4>方向统计</h4>',
-    '    <div class="dir-group">',
-    '      <div class="dir-mini dir-buy"><span class="dir-arrow">&uarr;</span><span class="dir-lbl">买入</span><span class="dir-num">' + buyCnt + '</span></div>',
-    '      <div class="dir-mini dir-sell"><span class="dir-arrow">&darr;</span><span class="dir-lbl">卖空</span><span class="dir-num">' + sellCnt + '</span></div>',
-    '      <div class="dir-mini dir-hold"><span class="dir-arrow">&mdash;</span><span class="dir-lbl">观望</span><span class="dir-num">' + holdCnt + '</span></div>',
-    '    </div>',
-    '  </div>',
-    '</div>',
-    '',
-    '<div class="charts-row">',
-    '  <div class="chart-cell"><h4>近30天信号趋势</h4><div class="chart-wrap"><canvas id="adChartSignalTrend"></canvas></div></div>',
-    '  <div class="chart-cell"><h4>近30天 Token 消耗</h4><div class="chart-wrap"><canvas id="adChartTokenTrend"></canvas></div></div>',
-    '</div>',
-    '',
-    '<hr class="dash-divider">',
-    '',
-    '<div class="section-inline">',
-    '  <h3><i data-lucide="search"></i>用户状态</h3>',
-    '</div>',
-    '',
-    '<div class="user-search-wrap">',
-    '  <input type="text" id="userSearchInput" class="user-search-input" placeholder="搜索用户邮箱或昵称..." autocomplete="off">',
-    '  <div class="search-dropdown" id="userSearchDropdown"></div>',
-    '</div>',
-    '',
-    '<div class="user-list-box" id="userListContainer">',
-    '  <div class="loading-state"><div class="loading-spinner loading-spinner-sm"></div><div class="loading-text">加载中...</div></div>',
-    '</div>',
-    '',
-    '<div id="userDetailContainer"></div>',
+      <section class="ops-view-panel active" data-admin-panel="overview">
+        <div class="ops-health-layout">
+          <article id="opsHealthSummary" class="ops-health-card ${healthSummary.tone}">${renderAdminHealthSummary(d)}</article>
+          <aside class="ops-attention-panel"><div class="ops-panel-heading"><div><span class="ops-kicker">行动优先</span><h2>待处理事项</h2></div><span class="ops-panel-count" data-field="attentionLabel">${healthSummary.tone === 'healthy' ? '已清零' : '需要关注'}</span></div><div id="opsAttentionList" class="ops-attention-list">${renderAdminAttention(d)}</div></aside>
+        </div>
 
-    '<hr class="dash-divider">',
-    '<div class="section-inline">',
-    '  <h3><i data-lucide="bell"></i>更新日志管理</h3>',
-    '</div>',
-    '<div id="changelogAdminSection" style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:20px">',
-    '  <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px">',
-    '    <label style="color:var(--text-muted);font-size:13px;white-space:nowrap">版本号</label>',
-    '    <input type="number" id="clVersionInput" min="1" style="width:80px;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--input-bg);color:var(--text-primary);font-size:14px">',
-    '  </div>',
-    '  <textarea id="clContentInput" rows="8" placeholder="更新日志内容（支持 HTML）&#10;例如：&#10;<b>v2.2.0</b> 更新内容：&#10;<ul><li>新增挂单系统</li><li>需更新桥接软件至 v2.2.0</li></ul>" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;background:var(--input-bg);color:var(--text-primary);font-size:13px;line-height:1.6;resize:vertical;font-family:inherit"></textarea>',
-    '  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">',
-    '    <span id="clSaveStatus" style="font-size:12px;color:var(--text-muted)"></span>',
-    '    <button onclick="saveChangelog()" style="padding:8px 20px;border:none;border-radius:6px;background:var(--gold-primary);color:#1a1a2e;cursor:pointer;font-weight:600;font-size:13px">保存</button>',
-    '  </div>',
-    '</div>',
-  ].join('\n');
+        <div class="ops-metrics-grid" aria-label="平台关键指标">
+          <article class="ops-metric-card"><span class="ops-metric-icon teal"><i data-lucide="activity"></i></span><div><span>当前在线</span><strong class="num" data-field="onlineNow">${Number(us.online_now || 0)}</strong><small data-field="todayActive">今日活跃 ${Number(us.today_active || 0)} 人</small></div></article>
+          <article class="ops-metric-card"><span class="ops-metric-icon gold"><i data-lucide="users"></i></span><div><span>平台注册用户</span><strong class="num" data-field="totalUsers">${Number(us.total_users || 0)}</strong><small data-field="userBreakdown">Pro ${Number(us.pro_users || 0)} · Plus ${Number(us.plus_users || 0)} · Free ${Number(us.free_users || 0)}</small></div></article>
+          <article class="ops-metric-card"><span class="ops-metric-icon blue"><i data-lucide="radio-tower"></i></span><div><span>在线 MT5 终端</span><strong class="num" data-field="wss">${wssCount}</strong><small>当前 WebSocket 连接</small></div></article>
+          <article class="ops-metric-card"><span class="ops-metric-icon violet"><i data-lucide="brain-circuit"></i></span><div><span>自动分析用户</span><strong class="num" data-field="autoReason">${Number(ar.auto_reasoning_users || 0)}</strong><small data-field="schedulerUsers">${Number(ar.auto_scheduler_users || 0)} 个订阅运行中</small></div></article>
+          <article class="ops-metric-card"><span class="ops-metric-icon coral"><i data-lucide="send"></i></span><div><span>交易发送开启</span><strong class="num" data-field="tradeEnabled">${Number(ar.trade_enabled_users || 0)}</strong><small>已授权自动执行</small></div></article>
+          <article class="ops-metric-card"><span class="ops-metric-icon cyan"><i data-lucide="database"></i></span><div><span>今日模型消耗</span><strong class="num" data-field="todayTokens">${formatAdminCompactNumber(tk.today_tokens)}</strong><small data-field="todayTraffic">流量 ${formatAdminBytes(d.healthStats?.model_bytes_today)}</small></div></article>
+        </div>
+
+        <section id="opsSchedulerSection" class="ops-section-card">
+          <div class="ops-section-heading"><div><span class="ops-kicker">自动分析链路</span><h2>调度器运行状态</h2><p>只突出正在推理、等待条件和真实错误。</p></div><div class="ops-inline-stats"><span><b class="num" data-field="schedulerRunning">${healthSummary.schedulerRunning}</b> 运行</span><span><b class="num" data-field="schedulerWaiting">${healthSummary.schedulerWaiting}</b> 等待</span><span class="danger"><b class="num" data-field="schedulerErrors">${healthSummary.schedulerErrors}</b> 异常</span></div></div>
+          <div class="ops-scheduler-grid" id="schedulerGrid">${renderSchedulerCards(d.schedulerData)}</div>
+        </section>
+
+        <section class="ops-section-card">
+          <div class="ops-section-heading"><div><span class="ops-kicker">分析产出与资源</span><h2>近 30 天运行趋势</h2><p>信号产出和模型消耗使用同一时间范围，便于发现异常波动。</p></div></div>
+          <div class="ops-signal-strip">
+            <div><span>今日信号</span><strong class="num" data-field="sigToday">${Number(ss.today || 0)}</strong></div>
+            <div><span>今日已执行</span><strong class="num" data-field="sigTodayExecuted">${Number(ss.today_executed || 0)}</strong></div>
+            <div><span>今日执行率</span><strong class="num" data-field="sigExecutionRate">${todayExecutionRate}%</strong></div>
+            <div><span>平均置信度</span><strong class="num" data-field="sigConfidence">${Number(ss.avg_confidence || 0)}%</strong></div>
+            <div class="direction"><span>方向分布</span><strong><i class="buy">多 ${buyCnt}</i><i class="sell">空 ${sellCnt}</i><i class="hold">观望 ${holdCnt}</i></strong></div>
+          </div>
+          <div class="ops-chart-grid">
+            <article><header><strong>每日信号数量</strong><span>近 30 天</span></header><div class="ops-chart-wrap">${d.signalTrend?.length ? '<canvas id="adChartSignalTrend" aria-label="近30天每日信号数量趋势"></canvas>' : '<div class="ops-chart-empty">近 30 天暂无信号数据</div>'}</div></article>
+            <article><header><strong>每日 Token 消耗</strong><span data-field="totalTokens">累计 ${formatAdminCompactNumber(tk.total_tokens)}</span></header><div class="ops-chart-wrap">${d.tokenTrend?.length ? '<canvas id="adChartTokenTrend" aria-label="近30天每日 Token 消耗趋势"></canvas>' : '<div class="ops-chart-empty">近 30 天暂无模型消耗</div>'}</div></article>
+          </div>
+        </section>
+      </section>
+
+      <section class="ops-view-panel" data-admin-panel="users" hidden>
+        <div class="ops-section-card ops-user-workspace">
+          <div class="ops-section-heading"><div><span class="ops-kicker">账号与连接</span><h2>用户运行状态</h2><p>搜索用户并检查终端、自动分析和交易授权状态。</p></div><span class="ops-total-users">共 <b class="num" data-field="totalUsersPanel">${Number(us.total_users || 0)}</b> 人</span></div>
+          <div class="user-search-wrap ops-user-search"><label for="userSearchInput"><i data-lucide="search"></i><span class="sr-only">搜索用户</span></label><input type="search" id="userSearchInput" class="user-search-input" placeholder="输入手机号、邮箱或昵称" autocomplete="off"><div class="search-dropdown" id="userSearchDropdown"></div></div>
+          <div class="user-list-box" id="userListContainer"><div class="loading-state"><div class="loading-spinner loading-spinner-sm"></div><div class="loading-text">正在加载用户...</div></div></div>
+          <div id="userDetailContainer" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="ops-view-panel" data-admin-panel="release" hidden>
+        <div class="ops-release-layout">
+          <section class="ops-section-card"><div class="ops-section-heading"><div><span class="ops-kicker">客户端公告</span><h2>发布更新日志</h2><p>保存后将作为当前版本更新内容展示给用户。</p></div></div><div class="ops-release-form"><label for="clVersionInput">版本号</label><input type="number" id="clVersionInput" min="1" inputmode="numeric"><label for="clContentInput">更新内容</label><textarea id="clContentInput" rows="12" placeholder="支持基础 HTML，例如：&#10;<b>本次更新</b>&#10;<ul><li>优化自动分析体验</li></ul>"></textarea><div class="ops-release-actions"><span id="clSaveStatus" role="status" aria-live="polite"></span><button id="clSaveButton" class="btn btn-primary" type="button"><i data-lucide="save"></i>保存并发布</button></div></div></section>
+          <aside class="ops-release-guide"><span class="ops-release-guide-icon"><i data-lucide="circle-help"></i></span><h3>发布前检查</h3><ul><li>版本号必须大于或等于 1</li><li>清楚说明用户能感知到的变化</li><li>桥接软件需要更新时必须明确标注</li><li>避免粘贴不受信任的 HTML 内容</li></ul></aside>
+        </div>
+      </section>
+    </div>`;
   initIcons();
+
+  const setAdminView = view => {
+    const target = ['overview', 'users', 'release'].includes(view) ? view : 'overview';
+    _adminDashState.activeView = target;
+    el.querySelectorAll('[data-admin-view]').forEach(button => {
+      const active = button.dataset.adminView === target;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+    });
+    el.querySelectorAll('[data-admin-panel]').forEach(panel => {
+      const active = panel.dataset.adminPanel === target;
+      panel.classList.toggle('active', active);
+      panel.hidden = !active;
+    });
+  };
+  el.querySelectorAll('[data-admin-view]').forEach(button => button.addEventListener('click', () => setAdminView(button.dataset.adminView)));
+  el.addEventListener('click', event => {
+    const jump = event.target.closest('[data-admin-jump]');
+    if (jump) setTab(jump.dataset.adminJump);
+    const scroll = event.target.closest('[data-admin-scroll]');
+    if (scroll?.dataset.adminScroll === 'scheduler') $('opsSchedulerSection')?.scrollIntoView({ behavior:'smooth', block:'start' });
+  });
+  setAdminView(_adminDashState.activeView);
+  $('clSaveButton')?.addEventListener('click', saveChangelog);
 
   // ====== Charts ======
   const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#9ca3af', font: { size: 10 } } } } };
 
-  if (d.signalTypeDist.length > 0) {
-    const typeLabels = d.signalTypeDist.map(r => {
-      const t = (r.signal_type||'').toLowerCase();
-      if (t === 'buy') return '买入'; if (t === 'sell') return '卖出';
-      if (t === 'strong_buy') return '强买'; if (t === 'strong_sell') return '强卖';
-      if (t === 'hold') return '观望'; return r.signal_type?.toUpperCase() || '未知';
-    });
-    const typeColors = d.signalTypeDist.map(r => {
-      const t = (r.signal_type||'').toLowerCase();
-      if (t === 'buy' || t === 'strong_buy') return '#22c55e';
-      if (t === 'sell' || t === 'strong_sell') return '#ef4444';
-      if (t === 'hold') return '#3b82f6'; return '#6b7280';
-    });
-    await ensureChartJs();
-    _adminDashState.charts.signalType = new Chart($('adChartSignalType'), {
-      type: 'doughnut',
-      data: { labels: typeLabels, datasets: [{ data: d.signalTypeDist.map(r => r.cnt), backgroundColor: typeColors, borderWidth: 0 }] },
-      options: { ...chartDefaults, cutout: '55%', plugins: { ...chartDefaults.plugins, legend: { position: 'right', labels: { color: '#9ca3af', font: { size: 10 }, padding: 8 } } } }
-    });
-  }
-
   if (d.signalTrend.length > 0) {
+    await ensureChartJs();
     _adminDashState.charts.signalTrend = new Chart($('adChartSignalTrend'), {
       type: 'line',
       data: {
@@ -8371,6 +8445,7 @@ async function renderAdminDashboard(el, d, userListResp) {
   }
 
   if (d.tokenTrend && d.tokenTrend.length > 0) {
+    await ensureChartJs();
     _adminDashState.charts.tokenTrend = new Chart($('adChartTokenTrend'), {
       type: 'bar',
       data: {
@@ -8405,10 +8480,11 @@ async function renderAdminDashboard(el, d, userListResp) {
         try {
           const resp = await wsApi('admin_user_search', { q, limit: 5 });
           if (resp.status !== 'success') return;
+          const planLabel = plan => ({ pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' }[plan] || '免费用户');
           dropdown.innerHTML = resp.users.length
             ? resp.users.map(u => '<div class="drop-item" data-uid="' + u.id + '">' +
                 '<div class="drop-info"><span class="drop-name">' + escapeHtml(u.nickname || '--') + '</span><span class="drop-email">' + escapeHtml(u.email) + '</span></div>' +
-                '<span class="chip chip-' + (u.plan||'free') + '">' + (u.plan||'free') + (u.role==='admin'?' · admin':'') + '</span></div>').join('')
+                '<span class="chip chip-' + (u.plan||'free') + '">' + planLabel(u.plan || 'free') + (u.role==='admin'?' · 管理员':'') + '</span></div>').join('')
             : '<div class="drop-empty">无匹配用户</div>';
           dropdown.querySelectorAll('.drop-item').forEach(el => {
             el.addEventListener('click', async () => {
@@ -8433,29 +8509,33 @@ async function renderAdminDashboard(el, d, userListResp) {
     const container = $('userListContainer');
     const totalPages = Math.ceil((data.total || 0) / (data.pageSize || 10));
     const users = data.users || [];
+    const planLabel = plan => ({ pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' }[plan] || '免费用户');
+    const pageStart = Math.max(1, Math.min(Math.max(1, totalPages - 4), Number(data.page || 1) - 2));
+    const visiblePages = Array.from({ length:Math.min(5, totalPages) }, (_, index) => pageStart + index).filter(page => page <= totalPages);
     container.innerHTML = users.length
-      ? '<table class="user-table"><thead><tr><th>ID</th><th>账号</th><th>计划</th><th>桥接</th><th>推理</th><th>交易</th><th>调度</th><th>心跳</th></tr></thead><tbody>' +
-        users.map(u => '<tr data-uid="' + u.id + '">' +
-          '<td style="color:var(--text-muted);font-family:monospace;font-size:0.65rem">' + u.id + '</td>' +
-          '<td><div class="bridge-user"><span class="name">' + escapeHtml(u.nickname||'--') + '</span><span class="email">' + escapeHtml(u.phone || u.email) + '</span></div></td>' +
-          '<td><span class="chip chip-' + (u.plan||'free') + '">' + (u.plan||'free') + (u.role==='admin'?' ★':'') + '</span></td>' +
-          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.bridgeConnected?'on':'off') + '"></span>' + (u.bridgeConnected?'在线':'离线') + '</span></td>' +
-          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.autoReasoning?'on':'off') + '"></span>' + (u.autoReasoning?'开':'关') + '</span></td>' +
-          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.tradeEnabled?'on':'off') + '"></span>' + (u.tradeEnabled?'开':'关') + '</span></td>' +
-          '<td><span class="bridge-status"><span class="bridge-dot ' + (u.schedulerEnabled?'on':'off') + '"></span>' + (u.schedulerEnabled?'开':'关') + '</span></td>' +
-          '<td style="font-size:0.65rem;color:var(--text-muted)">' + (u.bridge_heartbeat ? formatTimeAgo(u.bridge_heartbeat) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--')) + '</td></tr>').join('') +
+      ? '<div class="ops-user-table-wrap"><table class="user-table ops-user-table"><thead><tr><th>用户</th><th>会员</th><th>MT5 终端</th><th>自动分析</th><th>交易发送</th><th>最近活动</th><th><span class="sr-only">查看详情</span></th></tr></thead><tbody>' +
+        users.map(u => '<tr data-uid="' + u.id + '" tabindex="0">' +
+          '<td><div class="ops-user-cell"><span class="ops-user-avatar">' + escapeHtml((u.nickname || u.email || '?').slice(0, 1).toUpperCase()) + '</span><div><strong>' + escapeHtml(u.nickname || '未设置昵称') + (u.role === 'admin' ? '<em>管理员</em>' : '') + '</strong><span>#' + u.id + ' · ' + escapeHtml(u.phone || u.email || '--') + '</span></div></div></td>' +
+          '<td><span class="chip chip-' + (u.plan || 'free') + '">' + planLabel(u.plan || 'free') + '</span></td>' +
+          '<td><span class="ops-binary-state ' + (u.bridgeConnected ? 'on' : 'off') + '"><i></i>' + (u.bridgeConnected ? '已连接' : '未连接') + '</span></td>' +
+          '<td><span class="ops-binary-state ' + (u.autoReasoning ? 'on' : 'off') + '"><i></i>' + (u.autoReasoning ? '运行中' : '未开启') + '</span></td>' +
+          '<td><span class="ops-binary-state ' + (u.tradeEnabled ? 'on' : 'off') + '"><i></i>' + (u.tradeEnabled ? '已授权' : '未授权') + '</span></td>' +
+          '<td><span class="ops-last-seen">' + (u.bridge_heartbeat ? formatTimeAgo(u.bridge_heartbeat) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--')) + '</span></td>' +
+          '<td><button type="button" class="ops-row-action" data-user-detail="' + u.id + '" aria-label="查看用户 ' + u.id + ' 详情"><i data-lucide="chevron-right"></i></button></td></tr>').join('') +
         '</tbody></table>' +
         (totalPages > 1
           ? '<div class="user-pager"><button class="page-btn" data-page="prev"' + (data.page <= 1 ? ' disabled': '') + '>‹</button>' +
-            Array.from({length: totalPages}, (_, i) => i+1).map(p => '<button class="page-btn' + (p === data.page ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>').join('') +
+            visiblePages.map(p => '<button class="page-btn' + (p === data.page ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>').join('') +
             '<button class="page-btn" data-page="next"' + (data.page >= totalPages ? ' disabled': '') + '>›</button>' +
             '<span class="page-info">第 ' + data.page + '/' + totalPages + ' 页 · 共 ' + data.total + ' 人</span></div>'
-          : '')
-      : '<div class="bridge-empty">暂无用户数据</div>';
+          : '') + '</div>'
+      : '<div class="ops-empty-state"><i data-lucide="users"></i><strong>暂无用户数据</strong><span>注册用户会显示在这里。</span></div>';
 
-    container.querySelectorAll('tr[data-uid]').forEach(el => {
-      el.addEventListener('click', () => showUserDetail(el.dataset.uid));
+    container.querySelectorAll('tr[data-uid]').forEach(row => {
+      row.addEventListener('click', event => { if (!event.target.closest('button')) showUserDetail(row.dataset.uid); });
+      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showUserDetail(row.dataset.uid); } });
     });
+    container.querySelectorAll('[data-user-detail]').forEach(button => button.addEventListener('click', () => showUserDetail(button.dataset.userDetail)));
     container.querySelectorAll('.page-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         let targetPage = data.page;
@@ -8470,44 +8550,51 @@ async function renderAdminDashboard(el, d, userListResp) {
         }
       });
     });
+    initIcons();
   }
 
   async function showUserDetail(uid) {
     const detailContainer = $('userDetailContainer');
+    _adminDashState.selectedUserId = Number(uid);
     showLoading(detailContainer, "加载用户详情...", "sm");
     try {
       const resp = await wsApi('admin_user_status', { user_id: uid });
       if (resp.status !== 'success') throw new Error(resp.message);
       const d2 = resp.data, u = d2.user, s = d2.settings, sc = d2.scheduler, sig = d2.signals, br = d2.bridge;
+      const signalText = ({ buy:'买入', strong_buy:'强买入', sell:'卖出', strong_sell:'强卖出', hold:'观望', error:'异常' }[String(sig.last_signal_type || '').toLowerCase()] || '--');
+      const statusValue = (active, activeText = '开启', inactiveText = '关闭') => `<span class="ops-detail-status ${active ? 'on' : 'off'}"><i></i>${active ? activeText : inactiveText}</span>`;
       detailContainer.innerHTML =
-        '<div class="user-detail-card">' +
+        '<div class="user-detail-card ops-user-detail">' +
         '<div class="user-detail-header">' +
-        '<div class="user-detail-avatar">' + (u.nickname||u.email||'?')[0].toUpperCase() + '</div>' +
+        '<div class="user-detail-avatar">' + escapeHtml((u.nickname||u.email||'?')[0].toUpperCase()) + '</div>' +
         '<div class="user-detail-info"><span class="name">' + escapeHtml(u.nickname||'未设置昵称') + '</span><span class="email">' + escapeHtml(u.phone || u.email) + '</span></div>' +
-        '<button class="user-detail-close" onclick="document.getElementById(\'userDetailContainer\').innerHTML=\'\'">✕</button></div>' +
+        '<button class="user-detail-close" id="adminUserDetailClose" type="button" aria-label="关闭用户详情"><i data-lucide="x"></i></button></div>' +
         '<div class="user-detail-grid">' +
-        '<div class="user-detail-field"><span class="f-label">桥接状态</span><span class="f-value">' + (br.connected ? (br.alive ? '<span style="color:#22c55e">● 在线</span>' : '<span style="color:#f59e0b">● 无心跳</span>') : '<span style="color:var(--text-muted)">○ 离线</span>') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">交易发送</span><span class="f-value">' + (s.trade_send_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">自动分析</span><span class="f-value">' + (s.auto_reasoning_enabled ? '<span style="color:#22c55e">开启</span>' : '关闭') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">调度器</span><span class="f-value">' + (sc.enabled ? '<span style="color:#22c55e">启用</span>' : '未启用') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">监控品种</span><span class="f-value">' + (sc.symbols || '--') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">MT5 终端</span><span class="f-value">' + (br.connected ? statusValue(br.alive, '在线', '心跳中断') : statusValue(false, '在线', '离线')) + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">交易发送</span><span class="f-value">' + statusValue(s.trade_send_enabled, '已授权', '未授权') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">自动分析</span><span class="f-value">' + statusValue(s.auto_reasoning_enabled, '运行中', '未开启') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">调度订阅</span><span class="f-value">' + statusValue(sc.enabled, '已启用', '未启用') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">分析品种</span><span class="f-value">' + escapeHtml(sc.symbols || '--') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">上次运行</span><span class="f-value">' + (sc.last_run_at ? formatTimeAgo(sc.last_run_at) : '--') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">总信号</span><span class="f-value">' + (sig.total_signals||0) + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">今日信号</span><span class="f-value">' + (sig.today_signals||0) + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">已执行</span><span class="f-value">' + (sig.executed_signals||0) + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">最新信号</span><span class="f-value">' + (sig.last_signal_type ? sig.last_signal_type.toUpperCase() : '--') + ' ' + (sig.last_signal_at ? formatTimeAgo(sig.last_signal_at) : '') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">最新信号</span><span class="f-value">' + (sig.last_signal_type ? signalText + ' · ' + (sig.last_signal_at ? formatTimeAgo(sig.last_signal_at) : '--') : '暂无有效信号') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">最后在线</span><span class="f-value">' + (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">注册时间</span><span class="f-value">' + (u.created_at ? u.created_at.slice(0,10) : '--') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">手机号</span><span class="f-value">' + (u.phone || '--') + '</span></div>' +
+        '<div class="user-detail-field"><span class="f-label">手机号</span><span class="f-value">' + escapeHtml(u.phone || '--') + '</span></div>' +
         '<div class="user-detail-field"><span class="f-label">邮箱</span><span class="f-value">' + escapeHtml(u.email) + '</span></div>' +
         '</div></div>';
+      $('adminUserDetailClose')?.addEventListener('click', () => { detailContainer.innerHTML = ''; _adminDashState.selectedUserId = null; });
       initIcons();
     } catch (e) {
-      detailContainer.innerHTML = '<div style="color:#ef4444;text-align:center;padding:12px">' + escapeHtml(e.message) + '</div>';
+      detailContainer.innerHTML = '<div class="ops-inline-error"><i data-lucide="circle-alert"></i><span>' + escapeHtml(e.message || '用户详情加载失败') + '</span></div>';
+      initIcons();
     }
   }
 
   // Initial render
+  _adminDashState.renderUserList = renderUserList;
   if (userListResp && userListResp.status === 'success') {
     renderUserList(userListResp);
   }
@@ -8530,21 +8617,31 @@ async function saveChangelog() {
   const verInput = document.getElementById('clVersionInput');
   const contentInput = document.getElementById('clContentInput');
   const statusEl = document.getElementById('clSaveStatus');
+  const saveButton = document.getElementById('clSaveButton');
   if (!verInput || !contentInput) return;
   const version = parseInt(verInput.value, 10);
   if (!version || version < 1) {
-    if (statusEl) { statusEl.textContent = '版本号无效'; statusEl.style.color = '#ef4444'; }
+    if (statusEl) { statusEl.textContent = '版本号无效，请输入大于或等于 1 的整数'; statusEl.className = 'error'; }
+    verInput.focus();
     return;
   }
+  if (!contentInput.value.trim()) {
+    if (statusEl) { statusEl.textContent = '请填写更新内容'; statusEl.className = 'error'; }
+    contentInput.focus();
+    return;
+  }
+  if (saveButton) { saveButton.disabled = true; saveButton.classList.add('is-loading'); saveButton.innerHTML = '<i data-lucide="loader-2"></i>正在保存'; initIcons(); }
   try {
     const resp = await api('/api/admin/release-notes', { method: 'POST', body: { version, content: contentInput.value } });
     if (resp.ok) {
-      if (statusEl) { statusEl.textContent = '已保存'; statusEl.style.color = '#22c55e'; setTimeout(() => { statusEl.textContent = ''; }, 2000); }
+      if (statusEl) { statusEl.textContent = '已保存并发布'; statusEl.className = 'success'; setTimeout(() => { statusEl.textContent = ''; statusEl.className = ''; }, 3000); }
     } else {
-      if (statusEl) { statusEl.textContent = resp.error || '保存失败'; statusEl.style.color = '#ef4444'; }
+      if (statusEl) { statusEl.textContent = resp.error || '保存失败，请稍后重试'; statusEl.className = 'error'; }
     }
   } catch (e) {
-    if (statusEl) { statusEl.textContent = '保存失败'; statusEl.style.color = '#ef4444'; }
+    if (statusEl) { statusEl.textContent = '保存失败，请检查网络后重试'; statusEl.className = 'error'; }
+  } finally {
+    if (saveButton) { saveButton.disabled = false; saveButton.classList.remove('is-loading'); saveButton.innerHTML = '<i data-lucide="save"></i>保存并发布'; initIcons(); }
   }
 }
 

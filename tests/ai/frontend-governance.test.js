@@ -83,6 +83,25 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html.indexOf('data-tab="model-strategy"')).toBeLessThan(html.indexOf('data-tab="review-memory"'))
   })
 
+  it('organizes the administrator operations center around health, actions, users, and releases', () => {
+    expect(app).toContain("data-admin-view=\"overview\"")
+    expect(app).toContain("data-admin-view=\"users\"")
+    expect(app).toContain("data-admin-view=\"release\"")
+    expect(app).toContain('adminOperationalSummary')
+    expect(app).toContain('renderAdminAttention')
+    expect(app).toContain('opsHealthSummary')
+    expect(app).toContain('今日模型消耗')
+    expect(app).not.toContain('id="adChartSignalType"')
+    expect(css).toContain('.ops-health-layout')
+    expect(css).toContain('.ops-attention-list')
+    expect(css).toContain('.ops-user-table')
+    expect(bridgeWs).toContain('AS model_failures_today')
+    expect(bridgeWs).toContain('AS reviews_pending')
+    expect(bridgeWs).toContain('healthStats: healthStats || {}')
+    expect(bridgeWs).toContain('Number(oldStats?.old_today || 0) + Number(delivStats?.deliv_today || 0)')
+    expect(bridgeWs).toContain("selectedSymbols.join('、') || null")
+  })
+
   it('accepts a token handoff before the early authentication redirect', () => {
     const earlyAuth = html.slice(html.indexOf('(function()'), html.indexOf('</script>'))
     expect(earlyAuth).toContain("new URLSearchParams(window.location.search).get('token')")
