@@ -61,5 +61,16 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('cancelAnimationFrame(_inferenceChartFrame)')
     expect(app).toContain('renderAnalysisDetailLoading(signalId)')
     expect(app).toContain('setTab("ai-analyze", { skipRefresh:true })')
+    expect(app.match(/setTab = function\(tab, options = \{\}\)/g)).toHaveLength(2)
+    expect(app.match(/_origSetTab2?\(tab, options\)/g)).toHaveLength(2)
+    expect(app).toContain('!options.append && !options.skipResultRender')
+    expect(app).toContain('state.selectedSignal = previousSelected')
+  })
+
+  it('keeps revoked platform experience out of the active library and exposes a collapsed archive', () => {
+    expect(app).toContain('const currentItems = items.filter(item => item.status !== "revoked")')
+    expect(app).toContain('class="platform-experience-archive"')
+    expect(app).toContain('data-platform-experience-action="delete"')
+    expect(app).toContain('method:"DELETE"')
   })
 })

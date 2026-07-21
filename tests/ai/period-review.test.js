@@ -94,6 +94,20 @@ describe('daily review grouping', () => {
     expect(shouldRefreshDailyReviewCase(settled, group, sources, Date.parse('2026-07-19T22:00:00Z'))).toMatchObject({ refresh:false, reason:'finalized_unchanged' })
   })
 
+  it('freezes an approved evidence snapshot while still detecting a genuinely late outcome', () => {
+    const group = { outcomes:[{ id:3 }, { id:8 }], endUtcMs:Date.parse('2026-07-17T21:00:00Z') }
+    const changedSources = [
+      { outcome_id:3, source_hash:'old', current_evidence_hash:'new' },
+      { outcome_id:8, source_hash:'same', current_evidence_hash:'same' },
+    ]
+    const approved = { status:'approved', evidence_status:'complete', current_version_id:12,
+      approved_version_id:12, updated_at:'2026-07-18 05:00:00' }
+    expect(shouldRefreshDailyReviewCase(approved, group, changedSources, Date.parse('2026-07-18T06:00:00Z')))
+      .toEqual({ refresh:false, reason:'approved_snapshot_frozen' })
+    expect(shouldRefreshDailyReviewCase(approved, { ...group, outcomes:[...group.outcomes, { id:9 }] }, changedSources,
+      Date.parse('2026-07-18T06:00:00Z'))).toEqual({ refresh:true, reason:'outcome_set_changed' })
+  })
+
   it('ignores evidence generation timestamps when deciding whether a review changed', () => {
     const left = { statistics:{ trade_count:2 }, sources:[{ outcome_id:1, evidence_hash:'a' }],
       period_market:{ generated_at:'2026-07-18T00:00:00Z', hash:'old', symbols:{ XAUUSD:{ M15:{ candle_count:10 } } } } }

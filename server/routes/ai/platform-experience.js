@@ -249,6 +249,17 @@ export async function updatePlatformExperienceItem(itemId, adminUserId, status) 
   return queryOne('SELECT * FROM platform_strategy_experience_items WHERE id = ?', [id])
 }
 
+export async function deleteRevokedPlatformExperienceItem(itemId) {
+  const id = Number(itemId)
+  if (!Number.isInteger(id) || id <= 0) throw new Error('invalid_platform_experience_id')
+  const existing = await queryOne('SELECT id, status FROM platform_strategy_experience_items WHERE id = ?', [id])
+  if (!existing) throw new Error('platform_experience_not_found')
+  if (existing.status !== 'revoked') throw new Error('platform_experience_must_be_revoked_before_delete')
+  const result = await queryRun("DELETE FROM platform_strategy_experience_items WHERE id = ? AND status = 'revoked'", [id])
+  if (!Number(result.changes || 0)) throw new Error('platform_experience_delete_conflict')
+  return { deleted:true, id }
+}
+
 function estimateTokens(value) {
   return Math.max(1, Math.ceil(Buffer.byteLength(String(value || ''), 'utf8') / 4))
 }

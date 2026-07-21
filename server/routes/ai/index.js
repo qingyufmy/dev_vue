@@ -19,7 +19,8 @@ import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplica
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
   revokeLongTermMemory, createMemoryFromApprovedPeriodReview } from './memory-system.js'
 import { getPlatformExperiencePolicies, createPlatformExperienceCandidateFromApprovedPeriodReview, listPlatformExperience,
-  getPlatformExperienceEvaluation, updatePlatformExperienceItem, updatePlatformExperiencePolicy } from './platform-experience.js'
+  deleteRevokedPlatformExperienceItem, getPlatformExperienceEvaluation, updatePlatformExperienceItem,
+  updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
@@ -638,6 +639,12 @@ router.post('/ai/admin/platform-experience/:id/:action', authMiddleware, async (
   const status = req.params.action === 'publish' ? 'active' : req.params.action === 'revoke' ? 'revoked' : null
   if (!status) return res.status(400).json({ ok: false, error: 'invalid_platform_experience_action' })
   try { res.json({ ok: true, item: await updatePlatformExperienceItem(Number(req.params.id), req.user.id, status) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.delete('/ai/admin/platform-experience/:id', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  try { res.json({ ok:true, ...(await deleteRevokedPlatformExperienceItem(Number(req.params.id))) }) }
   catch (error) { reviewError(res, error) }
 })
 

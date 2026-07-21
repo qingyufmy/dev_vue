@@ -7668,6 +7668,38 @@ a.signal-link:hover {
 .platform-experience-actions { flex: 0 0 auto; gap: 7px; }
 .platform-experience-actions .btn { min-height: 34px !important; }
 .platform-empty-state { grid-column: 1 / -1; min-height: 190px; border: 1px dashed rgba(148, 163, 184, .16); border-radius: 9px; }
+.platform-experience-archive { border-top: 1px solid rgba(148, 163, 184, .1); }
+.platform-experience-archive > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 15px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+.platform-experience-archive > summary::-webkit-details-marker { display: none; }
+.platform-experience-archive > summary > span { display: flex; align-items: center; gap: 7px; }
+.platform-experience-archive > summary strong { font-size: 11px; }
+.platform-experience-archive > summary small { color: var(--text-muted); font-size: 9px; font-weight: 400; }
+.platform-experience-archive[open] > summary > svg { transform: rotate(180deg); }
+.platform-experience-archive-list { padding: 0 13px 13px; }
+.platform-experience-archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 12px;
+  border-top: 1px solid rgba(148, 163, 184, .09);
+  color: var(--text-muted);
+}
+.platform-experience-archive-row > div { display: grid; min-width: 0; gap: 3px; }
+.platform-experience-archive-row strong { color: var(--text-secondary); font-size: 10px; }
+.platform-experience-archive-row span { font-family: var(--font-mono); font-size: 9px; }
+.platform-experience-archive-row p { overflow: hidden; margin: 0; font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.platform-experience-archive-row .btn { flex: 0 0 auto; }
 
 .personal-memory-section {
   overflow: hidden;
@@ -7911,6 +7943,8 @@ a.signal-link:hover {
   .experience-evaluation-row time { grid-column: auto; padding-bottom: 0; }
   .platform-experience-card > footer { align-items: stretch; flex-direction: column; }
   .platform-experience-actions { justify-content: flex-end; }
+  .platform-experience-archive-row { align-items: stretch; flex-direction: column; }
+  .platform-experience-archive-row .btn { align-self: flex-end; }
   .personal-memory-card > footer { align-items: stretch; flex-direction: column; }
   .personal-memory-actions { justify-content: flex-end; }
 }

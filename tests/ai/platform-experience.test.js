@@ -12,7 +12,8 @@ vi.mock('../../server/routes/ai/memory-system.js', () => ({
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256: value => `hash:${value}` }))
 
 import { buildPlatformExperienceRetrievalContext, createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation,
-  platformExperienceApplicability, retrievePlatformExperience, sanitizePlatformExperienceText } from '../../server/routes/ai/platform-experience.js'
+  deleteRevokedPlatformExperienceItem, platformExperienceApplicability, retrievePlatformExperience,
+  sanitizePlatformExperienceText } from '../../server/routes/ai/platform-experience.js'
 
 describe('platform strategy experience boundary', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -36,6 +37,15 @@ describe('platform strategy experience boundary', () => {
     db.queryRun.mockResolvedValue({ insertId: 11, changes: 1 })
     await expect(createPlatformExperienceCandidateFromApprovedReview(7, 1)).resolves.toMatchObject({ id: 11, status:'candidate' })
     expect(db.queryRun.mock.calls[0][0]).toContain('platform_strategy_experience_items')
+  })
+
+  it('deletes only an already revoked platform experience record', async () => {
+    db.queryOne.mockResolvedValueOnce({ id:11, status:'active' })
+    await expect(deleteRevokedPlatformExperienceItem(11)).rejects.toThrow('platform_experience_must_be_revoked_before_delete')
+    db.queryOne.mockResolvedValueOnce({ id:12, status:'revoked' })
+    db.queryRun.mockResolvedValueOnce({ changes:1 })
+    await expect(deleteRevokedPlatformExperienceItem(12)).resolves.toEqual({ deleted:true, id:12 })
+    expect(db.queryRun.mock.calls.at(-1)[0]).toContain("status = 'revoked'")
   })
 
   it('shadow mode records selections but never injects them', async () => {

@@ -2737,12 +2737,17 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
   const labels = { candidate:"待发布", active:"已发布", revoked:"已撤销" };
   const candidateCount = items.filter(item => item.status === "candidate").length;
   const activeCount = items.filter(item => item.status === "active").length;
+  const currentItems = items.filter(item => item.status !== "revoked");
+  const revokedItems = items.filter(item => item.status === "revoked");
+  const renderCurrentItem = item => {
+    const statusClass = item.status === "active" ? "success" : "warning";
+    const icon = item.status === "active" ? "badge-check" : "sparkles";
+    const sourceVersion = item.period_review_version_id || item.review_version_id || "--";
+    return `<article class="platform-experience-card is-${escapeHtml(item.status)}"><header><span class="platform-experience-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>经验 #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(labels[item.status] || item.status)}</span></header><p class="platform-experience-lesson">${escapeHtml(item.lesson_text)}</p><footer><div class="platform-experience-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(sourceVersion)}</span>${item.platform_version ? `<span><i data-lucide="git-branch" size="13"></i>平台版本 ${Number(item.platform_version)}</span>` : '<span><i data-lucide="circle-dashed" size="13"></i>尚未生成平台版本</span>'}</div><div class="platform-experience-actions">${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}"><i data-lucide="send" size="14"></i>发布经验</button>` : ""}<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button></div></footer></article>`;
+  };
+  const archiveHtml = revokedItems.length ? `<details class="platform-experience-archive"><summary><span><i data-lucide="archive" size="15"></i><strong>已撤销归档</strong><small>${revokedItems.length} 条记录，仅用于追溯</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="platform-experience-archive-list">${revokedItems.map(item => `<article class="platform-experience-archive-row"><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} · 经验 #${Number(item.id)}</strong><span>${escapeHtml(item.revoked_at || item.updated_at || "--")}</span><p>${escapeHtml(item.lesson_text)}</p></div><button class="btn btn-secondary btn-sm" data-platform-experience-action="delete" data-platform-experience-id="${item.id}"><i data-lucide="trash-2" size="14"></i>删除记录</button></article>`).join("")}</div></details>` : "";
   host.innerHTML = `<section class="platform-library-section"><header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="library-big" size="18"></i></span><div><span class="review-section-kicker">经验内容</span><h3>平台经验库</h3><p>只有已发布的经验才会被正式启用的策略读取。</p></div></div><div class="platform-section-stats"><span><strong>${candidateCount}</strong> 待发布</span><span><strong>${activeCount}</strong> 已发布</span></div></header>
-    <div class="platform-experience-list">${items.length ? items.map(item => {
-      const statusClass = item.status === 'active' ? 'success' : item.status === 'revoked' ? 'danger' : 'warning';
-      const icon = item.status === 'active' ? 'badge-check' : item.status === 'revoked' ? 'archive-x' : 'sparkles';
-      return `<article class="platform-experience-card is-${escapeHtml(item.status)}"><header><span class="platform-experience-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>经验 #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(labels[item.status] || item.status)}</span></header><p class="platform-experience-lesson">${escapeHtml(item.lesson_text)}</p><footer><div class="platform-experience-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(item.review_version_id || '--')}</span>${item.platform_version ? `<span><i data-lucide="git-branch" size="13"></i>平台版本 ${Number(item.platform_version)}</span>` : '<span><i data-lucide="circle-dashed" size="13"></i>尚未生成平台版本</span>'}</div><div class="platform-experience-actions">${item.status === 'candidate' ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}"><i data-lucide="send" size="14"></i>发布经验</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button>` : ''}</div></footer></article>`;
-    }).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="library" size="20"></i></span><strong>暂无平台经验</strong><span>确认平台策略复盘后，市场经验会先进入待发布区。</span></div>'}</div></section>`;
+    <div class="platform-experience-list">${currentItems.length ? currentItems.map(renderCurrentItem).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="library" size="20"></i></span><strong>暂无可用平台经验</strong><span>确认平台策略复盘后，市场经验会先进入待发布区；撤销记录已移入下方归档。</span></div>'}</div>${archiveHtml}</section>`;
   initIcons();
 }
 
@@ -5995,10 +6000,16 @@ async function loadSignals(options = {}) {
     if (activeIndex >= 0) state.signals[activeIndex] = activeSignal;
   }
 
-  if (!options.append) {
+  if (!options.append && !options.skipResultRender) {
     state.selectedSignal = activeSignal;
     updateSignalDisplay(activeSignal);
     if (activeSignal) setText("signalFreshness", signalFreshness(activeSignal));
+  } else if (!options.append && previousSelected) {
+    // A background/list-only refresh must not steal the detail selection. This
+    // is especially important while an older signal is being opened from the
+    // history page: changing selectedSignal here invalidates the in-flight
+    // detail response and leaves the loading placeholder visible forever.
+    state.selectedSignal = previousSelected;
   }
   renderAnalysisHistory(state.signals);
   if (!options.skipResultRender && !options.append) {
@@ -7013,10 +7024,21 @@ function bindEvents() {
     }
     if (platformExperienceAction) {
       try {
-        await api(`/api/ai/admin/platform-experience/${Number(platformExperienceAction.dataset.platformExperienceId)}/${platformExperienceAction.dataset.platformExperienceAction}`, { method:"POST" });
-        toast(platformExperienceAction.dataset.platformExperienceAction === "publish" ? "平台经验已发布" : "平台经验已撤销", "success");
+        const itemId = Number(platformExperienceAction.dataset.platformExperienceId);
+        const action = platformExperienceAction.dataset.platformExperienceAction;
+        if (action === "delete") {
+          const confirmed = await showConfirm("删除已撤销经验", `经验 #${itemId} 将从归档中永久删除。该操作不会恢复，也不会影响当前已发布经验。`, { confirmText:"删除记录", danger:true });
+          if (!confirmed) return;
+          platformExperienceAction.disabled = true;
+          await api(`/api/ai/admin/platform-experience/${itemId}`, { method:"DELETE" });
+          toast("已撤销经验记录已删除", "success");
+        } else {
+          await api(`/api/ai/admin/platform-experience/${itemId}/${action}`, { method:"POST" });
+          toast(action === "publish" ? "平台经验已发布" : "平台经验已撤销", "success");
+        }
         await loadReviewMemory();
       } catch (error) { toast(error.message,"error"); }
+      finally { platformExperienceAction.disabled = false; }
       return;
     }
     if (platformPolicySave) {
@@ -7281,8 +7303,8 @@ async function loadFeedbackHistory() {
 
 // Hook into existing setTab
 const _origSetTab = setTab;
-setTab = function(tab) {
-  _origSetTab(tab);
+setTab = function(tab, options = {}) {
+  _origSetTab(tab, options);
   if (tab === 'feedback') showFeedbackPanel();
   if (tab === 'ai-analyze') initAnalysisHistoryScroll();
 };
@@ -7859,8 +7881,8 @@ function formatTimeAgo(dtStr) {
 }
 // Hook admin dashboard tab into setTab
 const _origSetTab2 = setTab;
-setTab = function(tab) {
-  _origSetTab2(tab);
+setTab = function(tab, options = {}) {
+  _origSetTab2(tab, options);
   if (tab === 'admin-dashboard') {
     loadAdminDashboard();
     startDashAutoRefresh();

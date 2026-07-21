@@ -43,6 +43,14 @@ function beijingDateTimeMs(value) {
 export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], asOfUtcMs = Date.now()) {
   if (!reviewCase) return { refresh:true, reason:'new_case' }
   if (!samePeriodOutcomeSet(group?.outcomes || [], sources)) return { refresh:true, reason:'outcome_set_changed' }
+  // User approval freezes the evidence snapshot that produced the published
+  // experience. Holding-path candles and Chan structures may continue to be
+  // backfilled after the trade closes; those enrichments must not silently
+  // clear an explicit approval or revoke its experience. A genuinely late
+  // outcome is still detected above and creates a new review cycle.
+  if (reviewCase.status === 'approved' && reviewCase.current_version_id && reviewCase.approved_version_id) {
+    return { refresh:false, reason:'approved_snapshot_frozen' }
+  }
   if (sources.some(source => source.current_evidence_hash
     && source.current_evidence_hash !== source.source_hash)) {
     return { refresh:true, reason:'trade_evidence_changed' }
