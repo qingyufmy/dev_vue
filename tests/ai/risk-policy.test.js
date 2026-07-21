@@ -251,7 +251,7 @@ describe('versioned policy semantics', () => {
     expect(DEFAULT_RISK_POLICY).not.toHaveProperty('min_margin_level_pct')
   })
 
-  it('normalizes administrator ranges so users cannot cross the platform safety boundary', () => {
+  it('uses the administrator range as the user boundary independently of the platform default', () => {
     const normalized = normalizePlatformRiskConfig({
       currentValues: DEFAULT_RISK_POLICY,
       valueChanges: { max_risk_per_trade_pct: 1 },
@@ -259,7 +259,14 @@ describe('versioned policy semantics', () => {
         max_risk_per_trade_pct: { allowed_min:0.01, allowed_max:20 },
       },
     })
-    expect(normalized.controls.max_risk_per_trade_pct.allowed_max).toBe(1)
+    expect(normalized.controls.max_risk_per_trade_pct.allowed_max).toBe(20)
+    expect(normalizePlatformRiskConfig({
+      currentValues: DEFAULT_RISK_POLICY,
+      controlChanges: { max_position_size: { allowed_min:0.001, allowed_max:1 } },
+    })).toMatchObject({
+      values: { max_position_size:0.05 },
+      controls: { max_position_size:{ allowed_min:0.001, allowed_max:1 } },
+    })
     expect(() => normalizePlatformRiskConfig({ valueChanges:{ observation_hours:72 } })).toThrow('unknown_risk_field:observation_hours')
     expect(() => normalizePlatformRiskConfig({ valueChanges:{ min_margin_level_pct:300 } })).toThrow('unknown_risk_field:min_margin_level_pct')
   })
@@ -316,6 +323,24 @@ describe('versioned policy semantics', () => {
     const result = await resolveEffectiveRiskPolicy({ userId:5, tradingAccountId:6 })
     expect(result.platformPolicy).toMatchObject({ max_risk_per_trade_pct:0.4, weekend_close_minutes:120 })
     expect(result.policy).toMatchObject({ max_risk_per_trade_pct:0.4, weekend_close_minutes:120 })
+  })
+
+  it('allows an account value above the platform default up to the administrator maximum', async () => {
+    db.queryOne.mockImplementation(async (sql, params) => {
+      if (sql.includes("scope = 'platform'")) return { id:1 }
+      if (sql.includes("scope = 'account'")) return { id:2 }
+      if (sql.includes('risk_policy_versions')) return Number(params[0]) === 1
+        ? { id:11, config_json:JSON.stringify({
+            values:{ max_position_size:0.05 },
+            controls:{ max_position_size:{ allowed_min:0.001, allowed_max:1, locked_value:null, user_editable:true } },
+          }) }
+        : { id:12, config_json:JSON.stringify({ max_position_size:1 }) }
+      return null
+    })
+    const result = await resolveEffectiveRiskPolicy({ userId:5, tradingAccountId:6 })
+    expect(result.platformPolicy.max_position_size).toBe(0.05)
+    expect(result.controls.max_position_size.allowed_max).toBe(1)
+    expect(result.policy.max_position_size).toBe(1)
   })
 })
 

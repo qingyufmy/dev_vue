@@ -74,8 +74,12 @@ function buildPlatformControls(rawConfig = {}) {
     const lockedValue = input.locked_value === null || input.locked_value === undefined
       ? null : normalizeValue(key, input.locked_value)
     let effectiveMin = allowedMin, effectiveMax = allowedMax
-    if (meta.type === 'number' && meta.safety_direction === 'lower') effectiveMax = Math.min(effectiveMax, Number(platformValues[key]))
-    if (meta.type === 'number' && meta.safety_direction === 'higher') effectiveMin = Math.max(effectiveMin, Number(platformValues[key]))
+    if (!Object.hasOwn(configured, key) && meta.type === 'number' && meta.safety_direction === 'lower') {
+      effectiveMax = Math.min(effectiveMax, Number(platformValues[key]))
+    }
+    if (!Object.hasOwn(configured, key) && meta.type === 'number' && meta.safety_direction === 'higher') {
+      effectiveMin = Math.max(effectiveMin, Number(platformValues[key]))
+    }
     return [key, {
       default_value: input.default_value === undefined ? meta.default_value : normalizeValue(key, input.default_value),
       allowed_min: effectiveMin, allowed_max: effectiveMax, locked_value: lockedValue,
@@ -117,7 +121,7 @@ function applyAccountConfig(base, rawConfig, controls) {
     if (value === undefined) continue
     if (meta.type === 'number') value = Math.min(control.allowed_max, Math.max(control.allowed_min, value))
     if (meta.type === 'set' && !result[key].includes('*')) value = value.filter(item => result[key].includes(item))
-    result[key] = stricter(key, result[key], value)
+    result[key] = value
   }
   result.require_stop_loss = true
   return result
@@ -165,14 +169,17 @@ export function normalizePlatformRiskConfig({ currentValues = {}, currentControl
     let min = Number(input.allowed_min ?? meta.allowed_min)
     let max = Number(input.allowed_max ?? meta.allowed_max)
     if (!Number.isFinite(min) || !Number.isFinite(max) || min < meta.allowed_min || max > meta.allowed_max || min > max) throw new Error(`invalid_global_risk_range:${key}`)
-    if (meta.safety_direction === 'lower') max = Math.min(max, Number(values[key]))
-    if (meta.safety_direction === 'higher') min = Math.max(min, Number(values[key]))
     let locked = input.locked_value
     if (locked !== null && locked !== undefined && locked !== '') {
       locked = Number(locked)
       if (!Number.isFinite(locked) || locked < min || locked > max) throw new Error(`invalid_global_risk_lock:${key}`)
     } else locked = null
     controls[key] = { allowed_min:min, allowed_max:max, locked_value:locked, user_editable:input.user_editable !== false }
+  }
+  for (const [key, control] of Object.entries(controls)) {
+    const meta = RISK_RULES[key]
+    if (meta?.type !== 'number') continue
+    values[key] = Math.min(control.allowed_max, Math.max(control.allowed_min, Number(values[key])))
   }
   if (Number(values.max_position_size) <= 0 || Number(values.max_risk_per_trade_pct) <= 0) throw new Error('invalid_global_risk_core_limits')
   return { values, controls }
@@ -249,8 +256,9 @@ export async function submitRiskPolicyChanges({ policySetId, actorId, changes, r
       if (value === undefined || (meta.type === 'number' && Number(value) !== Number(raw))) throw new Error(`invalid_risk_value:${key}`)
       if (set.scope === 'account') {
         const control = platformControls[key]
-        if (!control?.user_editable || (meta.type === 'number' && (value < control.allowed_min || value > control.allowed_max))
-          || stricter(key, platformPolicy[key], value) !== value) throw new Error(`risk_relaxation_not_allowed:${key}`)
+        if (!control?.user_editable || (meta.type === 'number' && (value < control.allowed_min || value > control.allowed_max))) {
+          throw new Error(`risk_relaxation_not_allowed:${key}`)
+        }
       }
       applied[key] = value
       const prior = currentConfig[key] ?? platformPolicy[key] ?? DEFAULT_RISK_POLICY[key]
