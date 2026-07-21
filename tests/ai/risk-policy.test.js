@@ -82,14 +82,14 @@ describe('L1/L4/L5 core risk gate', () => {
     expect(result.rule_results.some(item => item.code === 'R1.3_SL_WIDEN_VOLUME_DOWN')).toBe(false)
   })
 
-  it('uses the nearest existing AI take-profit tier that satisfies minimum R:R', () => {
+  it('keeps the selected AI take-profit tier without a minimum R:R override', () => {
     const result = run({ request: {
       tp: 2008, tp_tier_used: 2,
       take_profit_candidates: [{ tier:1, price:2005 }, { tier:2, price:2008 }, { tier:3, price:2013 }],
     } })
-    expect(result.decision_status).toBe('adjust')
-    expect(result.approved_order).toMatchObject({ tp:2013, tp_tier_used:3, tp_selection_source:'risk_adjusted' })
-    expect(result.rule_results).toContainEqual(expect.objectContaining({ code:'R1.5_TP_TIER_UPGRADED', outcome:'adjust' }))
+    expect(result.decision_status).toBe('pass')
+    expect(result.approved_order).toMatchObject({ tp:2008, tp_tier_used:2 })
+    expect(result.rule_results.some(item => item.code === 'R1.5_TP_TIER_UPGRADED')).toBe(false)
   })
 
   it('never increases AI volume when risk arithmetic is below broker minimum', () => {
@@ -242,24 +242,26 @@ describe('versioned policy semantics', () => {
   it('classifies tightening and relaxation by each field safety direction', () => {
     expect(isRelaxation('max_position_size', 0.02, 0.03)).toBe(true)
     expect(isRelaxation('max_position_size', 0.03, 0.02)).toBe(false)
-    expect(isRelaxation('min_rr', 1.5, 1.2)).toBe(true)
     expect(RISK_RULES.require_stop_loss.locked).toBe(true)
     expect(DEFAULT_RISK_POLICY).not.toHaveProperty('observation_hours')
     expect(DEFAULT_RISK_POLICY).not.toHaveProperty('ai_volume_step')
+    expect(DEFAULT_RISK_POLICY).not.toHaveProperty('sl_atr_max')
+    expect(DEFAULT_RISK_POLICY).not.toHaveProperty('min_rr')
+    expect(DEFAULT_RISK_POLICY).not.toHaveProperty('max_directional_exposure_lots')
+    expect(DEFAULT_RISK_POLICY).not.toHaveProperty('min_margin_level_pct')
   })
 
   it('normalizes administrator ranges so users cannot cross the platform safety boundary', () => {
     const normalized = normalizePlatformRiskConfig({
       currentValues: DEFAULT_RISK_POLICY,
-      valueChanges: { max_risk_per_trade_pct: 1, min_margin_level_pct: 300 },
+      valueChanges: { max_risk_per_trade_pct: 1 },
       controlChanges: {
         max_risk_per_trade_pct: { allowed_min:0.01, allowed_max:20 },
-        min_margin_level_pct: { allowed_min:0, allowed_max:100000 },
       },
     })
     expect(normalized.controls.max_risk_per_trade_pct.allowed_max).toBe(1)
-    expect(normalized.controls.min_margin_level_pct.allowed_min).toBe(300)
     expect(() => normalizePlatformRiskConfig({ valueChanges:{ observation_hours:72 } })).toThrow('unknown_risk_field:observation_hours')
+    expect(() => normalizePlatformRiskConfig({ valueChanges:{ min_margin_level_pct:300 } })).toThrow('unknown_risk_field:min_margin_level_pct')
   })
 
   it('applies tightening and relaxation immediately in one version while retaining field audits', async () => {
@@ -293,7 +295,8 @@ describe('versioned policy semantics', () => {
     })
     db.queryAll.mockResolvedValue([])
     const result = await resolveEffectiveRiskPolicy({ userId: 5, tradingAccountId: 6, riskProfileId: 7, legacyConfig: { max_position_size: 0.05 } })
-    expect(result.policy).toMatchObject({ max_position_size: 0.02, min_rr: 1.6, max_execution_price_deviation_pct:0.08, daily_loss_limit_pct:3 })
+    expect(result.policy).toMatchObject({ max_position_size: 0.02, max_execution_price_deviation_pct:0.08, daily_loss_limit_pct:3 })
+    expect(result.policy).not.toHaveProperty('min_rr')
     expect(result.policyVersionIds).toEqual([11, 12])
   })
 })

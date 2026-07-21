@@ -2854,6 +2854,44 @@ const migrations = [
         VALUES ('R4.6_EXECUTION_PRICE_DEVIATION', 'enforce', 0, NOW())
         ON DUPLICATE KEY UPDATE mode = VALUES(mode), forced_enforce = VALUES(forced_enforce), updated_at = VALUES(updated_at)`)
     }
+  },
+  {
+    id: '113_retire_redundant_risk_rules',
+    async up() {
+      const retiredKeys = ['sl_atr_max','min_rr','max_directional_exposure_lots','min_margin_level_pct']
+      const sets = await queryAll("SELECT id FROM risk_policy_sets WHERE status = 'active' ORDER BY id")
+      const now = new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').slice(0, 19)
+      for (const set of sets) {
+        const [latest] = await queryAll('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1', [set.id])
+        if (!latest) continue
+        let raw = {}
+        try { raw = latest.config_json ? JSON.parse(latest.config_json) : {} } catch {}
+        const wrapped = Boolean(raw.values || raw.defaults || raw.controls)
+        const values = { ...(raw.values || raw.defaults || raw) }
+        const defaults = { ...(raw.defaults || {}) }
+        const controls = { ...(raw.controls || {}) }
+        const cleanedRaw = { ...raw }
+        for (const key of retiredKeys) {
+          delete values[key]
+          delete defaults[key]
+          delete controls[key]
+          delete cleanedRaw[key]
+        }
+        const config = wrapped
+          ? { ...cleanedRaw, ...(raw.defaults ? { defaults } : {}), values, controls }
+          : values
+        const inserted = await queryRun(`INSERT INTO risk_policy_versions
+          (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)
+          VALUES (?, ?, ?, 0, '移除冗余风控规则', ?, ?)`,
+        [set.id, Number(latest.version_no || 0) + 1, JSON.stringify(config), now, now])
+        await queryRun('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [inserted.insertId, now, set.id])
+      }
+      await queryRun(`DELETE FROM risk_rule_rollouts WHERE rule_code IN (
+        'R1.4_STOP_LOSS_TOO_FAR','R1.5_RR_TOO_LOW','R1.5_TP_TIER_UPGRADED',
+        'R2.1_DIRECTIONAL_EXPOSURE','R3.4_MARGIN_LEVEL','R3.4_MARGIN_DATA_INCOMPLETE',
+        'R3.4_PROJECTED_MARGIN_LEVEL'
+      )`)
+    }
   }
 ]
 

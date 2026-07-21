@@ -150,7 +150,6 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('最终')
     expect(html).toContain('id="executionDecisionPager"')
     expect(app).toContain('executionFilters: { page: 1, pageSize: 5')
-    expect(app).toContain('R1.5_RR_TOO_LOW":"盈亏比低于最低要求')
     expect(app).toContain('pagerButton.dataset.pager === "executions"')
     expect(routes).toContain('page_size, 10) || 5')
   })
@@ -387,6 +386,14 @@ describe('AI governance navigation and DOM contract', () => {
     expect(groups).not.toContain('pending_price_deviation_atr')
     expect(groups).not.toContain('market_signal_drift_atr')
     expect(groups).not.toContain('broker_slippage_points')
+  })
+
+  it('removes the retired stop-distance, reward ratio, exposure and margin settings', () => {
+    const groups = app.slice(app.indexOf('const RISK_GROUPS'), app.indexOf('const RISK_SAFETY_LABELS'))
+    expect(groups).not.toContain('sl_atr_max')
+    expect(groups).not.toContain('min_rr')
+    expect(groups).not.toContain('max_directional_exposure_lots')
+    expect(groups).not.toContain('min_margin_level_pct')
   })
 
   it('keeps the overview signal card focused on the current decision and execution summary', () => {

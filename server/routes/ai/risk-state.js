@@ -266,11 +266,6 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
   })
 }
 
-function sameDirection(item, request) {
-  const side = String(item.side || item.type || item.order_type || '').toLowerCase()
-  return stripBrokerSuffix(item.symbol) === stripBrokerSuffix(request.symbol) && side.includes(request.order_type)
-}
-
 export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId, request, policy, snapshot, ruleModes = {} }) {
   const shadowRules = []
   const blocked = (rejectCode, details = {}) => ({ reject_code: rejectCode, details })
@@ -326,14 +321,9 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   if (haltReason) return blocked(haltReason, metrics)
   if (cooldownUntil) return blocked('R3.2_CONSECUTIVE_LOSS_COOLDOWN', { until: cooldownUntil })
 
-  const positions = snapshot.positions || [], pending = snapshot.pending || []
-  const externalDirectional = [...positions, ...pending].filter(item => sameDirection(item, request)).reduce((sum, item) => sum + toNumber(item.volume ?? item.volume_current), 0)
   const reserved = await txOne(run, `SELECT COALESCE(SUM(reserved_volume), 0) AS volume, COALESCE(SUM(reserved_daily_count), 0) AS daily_count,
     COALESCE(SUM(reserved_notional), 0) AS notional FROM risk_reservations
     WHERE trading_account_id = ? AND status = 'active' AND order_intent_id <> ?`, [accountId, intentId])
-  if (externalDirectional + toNumber(reserved?.volume) + toNumber(request.volume) > policy.max_directional_exposure_lots + 1e-9) {
-    const rejected = rolloutBlock('R2.1_DIRECTIONAL_EXPOSURE'); if (rejected) return rejected
-  }
   const successCount = await txOne(run, `SELECT COUNT(*) AS count FROM order_intents WHERE trading_account_id = ? AND status = 'succeeded'
     AND completed_at >= CONCAT(CURDATE(), ' 00:00:00')`, [accountId])
   if (toNumber(successCount?.count) + toNumber(reserved?.daily_count) + 1 > policy.max_daily_open_count) {
@@ -356,28 +346,9 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
       const rejected = rolloutBlock('R2.4_PRICE_TIME_DUPLICATE'); if (rejected) return rejected
     }
   }
-  const marginLevel = toNumber(snapshot.account?.margin_level)
-  if (toNumber(snapshot.account?.margin) > 0 && marginLevel < policy.min_margin_level_pct) {
-    const rejected = rolloutBlock('R3.4_MARGIN_LEVEL'); if (rejected) return rejected
-  }
-  const brokerCalculation = snapshot.broker_calculation || {}
-  const brokerVolume = toNumber(brokerCalculation.volume)
-  const requiredMargin = toNumber(brokerCalculation.required_margin)
-  if (!(brokerVolume > 0) || !(requiredMargin > 0)) return blocked('R3.4_MARGIN_DATA_INCOMPLETE')
-  const orderMargin = requiredMargin / brokerVolume * toNumber(request.volume)
-  const projectedMargin = toNumber(snapshot.account?.margin) + orderMargin
-  const projectedMarginLevel = projectedMargin > 0 ? metrics.equity / projectedMargin * 100 : Number.POSITIVE_INFINITY
-  if (projectedMarginLevel < policy.min_margin_level_pct) {
-    const rejected = rolloutBlock('R3.4_PROJECTED_MARGIN_LEVEL', {
-      current_margin:toNumber(snapshot.account?.margin), order_margin:orderMargin,
-      projected_margin_level_pct:projectedMarginLevel, minimum_pct:policy.min_margin_level_pct,
-    }); if (rejected) return rejected
-  }
-
   const approvedVolume = toNumber(request.volume)
   if (approvedVolume < toNumber(snapshot.instrument?.volume_min)) return blocked('R1.9_BELOW_MINIMUM_AFTER_RISK')
-  return { approved_volume: approvedVolume, adjusted:false, reserved_notional:0, metrics, shadow_rules: shadowRules,
-    projected_margin_level_pct:projectedMarginLevel }
+  return { approved_volume: approvedVolume, adjusted:false, reserved_notional:0, metrics, shadow_rules: shadowRules }
 }
 
 export async function recordSuccessfulOpenTx(run, accountId) {

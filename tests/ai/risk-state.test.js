@@ -165,12 +165,12 @@ describe('account metrics', () => {
 })
 
 describe('stateful gate', () => {
-  it('counts external MT5 positions and pending orders in directional exposure', async () => {
+  it('does not apply the retired same-direction exposure cap', async () => {
     const result = await evaluateStatefulRiskTx(runner(), {
       userId: 2, accountId: 4, intentId: 9, request: { ...request, volume: 0.02 }, policy: DEFAULT_RISK_POLICY,
       snapshot: snapshot({ positions: [{ symbol: 'XAUUSD', type: 'buy', volume: 0.09, price_current: 2000 }] }),
     })
-    expect(result.reject_code).toBe('R2.1_DIRECTIONAL_EXPOSURE')
+    expect(result.reject_code).toBeUndefined()
   })
 
   it('enforces daily count including active reservations', async () => {
@@ -238,29 +238,29 @@ describe('stateful gate', () => {
     })
     const result = await evaluateStatefulRiskTx(observedRunner, {
       userId: 2, accountId: 4, intentId: 9, request: { ...request, volume: 0.03 },
-      policy: { ...DEFAULT_RISK_POLICY, max_directional_exposure_lots: 1 }, snapshot: snapshot(),
+      policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
     })
     expect(result).toMatchObject({ adjusted: false, approved_volume: 0.03 })
   })
 
-  it('uses MT5 required margin to reject an order that would breach projected margin level', async () => {
+  it('does not apply the retired projected margin-level threshold', async () => {
     const result = await evaluateStatefulRiskTx(runner({ state:{ ...stateRow, day_start_equity:1000, equity_high_water:1000 } }), {
       userId:2, accountId:4, intentId:9, request,
-      policy:{ ...DEFAULT_RISK_POLICY, max_directional_exposure_lots:1, min_margin_level_pct:300 },
+      policy:DEFAULT_RISK_POLICY,
       snapshot:snapshot({ account:{ equity:1000, currency:'USD', margin:200, margin_level:500 },
         broker_calculation:{ volume:0.01, required_margin:200 } }),
     })
-    expect(result.reject_code).toBe('R3.4_PROJECTED_MARGIN_LEVEL')
-    expect(result.details.projected_margin_level_pct).toBe(250)
+    expect(result.reject_code).toBeUndefined()
+    expect(result).not.toHaveProperty('projected_margin_level_pct')
   })
 
-  it('fails closed when MT5 cannot calculate the proposed order margin', async () => {
+  it('does not require an MT5 projected-margin calculation', async () => {
     const result = await evaluateStatefulRiskTx(runner(), {
       userId:2, accountId:4, intentId:9, request,
-      policy:{ ...DEFAULT_RISK_POLICY, max_directional_exposure_lots:1 },
+      policy:DEFAULT_RISK_POLICY,
       snapshot:snapshot({ broker_calculation:null }),
     })
-    expect(result.reject_code).toBe('R3.4_MARGIN_DATA_INCOMPLETE')
+    expect(result.reject_code).toBeUndefined()
   })
 
   it('serializes 20 attempts so reservations cannot exceed the daily limit', async () => {
@@ -270,7 +270,7 @@ describe('stateful gate', () => {
       const next = lock.then(async () => {
         const result = await evaluateStatefulRiskTx(runner({ reserved: { volume: 0, daily_count: reservations, notional: 0 } }), {
           userId: 2, accountId: 4, intentId: 100 + reservations, request,
-          policy: { ...DEFAULT_RISK_POLICY, max_daily_open_count: 3, max_directional_exposure_lots: 1 }, snapshot: snapshot(),
+          policy: { ...DEFAULT_RISK_POLICY, max_daily_open_count: 3 }, snapshot: snapshot(),
         })
         if (!result.reject_code) reservations += 1
         return result

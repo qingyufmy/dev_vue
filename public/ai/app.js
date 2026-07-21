@@ -2113,19 +2113,19 @@ async function saveSubscriptionEditor() {
 }
 
 const RISK_LABELS = {
-  allowed_symbols:"允许交易品种", require_stop_loss:"强制止损", sl_atr_max:"最大止损距离", min_rr:"最低盈亏比",
+  allowed_symbols:"允许交易品种", require_stop_loss:"强制止损",
   pending_valid_minutes:"挂单有效期",
   max_position_size:"账户单笔最大手数", max_risk_per_trade_pct:"单笔最大风险",
   signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", max_execution_price_deviation_pct:"最大执行价格偏差", weekend_close_minutes:"MT5周末收盘提前量",
-  max_directional_exposure_lots:"同向最大敞口", min_open_interval_seconds:"最小开仓间隔", max_daily_open_count:"每日开仓次数", dedup_window_seconds:"重复订单时间窗", dedup_price_atr:"重复订单价格距离",
-  daily_loss_limit_pct:"每日最大亏损", consecutive_loss_limit:"连续亏损次数", loss_cooldown_minutes:"连续亏损冷却", max_drawdown_pct:"最大回撤", min_margin_level_pct:"最低预计保证金水平",
+  min_open_interval_seconds:"最小开仓间隔", max_daily_open_count:"每日开仓次数", dedup_window_seconds:"重复订单时间窗", dedup_price_atr:"重复订单价格距离",
+  daily_loss_limit_pct:"每日最大亏损", consecutive_loss_limit:"连续亏损次数", loss_cooldown_minutes:"连续亏损冷却", max_drawdown_pct:"最大回撤",
 };
 const RISK_GROUPS = [
-  ["交易结构", ["sl_atr_max","min_rr","pending_valid_minutes"]],
+  ["挂单管理", ["pending_valid_minutes"]],
   ["手数与单笔风险", ["max_position_size","max_risk_per_trade_pct"]],
   ["价格与成交质量", ["max_execution_price_deviation_pct","max_spread_points","max_quote_age_seconds","signal_ttl_seconds","weekend_close_minutes"]],
-  ["频率与敞口", ["max_directional_exposure_lots","min_open_interval_seconds","max_daily_open_count"]],
-  ["亏损与账户保护", ["daily_loss_limit_pct","consecutive_loss_limit","loss_cooldown_minutes","max_drawdown_pct","min_margin_level_pct"]],
+  ["交易频率", ["min_open_interval_seconds","max_daily_open_count"]],
+  ["亏损与账户保护", ["daily_loss_limit_pct","consecutive_loss_limit","loss_cooldown_minutes","max_drawdown_pct"]],
 ];
 const RISK_SAFETY_LABELS = {
   lower:"数值越低越严格", higher:"数值越高越严格", subset:"只能缩小允许范围",
@@ -2134,11 +2134,10 @@ const RISK_SAFETY_LABELS = {
 const RISK_ROLLOUT_LABELS = {
   ownership:"策略与账户归属校验", entitlement:"会员权限校验",
   kill_switch:"紧急停止开关", data_complete:"风控数据完整性", idempotency:"重复下单幂等保护", volume_bounds:"下单手数硬边界",
-  "R1.1_SYMBOL_NOT_ALLOWED":"交易品种白名单", "R1.4_STOP_LOSS_TOO_FAR":"止损距离上限", "R1.5_RR_TOO_LOW":"最低盈亏比",
-  "R1.7_PENDING_DEVIATION":"挂单价格偏离", "R2.1_DIRECTIONAL_EXPOSURE":"同向持仓敞口", "R2.2_MIN_OPEN_INTERVAL":"最小开仓间隔",
+  "R1.1_SYMBOL_NOT_ALLOWED":"交易品种白名单", "R1.7_PENDING_DEVIATION":"挂单价格偏离", "R2.2_MIN_OPEN_INTERVAL":"最小开仓间隔",
   "R2.3_DAILY_OPEN_COUNT":"每日开仓次数", "R2.4_PRICE_TIME_DUPLICATE":"重复价格与时间窗口", "R3.1_DAILY_LOSS_LIMIT":"每日亏损上限",
   "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损冷却", "R3.2_LOSS_COOLDOWN":"亏损后冷却", "R3.3_MAX_DRAWDOWN":"最大回撤",
-  "R3.4_MARGIN_LEVEL":"当前保证金水平", "R3.4_PROJECTED_MARGIN_LEVEL":"下单后预计保证金水平", "R4.2_WEEKEND_PROTECTION":"周末保护",
+  "R4.2_WEEKEND_PROTECTION":"周末保护",
   "R4.3_SIGNAL_EXPIRED":"信号有效期", "R4.4_QUOTE_STALE":"报价时效", "R4.5_SPREAD_TOO_WIDE":"最大点差", "R4.6_EXECUTION_PRICE_DEVIATION":"最大执行价格偏差",
 };
 function riskRolloutLabel(code) { return RISK_ROLLOUT_LABELS[code] || "未命名风控规则"; }

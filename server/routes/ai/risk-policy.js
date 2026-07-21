@@ -16,8 +16,6 @@ const rule = (code, type, unit, safety, value, min, max, locked, label, options 
 export const RISK_RULES = Object.freeze({
   allowed_symbols: rule('R1.1', 'set', 'symbol', 'subset', ['*'], null, null, false, '允许交易品种', { user_editable:false, category:'platform', description:'平台允许自动执行的品种范围' }),
   require_stop_loss: rule('R1.2', 'boolean', 'bool', 'locked_true', true, true, true, true, '强制止损', { unit_label:'开/关', category:'system', description:'所有自动执行订单必须包含有效止损' }),
-  sl_atr_max: rule('R1.4', 'number', 'ATR', 'lower', 4, 0.5, 10, false, '最大止损距离', { unit_label:'ATR 倍', description:'拦截明显超出行情波动范围的止损' }),
-  min_rr: rule('R1.5', 'number', 'ratio', 'higher', 1.1, 0.5, 10, false, '最低盈亏比', { unit_label:'倍', description:'实际入场、止损和止盈之间的最低收益风险比' }),
   pending_valid_minutes: rule('R1.8', 'number', 'minute', 'lower', 180, 5, 1440, false, '挂单默认有效期', { unit_label:'分钟', description:'模型未指定时使用；策略可设置更短期限' }),
   max_position_size: rule('R1.9D', 'number', 'lot', 'lower', 0.05, 0.001, 100, false, '单笔最大手数', { unit_label:'手', description:'任何单笔订单都不能突破的平台手数上限' }),
   max_risk_per_trade_pct: rule('R1.10', 'number', 'percent', 'lower', 1, 0.01, 20, false, '单笔最大风险比例', { unit_label:'%', description:'按真实止损亏损金额占账户净值计算' }),
@@ -26,7 +24,6 @@ export const RISK_RULES = Object.freeze({
   max_spread_points: rule('R4.5', 'number', 'point', 'lower', 120, 1, 100000, false, '最大点差', { unit_label:'点', description:'超过该点差时不新增风险' }),
   max_execution_price_deviation_pct: rule('R4.6', 'number', 'percent', 'lower', 0.1, 0.001, 5, false, '最大执行价格偏差', { unit_label:'%', description:'以推理参考价为基准限制最终执行价格；系统会将剩余偏差预算换算为 MT5 点数' }),
   weekend_close_minutes: rule('R4.2', 'number', 'minute', 'higher', 60, 0, 2880, false, '周末收盘提前保护', { unit_label:'分钟', description:'在 MT5 周末收盘前提前停止新增风险' }),
-  max_directional_exposure_lots: rule('R2.1', 'number', 'lot', 'lower', 0.1, 0.001, 1000, false, '同向最大敞口', { unit_label:'手', description:'同品种同方向持仓、挂单和执行预占的合计上限' }),
   min_open_interval_seconds: rule('R2.2', 'number', 'second', 'higher', 30, 0, 86400, false, '最小开仓间隔', { unit_label:'秒', description:'限制账户连续新增仓位的最短间隔' }),
   max_daily_open_count: rule('R2.3', 'number', 'count', 'lower', 20, 1, 10000, false, '每日开仓次数', { unit_label:'次/日', description:'按 MT5 交易日统计成功开仓次数' }),
   dedup_window_seconds: rule('R2.4A', 'number', 'second', 'higher', 180, 0, 86400, false, '重复订单时间窗', { unit_label:'秒', user_editable:false, category:'system', description:'系统内部的第二层重复下单保护' }),
@@ -35,7 +32,6 @@ export const RISK_RULES = Object.freeze({
   consecutive_loss_limit: rule('R3.2A', 'number', 'count', 'lower', 3, 1, 100, false, '连续亏损次数', { unit_label:'笔', description:'按完整平仓持仓统计，不按成交明细重复计数' }),
   loss_cooldown_minutes: rule('R3.2B', 'number', 'minute', 'higher', 60, 1, 10080, false, '连续亏损冷却', { unit_label:'分钟', description:'达到连续亏损次数后暂停新增风险' }),
   max_drawdown_pct: rule('R3.3', 'number', 'percent', 'lower', 8, 0.1, 100, false, '最大回撤', { unit_label:'%', description:'经资金流校正后的净值高水位回撤' }),
-  min_margin_level_pct: rule('R3.4A', 'number', 'percent', 'higher', 300, 0, 100000, false, '最低预计保证金水平', { unit_label:'%', description:'使用 MT5 预计保证金计算下单后的保证金水平' }),
 })
 
 export const DEFAULT_RISK_POLICY = Object.freeze(Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => [key, Array.isArray(meta.default_value) ? [...meta.default_value] : meta.default_value])))
@@ -342,38 +338,6 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   // The gate must not move an AI stop loss because that changes the trading
   // thesis. Broker minimum stop distance remains an execution-layer check.
   const finalDistance = Math.abs(entry - Number(approved.sl))
-  if (finalDistance > atr * policy.sl_atr_max + Number(instrument.tick_size)) {
-    const rejected = rolloutReject('R1.4_STOP_LOSS_TOO_FAR'); if (rejected) return rejected
-  }
-  let effectiveTp = tp
-  let rr = Math.abs(effectiveTp - entry) / finalDistance
-  if (rr + 1e-9 < policy.min_rr) {
-    // The model may provide TP1/TP2/TP3 while the user-selected tier is too
-    // close after the final entry/SL calculation. Prefer the nearest existing
-    // AI target that satisfies minimum R:R; never invent a target price.
-    const candidates = (Array.isArray(approved.take_profit_candidates) ? approved.take_profit_candidates : [])
-      .map(item => ({ tier: Number(item?.tier), price: finite(item?.price) }))
-      .filter(item => [1, 2, 3].includes(item.tier) && item.price > 0
-        && (side === 'buy' ? item.price > entry : item.price < entry))
-      .map(item => ({ ...item, rr: Math.abs(item.price - entry) / finalDistance }))
-      .filter(item => item.rr + 1e-9 >= policy.min_rr)
-      .sort((a, b) => Math.abs(a.price - entry) - Math.abs(b.price - entry))
-    if (candidates[0]) {
-      const chosen = candidates[0]
-      approved.tp = chosen.price
-      approved.tp_tier_used = chosen.tier
-      approved.tp_selection_source = 'risk_adjusted'
-      effectiveTp = chosen.price
-      rr = chosen.rr
-      adjusted = true
-      rules.push({ code: 'R1.5_TP_TIER_UPGRADED', outcome: 'adjust', details: {
-        from_tp: tp, to_tp: chosen.price, from_tier: original.tp_tier_used ?? null,
-        to_tier: chosen.tier, rr, minimum: policy.min_rr,
-      } })
-    } else {
-      const rejected = rolloutReject('R1.5_RR_TOO_LOW', { rr, minimum: policy.min_rr }); if (rejected) return rejected
-    }
-  }
   volume = floorStep(Math.min(volume, policy.max_position_size, Number(instrument.volume_max)), Number(instrument.volume_step))
   const brokerVolume = finite(brokerCalculation?.volume)
   const brokerLoss = finite(brokerCalculation?.loss_to_sl)
