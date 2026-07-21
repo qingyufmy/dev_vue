@@ -15,6 +15,7 @@ describe('AI observer access', () => {
     expect(access).toMatchObject({ mode:'observer', reason:'plus_plan', read_only:true, can_download_bridge:false, data_source:'platform_admin_account' })
     expect(access.allowed_tabs).toEqual(PLUS_OBSERVER_TABS)
     expect(access.allowed_tabs).toContain('feedback')
+    expect(access.allowed_tabs).not.toContain('signals')
   })
 
   it('makes offline Pro read-only while retaining bridge download access', () => {
@@ -22,6 +23,7 @@ describe('AI observer access', () => {
     expect(access).toMatchObject({ mode:'observer', reason:'bridge_offline', read_only:true, can_download_bridge:true })
     expect(access.allowed_tabs).toEqual(PRO_OBSERVER_TABS)
     expect(access.allowed_tabs).toContain('feedback')
+    expect(access.allowed_tabs).not.toContain('signals')
   })
 
   it('restores full Pro access only when the own bridge is connected', () => {

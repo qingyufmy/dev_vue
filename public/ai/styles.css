@@ -681,7 +681,7 @@ button {
   margin-bottom: 2px;
   padding: 9px var(--space-3);
   background: transparent;
-  border-left: 2px solid transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
@@ -706,13 +706,13 @@ button {
 .nav-item:hover {
   background: var(--bg-card);
   color: var(--text-primary);
-  border-left-color: var(--gold-dim);
+  border-color: var(--border-subtle);
 }
 
 .nav-item.active {
   background: var(--gold-glow);
   color: var(--gold-primary);
-  border-left-color: var(--gold-primary);
+  border-color: rgba(212, 175, 55, .24);
   font-weight: 700;
 }
 
@@ -5836,10 +5836,9 @@ a.signal-link:hover {
 .eyebrow,
 .section-kicker {
   color: var(--gold-primary);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .14em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 
 .section-kicker.danger {
@@ -5881,7 +5880,49 @@ a.signal-link:hover {
   border-color: var(--calm-border);
   border-radius: 14px;
   background: linear-gradient(135deg, rgba(17, 24, 39, .9), rgba(11, 18, 30, .82));
-  box-shadow: 0 12px 32px rgba(2, 6, 23, .12);
+  box-shadow: none;
+}
+
+.analyst-view-tabs {
+  margin-top: -2px;
+}
+
+.analyst-view-panel {
+  min-width: 0;
+}
+
+.analyst-view-panel[hidden] {
+  display: none;
+}
+
+.analyst-records-card {
+  overflow: hidden;
+  border-color: var(--calm-border);
+  background: var(--calm-surface);
+}
+
+.analyst-records-card > .card-header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.analyst-records-card > .card-header small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.analyst-records-toolbar {
+  min-height: 52px;
+  padding-inline: var(--space-4);
+}
+
+.trading-workspace {
+  gap: 18px;
+}
+
+.trading-workspace .account-snapshot-row {
+  margin-bottom: 0;
 }
 
 .strategy-control-header {

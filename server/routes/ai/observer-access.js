@@ -1,9 +1,9 @@
 export const PLUS_OBSERVER_TABS = Object.freeze([
-  'dashboard', 'signals', 'ai-analyze', 'trading', 'history', 'feedback',
+  'dashboard', 'ai-analyze', 'trading', 'history', 'feedback',
 ])
 
 export const PRO_OBSERVER_TABS = Object.freeze([
-  'dashboard', 'signals', 'model-strategy', 'ai-analyze', 'trading', 'history', 'feedback',
+  'dashboard', 'model-strategy', 'ai-analyze', 'trading', 'history', 'feedback',
 ])
 
 export const OBSERVER_WS_READ_ACTIONS = Object.freeze(new Set([

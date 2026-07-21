@@ -13,7 +13,8 @@ describe('inference workspace V2 contract', () => {
 
   it('keeps history as a dedicated navigation rail beside the result', () => {
     expect(html).toContain('<aside class="card analysis-history-panel"')
-    expect(html).toContain('历史推理')
+    expect(html).toContain('历史分析')
+    expect(html).toContain('data-analyst-view="records"')
     expect(html).not.toContain('analysis-history-panel quiet-disclosure')
     expect(html.indexOf('history-status-strip')).toBeLessThan(html.indexOf('analysisHistoryBody'))
     expect(app).toContain('const ANALYSIS_HISTORY_PAGE_SIZE = 10')
@@ -60,7 +61,7 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('resultHost?.dataset.renderVersion !== String(renderVersion)')
     expect(app).toContain('cancelAnimationFrame(_inferenceChartFrame)')
     expect(app).toContain('renderAnalysisDetailLoading(signalId)')
-    expect(app).toContain('setTab("ai-analyze", { skipRefresh:true })')
+    expect(app).toContain('setTab("ai-analyze", { skipRefresh:true, analystView:"detail" })')
     expect(app.match(/setTab = function\(tab, options = \{\}\)/g)).toHaveLength(2)
     expect(app.match(/_origSetTab2?\(tab, options\)/g)).toHaveLength(2)
     expect(app).toContain('!options.append && !options.skipResultRender')

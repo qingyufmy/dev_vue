@@ -11,6 +11,7 @@ const state = {
   signals: [],
   selectedSignal: null,
   latestSignalId: null,
+  analystView: "detail",
   analysisSelectionMode: "follow_latest",
   analysisSelectionSource: "initial",
   _lastGatewayLive: false,
@@ -953,7 +954,7 @@ function clampPage(page, pageSize, total) {
 
 const API_ERROR_MESSAGES = {
   encryption_master_key_missing: "服务器模型凭据加密密钥未正确配置，请联系管理员检查 32 字节 AES 密钥并重启服务",
-  no_model_configured: "尚未配置可用模型，请先在“模型策略 → 模型管理”中添加模型",
+  no_model_configured: "尚未配置可用模型，请先在“AI策略师 → 模型管理”中添加模型",
   no_platform_model: "平台尚未配置默认模型",
   bound_model_unavailable: "策略绑定的模型已停用或删除，请重新选择模型",
   credential_decryption_failed: "模型凭据无法解密，请联系管理员检查密钥版本",
@@ -1778,7 +1779,7 @@ function handleDisconnect(msg) {
     setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
     syncAiAccess({
       mode:"observer", reason:"bridge_offline", read_only:true, can_download_bridge:true,
-      allowed_tabs:["dashboard","signals","model-strategy","ai-analyze","trading","history"],
+      allowed_tabs:["dashboard","model-strategy","ai-analyze","trading","history"],
       data_source:"platform_admin_account",
     });
     _historyCache = null;
@@ -3092,6 +3093,8 @@ async function saveGlobalRisk() {
 }
 
 function setTab(tabId, options = {}) {
+  const legacySignalsTarget = tabId === "signals";
+  if (legacySignalsTarget) tabId = "ai-analyze";
   const modelStrategyTarget = tabId === "model-management" ? "models" : tabId === "ai-config" ? "strategies" : null;
   if (modelStrategyTarget) tabId = "model-strategy";
   if (!canAccessTab(tabId)) {
@@ -3108,8 +3111,27 @@ function setTab(tabId, options = {}) {
   const main = document.querySelector(".main");
   if (main) main.scrollTop = 0;
   if (tabId === "model-strategy") setModelStrategySubtab(modelStrategyTarget || state.modelStrategySubtab || "strategies");
+  if (tabId === "ai-analyze") setAnalystView(legacySignalsTarget ? "records" : (options.analystView || "detail"));
   initIcons();
   if (!options.skipRefresh) refreshTabData(tabId).catch((error) => toast(error.message, "error"));
+}
+
+function setAnalystView(target) {
+  const next = target === "records" ? "records" : "detail";
+  state.analystView = next;
+  document.querySelectorAll("[data-analyst-view]").forEach(button => {
+    const active = button.dataset.analystView === next;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-analyst-panel]").forEach(panel => {
+    const active = panel.dataset.analystPanel === next;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  if (next === "records" && state.token) loadSignalTable().catch(error => toast(error.message, "error"));
+  initIcons();
 }
 
 function setModelStrategySubtab(target) {
@@ -3955,6 +3977,7 @@ function setObserverPanelLock(panel, locked) {
       delete control.dataset.observerTitleBefore;
     }
   });
+
 }
 
 function applyRoleUI() {
@@ -6309,7 +6332,7 @@ async function openAnalysisFromHistory(signalId, options = {}) {
   // list cache, but must never reclaim the currently visible detail panel.
   state.selectedSignal = signal || { id: signalId };
   highlightActiveAnalysis(signalId);
-  if (navigate) setTab("ai-analyze", { skipRefresh:true });
+  if (navigate) setTab("ai-analyze", { skipRefresh:true, analystView:"detail" });
 
   if (!signal?.detail_loaded || forceRefresh) {
     renderAnalysisDetailLoading(signalId);
@@ -7304,6 +7327,21 @@ function bindEvents() {
     });
   });
 
+  document.querySelectorAll("[data-analyst-view]").forEach(button => {
+    button.addEventListener("click", () => setAnalystView(button.dataset.analystView));
+    button.addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = [...document.querySelectorAll("[data-analyst-view]")];
+      const current = tabs.indexOf(button);
+      const target = event.key === "Home" ? 0
+        : event.key === "End" ? tabs.length - 1
+          : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      setAnalystView(tabs[target].dataset.analystView);
+      tabs[target].focus();
+    });
+  });
+
   document.body.addEventListener("click", async (event) => {
     const actionButton = event.target.closest("[data-action]");
     const tabButton = event.target.closest("[data-tab-jump]");
@@ -7563,7 +7601,7 @@ function bindEvents() {
       }
     }
 
-    if (tabButton) setTab(tabButton.dataset.tabJump);
+    if (tabButton) setTab(tabButton.dataset.tabJump, tabButton.dataset.tabJump === "ai-analyze" ? { analystView:"detail" } : {});
     const analysisButton = event.target.closest("[data-analysis-id]");
     if (analysisButton) openAnalysisFromHistory(analysisButton.dataset.analysisId);
     if (closeButton) closePosition(closeButton.dataset.closeTicket);
