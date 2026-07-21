@@ -4494,6 +4494,29 @@ function signalExecutionAdvice(signal) {
   return { state:"review", title:"建议复核后执行", description:"执行前将获取最新报价并由风控计算最终手数。", executable:true };
 }
 
+function renderSignalPendingActions(signal) {
+  const actions = Array.isArray(signal?.pending_actions) ? signal.pending_actions : [];
+  if (!actions.length) return "";
+  const labels = {
+    cancelled: { title:"挂单已取消", icon:"circle-x" },
+    superseded: { title:"旧挂单已取消并替换", icon:"replace" },
+    failed: { title:"挂单取消失败", icon:"circle-alert" },
+  };
+  return `<section class="signal-pending-actions">
+    <div class="analysis-section-title"><i data-lucide="list-x" size="15"></i><strong>挂单处理</strong><span>共 ${actions.length} 条</span></div>
+    <div class="signal-pending-action-list">${actions.map(action => {
+      const actionState = labels[action.status] || labels.cancelled;
+      const detail = action.status === "failed"
+        ? userVisibleText(action.message, "系统未返回具体失败原因")
+        : userVisibleText(action.reason, action.status === "superseded" ? "为执行新信号，已取消同方向旧挂单" : "原挂单条件已经失效");
+      return `<article class="signal-pending-action ${escapeHtml(action.status || "cancelled")}">
+        <i data-lucide="${actionState.icon}" size="17"></i>
+        <div><strong>${actionState.title}${action.ticket ? ` · #${escapeHtml(action.ticket)}` : ""}</strong><p>${escapeHtml(detail)}</p></div>
+      </article>`;
+    }).join("")}</div>
+  </section>`;
+}
+
 function renderDecisionList(items, emptyText) {
   if (!items?.length) return `<p class="decision-empty">${escapeHtml(emptyText)}</p>`;
   return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
@@ -4922,6 +4945,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div><span>执行建议</span><strong>${escapeHtml(advice.title || executionStatus(signal))}</strong><p>${escapeHtml(advice.description || "")}</p></div>
       <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
     </section>
+    ${renderSignalPendingActions(signal)}
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
     ${renderDirectionBias(decision)}
     <div class="analysis-status-strip">

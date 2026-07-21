@@ -103,4 +103,11 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('data-platform-experience-action="delete"')
     expect(app).toContain('method:"DELETE"')
   })
+
+  it('renders pending cancellation outcomes in signal details', () => {
+    expect(app).toContain('function renderSignalPendingActions(signal)')
+    expect(app).toContain('signal?.pending_actions')
+    expect(app).toContain('${renderSignalPendingActions(signal)}')
+    expect(app).toContain('userVisibleText(action.message')
+  })
 })

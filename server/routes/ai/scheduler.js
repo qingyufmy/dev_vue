@@ -1464,6 +1464,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
             if (!Array.isArray(pendingOrders) || !pendingOrders.length) continue
             // Collect tickets to cancel (deduplicate by userId+ticket)
             const ticketsToCancel = new Map() // ticket -> condition
+            let pendingActionUpdated = false
             for (const cond of validConds) {
               for (const po of pendingOrders) {
                 const match = matchPendingCancelCondition(po, cond)
@@ -1506,6 +1507,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
                   await insertAudit(null, uid, 'ai_cancel_pending_failed', symbol,
                     { signal_id: signalId, prompt_type_id: promptTypeId, ticket, error: cancelResult?.message },
                     { status: 'error', message: cancelResult?.message }, 'warning')
+                  pendingActionUpdated = true
                   continue
                 }
                 await queryRun(
@@ -1515,12 +1517,17 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
                 await insertAudit(null, uid, 'ai_cancel_pending', symbol,
                   { signal_id: signalId, prompt_type_id: promptTypeId, ticket, reason: cond.reason },
                   { status: 'cancelled', ticket }, 'success')
+                pendingActionUpdated = true
               } catch (cancelErr) {
                 l(`cancel_pending exception: user=${uid} ticket=${ticket}: ${cancelErr.message}`)
                 await insertAudit(null, uid, 'ai_cancel_pending_failed', symbol,
                   { signal_id: signalId, prompt_type_id: promptTypeId, ticket, error: cancelErr.message },
                   { status: 'error', message: cancelErr.message }, 'warning')
+                pendingActionUpdated = true
               }
+            }
+            if (pendingActionUpdated) {
+              sendToBrowsers(uid, { type: 'signal_execution_updated', signal_id: signalId, status: 'pending_action_updated' })
             }
           } catch (e) {
             l(`cancel_pending bridge error: user=${uid}: ${e.message}`)

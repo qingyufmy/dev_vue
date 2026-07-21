@@ -58,6 +58,7 @@ import {
   sendToBrowsers,
   collectTradeRefs,
   buildSignalRefIndex,
+  buildSignalPendingActions,
   normalizeBridgeMarketState,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
@@ -97,6 +98,34 @@ describe('bridge-ws.js — exported API shape', () => {
 
   it('sendToBrowsers is exported as function', () => {
     expect(typeof sendToBrowsers).toBe('function')
+  })
+})
+
+describe('signal pending action presentation', () => {
+  it('normalizes successful, superseded and failed pending cancellations', () => {
+    expect(buildSignalPendingActions([
+      {
+        action: 'ai_cancel_pending', status: 'success', created_at: '2026-07-21 10:00:00',
+        request_json: JSON.stringify({ ticket: 101, reason: '市场结构已经失效' }),
+        result_json: JSON.stringify({ status: 'cancelled', ticket: 101 }),
+      },
+      {
+        action: 'pending_superseded', status: 'info',
+        request_json: JSON.stringify({ ticket: 102, pending_type: 'sell_limit' }),
+      },
+      {
+        action: 'ai_cancel_pending_failed', status: 'warning',
+        request_json: JSON.stringify({ ticket: 103, error: 'Invalid request' }),
+      },
+    ])).toEqual([
+      expect.objectContaining({ ticket: '101', status: 'cancelled', reason: '市场结构已经失效' }),
+      expect.objectContaining({ ticket: '102', status: 'superseded', pending_type: 'sell_limit' }),
+      expect.objectContaining({ ticket: '103', status: 'failed', message: 'Invalid request' }),
+    ])
+  })
+
+  it('ignores unrelated audit actions', () => {
+    expect(buildSignalPendingActions([{ action: 'ai_auto_execute', request_json: '{}' }])).toEqual([])
   })
 })
 

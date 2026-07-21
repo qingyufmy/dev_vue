@@ -74,6 +74,59 @@ export function buildSignalRefIndex(rows, toSignal = row => row) {
   return index
 }
 
+const SIGNAL_PENDING_ACTIONS = new Set([
+  'ai_cancel_pending',
+  'ai_cancel_pending_failed',
+  'pending_superseded',
+  'pending_supersede_failed',
+])
+
+function parseAuditPayload(value) {
+  if (!value) return {}
+  if (typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return {} }
+}
+
+export function buildSignalPendingActions(rows = []) {
+  return rows
+    .filter(row => SIGNAL_PENDING_ACTIONS.has(String(row?.action || '')))
+    .map(row => {
+      const request = parseAuditPayload(row.request_json ?? row.request)
+      const result = parseAuditPayload(row.result_json ?? row.result)
+      const failed = String(row.action).endsWith('_failed') || ['error', 'failed'].includes(String(row.status || result.status || '').toLowerCase())
+      const superseded = row.action === 'pending_superseded'
+      return {
+        ticket: String(request.ticket ?? result.ticket ?? '').trim() || null,
+        pending_type: String(request.pending_type || '').trim() || null,
+        status: failed ? 'failed' : superseded ? 'superseded' : 'cancelled',
+        reason: String(request.reason || '').trim() || null,
+        message: failed ? String(request.error || result.message || result.error || '').trim() || null : null,
+        created_at: row.created_at || null,
+      }
+    })
+    .slice(0, 20)
+}
+
+async function loadSignalPendingActions(userId, signalId) {
+  try {
+    const rows = await queryAll(
+      `SELECT action, request_json, result_json, status, created_at
+       FROM trade_audit_logs
+       WHERE user_id = ?
+         AND action IN ('ai_cancel_pending', 'ai_cancel_pending_failed', 'pending_superseded', 'pending_supersede_failed')
+         AND JSON_VALID(request_json)
+         AND CAST(JSON_UNQUOTE(JSON_EXTRACT(request_json, '$.signal_id')) AS UNSIGNED) = ?
+       ORDER BY id ASC
+       LIMIT 20`,
+      [userId, signalId]
+    )
+    return buildSignalPendingActions(rows)
+  } catch (error) {
+    console.warn(`[SignalDetail] Failed to load pending actions for signal ${signalId}:`, error.message)
+    return []
+  }
+}
+
 export function normalizeBridgeMarketState(payload, receivedAt = Date.now()) {
   if (Number(payload?.market_state_version) !== 1) return null
   const state = String(payload?.market_state || '').toLowerCase()
@@ -1021,6 +1074,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.delivery_id = delivery.id
             item.prompt_type_id = delivery.prompt_type_id
             item.source = 'auto_shared'
+            item.pending_actions = await loadSignalPendingActions(detailUserId, signalId)
             item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
             if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
             ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
@@ -1041,6 +1095,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
           delete item.market_data_json
           item.is_executed = !!item.is_executed
+          item.pending_actions = await loadSignalPendingActions(detailUserId, signalId)
           item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
           if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
           ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
