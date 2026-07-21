@@ -414,12 +414,14 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('preserves global-risk expansion and draft values across background refreshes', () => {
-    expect(app).toContain('captureGlobalRiskEditorState()')
+    expect(app).toContain('function captureGlobalRiskEditorState({ includeDrafts = true } = {})')
     expect(app).toContain('restoreGlobalRiskEditorState(editorState)')
     expect(app).toContain('data-global-risk-group=')
     expect(app).toContain('data-global-risk-key=')
     expect(app).toContain('同时作为继承值的平台上限')
-    expect(app).toContain('loadAdminRiskCenter({ preserveEditorState:false })')
+    expect(app).toContain('preserveEditorDrafts = preserveEditorState')
+    expect(app).toContain('captureGlobalRiskEditorState({ includeDrafts:preserveEditorDrafts })')
+    expect(app).toContain('loadAdminRiskCenter({ preserveEditorState:true, preserveEditorDrafts:false })')
   })
 
   it('keeps the overview signal card focused on the current decision and execution summary', () => {

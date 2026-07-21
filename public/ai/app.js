@@ -2954,19 +2954,19 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
 
 let _adminRiskLoadSequence = 0;
 
-function captureGlobalRiskEditorState() {
+function captureGlobalRiskEditorState({ includeDrafts = true } = {}) {
   const editor = $("globalRiskEditor");
   const inputKinds = ["globalRiskField", "globalRiskMin", "globalRiskMax", "globalRiskLock"];
   const inputKey = input => {
     const kind = inputKinds.find(name => input?.dataset?.[name] !== undefined);
     return kind ? `${kind}:${input.dataset[kind]}` : "";
   };
-  const active = editor?.contains(document.activeElement) ? document.activeElement : null;
+  const active = includeDrafts && editor?.contains(document.activeElement) ? document.activeElement : null;
   return {
     initialized:Boolean(editor?.querySelector(".global-risk-groups")),
     openGroups:new Set([...editor?.querySelectorAll("details.global-risk-group[open]") || []].map(item => item.dataset.globalRiskGroup)),
     openRows:new Set([...editor?.querySelectorAll("details.global-risk-row[open]") || []].map(item => item.dataset.globalRiskKey)),
-    drafts:Object.fromEntries([...editor?.querySelectorAll("input[data-global-risk-field], input[data-global-risk-min], input[data-global-risk-max], input[data-global-risk-lock]") || []].map(input => [inputKey(input), input.value])),
+    drafts:includeDrafts ? Object.fromEntries([...editor?.querySelectorAll("input[data-global-risk-field], input[data-global-risk-min], input[data-global-risk-max], input[data-global-risk-lock]") || []].map(input => [inputKey(input), input.value])) : {},
     focusKey:inputKey(active), selectionStart:active?.selectionStart ?? null, selectionEnd:active?.selectionEnd ?? null,
   };
 }
@@ -2987,9 +2987,9 @@ function restoreGlobalRiskEditorState(snapshot) {
   });
 }
 
-async function loadAdminRiskCenter({ preserveEditorState = true } = {}) {
+async function loadAdminRiskCenter({ preserveEditorState = true, preserveEditorDrafts = preserveEditorState } = {}) {
   const loadSequence = ++_adminRiskLoadSequence;
-  const editorState = preserveEditorState ? captureGlobalRiskEditorState() : null;
+  const editorState = preserveEditorState ? captureGlobalRiskEditorState({ includeDrafts:preserveEditorDrafts }) : null;
   const [data, rolloutData] = await Promise.all([api("/api/ai/admin/risk-center"), api("/api/ai/admin/rollout-health")]);
   if (loadSequence !== _adminRiskLoadSequence) return;
   state.globalRiskSnapshot = data;
@@ -3060,7 +3060,7 @@ async function saveGlobalRisk() {
   document.querySelectorAll("[data-global-risk-max]").forEach(input => { const key=input.dataset.globalRiskMax; controls[key] ||= {}; controls[key].allowed_max=Number(input.value); });
   document.querySelectorAll("[data-global-risk-lock]").forEach(input => { const key=input.dataset.globalRiskLock; controls[key] ||= {}; controls[key].locked_value=input.value === "" ? null : Number(input.value); });
   await api("/api/ai/admin/risk-center", { method:"PUT", body:{ values, controls, reason:"管理员从全局风控页面更新" } });
-  toast("全局风控新版本已生效", "success"); await loadAdminRiskCenter({ preserveEditorState:false });
+  toast("全局风控新版本已生效", "success"); await loadAdminRiskCenter({ preserveEditorState:true, preserveEditorDrafts:false });
 }
 
 function setTab(tabId, options = {}) {
