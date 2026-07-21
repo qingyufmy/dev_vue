@@ -391,8 +391,9 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
     const subscriptions = await listSubscriptions(req.user.id, req.user.role)
     const rows = []
     for (const account of accounts) {
-      const riskState = await queryAll(`SELECT halt_status, halt_reason, cooldown_until, user_kill_switch, data_complete,
-        data_incomplete_reason, last_risk_snapshot_at FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id])
+      const riskState = await queryAll(`SELECT halt_status, halt_reason, drawdown_pct, consecutive_losses,
+        cooldown_until, user_kill_switch, data_complete, data_incomplete_reason, last_risk_snapshot_at
+        FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id])
       rows.push({ account, risk_state: riskState[0] || null, effective: await resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }), subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) })
     }
     res.json({ ok: true, accounts: rows, rule_metadata: RISK_RULES })

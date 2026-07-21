@@ -459,6 +459,14 @@ describe('subscription schedule modal layout', () => {
 })
 
 describe('route permissions and credential redaction', () => {
+  it('returns the account metrics rendered by the risk-center status card', () => {
+    const start = routes.indexOf("router.get('/ai/risk-center', authMiddleware")
+    const end = routes.indexOf("router.post('/ai/risk-center/refresh'", start)
+    const route = routes.slice(start, end)
+    expect(route).toContain('drawdown_pct')
+    expect(route).toContain('consecutive_losses')
+  })
+
   it('requires authentication on every new route and an admin role on global controls', () => {
     for (const path of ['/ai/model-profiles', '/ai/strategies', '/ai/risk-center', '/ai/executions']) {
       expect(routes).toMatch(new RegExp(`router\\.(?:get|post|put|delete)\\('${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^']*', authMiddleware`))
