@@ -35,6 +35,7 @@ export const RISK_RULES = Object.freeze({
 })
 
 export const DEFAULT_RISK_POLICY = Object.freeze(Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => [key, Array.isArray(meta.default_value) ? [...meta.default_value] : meta.default_value])))
+export const DEFAULT_AI_VOLUME_STEP = 0.01
 
 const parseJson = (value, fallback = {}) => {
   if (value == null) return fallback
@@ -213,7 +214,6 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
     }
   }
   policy = applyPlatformControlBoundaries(policy, controls)
-  policy.max_position_size = Math.min(policy.max_position_size, finite(legacyConfig.max_position_size) || policy.max_position_size)
   if (riskProfileId) {
     const profile = await queryOne("SELECT * FROM risk_profiles WHERE id = ? AND user_id = ? AND status = 'active' AND deleted_at IS NULL", [riskProfileId, userId])
     if (!profile) throw new Error('risk_profile_not_found')
@@ -221,6 +221,23 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
     for (const [key, value] of Object.entries(profileConfig)) policy[key] = stricter(key, policy[key], value)
   }
   return { policy, policyVersionIds, platformPolicy, accountValues: accountValues.values || accountValues, controls }
+}
+
+// Shared AI inference only receives the administrator-controlled recommendation
+// range. Subscriber/account limits are resolved later by the deterministic gate.
+export async function resolvePlatformAiVolumeRange() {
+  const resolved = await resolveEffectiveRiskPolicy({ userId: 0 })
+  const metadata = RISK_RULES.max_position_size
+  const control = resolved.controls?.max_position_size || {}
+  // The shared recommendation is broker-neutral. Keep the historical 0.01-lot
+  // recommendation grid; subscriber-specific broker steps are applied later.
+  const minimum = Math.max(DEFAULT_AI_VOLUME_STEP, Number(metadata.allowed_min), Number(control.allowed_min ?? metadata.allowed_min))
+  const maximum = Math.min(Number(metadata.allowed_max), Number(control.allowed_max ?? metadata.allowed_max))
+  return {
+    min: Number(minimum.toFixed(8)),
+    max: Number(Math.max(minimum, maximum).toFixed(8)),
+    step: DEFAULT_AI_VOLUME_STEP,
+  }
 }
 
 export async function submitRiskPolicyChanges({ policySetId, actorId, changes, reason = '' } = {}) {

@@ -8,7 +8,7 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   DEFAULT_RISK_POLICY, RISK_RULES, evaluateCoreRisk, isRelaxation,
-  normalizePlatformRiskConfig, resolveEffectiveRiskPolicy, submitRiskPolicyChanges, persistRiskDecision, weekendProtectionState,
+  normalizePlatformRiskConfig, resolveEffectiveRiskPolicy, resolvePlatformAiVolumeRange, submitRiskPolicyChanges, persistRiskDecision, weekendProtectionState,
 } from '../../server/routes/ai/risk-policy.js'
 
 const nowMs = Date.parse('2026-07-15T13:00:00Z')
@@ -341,6 +341,35 @@ describe('versioned policy semantics', () => {
     expect(result.platformPolicy.max_position_size).toBe(0.05)
     expect(result.controls.max_position_size.allowed_max).toBe(1)
     expect(result.policy.max_position_size).toBe(1)
+  })
+
+  it('uses the administrator range as the shared AI recommendation boundary', async () => {
+    db.queryOne.mockImplementation(async (sql) => {
+      if (sql.includes("scope = 'platform'")) return { id:1 }
+      if (sql.includes("scope = 'account'")) return null
+      if (sql.includes('risk_policy_versions')) return { id:11, config_json:JSON.stringify({
+        values:{ max_position_size:0.05 },
+        controls:{ max_position_size:{ allowed_min:0.001, allowed_max:1, locked_value:null, user_editable:true } },
+      }) }
+      return null
+    })
+    await expect(resolvePlatformAiVolumeRange()).resolves.toEqual({ min:0.01, max:1, step:0.01 })
+  })
+
+  it('does not let the legacy scheduler limit override the account risk policy', async () => {
+    db.queryOne.mockImplementation(async (sql, params) => {
+      if (sql.includes("scope = 'platform'")) return { id:1 }
+      if (sql.includes("scope = 'account'")) return { id:2 }
+      if (sql.includes('risk_policy_versions')) return Number(params[0]) === 1
+        ? { id:11, config_json:JSON.stringify({
+            values:{ max_position_size:0.05 },
+            controls:{ max_position_size:{ allowed_min:0.001, allowed_max:0.1, locked_value:null, user_editable:true } },
+          }) }
+        : { id:12, config_json:JSON.stringify({ max_position_size:0.08 }) }
+      return null
+    })
+    const result = await resolveEffectiveRiskPolicy({ userId:5, tradingAccountId:6, legacyConfig:{ max_position_size:0.01 } })
+    expect(result.policy.max_position_size).toBe(0.08)
   })
 })
 

@@ -8,7 +8,7 @@ import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localizatio
 import { isEncryptionAvailable } from '../../ai-credential.js'
 import { resolveAiTaskModel, upsertDefaultModelProfileFromLegacyInput } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
-import { evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy } from './risk-policy.js'
+import { DEFAULT_AI_VOLUME_STEP, evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy, resolvePlatformAiVolumeRange } from './risk-policy.js'
 import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
 import { getRiskRuleRolloutModes } from './rollout-governance.js'
 import { getInferencePreference } from './inference-preferences.js'
@@ -120,7 +120,10 @@ export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
   if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
   const resolved = await resolveAiTaskModel({ userId, strategyId, usage: 'manual' })
   if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || 'no_model_configured')
-  const userConfig = await getInferencePreference(userId, sessionId)
+  const [userConfig, aiVolumeRange] = await Promise.all([
+    getInferencePreference(userId, sessionId),
+    resolvePlatformAiVolumeRange(),
+  ])
 
   return {
     ...resolved.model,
@@ -135,6 +138,9 @@ export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
     _model_shared: resolved.credential_source === 'platform_shared',
     _model_profile_id: resolved.model_profile_id,
     _credential_source: resolved.credential_source,
+    _ai_volume_min: aiVolumeRange.min,
+    _ai_volume_max: aiVolumeRange.max,
+    _ai_volume_step: aiVolumeRange.step,
   }
 }
 
@@ -209,7 +215,10 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
   const usage = isPrivate ? 'auto_private' : 'auto_platform'
   const resolved = await resolveAiTaskModel({ userId: isPrivate ? ownerUserId : 0, strategyId: promptTypeId, usage })
   if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || (isPrivate ? 'no_model_configured' : 'no_platform_model'))
-  const globalCfg = await getGlobalAutoConfig()
+  const [globalCfg, aiVolumeRange] = await Promise.all([
+    getGlobalAutoConfig(),
+    resolvePlatformAiVolumeRange(),
+  ])
   const policy = parseStrategyPolicy(pt)
   return {
     ...resolved.model,
@@ -234,8 +243,9 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
     _market_data_plan: policy.marketDataPlan,
     _allowed_entry_methods: policy.entryMethods,
     _use_chan_analysis: policy.useChanAnalysis,
-    _ai_volume_min: 0.01,
-    _ai_volume_max: Number(globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
+    _ai_volume_min: aiVolumeRange.min,
+    _ai_volume_max: aiVolumeRange.max,
+    _ai_volume_step: aiVolumeRange.step || DEFAULT_AI_VOLUME_STEP,
     prompt_type_id: promptTypeId,
   }
 }
@@ -318,7 +328,6 @@ export async function getDeliveryExecuteRiskConfig(userId) {
     return {
       enable_auto_trade: !!scheduler.enable_auto_trade,
       selected_take_profit: scheduler.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
-      max_position_size: scheduler.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
     }
   }
   const globalCfg = await getGlobalAutoConfig()
@@ -326,7 +335,6 @@ export async function getDeliveryExecuteRiskConfig(userId) {
   return {
     enable_auto_trade: !!globalCfg.enable_auto_trade,
     selected_take_profit: globalCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
-    max_position_size: globalCfg.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
   }
 }
 

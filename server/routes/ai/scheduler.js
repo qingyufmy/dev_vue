@@ -5,7 +5,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { getOwnBridgeMarketState, recordBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges } from '../../bridge-ws.js'
 import { mt5Bridge, platformRates, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
-import { getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, DEFAULT_MAX_POSITION_SIZE } from './config.js'
+import { getCloseConfig, saveCloseConfig, insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore } from './config.js'
 import { attachAtrAnchor, buildStrategyContextFromTags, loadPrivatePortfolioContext, resolveChanHistoryCount } from './strategy.js'
 import { attachSignalTiming, signalTtlSeconds, stripTimeframeTags, round2, stripBrokerSuffix } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
@@ -1240,6 +1240,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         standardSymbol: symbol,
         volumeMin: config._ai_volume_min,
         volumeMax: config._ai_volume_max,
+        volumeStep: config._ai_volume_step,
         marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
       })
     }
@@ -1616,7 +1617,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
   const setTerminalStatus = (status, reason, details = {}) => queryRun(
     'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
-    [status, JSON.stringify({ reason, ...details }), signalId, userId])
+    [status, JSON.stringify({ status, reason, details }), signalId, userId])
   try {
     if (isWeeklyFlattenWindow()) {
       await setTerminalStatus('skipped', 'weekly_flatten_window')
@@ -1650,8 +1651,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     if (riskConfig) riskConfig.take_profit_mode = subscriptionRuntime.take_profit_mode || 'ai_recommended'
     if (!riskConfig?.enable_auto_trade) {
       l('skipped: enable_auto_trade=false')
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['skipped', signalId, userId])
+      await setTerminalStatus('skipped', 'auto_trade_disabled')
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'auto_trade_disabled' },
         { status: 'skipped' }, 'info')
@@ -1661,8 +1661,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     // Use user's own bridge for execution
     if (!isBridgeAlive(userId)) {
       l('skipped: bridge not alive')
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['skipped', signalId, userId])
+      await setTerminalStatus('skipped', 'bridge_offline')
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'bridge_offline' },
         { status: 'skipped' }, 'info')
@@ -1673,8 +1672,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const ubSettings = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
     if (!ubSettings || !ubSettings.trade_send_enabled) {
       l('skipped: trade_send_enabled=0 (or no row)')
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['skipped', signalId, userId])
+      await setTerminalStatus('skipped', 'trade_send_disabled')
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'trade_send_disabled' },
         { status: 'skipped' }, 'info')
@@ -1682,14 +1680,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     }
 
     const order = signalOrderPayload(signal, riskConfig, market, true)
-    // Scale down volume if it exceeds user's max_position_size
-    const userMaxVolume = parseFloat(riskConfig.max_position_size || DEFAULT_MAX_POSITION_SIZE)
-    if (order.volume > userMaxVolume) {
-      const originalVolume = order.volume
-      order.volume = round2(userMaxVolume)
-      l(`volume scaled: ${originalVolume} → ${order.volume} (user max=${userMaxVolume})`)
-    }
-
     // TP/SL validation: strict fail-closed (Fix 5)
     const isBuyOrder = order.order_type === 'buy'
     // Get user's own quote — fail-closed if unavailable
@@ -1709,8 +1699,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     // Strict: entryRef must be valid
     if (!entryRef || !Number.isFinite(entryRef) || entryRef <= 0) {
       l('rejected: user_quote_unavailable — no valid entry reference')
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['rejected', signalId, userId])
+      await setTerminalStatus('rejected', 'user_quote_unavailable', { limit_price:order.limit_price || null })
       await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'user_quote_unavailable' },
         { status: 'rejected', message: 'user_quote_unavailable' }, 'warning')
@@ -1720,8 +1709,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const slVal = order.sl != null ? parseFloat(order.sl) : null
     if (slVal == null || !Number.isFinite(slVal) || slVal <= 0) {
       l(`rejected: stop_loss_missing sl=${order.sl}`)
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['rejected', signalId, userId])
+      await setTerminalStatus('rejected', 'stop_loss_missing', { stop_loss:order.sl ?? null })
       await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'stop_loss_missing', sl: order.sl },
         { status: 'rejected', message: 'stop_loss_missing' }, 'warning')
@@ -1731,8 +1719,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const slOk = isBuyOrder ? slVal < entryRef : slVal > entryRef
     if (!slOk) {
       l(`rejected: invalid_stop_loss_direction sl=${slVal} for ${order.order_type} at ${entryRef}`)
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['rejected', signalId, userId])
+      await setTerminalStatus('rejected', 'invalid_stop_loss_direction', { stop_loss:slVal, entry_price:entryRef, order_type:order.order_type })
       await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_stop_loss_direction', sl: slVal, entry: entryRef },
         { status: 'rejected', message: 'invalid_stop_loss_direction' }, 'warning')
@@ -1742,8 +1729,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const tpVal = order.tp != null ? parseFloat(order.tp) : null
     if (tpVal == null || !Number.isFinite(tpVal) || tpVal <= 0) {
       l(`rejected: take_profit_target_missing tp=${order.tp} mode=${order.tp_selection_mode} tier=${order.tp_tier_requested}`)
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['rejected', signalId, userId])
+      await setTerminalStatus('rejected', 'take_profit_target_missing', { take_profit:order.tp ?? null, take_profit_mode:order.tp_selection_mode, take_profit_tier:order.tp_tier_requested })
       await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'take_profit_target_missing', tp: order.tp, mode: order.tp_selection_mode, tier: order.tp_tier_requested },
         { status: 'rejected', message: 'take_profit_target_missing' }, 'warning')
@@ -1753,8 +1739,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const tpOk = isBuyOrder ? tpVal > entryRef : tpVal < entryRef
     if (!tpOk) {
       l(`rejected: invalid_take_profit_direction tp=${tpVal} for ${order.order_type} at ${entryRef}`)
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ? WHERE signal_id = ? AND user_id = ?',
-        ['rejected', signalId, userId])
+      await setTerminalStatus('rejected', 'invalid_take_profit_direction', { take_profit:tpVal, entry_price:entryRef, order_type:order.order_type })
       await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'invalid_take_profit_direction', tp: tpVal, entry: entryRef },
         { status: 'rejected', message: 'invalid_take_profit_direction' }, 'warning')
@@ -1772,8 +1757,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         // Fix 4: pending_list failure = fail-closed
         if (!pendingList || pendingList.status === 'error' || !Array.isArray(pendingList?.orders || pendingList?.pending_list)) {
           l('rejected: pending_list_unavailable')
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
-            ['rejected', JSON.stringify({ reason: 'pending_list_unavailable' }), signalId, userId])
+          await setTerminalStatus('rejected', 'pending_list_unavailable')
           await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
             { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_list_unavailable' },
             { status: 'rejected', message: 'pending_list_unavailable' }, 'warning')
@@ -1836,8 +1820,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           const confirmResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback: true })
           if (!confirmResp || confirmResp.status === 'error' || !Array.isArray(confirmResp?.orders || confirmResp?.pending_list)) {
             l('rejected: pending_list confirm unavailable')
-            await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
-              ['rejected', JSON.stringify({ reason: 'pending_list_confirm_unavailable' }), signalId, userId])
+            await setTerminalStatus('rejected', 'pending_list_confirm_unavailable')
             await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
               { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_list_confirm_unavailable' },
               { status: 'rejected', message: 'pending_list_confirm_unavailable' }, 'warning')
@@ -1848,8 +1831,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           remainingSameDirectionCount = countPendingForSymbolDirection(confirmOrders, symbol, newOrderDirection)
         } catch (confirmErr) {
           l(`rejected: pending_list confirm failed: ${confirmErr.message}`)
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
-            ['rejected', JSON.stringify({ reason: 'pending_list_confirm_failed', error: confirmErr.message }), signalId, userId])
+          await setTerminalStatus('rejected', 'pending_list_confirm_failed')
           await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
             { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_list_confirm_failed' },
             { status: 'rejected', message: 'pending_list_confirm_failed' }, 'warning')
@@ -1857,8 +1839,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         }
         if (remainingSameDirectionCount > 0) {
           l(`rejected: ${remainingSameDirectionCount} same-direction pending order(s) remain after supersede`)
-          await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
-            ['rejected', JSON.stringify({ reason: 'pending_supersede_incomplete', remaining_same_direction: remainingSameDirectionCount }), signalId, userId])
+          await setTerminalStatus('rejected', 'pending_supersede_incomplete', { remaining_same_direction:remainingSameDirectionCount })
           await insertAudit(null, userId, 'ai_auto_execute_rejected', symbol,
             { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_supersede_incomplete', remaining_same_direction: remainingSameDirectionCount },
             { status: 'rejected', message: 'pending_supersede_incomplete' }, 'warning')
@@ -1879,8 +1860,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const MAX_PENDING_PER_SYMBOL = 2
     if (remainingPendingCount + 1 > MAX_PENDING_PER_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
       l(`skipped: ${remainingPendingCount} pending orders remain + 1 new > max ${MAX_PENDING_PER_SYMBOL}`)
-      await queryRun('UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
-        ['skipped', JSON.stringify({ reason: 'pending_limit_reached', remaining: remainingPendingCount, max: MAX_PENDING_PER_SYMBOL }), signalId, userId])
+      await setTerminalStatus('skipped', 'pending_limit_reached', { remaining:remainingPendingCount, maximum:MAX_PENDING_PER_SYMBOL })
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_limit_reached', pending_count: remainingPendingCount },
         { status: 'skipped' }, 'info')
@@ -1959,7 +1939,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     l(`exception: ${err.message}`)
     await queryRun(
       `UPDATE auto_signal_deliveries SET execution_status = 'failed', execution_result = ? WHERE signal_id = ? AND user_id = ?`,
-      [JSON.stringify({ error: err.message }), signalId, userId]).catch(() => {})
+      [JSON.stringify({ status:'failed', reason:'system_execution_exception', details:{} }), signalId, userId]).catch(() => {})
     await insertAudit(null, userId, 'ai_auto_execute', symbol,
       { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: err.message },
       { status: 'error', message: err.message }, 'error')

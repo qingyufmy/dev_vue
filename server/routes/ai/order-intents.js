@@ -219,7 +219,16 @@ async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, reque
     )
     return state
   })
-  if (stateResult?.reject_code) throw new StatefulRiskReject(stateResult.reject_code, stateResult.details)
+  if (stateResult?.reject_code) {
+    throw new StatefulRiskReject(stateResult.reject_code, {
+      ...(stateResult.details || {}),
+      rules: [...(risk?.rule_results || []), {
+        code: stateResult.reject_code,
+        outcome: 'reject',
+        details: stateResult.details || {},
+      }],
+    })
+  }
 }
 
 async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId, bridgeAction, bridgeParams) {

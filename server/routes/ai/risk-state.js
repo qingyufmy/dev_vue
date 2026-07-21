@@ -390,13 +390,19 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
     WHERE trading_account_id = ? AND status = 'active' AND order_intent_id <> ?`, [accountId, intentId])
   const successCount = await txOne(run, `SELECT COUNT(*) AS count FROM order_intents WHERE trading_account_id = ? AND status = 'succeeded'
     AND completed_at >= CONCAT(CURDATE(), ' 00:00:00')`, [accountId])
-  if (toNumber(successCount?.count) + toNumber(reserved?.daily_count) + 1 > policy.max_daily_open_count) {
-    const rejected = rolloutBlock('R2.3_DAILY_OPEN_COUNT'); if (rejected) return rejected
+  const currentDailyCount = toNumber(successCount?.count) + toNumber(reserved?.daily_count)
+  if (currentDailyCount + 1 > policy.max_daily_open_count) {
+    const rejected = rolloutBlock('R2.3_DAILY_OPEN_COUNT', { count: currentDailyCount, limit: policy.max_daily_open_count }); if (rejected) return rejected
   }
   const latest = await txOne(run, `SELECT completed_at FROM order_intents WHERE trading_account_id = ? AND status = 'succeeded'
     ORDER BY completed_at DESC LIMIT 1`, [accountId])
   if (latest?.completed_at && Date.now() - parseBeijing(latest.completed_at).getTime() < policy.min_open_interval_seconds * 1000) {
-    const rejected = rolloutBlock('R2.2_MIN_OPEN_INTERVAL'); if (rejected) return rejected
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parseBeijing(latest.completed_at).getTime()) / 1000))
+    const rejected = rolloutBlock('R2.2_MIN_OPEN_INTERVAL', {
+      elapsed_seconds: elapsedSeconds,
+      remaining_seconds: Math.max(0, policy.min_open_interval_seconds - elapsedSeconds),
+      minimum_seconds: policy.min_open_interval_seconds,
+    }); if (rejected) return rejected
   }
   const duplicates = await txAll(run, `SELECT id, approved_order_json FROM order_intents WHERE trading_account_id = ? AND id <> ?
     AND symbol = ? AND status IN ('preparing','prepared','bridge_sending','uncertain','succeeded')
@@ -407,11 +413,18 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
     const currentPrice = toNumber(request.limit_price || request.reference_price || request.quote_price)
     const priorPrice = toNumber(prior.limit_price || prior.reference_price || prior.quote_price)
     if (prior.order_type === request.order_type && Math.abs(currentPrice - priorPrice) <= toNumber(request.atr_anchor) * policy.dedup_price_atr) {
-      const rejected = rolloutBlock('R2.4_PRICE_TIME_DUPLICATE'); if (rejected) return rejected
+      const rejected = rolloutBlock('R2.4_PRICE_TIME_DUPLICATE', {
+        prior_intent_id: duplicate.id,
+        current_price: currentPrice,
+        prior_price: priorPrice,
+      }); if (rejected) return rejected
     }
   }
   const approvedVolume = toNumber(request.volume)
-  if (approvedVolume < toNumber(snapshot.instrument?.volume_min)) return blocked('R1.9_BELOW_MINIMUM_AFTER_RISK')
+  if (approvedVolume < toNumber(snapshot.instrument?.volume_min)) return blocked('R1.9_BELOW_MINIMUM_AFTER_RISK', {
+    volume: approvedVolume,
+    minimum: toNumber(snapshot.instrument?.volume_min),
+  })
   return { approved_volume: approvedVolume, adjusted:false, reserved_notional:0, metrics, shadow_rules: shadowRules }
 }
 

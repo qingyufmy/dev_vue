@@ -122,4 +122,9 @@ describe('review durability and privacy guards', () => {
     expect(service).toContain('strategyId, usage: \'review\'')
     expect(service).toContain('strategyId },')
   })
+
+  it('requires every user-visible review field to be written in Chinese', () => {
+    expect(service).toContain('全部用户可见内容必须使用简体中文')
+    expect(service).toContain('禁止内部错误码、英文状态或整句英文')
+  })
 })

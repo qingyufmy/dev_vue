@@ -311,3 +311,11 @@ describe('period market evidence', () => {
     expect(compact.evidence_refs.inference_snapshot.id).toBe(7)
   })
 })
+
+describe('period review language contract', () => {
+  it('requires daily and monthly user-visible content to be written in Chinese', () => {
+    const periodReview = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    expect(periodReview.match(/所有用户可见字符串与数组内容必须使用简体中文/g)).toHaveLength(2)
+    expect(periodReview.match(/禁止输出内部错误码、英文状态或整句英文/g)).toHaveLength(2)
+  })
+})

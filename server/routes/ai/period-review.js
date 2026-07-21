@@ -726,6 +726,7 @@ async function generateDailyReview(job, requestModel) {
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
     '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。',
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
+    '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     `trade_assessments 和 chan_diagnoses 必须各包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}。`,
     '不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。',
   ].join('\n')
@@ -844,6 +845,7 @@ async function generateMonthlyReview(job, requestModel) {
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
     '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。',
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
+    '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     `daily_assessments 必须包含 ${dailyCaseIds.length} 项，并且 period_case_id 只能且必须完整覆盖：${dailyCaseIds.join(', ')}。`,
     'memory_candidates 的每项必须至少由两个已确认日复盘支持；不符合条件时必须返回空数组。',
     '不得遗漏、合并或虚构日复盘，不得修改系统提供的基础统计。',

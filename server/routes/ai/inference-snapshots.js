@@ -45,7 +45,7 @@ function stripAccountPrivateData(value) {
   return out
 }
 
-export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, volumeMax, marketSource = 'platform_market_bridge' } = {}) {
+export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, volumeMax, volumeStep = 0.01, marketSource = 'platform_market_bridge' } = {}) {
   const technicalFields = [
     'timestamp', 'latest_price', 'price_change', 'price_change_pct', 'sma_20', 'sma_50', 'ema_12', 'ema_26',
     'avg_volatility', 'recent_high_20', 'recent_low_20', 'range_position_20', 'sma_distance_pct',
@@ -59,7 +59,7 @@ export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, v
     symbol: stripBrokerSuffix(String(standardSymbol || market?.symbol || '')).toUpperCase(),
     timeframe: market?.timeframe,
     market_source: marketSource,
-    ai_volume_range: { min: Number(volumeMin), max: Number(volumeMax) },
+    ai_volume_range: { min: Number(volumeMin), max: Number(volumeMax), step: Number(volumeStep) },
   }
   for (const key of technicalFields) if (market?.[key] !== undefined) result[key] = stripAccountPrivateData(clean(market[key]))
   const visualizationKlines = market?.strategy_context?.visualization_klines

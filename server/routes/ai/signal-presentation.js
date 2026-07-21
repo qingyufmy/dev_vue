@@ -1,4 +1,4 @@
-import { auditValueLabel } from '../../audit-localization.js'
+import { auditValueLabel, formatRiskReason } from '../../audit-localization.js'
 
 const SIGNAL_SCHEMA_VERSION = 2
 
@@ -76,14 +76,17 @@ export function restrictSignalExperienceUsage(signal = {}, { requesterUserId = n
 }
 
 function executionDescription(execution, fallback) {
-  const rejectedRule = Array.isArray(execution?.details?.rules)
-    ? execution.details.rules.find(rule => rule?.outcome === 'reject')
-    : null
-  const raw = cleanText(rejectedRule?.code || execution?.message || execution?.reason || execution?.error, 240)
+  const ruleSets = [execution?.details?.rules, execution?.risk?.rule_results, execution?.rule_results]
+  const rejectedRule = ruleSets.find(Array.isArray)?.find(rule => rule?.outcome === 'reject') || null
+  const raw = cleanText(rejectedRule?.code || execution?.reject_code || execution?.message || execution?.reason || execution?.error, 240)
   if (!raw) return fallback
+  if (rejectedRule || /^(?:R\d|PX\.)[A-Z0-9._-]+$/i.test(raw)) {
+    return formatRiskReason(raw, rejectedRule?.details || execution?.details || {})
+  }
   const localized = auditValueLabel(raw)
-  if (localized !== raw) return localized
+  if (localized !== raw) return formatRiskReason(raw, execution?.details || {})
   if (/^(?:R\d|PX\.)[A-Z0-9._-]+$/i.test(raw)) return '风控条件未满足'
+  if (/[A-Za-z]/.test(raw) && !/[\u4e00-\u9fff]/.test(raw)) return '系统执行条件未满足，详细信息已记录'
   return raw
 }
 
@@ -108,7 +111,10 @@ export function normalizeDecisionFields(signal = {}) {
 export function buildExecutionAdvice(signal = {}, executionResult = null) {
   const direction = String(signal.signal_type || 'hold').toLowerCase()
   const entryMethod = String(signal.entry_method || (direction === 'hold' ? 'observe' : 'market')).toLowerCase()
-  const execution = parseJson(executionResult ?? signal.execution_result)
+  const parsedExecution = parseJson(executionResult ?? signal.execution_result)
+  const persistedStatus = String(signal.execution_status || '').toLowerCase()
+  const terminalStatus = ['rejected', 'failed', 'skipped', 'uncertain'].includes(persistedStatus) ? persistedStatus : ''
+  const execution = parsedExecution ? { ...parsedExecution, status: parsedExecution.status || terminalStatus } : (terminalStatus ? { status:terminalStatus } : null)
   const executed = Number(signal.is_executed) === 1 || signal.is_executed === true || execution?.status === 'success'
   const pending = Boolean(signal.pending_ticket) || signal.pending_state === 'pending'
   const stale = Boolean(signal.is_stale)

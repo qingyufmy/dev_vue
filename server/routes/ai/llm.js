@@ -26,6 +26,10 @@ const CHAN_DIVERGENCE_RULE = `
 chan.divergence 仅表示最新确认线段的背驰判断；只有 type 为 top 或 bottom、state 为 confirmed 且 confirmed=true 时，才能称为“已确认背驰段”。chan.forming_divergence 仅表示候选线段背驰，不得当作已确认反转或单独作为执行依据。chan.recent_divergences 是当前稳定历史结构内最近的已确认背驰段，entry_segment 与 departure_segment 给出进入段、离开段的 UTC 时间、经纪商时间和价格。area_ratio 与 peak_ratio 越小表示力度衰减越明显。chan.trend_state 区分趋势、盘整、突破候选、确认突破和衰竭；upward_breakout_pending/downward_breakout_pending 只表示价格已经离开尚未闭合的旧中枢，方向仍未由新确认线段证实，不得描述为已确认突破；衰竭也只表示反转风险上升。chan.entry_candidates 中的一二三类买卖点均为候选证据，只有 usable_for_entry=true 才可参与入场论证，也不得单独构成执行指令。strategy_context.chan_timeframe_alignment 用于检查大小周期方向是否一致；agreement=mixed、alignment_with_higher=conflict、status=partial 时必须降低结论强度或选择观望。必须先检查 strategy_context.context_status、missing_timeframes，以及 chan.status、reliability、window_stable、time_location_reliable 和 warnings；出现 confirmed_structure_stale 表示最近确认结构距当前行情过远，不得把旧中枢描述为当前盘整区。结构或时间定位不可靠时应降低该证据权重。所有缠论结果都是行情证据，不等同于交易已经确认，也不直接构成交易指令。
 `
 
+const USER_VISIBLE_CHINESE_RULE = `
+## 用户可见语言规则
+所有用户可见文本必须使用简体中文，包括一句话结论、触发条件、失效条件、关键依据、风险因素、行情分析、分析依据、经验影响和取消原因。禁止输出内部错误码、英文状态值或整句英文。品种代码、周期、价格以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。`
+
 let _schemaCache = null
 let _schemaCacheTs = 0
 const SCHEMA_CACHE_TTL = 300_000 // 5 minutes
@@ -36,7 +40,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   confidence: "0.00-1.00，动态估算，禁止固定值。按趋势强度、位置结构、波动噪音、风险状态综合评估。BUY/SELL弱优势0.52-0.62，中等0.63-0.74，强共振>0.75。HOLD时0.55-0.68，明确回避风险可>0.70。hold时也不得为0",
   bullish_score: "0-100，市场偏多倾向分。必须与bearish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
   bearish_score: "0-100，市场偏空倾向分。必须与bullish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
-  recommended_volume: "0.01至输入市场数据中的max_position_size手，不得超过max_position_size。应根据当前风险与止损距离合理建议；hold时返回0",
+  recommended_volume: "必须位于输入市场数据 ai_volume_range 的 min、max 范围内，并按 step 对齐。应根据行情风险与止损距离合理建议；hold时返回0。不得读取或猜测订阅用户的账户手数上限",
   limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
   stop_limit_price: "Stop Limit 触发后挂出的限价，仅buy_stop_limit/sell_stop_limit时必填。limit_price始终是突破触发价：buy_stop_limit 的触发价高于当前价，stop_limit_price不得高于触发价；sell_stop_limit 的触发价低于当前价，stop_limit_price不得低于触发价",
   pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
@@ -64,6 +68,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   const labels = { market: '市价', limit: '限价挂单', stop: '突破挂单', stop_limit: '突破限价挂单' }
   schema.signal_type = `仅允许 ${signalTypes.join(' | ')}。hold 表示观望；本策略支持的入场方式：${methods.map(item => labels[item]).join('、')}。禁止输出未列出的信号类型。`
   schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。`
+  schema.recommended_volume = '必须位于输入市场数据 ai_volume_range 的 min、max 范围内，并按 step 对齐；hold 必须返回 0。该值是 AI 的行情建议，不得读取、推测或替代订阅用户的账户手数上限。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
   schema.experience_usage = experienceIds.length
     ? { considered_ids:experienceIds, used_ids:`只能填写实际采用的经验编号，且必须来自 ${experienceIds.join('、')}`,
@@ -363,7 +368,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const platformExperience = config._market_only && typeof config._platformExperienceContext === 'string'
       ? config._platformExperienceContext : ''
     const pendingRule = strategySchema.hasPending ? `\n\n${PENDING_LIFECYCLE_RULE}` : ''
-    const fullPrompt = prompt + marketOnlyRule + platformExperience + personalMemory + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + pendingRule
+    const fullPrompt = prompt + marketOnlyRule + platformExperience + personalMemory + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + pendingRule
 
     // Check if prompt wants Chan theory data
     const useChan = config._use_chan_analysis === undefined
@@ -389,6 +394,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       ai_volume_range: {
         min: Number(config?._ai_volume_min ?? market?.ai_volume_range?.min ?? 0.01),
         max: Number(config?._ai_volume_max ?? market?.ai_volume_range?.max ?? config?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
+        step: Number(config?._ai_volume_step ?? market?.ai_volume_range?.step ?? 0.01),
       },
     }
     if (market.strategy_context) {
@@ -730,7 +736,7 @@ export function normalizeAiSignal(parsed, config, market) {
 
   const configuredMinPosition = Number(config?._ai_volume_min ?? market?.ai_volume_range?.min ?? 0.01)
   const configuredMaxPosition = Number(config?._ai_volume_max ?? market?.ai_volume_range?.max ?? config?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE)
-  const configuredVolumeStep = Number(config?._ai_volume_step ?? 0.01)
+  const configuredVolumeStep = Number(config?._ai_volume_step ?? market?.ai_volume_range?.step ?? 0.01)
   const minPosition = Number.isFinite(configuredMinPosition) && configuredMinPosition > 0 ? configuredMinPosition : 0.01
   const maxPosition = Number.isFinite(configuredMaxPosition) && configuredMaxPosition >= minPosition ? configuredMaxPosition : minPosition
   const volumeStep = Number.isFinite(configuredVolumeStep) && configuredVolumeStep > 0 ? configuredVolumeStep : 0.01

@@ -267,7 +267,7 @@ async function generateReview(reviewCase, requestModel = requestJsonObject) {
   const resolved = await resolveAiTaskModel({ userId: reviewCase.user_id, strategyId, usage: 'review' })
   if (!resolved.model) throw new Error(resolved.error || 'review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
-  const system = `你是严格的交易复盘分析器。只依据提供的证据判断，不得把亏损直接等同于决策错误，也不得把盈利直接等同于决策正确。区分推理时证据与交易后结果；无法判断时使用 insufficient_evidence。只返回 JSON。`
+  const system = `你是严格的交易复盘分析器。只依据提供的证据判断，不得把亏损直接等同于决策错误，也不得把盈利直接等同于决策正确。区分推理时证据与交易后结果；无法判断时使用 insufficient_evidence。只返回 JSON。除 JSON 字段名和规定枚举值外，summary、outcome_summary、description、strengths、lessons 等全部用户可见内容必须使用简体中文，禁止内部错误码、英文状态或整句英文；品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。`
   const shape = { summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence', outcome_summary: 'string', trade_process_issues: [{ code: 'string', severity: 'low|medium|high|critical', description: 'string', evidence_refs: ['ref key'] }], strengths: ['string'], lessons: ['string'], evidence_refs: ['ref key'], confidence: 0.5 }
   const content = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider, model: resolved.model.model_name,
     temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens: resolved.model.max_tokens || 3000,

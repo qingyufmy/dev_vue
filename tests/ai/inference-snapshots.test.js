@@ -16,14 +16,15 @@ describe('shared market inference boundary', () => {
       chan: { divergence: { type: 'top' } },
       strategy_context: { timeframes: { M5: { klines: [[1, 2, 3, 1, 2, 8]], summary: { pending_orders: [{ ticket: 1 }], rsi_14: 50, chan: { divergence: { type: 'top' } } } } } },
     }
-    const first = buildSharedMarketSnapshot({ ...base, account: { balance: 1 }, positions: { total_positions: 8 }, pending_orders: [{ ticket: 1 }] }, { volumeMin: 0.01, volumeMax: 0.05 })
-    const second = buildSharedMarketSnapshot({ ...base, account: { balance: 999999 }, positions: { total_positions: 0 }, pending_orders: [] }, { volumeMin: 0.01, volumeMax: 0.05 })
+    const first = buildSharedMarketSnapshot({ ...base, account: { balance: 1 }, positions: { total_positions: 8 }, pending_orders: [{ ticket: 1 }] }, { volumeMin: 0.01, volumeMax: 0.05, volumeStep:0.01 })
+    const second = buildSharedMarketSnapshot({ ...base, account: { balance: 999999 }, positions: { total_positions: 0 }, pending_orders: [] }, { volumeMin: 0.01, volumeMax: 0.05, volumeStep:0.01 })
     expect(first).toEqual(second)
     expect(first.standard_symbol).toBe('XAUUSD')
     expect(first).not.toHaveProperty('account')
     expect(first).not.toHaveProperty('positions')
     expect(first).not.toHaveProperty('pending_orders')
     expect(first).not.toHaveProperty('chan')
+    expect(first.ai_volume_range).toEqual({ min:0.01, max:0.05, step:0.01 })
     expect(first.strategy_context.timeframes.M5.summary).toEqual({ rsi_14: 50, chan: { divergence: { type: 'top' } } })
   })
 

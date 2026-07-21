@@ -218,7 +218,7 @@ const REASON_MAP = {
   mt5_terminal_autotrading_disabled: "MT5 终端自动交易关闭",
   mt5_account_trade_disabled: "MT5 账户禁止交易",
   mt5_account_expert_trading_disabled: "MT5 账户禁止 EA/脚本交易",
-  hold_signal_cannot_execute: "已跳过（HOLD 信号）",
+  hold_signal_cannot_execute: "已跳过（观望信号）",
   signal_expired: "已跳过（信号已过期）",
   signal_already_executed_or_pending: "该信号已经执行或已有挂单，不能重复执行",
   kimi_code_model_not_supported: "Kimi Code 模型名称无效，请选择 k3、kimi-for-coding 或 kimi-for-coding-highspeed",
@@ -244,6 +244,26 @@ const REASON_MAP = {
   volume_exceeds_config_limit: "手数超过配置上限，已拒绝",
   max_open_positions_reached: "持仓数量达到上限，已拒绝",
   signal_price_slippage_exceeded: "信号参考价与当前报价偏离过大，已拒绝",
+  auto_trade_disabled: "当前订阅没有开启自动执行",
+  bridge_offline: "用户的 MT5 桥接当前未连接",
+  user_quote_unavailable: "无法获取用户 MT5 的有效报价",
+  stop_loss_missing: "AI 信号缺少有效止损价格",
+  invalid_stop_loss_direction: "止损价格方向与订单方向不一致",
+  take_profit_target_missing: "所选止盈档位没有有效目标价格",
+  invalid_take_profit_direction: "止盈价格方向与订单方向不一致",
+  pending_list_unavailable: "无法读取当前 MT5 挂单列表",
+  pending_list_confirm_unavailable: "替换旧挂单后无法复核最新挂单列表",
+  pending_list_confirm_failed: "替换旧挂单后的挂单复核失败",
+  pending_supersede_incomplete: "同方向旧挂单尚未完全替换",
+  pending_limit_reached: "当前品种的挂单数量已达到限制",
+  subscription_inactive: "策略订阅当前未启用",
+  outside_schedule: "当前不在自动推理运行时段内",
+  trade_send_disabled: "交易发送已关闭",
+  weekly_flatten_window: "周末风险控制处理中",
+  system_execution_exception: "系统执行异常，详细信息已记录",
+  lock_lost_before_supersede_cancel: "任务执行权已失效，未继续替换旧挂单",
+  lock_lost_before_pending_confirm: "任务执行权已失效，未继续复核挂单",
+  lock_lost_before_send: "任务执行权已失效，订单未发送到 MT5",
   bridge_upgrade_required_for_incremental_risk: "桥接软件版本过旧，请从源码重启或升级到最新版后重试",
   risk_snapshot_failed: "无法获取完整的 MT5 风险快照，已为安全起见阻止交易",
   confirmation_required: "需要人工确认",
@@ -784,7 +804,22 @@ function localizeReason(reason) {
   if (text.startsWith("Invalid live quote for ")) {
     return `${text.replace("Invalid live quote for ", "")} 报价无效，已阻止下单`;
   }
+  if (/^(?:R\d|PX\.)[A-Z0-9._-]+$/i.test(text)) return "风控条件未满足";
+  if (/[A-Za-z]/.test(text) && !/[\u4e00-\u9fff]/.test(text)) return "系统执行条件未满足，详细信息已记录";
   return text;
+}
+
+function userVisibleText(value, fallback = "暂无中文说明") {
+  const text = String(value || "").trim();
+  if (!text) return fallback;
+  const localized = localizeReason(text);
+  if (localized !== text) return localized;
+  const replaced = text.replace(/\b(?:R\d(?:\.[0-9A-Z]+)?_[A-Z0-9._-]+|PX\.[A-Z0-9._-]+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/gi, token => {
+    const translated = REASON_MAP[token] || RISK_DECISION_LABELS[token];
+    return translated || "系统内部状态";
+  });
+  if (/[A-Za-z]/.test(replaced) && !/[\u4e00-\u9fff]/.test(replaced)) return fallback;
+  return replaced;
 }
 
 function setSignalFieldClass(id, className = "") {
@@ -923,7 +958,7 @@ function showSignalNotification(signal) {
     }
   }
   const dir = signalType(signal.signal_type);
-  const dirLabel = dir.toUpperCase() + " " + directionText(signal.signal_type);
+  const dirLabel = directionText(signal.signal_type);
   const node = document.createElement("div");
   node.className = "toast signal-notification";
   const conf = typeof signal.confidence === 'number' ? (signal.confidence > 1 ? signal.confidence : signal.confidence * 100) : 0;
@@ -2427,15 +2462,34 @@ function riskRuleDescription(code, details = {}) {
   if (code === "R4.6_EXECUTION_PRICE_DEVIATION") return `${label}：当前 ${displayRiskNumber(details.current_price)}，允许 ${displayRiskNumber(details.allowed_min)} ～ ${displayRiskNumber(details.allowed_max)}（±${displayRiskNumber(details.maximum_pct, 3)}%）`;
   if (code === "PX.3_EXECUTION_PRICE_TOLERANCE") return `${label}：剩余 ${displayRiskNumber(details.remaining_price, 3)}，发送 ${displayRiskNumber(details.mt5_points, 0)} MT5 点`;
   if (code === "R1.3_SL_WIDEN_VOLUME_DOWN") return `${label}：止损 ${displayRiskNumber(details.from_sl)} → ${displayRiskNumber(details.to_sl)}，手数 ${displayRiskNumber(details.from_volume)} → ${displayRiskNumber(details.to_volume)}`;
+  if (code === "R1.9_AI_VOLUME_OUT_OF_RANGE") return `${label}：AI 建议 ${displayRiskNumber(details.volume)} 手，允许 ${displayRiskNumber(details.minimum)} ～ ${displayRiskNumber(details.maximum)} 手，步进 ${displayRiskNumber(details.step)} 手`;
+  if (code === "R1.7_PENDING_DIRECTION") return `${label}：触发价 ${displayRiskNumber(details.trigger_price)}，当前价 ${displayRiskNumber(details.current_price)}`;
+  if (code === "R1.7_STOP_LIMIT_RELATION") return `${label}：触发价 ${displayRiskNumber(details.trigger_price)}，触发后限价 ${displayRiskNumber(details.stop_limit_price)}`;
+  if (code === "R4.5_SPREAD_TOO_WIDE") return `${label}：当前点差 ${displayRiskNumber(details.spread_points)} 点`;
+  if (code === "R2.2_MIN_OPEN_INTERVAL") return `${label}：还需等待 ${displayRiskNumber(details.remaining_seconds, 0)} 秒`;
+  if (code === "R2.3_DAILY_OPEN_COUNT") return `${label}：当前 ${displayRiskNumber(details.count, 0)} 次，上限 ${displayRiskNumber(details.limit, 0)} 次`;
+  if (code === "R2.4_PRICE_TIME_DUPLICATE") return `${label}：与执行记录 #${displayRiskNumber(details.prior_intent_id, 0)} 的方向和价格相近`;
+  if (code === "R3.1_DAILY_LOSS_LIMIT") return `${label}：当前 ${displayRiskNumber(details.daily_loss_pct)}%，上限 ${displayRiskNumber(details.limit_pct ?? details.daily_loss_limit_pct)}%`;
+  if (code === "R3.2_LOSS_COOLDOWN" || code === "R3.2_CONSECUTIVE_LOSS_COOLDOWN") return details.until ? `${label}：冷却至 ${details.until}` : label;
+  if (code === "R3.3_MAX_DRAWDOWN") return `${label}：当前 ${displayRiskNumber(details.drawdown_pct)}%，上限 ${displayRiskNumber(details.limit_pct ?? details.max_drawdown_pct)}%`;
+  if (code === "invalid_stop_loss_direction") return `${label}：止损 ${displayRiskNumber(details.stop_loss)}，入场参考价 ${displayRiskNumber(details.entry_price)}`;
+  if (code === "invalid_take_profit_direction") return `${label}：止盈 ${displayRiskNumber(details.take_profit)}，入场参考价 ${displayRiskNumber(details.entry_price)}`;
+  if (code === "pending_supersede_incomplete") return `${label}：仍有 ${displayRiskNumber(details.remaining_same_direction, 0)} 个同向挂单未取消`;
+  if (code === "pending_limit_reached") return `${label}：当前 ${displayRiskNumber(details.remaining, 0)} 个，上限 ${displayRiskNumber(details.maximum, 0)} 个`;
+  if ((code === "R6_GLOBAL_KILL_SWITCH" || code === "R6_USER_KILL_SWITCH") && details.reason) return `${label}：${userVisibleText(details.reason, "未填写补充原因")}`;
   return label;
 }
 function rejectionRule(rules = [], fallbackCode = "") {
   return rules.find(rule => rule?.outcome === "reject") || (fallbackCode ? { code:fallbackCode, details:{} } : null);
 }
 function resultRiskReason(result = {}) {
-  const rules = Array.isArray(result?.details?.rules) ? result.details.rules : [];
+  const rules = Array.isArray(result?.details?.rules) ? result.details.rules
+    : Array.isArray(result?.risk?.rule_results) ? result.risk.rule_results
+      : Array.isArray(result?.rule_results) ? result.rule_results : [];
   const rule = rejectionRule(rules, result.reject_code || (/^(?:R|PX)[A-Z0-9._-]+$/.test(result.message || "") ? result.message : ""));
-  return rule ? riskRuleDescription(rule.code, rule.details || {}) : "";
+  if (rule) return riskRuleDescription(rule.code, rule.details || {});
+  const reason = String(result.reason || result.reject_code || "").trim();
+  return reason ? riskRuleDescription(reason, result.details || {}) : "";
 }
 function rolloutStatusLabel(value) { return ({ completed:"已完成", succeeded:"成功", failed:"失败", running:"执行中", pending:"等待中" })[value] || value || "未执行"; }
 function riskUnit(meta = {}) { return meta.unit_label || ({ percent:"%", lot:"手", minute:"分钟", second:"秒", count:"次/日", point:"点", ATR:"ATR 倍", ratio:"倍", hour:"小时" })[meta.unit] || ""; }
@@ -2488,7 +2542,7 @@ async function loadRiskCenter() {
     const stateInfo = row.risk_state || {}, active = stateInfo.halt_status === "active", dataComplete = !(stateInfo.data_complete === false || Number(stateInfo.data_complete) === 0);
     const reason = stateInfo.halt_reason === "R3_RISK_DATA_INCOMPLETE"
       ? `风控数据不完整：${riskDataIncompleteText(stateInfo.data_incomplete_reason)}`
-      : stateInfo.halt_reason || (!dataComplete ? riskDataIncompleteText(stateInfo.data_incomplete_reason) : "当前没有触发停止交易的条件");
+      : stateInfo.halt_reason ? riskDecisionLabel(stateInfo.halt_reason) : (!dataComplete ? riskDataIncompleteText(stateInfo.data_incomplete_reason) : "当前没有触发停止交易的条件");
     return `<article class="workspace-panel risk-status-card ${active && dataComplete ? 'is-safe' : 'is-alert'}" data-risk-status-account="${row.account.id}"><div class="risk-status-icon"><i data-lucide="${active && dataComplete ? 'shield-check' : 'shield-alert'}" size="22"></i></div><div class="risk-status-main"><div class="workspace-row-title">${escapeHtml(row.account.nickname || row.account.login_account)} <span class="status-chip ${active && dataComplete ? 'success' : 'danger'}">${active && dataComplete ? '允许交易' : '已暂停新开仓'}</span></div><p>${escapeHtml(reason)}</p><div class="workspace-row-meta"><span>${escapeHtml(row.account.broker_server)}</span><span>数据${dataComplete ? '完整' : '不完整'}</span><span>回撤 ${escapeHtml(stateInfo.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(stateInfo.consecutive_losses ?? '--')}</span></div></div><div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" type="button" data-open-workspace-tab="risk" data-open-workspace-target="rules">查看规则</button><button class="btn ${stateInfo.user_kill_switch ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${stateInfo.user_kill_switch ? '0' : '1'}">${stateInfo.user_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></article>`;
   }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>连接 Bridge 后会在这里显示账户交易状态。</span></div>';
   host.innerHTML = rows.length ? rows.map(row => {
@@ -2530,7 +2584,15 @@ function renderExecutionDecisions(rows, pagination = {}) {
   renderPager("executionDecisionPager", state.executionFilters.page, state.executionFilters.pageSize, state.executionFilters.total, "executions");
 }
 
-function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", queued:"已进入队列", preparing:"准备证据", model_request:"AI 分析中", validating:"校验结果", repairing:"修复输出", retry_wait:"等待重试", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", succeeded:"生成完成", deferred:"稍后处理" })[value] || value; }
+function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", queued:"已进入队列", preparing:"准备证据", model_request:"AI 分析中", validating:"校验结果", repairing:"修复输出", retry_wait:"等待重试", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", succeeded:"生成完成", deferred:"稍后处理" })[value] || userVisibleText(value, "未知状态"); }
+
+function reviewFieldStatusLabel(value) {
+  return ({
+    pending:"待确认", accurate:"内容准确", needs_revision:"需要修改", deferred:"稍后处理",
+    confirmed:"已确认", approved:"已确认", rejected:"有问题", none:"未发现", found:"已发现",
+    confirmed_no_issue:"确认无问题", confirmed_has_issue:"确认有问题", unknown:"待检查",
+  })[String(value || "").trim()] || "待检查";
+}
 
 function periodReviewEvidenceReasonText(value) {
   const labels = {
@@ -2683,7 +2745,7 @@ async function openReviewDetail(id) {
   const current = (review.versions || []).find(v => Number(v.id) === Number(review.current_version_id)) || review.versions?.at(-1);
   const evidence = review.evidence || {}, outcome = evidence.post_trade?.outcome || {}, snapshot = evidence.inference_time?.snapshot || {};
   const content = current?.content || {};
-  const issueSummary = (content.trade_process_issues || []).map(item => item.description || item.code).filter(Boolean);
+  const issueSummary = (content.trade_process_issues || []).map(item => userVisibleText(item.description || item.code, "交易流程存在未说明问题")).filter(Boolean);
   const isAdmin = state.user?.role === "admin";
   const lessonHelp = isAdmin ? "每行一条；确认后先进入平台记忆候选区，发布后才用于绑定策略" : "每行一条，将用于生成个人记忆";
   const approveLabel = isAdmin ? "内容准确并加入平台记忆候选" : "内容准确并加入记忆";
@@ -2704,12 +2766,13 @@ async function openReviewDetail(id) {
       <footer>${pathCoverage.map(([timeframe, item]) => `<span><strong>${escapeHtml(timeframe)}</strong> ${Number(item.candle_count || 0)} 根 · ${item.status === 'complete' ? '结构已计算' : '数据不足'}</span>`).join('') || '<span>暂无可用的持仓行情路径</span>'}</footer>
     </section>
     <div class="review-structured-form">
-      <section class="review-form-section review-summary-section"><div class="review-form-heading"><div><span class="review-section-kicker">核心判断</span><h3>复盘结论</h3></div><small>先确认事实与结论是否一致</small></div><label class="review-field"><span class="sr-only">复盘结论</span><textarea data-review-field="summary" rows="4" ${current ? '' : 'disabled'}>${escapeHtml(content.summary || '')}</textarea></label></section>
-      <section class="review-form-section"><div class="review-form-heading"><div><span class="review-section-kicker">质量校对</span><h3>评估与结果说明</h3></div><small>可按实际交易情况修正</small></div><div class="review-assessment-grid"><label class="review-field"><span>决策质量</span><select data-review-field="decision_quality" ${current ? '' : 'disabled'}><option value="good" ${content.decision_quality === 'good' ? 'selected' : ''}>良好</option><option value="mixed" ${content.decision_quality === 'mixed' ? 'selected' : ''}>有得有失</option><option value="poor" ${content.decision_quality === 'poor' ? 'selected' : ''}>需要改进</option><option value="insufficient_evidence" ${content.decision_quality === 'insufficient_evidence' ? 'selected' : ''}>证据不足</option></select></label><label class="review-field review-confidence-field"><span>结论置信度</span><div><input data-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${current ? '' : 'disabled'}><small>填写 0–1</small></div></label><label class="review-field review-outcome-summary"><span>交易结果说明</span><textarea data-review-field="outcome_summary" rows="3" ${current ? '' : 'disabled'}>${escapeHtml(content.outcome_summary || '')}</textarea></label></div></section>
+      <section class="review-form-section review-summary-section"><div class="review-form-heading"><div><span class="review-section-kicker">核心判断</span><h3>复盘结论</h3></div><small>先确认事实与结论是否一致</small></div><label class="review-field"><span class="sr-only">复盘结论</span><textarea data-review-field="summary" rows="4" ${current ? '' : 'disabled'}>${escapeHtml(userVisibleText(content.summary, "暂无复盘结论"))}</textarea></label></section>
+      <section class="review-form-section"><div class="review-form-heading"><div><span class="review-section-kicker">质量校对</span><h3>评估与结果说明</h3></div><small>可按实际交易情况修正</small></div><div class="review-assessment-grid"><label class="review-field"><span>决策质量</span><select data-review-field="decision_quality" ${current ? '' : 'disabled'}><option value="good" ${content.decision_quality === 'good' ? 'selected' : ''}>良好</option><option value="mixed" ${content.decision_quality === 'mixed' ? 'selected' : ''}>有得有失</option><option value="poor" ${content.decision_quality === 'poor' ? 'selected' : ''}>需要改进</option><option value="insufficient_evidence" ${content.decision_quality === 'insufficient_evidence' ? 'selected' : ''}>证据不足</option></select></label><label class="review-field review-confidence-field"><span>结论置信度</span><div><input data-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${current ? '' : 'disabled'}><small>填写 0–1</small></div></label><label class="review-field review-outcome-summary"><span>交易结果说明</span><textarea data-review-field="outcome_summary" rows="3" ${current ? '' : 'disabled'}>${escapeHtml(userVisibleText(content.outcome_summary, "暂无交易结果说明"))}</textarea></label></div></section>
       ${issueSummary.length ? `<section class="review-issues"><div><i data-lucide="triangle-alert" size="16"></i><span>发现 ${issueSummary.length} 项流程问题</span></div>${issueSummary.map(item => `<p>${escapeHtml(item)}</p>`).join('')}</section>` : '<section class="review-issues is-clear"><div><i data-lucide="circle-check" size="16"></i><span>交易流程检查</span></div><p>未记录明确的交易流程问题</p></section>'}
-      <section class="review-form-section"><div class="review-form-heading"><div><span class="review-section-kicker">经验沉淀</span><h3>保留有效经验</h3></div><small>使用短句，每行只写一个要点</small></div><div class="review-form-columns"><label class="review-field"><span>做得好的地方</span><textarea data-review-field="strengths" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.strengths || []).join('\n'))}</textarea><small>每行一条，记录可复用的正确做法</small></label><label class="review-field"><span>后续经验</span><textarea data-review-field="lessons" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.lessons || []).join('\n'))}</textarea><small>${escapeHtml(lessonHelp)}</small></label></div></section>
+      <section class="review-form-section"><div class="review-form-heading"><div><span class="review-section-kicker">经验沉淀</span><h3>保留有效经验</h3></div><small>使用短句，每行只写一个要点</small></div><div class="review-form-columns"><label class="review-field"><span>做得好的地方</span><textarea data-review-field="strengths" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.strengths || []).map(value => userVisibleText(value, "模型未提供中文说明")).join('\n'))}</textarea><small>每行一条，记录可复用的正确做法</small></label><label class="review-field"><span>后续经验</span><textarea data-review-field="lessons" rows="4" ${current ? '' : 'disabled'}>${escapeHtml((content.lessons || []).map(value => userVisibleText(value, "模型未提供中文说明")).join('\n'))}</textarea><small>${escapeHtml(lessonHelp)}</small></label></div></section>
     </div>
-    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="file-search" size="15"></i><strong>查看推理证据与原始数据</strong><small>证据只读，原始 JSON 仅供高级检查</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>信号 / 策略</span><strong>#${review.signal_id || '--'} / #${snapshot.strategy_id || '--'}</strong></div><div><span>模型来源</span><strong>${escapeHtml(snapshot.credential_source || '--')} · ${escapeHtml(snapshot.model_name || '--')}</strong></div><div><span>交易结果</span><strong>净利润 ${escapeHtml(outcome.net_profit ?? '--')} · 手数 ${escapeHtml(outcome.closed_volume ?? '--')}</strong></div><div><span>证据哈希</span><strong>${escapeHtml(snapshot.content_hash || '--')}</strong></div></div><div class="workspace-row-meta"><span>交易流程问题：${escapeHtml(review.trade_process_issue_status)}</span><span>复盘内容确认：${escapeHtml(review.review_content_status)}</span></div><label><span>原始结构化内容</span><textarea id="reviewContentEditor" class="review-editor compact" readonly>${escapeHtml(JSON.stringify(content,null,2))}</textarea></label></div></details>
+    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="file-search" size="15"></i><strong>查看推理证据</strong><small>证据只读，用于核对复盘来源</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>信号 / 策略</span><strong>#${review.signal_id || '--'} / #${snapshot.strategy_id || '--'}</strong></div><div><span>模型来源</span><strong>${escapeHtml(snapshot.model_name || '未记录')}</strong></div><div><span>交易结果</span><strong>净利润 ${escapeHtml(outcome.net_profit ?? '--')} · 手数 ${escapeHtml(outcome.closed_volume ?? '--')}</strong></div><div><span>证据哈希</span><strong>${escapeHtml(snapshot.content_hash || '--')}</strong></div></div><div class="workspace-row-meta"><span>交易流程问题：${escapeHtml(reviewFieldStatusLabel(review.trade_process_issue_status))}</span><span>复盘内容确认：${escapeHtml(reviewFieldStatusLabel(review.review_content_status))}</span></div></div></details>
+    <textarea id="reviewContentEditor" hidden>${escapeHtml(JSON.stringify(content))}</textarea>
     ${current ? `<footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认前请核对结论</strong><small>确认后才会进入经验候选或个人记忆</small></span></div><div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">内容有问题，继续修改</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>${escapeHtml(approveLabel)}</button></div></footer>` : ''}`;
   initIcons();
 }
@@ -2717,7 +2780,7 @@ async function openReviewDetail(id) {
 const periodDecisionLabels = { good:"良好", mixed:"有得有失", poor:"需要改进", insufficient_evidence:"证据不足" };
 const chanIssueLabels = { data:"行情数据", calculation:"结构计算", confirmation_lag:"结构确认延迟", ai_interpretation:"AI 解读", strategy_rule:"策略规则", none:"未发现问题", unknown:"暂无法判断" };
 
-function periodReviewArray(value) { return Array.isArray(value) ? value.map(item => String(item || "").trim()).filter(Boolean) : []; }
+function periodReviewArray(value) { return Array.isArray(value) ? value.map(item => userVisibleText(item, "系统未提供中文说明")).filter(Boolean) : []; }
 function periodReviewLines(value) { return periodReviewArray(value).join("\n"); }
 function periodReviewFailureText(value) {
   const text = String(value || "");
@@ -2818,7 +2881,7 @@ function syncPeriodReviewEditorFromFields() {
 
 function periodReviewListBlock(title, values, icon = "list-checks") {
   const items = periodReviewArray(values);
-  return `<section class="period-review-evidence-card"><header><i data-lucide="${icon}" size="15"></i><strong>${escapeHtml(title)}</strong><span>${items.length}</span></header>${items.length ? `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : '<p>本周期未记录相关问题</p>'}</section>`;
+  return `<section class="period-review-evidence-card"><header><i data-lucide="${icon}" size="15"></i><strong>${escapeHtml(title)}</strong><span>${items.length}</span></header>${items.length ? `<ul>${items.map(item => `<li>${escapeHtml(userVisibleText(item, "系统未提供中文说明"))}</li>`).join("")}</ul>` : '<p>本周期未记录相关问题</p>'}</section>`;
 }
 
 async function openPeriodReviewDetail(id, { silent = false } = {}) {
@@ -2878,7 +2941,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     ${review.status === 'approved' && derivationStatus ? `<div class="period-review-source ${derivationClass}"><i data-lucide="${derivationStatus === 'succeeded' ? 'brain-circuit' : derivationStatus === 'failed' ? 'circle-alert' : 'loader-circle'}" size="16"></i><div><strong>${escapeHtml(derivationLabels[derivationStatus] || derivationStatus)}</strong><span>${escapeHtml(derivationDetail)}</span></div>${derivationStatus === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry-derivation">重试经验处理</button>' : ''}</div>` : ''}
     ${current ? `<section class="period-review-editor">
       <div class="period-review-section-heading"><div><span class="review-section-kicker">核心结论</span><h3>${isMonthly ? '本月策略表现' : '当日策略表现'}</h3></div><span>版本 ${Number(current.version_no || 1)}</span></div>
-      <label class="review-field"><span>复盘摘要</span><textarea data-period-review-field="period_summary" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(content.period_summary || '')}</textarea></label>
+      <label class="review-field"><span>复盘摘要</span><textarea data-period-review-field="period_summary" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(userVisibleText(content.period_summary, "暂无复盘摘要"))}</textarea></label>
       <div class="period-review-decision-row"><label class="review-field"><span>决策质量</span><select data-period-review-field="decision_quality" ${editable ? '' : 'disabled'}>${Object.entries(periodDecisionLabels).map(([value,label]) => `<option value="${value}" ${content.decision_quality === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="review-field"><span>结论置信度</span><div class="confidence-input"><input data-period-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${editable ? '' : 'disabled'}><small>0 到 1</small></div></label></div>
       <div class="period-review-edit-grid">${editableGroups.map(([key,label]) => `<label class="review-field"><span>${label}</span><textarea data-period-review-field="${key}" data-field-type="lines" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(periodReviewLines(content[key]))}</textarea><small>每行一条，保持简短且可执行</small></label>`).join('')}</div>
       <textarea id="reviewContentEditor" hidden>${escapeHtml(JSON.stringify(content))}</textarea>
@@ -4128,7 +4191,7 @@ function updateAnalysisExecutionButton(signal) {
     ? "复核后发送执行请求"
     : dir === "close" ? "持仓分析信号已自动执行"
       : signal.is_stale ? "信号已过期，无法执行"
-        : advice.description || (signal.is_executed ? "信号已执行" : "HOLD 观望信号不执行");
+        : advice.description || (signal.is_executed ? "信号已执行" : "观望信号不执行");
 }
 
 function renderSignalMonitorDetails(signal) {
@@ -4149,8 +4212,8 @@ function renderSignalMonitorDetails(signal) {
   const finalVolume = approved?.volume;
   const entryLabels = { market:"市价", limit:"限价", stop:"止损挂单", stop_limit:"止损限价" };
   const entryMethod = entryLabels[signal.entry_method] || (signalType(signal.signal_type) === "hold" ? "观望" : "待确认");
-  const analysis = String(signal.analysis || "").trim();
-  const reasoning = String(signal.reasoning || "").trim();
+  const analysis = userVisibleText(signal.analysis, "暂无行情分析正文");
+  const reasoning = userVisibleText(signal.reasoning, "");
   const strategyLabel = signal.prompt_type_name || signal.strategy_name || signal.strategy_title || "当前交易策略";
   const targetPrice = takeProfit.price || (takeProfit.tier ? signal[`take_profit_${takeProfit.tier}_price`] : null) || signalTakeProfit(signal);
 
@@ -4298,7 +4361,7 @@ function updateSignalDisplay(signal, options = {}) {
   card.style.setProperty("--signal-glow", colorMap[dir].glow);
   setText("sigSymbol", signal.symbol || "--");
   setText("sigTimeframe", signal.timeframe || "--");
-  setText("sigDirection", dir.toUpperCase());
+  setText("sigDirection", directionText(signal.signal_type));
   setText("sigDirectionText", directionText(signal.signal_type));
   $("sigDirection").className = `signal-direction ${dir}`;
   $("sigDirectionText").className = `signal-direction-text ${dir}`;
@@ -4369,11 +4432,11 @@ function signalDecision(signal) {
   const hasDirectionBias = Number.isFinite(bullish) && Number.isFinite(bearish) && bullish >= 0 && bearish >= 0 && bullish + bearish > 0;
   const total = hasDirectionBias ? bullish + bearish : 0;
   return {
-    summary: signal?.decision_summary || stored.decision_summary || (dir === "hold" ? "当前条件不足，建议继续观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待风控复核。`),
-    trigger: signal?.trigger_condition || stored.trigger_condition || "",
-    invalidation: signal?.invalidation_condition || stored.invalidation_condition || "",
-    reasons: Array.isArray(sourceReasons) ? sourceReasons.slice(0, 4) : [],
-    risks: Array.isArray(sourceRisks) ? sourceRisks.slice(0, 4) : [],
+    summary: userVisibleText(signal?.decision_summary || stored.decision_summary, dir === "hold" ? "当前条件不足，建议继续观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待风控复核。`),
+    trigger: userVisibleText(signal?.trigger_condition || stored.trigger_condition, ""),
+    invalidation: userVisibleText(signal?.invalidation_condition || stored.invalidation_condition, ""),
+    reasons: Array.isArray(sourceReasons) ? sourceReasons.slice(0, 4).map(item => userVisibleText(item, "系统未提供中文依据")) : [],
+    risks: Array.isArray(sourceRisks) ? sourceRisks.slice(0, 4).map(item => userVisibleText(item, "系统未提供中文风险说明")) : [],
     bullishScore: hasDirectionBias ? Math.round(bullish / total * 1000) / 10 : null,
     bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
     experienceUsage,
@@ -4397,7 +4460,7 @@ function renderExperienceUsage(signal, usage = {}) {
   return `<section class="analysis-experience-usage">
     <div class="analysis-section-title"><i data-lucide="brain-circuit" size="15"></i><strong>经验采用情况</strong><span>${escapeHtml(source)}</span></div>
     <div class="experience-usage-stats"><span>系统候选 <strong>${considered.length}</strong></span><span class="used">模型采用 <strong>${used.length}</strong></span><span>未采用 <strong>${rejected.length}</strong></span></div>
-    <p>${escapeHtml(usage.influence || (used.length ? `本次采用经验 #${used.join("、#")}` : "模型评估后未采用候选经验。"))}</p>
+    <p>${escapeHtml(userVisibleText(usage.influence, used.length ? `本次采用经验 #${used.join("、#")}` : "模型评估后未采用候选经验。"))}</p>
   </section>`;
 }
 
@@ -4413,6 +4476,19 @@ function renderDirectionBias(decision) {
 function signalExecutionAdvice(signal) {
   if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:"执行结果已记录。", executable:false };
   if (signalIsStale(signal)) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
+  const execution = parseJsonField(signal?.execution_result, {});
+  const persistedStatus = String(signal?.execution_status || "").toLowerCase();
+  const terminalStatus = ["rejected", "failed", "skipped", "uncertain"].includes(persistedStatus) ? persistedStatus : "";
+  const executionStatus = execution?.status || terminalStatus;
+  if (executionStatus && executionStatus !== "success") {
+    const rejected = executionStatus === "rejected";
+    return {
+      state: rejected ? "rejected" : "failed",
+      title: rejected ? "风控未放行" : "执行未完成",
+      description: resultRiskReason(execution) || userVisibleText(execution.message || execution.reason || execution.error, "系统未返回具体原因，请查看风控执行记录"),
+      executable: false,
+    };
+  }
   if (signal?.execution_advice) return signal.execution_advice;
   if (signalType(signal?.signal_type) === "hold") return { state:"observe", title:"暂不执行", description:"等待市场条件改善。", executable:false };
   return { state:"review", title:"建议复核后执行", description:"执行前将获取最新报价并由风控计算最终手数。", executable:true };
@@ -4793,14 +4869,14 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     : (market.positions || {});
   const result = $("analysisResult");
   const freshnessClass = signal.is_stale ? "expired" : signal.is_executed ? "executed" : "live";
-  const reasoningText = String(signal.reasoning || "").trim();
+  const reasoningText = userVisibleText(signal.reasoning, "");
   // Try to parse structured positions data (CLOSE signals store JSON array)
   let closePositions = null;
   try {
     const raw = String(signal.analysis || "").trim();
     if (raw.startsWith("[")) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length > 0 && arr[0].ticket) closePositions = arr; }
   } catch {}
-  let escapedAnalysis = closePositions ? "" : escapeHtml(String(signal.analysis || "").trim() || "暂无行情分析");
+  let escapedAnalysis = closePositions ? "" : escapeHtml(userVisibleText(signal.analysis, "暂无行情分析"));
   // Build analysis block: table for structured data, plain text otherwise
   let analysisBlock = "";
   if (closePositions) {
@@ -4815,7 +4891,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
         <td class="num"><a href="#" class="close-ticket-link" onclick="event.preventDefault(); navigateToOrder('${escapeHtml(ticket)}', '${escapeHtml(p.action)}')">#${escapeHtml(ticket)}</a></td>
         <td class="action-col"><span class="${actionClass}">${actionLabel}</span></td>
         <td class="confidence-col"><span class="${confClass}">${pct}%</span></td>
-        <td>${escapeHtml(p.reason || "--")}</td>
+        <td>${escapeHtml(userVisibleText(p.reason, "暂无中文说明"))}</td>
       </tr>`;
     }).join("\n");
     analysisBlock = `<strong>持仓分析</strong>\n<table class="close-analysis-table">
@@ -4837,7 +4913,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div class="analysis-summary-title">
         <span class="analysis-symbol">${escapeHtml(signal.symbol)}</span>
         <span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span>
-        <span class="analysis-direction-badge ${dir}">${dir.toUpperCase()} ${directionText(signal.signal_type)}</span>
+        <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
       </div>
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
     </div>
@@ -6008,10 +6084,10 @@ function renderCompareResults(result, elapsedMs) {
     const conf = confidenceInfo(signal.confidence);
     const modelName = r.model_name || models[r.model_id]?.model_name || `模型 #${r.model_id}`;
     const provider = r.provider || models[r.model_id]?.provider || "";
-    const analysis = escapeHtml(String(signal.analysis || "").trim() || "暂无分析");
-    const reasoning = String(signal.reasoning || "").trim();
+    const analysis = escapeHtml(userVisibleText(signal.analysis, "暂无分析"));
+    const reasoning = userVisibleText(signal.reasoning, "");
     if (r.error) {
-      return `<div class="compare-card"><div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-provider">${escapeHtml(modelProviderLabel(provider))}</span></div><div class="compare-card-error">${escapeHtml(r.error)}</div></div>`;
+      return `<div class="compare-card"><div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-provider">${escapeHtml(modelProviderLabel(provider))}</span></div><div class="compare-card-error">${escapeHtml(userVisibleText(r.error, "模型分析失败，详细信息已记录"))}</div></div>`;
     }
     return `<div class="compare-card">
       <div class="compare-card-head"><span class="compare-card-model">${escapeHtml(modelName)}</span><span class="compare-card-direction ${dir}">${directionText(signal.signal_type)}</span></div>
@@ -6462,7 +6538,7 @@ function buildHistoryItemHTML(signal) {
       <button class="analysis-history-item" data-analysis-id="${escapeHtml(signal.id)}">
         <span class="history-item-top">
           <span class="history-item-symbol">${escapeHtml(signal.symbol)} · ${escapeHtml(signal.timeframe)}</span>
-          <span class="history-item-dir ${dir}">${dir.toUpperCase()} ${directionText(signal.signal_type)}</span>
+          <span class="history-item-dir ${dir}">${directionText(signal.signal_type)}</span>
         </span>
         <span class="history-item-meta">
           <span>#${escapeHtml(signal.id)}</span>
@@ -6470,7 +6546,7 @@ function buildHistoryItemHTML(signal) {
           <span>${confidence}</span>
           <span>${escapeHtml(status)}</span>
         </span>
-        <span class="history-item-text">${escapeHtml(signal.analysis || signal.reasoning || "--")}</span>
+        <span class="history-item-text">${escapeHtml(userVisibleText(signal.analysis || signal.reasoning, "暂无中文分析摘要"))}</span>
       </button>
     `;
 }
@@ -6571,7 +6647,7 @@ function renderSignalRows() {
         <td>${compactTimeHtml(signal?.created_at_mt5 || signal?.created_at)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
         <td><span class="signal-tf-badge ${dir === 'close' ? 'close-badge' : ''}">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
-        <td><span class="tag ${dir}">${dir.toUpperCase()} ${directionText(signal.signal_type)}</span></td>
+        <td><span class="tag ${dir}">${directionText(signal.signal_type)}</span></td>
         <td>
           <div class="conf-mini ${confidenceClass(signal.confidence)}">
             <span class="conf-mini-track"><span class="conf-mini-fill" style="width:${confidence.value}%"></span></span>
@@ -6804,7 +6880,7 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
       <td class="num">${escapeHtml(formatTime(row.entry_time))}</td>
       <td>${escapeHtml(row.symbol)}</td>
       ${ticketCell(ticket, tickets)}
-      <td><span class="tag ${dir}">${String(row.type || dir).toUpperCase()} ${directionText(dir)}</span></td>
+      <td><span class="tag ${dir}">${directionText(row.type || dir)}</span></td>
       <td class="num">${escapeHtml(volumeText(row.volume))}</td>
       <td class="num">${escapeHtml(raw(row.entry_price))}</td>
       <td class="num">${row.stop_loss ? escapeHtml(raw(row.stop_loss)) : '--'}</td>

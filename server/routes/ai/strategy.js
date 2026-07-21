@@ -17,6 +17,7 @@ import { saveChanStructureAnchor } from './platform-market-data.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
 import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backtest.js'
 import { resolveModelSnapshotSelection } from './model-snapshot-samples.js'
+import { resolvePlatformAiVolumeRange } from './risk-policy.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -608,9 +609,9 @@ export async function handleAnalyze(userId, params) {
   config._allowed_entry_methods = policy.entryMethods
   config._market_data_plan = policy.marketDataPlan
   config._use_chan_analysis = policy.useChanAnalysis
-  config._ai_volume_min = 0.01
-  config._ai_volume_max = Number(config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE)
-  config._ai_volume_step = 0.01
+  config._ai_volume_min = Number(config._ai_volume_min)
+  config._ai_volume_max = Number(config._ai_volume_max)
+  config._ai_volume_step = Number(config._ai_volume_step)
   config.enable_auto_trade = Boolean(auto_execute)
   config._market_only = strategy.scope === 'platform'
   config._include_portfolio_context = strategy.scope === 'private' && Boolean(Number(strategy.include_portfolio_context))
@@ -652,6 +653,7 @@ export async function handleAnalyze(userId, params) {
       standardSymbol: symbol,
       volumeMin: config._ai_volume_min,
       volumeMax: config._ai_volume_max,
+      volumeStep: config._ai_volume_step,
       marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
     })
   }
@@ -857,6 +859,7 @@ export async function handleAnalyzeCompare(userId, params) {
 
   const prompt = strategy.system_prompt || ''
   const policy = parseStrategyPolicy(strategy)
+  const aiVolumeRange = await resolvePlatformAiVolumeRange()
   const primaryTf = policy.marketDataPlan?.primary_timeframe || 'M30'
   const tags = (policy.marketDataPlan?.timeframes || []).map(item => ({ tf: item.timeframe, count: item.kline_count }))
   if (tags.length === 0) tags.push({ tf: primaryTf, count: 100 })
@@ -878,8 +881,9 @@ export async function handleAnalyzeCompare(userId, params) {
   if (strategy.scope === 'platform') {
     market = buildSharedMarketSnapshot(market, {
       standardSymbol: symbol,
-      volumeMin: 0.01,
-      volumeMax: 1.0,
+      volumeMin: aiVolumeRange.min,
+      volumeMax: aiVolumeRange.max,
+      volumeStep: aiVolumeRange.step,
       marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
     })
   }
@@ -920,9 +924,9 @@ export async function handleAnalyzeCompare(userId, params) {
       _market_data_plan: policy.marketDataPlan,
       _use_chan_analysis: policy.useChanAnalysis,
       _market_only: strategy.scope === 'platform',
-      _ai_volume_min: 0.01,
-      _ai_volume_max: 1.0,
-      _ai_volume_step: 0.01,
+      _ai_volume_min: aiVolumeRange.min,
+      _ai_volume_max: aiVolumeRange.max,
+      _ai_volume_step: aiVolumeRange.step,
       _comparison_mode:true,
     }
     return maybeAiSignal(null, config, market, prompt).then(signal => {
@@ -1009,6 +1013,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
   const policy = parseStrategyPolicy(strategy)
+  const currentAiVolumeRange = await resolvePlatformAiVolumeRange()
   const planItems = policy.marketDataPlan.timeframes.map(item => ({
     timeframe: String(item.timeframe || '').toUpperCase(),
     kline_count: Math.max(20, Number(item.kline_count) || 100),
@@ -1310,6 +1315,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     }
 
     const inferenceTasks = validModels.map(async ({ modelId, resolved }) => {
+      const snapshotVolumeRange = decisionPoint.snapshotSample?.market_snapshot?.ai_volume_range || currentAiVolumeRange
       const config = {
         ...resolved.model,
         system_prompt: prompt,
@@ -1325,9 +1331,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _market_data_plan:runtimePolicy.marketDataPlan,
         _use_chan_analysis:runtimePolicy.useChanAnalysis,
         _market_only:runtimePolicy.marketOnly,
-        _ai_volume_min: 0.01,
-        _ai_volume_max: 1.0,
-        _ai_volume_step: 0.01,
+        _ai_volume_min:Number(snapshotVolumeRange.min ?? currentAiVolumeRange.min),
+        _ai_volume_max:Number(snapshotVolumeRange.max ?? currentAiVolumeRange.max),
+        _ai_volume_step:Number(snapshotVolumeRange.step ?? currentAiVolumeRange.step),
         _comparison_mode:true,
         _comparison_replay_system_prompt:decisionPoint.snapshotSample?.system_prompt,
         _comparison_replay_user_prompt:decisionPoint.snapshotSample?.user_prompt,

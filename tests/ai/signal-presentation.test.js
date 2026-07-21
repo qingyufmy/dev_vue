@@ -64,6 +64,28 @@ describe('signal presentation', () => {
     expect(advice.description).not.toContain('R1.7')
   })
 
+  it('shows the concrete rejected values instead of only a generic risk label', () => {
+    const advice = buildExecutionAdvice({ signal_type:'buy', execution_result:{ status:'rejected', details:{ rules:[{
+      code:'R1.9_AI_VOLUME_OUT_OF_RANGE', outcome:'reject', details:{ volume:0.3, minimum:0.01, maximum:0.05, step:0.01 },
+    }] } } })
+    expect(advice.description).toBe('AI 建议手数超出平台允许范围：AI 建议 0.3 手，允许范围 0.01～0.05 手，步进 0.01 手')
+    expect(advice.description).not.toContain('R1.9')
+  })
+
+  it('does not expose a raw English broker error in user-facing advice', () => {
+    const advice = buildExecutionAdvice({ signal_type:'sell_limit', execution_result:{ status:'failed', error:'Unknown broker transport failure' } })
+    expect(advice.description).toBe('系统执行条件未满足，详细信息已记录')
+  })
+
+  it('restores a persisted rejection even when an old execution payload has no status field', () => {
+    const advice = buildExecutionAdvice({
+      signal_type:'sell', execution_status:'rejected',
+      execution_result:{ reason:'invalid_stop_loss_direction', details:{ stop_loss:3990, entry_price:4000 } },
+    })
+    expect(advice).toMatchObject({ state:'rejected', executable:false })
+    expect(advice.description).toBe('止损价格方向与订单方向不一致：止损 3990，入场参考价 4000')
+  })
+
   it('hides unknown internal risk codes behind a safe Chinese fallback', () => {
     const advice = buildExecutionAdvice({ signal_type: 'buy', execution_result: { status: 'rejected', message: 'R9_UNKNOWN_PRIVATE_RULE' } })
     expect(advice.description).toBe('风控条件未满足')

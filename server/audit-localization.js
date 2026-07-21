@@ -92,6 +92,25 @@ const VALUE_LABELS = {
   volume_exceeds_config_limit: '手数超过配置上限',
   max_open_positions_reached: '持仓数量达到上限',
   signal_price_slippage_exceeded: '信号价格与当前价格偏差过大',
+  auto_trade_disabled: '当前订阅没有开启自动执行',
+  bridge_offline: '用户的 MT5 桥接当前未连接',
+  user_quote_unavailable: '无法获取用户 MT5 的有效报价',
+  stop_loss_missing: 'AI 信号缺少有效止损价格',
+  invalid_stop_loss_direction: '止损价格方向与订单方向不一致',
+  take_profit_target_missing: '所选止盈档位没有有效目标价格',
+  invalid_take_profit_direction: '止盈价格方向与订单方向不一致',
+  pending_list_unavailable: '无法读取当前 MT5 挂单列表',
+  pending_list_confirm_unavailable: '替换旧挂单后无法复核最新挂单列表',
+  pending_list_confirm_failed: '替换旧挂单后的挂单复核失败',
+  pending_supersede_incomplete: '同方向旧挂单尚未完全替换',
+  pending_limit_reached: '当前品种的挂单数量已达到限制',
+  private_portfolio_context_unavailable: '无法获取私有策略所需的持仓与挂单数据',
+  subscription_inactive: '策略订阅当前未启用',
+  outside_schedule: '当前不在自动推理运行时段内',
+  system_execution_exception: '系统执行异常，详细信息已记录',
+  lock_lost_before_supersede_cancel: '任务执行权已失效，未继续替换旧挂单',
+  lock_lost_before_pending_confirm: '任务执行权已失效，未继续复核挂单',
+  lock_lost_before_send: '任务执行权已失效，订单未发送到 MT5',
   'R1.5_RR_TOO_LOW': '盈亏比低于最低要求',
   'R1.5_TP_TIER_UPGRADED': '已改用满足盈亏比要求的更远止盈档位',
   'R1.9_BELOW_MINIMUM_AFTER_RISK': '风险调整后手数低于最小可交易手数',
@@ -118,6 +137,35 @@ const VALUE_LABELS = {
   'R1.7_STOP_LIMIT_RELATION': 'Stop Limit 触发价与触发后限价关系错误',
   'R3.4_MARGIN_DATA_INCOMPLETE': 'MT5 无法计算本次订单所需保证金',
   'R3.4_PROJECTED_MARGIN_LEVEL': '下单后的预计保证金水平低于要求',
+  'R1_INSTRUMENT_DATA_INCOMPLETE': '品种交易参数不完整',
+  'R1_SYMBOL_TRADE_DISABLED': '该品种当前禁止交易',
+  'R1.1_SYMBOL_NOT_ALLOWED': '该品种不在平台允许交易范围内',
+  'R1.2_STOP_LOSS_REQUIRED': '订单缺少有效止损',
+  'R1.5_TAKE_PROFIT_REQUIRED': '订单缺少有效止盈',
+  'R1.6_SL_TP_DIRECTION': '止损或止盈价格方向错误',
+  'R1.9_AI_VOLUME_OUT_OF_RANGE': 'AI 建议手数超出平台允许范围',
+  'R1.9_VOLUME_INCREASE_FORBIDDEN': '风控禁止放大 AI 建议手数',
+  'R1.9_VOLUME_INVALID': '订单手数不符合品种交易规则',
+  'R1.10_RISK_DATA_INVALID': '账户或品种风险数据无效',
+  'R2.2_MIN_OPEN_INTERVAL': '距离上次开仓时间过短',
+  'R2.3_DAILY_OPEN_COUNT': '当日开仓次数已达到上限',
+  'R2.4_PRICE_TIME_DUPLICATE': '检测到时间和价格均相近的重复订单',
+  'R3.1_DAILY_LOSS_LIMIT': '账户已达到每日亏损上限',
+  'R3.2_CONSECUTIVE_LOSS_COOLDOWN': '连续亏损已触发交易冷却',
+  'R3.2_LOSS_COOLDOWN': '账户仍处于连续亏损冷却期',
+  'R3.3_MAX_DRAWDOWN': '账户回撤已达到限制',
+  'R3_ACCOUNT_HALTED': '账户风控当前处于暂停状态',
+  'R3_RISK_DATA_INCOMPLETE': '账户风险数据尚不完整',
+  'R4_QUOTE_INVALID': '当前 MT5 报价无效',
+  'R4.2_WEEKEND_PROTECTION': '当前处于周末保护时段，禁止新增仓位',
+  'R4.3_SIGNAL_EXPIRED': '推理信号已经超过有效期',
+  'R4.5_SPREAD_TOO_WIDE': '当前点差超过允许上限',
+  'R6_ACCOUNT_NOT_FOUND': '未找到当前 MT5 对应的交易账户',
+  'R6_ACCOUNT_PAUSED': '当前交易账户已暂停',
+  'R6_ACCOUNT_TRANSFERRED': '该 MT5 账户已切换到其他平台账号',
+  'R6_GLOBAL_KILL_SWITCH': '平台紧急停止已开启',
+  'R6_USER_KILL_SWITCH': '账户紧急停止已开启',
+  'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED': '当前 MT5 账户没有完整交易权限',
 }
 
 const ACTION_CODES = new Map(Object.entries(ACTION_LABELS).map(([code, label]) => [label, code]))
@@ -146,6 +194,36 @@ export function auditStatusLabel(value) {
 export function auditValueLabel(value) {
   const text = String(value ?? '').trim()
   return VALUE_LABELS[text] || text
+}
+
+function displayNumber(value, digits = 3) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '--'
+  return number.toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+}
+
+export function formatRiskReason(code, details = {}) {
+  const rawCode = String(code || '').trim()
+  const label = auditValueLabel(rawCode)
+  const base = label === rawCode ? '风控条件未满足' : label
+  if (rawCode === 'R1.9_AI_VOLUME_OUT_OF_RANGE') return `${base}：AI 建议 ${displayNumber(details.volume)} 手，允许范围 ${displayNumber(details.minimum)}～${displayNumber(details.maximum)} 手，步进 ${displayNumber(details.step)} 手`
+  if (rawCode === 'R1.9_BELOW_MINIMUM_AFTER_RISK') return `${base}：风险计算后为 ${displayNumber(details.volume)} 手，最低可交易 ${displayNumber(details.minimum)} 手`
+  if (rawCode === 'R1.7_PENDING_DIRECTION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，当前价 ${displayNumber(details.current_price)}`
+  if (rawCode === 'R1.7_STOP_LIMIT_RELATION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，触发后限价 ${displayNumber(details.stop_limit_price)}`
+  if (rawCode === 'R4.4_QUOTE_STALE') return `${base}：报价年龄 ${displayNumber(details.quote_age_seconds)} 秒，允许上限 ${displayNumber(details.maximum_seconds)} 秒`
+  if (rawCode === 'R4.5_SPREAD_TOO_WIDE') return `${base}：当前 ${displayNumber(details.spread_points)} 点`
+  if (rawCode === 'R4.6_EXECUTION_PRICE_DEVIATION') return `${base}：当前价 ${displayNumber(details.current_price)}，允许区间 ${displayNumber(details.allowed_min)}～${displayNumber(details.allowed_max)}，最大偏差 ${displayNumber(details.maximum_pct)}%`
+  if (rawCode === 'R2.2_MIN_OPEN_INTERVAL') return `${base}：还需等待 ${displayNumber(details.remaining_seconds, 0)} 秒`
+  if (rawCode === 'R2.3_DAILY_OPEN_COUNT') return `${base}：当前 ${displayNumber(details.count, 0)} 次，上限 ${displayNumber(details.limit, 0)} 次`
+  if (rawCode === 'R3.1_DAILY_LOSS_LIMIT') return `${base}：当前亏损 ${displayNumber(details.daily_loss_pct ?? details.loss_pct)}%，上限 ${displayNumber(details.limit_pct ?? details.daily_loss_limit_pct)}%`
+  if (rawCode === 'R3.2_LOSS_COOLDOWN' && details.until) return `${base}：冷却至 ${details.until}`
+  if (rawCode === 'R3.3_MAX_DRAWDOWN') return `${base}：当前回撤 ${displayNumber(details.drawdown_pct)}%，上限 ${displayNumber(details.limit_pct)}%`
+  if (rawCode === 'invalid_stop_loss_direction') return `${base}：止损 ${displayNumber(details.stop_loss)}，入场参考价 ${displayNumber(details.entry_price)}`
+  if (rawCode === 'invalid_take_profit_direction') return `${base}：止盈 ${displayNumber(details.take_profit)}，入场参考价 ${displayNumber(details.entry_price)}`
+  if (rawCode === 'pending_supersede_incomplete') return `${base}：仍有 ${displayNumber(details.remaining_same_direction, 0)} 个同向挂单未取消`
+  if (rawCode === 'pending_limit_reached') return `${base}：当前 ${displayNumber(details.remaining, 0)} 个，上限 ${displayNumber(details.maximum, 0)} 个`
+  if ((rawCode === 'R6_GLOBAL_KILL_SWITCH' || rawCode === 'R6_USER_KILL_SWITCH') && details.reason) return `${base}：${details.reason}`
+  return base
 }
 
 const USER_TEXT_KEYS = new Set(['reason', 'message', 'error', 'risk_block', 'last_error'])
