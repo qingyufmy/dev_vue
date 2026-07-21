@@ -2797,8 +2797,47 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
   initIcons();
 }
 
-async function loadAdminRiskCenter() {
-  const [data, rolloutData] = await Promise.all([api("/api/ai/admin/risk-center"), api("/api/ai/admin/rollout-health")]); state.globalRiskSnapshot = data;
+let _adminRiskLoadSequence = 0;
+
+function captureGlobalRiskEditorState() {
+  const editor = $("globalRiskEditor");
+  const inputKinds = ["globalRiskField", "globalRiskMin", "globalRiskMax", "globalRiskLock"];
+  const inputKey = input => {
+    const kind = inputKinds.find(name => input?.dataset?.[name] !== undefined);
+    return kind ? `${kind}:${input.dataset[kind]}` : "";
+  };
+  const active = editor?.contains(document.activeElement) ? document.activeElement : null;
+  return {
+    initialized:Boolean(editor?.querySelector(".global-risk-groups")),
+    openGroups:new Set([...editor?.querySelectorAll("details.global-risk-group[open]") || []].map(item => item.dataset.globalRiskGroup)),
+    openRows:new Set([...editor?.querySelectorAll("details.global-risk-row[open]") || []].map(item => item.dataset.globalRiskKey)),
+    drafts:Object.fromEntries([...editor?.querySelectorAll("input[data-global-risk-field], input[data-global-risk-min], input[data-global-risk-max], input[data-global-risk-lock]") || []].map(input => [inputKey(input), input.value])),
+    focusKey:inputKey(active), selectionStart:active?.selectionStart ?? null, selectionEnd:active?.selectionEnd ?? null,
+  };
+}
+
+function restoreGlobalRiskEditorState(snapshot) {
+  if (!snapshot?.initialized) return;
+  const editor = $("globalRiskEditor");
+  editor?.querySelectorAll("details.global-risk-group").forEach(item => { item.open = snapshot.openGroups.has(item.dataset.globalRiskGroup); });
+  editor?.querySelectorAll("details.global-risk-row").forEach(item => { item.open = snapshot.openRows.has(item.dataset.globalRiskKey); });
+  editor?.querySelectorAll("input[data-global-risk-field], input[data-global-risk-min], input[data-global-risk-max], input[data-global-risk-lock]").forEach(input => {
+    const kind = ["globalRiskField", "globalRiskMin", "globalRiskMax", "globalRiskLock"].find(name => input.dataset[name] !== undefined);
+    const key = kind ? `${kind}:${input.dataset[kind]}` : "";
+    if (Object.hasOwn(snapshot.drafts, key)) input.value = snapshot.drafts[key];
+    if (key === snapshot.focusKey) {
+      input.focus({ preventScroll:true });
+      if (snapshot.selectionStart != null) input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd ?? snapshot.selectionStart);
+    }
+  });
+}
+
+async function loadAdminRiskCenter({ preserveEditorState = true } = {}) {
+  const loadSequence = ++_adminRiskLoadSequence;
+  const editorState = preserveEditorState ? captureGlobalRiskEditorState() : null;
+  const [data, rolloutData] = await Promise.all([api("/api/ai/admin/risk-center"), api("/api/ai/admin/rollout-health")]);
+  if (loadSequence !== _adminRiskLoadSequence) return;
+  state.globalRiskSnapshot = data;
   const raw = parseJsonField(data.platform_policy_version?.config_json, {}), current = { ...(data.defaults || {}), ...(raw.values || raw.defaults || raw) }, controls = raw.controls || {}, meta = data.rule_metadata || {};
   const editable = Object.keys(data.defaults || {}).filter(key => typeof data.defaults[key] === "number" && meta[key]?.configurable !== false);
   const renderUnitInput = ({ key, dataAttr, value, disabled = false, placeholder = "" }) => {
@@ -2808,9 +2847,15 @@ async function loadAdminRiskCenter() {
   const renderGlobalRiskRow = key => {
     const rule = meta[key] || {}, control = controls[key] || {}, direction = RISK_SAFETY_LABELS[rule.safety_direction] || "平台规则";
     const userConfigurable = rule.user_editable !== false && !rule.locked;
-    return `<details class="global-risk-row"><summary><span class="global-risk-name"><strong>${escapeHtml(RISK_LABELS[key] || key)}</strong><small>${escapeHtml(rule.description || direction)}</small></span><span class="risk-default-pill">平台边界 ${escapeHtml(formatRiskValue(key, current[key], rule))}</span><i data-lucide="chevron-down" size="15"></i></summary><div class="global-risk-fields"><label><span><strong>平台安全边界</strong><small>${escapeHtml(direction)}</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-field', value:current[key] })}</label>${userConfigurable ? `<label><span><strong>用户可选最小值</strong><small>用户只能在安全方向内调整</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-min', value:control.allowed_min ?? rule.allowed_min })}</label><label><span><strong>用户可选最大值</strong><small>不会允许突破平台边界</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-max', value:control.allowed_max ?? rule.allowed_max })}</label><label><span><strong>平台锁定值</strong><small>填写后所有用户统一使用</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-lock', value:control.locked_value, placeholder:'不锁定' })}</label>` : `<div class="risk-system-note"><i data-lucide="shield-check" size="16"></i><span><strong>仅平台管理</strong><small>该项涉及系统时效或执行安全，不开放给普通用户修改。</small></span></div>`}</div></details>`;
+    const inheritedBoundary = rule.safety_direction === "lower"
+      ? `用户上限 ${formatRiskValue(key, control.allowed_max ?? current[key], rule)}`
+      : rule.safety_direction === "higher"
+        ? `用户下限 ${formatRiskValue(key, control.allowed_min ?? current[key], rule)}`
+        : `平台默认 ${formatRiskValue(key, current[key], rule)}`;
+    return `<details class="global-risk-row" data-global-risk-key="${escapeHtml(key)}"><summary><span class="global-risk-name"><strong>${escapeHtml(RISK_LABELS[key] || key)}</strong><small>${escapeHtml(rule.description || direction)}</small></span><span class="risk-default-pill">${escapeHtml(inheritedBoundary)}</span><i data-lucide="chevron-down" size="15"></i></summary><div class="global-risk-fields"><label><span><strong>平台默认值</strong><small>用户留空时继承，并受下方允许范围约束</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-field', value:current[key] })}</label>${userConfigurable ? `<label><span><strong>用户可选最小值</strong><small>同时作为继承值的下限</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-min', value:control.allowed_min ?? rule.allowed_min })}</label><label><span><strong>用户可选最大值</strong><small>同时作为继承值的平台上限</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-max', value:control.allowed_max ?? rule.allowed_max })}</label><label><span><strong>平台锁定值</strong><small>填写后所有用户统一使用</small></span>${renderUnitInput({ key, dataAttr:'data-global-risk-lock', value:control.locked_value, placeholder:'不锁定' })}</label>` : `<div class="risk-system-note"><i data-lucide="shield-check" size="16"></i><span><strong>仅平台管理</strong><small>该项涉及系统时效或执行安全，不开放给普通用户修改。</small></span></div>`}</div></details>`;
   };
-  $("globalRiskEditor").innerHTML = `<div class="global-risk-groups">${RISK_GROUPS.map(([title, keys], index) => { const rows = keys.filter(key => editable.includes(key)); return rows.length ? `<details class="workspace-panel global-risk-group" ${index === 0 ? 'open' : ''}><summary><span><strong>${escapeHtml(title)}</strong><small>${rows.length} 项平台规则</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="global-risk-group-body">${rows.map(renderGlobalRiskRow).join("")}</div></details>` : ""; }).join("")}</div>`;
+  $("globalRiskEditor").innerHTML = `<div class="global-risk-groups">${RISK_GROUPS.map(([title, keys], index) => { const rows = keys.filter(key => editable.includes(key)); return rows.length ? `<details class="workspace-panel global-risk-group" data-global-risk-group="${escapeHtml(title)}" ${!editorState?.initialized && index === 0 ? 'open' : ''}><summary><span><strong>${escapeHtml(title)}</strong><small>${rows.length} 项平台规则</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="global-risk-group-body">${rows.map(renderGlobalRiskRow).join("")}</div></details>` : ""; }).join("")}</div>`;
+  restoreGlobalRiskEditorState(editorState);
   $("adminRiskAccounts").innerHTML = (data.accounts || []).map(account => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.nickname || account.login_account)} <span class="status-chip ${account.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(account.halt_status || '未初始化')}</span></div><div class="workspace-row-meta"><span>回撤 ${escapeHtml(account.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(account.consecutive_losses ?? '--')}</span><span>冷却至 ${escapeHtml(account.cooldown_until || '--')}</span><span>Kill Switch ${account.user_kill_switch ? '开启' : '关闭'}</span><span>数据 ${account.data_complete ? '完整' : `不完整：${escapeHtml(riskDataIncompleteText(account.data_incomplete_reason))}`}</span></div></div></article>`).join("") || '<div class="empty-state">暂无账户风险状态</div>';
   const global = data.global_control || {}, globalEnabled = Boolean(global.global_kill_switch);
   $("globalKillSwitchBtn").textContent = globalEnabled ? "解除平台紧急停止" : "紧急停止所有新开仓";
@@ -2855,7 +2900,7 @@ async function saveGlobalRisk() {
   document.querySelectorAll("[data-global-risk-max]").forEach(input => { const key=input.dataset.globalRiskMax; controls[key] ||= {}; controls[key].allowed_max=Number(input.value); });
   document.querySelectorAll("[data-global-risk-lock]").forEach(input => { const key=input.dataset.globalRiskLock; controls[key] ||= {}; controls[key].locked_value=input.value === "" ? null : Number(input.value); });
   await api("/api/ai/admin/risk-center", { method:"PUT", body:{ values, controls, reason:"管理员从全局风控页面更新" } });
-  toast("全局风控新版本已生效", "success"); await loadAdminRiskCenter();
+  toast("全局风控新版本已生效", "success"); await loadAdminRiskCenter({ preserveEditorState:false });
 }
 
 function setTab(tabId, options = {}) {

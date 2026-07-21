@@ -299,6 +299,24 @@ describe('versioned policy semantics', () => {
     expect(result.policy).not.toHaveProperty('min_rr')
     expect(result.policyVersionIds).toEqual([11, 12])
   })
+
+  it('applies the administrator user range to inherited platform values', async () => {
+    db.queryOne.mockImplementation(async (sql) => {
+      if (sql.includes("scope = 'platform'")) return { id:1 }
+      if (sql.includes("scope = 'account'")) return null
+      if (sql.includes('risk_policy_versions')) return { id:11, config_json:JSON.stringify({
+        values:{ max_risk_per_trade_pct:1, weekend_close_minutes:60 },
+        controls:{
+          max_risk_per_trade_pct:{ allowed_min:0.01, allowed_max:0.4, locked_value:null, user_editable:true },
+          weekend_close_minutes:{ allowed_min:120, allowed_max:2880, locked_value:null, user_editable:true },
+        },
+      }) }
+      return null
+    })
+    const result = await resolveEffectiveRiskPolicy({ userId:5, tradingAccountId:6 })
+    expect(result.platformPolicy).toMatchObject({ max_risk_per_trade_pct:0.4, weekend_close_minutes:120 })
+    expect(result.policy).toMatchObject({ max_risk_per_trade_pct:0.4, weekend_close_minutes:120 })
+  })
 })
 
 describe('risk decision persistence', () => {

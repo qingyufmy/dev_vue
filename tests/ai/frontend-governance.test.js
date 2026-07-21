@@ -396,6 +396,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(groups).not.toContain('min_margin_level_pct')
   })
 
+  it('preserves global-risk expansion and draft values across background refreshes', () => {
+    expect(app).toContain('captureGlobalRiskEditorState()')
+    expect(app).toContain('restoreGlobalRiskEditorState(editorState)')
+    expect(app).toContain('data-global-risk-group=')
+    expect(app).toContain('data-global-risk-key=')
+    expect(app).toContain('同时作为继承值的平台上限')
+    expect(app).toContain('loadAdminRiskCenter({ preserveEditorState:false })')
+  })
+
   it('keeps the overview signal card focused on the current decision and execution summary', () => {
     const start = html.indexOf('id="signalCard"')
     const end = html.indexOf('class="card grid-area-positions"', start)

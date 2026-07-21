@@ -84,9 +84,28 @@ function buildPlatformControls(rawConfig = {}) {
   }))
 }
 
+function applyPlatformControlBoundaries(base, controls) {
+  const result = { ...base }
+  for (const [key, meta] of Object.entries(RISK_RULES)) {
+    const control = controls?.[key]
+    if (!control) continue
+    if (control.locked_value !== null && control.locked_value !== undefined) {
+      result[key] = control.locked_value
+      continue
+    }
+    if (meta.type !== 'number') continue
+    const min = finite(control.allowed_min)
+    const max = finite(control.allowed_max)
+    if (min != null) result[key] = Math.max(min, Number(result[key]))
+    if (max != null) result[key] = Math.min(max, Number(result[key]))
+  }
+  result.require_stop_loss = true
+  return result
+}
+
 function applyAccountConfig(base, rawConfig, controls) {
   const values = rawConfig?.values || rawConfig || {}
-  const result = { ...base }
+  const result = applyPlatformControlBoundaries(base, controls)
   for (const [key, meta] of Object.entries(RISK_RULES)) {
     const control = controls[key]
     if (control.locked_value !== null && control.locked_value !== undefined) {
@@ -176,6 +195,7 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
       policyVersionIds.push(version.id)
     }
   }
+  policy = applyPlatformControlBoundaries(policy, controls)
   platformPolicy = { ...policy }
   if (account) {
     const version = await queryOne('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? AND effective_at <= ? ORDER BY version_no DESC LIMIT 1', [account.id, now])
@@ -185,9 +205,7 @@ export async function resolveEffectiveRiskPolicy({ userId, tradingAccountId = nu
       policyVersionIds.push(version.id)
     }
   }
-  for (const [key, control] of Object.entries(controls)) {
-    if (control.locked_value !== null && control.locked_value !== undefined) policy[key] = control.locked_value
-  }
+  policy = applyPlatformControlBoundaries(policy, controls)
   policy.max_position_size = Math.min(policy.max_position_size, finite(legacyConfig.max_position_size) || policy.max_position_size)
   if (riskProfileId) {
     const profile = await queryOne("SELECT * FROM risk_profiles WHERE id = ? AND user_id = ? AND status = 'active' AND deleted_at IS NULL", [riskProfileId, userId])
@@ -214,6 +232,7 @@ export async function submitRiskPolicyChanges({ policySetId, actorId, changes, r
         const platformRaw = parseJson(platformVersion?.config_json)
         platformPolicy = mergeKnown(platformPolicy, platformRaw.values || platformRaw.defaults || platformRaw)
         platformControls = buildPlatformControls(platformRaw)
+        platformPolicy = applyPlatformControlBoundaries(platformPolicy, platformControls)
       }
     }
     const applied = {}, removals = new Set(), auditItems = []
