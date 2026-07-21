@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse } from '../../server/routes/ai/llm.js'
 
 describe('buildStrategyOutputFormat', () => {
   it('removes all pending-order fields from a market-only strategy', () => {
@@ -36,6 +36,48 @@ describe('experience usage normalization', () => {
     { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[7, 8] } },
     { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
     expect(result.experience_usage).toMatchObject({ source:'platform', considered_ids:[7, 8], used_ids:[7], rejected_ids:[8] })
+  })
+})
+
+describe('model comparison signal isolation', () => {
+  const config = { _allowed_entry_methods:['market', 'limit'], _ai_volume_min:0.01, _ai_volume_max:1, _ai_volume_step:0.01 }
+  const market = { latest_price:2000 }
+
+  it('preserves a raw trade when live ATR policy would have downgraded it', () => {
+    const raw = {
+      _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
+      recommended_volume:0.03, limit_price:1995, pending_valid_minutes:60,
+      stop_loss_price:1985, take_profit_1_price:2010, recommended_take_profit_tier:1,
+    }
+    const normalized = {
+      ...raw, signal_type:'hold', entry_method:'observe', confidence:0, recommended_volume:0,
+      normalization_info:{ type:'atr_anchor_unavailable_hold', reason:'atr_anchor_unavailable_hold' },
+    }
+    expect(buildModelComparisonSignal(raw, normalized, config, market)).toMatchObject({
+      signal_type:'buy_limit', entry_method:'limit', recommended_volume:0.03,
+      pending_valid_until:null,
+      comparison_validation:{
+        status:'valid', execution_eligible:true,
+        warnings:['atr_anchor_unavailable_hold'], live_risk_bypassed:true,
+      },
+    })
+  })
+
+  it('keeps the raw direction but blocks replay when order constraints are invalid', () => {
+    const raw = {
+      _inference_source:'ai', signal_type:'sell_limit', entry_method:'limit', confidence:0.75,
+      recommended_volume:0.02, limit_price:1990,
+      stop_loss_price:2010, take_profit_1_price:1970, recommended_take_profit_tier:1,
+    }
+    const normalized = {
+      ...raw, signal_type:'hold', entry_method:'observe', confidence:0, recommended_volume:0,
+      normalization_info:{ type:'l5_schema_hold', reason:'pending_price_direction_invalid' },
+    }
+    const result = buildModelComparisonSignal(raw, normalized, config, market)
+    expect(result.signal_type).toBe('sell_limit')
+    expect(result.comparison_validation.status).toBe('invalid')
+    expect(result.comparison_validation.execution_eligible).toBe(false)
+    expect(result.comparison_validation.errors).toContain('pending_price_direction_invalid')
   })
 })
 

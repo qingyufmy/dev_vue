@@ -8208,6 +8208,7 @@ a.signal-link:hover {
 .compare-direction-legend .sell,.compare-direction-chip.sell { background:rgba(239,68,68,.12); color:#f87171; }
 .compare-direction-legend .hold,.compare-direction-chip.hold { background:rgba(234,179,8,.12); color:#facc15; }
 .compare-direction-legend .downgraded,.compare-direction-chip.downgraded { background:rgba(168,85,247,.13); color:#c4b5fd; }
+.compare-direction-legend .constraint_invalid,.compare-direction-chip.constraint_invalid { background:rgba(249,115,22,.13); color:#fb923c; }
 .compare-direction-legend .error,.compare-direction-chip.error { background:rgba(148,163,184,.1); color:var(--text-muted); }
 .compare-direction-chip.empty { color:var(--text-muted); }
 .compare-decision-table th:not(:first-child),.compare-decision-table td:not(:first-child) { text-align:center; }

@@ -273,6 +273,7 @@ describe('handleAnalyzeCompare', () => {
         model_name:'deepseek-chat-10',
         _usage:'model_compare',
         _strategyId:1,
+        _comparison_mode:true,
       }), expect.any(Object), expect.any(String))
       expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
         model_name:'deepseek-chat-20',
@@ -524,6 +525,9 @@ describe('handleHistoryCompare', () => {
       expect(maybeAiSignal).toHaveBeenCalled()
       const callCount = maybeAiSignal.mock.calls.length
       expect(callCount).toBeGreaterThan(0)
+      expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
+        _comparison_mode:true,
+      }), expect.any(Object), expect.any(String))
     })
 
     it('passes a shared abort signal to every model and exits when it is cancelled', async () => {
@@ -565,6 +569,9 @@ describe('handleHistoryCompare', () => {
         expect(r.directional_score).toHaveProperty('sell_count')
         expect(r.directional_score).toHaveProperty('hold_count')
         expect(r.directional_score).toHaveProperty('downgraded_count')
+        expect(r.directional_score).toHaveProperty('constraint_invalid_count')
+        expect(r.directional_score).toHaveProperty('executable_count')
+        expect(r.directional_score).toHaveProperty('output_compliance_rate')
         expect(r.directional_score).toHaveProperty('invalid_count')
         expect(r.account_simulation.options).toMatchObject({
           timezone_offset_minutes:180,
@@ -572,6 +579,28 @@ describe('handleHistoryCompare', () => {
           apply_swap:true,
         })
       }
+    })
+
+    it('keeps a constraint-invalid raw direction out of account replay without turning it into hold', async () => {
+      maybeAiSignal.mockResolvedValue({
+        signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
+        recommended_volume:0.02, limit_price:2010, stop_loss_price:1990,
+        take_profit_1_price:2020, recommended_take_profit_tier:1,
+        comparison_validation:{ status:'invalid', execution_eligible:false, errors:['pending_price_direction_invalid'], warnings:[] },
+        analysis:'a', reasoning:'r', _inference_source:'ai',
+      })
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', step:25,
+      })
+      expect(result.results[0].signals[0]).toMatchObject({
+        signal_type:'buy', decision_class:'constraint_invalid', execution_eligible:false,
+      })
+      expect(result.results[0].directional_score).toMatchObject({
+        buy_count:expect.any(Number), hold_count:0, constraint_invalid_count:expect.any(Number),
+        executable_count:0, output_compliance_rate:0,
+      })
+      expect(result.meta.account_simulation_status).toBe('not_applicable')
     })
 
     it('treats an unknown signal type as an invalid model response', async () => {
@@ -631,7 +660,7 @@ describe('handleHistoryCompare', () => {
       expect(result.meta).toHaveProperty('requested_step', 10)
       expect(result.meta.evaluation_count).toBeLessThanOrEqual(20)
       expect(result.meta).toHaveProperty('metric_type', 'next_evaluation_bar_direction')
-      expect(result.meta).toHaveProperty('metric_version', 'directional-eval-v3')
+      expect(result.meta).toHaveProperty('metric_version', 'directional-eval-v4')
       expect(result.meta).toHaveProperty('average_agreement_rate')
       expect(result.meta).toHaveProperty('agreement_comparable_count')
       expect(result.meta).toHaveProperty('agreement_insufficient_count')
@@ -675,7 +704,7 @@ describe('handleHistoryCompare', () => {
       expect(result.meta.repair_model_calls).toBe(0)
       expect(result.meta.model_token_count).toBe(16 * 123)
       expect(result.meta.reproducibility).toMatchObject({
-        run_version:'history-compare-v5',
+        run_version:'history-compare-v6',
         reproducibility_level:'input_auditable_model_nondeterministic',
         strategy:{
           strategy_id:1,
@@ -919,7 +948,7 @@ describe('historical comparison frontend contract', () => {
     expect(html).toContain('经典行情集')
     expect(frontend).toContain('/api/ai/model-compare/benchmarks')
     expect(frontend).toContain('data_source:dataSource')
-    expect(frontend).toContain('系统降级')
+    expect(frontend).toContain('约束异常')
   })
 
   const frontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
@@ -968,9 +997,9 @@ describe('historical comparison frontend contract', () => {
 
   it('presents directional evaluation separately from the event-driven virtual account', () => {
     expect(frontend).toContain('方向准确率')
-    expect(frontend).toContain('方向评估与资金回放分开计算')
+    expect(frontend).toContain('保留模型原始方向')
     expect(frontend).toContain('抽样账户资金回放')
-    expect(frontend).toContain('系统降级不会再伪装成模型主动观望')
+    expect(frontend).toContain('实盘账户状态、冷却、报价时效和 ATR 风控不参与模型排名')
     expect(frontend).toContain('尚未接入真实逐笔 Tick')
     expect(frontend).toContain('决策周期')
   })

@@ -138,7 +138,7 @@ export function aiFailureHold(market, reason) {
     stop_limit_price: null,
     pending_valid_until: null,
     analysis: `${market.symbol} ${market.timeframe}: AI 推理返回未能形成可执行 JSON，系统按保护规则观望。`,
-    reasoning: `DeepSeek 推理失败或输出格式不符合执行合约：${reason}。为确保交易严格按策略提示词执行，本轮不使用本地规则替代开仓。`,
+    reasoning: `AI 模型推理失败或输出格式不符合执行合约：${reason}。为确保交易严格按策略提示词执行，本轮不使用本地规则替代开仓。`,
     stop_loss_price: null,
     take_profit_1_price: null,
     take_profit_2_price: null,

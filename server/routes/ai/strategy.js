@@ -831,6 +831,7 @@ export async function handleAnalyzeCompare(userId, params) {
       _ai_volume_min: 0.01,
       _ai_volume_max: 1.0,
       _ai_volume_step: 0.01,
+      _comparison_mode:true,
     }
     return maybeAiSignal(null, config, market, prompt).then(signal => {
       const inferenceSource = signal?._inference_source || 'unknown'
@@ -1172,6 +1173,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _ai_volume_min: 0.01,
         _ai_volume_max: 1.0,
         _ai_volume_step: 0.01,
+        _comparison_mode:true,
         _abortSignal:abortSignal,
         _onProviderRequest:({ phase }) => {
           modelTelemetry[modelId].provider_request_count += 1
@@ -1252,9 +1254,14 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       let nextBarMove = 0
       if (direction === 'buy') nextBarMove = closePrice - openPrice
       else if (direction === 'sell') nextBarMove = openPrice - closePrice
+      const comparisonValidation = signal.comparison_validation || null
+      const constraintInvalid = direction !== 'hold' && comparisonValidation?.status === 'invalid'
       const decisionClass = direction === 'hold' && signal.normalization_info
         ? 'system_downgraded'
-        : direction === 'hold' ? 'model_hold' : 'actionable'
+        : direction === 'hold' ? 'model_hold'
+          : constraintInvalid ? 'constraint_invalid' : 'actionable'
+      const executionEligible = (direction === 'buy' || direction === 'sell')
+        && comparisonValidation?.execution_eligible !== false
 
       modelSignals[result.modelId].push({
         decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
@@ -1263,6 +1270,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         confidence: signal.confidence || 0, next_bar_move: nextBarMove,
         latency_ms: result.latencyMs || 0,
         normalization_info:signal.normalization_info || null,
+        comparison_validation:comparisonValidation,
+        execution_eligible:executionEligible,
         decision_summary:boundedComparisonError(signal.decision_summary || signal.analysis || '', '', 600),
         reasoning:boundedComparisonError(signal.reasoning || '', '', 800),
         benchmark_case:decisionPoint.benchmarkCase ? {
@@ -1305,9 +1314,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     market_source:null,
     timezone_offset_minutes:null,
   }
-  const hasActionableSignals = Object.values(modelSignals).some(signals =>
-    signals.some(signal => signal.signal_type === 'buy' || signal.signal_type === 'sell'))
-  if (hasActionableSignals) {
+  const executableModelSignals = Object.fromEntries(Object.entries(modelSignals).map(([modelId, signals]) => [
+    modelId,
+    signals.filter(signal => signal.execution_eligible !== false
+      && (signal.signal_type === 'buy' || signal.signal_type === 'sell')),
+  ]))
+  const hasExecutableSignals = Object.values(executableModelSignals).some(signals => signals.length > 0)
+  if (hasExecutableSignals) {
     await onProgress({
       stage:'backtesting',
       progress_percent:96,
@@ -1316,7 +1329,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     })
     const [executionResult, symbolResult] = await Promise.allSettled([
       loadHistoryExecutionCandles(userId, symbol,
-        historyExecutionWindows(modelSignals, endUtcMs, backtestOptions.max_holding_hours)),
+        historyExecutionWindows(executableModelSignals, endUtcMs, backtestOptions.max_holding_hours)),
       loadHistorySymbolSnapshot(userId, symbol),
     ])
     const execution = executionResult.status === 'fulfilled' ? executionResult.value : null
@@ -1370,6 +1383,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     const sellCount = signals.filter(s => s.signal_type === 'sell').length
     const holdCount = signals.filter(s => s.decision_class === 'model_hold').length
     const downgradedCount = signals.filter(s => s.decision_class === 'system_downgraded').length
+    const constraintInvalidCount = signals.filter(s => s.decision_class === 'constraint_invalid').length
+    const executableSignals = signals.filter(s => s.execution_eligible !== false
+      && (s.signal_type === 'buy' || s.signal_type === 'sell'))
     const correctCount = signals.filter(s => s.next_bar_move > 0).length
     const incorrectCount = signals.filter(s => s.next_bar_move < 0).length
     const flatCount = signals.filter(s => ['buy', 'sell'].includes(s.signal_type) && s.next_bar_move === 0).length
@@ -1387,7 +1403,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       : 0
     const qualityScore = wilsonLowerBound(correctCount, tradeCount) * (0.7 + 0.3 * responseSuccessRate / 100) * 100
     const accountSimulation = backtestContext.status === 'ready'
-      ? simulateVirtualAccount(signals, backtestContext.execution_candles, backtestContext.instrument, runtimeBacktestOptions)
+      ? simulateVirtualAccount(executableSignals, backtestContext.execution_candles, backtestContext.instrument, runtimeBacktestOptions)
       : {
         status:'unavailable',
         reason:backtestContext.reason,
@@ -1418,7 +1434,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         directional_accuracy: tradeCount > 0 ? Number(((correctCount / tradeCount) * 100).toFixed(1)) : 0,
         direction_quality_score: Number(qualityScore.toFixed(1)),
         actionable_count: tradeCount,
+        executable_count:executableSignals.length,
         action_rate: Number(actionRate.toFixed(1)),
+        output_compliance_rate:signals.length > 0
+          ? Number((((signals.length - constraintInvalidCount - downgradedCount - errorCount) / signals.length) * 100).toFixed(1))
+          : 0,
         response_success_rate: Number(responseSuccessRate.toFixed(1)),
         average_confidence: Number((averageConfidence * 100).toFixed(1)),
         average_latency_ms: Math.round(averageLatency),
@@ -1427,7 +1447,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         sell_count: sellCount,
         hold_count: holdCount,
         downgraded_count:downgradedCount,
-        invalid_count:downgradedCount + errorCount,
+        constraint_invalid_count:constraintInvalidCount,
+        invalid_count:downgradedCount + constraintInvalidCount + errorCount,
         error_count: errorCount,
       },
     })
@@ -1435,7 +1456,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
 
   const agreementByStep = decisionPoints.map((_, index) => {
     const directions = modelResults.map(result => result.signals[index])
-      .filter(signal => ['actionable', 'model_hold'].includes(signal?.decision_class))
+      .filter(signal => ['actionable', 'constraint_invalid', 'model_hold'].includes(signal?.decision_class))
       .map(signal => signal.signal_type)
     if (directions.length < 2) return null
     const counts = directions.reduce((acc, direction) => {
@@ -1453,7 +1474,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const unavailableAccountReplay = modelResults.find(result => result.account_simulation?.status === 'unavailable')
   const accountSimulationStatus = successfulAccountReplay
     ? 'ready'
-    : hasActionableSignals ? 'unavailable' : 'not_applicable'
+    : hasExecutableSignals ? 'unavailable' : 'not_applicable'
   const accountSimulationReason = successfulAccountReplay
     ? null
     : (unavailableAccountReplay?.account_simulation?.reason || backtestContext.reason)
@@ -1471,7 +1492,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     token_count:0,
   })
   const reproducibilityEvidence = {
-    run_version:'history-compare-v5',
+    run_version:'history-compare-v6',
     reproducibility_level:'input_auditable_model_nondeterministic',
     strategy:strategyRuntimeSnapshot,
     models:Object.values(modelRuntimeSnapshots),
@@ -1535,9 +1556,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       start_time:compareRateUtcMs(klines[0]) == null ? null : new Date(compareRateUtcMs(klines[0])).toISOString(),
       end_time:compareRateUtcMs(klines.at(-1)) == null ? null : new Date(compareRateUtcMs(klines.at(-1))).toISOString(),
       metric_type:'next_evaluation_bar_direction',
-      metric_version:'directional-eval-v3',
+      metric_version:'directional-eval-v4',
       account_simulation_type:'event_driven_virtual_account',
-      account_simulation_version:'account-replay-v3',
+      account_simulation_version:'account-replay-v4',
       account_simulation_status:accountSimulationStatus,
       account_simulation_reason:accountSimulationReason,
       execution_timeframe:backtestContext.execution_timeframe,

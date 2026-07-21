@@ -997,6 +997,9 @@ const API_ERROR_MESSAGES = {
   invalid_entry_method: "模型返回了不支持的入场方式",
   signal_entry_mismatch: "信号类型与入场方式不一致",
   entry_method_not_allowed_by_strategy: "入场方式不在策略允许范围内",
+  invalid_stop_loss_direction: "止损价格与交易方向不符",
+  invalid_take_profit_direction: "止盈价格与交易方向不符",
+  invalid_recommended_take_profit_tier: "AI 推荐的止盈档位无效",
   ai_volume_out_of_platform_range: "AI 建议手数超出平台范围",
   confidence_below_risk_threshold: "置信度低于策略风险阈值",
   atr_anchor_unavailable_hold: "缺少可靠 ATR 锚点",
@@ -5121,7 +5124,9 @@ function renderHistoryCompareResults(results, meta) {
   const strategyVersion = Number(meta.reproducibility?.strategy?.strategy_version || 1);
   const dataSourceLabel = meta.data_source === "benchmark" ? "经典行情集" : "自选历史";
   const evaluationTimeframe = meta.evaluation_timeframe || meta.timeframe || "--";
-  const downgradedTotal = valid.reduce((sum, result) => sum + Number(result.directional_score?.downgraded_count || 0), 0);
+  const constraintInvalidTotal = valid.reduce((sum, result) => sum
+    + Number(result.directional_score?.constraint_invalid_count || 0)
+    + Number(result.directional_score?.downgraded_count || 0), 0);
   const conclusion = !leader
     ? "本次没有模型给出可评估方向"
     : directionHasUniqueLeader
@@ -5133,19 +5138,19 @@ function renderHistoryCompareResults(results, meta) {
   const replayLeaderLabel = !replayLeader
     ? "没有形成模拟成交"
     : replayHasUniqueLeader ? escapeHtml(replayLeader.model_name) : `${replayLeaderTies.length} 个模型并列`;
-  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${conclusion}</h2><p>方向评估与资金回放分开计算；系统降级不会再伪装成模型主动观望。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(dataSourceLabel)}</span></header>
+  let summaryHtml = `<header class="compare-result-header"><div><span class="section-kicker">评估结论</span><h2>${conclusion}</h2><p>保留模型原始方向；输出约束校验与虚拟资金回放分开计算。</p></div><span class="compare-result-scope">${escapeHtml(meta.symbol || "")} · ${escapeHtml(dataSourceLabel)}</span></header>
     <div class="compare-summary-grid">
       <div><span>方向领先</span><strong>${directionLeaderLabel}</strong><small>${leader ? `方向质量分 ${directionLeaderScore.toFixed(1)}` : "本次只有观望或异常响应"}</small></div>
       <div><span>资金回放领先</span><strong>${replayLeaderLabel}</strong><small>${replayLeader ? `净收益 ${replayLeaderProfit.toFixed(2)}` : replayModels.length ? "订单均未成交" : "执行数据暂不可用"}</small></div>
       <div><span>平均一致度</span><strong>${agreementValue}</strong><small>${agreementNote}</small></div>
       <div><span>${isContinuous ? "决策时点" : "评估案例"}</span><strong>${meta.evaluation_count || 0}</strong><small>分析 ${escapeHtml(meta.timeframe || "--")} · 决策 ${escapeHtml(evaluationTimeframe)}</small></div>
-      <div><span>系统降级</span><strong>${downgradedTotal}</strong><small>格式或交易约束未通过，不计为观望</small></div>
+      <div><span>约束异常</span><strong>${constraintInvalidTotal}</strong><small>保留原始方向，但不进入虚拟成交</small></div>
       <div><span>实际模型调用</span><strong>${actualModelCalls}</strong><small>格式修复 ${repairModelCalls} 次 · ${modelTokenCount.toLocaleString("zh-CN")} Token</small></div>
       <div title="${escapeHtml(evidenceFingerprint)}"><span>运行证据</span><strong>${evidenceFingerprint ? evidenceFingerprint.slice(0, 12) : "--"}</strong><small>策略 v${strategyVersion} · 输入与行情已留指纹</small></div>
     </div>
     <details class="compare-method-note"><summary><i data-lucide="info" size="15"></i>如何理解这份结果</summary><p>${meta.data_source === "benchmark"
       ? `本次使用固定版本经典行情集，在趋势、反转、假突破和震荡案例间均衡抽取；相同基准指纹可用于跨模型重复比较。`
-      : isContinuous ? "每个模型在每个策略决策周期闭合点读取相同的完整多周期上下文。" : "每个模型在相同的均匀抽样历史时点读取相同上下文。"} 方向质量按下一根 ${escapeHtml(evaluationTimeframe)} K 线评估，而 ${escapeHtml(meta.timeframe || "--")} 仍作为策略主分析周期。模型主动返回观望才计入观望；模型原本给出交易、但因格式或交易约束校验被系统改为观望的结果单独标记为“系统降级”，不参与响应成功率、一致度和平均置信度。虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序回放订单，${isContinuous ? "属于逐根主周期连续决策 + M1 OHLC 执行回放" : "属于抽样决策 + M1 OHLC 执行回放"}。跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，顺序不明确时采用保守处理；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照；使用当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；保证金强平按方向不利的盘中极值进行保守检查。手续费和隔夜成本分开统计，隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick，资金结果不等同真实成交收益。共读取 ${meta.kline_count || 0} 根决策周期 K 线，实际调用 ${actualModelCalls} 次（格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情和逐决策输入指纹。模型输出具有随机性，因此相同证据指纹不保证输出完全一致。</p></details>`;
+      : isContinuous ? "每个模型在每个策略决策周期闭合点读取相同的完整多周期上下文。" : "每个模型在相同的均匀抽样历史时点读取相同上下文。"} 方向质量按下一根 ${escapeHtml(evaluationTimeframe)} K 线评估，而 ${escapeHtml(meta.timeframe || "--")} 仍作为策略主分析周期。模型原始做多、做空和观望均会保留；格式、入场方式或价格关系不符合策略约束时单独标记为“约束异常”，仅禁止该建议进入虚拟成交。实盘账户状态、冷却、报价时效和 ATR 风控不参与模型排名。虚拟账户使用 ${escapeHtml(meta.execution_timeframe || "M1")} K 线按时间顺序回放订单，${isContinuous ? "属于逐根主周期连续决策 + M1 OHLC 执行回放" : "属于抽样决策 + M1 OHLC 执行回放"}。跳空触发和跳空止损按更差的开盘成交价计算；挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损，顺序不明确时采用保守处理；Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根。保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照；使用当前 MT5 合约参数快照，并非经纪商当时的历史合约参数；保证金强平按方向不利的盘中极值进行保守检查。手续费和隔夜成本分开统计，隔夜利息按 MT5 服务器时区跨日计提，币种无法可靠换算时会明确标记为“部分未计入”。尚未接入真实逐笔 Tick，资金结果不等同真实成交收益。共读取 ${meta.kline_count || 0} 根决策周期 K 线，实际调用 ${actualModelCalls} 次（格式修复 ${repairModelCalls} 次），累计 ${modelTokenCount.toLocaleString("zh-CN")} Token；异常模型 ${failedModels} 个。运行证据保存策略、模型参数、行情和逐决策输入指纹。模型输出具有随机性，因此相同证据指纹不保证输出完全一致。</p></details>`;
   $("cmpResultsSummary").innerHTML = summaryHtml;
   let tableHtml = "";
   if (failedResults.length) {
@@ -5191,15 +5196,15 @@ function renderHistoryCompareResults(results, meta) {
     tableHtml += '<section class="compare-inline-empty"><i data-lucide="circle-minus" size="18"></i><span>本次模型均未给出可执行方向，因此没有产生模拟成交。</span></section>';
   }
   if (sorted.length) {
-    tableHtml += '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>方向质量排名</h2><p>模型主动观望与系统校验降级分开统计，避免“全是观望”的假象。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>有效出手</th><th>响应成功率</th><th>系统降级</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
+    tableHtml += '<section class="compare-ranking-panel"><div class="section-heading"><div><h2>方向质量排名</h2><p>排名使用模型原始方向；约束异常只影响可执行率和虚拟成交。</p></div></div><div class="compare-table-scroll"><table class="cmp-table"><thead><tr><th>排名 / 模型</th><th>方向质量分</th><th>方向准确率</th><th>主动出手</th><th>输出合规率</th><th>约束异常</th><th>平均置信度</th><th>平均耗时</th><th>买 / 卖 / 观望</th></tr></thead><tbody>';
     sorted.forEach((r, index) => {
       const score = r.directional_score;
       tableHtml += `<tr><td><div class="compare-rank-model"><span>${index + 1}</span><div><strong>${escapeHtml(r.model_name)}</strong><small>${escapeHtml(modelProviderLabel(r.provider))}</small></div></div></td>
         <td><strong class="compare-quality-score">${score.direction_quality_score ?? 0}</strong></td>
         <td>${score.directional_accuracy}% <small class="compare-cell-note">${score.correct_count}/${score.actionable_count}</small></td>
         <td>${score.action_rate}% <small class="compare-cell-note">${score.actionable_count} 次</small></td>
-        <td>${score.response_success_rate}%${score.error_count ? `<small class="compare-cell-note danger">${score.error_count} 次异常</small>` : ""}</td>
-        <td>${score.downgraded_count || 0}<small class="compare-cell-note ${score.downgraded_count ? "danger" : ""}">${score.downgraded_count ? "未计入观望" : "无"}</small></td>
+        <td>${score.output_compliance_rate ?? score.response_success_rate}%<small class="compare-cell-note">${score.executable_count ?? score.actionable_count} 次可回放</small></td>
+        <td>${Number(score.constraint_invalid_count || 0) + Number(score.downgraded_count || 0)}<small class="compare-cell-note ${(score.constraint_invalid_count || score.downgraded_count) ? "danger" : ""}">${(score.constraint_invalid_count || score.downgraded_count) ? "保留原始方向" : "无"}</small></td>
         <td>${score.average_confidence}%</td><td>${score.average_latency_ms ? `${(score.average_latency_ms / 1000).toFixed(1)} 秒` : "--"}</td>
         <td><div class="compare-signal-mix" title="买 ${score.buy_count}，卖 ${score.sell_count}，观望 ${score.hold_count}"><span class="buy" style="flex:${score.buy_count}"></span><span class="sell" style="flex:${score.sell_count}"></span><span class="hold" style="flex:${score.hold_count}"></span></div><small class="compare-cell-note">${score.buy_count} / ${score.sell_count} / ${score.hold_count}</small></td></tr>`;
     });
@@ -5221,8 +5226,8 @@ function renderHistoryCompareResults(results, meta) {
       return Number.isFinite(aValue) && Number.isFinite(bValue) ? aValue - bValue : a.localeCompare(b);
     });
     const models = validWithSignals;
-    const directionLabel = { buy: "做多", sell: "做空", hold: "观望", error: "异常", downgraded:"系统降级" };
-    timelineHtml = '<section class="compare-decision-panel"><div class="section-heading"><div><h2>逐次决策差异</h2><p>系统降级表示模型尝试交易，但输出未通过格式或交易约束校验。</p></div><div class="compare-direction-legend"><span class="buy">做多</span><span class="sell">做空</span><span class="hold">观望</span><span class="downgraded">系统降级</span><span class="error">异常</span></div></div><div class="compare-table-scroll"><table class="cmp-table compare-decision-table"><thead><tr><th>决策时间</th>';
+    const directionLabel = { buy: "做多", sell: "做空", hold: "观望", error: "异常", constraint_invalid:"约束异常", downgraded:"旧版降级" };
+    timelineHtml = '<section class="compare-decision-panel"><div class="section-heading"><div><h2>逐次决策差异</h2><p>做多、做空保留模型原始方向；约束异常表示该建议不进入虚拟成交。</p></div><div class="compare-direction-legend"><span class="buy">做多</span><span class="sell">做空</span><span class="hold">观望</span><span class="constraint_invalid">约束异常</span><span class="error">异常</span></div></div><div class="compare-table-scroll"><table class="cmp-table compare-decision-table"><thead><tr><th>决策时间</th>';
     models.forEach(model => { timelineHtml += `<th>${escapeHtml(model.model_name)}</th>`; });
     timelineHtml += '</tr></thead><tbody>';
     for (const time of times) {
@@ -5234,10 +5239,13 @@ function renderHistoryCompareResults(results, meta) {
       for (const m of models) {
         const sig = m.signals.find(s => signalTimeKey(s) === time);
         if (sig) {
-          const dir = sig.decision_class === "system_downgraded" ? "downgraded" : sig.signal_type;
-          const reason = sig.normalization_info?.reason || sig.normalization_info?.type || sig.normalization_info?.original_signal_type || "";
-          const tip = `${directionLabel[dir] || directionText(dir)}${reason ? ` · ${apiErrorMessage(reason)}` : ""}${sig.next_bar_move ? ` · 下一根方向幅度 ${sig.next_bar_move.toFixed(4)}` : ""}`;
-          timelineHtml += `<td title="${escapeHtml(tip)}"><span class="compare-direction-chip ${dir}">${directionLabel[dir] || "未知"}</span></td>`;
+          const dir = sig.decision_class === "constraint_invalid" ? "constraint_invalid"
+            : sig.decision_class === "system_downgraded" ? "downgraded" : sig.signal_type;
+          const reason = sig.comparison_validation?.errors?.[0] || sig.normalization_info?.reason || sig.normalization_info?.type || sig.normalization_info?.original_signal_type || "";
+          const rawDirectionLabel = directionText(sig.signal_type);
+          const chipLabel = dir === "constraint_invalid" ? `${rawDirectionLabel} · 约束异常` : (directionLabel[dir] || rawDirectionLabel);
+          const tip = `${chipLabel}${reason ? ` · ${apiErrorMessage(reason)}` : ""}${sig.next_bar_move ? ` · 下一根方向幅度 ${sig.next_bar_move.toFixed(4)}` : ""}`;
+          timelineHtml += `<td title="${escapeHtml(tip)}"><span class="compare-direction-chip ${dir}">${escapeHtml(chipLabel)}</span></td>`;
         } else {
           timelineHtml += '<td><span class="compare-direction-chip empty">--</span></td>';
         }

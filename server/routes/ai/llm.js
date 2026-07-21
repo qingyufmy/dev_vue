@@ -444,10 +444,122 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       validateObject: value => validateAiSignalResponse(value, config._allowed_entry_methods),
     })
     parsed._inference_source = 'ai'
-    return normalizeAiSignal(parsed, config, market)
+    const comparisonRaw = config?._comparison_mode ? structuredClone(parsed) : null
+    const normalized = normalizeAiSignal(parsed, config, market)
+    return comparisonRaw
+      ? buildModelComparisonSignal(comparisonRaw, normalized, config, market)
+      : normalized
   } catch (exc) {
     if (config?._abortSignal?.aborted) throw exc
     return aiFailureHold(market, exc.message)
+  }
+}
+
+const COMPARISON_LIVE_RISK_REASONS = new Set([
+  'atr_anchor_unavailable_hold',
+  'confidence_below_risk_threshold',
+  'sl_widened',
+  'sl_widen_min_lot_hold',
+  'sl_too_far_hold',
+])
+
+/**
+ * Preserve the model's original decision for offline comparison. The normal
+ * live path is still evaluated so its diagnostics remain available, but live
+ * risk policy is not allowed to rewrite BUY/SELL into HOLD. Contract and
+ * order-structure errors only make the suggestion ineligible for replay.
+ */
+export function buildModelComparisonSignal(raw, normalized, config = {}, market = {}) {
+  const signalType = String(raw?.signal_type || 'hold').toLowerCase()
+  const typeEntryMap = {
+    buy_limit:'limit', sell_limit:'limit', buy_stop:'stop', sell_stop:'stop',
+    buy_stop_limit:'stop_limit', sell_stop_limit:'stop_limit', buy:'market', sell:'market', hold:'observe',
+  }
+  const entryMethod = String(raw?.entry_method || typeEntryMap[signalType] || '').toLowerCase()
+  const isTrade = signalType.startsWith('buy') || signalType.startsWith('sell')
+  const isBuySide = signalType.startsWith('buy')
+  const numberOrNull = value => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }
+  const limitPrice = numberOrNull(raw?.limit_price)
+  const stopLimitPrice = entryMethod === 'stop_limit' ? numberOrNull(raw?.stop_limit_price) : null
+  const stopLoss = numberOrNull(raw?.stop_loss_price)
+  const takeProfits = [1, 2, 3].map(tier => numberOrNull(raw?.[`take_profit_${tier}_price`]))
+  const referencePrice = Number(market?.latest_price)
+  const anchorPrice = entryMethod !== 'market' && entryMethod !== 'observe' ? limitPrice : referencePrice
+  const errors = new Set()
+  const warnings = new Set()
+  const normalizationReason = normalized?.normalization_info?.reason || normalized?.normalization_info?.type || null
+  if (normalizationReason) {
+    if (COMPARISON_LIVE_RISK_REASONS.has(normalizationReason)) warnings.add(normalizationReason)
+    else errors.add(normalizationReason)
+  }
+
+  const validTypes = new Set(['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit'])
+  if (!validTypes.has(signalType)) errors.add('invalid_signal_type')
+  if (!['market', 'limit', 'stop', 'stop_limit', 'observe'].includes(entryMethod)) errors.add('invalid_entry_method')
+  if (isTrade && entryMethod !== typeEntryMap[signalType]) errors.add('signal_entry_mismatch')
+  if (isTrade && !new Set(normalizeEntryMethods(config?._allowed_entry_methods)).has(entryMethod)) {
+    errors.add('entry_method_not_allowed_by_strategy')
+  }
+  if (isTrade && entryMethod !== 'market' && !limitPrice) errors.add('pending_price_required')
+  if (isTrade && entryMethod === 'stop_limit' && !stopLimitPrice) errors.add('stop_limit_price_required')
+  if (isTrade && anchorPrice > 0) {
+    if (entryMethod !== 'market') {
+      const directionInvalid = entryMethod === 'limit'
+        ? (isBuySide ? limitPrice >= referencePrice : limitPrice <= referencePrice)
+        : (isBuySide ? limitPrice <= referencePrice : limitPrice >= referencePrice)
+      if (directionInvalid) errors.add('pending_price_direction_invalid')
+    }
+    if (entryMethod === 'stop_limit') {
+      const relationInvalid = isBuySide ? stopLimitPrice > limitPrice : stopLimitPrice < limitPrice
+      if (relationInvalid) errors.add('stop_limit_price_relation_invalid')
+    }
+    if (!stopLoss || (isBuySide ? stopLoss >= anchorPrice : stopLoss <= anchorPrice)) errors.add('invalid_stop_loss_direction')
+    if (!takeProfits[0] || (isBuySide ? takeProfits[0] <= anchorPrice : takeProfits[0] >= anchorPrice)) {
+      errors.add('invalid_take_profit_direction')
+    }
+  }
+  const recommendedTier = Number(raw?.recommended_take_profit_tier)
+  if (isTrade && (![1, 2, 3].includes(recommendedTier) || !takeProfits[recommendedTier - 1])) {
+    errors.add('invalid_recommended_take_profit_tier')
+  }
+
+  let confidence = Number(normalized?.confidence)
+  if (!(confidence > 0)) {
+    confidence = Number(raw?.confidence)
+    if (confidence > 1) confidence /= 100
+    confidence = round2(Math.max(0, Math.min(1, Number.isFinite(confidence) ? confidence : 0)))
+  }
+  const pendingValidMinutes = Math.min(Math.max(parseInt(raw?.pending_valid_minutes) || 240, 1), 1440)
+  const validationErrors = [...errors]
+  const validationWarnings = [...warnings]
+  return {
+    ...normalized,
+    signal_type:signalType,
+    entry_method:isTrade ? entryMethod : 'observe',
+    confidence,
+    recommended_volume:isTrade ? (numberOrNull(raw?.recommended_volume) || 0) : 0,
+    limit_price:isTrade ? limitPrice : null,
+    stop_limit_price:isTrade ? stopLimitPrice : null,
+    pending_valid_minutes:pendingValidMinutes,
+    // Historical replay must derive expiry from the historical decision time,
+    // never from the wall clock at which the comparison happened to run.
+    pending_valid_until:null,
+    stop_loss_price:isTrade ? stopLoss : null,
+    take_profit_1_price:isTrade ? takeProfits[0] : null,
+    take_profit_2_price:isTrade ? takeProfits[1] : null,
+    take_profit_3_price:isTrade ? takeProfits[2] : null,
+    recommended_take_profit_tier:isTrade && [1, 2, 3].includes(recommendedTier) ? recommendedTier : null,
+    normalization_info:null,
+    comparison_validation:{
+      status:validationErrors.length ? 'invalid' : 'valid',
+      execution_eligible:isTrade && validationErrors.length === 0,
+      errors:validationErrors,
+      warnings:validationWarnings,
+      live_risk_bypassed:true,
+    },
   }
 }
 
