@@ -79,6 +79,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).not.toContain('data-tab="ai-config"')
     for (const tab of ['global-risk', 'audit']) expect(html).toContain(`data-tab="${tab}"`)
     expect(html).not.toContain('data-tab="account-review"')
+    expect(html.indexOf('data-tab="model-strategy"')).toBeGreaterThan(html.indexOf('data-tab="risk-center"'))
+    expect(html.indexOf('data-tab="model-strategy"')).toBeLessThan(html.indexOf('data-tab="review-memory"'))
   })
 
   it('accepts a token handoff before the early authentication redirect', () => {
