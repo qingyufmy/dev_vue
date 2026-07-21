@@ -494,6 +494,11 @@ async function getValidSummary(userId, key) {
 export async function retrievePersonalMemory({ userId, strategyId = null, strategyVersion = 1, symbol = null, timeframe = null,
   direction = null, entryMethod = null, marketRegime = null, mode = null, experimentGroup = null } = {}) {
   if (!userId) return { promptBlock: '', selectedItemIds: [], selectedSummaryIds: [], tokenCount: 0, disabled: true }
+  const boundStrategyId = Number(strategyId)
+  if (!Number.isInteger(boundStrategyId) || boundStrategyId <= 0) {
+    return { promptBlock:'', selectedItemIds:[], selectedSummaryIds:[], selectedLongMemoryIds:[], tokenCount:0,
+      disabled:true, reason:'strategy_required' }
+  }
   const rollout = await getEffectiveFeatureFlags(userId)
   if (!rollout.experience_memory_enabled) return { promptBlock: '', selectedItemIds: [], selectedSummaryIds: [], tokenCount: 0, disabled: true, reason: 'rollout_disabled' }
   const settings = await getMemorySettings(userId)
@@ -501,24 +506,22 @@ export async function retrievePersonalMemory({ userId, strategyId = null, strate
   const actualMode = rollout.retrieval_shadow_enabled || mode === 'shadow' || settings.retrieval_mode === 'shadow' ? 'shadow' : 'active'
   await expireShortMemories(userId)
   const version = Math.max(1, Number(strategyVersion || 1))
-  if (strategyId) {
-    await queryRun(`UPDATE experience_memory_items SET status = 'stale', updated_at = ?
-      WHERE user_id = ? AND strategy_id = ? AND strategy_version <> ? AND status = 'active'`, [beijingNow(), userId, strategyId, version])
-    await queryRun(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
-      WHERE user_id = ? AND strategy_id = ? AND strategy_version <> ? AND status = 'active'`, [beijingNow(), userId, strategyId, version])
-  }
-  const context = { strategy_id: strategyId, strategy_version: version, symbol, timeframe, direction, entry_method: entryMethod, market_regime: marketRegime }
+  await queryRun(`UPDATE experience_memory_items SET status = 'stale', updated_at = ?
+    WHERE user_id = ? AND strategy_id = ? AND strategy_version <> ? AND status = 'active'`, [beijingNow(), userId, boundStrategyId, version])
+  await queryRun(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
+    WHERE user_id = ? AND strategy_id = ? AND strategy_version <> ? AND status = 'active'`, [beijingNow(), userId, boundStrategyId, version])
+  const context = { strategy_id: boundStrategyId, strategy_version: version, symbol, timeframe, direction, entry_method: entryMethod, market_regime: marketRegime }
   const items = await queryAll(`SELECT * FROM experience_memory_items WHERE user_id = ? AND status = 'active'
     AND memory_tier = 'short' AND strategy_id = ? AND strategy_version = ?
     AND (expires_at IS NULL OR expires_at > ?) AND (symbol IS NULL OR symbol = ?)
-    AND (timeframe IS NULL OR timeframe = ?) ORDER BY updated_at DESC LIMIT 200`, [userId, strategyId, version, beijingNow(), symbol, timeframe])
+    AND (timeframe IS NULL OR timeframe = ?) ORDER BY updated_at DESC LIMIT 200`, [userId, boundStrategyId, version, beijingNow(), symbol, timeframe])
   const longItems = await queryAll(`SELECT * FROM experience_long_term_memories WHERE user_id = ? AND status = 'active'
     AND strategy_id = ? AND strategy_version = ? AND (symbol IS NULL OR symbol = ?)
     AND (timeframe IS NULL OR timeframe = ?) ORDER BY support_count DESC, updated_at DESC LIMIT 50`,
-  [userId, strategyId, version, symbol, timeframe])
+  [userId, boundStrategyId, version, symbol, timeframe])
   const ranked = rankMemoryCandidates(items, context).filter(candidate => candidate.eligible)
   const rankedLong = rankMemoryCandidates(longItems, context).filter(candidate => candidate.eligible)
-  const key = [`${strategyId || '*'}@${version}`, symbol || '*', timeframe || '*'].join(':')
+  const key = [`${boundStrategyId}@${version}`, symbol || '*', timeframe || '*'].join(':')
   const summary = await getValidSummary(userId, key)
   const budget = settings.runtime_token_budget || DEFAULT_BUDGET
   const longBudget = Math.floor(budget * LONG_MEMORY_BUDGET_RATIO)
@@ -555,7 +558,7 @@ export async function retrievePersonalMemory({ userId, strategyId = null, strate
   const log = await queryRun(`INSERT INTO memory_injection_logs
     (user_id, strategy_id, strategy_version, symbol, mode, experiment_group, selected_item_ids_json,
      selected_summary_ids_json, selected_long_memory_ids_json, token_count, retrieval_reasons_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [userId, strategyId, version, symbol, actualMode, group,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [userId, boundStrategyId, version, symbol, actualMode, group,
     JSON.stringify(selectedItems), JSON.stringify(selectedSummaries), JSON.stringify(selectedLong), used, JSON.stringify(reasons), beijingNow()])
   if (selectedItems.length) await queryRun(`UPDATE experience_memory_items SET match_count = match_count + 1, last_matched_at = ?, updated_at = updated_at
     WHERE user_id = ? AND id IN (${selectedItems.map(() => '?').join(',')})`, [beijingNow(), userId, ...selectedItems])

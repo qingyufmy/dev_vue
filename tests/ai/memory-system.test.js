@@ -9,7 +9,8 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { buildPeriodMemoryScope, buildPersonalMemoryRetrievalContext, memorySimilarity, pairedInferenceDigest, rankMemoryCandidates, sanitizeMemoryText } from '../../server/routes/ai/memory-system.js'
+import { buildPeriodMemoryScope, buildPersonalMemoryRetrievalContext, memorySimilarity, pairedInferenceDigest, rankMemoryCandidates,
+  retrievePersonalMemory, sanitizeMemoryText } from '../../server/routes/ai/memory-system.js'
 
 describe('personal memory input hardening', () => {
   it('removes control characters, escapes delimiters and breaks template markers', () => {
@@ -31,6 +32,12 @@ describe('personal memory input hardening', () => {
 })
 
 describe('memory retrieval ranking', () => {
+  it('does not retrieve personal memory without an explicit strategy binding', async () => {
+    const result = await retrievePersonalMemory({ userId:7, strategyId:null, symbol:'XAUUSD' })
+    expect(result).toMatchObject({ disabled:true, reason:'strategy_required', selectedItemIds:[] })
+    expect(db.queryAll).not.toHaveBeenCalled()
+  })
+
   it('prioritizes strategy, symbol, timeframe and confidence matches', () => {
     const items = [
       { id: 1, strategy_id: 5, symbol: 'XAUUSD', timeframe: 'H1', confidence: 0.8, updated_at: '2026-07-15 10:00:00' },

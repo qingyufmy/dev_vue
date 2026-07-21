@@ -968,6 +968,7 @@ const API_ERROR_MESSAGES = {
   strategy_delete_version_changed: "策略在确认期间已被修改，请重新检查后再删除",
   strategy_delete_impact_changed: "策略订阅情况在确认期间发生变化，请重新确认影响范围",
   strategy_delete_active_subscriptions_unconfirmed: "仍有运行中的订阅，必须明确确认停止后才能删除",
+  private_strategy_limit_reached: "当前 Pro 账户最多只能创建 1 条自定义策略",
   admin_only: "仅管理员可以使用此功能",
   "symbol required": "请选择交易品种",
   "timeframe required": "请选择 K 线周期",
@@ -1903,6 +1904,16 @@ async function loadStrategyCatalog() {
     const privateCount = items.filter(item => item.scope === "private").length;
     summary.textContent = `${items.length} 个策略 · ${active} 个可用${privateCount ? ` · ${privateCount} 个私有` : ""}`;
   }
+  const addStrategyButton = $("addPrivateStrategyBtn");
+  if (addStrategyButton && state.user?.role !== "admin") {
+    const ownPrivateCount = items.filter(item => item.scope === "private" && Number(item.owner_user_id) === Number(state.user?.id)).length;
+    const reachedLimit = ownPrivateCount >= 1;
+    addStrategyButton.disabled = reachedLimit;
+    addStrategyButton.title = reachedLimit ? "当前 Pro 账户最多只能创建 1 条自定义策略" : "新建自定义策略";
+    addStrategyButton.innerHTML = reachedLimit
+      ? '<i data-lucide="check" size="15"></i>已创建 1 条策略'
+      : '<i data-lucide="plus" size="15"></i>新建自定义策略';
+  }
   const activeCount = items.filter(item => item.visibility_status === "active" && Number(item.is_active)).length;
   const runningCount = subscriptions.filter(item => Number(item.execution_enabled)).length;
   setText("strategyTotalStat", items.length);
@@ -1925,7 +1936,7 @@ async function loadStrategyCatalog() {
       ? (Number(item.include_portfolio_context) ? "已提供持仓与挂单" : "不提供持仓与挂单")
       : "平台行情专用";
     const source = item.model_profile_id ? `绑定模型 #${item.model_profile_id}` : "继承默认模型";
-    const memory = item.scope === "private" ? "个人记忆可用" : "平台共享 · 禁止个人记忆";
+    const memory = item.scope === "private" ? "个人记忆可用" : "使用绑定的平台记忆";
     const linked = subscriptions.filter(sub => Number(sub.strategy_id) === Number(item.id));
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
     const memoryMode = linked.some(sub => sub.memory_mode === "disabled") ? "部分订阅关闭记忆" : memory;
@@ -2547,8 +2558,8 @@ async function openReviewDetail(id) {
   const content = current?.content || {};
   const issueSummary = (content.trade_process_issues || []).map(item => item.description || item.code).filter(Boolean);
   const isAdmin = state.user?.role === "admin";
-  const lessonHelp = isAdmin ? "每行一条；确认后先进入平台经验候选区，发布后才用于平台策略" : "每行一条，将用于生成个人记忆";
-  const approveLabel = isAdmin ? "内容准确并加入平台经验候选" : "内容准确并加入记忆";
+  const lessonHelp = isAdmin ? "每行一条；确认后先进入平台记忆候选区，发布后才用于绑定策略" : "每行一条，将用于生成个人记忆";
+  const approveLabel = isAdmin ? "内容准确并加入平台记忆候选" : "内容准确并加入记忆";
   const netProfit = Number(outcome.net_profit);
   const profitClass = Number.isFinite(netProfit) ? netProfit > 0 ? "positive" : netProfit < 0 ? "negative" : "neutral" : "neutral";
   const confidence = Number(content.confidence);
@@ -2713,7 +2724,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   const derivationDetail = derivationStatus === "paused"
     ? "相关记忆功能当前已关闭，重新启用后会自动继续"
     : derivationStatus === "failed" ? periodReviewFailureText(review.derivation_error_code)
-      : derivationStatus === "succeeded" ? (state.user?.role === "admin" ? "已生成平台经验候选" : "已写入个人记忆体系")
+      : derivationStatus === "succeeded" ? (state.user?.role === "admin" ? "已生成平台记忆候选" : "已写入个人记忆体系")
         : "后台任务会自动完成，无需重复确认";
   const editableGroups = isMonthly
     ? [
@@ -2843,10 +2854,10 @@ function renderPlatformExperienceEvaluation(evaluation = {}) {
   const strategyRows = strategies.map(row => `<div class="experience-strategy-row"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</strong><span>最近运行 ${escapeHtml(row.latest_at || '--')}</span></div><span>${Number(row.shadow_retrievals || 0)} 次影子检索</span><span>${Number(row.shadow_hits || 0)} 次命中</span><strong>${percent(row.shadow_hit_rate)}</strong></div>`).join("");
   const pairedRows = pairs.slice(0, 8).map(row => `<div class="experience-evaluation-row paired"><div><strong>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id || '--'}`)}</strong><span>信号 #${escapeHtml(row.signal_id || '--')} · ${escapeHtml(row.user_nickname || `用户 #${row.user_id}`)}</span></div><div class="experience-hit-result ${row.changed_fields?.length ? 'is-hit' : 'is-miss'}"><strong>${row.status === 'succeeded' ? (row.changed_fields?.length ? '推理结果有差异' : '推理结果一致') : '对照运行失败'}</strong><span>${row.changed_fields?.length ? row.changed_fields.map(key => diffLabels[key] || key).join('、') : row.error_code ? '未获得有效对照结果' : '关键输出没有变化'}</span></div><time>${escapeHtml(row.created_at || '--')}</time></div>`).join("");
   host.innerHTML = `<section class="platform-evaluation-section">
-    <header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="scan-search" size="18"></i></span><div><span class="review-section-kicker">效果评估</span><h3>经验检索表现</h3><p>影子评估只衡量能否找到合适经验；配对实验才比较记忆是否改变推理结果。</p></div></div><span class="evaluation-window">最近 ${Number(evaluation.window_days || 30)} 天</span></header>
+    <header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="scan-search" size="18"></i></span><div><span class="review-section-kicker">效果评估</span><h3>平台记忆检索表现</h3><p>影子评估只衡量能否找到合适记忆；配对实验才比较记忆是否改变推理结果。</p></div></div><span class="evaluation-window">最近 ${Number(evaluation.window_days || 30)} 天</span></header>
     <div class="experience-evaluation-metrics"><div><span>可评估影子检索</span><strong>${Number(retrieval.shadow_total || 0)}</strong><small>从经验发布后开始统计</small></div><div><span>经验命中</span><strong>${Number(retrieval.shadow_hits || 0)}</strong><small>找到可用经验</small></div><div><span>影子命中率</span><strong>${percent(retrieval.shadow_hit_rate)}</strong><small>命中次数 ÷ 可评估检索</small></div><div><span>配对实验</span><strong>${Number(paired.total || 0)}</strong><small>${Number(paired.changed || 0)} 次产生差异</small></div></div>
     ${strategies.length ? `<div class="experience-strategy-list"><div class="experience-list-heading"><strong>按策略统计</strong><span>命中率只代表检索适配度，不代表盈利提升</span></div>${strategyRows}</div>` : ''}
-    <details class="experience-evaluation-details" ${recent.length ? 'open' : ''}><summary><span><strong>最近检索记录</strong><small>${recent.length ? `显示最近 ${Math.min(10, recent.length)} 条` : '尚无检索记录'}</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="experience-evaluation-list">${recentRows || '<div class="platform-evaluation-empty"><strong>尚无影子检索数据</strong><span>策略运行并完成经验检索后，这里会显示命中详情。</span></div>'}</div></details>
+    <details class="experience-evaluation-details" ${recent.length ? 'open' : ''}><summary><span><strong>最近检索记录</strong><small>${recent.length ? `显示最近 ${Math.min(10, recent.length)} 条` : '尚无检索记录'}</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="experience-evaluation-list">${recentRows || '<div class="platform-evaluation-empty"><strong>尚无影子检索数据</strong><span>策略运行并完成平台记忆检索后，这里会显示命中详情。</span></div>'}</div></details>
     <details class="experience-evaluation-details"><summary><span><strong>配对推理对照</strong><small>${pairs.length ? `最近 ${Math.min(8, pairs.length)} 次` : '尚未启用或尚未产生数据'}</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="experience-evaluation-list">${pairedRows || '<div class="platform-evaluation-empty"><strong>还没有配对实验</strong><span>影子评估不会额外调用模型；只有明确启用付费配对实验后，才能比较使用经验与不使用经验的推理差异。</span></div>'}</div></details>
   </section>`;
 }
@@ -2860,12 +2871,12 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
     const activePolicies = policies.filter(policy => policy.mode === "active").length;
     const shadowPolicies = policies.filter(policy => policy.mode === "shadow").length;
     policyHost.innerHTML = `<section class="platform-policy-section">
-      <header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="route" size="18"></i></span><div><span class="review-section-kicker">策略控制</span><h3>经验运行模式</h3><p>分别决定每个策略是否读取已发布的平台经验。</p></div></div><div class="platform-section-stats"><span><strong>${activePolicies}</strong> 正式启用</span><span><strong>${shadowPolicies}</strong> 影子评估</span><span><strong>${policies.length}</strong> 个策略</span></div></header>
-      <div class="platform-mode-notice"><i data-lucide="info" size="15"></i><span><strong>影子评估</strong>只验证经验效果，不注入正式推理；选择<strong>正式启用</strong>后才会参与平台策略。</span></div>
+      <header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="route" size="18"></i></span><div><span class="review-section-kicker">策略控制</span><h3>记忆运行模式</h3><p>每条平台记忆只允许被其绑定的策略检索和使用。</p></div></div><div class="platform-section-stats"><span><strong>${activePolicies}</strong> 正式启用</span><span><strong>${shadowPolicies}</strong> 影子评估</span><span><strong>${policies.length}</strong> 个策略</span></div></header>
+      <div class="platform-mode-notice"><i data-lucide="info" size="15"></i><span><strong>影子评估</strong>只验证记忆匹配效果，不注入正式推理；选择<strong>正式启用</strong>后才会参与对应的平台策略。</span></div>
       <div class="platform-policy-grid">${policies.length ? policies.map(policy => `<article class="platform-experience-policy" data-platform-policy-strategy="${Number(policy.strategy_id)}">
-        <div class="platform-policy-head"><span class="platform-policy-icon"><i data-lucide="brain-circuit" size="17"></i></span><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>策略经验配置 · 版本 ${Number(policy.policy_version || 1)}</small></div><span class="status-chip ${modeClasses[policy.mode] || 'neutral'}">${escapeHtml(modeLabels[policy.mode] || policy.mode)}</span></div>
-        <div class="platform-policy-controls"><label><span>经验模式</span><select aria-label="${escapeHtml(policy.strategy_title)}的平台经验模式" data-platform-policy-mode><option value="off" ${policy.mode === 'off' ? 'selected' : ''}>关闭</option><option value="shadow" ${policy.mode === 'shadow' ? 'selected' : ''}>影子评估</option><option value="active" ${policy.mode === 'active' ? 'selected' : ''}>正式启用</option></select></label><button class="btn btn-secondary btn-sm" data-platform-policy-save><i data-lucide="save" size="14"></i>保存模式</button></div>
-      </article>`).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="route-off" size="20"></i></span><strong>暂无平台策略</strong><span>创建平台策略后，可以在这里配置统一经验。</span></div>'}</div>
+        <div class="platform-policy-head"><span class="platform-policy-icon"><i data-lucide="brain-circuit" size="17"></i></span><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>策略记忆配置 · 版本 ${Number(policy.policy_version || 1)}</small></div><span class="status-chip ${modeClasses[policy.mode] || 'neutral'}">${escapeHtml(modeLabels[policy.mode] || policy.mode)}</span></div>
+        <div class="platform-policy-controls"><label><span>记忆模式</span><select aria-label="${escapeHtml(policy.strategy_title)}的平台记忆模式" data-platform-policy-mode><option value="off" ${policy.mode === 'off' ? 'selected' : ''}>关闭</option><option value="shadow" ${policy.mode === 'shadow' ? 'selected' : ''}>影子评估</option><option value="active" ${policy.mode === 'active' ? 'selected' : ''}>正式启用</option></select></label><button class="btn btn-secondary btn-sm" data-platform-policy-save><i data-lucide="save" size="14"></i>保存模式</button></div>
+      </article>`).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="route-off" size="20"></i></span><strong>暂无平台策略</strong><span>创建平台策略后，可以在这里配置策略记忆。</span></div>'}</div>
     </section>`;
   }
   renderPlatformExperienceEvaluation(evaluation);
@@ -2873,17 +2884,22 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
   const labels = { candidate:"待发布", active:"已发布", revoked:"已撤销" };
   const candidateCount = items.filter(item => item.status === "candidate").length;
   const activeCount = items.filter(item => item.status === "active").length;
-  const currentItems = items.filter(item => item.status !== "revoked");
-  const revokedItems = items.filter(item => item.status === "revoked");
+  const shortCount = items.filter(item => item.memory_tier !== "long" && item.status !== "revoked").length;
+  const longCount = items.filter(item => item.memory_tier === "long" && item.status !== "revoked").length;
+  const visibleItems = state.memoryTierFilter === "all" ? items : items.filter(item => (item.memory_tier === "long" ? "long" : "short") === state.memoryTierFilter);
+  const currentItems = visibleItems.filter(item => item.status !== "revoked");
+  const revokedItems = visibleItems.filter(item => item.status === "revoked");
   const renderCurrentItem = item => {
     const statusClass = item.status === "active" ? "success" : "warning";
     const icon = item.status === "active" ? "badge-check" : "sparkles";
     const sourceVersion = item.period_review_version_id || item.review_version_id || "--";
-    return `<article class="platform-experience-card is-${escapeHtml(item.status)}"><header><span class="platform-experience-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>经验 #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(labels[item.status] || item.status)}</span></header><p class="platform-experience-lesson">${escapeHtml(item.lesson_text)}</p><footer><div class="platform-experience-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(sourceVersion)}</span>${item.platform_version ? `<span><i data-lucide="git-branch" size="13"></i>平台版本 ${Number(item.platform_version)}</span>` : '<span><i data-lucide="circle-dashed" size="13"></i>尚未生成平台版本</span>'}</div><div class="platform-experience-actions">${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}"><i data-lucide="send" size="14"></i>发布经验</button>` : ""}<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button></div></footer></article>`;
+    const tierLabel = item.memory_tier === "long" ? "长期记忆" : "短期记忆";
+    return `<article class="platform-experience-card memory-tier-${item.memory_tier === "long" ? "long" : "short"} is-${escapeHtml(item.status)}"><header><span class="platform-experience-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>${tierLabel} #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(labels[item.status] || item.status)}</span></header><p class="platform-experience-lesson">${escapeHtml(item.lesson_text)}</p><footer><div class="platform-experience-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(sourceVersion)}</span>${item.platform_version ? `<span><i data-lucide="git-branch" size="13"></i>平台版本 ${Number(item.platform_version)}</span>` : '<span><i data-lucide="circle-dashed" size="13"></i>尚未生成平台版本</span>'}</div><div class="platform-experience-actions">${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}"><i data-lucide="send" size="14"></i>发布记忆</button>` : ""}<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button></div></footer></article>`;
   };
   const archiveHtml = revokedItems.length ? `<details class="platform-experience-archive"><summary><span><i data-lucide="archive" size="15"></i><strong>已撤销归档</strong><small>${revokedItems.length} 条记录，仅用于追溯</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="platform-experience-archive-list">${revokedItems.map(item => `<article class="platform-experience-archive-row"><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} · 经验 #${Number(item.id)}</strong><span>${escapeHtml(item.revoked_at || item.updated_at || "--")}</span><p>${escapeHtml(item.lesson_text)}</p></div><button class="btn btn-secondary btn-sm" data-platform-experience-action="delete" data-platform-experience-id="${item.id}"><i data-lucide="trash-2" size="14"></i>删除记录</button></article>`).join("")}</div></details>` : "";
-  host.innerHTML = `<section class="platform-library-section"><header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="library-big" size="18"></i></span><div><span class="review-section-kicker">经验内容</span><h3>平台经验库</h3><p>只有已发布的经验才会被正式启用的策略读取。</p></div></div><div class="platform-section-stats"><span><strong>${candidateCount}</strong> 待发布</span><span><strong>${activeCount}</strong> 已发布</span></div></header>
-    <div class="platform-experience-list">${currentItems.length ? currentItems.map(renderCurrentItem).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="library" size="20"></i></span><strong>暂无可用平台经验</strong><span>确认平台策略复盘后，市场经验会先进入待发布区；撤销记录已移入下方归档。</span></div>'}</div>${archiveHtml}</section>`;
+  host.innerHTML = `<section class="platform-library-section"><header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="library-big" size="18"></i></span><div><span class="review-section-kicker">记忆内容</span><h3>平台记忆库</h3><p>日复盘形成短期记忆，月复盘形成长期记忆；发布后仅供绑定策略读取。</p></div></div><div class="platform-section-stats"><span><strong>${candidateCount}</strong> 待发布</span><span><strong>${activeCount}</strong> 已发布</span></div></header>
+    <div class="memory-tier-tabs" role="tablist" aria-label="平台记忆层级筛选"><button class="${state.memoryTierFilter === 'all' ? 'active' : ''}" data-memory-tier="all">全部</button><button class="${state.memoryTierFilter === 'short' ? 'active' : ''}" data-memory-tier="short">短期记忆 ${shortCount}</button><button class="${state.memoryTierFilter === 'long' ? 'active' : ''}" data-memory-tier="long">长期记忆 ${longCount}</button></div>
+    <div class="platform-experience-list">${currentItems.length ? currentItems.map(renderCurrentItem).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="library" size="20"></i></span><strong>当前层级暂无平台记忆</strong><span>确认平台策略复盘后，记忆会先进入待发布区；撤销记录保留在归档中。</span></div>'}</div>${archiveHtml}</section>`;
   initIcons();
 }
 
@@ -3870,14 +3886,16 @@ function applyRoleUI() {
   document.querySelectorAll('.user-only').forEach(el => {
     el.style.display = isAdmin ? 'none' : '';
   });
-  setText("memoryTabLabel", isAdmin ? "平台经验" : "我的记忆");
-  setText("memoryActiveLabel", isAdmin ? "已发布经验" : "有效记忆");
+  setText("memoryTabLabel", isAdmin ? "平台记忆" : "我的记忆");
+  setText("memoryActiveLabel", isAdmin ? "已发布记忆" : "有效记忆");
   setText("memoryActiveHelp", isAdmin ? "可用于平台策略" : "可用于后续推理");
-  setText("memorySectionTitle", isAdmin ? "平台策略经验" : "我的交易记忆");
+  setText("memorySectionTitle", isAdmin ? "平台策略记忆" : "我的交易记忆");
   setText("memorySectionDescription", isAdmin
-    ? "来自观摩账户复盘的市场经验先进入候选区，经发布后才会用于平台策略。"
+    ? "来自观摩账户复盘的策略记忆先进入候选区，经发布后才会用于其绑定的平台策略。"
     : "这里只保留你已经确认的经验，可以随时暂停或撤销。");
-  if ($("addPrivateStrategyBtn")) $("addPrivateStrategyBtn").textContent = isAdmin ? "新建策略" : "新建自定义策略";
+  if ($("addPrivateStrategyBtn") && !$("addPrivateStrategyBtn").disabled) {
+    $("addPrivateStrategyBtn").textContent = isAdmin ? "新建策略" : "新建自定义策略";
+  }
 
   // Navigation is an explicit capability list in observer mode. Empty groups
   // are removed so the sidebar contains exactly the pages the user can open.
@@ -4086,7 +4104,7 @@ function renderExperienceUsage(signal, usage = {}) {
   if (!considered.length) return "";
   const used = Array.isArray(usage.used_ids) ? usage.used_ids : [];
   const rejected = Array.isArray(usage.rejected_ids) ? usage.rejected_ids : [];
-  const source = usage.source === "platform" ? "平台经验" : "个人记忆";
+  const source = usage.source === "platform" ? "平台记忆" : "个人记忆";
   return `<section class="analysis-experience-usage">
     <div class="analysis-section-title"><i data-lucide="brain-circuit" size="15"></i><strong>经验采用情况</strong><span>${escapeHtml(source)}</span></div>
     <div class="experience-usage-stats"><span>系统候选 <strong>${considered.length}</strong></span><span class="used">模型采用 <strong>${used.length}</strong></span><span>未采用 <strong>${rejected.length}</strong></span></div>
@@ -7249,14 +7267,14 @@ function bindEvents() {
         const itemId = Number(platformExperienceAction.dataset.platformExperienceId);
         const action = platformExperienceAction.dataset.platformExperienceAction;
         if (action === "delete") {
-          const confirmed = await showConfirm("删除已撤销经验", `经验 #${itemId} 将从归档中永久删除。该操作不会恢复，也不会影响当前已发布经验。`, { confirmText:"删除记录", danger:true });
+          const confirmed = await showConfirm("删除已撤销记忆", `记忆 #${itemId} 将从归档中永久删除。该操作不会恢复，也不会影响当前已发布记忆。`, { confirmText:"删除记录", danger:true });
           if (!confirmed) return;
           platformExperienceAction.disabled = true;
           await api(`/api/ai/admin/platform-experience/${itemId}`, { method:"DELETE" });
           toast("已撤销经验记录已删除", "success");
         } else {
           await api(`/api/ai/admin/platform-experience/${itemId}/${action}`, { method:"POST" });
-          toast(action === "publish" ? "平台经验已发布" : "平台经验已撤销", "success");
+          toast(action === "publish" ? "平台记忆已发布" : "平台记忆已撤销", "success");
         }
         await loadReviewMemory();
       } catch (error) { toast(error.message,"error"); }
@@ -7267,7 +7285,7 @@ function bindEvents() {
       const row = platformPolicySave.closest("[data-platform-policy-strategy]");
       try {
         await api(`/api/ai/admin/platform-experience/policies/${Number(row.dataset.platformPolicyStrategy)}`, { method:"PUT", body:{ mode:row.querySelector("[data-platform-policy-mode]").value } });
-        toast("平台经验模式已保存", "success"); await loadReviewMemory();
+        toast("平台记忆模式已保存", "success"); await loadReviewMemory();
       } catch (error) { toast(error.message,"error"); }
       return;
     }

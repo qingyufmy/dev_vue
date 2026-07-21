@@ -11,7 +11,8 @@ vi.mock('../../server/routes/ai/memory-system.js', () => ({
 }))
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256: value => `hash:${value}` }))
 
-import { buildPlatformExperienceRetrievalContext, createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation,
+import { buildPlatformExperienceRetrievalContext, createPlatformExperienceCandidateFromApprovedPeriodReview,
+  createPlatformExperienceCandidateFromApprovedReview, getPlatformExperienceEvaluation,
   deleteRevokedPlatformExperienceItem, platformExperienceApplicability, retrievePlatformExperience,
   sanitizePlatformExperienceText } from '../../server/routes/ai/platform-experience.js'
 
@@ -37,6 +38,22 @@ describe('platform strategy experience boundary', () => {
     db.queryRun.mockResolvedValue({ insertId: 11, changes: 1 })
     await expect(createPlatformExperienceCandidateFromApprovedReview(7, 1)).resolves.toMatchObject({ id: 11, status:'candidate' })
     expect(db.queryRun.mock.calls[0][0]).toContain('platform_strategy_experience_items')
+  })
+
+  it('maps daily and monthly platform reviews to short and long memory tiers', async () => {
+    db.queryOne
+      .mockResolvedValueOnce({ id:21, user_id:1, user_role:'admin', strategy_scope:'platform', strategy_id:3,
+        strategy_version:2, period_type:'monthly', period_key:'2026-07', status:'approved', approved_version_id:31 })
+      .mockResolvedValueOnce({ id:31, content_json:JSON.stringify({ period_summary:'月度趋势等待确认', memory_candidates:[] }) })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id:3 })
+      .mockResolvedValueOnce({ id:41, memory_tier:'long' })
+    db.queryRun.mockResolvedValue({ insertId:41, changes:1 })
+    await expect(createPlatformExperienceCandidateFromApprovedPeriodReview(21, 1))
+      .resolves.toMatchObject({ memory_tier:'long' })
+    const insert = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT IGNORE INTO platform_strategy_experience_items'))
+    expect(insert[0]).toContain('memory_tier')
+    expect(insert[1]).toContain('long')
   })
 
   it('deletes only an already revoked platform experience record', async () => {
@@ -74,7 +91,7 @@ describe('platform strategy experience boundary', () => {
     const result = await retrievePlatformExperience({ strategyId:3, symbol:'XAUUSD', timeframe:'H1', market, allowedEntryMethods:['limit'] })
     expect(result.selectedItemIds).toEqual([4])
     expect(result.selectionDetails[0]).toMatchObject({ id:4, score:96 })
-    expect(result.promptBlock).toContain('[经验 #4 | 匹配度 96]')
+    expect(result.promptBlock).toContain('[短期记忆 #4 | 匹配度 96]')
     expect(result.promptBlock).not.toContain('上涨趋势突破追多')
     expect(result.retrievalContext).toMatchObject({ market_regime:'downward_exhaustion', trend_direction:'down', chan_divergence:'bottom' })
   })
@@ -89,6 +106,13 @@ describe('platform strategy experience boundary', () => {
     const result = platformExperienceApplicability({ context_json:JSON.stringify({ strategy_version:2 }) },
       buildPlatformExperienceRetrievalContext({ strategyVersion:3, symbol:'XAUUSD', timeframe:'M5' }))
     expect(result).toEqual({ eligible:false, score:0, reasons:['strategy_version_mismatch'] })
+  })
+
+  it('requires an explicit strategy binding before platform memory retrieval', async () => {
+    const result = await retrievePlatformExperience({ strategyId:null, symbol:'XAUUSD', timeframe:'H1' })
+    expect(result).toMatchObject({ disabled:true, reason:'strategy_required', selectedItemIds:[] })
+    expect(db.queryOne).not.toHaveBeenCalled()
+    expect(db.queryAll).not.toHaveBeenCalled()
   })
 
   it('summarizes shadow hits and paired inference differences without claiming profitability', async () => {

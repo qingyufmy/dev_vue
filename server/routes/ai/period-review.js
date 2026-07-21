@@ -458,7 +458,9 @@ async function upsertDailyGroup(group, clock) {
   const sourceHash = sha256(JSON.stringify(sources.map(item => [item.outcome_id, item.evidence_hash])))
   const evidence = {
     schema_version: 2,
-    period: { type: 'daily', key: group.periodKey, timezone_offset_minutes: group.offsetMinutes, clock_status: clock.status, start_utc_msc: group.startUtcMs, end_utc_msc: group.endUtcMs },
+    period: { type:'daily', key:group.periodKey, aggregation_basis:'fully_closed_at',
+      timezone_offset_minutes:group.offsetMinutes, clock_status:clock.status,
+      start_utc_msc:group.startUtcMs, end_utc_msc:group.endUtcMs },
     strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope,
       inference_system_prompt:prepared.find(item => item.evidence?.inference_time?.snapshot?.system_prompt)?.evidence?.inference_time?.snapshot?.system_prompt || null,
       prompt_hashes:[...new Set(prepared.map(item => item.evidence?.inference_time?.snapshot?.prompt_hash).filter(Boolean))] },

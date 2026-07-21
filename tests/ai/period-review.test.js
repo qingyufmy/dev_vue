@@ -39,6 +39,14 @@ describe('daily review grouping', () => {
     expect(ready[0]).toMatchObject({ periodKey: '2026-07-17', strategyVersion: 2, offsetMinutes: 180 })
   })
 
+  it('assigns daily reviews by full-close time rather than open time', () => {
+    const rows = [{ ...base, id:1, opened_at:'2026-07-16 10:00:00',
+      last_deal_raw_json:JSON.stringify({ time_utc_msc:Date.parse('2026-07-17T20:30:00Z') }) }]
+    const groups = groupDailyReviewOutcomes(rows, { offsetMinutes:180, asOfUtcMs:Date.parse('2026-07-18T22:00:00Z') })
+    expect(groups).toHaveLength(1)
+    expect(groups[0].periodKey).toBe('2026-07-17')
+  })
+
   it('keeps strategy versions and accounts isolated', () => {
     const time = JSON.stringify({ time_utc_msc: Date.parse('2026-07-17T10:00:00Z') })
     const rows = [

@@ -2892,6 +2892,29 @@ const migrations = [
         'R3.4_PROJECTED_MARGIN_LEVEL'
       )`)
     }
+  },
+  {
+    id: '114_platform_tiered_memory',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'platform_strategy_experience_items'
+          AND COLUMN_NAME = 'memory_tier'`)
+      if (!columns.length) {
+        await queryRun(`ALTER TABLE platform_strategy_experience_items
+          ADD COLUMN memory_tier VARCHAR(16) NOT NULL DEFAULT 'short' AFTER strategy_id`)
+      }
+      await queryRun(`UPDATE platform_strategy_experience_items items
+        LEFT JOIN period_review_cases cases ON cases.id = items.period_review_case_id
+        SET items.memory_tier = CASE WHEN cases.period_type = 'monthly' THEN 'long' ELSE 'short' END
+        WHERE items.memory_tier IS NULL OR items.memory_tier = '' OR cases.period_type = 'monthly'`)
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'platform_strategy_experience_items'
+          AND INDEX_NAME = 'idx_platform_memory_retrieval'`)
+      if (!indexes.length) {
+        await queryRun(`CREATE INDEX idx_platform_memory_retrieval
+          ON platform_strategy_experience_items (strategy_id, status, memory_tier, platform_version)`)
+      }
+    }
   }
 ]
 

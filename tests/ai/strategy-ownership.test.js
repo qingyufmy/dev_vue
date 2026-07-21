@@ -61,6 +61,10 @@ const SUB = {
 
 let txRun
 
+function latestStrategyInsert() {
+  return [...txRun.mock.calls].reverse().find(([sql]) => sql.includes('INSERT INTO auto_prompt_types'))
+}
+
 function defaultQueryOne(sql) {
   if (sql.includes('FROM users')) return PRO
   if (sql.includes('FROM auto_prompt_types apt')) return PRIVATE
@@ -132,7 +136,7 @@ describe('strategy visibility and mutation permissions', () => {
 
   it('creates private strategies with server-owned owner and user-default model semantics', async () => {
     await createStrategy(2, 'user', { scope: 'private', owner_user_id: 99, inference_mode: 'platform_model', title: 'P', symbols: ['XAUUSD.a'], include_portfolio_context: true })
-    const params = db.queryRun.mock.calls[0][1]
+    const params = latestStrategyInsert()[1]
     expect(params).toContain('private')
     expect(params).toContain(2)
     expect(params).toContain('user_default')
@@ -142,7 +146,7 @@ describe('strategy visibility and mutation permissions', () => {
 
   it('forces platform strategies to exclude portfolio context', async () => {
     await createStrategy(1, 'admin', { scope: 'platform', symbols: ['XAUUSD'], include_portfolio_context: true })
-    expect(db.queryRun.mock.calls[0][1][7]).toBe(0)
+    expect(latestStrategyInsert()[1][7]).toBe(0)
   })
 
   it('does not create administrator private strategies', async () => {
@@ -151,9 +155,19 @@ describe('strategy visibility and mutation permissions', () => {
     expect(db.queryRun).not.toHaveBeenCalled()
   })
 
+  it('limits a Pro user to one non-deleted private strategy', async () => {
+    txRun.mockImplementation(sql => {
+      if (sql.includes('COUNT(*) AS strategy_count')) return [[{ strategy_count:1 }], []]
+      return defaultTx(sql)
+    })
+    await expect(createStrategy(2, 'user', { scope:'private', title:'第二条', symbols:['XAUUSD'] }))
+      .rejects.toThrow('private_strategy_limit_reached')
+    expect(latestStrategyInsert()).toBeUndefined()
+  })
+
   it('derives the executable flag from the strategy visibility state', async () => {
     await createStrategy(1, 'admin', { scope: 'platform', visibility_status: 'draft', is_active: true, symbols: ['XAUUSD'] })
-    expect(db.queryRun.mock.calls[0][1][9]).toBe(0)
+    expect(latestStrategyInsert()[1][9]).toBe(0)
 
     db.queryRun.mockClear()
     db.queryOne.mockImplementation(sql => sql.includes('FROM users') ? PRO : { ...PLATFORM, is_active: 0, visibility_status: 'draft' })
@@ -166,7 +180,7 @@ describe('strategy visibility and mutation permissions', () => {
       scope: 'private', title: 'Legacy', symbols: ['XAUUSD'],
       system_prompt: '分析黄金 {{ATF:H1:80}} {{ATF:H4:50}} {{USE_CHAN}}',
     })
-    const params = db.queryRun.mock.calls[0][1]
+    const params = latestStrategyInsert()[1]
     expect(params[2]).toBe('分析黄金')
     expect(JSON.parse(params[4])).toEqual({
       primary_timeframe: 'H1',
@@ -184,7 +198,7 @@ describe('strategy visibility and mutation permissions', () => {
   it('allows an active platform model binding and rejects user models on platform strategies', async () => {
     models.getModelProfileById.mockResolvedValueOnce({ id: 8, scope: 'platform', owner_user_id: 0, status: 'active' })
     await expect(createStrategy(1, 'admin', { scope: 'platform', model_profile_id: 8, symbols: ['XAUUSD'] })).resolves.toBeTruthy()
-    expect(db.queryRun.mock.calls[0][1]).toContain('platform_bound_model')
+    expect(latestStrategyInsert()[1]).toContain('platform_bound_model')
 
     models.getModelProfileById.mockResolvedValueOnce({ id: 9, scope: 'user', owner_user_id: 1, status: 'active' })
     await expect(createStrategy(1, 'admin', { scope: 'platform', model_profile_id: 9, symbols: ['XAUUSD'] }))

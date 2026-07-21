@@ -12,6 +12,7 @@ const VALID_VISIBILITY = new Set(['active', 'draft', 'archived'])
 const PRIVATE_MEMORY_MODES = new Set(['personal', 'off', 'shadow'])
 const VALID_MARGIN_MODES = new Set(['unknown', 'netting', 'hedging'])
 const VALID_TAKE_PROFIT_MODES = new Set(['ai_recommended', 'conservative', 'standard', 'trend'])
+const DEFAULT_PRO_PRIVATE_STRATEGY_LIMIT = 1
 
 function toId(value, field = 'id') {
   const id = Number(value)
@@ -211,8 +212,21 @@ export async function createStrategy(userId, userRole, payload = {}) {
   const ownerUserId = scope === 'platform' ? 0 : actorId
   const binding = await validateModelBinding(scope, ownerUserId, payload.model_profile_id)
   const now = beijingNow()
-  const result = await queryRun(
-    `INSERT INTO auto_prompt_types
+  const insertId = await withTransaction(async run => {
+    if (scope === 'private') {
+      // Lock the owner row so two concurrent create requests cannot both pass
+      // the default Pro quota. A future entitlement can replace the constant
+      // without changing the strategy ownership boundary.
+      await assertTxProAccess(run, actorId, userRole)
+      const quota = await txOne(run, `SELECT COUNT(*) AS strategy_count
+        FROM auto_prompt_types
+        WHERE scope = 'private' AND owner_user_id = ? AND deleted_at IS NULL`, [actorId])
+      if (Number(quota?.strategy_count || 0) >= DEFAULT_PRO_PRIVATE_STRATEGY_LIMIT) {
+        throw new Error('private_strategy_limit_reached')
+      }
+    }
+    const [result] = await run(
+      `INSERT INTO auto_prompt_types
       (title, description, system_prompt, symbols_json, market_data_plan_json, entry_methods_json, use_chan_analysis, include_portfolio_context, interval_minutes, is_active, sort_order,
        created_by, scope, owner_user_id, model_profile_id, inference_mode, visibility_status,
        version, version_label, created_at, updated_at)
@@ -225,9 +239,11 @@ export async function createStrategy(userId, userRole, payload = {}) {
       visibility === 'active' ? 1 : 0, Number(payload.sort_order) || 0, actorId,
       scope, ownerUserId, binding.modelProfileId, binding.inferenceMode, visibility,
       payload.version_label || '', now, now,
-    ]
-  )
-  return getStrategyById(result.insertId, actorId, userRole)
+      ]
+    )
+    return result.insertId
+  })
+  return getStrategyById(insertId, actorId, userRole)
 }
 
 export async function updateStrategy(strategyId, userId, userRole, payload = {}) {
