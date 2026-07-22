@@ -7208,23 +7208,23 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
     const exitPrice = row.exit_price ?? row.price;
     const closeInfo = closeTickets[String(ticket)];
     const exitPriceCell = closeInfo
-      ? `<td class="num"><a href="#" class="signal-link close-price-link" onclick="event.preventDefault(); openAnalysisFromHistory(${closeInfo.signalId}, { source:'history', forcePinned:true })" title="点击查看平仓分析">${escapeHtml(raw(closeInfo.price ?? exitPrice))}</a></td>`
-      : `<td class="num">${escapeHtml(raw(exitPrice))}</td>`;
+      ? `<td data-label="平仓价" class="num"><a href="#" class="signal-link close-price-link" onclick="event.preventDefault(); openAnalysisFromHistory(${closeInfo.signalId}, { source:'history', forcePinned:true })" title="点击查看平仓分析">${escapeHtml(raw(closeInfo.price ?? exitPrice))}</a></td>`
+      : `<td data-label="平仓价" class="num">${escapeHtml(raw(exitPrice))}</td>`;
     return `
     <tr data-ticket="${escapeHtml(String(ticket))}">
-      <td class="num">${escapeHtml(formatTime(row.entry_time))}</td>
-      <td>${escapeHtml(row.symbol)}</td>
+      <td data-label="开仓时间" class="num">${escapeHtml(formatTime(row.entry_time))}</td>
+      <td data-label="品种">${escapeHtml(row.symbol)}</td>
       ${ticketCell(ticket, tickets)}
-      <td><span class="tag ${dir}">${directionText(row.type || dir)}</span></td>
-      <td class="num">${escapeHtml(volumeText(row.volume))}</td>
-      <td class="num">${escapeHtml(raw(row.entry_price))}</td>
-      <td class="num">${row.stop_loss ? escapeHtml(raw(row.stop_loss)) : '--'}</td>
-      <td class="num">${row.take_profit ? escapeHtml(raw(row.take_profit)) : '--'}</td>
-      <td class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
+      <td data-label="方向"><span class="tag ${dir}">${directionText(row.type || dir)}</span></td>
+      <td data-label="手数" class="num">${escapeHtml(volumeText(row.volume))}</td>
+      <td data-label="入场价" class="num">${escapeHtml(raw(row.entry_price))}</td>
+      <td data-label="止损" class="num">${row.stop_loss ? escapeHtml(raw(row.stop_loss)) : '--'}</td>
+      <td data-label="止盈" class="num">${row.take_profit ? escapeHtml(raw(row.take_profit)) : '--'}</td>
+      <td data-label="平仓时间" class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
-      <td class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
-      <td class="${profitClass(row.profit || 0)}">${row.profit != null && row.entry_price && row.volume ? (row.profit / (row.volume * row.entry_price * (row.contract_size || 100)) * 100).toFixed(2) + '%' : '--'}</td>
-      <td class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
+      <td data-label="盈亏" class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
+      <td data-label="收益率" class="${profitClass(row.profit || 0)}">${row.profit != null && row.entry_price && row.volume ? (row.profit / (row.volume * row.entry_price * (row.contract_size || 100)) * 100).toFixed(2) + '%' : '--'}</td>
+      <td data-label="备注" class="comment-cell">${closeInfo ? `<span class="close-remark-tag" title="智能平仓">tp ${escapeHtml(raw(closeInfo.takeProfit ?? closeInfo.price ?? exitPrice))}</span>` : `<span class="comment-ellipsis" title="${escapeHtml(comment || "--")}">${escapeHtml(comment || "--")}</span>`}</td>
     </tr>  `;
   }).join("") : '<tr class="empty-row"><td colspan="13">暂无成交记录</td></tr>';
 }
@@ -7641,12 +7641,12 @@ function renderAuditRows() {
     const resultText = auditResultText(row);
     return `
       <tr class="audit-row ${auditRowClass(status)}">
-        <td>${compactTimeHtml(row?.created_at_mt5 || row?.created_at)}</td>
-        <td><span class="action-badge ${actionType}">${escapeHtml(auditActionLabel(row.action))}</span></td>
-        <td>${escapeHtml(row.symbol || "--")}</td>
-        <td><span class="audit-status ${statusClass}">${escapeHtml(auditStatusLabel(row.status_code || row.status))}</span></td>
-        <td class="audit-result-cell"><button class="audit-result-text" type="button" title="${escapeHtml(resultText)}" data-audit-result>${escapeHtml(resultText)}</button></td>
-        <td title="${escapeHtml(rawReason || "--")}">${escapeHtml(reasonText)}</td>
+        <td data-label="时间">${compactTimeHtml(row?.created_at_mt5 || row?.created_at)}</td>
+        <td data-label="动作"><span class="action-badge ${actionType}">${escapeHtml(auditActionLabel(row.action))}</span></td>
+        <td data-label="品种">${escapeHtml(row.symbol || "--")}</td>
+        <td data-label="状态"><span class="audit-status ${statusClass}">${escapeHtml(auditStatusLabel(row.status_code || row.status))}</span></td>
+        <td data-label="中文结果" class="audit-result-cell"><button class="audit-result-text" type="button" title="${escapeHtml(resultText)}" data-audit-result>${escapeHtml(resultText)}</button></td>
+        <td data-label="具体原因" title="${escapeHtml(rawReason || "--")}">${escapeHtml(reasonText)}</td>
       </tr>
     `;
   }).join("") : `<tr class="empty-row"><td colspan="6">当前筛选下暂无审计记录</td></tr>`;

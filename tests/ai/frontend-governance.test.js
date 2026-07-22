@@ -666,6 +666,20 @@ describe('AI governance navigation and DOM contract', () => {
     expect(responsiveCss).toContain('bottom: calc(var(--mobile-nav-height) + var(--safe-bottom))')
   })
 
+  it('keeps data-heavy history, audit and administrator views usable on phones', () => {
+    expect(app).toContain('data-label="收益率"')
+    expect(app).toContain('data-label="中文结果"')
+    expect(app).toContain('data-label="具体原因"')
+    expect(responsiveCss).toContain('#history .data-table tr:not(.empty-row)')
+    expect(responsiveCss).toContain('#audit .data-table tr:not(.empty-row)')
+    expect(responsiveCss).toContain('#audit .audit-result-text')
+    expect(responsiveCss).toContain('min-width: 0;\n    max-width: 100%;')
+    expect(responsiveCss).toContain('.global-risk-workspace > .workspace-subtabs')
+    expect(responsiveCss).toContain('.ops-user-table-wrap,')
+    expect(responsiveCss).toContain('.compare-table-scroll,')
+    expect(responsiveCss).toContain('-webkit-overflow-scrolling: touch')
+  })
+
   it('uses a readable product type scale across the core AI workspaces', () => {
     for (const token of ['--type-caption', '--type-body', '--type-section', '--type-page']) {
       expect(css).toContain(token)
