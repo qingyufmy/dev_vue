@@ -8868,7 +8868,7 @@ function initAnalysisHistoryScroll() {
 }
 
 // ============ Admin Data Dashboard ============
-const _adminDashState = { charts: {}, loaded: false, activeView:'overview', observerLoaded:false, userList: { page: 1, total: 0, users: [] }, selectedUserId: null, renderUserList:null, refreshTimer: null };
+const _adminDashState = { charts: {}, loaded: false, activeView:'overview', observerLoaded:false, userList: { page: 1, pageSize:10, total: 0, users: [] }, selectedUserId: null, renderUserList:null, refreshTimer: null };
 
 async function loadAdminDashboard(force) {
   if (_adminDashState.loaded && !force) return;
@@ -8885,7 +8885,7 @@ async function loadAdminDashboard(force) {
     loadChangelogAdmin();
     _adminDashState.loaded = true;
     if (userListResp && userListResp.status === 'success') {
-      _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
+      _adminDashState.userList = { page: userListResp.page, pageSize:userListResp.pageSize || 10, total: userListResp.total, users: userListResp.users };
     }
   } catch (e) {
     showError(container, '加载失败: ' + e.message);
@@ -8914,6 +8914,9 @@ async function updateAdminDashboard() {
     set('totalUsers', us.total_users || 0);
     set('totalUsersTab', us.total_users || 0);
     set('totalUsersPanel', us.total_users || 0);
+    set('onlineUsersPanel', us.online_now || 0);
+    set('autoUsersPanel', ar.auto_reasoning_users || 0);
+    set('tradeUsersPanel', ar.trade_enabled_users || 0);
     set('userBreakdown', 'Pro ' + (us.pro_users||0) + ' · Plus ' + (us.plus_users||0) + ' · Free ' + (us.free_users||0));
     set('todayNew', us.today_new || 0);
     set('onlineNow', us.online_now || 0);
@@ -8967,7 +8970,7 @@ async function updateAdminDashboard() {
 
     // Update user list in-place
     if (userListResp && userListResp.status === 'success') {
-      _adminDashState.userList = { page: userListResp.page, total: userListResp.total, users: userListResp.users };
+      _adminDashState.userList = { page: userListResp.page, pageSize:userListResp.pageSize || 10, total: userListResp.total, users: userListResp.users };
       _adminDashState.renderUserList?.(userListResp);
     }
   } catch (e) {
@@ -9503,11 +9506,29 @@ async function renderAdminDashboard(el, d, userListResp) {
       </section>
 
       <section class="ops-view-panel" data-admin-panel="users" hidden>
-        <div class="ops-section-card ops-user-workspace">
-          <div class="ops-section-heading"><div><span class="ops-kicker">账号与连接</span><h2>用户运行状态</h2><p>搜索用户并检查终端、自动分析和交易授权状态。</p></div><span class="ops-total-users">共 <b class="num" data-field="totalUsersPanel">${Number(us.total_users || 0)}</b> 人</span></div>
-          <div class="user-search-wrap ops-user-search"><label for="userSearchInput"><i data-lucide="search"></i><span class="sr-only">搜索用户</span></label><input type="search" id="userSearchInput" class="user-search-input" placeholder="输入手机号、邮箱或昵称" autocomplete="off"><div class="search-dropdown" id="userSearchDropdown"></div></div>
-          <div class="user-list-box" id="userListContainer"><div class="loading-state"><div class="loading-spinner loading-spinner-sm"></div><div class="loading-text">正在加载用户...</div></div></div>
-          <div id="userDetailContainer" aria-live="polite"></div>
+        <div class="ops-user-workspace">
+          <header class="ops-user-heading">
+            <div><span class="ops-kicker">用户运营工作台</span><h2>用户管理</h2><p>快速定位用户，统一查看连接、运行状态、账户收益、策略与风控。</p></div>
+            <div class="ops-user-summary" aria-label="用户概况">
+              <div><span>全部用户</span><strong class="num" data-field="totalUsersPanel">${Number(us.total_users || 0)}</strong></div>
+              <div><span>当前在线</span><strong class="num" data-field="onlineUsersPanel">${Number(us.online_now || 0)}</strong></div>
+              <div><span>自动分析</span><strong class="num" data-field="autoUsersPanel">${Number(ar.auto_reasoning_users || 0)}</strong></div>
+              <div><span>交易发送</span><strong class="num" data-field="tradeUsersPanel">${Number(ar.trade_enabled_users || 0)}</strong></div>
+            </div>
+          </header>
+          <section class="ops-section-card ops-user-directory">
+            <div class="ops-directory-toolbar">
+              <div><strong>用户目录</strong><span>按最近活动排序，点击用户查看完整运营档案</span></div>
+              <div class="user-search-wrap ops-user-search"><label for="userSearchInput"><i data-lucide="search"></i><span class="sr-only">搜索用户</span></label><input type="search" id="userSearchInput" class="user-search-input" placeholder="搜索手机号、邮箱或昵称" autocomplete="off"><div class="search-dropdown" id="userSearchDropdown"></div></div>
+            </div>
+            <div class="user-list-box" id="userListContainer"><div class="loading-state"><div class="loading-spinner loading-spinner-sm"></div><div class="loading-text">正在加载用户...</div></div></div>
+          </section>
+        </div>
+        <div class="ops-user-modal" id="userDetailModal" hidden>
+          <button class="ops-user-modal-backdrop" type="button" data-close-user-detail aria-label="关闭用户详情"></button>
+          <section class="ops-user-modal-dialog" role="dialog" aria-modal="true" aria-label="用户运营档案" tabindex="-1">
+            <div id="userDetailContainer" aria-live="polite"></div>
+          </section>
         </div>
       </section>
 
@@ -9548,6 +9569,36 @@ async function renderAdminDashboard(el, d, userListResp) {
   });
   setAdminView(_adminDashState.activeView);
   $('clSaveButton')?.addEventListener('click', saveChangelog);
+
+  const userDetailModal = $('userDetailModal');
+  const closeUserDetail = () => {
+    if (!userDetailModal || userDetailModal.hidden) return;
+    userDetailModal.hidden = true;
+    document.body.classList.remove('form-modal-open');
+    const previousUserId = Number(_adminDashState.selectedUserId);
+    _adminDashState.selectedUserId = null;
+    _adminDashState.renderUserList?.(_adminDashState.userList);
+    document.querySelector(`[data-uid="${previousUserId}"]`)?.focus();
+  };
+  userDetailModal?.querySelector('[data-close-user-detail]')?.addEventListener('click', closeUserDetail);
+  userDetailModal?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      closeUserDetail();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const dialog = userDetailModal.querySelector('.ops-user-modal-dialog');
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter(item => !item.hidden && item.offsetParent !== null);
+    if (!focusable.length) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
 
   // ====== Charts ======
   const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#9ca3af', font: { size: 10 } } } } };
@@ -9633,29 +9684,23 @@ async function renderAdminDashboard(el, d, userListResp) {
     const pageStart = Math.max(1, Math.min(Math.max(1, totalPages - 4), Number(data.page || 1) - 2));
     const visiblePages = Array.from({ length:Math.min(5, totalPages) }, (_, index) => pageStart + index).filter(page => page <= totalPages);
     container.innerHTML = users.length
-      ? '<div class="ops-user-table-wrap"><table class="user-table ops-user-table"><thead><tr><th>用户</th><th>会员</th><th>MT5 终端</th><th>自动分析</th><th>交易发送</th><th>最近活动</th><th><span class="sr-only">查看详情</span></th></tr></thead><tbody>' +
-        users.map(u => '<tr data-uid="' + u.id + '" tabindex="0">' +
-          '<td><div class="ops-user-cell"><span class="ops-user-avatar">' + escapeHtml((u.nickname || u.email || '?').slice(0, 1).toUpperCase()) + '</span><div><strong>' + escapeHtml(u.nickname || '未设置昵称') + (u.role === 'admin' ? '<em>管理员</em>' : '') + '</strong><span>#' + u.id + ' · ' + escapeHtml(u.phone || u.email || '--') + '</span></div></div></td>' +
-          '<td><span class="chip chip-' + (u.plan || 'free') + '">' + planLabel(u.plan || 'free') + '</span></td>' +
-          '<td><span class="ops-binary-state ' + (u.bridgeConnected ? 'on' : 'off') + '"><i></i>' + (u.bridgeConnected ? '已连接' : '未连接') + '</span></td>' +
-          '<td><span class="ops-binary-state ' + (u.autoReasoning ? 'on' : 'off') + '"><i></i>' + (u.autoReasoning ? '运行中' : '未开启') + '</span></td>' +
-          '<td><span class="ops-binary-state ' + (u.tradeEnabled ? 'on' : 'off') + '"><i></i>' + (u.tradeEnabled ? '已授权' : '未授权') + '</span></td>' +
-          '<td><span class="ops-last-seen">' + (u.bridge_heartbeat ? formatTimeAgo(u.bridge_heartbeat) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--')) + '</span></td>' +
-          '<td><button type="button" class="ops-row-action" data-user-detail="' + u.id + '" aria-label="查看用户 ' + u.id + ' 详情"><i data-lucide="chevron-right"></i></button></td></tr>').join('') +
-        '</tbody></table>' +
+      ? '<div class="ops-user-list">' +
+        users.map(u => '<button type="button" class="ops-user-list-item' + (Number(u.id) === Number(_adminDashState.selectedUserId) ? ' active' : '') + '" data-uid="' + u.id + '" aria-label="查看 ' + escapeHtml(u.nickname || u.email || `用户 ${u.id}`) + ' 的运营档案">' +
+          '<span class="ops-user-cell"><span class="ops-user-avatar">' + escapeHtml((u.nickname || u.email || '?').slice(0, 1).toUpperCase()) + '</span><span><strong>' + escapeHtml(u.nickname || '未设置昵称') + (u.role === 'admin' ? '<em>管理员</em>' : '') + '</strong><small>#' + u.id + ' · ' + escapeHtml(u.phone || u.email || '--') + '</small></span></span>' +
+          '<span class="chip chip-' + (u.plan || 'free') + '">' + planLabel(u.plan || 'free') + '</span>' +
+          '<span class="ops-user-runtime"><span class="ops-binary-state ' + (u.bridgeConnected ? 'on' : 'off') + '"><i></i>MT5 ' + (u.bridgeConnected ? '已连接' : '未连接') + '</span><span class="ops-binary-state ' + (u.autoReasoning ? 'on' : 'off') + '"><i></i>分析' + (u.autoReasoning ? '开启' : '关闭') + '</span><span class="ops-binary-state ' + (u.tradeEnabled ? 'on' : 'off') + '"><i></i>交易' + (u.tradeEnabled ? '开启' : '关闭') + '</span></span>' +
+          '<span class="ops-user-activity"><small>最近活动</small><strong>' + (u.bridge_heartbeat ? formatTimeAgo(u.bridge_heartbeat) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '暂无记录')) + '</strong></span>' +
+          '<span class="ops-row-action" aria-hidden="true"><i data-lucide="chevron-right"></i></span></button>').join('') +
+        '</div>' +
         (totalPages > 1
-          ? '<div class="user-pager"><button class="page-btn" data-page="prev"' + (data.page <= 1 ? ' disabled': '') + '>‹</button>' +
+          ? '<div class="user-pager"><button class="page-btn" data-page="prev" aria-label="上一页"' + (data.page <= 1 ? ' disabled': '') + '><i data-lucide="chevron-left"></i></button>' +
             visiblePages.map(p => '<button class="page-btn' + (p === data.page ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>').join('') +
-            '<button class="page-btn" data-page="next"' + (data.page >= totalPages ? ' disabled': '') + '>›</button>' +
+            '<button class="page-btn" data-page="next" aria-label="下一页"' + (data.page >= totalPages ? ' disabled': '') + '><i data-lucide="chevron-right"></i></button>' +
             '<span class="page-info">第 ' + data.page + '/' + totalPages + ' 页 · 共 ' + data.total + ' 人</span></div>'
           : '') + '</div>'
       : '<div class="ops-empty-state"><i data-lucide="users"></i><strong>暂无用户数据</strong><span>注册用户会显示在这里。</span></div>';
 
-    container.querySelectorAll('tr[data-uid]').forEach(row => {
-      row.addEventListener('click', event => { if (!event.target.closest('button')) showUserDetail(row.dataset.uid); });
-      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showUserDetail(row.dataset.uid); } });
-    });
-    container.querySelectorAll('[data-user-detail]').forEach(button => button.addEventListener('click', () => showUserDetail(button.dataset.userDetail)));
+    container.querySelectorAll('[data-uid]').forEach(row => row.addEventListener('click', () => showUserDetail(row.dataset.uid)));
     container.querySelectorAll('.page-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         let targetPage = data.page;
@@ -9665,7 +9710,7 @@ async function renderAdminDashboard(el, d, userListResp) {
         if (targetPage === data.page) return;
         const resp = await wsApi('admin_user_list', { page: targetPage, pageSize: data.pageSize || 10 });
         if (resp.status === 'success') {
-          _adminDashState.userList = { page: resp.page, total: resp.total, users: resp.users };
+          _adminDashState.userList = { page: resp.page, pageSize:resp.pageSize || data.pageSize || 10, total: resp.total, users: resp.users };
           renderUserList(resp);
         }
       });
@@ -9676,6 +9721,11 @@ async function renderAdminDashboard(el, d, userListResp) {
   async function showUserDetail(uid) {
     const detailContainer = $('userDetailContainer');
     _adminDashState.selectedUserId = Number(uid);
+    if (userDetailModal) {
+      userDetailModal.hidden = false;
+      document.body.classList.add('form-modal-open');
+    }
+    _adminDashState.renderUserList?.(_adminDashState.userList);
     showLoading(detailContainer, "加载用户详情...", "sm");
     try {
       const d2 = await api(`/api/ai/admin/users/${Number(uid)}/operations-detail`);
@@ -9695,8 +9745,11 @@ async function renderAdminDashboard(el, d, userListResp) {
         return `<article class="ops-account-card" data-admin-account="${Number(account.id)}"><header><div><span class="ops-kicker">MT5 账户</span><h4>${escapeHtml(account.nickname || account.login_account)}</h4><p>${escapeHtml(account.broker_server)} · ${escapeHtml(account.login_account)}</p></div><span class="status-chip ${account.observe_status === 'active' ? 'success' : 'warning'}">${account.observe_status === 'active' ? '当前接入' : '历史账户'}</span></header><div class="ops-account-metrics"><div><span>接入后累计收益</span><strong class="num ${Number(account.realized_net || 0) < 0 ? 'text-danger' : 'text-success'}">${syncReady ? `${Number(account.realized_net).toFixed(2)} ${escapeHtml(currency)}` : '同步中'}</strong><small>仅平仓净收益，不含入金和出金</small></div><div><span>资金净流入</span><strong class="num">${syncReady ? `${Number(account.net_funding || 0).toFixed(2)} ${escapeHtml(currency)}` : '--'}</strong><small>入金－出金＋信用与调整</small></div><div><span>已平仓</span><strong class="num">${account.closed_position_count ?? '--'}</strong><small>胜 ${account.winning_exit_count ?? '--'} · 负 ${account.losing_exit_count ?? '--'}</small></div><div><span>风控状态</span><strong>${account.halt_status === 'active' ? '允许交易' : '暂停新开仓'}</strong><small>回撤 ${account.drawdown_pct ?? '--'}% · 连亏 ${account.consecutive_losses ?? '--'}</small></div></div><div class="ops-account-sync"><span>统计起点 ${escapeHtml(String(account.platform_connected_at || '--').slice(0, 19))}</span><span>同步至 ${escapeHtml(String(account.performance_synced_through_date || '--').slice(0, 10))}</span><span>${syncLabel}</span></div><details class="ops-detail-editor"><summary><span><i data-lucide="shield-check"></i><strong>编辑该账户风控</strong><small>留空表示继承平台规则</small></span><i data-lucide="chevron-down"></i></summary><div class="ops-risk-editor">${riskFields}</div><div class="ops-detail-actions"><button class="btn btn-primary btn-sm" type="button" data-save-admin-risk="${Number(account.id)}">保存账户风控</button></div></details></article>`;
       }).join('') || '<div class="ops-empty-state"><strong>尚未接入 MT5 账户</strong><span>用户连接桥接软件后，这里会自动出现账户和统计。</span></div>';
       const subscriptionCards = subscriptions.map(item => `<article class="ops-subscription-row" data-admin-subscription="${Number(item.id)}"><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>${escapeHtml(item.broker_server)} · ${escapeHtml(item.login_account)}</span></div><select data-admin-subscription-strategy aria-label="选择策略">${strategyOptions(item.strategy_id)}</select><label class="ops-inline-switch"><input type="checkbox" data-admin-subscription-enabled ${Number(item.execution_enabled) ? 'checked' : ''}><span>自动分析</span></label><button class="btn btn-secondary btn-sm" type="button" data-save-admin-subscription="${Number(item.id)}">保存</button></article>`).join('') || '<div class="ops-empty-state"><strong>暂无策略订阅</strong><span>用户创建订阅后可在这里查看和调整。</span></div>';
-      detailContainer.innerHTML = `<section class="ops-user-control"><header class="user-detail-header"><div class="user-detail-avatar">${escapeHtml((u.nickname || u.email || '?')[0].toUpperCase())}</div><div class="user-detail-info"><span class="name">${escapeHtml(u.nickname || '未设置昵称')} <small>#${Number(u.id)}</small></span><span class="email">${escapeHtml(u.phone || u.email || '--')} · ${escapeHtml(u.plan || 'free')}</span></div><button class="user-detail-close" id="adminUserDetailClose" type="button" aria-label="关闭用户详情"><i data-lucide="x"></i></button></header><div class="ops-runtime-controls"><div><span class="ops-kicker">实时控制</span><h3>自动分析与交易发送</h3><p>修改后立即写入系统；桥接在线时同步下发，离线时会在下次连接恢复。</p></div><label class="ops-control-switch"><input id="adminUserAutoReasoning" type="checkbox" ${Number(s.auto_reasoning_enabled) ? 'checked' : ''}><span><strong>自动分析</strong><small>${d2.bridge?.connected ? '桥接在线' : '桥接离线，保存为期望状态'}</small></span></label><label class="ops-control-switch danger"><input id="adminUserTradeSend" type="checkbox" ${Number(s.trade_send_enabled) ? 'checked' : ''}><span><strong>交易发送</strong><small>允许系统向该账户发送订单</small></span></label><button class="btn btn-primary btn-sm" id="saveAdminUserRuntime" type="button">保存运行状态</button></div><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">账户与收益</span><h3>接入过的 MT5 账户</h3><p>收益按账户归属期、MT5 平仓时间和账户币种汇总，入出金单独展示。</p></div></div><div class="ops-account-list">${accountCards}</div></section><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">策略运行</span><h3>当前策略订阅</h3><p>管理员可调整绑定策略与自动分析状态，所有修改进入审计。</p></div></div><div class="ops-subscription-list">${subscriptionCards}</div></section></section>`;
-      $('adminUserDetailClose')?.addEventListener('click', () => { detailContainer.innerHTML = ''; _adminDashState.selectedUserId = null; });
+      const planText = ({ pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' })[u.plan] || '免费用户';
+      const expiresText = u.plan_expires_at ? String(u.plan_expires_at).slice(0, 10) : '长期有效';
+      detailContainer.innerHTML = `<section class="ops-user-control"><header class="user-detail-header"><div class="user-detail-avatar">${escapeHtml((u.nickname || u.email || '?')[0].toUpperCase())}</div><div class="user-detail-info"><span class="ops-kicker">用户运营档案</span><span class="name">${escapeHtml(u.nickname || '未设置昵称')} <small>#${Number(u.id)}</small></span><span class="email">${escapeHtml(u.phone || u.email || '--')}</span></div><div class="ops-user-profile-badges"><span class="chip chip-${escapeHtml(u.plan || 'free')}">${escapeHtml(planText)}</span><span class="ops-binary-state ${d2.bridge?.connected ? 'on' : 'off'}"><i></i>${d2.bridge?.connected ? 'MT5 在线' : 'MT5 离线'}</span></div><button class="user-detail-close" id="adminUserDetailClose" type="button" aria-label="关闭用户详情"><i data-lucide="x"></i></button></header><div class="ops-user-profile-facts"><div><span>注册时间</span><strong>${escapeHtml(String(u.created_at || '--').slice(0, 10))}</strong></div><div><span>会员有效期</span><strong>${escapeHtml(expiresText)}</strong></div><div><span>最近活动</span><strong>${u.bridge_heartbeat ? escapeHtml(formatTimeAgo(u.bridge_heartbeat)) : u.last_seen_at ? escapeHtml(formatTimeAgo(u.last_seen_at)) : '暂无记录'}</strong></div><div><span>接入账户</span><strong class="num">${accounts.length}</strong></div></div><div class="ops-runtime-controls"><div><span class="ops-kicker">实时控制</span><h3>自动分析与交易发送</h3><p>保存后立即生效；桥接离线时会在下次连接后恢复期望状态。</p></div><label class="ops-control-switch"><input id="adminUserAutoReasoning" type="checkbox" ${Number(s.auto_reasoning_enabled) ? 'checked' : ''}><span><strong>自动分析</strong><small>${d2.bridge?.connected ? '桥接在线，可实时同步' : '桥接离线，暂存期望状态'}</small></span></label><label class="ops-control-switch danger"><input id="adminUserTradeSend" type="checkbox" ${Number(s.trade_send_enabled) ? 'checked' : ''}><span><strong>交易发送</strong><small>允许系统向该用户账户发送订单</small></span></label><button class="btn btn-primary btn-sm" id="saveAdminUserRuntime" type="button"><i data-lucide="save"></i>保存运行状态</button></div><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">账户与收益</span><h3>接入过的 MT5 账户</h3><p>收益按账户归属期和 MT5 平仓时间汇总，入出金单独展示。</p></div><span class="ops-section-count">${accounts.length} 个账户</span></div><div class="ops-account-list">${accountCards}</div></section><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">策略运行</span><h3>当前策略订阅</h3><p>可以调整绑定策略和自动分析状态，所有修改都会进入审计。</p></div><span class="ops-section-count">${subscriptions.length} 条订阅</span></div><div class="ops-subscription-list">${subscriptionCards}</div></section></section>`;
+      $('adminUserDetailClose')?.addEventListener('click', closeUserDetail);
+      userDetailModal?.querySelector('.ops-user-modal-dialog')?.focus();
       $('saveAdminUserRuntime')?.addEventListener('click', async event => {
         event.currentTarget.disabled = true;
         try {
