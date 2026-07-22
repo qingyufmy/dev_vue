@@ -644,6 +644,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(responsiveCss).toContain('min-height: 100dvh')
   })
 
+  it('keeps the latest decision first and removes nested scrolling on narrow screens', () => {
+    expect(responsiveCss).toContain('grid-template-areas:\n      "signal"\n      "account"\n      "quote"\n      "positions"')
+    expect(responsiveCss).toContain('grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr)')
+    expect(responsiveCss).toContain('.analysis-history-panel .analysis-history-list {\n    max-height: none;\n    overflow: visible;')
+    expect(responsiveCss).toContain('height: 100dvh')
+    expect(responsiveCss).toContain('env(safe-area-inset-bottom)')
+    expect(responsiveCss).toContain('.analyst-records-card .data-table {\n    min-width: 860px;')
+  })
+
   it('uses a readable product type scale across the core AI workspaces', () => {
     for (const token of ['--type-caption', '--type-body', '--type-section', '--type-page']) {
       expect(css).toContain(token)
