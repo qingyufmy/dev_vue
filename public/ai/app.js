@@ -9067,12 +9067,20 @@ function renderObserverAdminPanel() {
           <label><span>桥接源账号</span><div class="observer-source-account-field"><select class="form-select" name="bridge_user_id" required><option value="">请选择专用源账号</option>${candidateOptions}</select><button id="createObserverSourceAccountBtn" class="btn btn-secondary" type="button"><i data-lucide="user-plus" size="15"></i>创建账号</button></div></label>
           <label><span>固定平台策略</span><select class="form-select" name="strategy_id" required><option value="">请选择平台策略</option>${strategyOptions}</select><small>只有该策略产生的系统持仓与挂单会进入参考组合。</small></label>
           <label><span>绑定 MT5 账户</span><select class="form-select" name="trading_account_id"><option value="">自动识别当前账户</option></select></label>
+          <fieldset class="observer-runtime-defaults">
+            <legend>初始运行状态</legend>
+            <label class="observer-runtime-toggle"><input type="checkbox" name="auto_inference_enabled" checked><span><b>自动推理</b><small>按策略持续生成新信号</small></span><i aria-hidden="true"></i></label>
+            <label class="observer-runtime-toggle"><input type="checkbox" name="trade_send_enabled" checked><span><b>交易发送</b><small>允许向该源 MT5 发送订单</small></span><i aria-hidden="true"></i></label>
+          </fieldset>
           <button class="btn btn-primary" type="submit"><i data-lucide="plus"></i>添加来源</button>
         </form>
         <div class="observer-admin-list">${sources.length ? sources.map(source => `
-          <article class="observer-admin-item">
+          <article class="observer-admin-item observer-source-item">
             <span class="observer-source-dot ${source.bridge_online ? 'online' : ''}" aria-hidden="true"></span>
-            <div><strong>${escapeHtml(source.name)}</strong><p>${escapeHtml(source.login_account ? `${source.broker_server || 'MT5'} · ${source.login_account}` : source.bridge_user_nickname || source.bridge_user_email || `源账号 #${source.bridge_user_id}`)}</p><div class="observer-source-strategy-editor"><select class="form-select" data-observer-source-strategy="${Number(source.id)}"><option value="">请选择固定策略</option>${sourceStrategyOptions(source.strategy_id)}</select><button class="btn btn-secondary btn-sm" type="button" data-observer-source-strategy-save="${Number(source.id)}">保存策略</button></div></div>
+            <div class="observer-source-main"><strong>${escapeHtml(source.name)}</strong><p>${escapeHtml(source.login_account ? `${source.broker_server || 'MT5'} · ${source.login_account}` : source.bridge_user_nickname || source.bridge_user_email || `源账号 #${source.bridge_user_id}`)}</p><div class="observer-source-strategy-editor"><select class="form-select" data-observer-source-strategy="${Number(source.id)}"><option value="">请选择固定策略</option>${sourceStrategyOptions(source.strategy_id)}</select><button class="btn btn-secondary btn-sm" type="button" data-observer-source-strategy-save="${Number(source.id)}">保存策略</button></div><div class="observer-source-runtime" aria-label="观摩源运行控制">
+              <label class="observer-runtime-toggle" title="关闭后，该观摩源绑定的策略停止生成新信号"><input type="checkbox" data-observer-runtime-field="auto_inference_enabled" data-observer-source-id="${Number(source.id)}" ${Number(source.auto_inference_enabled) === 1 ? 'checked' : ''}><span><b>自动推理</b><small>${Number(source.auto_inference_enabled) === 1 ? '持续生成新信号' : '已停止生成信号'}</small></span><i aria-hidden="true"></i></label>
+              <label class="observer-runtime-toggle" title="关闭后仍可分析，但不再向该源 MT5 发送或取消订单"><input type="checkbox" data-observer-runtime-field="trade_send_enabled" data-observer-source-id="${Number(source.id)}" ${Number(source.trade_send_enabled) === 1 ? 'checked' : ''}><span><b>交易发送</b><small>${Number(source.trade_send_enabled) === 1 ? '允许发送和取消订单' : '仅分析，不发送订单'}</small></span><i aria-hidden="true"></i></label>
+            </div></div>
             <span class="ops-state-pill ${source.bridge_online ? 'running' : 'waiting'}">${source.bridge_online ? '已连接' : '离线'}</span>
             <button class="icon-btn" type="button" data-observer-source-delete="${Number(source.id)}" aria-label="删除观摩源"><i data-lucide="trash-2"></i></button>
           </article>`).join('') : '<div class="ops-empty-state compact"><strong>尚未配置观摩源</strong><span>先准备一个 Pro 源账号并连接桥接软件。</span></div>'}</div>
@@ -9111,7 +9119,7 @@ function renderObserverAdminPanel() {
     const button = event.currentTarget.querySelector('button[type="submit"]');
     try {
       button.disabled = true;
-      await api('/api/ai/admin/observer-sources', { method:'POST', body:{ name:form.get('name'), bridge_user_id:Number(form.get('bridge_user_id')), trading_account_id:form.get('trading_account_id') ? Number(form.get('trading_account_id')) : null, strategy_id:Number(form.get('strategy_id')) } });
+      await api('/api/ai/admin/observer-sources', { method:'POST', body:{ name:form.get('name'), bridge_user_id:Number(form.get('bridge_user_id')), trading_account_id:form.get('trading_account_id') ? Number(form.get('trading_account_id')) : null, strategy_id:Number(form.get('strategy_id')), auto_inference_enabled:form.get('auto_inference_enabled') === 'on', trade_send_enabled:form.get('trade_send_enabled') === 'on' } });
       toast('观摩源已添加', 'success'); await loadObserverAdminPanel(true);
     } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; }
   });
@@ -9141,6 +9149,29 @@ function renderObserverAdminPanel() {
       toast('观摩源固定策略已更新', 'success');
       await loadObserverAdminPanel(true);
     } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; }
+  }));
+  root.querySelectorAll('[data-observer-runtime-field]').forEach(input => input.addEventListener('change', async () => {
+    const sourceId = Number(input.dataset.observerSourceId);
+    const field = input.dataset.observerRuntimeField;
+    const enabled = input.checked;
+    if (field === 'trade_send_enabled' && enabled && !confirm('开启交易发送后，系统可按风控结果向该观摩源 MT5 发送、修改或取消订单。确定开启吗？')) {
+      input.checked = false;
+      return;
+    }
+    try {
+      input.disabled = true;
+      const result = await api(`/api/ai/admin/observer-sources/${sourceId}`, { method:'PUT', body:{ [field]:enabled } });
+      const label = field === 'auto_inference_enabled' ? '自动推理' : '交易发送';
+      if (field === 'trade_send_enabled' && result.runtime_sync?.connected && enabled && !result.runtime_sync?.trade_applied) {
+        toast(`${label}设置已保存，桥接软件暂未确认，将在重连后自动同步`, 'warning');
+      } else {
+        toast(`${label}已${enabled ? '开启' : '关闭'}`, 'success');
+      }
+      await loadObserverAdminPanel(true);
+    } catch (error) {
+      input.checked = !enabled;
+      toast(error.message, 'error');
+    } finally { input.disabled = false; }
   }));
   root.querySelectorAll('[data-observer-channel-default]').forEach(button => button.addEventListener('click', async () => {
     try { await api(`/api/ai/admin/observer-channels/${button.dataset.observerChannelDefault}`, { method:'PUT', body:{ is_default:true } }); toast('默认频道已更新', 'success'); await loadObserverAdminPanel(true); }

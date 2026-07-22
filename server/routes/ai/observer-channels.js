@@ -27,6 +27,12 @@ function normalizedStatus(value, allowed, fallback = 'active') {
   return status
 }
 
+function normalizedBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return Boolean(fallback)
+  if (typeof value === 'string') return !['0', 'false', 'off', 'no'].includes(value.trim().toLowerCase())
+  return Boolean(value)
+}
+
 function normalizedSlug(value) {
   const slug = requiredText(value, 'channel_slug_required', 64).toLowerCase()
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug)) throw new Error('invalid_channel_slug')
@@ -62,28 +68,49 @@ async function validateTradingAccount(tradingAccountId, bridgeUserId) {
   return id
 }
 
-async function syncObserverSourceRuntime(bridgeUserId, tradingAccountId, strategyId) {
+async function readObserverSourceRuntime(bridgeUserId, strategyId) {
+  const [scheduler, bridgeSettings] = await Promise.all([
+    queryOne(`SELECT enabled, enable_auto_trade FROM auto_scheduler
+      WHERE user_id = ? AND prompt_type_id = ? LIMIT 1`, [bridgeUserId, strategyId]),
+    queryOne(`SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings
+      WHERE user_id = ? LIMIT 1`, [bridgeUserId]),
+  ])
+  return {
+    auto_inference_enabled: normalizedBoolean(scheduler?.enabled, bridgeSettings?.auto_reasoning_enabled),
+    trade_send_enabled: normalizedBoolean(bridgeSettings?.trade_send_enabled, scheduler?.enable_auto_trade),
+  }
+}
+
+async function syncObserverSourceRuntime(bridgeUserId, tradingAccountId, strategyId, runtime = {}) {
   const strategy = await queryOne(`SELECT id, symbols_json FROM auto_prompt_types
     WHERE id = ? AND scope = 'platform' AND is_active = 1 AND deleted_at IS NULL`, [strategyId])
   if (!strategy) throw new Error('observer_source_strategy_invalid')
+  const autoInferenceEnabled = normalizedBoolean(runtime.auto_inference_enabled, true)
+  const tradeSendEnabled = normalizedBoolean(runtime.trade_send_enabled, true)
   const existing = await queryOne(`SELECT id FROM strategy_subscriptions
     WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY id DESC LIMIT 1`, [bridgeUserId, strategyId])
   if (existing) {
     await queryRun(`UPDATE strategy_subscriptions SET trading_account_id = ?, symbols_json = ?,
-      execution_enabled = 1, memory_mode = 'platform_only', updated_at = NOW() WHERE id = ?`,
-    [tradingAccountId, strategy.symbols_json, existing.id])
+      execution_enabled = ?, memory_mode = 'platform_only', updated_at = NOW() WHERE id = ?`,
+    [tradingAccountId, strategy.symbols_json, autoInferenceEnabled ? 1 : 0, existing.id])
   } else {
     await queryRun(`INSERT INTO strategy_subscriptions
       (user_id, trading_account_id, strategy_id, symbols_json, execution_enabled, memory_mode, is_deleted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, 'platform_only', 0, NOW(), NOW())`,
-    [bridgeUserId, tradingAccountId, strategyId, strategy.symbols_json])
+      VALUES (?, ?, ?, ?, ?, 'platform_only', 0, NOW(), NOW())`,
+    [bridgeUserId, tradingAccountId, strategyId, strategy.symbols_json, autoInferenceEnabled ? 1 : 0])
   }
   await queryRun(`INSERT INTO auto_scheduler
     (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, selected_symbols_json, created_at, updated_at)
-    VALUES (?, 1, ?, 'medium', 0.05, 2, 1, ?, NOW(), NOW())
-    ON DUPLICATE KEY UPDATE enabled = 1, prompt_type_id = VALUES(prompt_type_id),
-      enable_auto_trade = 1, selected_symbols_json = VALUES(selected_symbols_json), updated_at = NOW()`,
-  [bridgeUserId, strategyId, strategy.symbols_json])
+    VALUES (?, ?, ?, 'medium', 0.05, 2, ?, ?, NOW(), NOW())
+    ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), prompt_type_id = VALUES(prompt_type_id),
+      enable_auto_trade = VALUES(enable_auto_trade), selected_symbols_json = VALUES(selected_symbols_json), updated_at = NOW()`,
+  [bridgeUserId, autoInferenceEnabled ? 1 : 0, strategyId, tradeSendEnabled ? 1 : 0, strategy.symbols_json])
+  await queryRun(`INSERT INTO user_bridge_settings
+    (user_id, trade_send_enabled, auto_reasoning_enabled, updated_at)
+    VALUES (?, ?, ?, NOW())
+    ON DUPLICATE KEY UPDATE trade_send_enabled = VALUES(trade_send_enabled),
+      auto_reasoning_enabled = VALUES(auto_reasoning_enabled), updated_at = NOW()`,
+  [bridgeUserId, tradeSendEnabled ? 1 : 0, autoInferenceEnabled ? 1 : 0])
 }
 
 async function disableObserverSourceRuntime(bridgeUserId, strategyId) {
@@ -167,15 +194,21 @@ export async function listObserverSources() {
       users.email AS bridge_user_email, users.nickname AS bridge_user_nickname,
       accounts.login_account, accounts.broker_server,
       strategies.title AS strategy_title,
+      COALESCE(scheduler.enabled, 0) AS auto_inference_enabled,
+      COALESCE(bridge_settings.trade_send_enabled, 0) AS trade_send_enabled,
       COUNT(channels.id) AS channel_count
     FROM ai_observer_sources sources
     JOIN users ON users.id = sources.bridge_user_id
     LEFT JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
     LEFT JOIN auto_prompt_types strategies ON strategies.id = sources.strategy_id
+    LEFT JOIN auto_scheduler scheduler ON scheduler.user_id = sources.bridge_user_id
+      AND scheduler.prompt_type_id = sources.strategy_id
+    LEFT JOIN user_bridge_settings bridge_settings ON bridge_settings.user_id = sources.bridge_user_id
     LEFT JOIN ai_observer_channels channels ON channels.source_id = sources.id
     GROUP BY sources.id, sources.name, sources.bridge_user_id, sources.trading_account_id,
       sources.strategy_id, sources.status, sources.notes, sources.created_by_user_id, sources.created_at,
-      sources.updated_at, users.email, users.nickname, accounts.login_account, accounts.broker_server, strategies.title
+      sources.updated_at, users.email, users.nickname, accounts.login_account, accounts.broker_server, strategies.title,
+      scheduler.enabled, bridge_settings.trade_send_enabled
     ORDER BY sources.status = 'active' DESC, sources.id`)
 }
 
@@ -190,9 +223,13 @@ export async function createObserverSource(actorId, input = {}) {
     requiredText(input.name, 'source_name_required', 80), bridgeUser.id, tradingAccountId, strategyId,
     status, optionalText(input.notes, 255), Number(actorId),
   ])
-  if (status === 'active') await syncObserverSourceRuntime(bridgeUser.id, tradingAccountId, strategyId)
+  const runtime = {
+    auto_inference_enabled: normalizedBoolean(input.auto_inference_enabled, true),
+    trade_send_enabled: normalizedBoolean(input.trade_send_enabled, true),
+  }
+  if (status === 'active') await syncObserverSourceRuntime(bridgeUser.id, tradingAccountId, strategyId, runtime)
   invalidateObserverChannelCache()
-  return queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [result.insertId])
+  return { ...await queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [result.insertId]), ...runtime }
 }
 
 export async function updateObserverSource(id, input = {}) {
@@ -205,6 +242,11 @@ export async function updateObserverSource(id, input = {}) {
   )
   const strategyId = await validatePlatformStrategy(input.strategy_id ?? existing.strategy_id, Number(id))
   const status = input.status === undefined ? existing.status : normalizedStatus(input.status, SOURCE_STATUSES)
+  const currentRuntime = await readObserverSourceRuntime(existing.bridge_user_id, existing.strategy_id)
+  const runtime = {
+    auto_inference_enabled: normalizedBoolean(input.auto_inference_enabled, currentRuntime.auto_inference_enabled),
+    trade_send_enabled: normalizedBoolean(input.trade_send_enabled, currentRuntime.trade_send_enabled),
+  }
   const runtimeChanged = Number(existing.bridge_user_id) !== Number(bridgeUser.id)
     || Number(existing.strategy_id) !== Number(strategyId)
     || existing.status !== status
@@ -218,9 +260,9 @@ export async function updateObserverSource(id, input = {}) {
     status,
     input.notes === undefined ? existing.notes : optionalText(input.notes, 255), Number(id),
   ])
-  if (status === 'active') await syncObserverSourceRuntime(bridgeUser.id, tradingAccountId, strategyId)
+  if (status === 'active') await syncObserverSourceRuntime(bridgeUser.id, tradingAccountId, strategyId, runtime)
   invalidateObserverChannelCache()
-  return queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [Number(id)])
+  return { ...await queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [Number(id)]), ...runtime }
 }
 
 export async function deleteObserverSource(id) {

@@ -62,6 +62,60 @@ describe('observer sources and channels', () => {
       .resolves.toMatchObject({ id:6, bridge_user_id:8 })
   })
 
+  it('creates an observer source with both runtime switches disabled', async () => {
+    db.queryOne.mockImplementation(async sql => {
+      if (sql.includes('FROM users')) return { id:7, role:'admin', bridge_eligible:1 }
+      if (sql.includes('FROM trading_accounts')) return { id:12 }
+      if (sql.includes("scope = 'platform'")) return { id:3, title:'平台策略', symbols_json:'["XAUUSD"]' }
+      if (sql.includes('FROM ai_observer_sources') && sql.includes('strategy_id = ?')) return null
+      if (sql.includes('SELECT id FROM strategy_subscriptions')) return null
+      if (sql.includes('SELECT * FROM ai_observer_sources')) return { id:5, bridge_user_id:7, trading_account_id:12, strategy_id:3 }
+      return null
+    })
+    db.queryRun.mockResolvedValue({ insertId:5 })
+
+    const source = await createObserverSource(1, {
+      name:'暂停来源', bridge_user_id:7, trading_account_id:12, strategy_id:3,
+      auto_inference_enabled:false, trade_send_enabled:false,
+    })
+
+    expect(source).toMatchObject({ auto_inference_enabled:false, trade_send_enabled:false })
+    const subscriptionCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
+    const schedulerCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
+    const bridgeSettingsCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO user_bridge_settings'))
+    expect(subscriptionCall[1]).toEqual([7, 12, 3, '["XAUUSD"]', 0])
+    expect(schedulerCall[1]).toEqual([7, 0, 3, 0, '["XAUUSD"]'])
+    expect(bridgeSettingsCall[1]).toEqual([7, 0, 0])
+  })
+
+  it('updates observer-source runtime switches without forcing them back on', async () => {
+    db.queryOne.mockImplementation(async sql => {
+      if (sql === 'SELECT * FROM ai_observer_sources WHERE id = ?') {
+        return { id:5, name:'来源', bridge_user_id:7, trading_account_id:12, strategy_id:3, status:'active', notes:null }
+      }
+      if (sql.includes('FROM users')) return { id:7, role:'admin', bridge_eligible:1 }
+      if (sql.includes('FROM trading_accounts')) return { id:12 }
+      if (sql.includes('SELECT id, title FROM auto_prompt_types')) return { id:3, title:'平台策略' }
+      if (sql.includes('FROM ai_observer_sources') && sql.includes('strategy_id = ?')) return null
+      if (sql.includes('SELECT enabled, enable_auto_trade')) return { enabled:1, enable_auto_trade:1 }
+      if (sql.includes('SELECT trade_send_enabled')) return { trade_send_enabled:1, auto_reasoning_enabled:1 }
+      if (sql.includes('SELECT id, symbols_json FROM auto_prompt_types')) return { id:3, symbols_json:'["XAUUSD"]' }
+      if (sql.includes('SELECT id FROM strategy_subscriptions')) return { id:31 }
+      return null
+    })
+    db.queryRun.mockResolvedValue({ changes:1 })
+
+    const source = await updateObserverSource(5, { auto_inference_enabled:false, trade_send_enabled:false })
+
+    expect(source).toMatchObject({ auto_inference_enabled:false, trade_send_enabled:false })
+    const subscriptionCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE strategy_subscriptions SET trading_account_id'))
+    const schedulerCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
+    const bridgeSettingsCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO user_bridge_settings'))
+    expect(subscriptionCall[1]).toEqual([12, '["XAUUSD"]', 0, 31])
+    expect(schedulerCall[1]).toEqual([7, 0, 3, 0, '["XAUUSD"]'])
+    expect(bridgeSettingsCall[1]).toEqual([7, 0, 0])
+  })
+
   it('rejects a source account without active Pro access', async () => {
     db.queryOne.mockResolvedValue({ id:8, role:'user', plan:'plus', bridge_eligible:0 })
     await expect(createObserverSource(1, { name:'错误来源', bridge_user_id:8, strategy_id:4 }))

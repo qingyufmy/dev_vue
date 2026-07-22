@@ -764,6 +764,17 @@ describe('route permissions and credential redaction', () => {
     expect(routes).toContain("router.post('/ai/admin/observer-source-accounts'")
   })
 
+  it('lets administrators control observer-source inference and trade sending independently', () => {
+    expect(app).toContain('data-observer-runtime-field="auto_inference_enabled"')
+    expect(app).toContain('data-observer-runtime-field="trade_send_enabled"')
+    expect(app).toContain('关闭后仍可分析，但不再向该源 MT5 发送或取消订单')
+    expect(css).toContain('.observer-runtime-toggle')
+    expect(responsiveCss).toContain('.observer-source-runtime { grid-template-columns:1fr; }')
+    expect(routes).toContain('applyBridgeRuntimeState')
+    expect(scheduler).toContain('observer_source.status = \'active\'')
+    expect(scheduler).toContain('COALESCE(observer_scheduler.enabled, 0) = 0')
+  })
+
   it('returns the account metrics rendered by the risk-center status card', () => {
     const start = routes.indexOf("router.get('/ai/risk-center', authMiddleware")
     const end = routes.indexOf("router.post('/ai/risk-center/refresh'", start)

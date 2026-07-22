@@ -13,7 +13,7 @@ import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistory
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
   buildStrategyContextFromTags } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
-import { getBridgeDiagnostics, getActivePlatformBridgeUserId, isBridgeAlive } from '../../bridge-ws.js'
+import { applyBridgeRuntimeState, getBridgeDiagnostics, getActivePlatformBridgeUserId, isBridgeAlive } from '../../bridge-ws.js'
 import { buildAiAccessContext, observerAccessError, observerHttpRequestAllowed } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
   listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
@@ -176,13 +176,29 @@ router.post('/ai/admin/observer-source-accounts', async (req, res) => {
 
 router.post('/ai/admin/observer-sources', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
-  try { res.status(201).json({ ok:true, source:await createObserverSource(req.user.id, req.body || {}) }) }
+  try {
+    const source = await createObserverSource(req.user.id, req.body || {})
+    await reconcileAutoSchedulers()
+    const runtime_sync = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
+      tradeEnabled:Boolean(source.trade_send_enabled),
+      autoReasoningEnabled:Boolean(source.auto_inference_enabled),
+    })
+    res.status(201).json({ ok:true, source, runtime_sync })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.put('/ai/admin/observer-sources/:id', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
-  try { res.json({ ok:true, source:await updateObserverSource(req.params.id, req.body || {}) }) }
+  try {
+    const source = await updateObserverSource(req.params.id, req.body || {})
+    await reconcileAutoSchedulers()
+    const runtime_sync = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
+      tradeEnabled:Boolean(source.trade_send_enabled),
+      autoReasoningEnabled:Boolean(source.auto_inference_enabled),
+    })
+    res.json({ ok:true, source, runtime_sync })
+  }
   catch (error) { reviewError(res, error) }
 })
 

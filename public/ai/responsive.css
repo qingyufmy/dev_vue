@@ -1815,7 +1815,12 @@
   .observer-source-account-field .btn { width:100%; justify-content:center; }
   .observer-admin-item { grid-template-columns:auto minmax(0,1fr) auto; }
   .observer-admin-item .ops-state-pill { grid-column:2; justify-self:start; }
+  .observer-source-item { grid-template-columns:auto minmax(0,1fr) auto; }
+  .observer-source-item [data-observer-source-delete] { grid-column:3; grid-row:1; }
   .observer-source-strategy-editor { align-items:stretch; flex-direction:column; }
   .observer-source-strategy-editor .form-select,
   .observer-source-strategy-editor .btn { width:100%; }
+  .observer-runtime-defaults { display:grid; grid-template-columns:1fr; }
+  .observer-source-runtime { grid-template-columns:1fr; }
+  .observer-source-item .ops-state-pill { align-self:start; }
 }

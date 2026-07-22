@@ -2147,6 +2147,48 @@ export function isTradeEnabled(userId) {
   return bridge.tradeEnabled !== false
 }
 
+// Apply administrator-managed observer-source switches to an already connected
+// bridge. Database persistence is handled by the observer-source service so the
+// desired state also survives bridge restarts.
+export async function applyBridgeRuntimeState(userId, { tradeEnabled, autoReasoningEnabled } = {}) {
+  const numericUserId = Number(userId)
+  const bridge = bridges.get(numericUserId)
+  const connected = !!(bridge && bridge.ws?.readyState === 1)
+  let tradeApplied = !connected
+  let tradeError = null
+
+  if (bridge && typeof autoReasoningEnabled === 'boolean') {
+    bridge.autoReasoningEnabled = autoReasoningEnabled
+  }
+  if (bridge && typeof tradeEnabled === 'boolean') {
+    // Disable locally before the command is acknowledged so no server-side
+    // order can slip through while the bridge processes the switch.
+    if (!tradeEnabled) bridge.tradeEnabled = false
+    const result = await sendBridgeCommand(numericUserId, 'toggle_trade', { enable:tradeEnabled }, 5000, { noFallback:true })
+    tradeApplied = result?.status === 'success'
+    if (tradeApplied) bridge.tradeEnabled = tradeEnabled
+    else tradeError = result?.message || result?.error || 'bridge_runtime_sync_failed'
+  }
+
+  if (typeof autoReasoningEnabled === 'boolean') {
+    sendToBrowsers(numericUserId, {
+      type:'auto_state', enabled:autoReasoningEnabled,
+      runtime_subscribed:autoReasoningEnabled && connected,
+      reason:'observer_source_admin_update',
+    })
+  }
+  if (typeof tradeEnabled === 'boolean') {
+    sendToBrowsers(numericUserId, {
+      type:'hb', mt5_connected:connected, mt5_alive:connected,
+      trade_enabled:connected ? bridge?.tradeEnabled !== false : tradeEnabled,
+      auto_reasoning_enabled:typeof autoReasoningEnabled === 'boolean'
+        ? autoReasoningEnabled : Boolean(bridge?.autoReasoningEnabled),
+      trade_mode:typeof bridge?.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
+    })
+  }
+  return { connected, trade_applied:tradeApplied, trade_error:tradeError }
+}
+
 // Market status: bridge connected + tick time unchanged for 5 min → closed
 // Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
 // Market tick thresholds

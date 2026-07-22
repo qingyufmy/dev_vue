@@ -271,6 +271,15 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
      JOIN users u ON u.id = s.user_id
      WHERE s.prompt_type_id = ? AND s.enabled = 1
        AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = s.user_id))
+       AND NOT EXISTS (
+         SELECT 1 FROM ai_observer_sources observer_source
+         LEFT JOIN auto_scheduler observer_scheduler
+           ON observer_scheduler.user_id = observer_source.bridge_user_id
+          AND observer_scheduler.prompt_type_id = observer_source.strategy_id
+         WHERE observer_source.strategy_id = apt.id
+           AND observer_source.status = 'active'
+           AND COALESCE(observer_scheduler.enabled, 0) = 0
+       )
        AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))`,
     [promptTypeId]
   )
