@@ -163,6 +163,7 @@
 }
 
 @media (max-width: 767px) {
+  .candidate-entry-reference > div:nth-child(2) { grid-template-columns:1fr; }
   :root {
     --responsive-gutter: 16px;
     --mobile-nav-height: 68px;

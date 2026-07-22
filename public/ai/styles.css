@@ -873,6 +873,15 @@ button {
 .direction-bias-track i { display:block; height:100%; }
 .direction-bias-track .bullish { background:var(--color-positive); }
 .direction-bias-track .bearish { background:var(--color-negative); }
+.candidate-entry-reference { display:grid; gap:10px; margin-bottom:12px; padding:13px 15px; border:1px solid color-mix(in srgb,var(--brand-gold) 30%,var(--border-subtle)); border-radius:12px; background:color-mix(in srgb,var(--brand-gold) 5%,var(--bg-input-soft)); }
+.candidate-entry-reference-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.candidate-entry-reference-head span { display:flex; align-items:center; gap:7px; color:var(--brand-gold); font-size:13px; font-weight:700; }
+.candidate-entry-reference-head strong { color:var(--text-secondary); font-size:12px; }
+.candidate-entry-reference > div:nth-child(2) { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.candidate-entry-reference > div:nth-child(2) > span { display:grid; gap:3px; padding:9px 11px; border-radius:9px; background:color-mix(in srgb,var(--bg-card) 72%,transparent); }
+.candidate-entry-reference small { color:var(--text-muted); font-size:11px; }
+.candidate-entry-reference b { color:var(--text-primary); font-size:14px; }
+.candidate-entry-reference p { margin:0; color:var(--text-muted); font-size:11px; line-height:1.5; }
 .execution-prices { grid-template-columns:repeat(4,minmax(0,1fr)); }
 .execution-targets { grid-template-columns:minmax(118px,.72fr) minmax(118px,.72fr) minmax(178px,1fr) minmax(300px,1.7fr); gap:0; overflow:hidden; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-input-soft); }
 .execution-targets > div { display:flex; min-height:92px; flex-direction:column; justify-content:center; padding:14px 16px; border:0; border-left:1px solid var(--border-subtle); border-radius:0; background:transparent; }

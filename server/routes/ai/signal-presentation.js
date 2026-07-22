@@ -22,6 +22,31 @@ function directionScores(signal) {
   return { bullish_score: bullishScore, bearish_score: Math.round((100 - bullishScore) * 10) / 10 }
 }
 
+function candidateEntry(signal) {
+  const candidate = signal?.candidate_entry && typeof signal.candidate_entry === 'object'
+    ? signal.candidate_entry : null
+  if (!candidate) return null
+  const positiveNumber = value => {
+    const number = Number(value)
+    return Number.isFinite(number) && number > 0 ? number : null
+  }
+  const signalType = String(candidate.signal_type || '').toLowerCase()
+  const entryMethod = String(candidate.entry_method || '').toLowerCase()
+  if (!/^(?:buy|sell)(?:_(?:limit|stop|stop_limit))?$/.test(signalType)) return null
+  if (!['market', 'limit', 'stop', 'stop_limit'].includes(entryMethod)) return null
+  return {
+    signal_type:signalType,
+    direction:signalType.startsWith('buy') ? 'buy' : 'sell',
+    entry_method:entryMethod,
+    entry_price:positiveNumber(candidate.entry_price),
+    stop_limit_price:positiveNumber(candidate.stop_limit_price),
+    stop_loss_price:positiveNumber(candidate.stop_loss_price),
+    take_profit_1_price:positiveNumber(candidate.take_profit_1_price),
+    take_profit_2_price:positiveNumber(candidate.take_profit_2_price),
+    take_profit_3_price:positiveNumber(candidate.take_profit_3_price),
+  }
+}
+
 function experienceUsage(signal) {
   const usage = signal?.experience_usage && typeof signal.experience_usage === 'object' ? signal.experience_usage : {}
   const ids = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
@@ -121,6 +146,7 @@ export function normalizeDecisionFields(signal = {}) {
     position_action:String(signal.position_action || (isHold ? 'observe' : 'open')).toLowerCase(),
     pending_action:String(signal.pending_action || 'none').toLowerCase(),
     management_direction:String(signal.management_direction || 'none').toLowerCase(),
+    candidate_entry:candidateEntry(signal),
     experience_usage:experienceUsage(signal),
     ...directionScores(signal),
   }
@@ -149,6 +175,13 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
     description: executionDescription(execution, pending ? '等待市场触发，系统会继续跟踪状态。' : '执行结果已记录，可前往交易或审计页面查看。'),
     executable: false,
   }
+  const storedDecision = parseJson(signal.decision_json) || {}
+  const positionAction = String(signal.position_action || storedDecision.position_action || '').toLowerCase()
+  if (positionAction === 'hold_no_add') return {
+    state:'observe', title:'继续持有，暂不加仓',
+    description:'当前已有同向持仓，候选入场价仅供观察，不会进入下单流程。',
+    executable:false,
+  }
   if (execution && execution.status && execution.status !== 'success') return {
     state: execution.status === 'rejected' ? 'rejected' : execution.status === 'skipped' ? 'skipped' : 'failed',
     title: execution.status === 'rejected' ? '风控未放行' : execution.status === 'skipped' ? '本次未执行' : '执行未完成',
@@ -167,8 +200,35 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
 
 export function attachSignalPresentation(signal = {}) {
   const stored = parseJson(signal.decision_json) || {}
-  const decision = normalizeDecisionFields({ ...signal, ...stored })
-  return { ...signal, ...decision, decision, execution_advice: buildExecutionAdvice(signal) }
+  const positionAction = String(signal.position_action || stored.position_action || '').toLowerCase()
+  const signalType = String(signal.signal_type || '').toLowerCase()
+  const noAddTrade = positionAction === 'hold_no_add' && (signalType.startsWith('buy') || signalType.startsWith('sell'))
+  const legacyCandidate = noAddTrade ? candidateEntry({ candidate_entry:{
+    signal_type:signalType,
+    entry_method:String(signal.entry_method || '').toLowerCase(),
+    entry_price:signal.entry_method === 'market' ? signal.market_data?.latest_price : signal.limit_price,
+    stop_limit_price:signal.stop_limit_price,
+    stop_loss_price:signal.stop_loss_price,
+    take_profit_1_price:signal.take_profit_1_price,
+    take_profit_2_price:signal.take_profit_2_price,
+    take_profit_3_price:signal.take_profit_3_price,
+  } }) : null
+  const presentationSignal = noAddTrade ? {
+    ...signal,
+    signal_type:'hold', entry_method:'observe', recommended_volume:0,
+    position_size_tier:'observe', position_size_factor:0,
+    decision_summary:'当前已有同向持仓，策略建议继续持有，暂不加仓。',
+    candidate_entry:stored.candidate_entry || signal.candidate_entry || legacyCandidate,
+    limit_price:null, stop_limit_price:null, stop_loss_price:null,
+    take_profit_1_price:null, take_profit_2_price:null, take_profit_3_price:null,
+    recommended_take_profit_tier:null, pending_valid_until:null,
+  } : signal
+  const decision = normalizeDecisionFields({ ...presentationSignal, ...stored,
+    ...(noAddTrade ? {
+      decision_summary:'当前已有同向持仓，策略建议继续持有，暂不加仓。',
+      candidate_entry:presentationSignal.candidate_entry,
+    } : {}) })
+  return { ...presentationSignal, ...decision, decision, execution_advice: buildExecutionAdvice(presentationSignal) }
 }
 
 export { SIGNAL_SCHEMA_VERSION }

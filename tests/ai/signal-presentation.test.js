@@ -27,6 +27,20 @@ describe('signal presentation', () => {
     expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
   })
 
+  it('persists sanitized candidate entry evidence for a normalized no-add hold', () => {
+    const result = normalizeDecisionFields({
+      signal_type:'hold', entry_method:'observe', position_action:'hold_no_add',
+      candidate_entry:{ signal_type:'buy_limit', entry_method:'limit', entry_price:'1995', stop_loss_price:1985, take_profit_1_price:2010 },
+    })
+    expect(result.candidate_entry).toEqual({
+      signal_type:'buy_limit', direction:'buy', entry_method:'limit', entry_price:1995,
+      stop_limit_price:null, stop_loss_price:1985, take_profit_1_price:2010,
+      take_profit_2_price:null, take_profit_3_price:null,
+    })
+    expect(app).toContain('候选入场参考')
+    expect(app).toContain('不会进入下单流程')
+  })
+
   it('persists only model usage ids that were actually considered', () => {
     const result = normalizeDecisionFields({ experience_usage:{ source:'platform', considered_ids:[3, 4], used_ids:[4, 99], rejected_ids:[3, 99], influence:'等待确认' } })
     expect(result.experience_usage).toEqual({ source:'platform', considered_ids:[3, 4], used_ids:[4], rejected_ids:[3], influence:'等待确认' })
@@ -39,6 +53,21 @@ describe('signal presentation', () => {
 
   it('never marks a hold signal executable', () => {
     expect(buildExecutionAdvice({ signal_type: 'hold' })).toMatchObject({ state: 'observe', executable: false })
+  })
+
+  it('presents a legacy trade-shaped no-add signal as hold with candidate levels', () => {
+    const result = attachSignalPresentation({
+      id:6127, signal_type:'buy_limit', entry_method:'limit', limit_price:4109,
+      stop_loss_price:4100, take_profit_1_price:4130,
+      decision_json:JSON.stringify({ position_action:'hold_no_add', decision_summary:'建议挂单做多' }),
+      execution_status:'skipped', execution_result:{ status:'skipped', reason:'existing_position_no_add', details:{ count:1 } },
+    })
+    expect(result).toMatchObject({
+      signal_type:'hold', entry_method:'observe', limit_price:null, stop_loss_price:null,
+      decision_summary:'当前已有同向持仓，策略建议继续持有，暂不加仓。',
+      candidate_entry:{ signal_type:'buy_limit', entry_method:'limit', entry_price:4109, stop_loss_price:4100, take_profit_1_price:4130 },
+      execution_advice:{ state:'observe', title:'继续持有，暂不加仓', executable:false },
+    })
   })
 
   it('presents a successful pending delivery as submitted and never executable', () => {

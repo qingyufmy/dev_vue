@@ -102,7 +102,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   bearish_score: "0-100，市场偏空倾向分。必须与bullish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
   position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
   position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
-  position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe。参考组合已有同向持仓时默认 hold_no_add；只有明确延续信号才可 allow_add；不得建议自动平仓",
+  position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe。参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；不得建议自动平仓",
   pending_action: "必须字段。仅允许 none | keep | cancel | cancel_replace。参考组合无挂单时返回 none；旧挂单仍符合当前逻辑时返回 keep，禁止无条件替换",
   management_direction: "必须字段。仅允许 buy | sell | none。需要取消或替换挂单时填写被管理挂单方向；其他情况填 none",
   limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
@@ -135,7 +135,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   delete schema.recommended_volume
   schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
   schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
-  schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe。平台参考组合已有同向持仓时默认 hold_no_add；只有明确延续信号才可 allow_add；暂不支持自动平仓。'
+  schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe。平台参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；暂不支持自动平仓。'
   schema.pending_action = '必须字段。仅允许 none | keep | cancel | cancel_replace。旧挂单仍符合当前行情逻辑时必须 keep，只有逻辑失效或方向反转时才能 cancel 或 cancel_replace。'
   schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 或 cancel_replace 时填写被管理挂单方向；其他情况填 none。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
@@ -911,6 +911,52 @@ export function normalizeAiSignal(parsed, config, market) {
   }
 
   parsed.confidence = round2(Math.max(0.05, Math.min(0.95, calibrated)))
+
+  // `hold_no_add` is a non-executable portfolio-management conclusion. Some
+  // models still pair it with a BUY/SELL order type, which creates a
+  // contradictory user-facing signal even though delivery correctly skips it.
+  // Normalize that combination to HOLD while retaining the proposed levels as
+  // explicitly non-executable market evidence.
+  if (signalType !== 'hold' && parsed.position_action === 'hold_no_add') {
+    const originalSignalType = signalType
+    const candidateEntryPrice = entryMethod === 'market' ? Number(market.latest_price) : limitPrice
+    parsed.candidate_entry = {
+      signal_type:originalSignalType,
+      direction:originalSignalType.startsWith('buy') ? 'buy' : 'sell',
+      entry_method:entryMethod,
+      entry_price:Number.isFinite(Number(candidateEntryPrice)) && Number(candidateEntryPrice) > 0 ? Number(candidateEntryPrice) : null,
+      stop_limit_price:Number.isFinite(Number(stopLimitPrice)) && Number(stopLimitPrice) > 0 ? Number(stopLimitPrice) : null,
+      stop_loss_price:Number.isFinite(Number(parsed.stop_loss_price)) && Number(parsed.stop_loss_price) > 0 ? Number(parsed.stop_loss_price) : null,
+      take_profit_1_price:Number.isFinite(Number(parsed.take_profit_1_price)) && Number(parsed.take_profit_1_price) > 0 ? Number(parsed.take_profit_1_price) : null,
+      take_profit_2_price:Number.isFinite(Number(parsed.take_profit_2_price)) && Number(parsed.take_profit_2_price) > 0 ? Number(parsed.take_profit_2_price) : null,
+      take_profit_3_price:Number.isFinite(Number(parsed.take_profit_3_price)) && Number(parsed.take_profit_3_price) > 0 ? Number(parsed.take_profit_3_price) : null,
+    }
+    parsed.signal_type = 'hold'
+    parsed.entry_method = 'observe'
+    parsed.recommended_volume = 0
+    parsed.position_size_tier = 'observe'
+    parsed.position_size_factor = 0
+    parsed.position_size_reason = '当前已有同向持仓，本次不新增仓位。'
+    parsed.pending_action = parsed.pending_action === 'cancel_replace' ? 'cancel' : parsed.pending_action
+    parsed.management_direction = ['cancel'].includes(parsed.pending_action) ? parsed.management_direction : 'none'
+    parsed.limit_price = null
+    parsed.stop_limit_price = null
+    parsed.stop_loss_price = null
+    parsed.take_profit_1_price = null
+    parsed.take_profit_2_price = null
+    parsed.take_profit_3_price = null
+    parsed.recommended_take_profit_tier = null
+    parsed.pending_valid_minutes = 0
+    parsed.pending_valid_until = null
+    parsed.decision_summary = '当前已有同向持仓，策略建议继续持有，暂不加仓。'
+    parsed.normalization_info = {
+      type:'existing_position_hold_no_add',
+      reason:'existing_position_hold_no_add',
+      original_signal_type:originalSignalType,
+      original_entry_method:entryMethod,
+    }
+    return parsed
+  }
 
   if (signalType !== 'hold' && parsed.confidence < risk.minConfidence) {
     const originalSignalType = signalType

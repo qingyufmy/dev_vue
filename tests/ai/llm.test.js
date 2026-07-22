@@ -887,6 +887,24 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     expect(result.normalization_info?.type).not.toBe('l5_schema_hold')
   })
 
+  it('turns a trade-shaped no-add decision into hold while preserving non-executable candidate levels', () => {
+    const result = normalizeAiSignal({
+      _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
+      position_size_tier:'probe', position_size_reason:'等待回踩', position_action:'hold_no_add',
+      pending_action:'none', management_direction:'none', limit_price:1995,
+      stop_loss_price:1985, take_profit_1_price:2010, recommended_take_profit_tier:1,
+      analysis:'偏多但不加仓', reasoning:'已有同向持仓',
+    }, { ...config, _allowed_entry_methods:['limit'] }, market)
+    expect(result).toMatchObject({
+      signal_type:'hold', entry_method:'observe', recommended_volume:0,
+      position_size_tier:'observe', position_action:'hold_no_add', limit_price:null,
+      stop_loss_price:null, take_profit_1_price:null,
+      decision_summary:'当前已有同向持仓，策略建议继续持有，暂不加仓。',
+      candidate_entry:{ signal_type:'buy_limit', entry_method:'limit', entry_price:1995, stop_loss_price:1985, take_profit_1_price:2010 },
+      normalization_info:{ type:'existing_position_hold_no_add', original_signal_type:'buy_limit' },
+    })
+  })
+
   it('invalid explicit entry_method degrades to hold instead of market', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'instant', confidence: 0.8,

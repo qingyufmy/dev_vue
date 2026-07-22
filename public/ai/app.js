@@ -4864,6 +4864,7 @@ function signalDecision(signal) {
     risks: Array.isArray(sourceRisks) ? sourceRisks.slice(0, 4).map(item => userVisibleText(item, "系统未提供中文风险说明")) : [],
     bullishScore: hasDirectionBias ? Math.round(bullish / total * 1000) / 10 : null,
     bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
+    candidateEntry: signal?.candidate_entry || stored.candidate_entry || null,
     experienceUsage,
   };
 }
@@ -4952,6 +4953,28 @@ function signalExecutionAdvice(signal) {
   if (localizedPresented) return localizedPresented;
   if (signalType(signal?.signal_type) === "hold") return { state:"observe", title:"暂不执行", description:"等待市场条件改善。", executable:false };
   return { state:"review", title:"建议复核后执行", description:"执行前将获取最新报价并由风控计算最终手数。", executable:true };
+}
+
+function renderCandidateEntryReference(candidate) {
+  if (!candidate || typeof candidate !== "object") return "";
+  const signalTypeValue = String(candidate.signal_type || "").toLowerCase();
+  const typeLabels = {
+    buy:"做多市价参考", sell:"做空市价参考",
+    buy_limit:"买入限价参考", sell_limit:"卖出限价参考",
+    buy_stop:"买入止损参考", sell_stop:"卖出止损参考",
+    buy_stop_limit:"买入止损限价参考", sell_stop_limit:"卖出止损限价参考",
+  };
+  const rows = [
+    ["候选入场", candidate.entry_price],
+    ["候选止损", candidate.stop_loss_price],
+    ["候选止盈", candidate.take_profit_1_price],
+  ].filter(([, value]) => Number(value) > 0);
+  if (!rows.length) return "";
+  return `<section class="candidate-entry-reference">
+    <div class="candidate-entry-reference-head"><span><i data-lucide="scan-search" size="15"></i>候选入场参考</span><strong>${escapeHtml(typeLabels[signalTypeValue] || "方向参考")}</strong></div>
+    <div>${rows.map(([label, value]) => `<span><small>${label}</small><b>${escapeHtml(priceDisplay(value))}</b></span>`).join("")}</div>
+    <p>仅作为后续行情观察依据，当前策略明确建议不加仓，不会进入下单流程。</p>
+  </section>`;
 }
 
 function renderSignalPendingActions(signal) {
@@ -5409,6 +5432,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     ${renderSignalPendingActions(signal)}
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
     ${renderDirectionBias(decision)}
+    ${renderCandidateEntryReference(decision.candidateEntry)}
     <div class="analysis-status-strip">
       <div><span>置信度</span><strong>${confidence.label}</strong></div>
       <div><span>AI 仓位档位</span><strong>${escapeHtml(positionSizeAdvice(signal).text)}</strong></div>
