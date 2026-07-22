@@ -740,6 +740,8 @@ describe('route permissions and credential redaction', () => {
     expect(css).toContain('.observer-channel-control:focus-within')
     expect(css).toContain('appearance: none')
     expect(css).toContain('background: transparent !important')
+    expect(css).toContain('outline: none !important')
+    expect(css).toContain('box-shadow: none !important')
     expect(responsiveCss).toContain('grid-row: 3')
     expect(responsiveCss).toContain('font-size: 16px')
   })
