@@ -225,17 +225,21 @@
   .observer-channel-control:not(.hidden) {
     grid-column: 1 / -1;
     grid-row: 3;
-    display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr);
+    display: flex;
     width: 100%;
     min-height: 44px;
-    padding: 5px 8px 5px 12px;
+    padding: 0 12px;
+  }
+
+  .observer-channel-picker {
+    flex: 1;
+    max-width: none;
   }
 
   .observer-channel-control select {
     width: 100%;
     max-width: none;
-    min-height: 34px;
+    min-height: 42px;
     font-size: 16px;
   }
 

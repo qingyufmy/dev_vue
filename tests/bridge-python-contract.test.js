@@ -25,7 +25,7 @@ describe('Python Bridge history contract', () => {
 
   it('lets only the administrator main Bridge provision a dedicated observer source and MT5 process', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
-    expect(source).toContain('self.btn_add_observer_source = QPushButton("＋ 新增观摩源")')
+    expect(source).toContain('self.btn_observer_sources = QPushButton("观摩源 ▾")')
     expect(source).toContain('cfg.get("role") == "admin" and BRIDGE_PROFILE == "default"')
     expect(source).toContain('plan_source != "observer_source"')
     expect(source).toContain('find_mt5_path_owner(CONFIG_ROOT, mt5_path)')
@@ -34,6 +34,9 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('"mt5_portable": False')
     expect(source).toContain('self.mt5.initialize(terminal_path, portable=portable)')
     expect(source).toContain('http_get_json(f"{server.rstrip(\'/\')}/api/auth/me", timeout=5, token=token)')
+    expect(source).toContain('def _show_observer_sources_menu(self):')
+    expect(source).toContain('def _open_saved_observer_source(self, slug):')
+    expect(source).toContain('activate_profile_window(runtime.get("pid"))')
   })
 
   it('provides a compact incremental risk snapshot without full-history export', () => {

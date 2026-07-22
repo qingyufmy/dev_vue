@@ -733,8 +733,10 @@ describe('subscription schedule modal layout', () => {
 describe('route permissions and credential redaction', () => {
   it('keeps the observer channel selector compact and responsive', () => {
     expect(html).toContain('id="observerChannelSelect"')
+    expect(html).toContain('class="observer-channel-picker"')
     expect(css).toContain('.observer-channel-control {')
-    expect(css).toContain('box-shadow: 0 0 0 2px var(--gold-primary)')
+    expect(css).toContain('.observer-channel-control:focus-within')
+    expect(css).toContain('appearance: none')
     expect(responsiveCss).toContain('grid-row: 3')
     expect(responsiveCss).toContain('font-size: 16px')
   })

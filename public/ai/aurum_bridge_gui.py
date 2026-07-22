@@ -302,6 +302,17 @@ QPushButton[secondary="true"] {
 }
 QPushButton[secondary="true"]:hover { background-color: #475569; }
 
+QPushButton[observerSources="true"] {
+    padding: 0 14px;
+    border: 1px solid #475569;
+    border-radius: 7px;
+    font-size: 13px;
+}
+QPushButton[observerSources="true"]:hover {
+    border-color: #d4af37;
+    color: #f8fafc;
+}
+
 QPushButton[danger="true"] {
     background-color: #ef4444;
 }
@@ -356,8 +367,13 @@ QMenu {
     background-color: #1e293b;
     color: #e2e8f0;
     border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 7px;
 }
-QMenu::item:selected { background-color: #334155; }
+QMenu::item { min-width: 220px; padding: 9px 14px; border-radius: 6px; }
+QMenu::item:selected { background-color: #334155; color: #f8fafc; }
+QMenu::item:disabled { color: #64748b; }
+QMenu::separator { height: 1px; margin: 6px 8px; background: #334155; }
 """
 
 # ══════════════════════════════════════════════════════════
@@ -2857,7 +2873,7 @@ class LoginPage(QWidget):
 
 class BridgePage(QWidget):
     request_settings = Signal()
-    request_new_observer_source = Signal()
+    request_observer_sources = Signal()
 
     def __init__(self):
         super().__init__()
@@ -2875,12 +2891,15 @@ class BridgePage(QWidget):
         title.setStyleSheet("color: #3b82f6; background: transparent;")
         top_row.addWidget(title)
         top_row.addStretch()
-        self.btn_add_observer_source = QPushButton("＋ 新增观摩源")
-        self.btn_add_observer_source.setProperty("secondary", True)
-        self.btn_add_observer_source.setFixedHeight(32)
-        self.btn_add_observer_source.setVisible(False)
-        self.btn_add_observer_source.clicked.connect(self.request_new_observer_source.emit)
-        top_row.addWidget(self.btn_add_observer_source)
+        self.btn_observer_sources = QPushButton("观摩源 ▾")
+        self.btn_observer_sources.setProperty("secondary", True)
+        self.btn_observer_sources.setProperty("observerSources", True)
+        self.btn_observer_sources.setMinimumWidth(112)
+        self.btn_observer_sources.setFixedHeight(36)
+        self.btn_observer_sources.setVisible(False)
+        self.btn_observer_sources.setToolTip("打开已保存的观摩源，或新增观摩源")
+        self.btn_observer_sources.clicked.connect(self.request_observer_sources.emit)
+        top_row.addWidget(self.btn_observer_sources)
         self.btn_settings = GearButton()
         self.btn_settings.clicked.connect(self.request_settings.emit)
         top_row.addWidget(self.btn_settings)
@@ -3549,7 +3568,7 @@ class MainWindow(QMainWindow):
 
         self.bridge_page = BridgePage()
         self.bridge_page.request_settings.connect(self._show_settings)
-        self.bridge_page.request_new_observer_source.connect(self._open_new_observer_source)
+        self.bridge_page.request_observer_sources.connect(self._show_observer_sources_menu)
         self.stack.addWidget(self.bridge_page)
 
         self.settings_page = SettingsPage()
@@ -3618,7 +3637,9 @@ class MainWindow(QMainWindow):
             self.bridge_page.lbl_update_hint.setVisible(False)
             cfg = load_config()
             is_admin_main = cfg.get("role") == "admin" and BRIDGE_PROFILE == "default"
-            self.bridge_page.btn_add_observer_source.setVisible(is_admin_main)
+            self.bridge_page.btn_observer_sources.setVisible(is_admin_main)
+            if is_admin_main:
+                self._refresh_observer_sources_button()
             if cfg.get("auto_start_bridge"):
                 QTimer.singleShot(700, self.bridge_page.start_bridge)
         except Exception:
@@ -3644,6 +3665,59 @@ class MainWindow(QMainWindow):
     def _show_settings(self):
         self.settings_page.load_settings()
         self.stack.setCurrentIndex(2)
+
+    def _observer_source_profiles(self):
+        return [profile for profile in list_bridge_profiles(CONFIG_ROOT) if profile["slug"] != "default"]
+
+    def _refresh_observer_sources_button(self):
+        count = len(self._observer_source_profiles())
+        suffix = f" · {count}" if count else ""
+        self.bridge_page.btn_observer_sources.setText(f"观摩源{suffix} ▾")
+
+    def _show_observer_sources_menu(self):
+        if load_config().get("role") != "admin" or BRIDGE_PROFILE != "default":
+            QMessageBox.warning(self, "权限不足", "只有管理员主桥接可以管理观摩源。")
+            return
+        profiles = self._observer_source_profiles()
+        menu = QMenu(self)
+        menu.setObjectName("observerSourcesMenu")
+        if profiles:
+            section = menu.addSection("已保存的观摩源")
+            section.setEnabled(False)
+            for profile in profiles:
+                runtime = read_profile_runtime(CONFIG_ROOT, profile["slug"])
+                running = bool(runtime.get("running"))
+                state_text = "运行中" if running else "已停止"
+                action = menu.addAction(f"{profile['name']}   ·   {state_text}")
+                action.setToolTip("切换到桥接窗口" if running else "启动并自动登录")
+                action.triggered.connect(
+                    lambda checked=False, slug=profile["slug"]: self._open_saved_observer_source(slug)
+                )
+            menu.addSeparator()
+        else:
+            empty = menu.addAction("尚未保存观摩源")
+            empty.setEnabled(False)
+            menu.addSeparator()
+        add_action = menu.addAction("＋ 新增观摩源")
+        add_action.triggered.connect(self._open_new_observer_source)
+        button = self.bridge_page.btn_observer_sources
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
+    def _open_saved_observer_source(self, slug):
+        runtime = read_profile_runtime(CONFIG_ROOT, slug)
+        if runtime.get("running"):
+            if not activate_profile_window(runtime.get("pid")):
+                QMessageBox.information(self, "观摩源正在运行", "该观摩源进程仍在运行，请从任务栏切换到对应窗口。")
+            return
+        try:
+            launch_bridge_profile(
+                sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__),
+                slug, frozen=bool(getattr(sys, "frozen", False)),
+            )
+        except OSError as error:
+            QMessageBox.warning(self, "启动失败", f"观摩源启动失败：{error}")
+            return
+        QMessageBox.information(self, "正在启动", "观摩源桥接与对应 MT5 正在启动，将使用已保存的账号自动登录。")
 
     def _open_new_observer_source(self):
         if load_config().get("role") != "admin" or BRIDGE_PROFILE != "default":
@@ -3720,6 +3794,7 @@ class MainWindow(QMainWindow):
             dialog.show_error(f"观摩源启动失败：{error}")
             return
         dialog.accept()
+        self._refresh_observer_sources_button()
         QMessageBox.information(self, "观摩源已启动", "新的桥接窗口和独立 MT5 进程正在启动。网站运营中心将在连接成功后显示在线。")
 
     def _on_logout(self):
@@ -3727,7 +3802,7 @@ class MainWindow(QMainWindow):
         self._pending_update_data = None
         self.bridge_page.stop_bridge()
         self.bridge_page.lbl_login_user.setText("")
-        self.bridge_page.btn_add_observer_source.setVisible(False)
+        self.bridge_page.btn_observer_sources.setVisible(False)
         self.bridge_page.lbl_update_hint.setVisible(False)
         self.login_page.load_config()
         self.login_page.lbl_status.setText("")
