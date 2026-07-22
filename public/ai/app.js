@@ -2675,7 +2675,7 @@ function renderRiskPolicyGroup(title, keys, row, metadata) {
   const platform = row.effective?.platformPolicy || {}, controls = row.effective?.controls || {};
   const visibleKeys = keys.filter(key => metadata[key]?.configurable !== false && metadata[key]?.user_editable !== false);
   if (!visibleKeys.length) return "";
-  return `<details class="risk-policy-group"><summary><span><strong>${escapeHtml(title)}</strong><small>${visibleKeys.length} 项可调规则</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="risk-rule-table"><div class="risk-rule-row risk-rule-head"><span>规则</span><span>我的设置</span><span>平台边界</span><span>最终生效</span></div>${visibleKeys.map(key => {
+  return `<details class="risk-policy-group" data-risk-policy-group="${escapeHtml(title)}"><summary><span><strong>${escapeHtml(title)}</strong><small>${visibleKeys.length} 项可调规则</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="risk-rule-table"><div class="risk-rule-row risk-rule-head"><span>规则</span><span>我的设置</span><span>平台边界</span><span>最终生效</span></div>${visibleKeys.map(key => {
     const meta = metadata[key] || {}, control = controls[key] || {}, own = accountValues[key];
     const editable = meta.type === "number" && control.user_editable !== false && control.locked_value == null;
     const unit = riskUnit(meta);
@@ -2687,7 +2687,48 @@ function renderRiskPolicyGroup(title, keys, row, metadata) {
   }).join("")}</div></details>`;
 }
 
-async function loadRiskCenter() {
+let _riskCenterLoadSequence = 0;
+
+function captureUserRiskEditorState({ includeDrafts = true } = {}) {
+  const host = $("riskAccountsList");
+  const fieldKey = input => {
+    const accountId = input?.closest("[data-risk-account]")?.dataset.riskAccount;
+    const field = input?.dataset?.userRiskField;
+    return accountId && field ? `${accountId}:${field}` : "";
+  };
+  const active = includeDrafts && host?.contains(document.activeElement) ? document.activeElement : null;
+  return {
+    initialized:Boolean(host?.querySelector("[data-risk-account]")),
+    openGroups:new Set([...host?.querySelectorAll("details.risk-policy-group[open]") || []].map(item => {
+      const accountId = item.closest("[data-risk-account]")?.dataset.riskAccount;
+      return accountId ? `${accountId}:${item.dataset.riskPolicyGroup}` : "";
+    }).filter(Boolean)),
+    drafts:includeDrafts ? Object.fromEntries([...host?.querySelectorAll("input[data-user-risk-field]") || []].map(input => [fieldKey(input), input.value]).filter(([key]) => key)) : {},
+    focusKey:fieldKey(active), selectionStart:active?.selectionStart ?? null, selectionEnd:active?.selectionEnd ?? null,
+  };
+}
+
+function restoreUserRiskEditorState(snapshot) {
+  if (!snapshot?.initialized) return;
+  const host = $("riskAccountsList");
+  host?.querySelectorAll("details.risk-policy-group").forEach(item => {
+    const accountId = item.closest("[data-risk-account]")?.dataset.riskAccount;
+    item.open = Boolean(accountId && snapshot.openGroups.has(`${accountId}:${item.dataset.riskPolicyGroup}`));
+  });
+  host?.querySelectorAll("input[data-user-risk-field]").forEach(input => {
+    const accountId = input.closest("[data-risk-account]")?.dataset.riskAccount;
+    const key = accountId ? `${accountId}:${input.dataset.userRiskField}` : "";
+    if (key && Object.hasOwn(snapshot.drafts, key)) input.value = snapshot.drafts[key];
+    if (key && key === snapshot.focusKey) {
+      input.focus({ preventScroll:true });
+      if (snapshot.selectionStart != null) input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd ?? snapshot.selectionStart);
+    }
+  });
+}
+
+async function loadRiskCenter({ preserveRuleState = true, preserveRuleDrafts = preserveRuleState } = {}) {
+  const loadSequence = ++_riskCenterLoadSequence;
+  const ruleEditorState = preserveRuleState ? captureUserRiskEditorState({ includeDrafts:preserveRuleDrafts }) : null;
   const filters = state.executionFilters;
   let riskData = await api("/api/ai/risk-center");
   if ((riskData.accounts || []).some(row => row.risk_state?.data_complete === false || Number(row.risk_state?.data_complete) === 0)) {
@@ -2695,6 +2736,7 @@ async function loadRiskCenter() {
     if (refreshed.refreshed > 0) riskData = await api("/api/ai/risk-center");
   }
   const executionData = await api(`/api/ai/executions?page=${filters.page}&page_size=${filters.pageSize}`);
+  if (loadSequence !== _riskCenterLoadSequence) return;
   const host = $("riskAccountsList");
   const rows = riskData.accounts || [];
   const haltedRows = rows.filter(row => row.risk_state?.halt_status !== "active");
@@ -2714,6 +2756,7 @@ async function loadRiskCenter() {
     const haltText = stateInfo.halt_reason === "R3_RISK_DATA_INCOMPLETE" ? `风控数据不完整：${riskDataIncompleteText(stateInfo.data_incomplete_reason)}` : riskDecisionLabel(stateInfo.halt_reason);
     return `<article class="workspace-panel risk-rule-account" data-risk-account="${row.account.id}"><div class="section-heading"><div><h2>${escapeHtml(row.account.nickname || row.account.login_account)}</h2><p>${escapeHtml(row.account.broker_server)} · 先查看最终有效值，需要调整时再展开对应规则组。</p></div><span class="status-chip ${stateInfo.halt_status === 'active' ? 'success' : 'danger'}">${stateInfo.halt_status === 'active' ? '允许交易' : '已暂停'}</span></div>${stateInfo.halt_reason ? `<div class="source-notice"><span><strong>暂停原因：</strong>${escapeHtml(haltText)}；将在下一次完整风险快照校验通过后解除。</span></div>` : ''}<div class="risk-policy-groups">${RISK_GROUPS.map(([title, keys]) => renderRiskPolicyGroup(title, keys, row, riskData.rule_metadata || {})).join("")}</div><div class="risk-save-bar"><p>留空表示继承平台值。所有修改保存后立即生效，并保留版本与审计记录。</p><button class="btn btn-primary btn-sm" data-risk-save="${row.account.id}">保存并立即生效</button></div></article>`;
   }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>账户通过 Bridge 自动验证后，这里会显示最终有效风控。</span></div>';
+  restoreUserRiskEditorState(ruleEditorState);
   renderExecutionDecisions(executionData.executions || [], executionData.pagination || {});
   initIcons();
 }
@@ -8403,7 +8446,7 @@ function bindEvents() {
       panel?.querySelectorAll("[data-user-risk-field]").forEach(input => {
         changes[input.dataset.userRiskField] = input.value.trim() === "" ? null : Number(input.value);
       });
-      try { await api(`/api/ai/risk-center/${Number(riskSave.dataset.riskSave)}`, { method:"PUT", body:{ changes, reason:"用户从风控中心更新" } }); toast("用户风控已立即生效", "success"); await loadRiskCenter(); }
+      try { await api(`/api/ai/risk-center/${Number(riskSave.dataset.riskSave)}`, { method:"PUT", body:{ changes, reason:"用户从风控中心更新" } }); toast("用户风控已立即生效", "success"); await loadRiskCenter({ preserveRuleState:true, preserveRuleDrafts:false }); }
       catch (error) { toast(error.message,"error"); } return;
     }
 

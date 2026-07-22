@@ -396,7 +396,7 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('initializes dynamically rendered risk-center icons without requiring a tab switch', () => {
-    const start = app.indexOf('async function loadRiskCenter()')
+    const start = app.indexOf('async function loadRiskCenter(')
     const end = app.indexOf('async function loadExecutionDecisions()', start)
     const loadRiskCenter = app.slice(start, end)
     expect(loadRiskCenter).toContain('class="risk-status-icon"')
@@ -458,6 +458,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('preserveEditorDrafts = preserveEditorState')
     expect(app).toContain('captureGlobalRiskEditorState({ includeDrafts:preserveEditorDrafts })')
     expect(app).toContain('loadAdminRiskCenter({ preserveEditorState:true, preserveEditorDrafts:false })')
+  })
+
+  it('preserves personal-risk expansion and drafts while refreshing, then reloads saved values', () => {
+    expect(app).toContain('function captureUserRiskEditorState({ includeDrafts = true } = {})')
+    expect(app).toContain('restoreUserRiskEditorState(ruleEditorState)')
+    expect(app).toContain('data-risk-policy-group=')
+    expect(app).toContain('preserveRuleDrafts = preserveRuleState')
+    expect(app).toContain('captureUserRiskEditorState({ includeDrafts:preserveRuleDrafts })')
+    expect(app).toContain('loadRiskCenter({ preserveRuleState:true, preserveRuleDrafts:false })')
   })
 
   it('keeps the overview signal card focused on the current decision and execution summary', () => {
