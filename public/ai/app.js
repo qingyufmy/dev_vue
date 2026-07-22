@@ -764,11 +764,11 @@ function renderAutoAnalyzeBadge(s) {
   }
 
   if (!s.enabled) {
-    label = '自动分析关闭';
+    label = '自动分析已关闭';
     type = 'neutral';
     title = '状态：自动分析关闭';
   } else if (s.paused_reason === 'weekly_flatten_window') {
-    label = '自动分析暂停 · 周末清仓';
+    label = '自动分析 · 周末清仓';
     type = 'warning';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：周末清仓期间暂停`;
   } else if (s.in_flight) {
@@ -780,7 +780,7 @@ function renderAutoAnalyzeBadge(s) {
     }], ptName);
     return;
   } else if (s.paused_reason && isMarketClosedReason(s.paused_reason)) {
-    label = '自动分析暂停 · 休市';
+    label = '自动分析 · 休市';
     type = 'warning';
     const msState = s.market_state || {};
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：休市暂停`;
@@ -791,13 +791,13 @@ function renderAutoAnalyzeBadge(s) {
     const min = Math.floor(remaining / 60);
     const sec = remaining % 60;
     const countdown = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-    label = `自动分析开启 · 下次 ${countdown}`;
+    label = `自动分析 · ${countdown}`;
     type = 'active';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启\n下次运行：等待倒计时结束`;
     if (s.paused_reason) title += `\n内部状态：${autoReasonText(s.paused_reason)}`;
     if (s.market_state) title += `\n市场状态：${autoReasonText(s.market_state.reason)}`;
   } else {
-    label = '自动分析开启';
+    label = '自动分析已开启';
     type = 'active';
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启`;
     if (s.paused_reason) title += `\n内部状态：${autoReasonText(s.paused_reason)}`;
@@ -1894,7 +1894,7 @@ function handleHeartbeat(msg) {
       setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
     }
   } else {
-    setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+    setBadge("gatewayMode", isLive ? "MT5 已连接" : "MT5 未连接", isLive ? "connected" : "neutral");
   }
 
   // Update market status from heartbeat
@@ -1909,7 +1909,7 @@ function handleHeartbeat(msg) {
         autoEnabled: typeof msg.auto_reasoning_enabled === 'boolean' ? msg.auto_reasoning_enabled : state.autoEnabled,
       });
     } else {
-      const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
+      const tradeText = msg.trade_enabled ? "交易已开启" : "交易已关闭";
       renderTradePermissionBadge(msg.trade_enabled, { label:tradeText });
     }
   } else if (!isLive && !usingFallback) {
@@ -1953,7 +1953,7 @@ function handleHeartbeat(msg) {
 
 // Handle bridge disconnect notification
 function handleDisconnect(msg) {
-  setBadge("gatewayMode", "未连接-请启动桥接脚本", "neutral");
+  setBadge("gatewayMode", "MT5 未连接", "neutral");
   setBadge("tradeMode", "请先启动桥接", "neutral");
   // Bridge connectivity pauses the runtime subscription but does not change
   // the persisted automatic-inference switch.
@@ -3674,7 +3674,7 @@ async function loadStatus() {
       setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
     }
   } else {
-    setBadge("gatewayMode", isLive ? "MT5桥接-已连接" : "未连接-请启动桥接脚本", isLive ? "connected" : "neutral");
+    setBadge("gatewayMode", isLive ? "MT5 已连接" : "MT5 未连接", isLive ? "connected" : "neutral");
   }
 
   // Sync role-based UI (observation hint, button states, etc.)
@@ -3693,7 +3693,7 @@ async function loadStatus() {
   const tradeText = !isLive
     ? "请先启动桥接"
     : mt5TradeBlocked ? "MT5 自动交易关闭"
-    : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
+    : gateway.live_trading_enabled ? "交易已开启" : "交易已关闭";
   renderTradePermissionBadge(Boolean(gateway.live_trading_enabled), { blocked:mt5TradeBlocked, label:tradeText });
 
   // Update market status from server (server now detects staleness via tick_time)

@@ -240,7 +240,12 @@
   .topbar-primary-status {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
+    gap: 0;
+    overflow: hidden;
+    padding: 3px;
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-input) 82%, transparent);
   }
 
   .topbar-primary-status .status-badge,
@@ -250,13 +255,36 @@
     min-width: 0;
     max-width: none;
     min-height: 44px;
-    padding: 5px 7px;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
     font-size: 11px;
     text-align: center;
   }
 
   .topbar-primary-status .status-badge {
     text-overflow: ellipsis;
+  }
+
+  .topbar-primary-status .status-badge + .status-badge {
+    border-left: 1px solid var(--border-subtle);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+
+  .topbar-primary-status .status-connected {
+    background: color-mix(in srgb, var(--status-connected-bg) 52%, transparent);
+  }
+
+  .topbar-primary-status .status-active,
+  .topbar-primary-status .status-warning {
+    background: color-mix(in srgb, var(--color-warning-bg) 42%, transparent);
+  }
+
+  .topbar-primary-status .status-trade-active,
+  .topbar-primary-status .status-danger {
+    background: color-mix(in srgb, var(--status-danger-bg) 54%, transparent);
   }
 
   .auto-runtime-control.is-progress {
@@ -776,6 +804,38 @@
 
   .analysis-result-card {
     min-height: 0;
+  }
+
+  .analysis-summary-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .analysis-summary-title {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .analysis-time {
+    justify-self: start;
+    font-size: 11px;
+    white-space: normal;
+  }
+
+  .analysis-direction-badge {
+    flex: 0 0 auto;
+    min-width: max-content;
+    max-width: 100%;
+    min-height: 30px;
+    padding-inline: 10px;
+    font-size: 14px;
+    line-height: 1;
+    white-space: nowrap;
+    word-break: keep-all;
+    writing-mode: horizontal-tb;
   }
 
   .analysis-result-card > .card-header {

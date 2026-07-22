@@ -626,6 +626,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.kline-period-btn {\n    min-width: 44px;')
     expect(css).toContain('.account-card details > summary')
     expect(css).toContain('env(safe-area-inset-top)')
+    expect(responsiveCss).toContain('background: color-mix(in srgb, var(--bg-input) 82%, transparent)')
+    expect(responsiveCss).toContain('word-break: keep-all')
+    expect(responsiveCss).toContain('writing-mode: horizontal-tb')
   })
 
   it('uses adaptive navigation instead of horizontally scrolling the desktop sidebar on phones', () => {

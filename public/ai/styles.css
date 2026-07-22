@@ -3976,7 +3976,9 @@ input:checked + .slider::before { transform: translateX(18px); }
 
 .analysis-direction-badge {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
+  min-width: max-content;
   min-height: 28px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-pill);
@@ -3985,6 +3987,10 @@ input:checked + .slider::before { transform: translateX(18px); }
   font-family: var(--font-display);
   font-size: 20px;
   font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  word-break: keep-all;
+  writing-mode: horizontal-tb;
 }
 
 .analysis-direction-badge.buy {
