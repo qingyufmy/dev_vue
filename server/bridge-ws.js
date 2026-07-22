@@ -9,6 +9,7 @@ import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/config.js'
 import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
+import { getDefaultObserverSource } from './routes/ai/observer-channels.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -192,6 +193,19 @@ async function getAdminUserId() {
 }
 
 export async function getActivePlatformBridgeUserId() {
+  const channelSource = await getDefaultObserverSource().catch(error => {
+    // Compatibility for deployments where migration 118 has not run yet.
+    if (!String(error?.message || '').includes("doesn't exist")) {
+      console.error('[BridgeWS] default observer channel lookup failed:', error.message)
+    }
+    return null
+  })
+  if (channelSource?.bridge_user_id) {
+    const channelUserId = Number(channelSource.bridge_user_id)
+    // A configured channel is authoritative. Never silently show another
+    // account when its source is offline.
+    return bridges.get(channelUserId)?.ws?.readyState === 1 ? channelUserId : null
+  }
   const configured = await queryOne(`SELECT value FROM system_config
     WHERE category = 'market_data' AND \`key\` = 'platform_market_bridge_user_id' LIMIT 1`).catch(() => null)
   const configuredId = Number(configured?.value)

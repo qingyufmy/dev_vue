@@ -63,5 +63,7 @@ describe('AI observer access', () => {
     expect(css).not.toContain('.ai-observer-mode #autoAnalyzeMode,')
     expect(bridgeWs).toContain('auto_reasoning_enabled: autoReasoningEnabled')
     expect(bridgeWs).toContain('const tradeEnabled = alive ? !!bridge.tradeEnabled : undefined')
+    expect(bridgeWs).toContain('const channelSource = await getDefaultObserverSource()')
+    expect(bridgeWs).toContain('Never silently show another')
   })
 })

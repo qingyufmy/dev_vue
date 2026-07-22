@@ -3121,6 +3121,51 @@ const migrations = [
         [JSON.stringify(applicability), '{}', row.id])
       }
     }
+  },
+  {
+    id: '118_observer_sources_and_channels',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_observer_sources (
+        id BIGINT NOT NULL AUTO_INCREMENT,
+        name VARCHAR(80) NOT NULL,
+        bridge_user_id INT NOT NULL,
+        trading_account_id INT DEFAULT NULL,
+        status ENUM('active', 'disabled') NOT NULL DEFAULT 'active',
+        notes VARCHAR(255) DEFAULT NULL,
+        created_by_user_id INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY uk_observer_source_bridge_user (bridge_user_id),
+        KEY idx_observer_source_status (status, updated_at),
+        KEY idx_observer_source_account (trading_account_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_observer_channels (
+        id BIGINT NOT NULL AUTO_INCREMENT,
+        name VARCHAR(80) NOT NULL,
+        slug VARCHAR(64) NOT NULL,
+        description VARCHAR(255) DEFAULT NULL,
+        source_id BIGINT NOT NULL,
+        audience ENUM('all', 'plus', 'pro', 'assigned') NOT NULL DEFAULT 'all',
+        status ENUM('active', 'disabled') NOT NULL DEFAULT 'active',
+        is_default TINYINT(1) NOT NULL DEFAULT 0,
+        sort_order INT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY uk_observer_channel_slug (slug),
+        KEY idx_observer_channel_default (is_default, status, sort_order),
+        KEY idx_observer_channel_source (source_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_observer_channel_assignments (
+        channel_id BIGINT NOT NULL,
+        user_id INT NOT NULL,
+        created_by_user_id INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (channel_id, user_id),
+        KEY idx_observer_assignment_user (user_id, channel_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 
