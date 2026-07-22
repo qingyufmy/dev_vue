@@ -1124,6 +1124,9 @@ const API_ERROR_MESSAGES = {
   trading_account_not_owned_by_source: "所选 MT5 账户不属于这个观摩源账号",
   observer_source_has_channels: "该观摩源仍绑定频道，请先移除相关频道",
   default_observer_channel_cannot_be_deleted: "默认观摩频道不能删除，请先设置另一个默认频道",
+  observer_source_email_invalid: "请输入有效的桥接源登录邮箱",
+  observer_source_email_exists: "该邮箱已存在，请直接从桥接源账号中选择",
+  observer_source_password_invalid: "密码需为 8–128 位，并同时包含字母和数字",
   "symbol required": "请选择交易品种",
   "timeframe required": "请选择 K 线周期",
   "strategy required": "请选择交易策略",
@@ -7940,6 +7943,18 @@ function bindEvents() {
     $("profileBaseUrl").value = preset.url; if (preset.models?.[0]) $("profileModelName").value = preset.models[0];
     updateModelProviderHelp(event.target.value);
   });
+  $("cancelObserverSourceAccountBtn")?.addEventListener("click", () => closeFormModal($("observerSourceAccountEditor")));
+  $("observerSourceAccountForm")?.addEventListener("submit", submitObserverSourceAccount);
+  $("generateObserverSourcePassword")?.addEventListener("click", generateObserverSourcePassword);
+  $("toggleObserverSourcePassword")?.addEventListener("click", event => {
+    const password = $("observerSourceAccountPassword");
+    if (!password) return;
+    const visible = password.type === "text";
+    password.type = visible ? "password" : "text";
+    event.currentTarget.textContent = visible ? "显示" : "隐藏";
+    event.currentTarget.setAttribute("aria-pressed", String(!visible));
+    password.focus();
+  });
   document.querySelectorAll(".form-modal").forEach(modal => {
     modal.addEventListener("keydown", handleFormModalKeydown);
     modal.addEventListener("click", event => { if (event.target === modal) closeFormModal(modal); });
@@ -8850,6 +8865,80 @@ function renderAdminAttention(data) {
 
 let _observerAdminData = { sources:[], channels:[], candidates:[] };
 
+function setObserverSourceAccountError(message = '') {
+  const error = $('observerSourceAccountError');
+  if (!error) return;
+  error.textContent = message;
+  error.classList.toggle('hidden', !message);
+}
+
+function openObserverSourceAccountEditor() {
+  const form = $('observerSourceAccountForm');
+  form?.reset();
+  setObserverSourceAccountError();
+  const password = $('observerSourceAccountPassword');
+  if (password) password.type = 'password';
+  const toggle = $('toggleObserverSourcePassword');
+  if (toggle) { toggle.textContent = '显示'; toggle.setAttribute('aria-pressed', 'false'); }
+  openFormModal($('observerSourceAccountEditor'));
+  requestAnimationFrame(() => $('observerSourceAccountEmail')?.focus());
+}
+
+function generateObserverSourcePassword() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+  const random = new Uint32Array(14);
+  crypto.getRandomValues(random);
+  const suffix = [...random].map(value => alphabet[value % alphabet.length]).join('');
+  const password = $('observerSourceAccountPassword');
+  if (!password) return;
+  password.value = `Aa7!${suffix}`;
+  password.type = 'text';
+  const toggle = $('toggleObserverSourcePassword');
+  if (toggle) { toggle.textContent = '隐藏'; toggle.setAttribute('aria-pressed', 'true'); }
+  password.focus();
+  password.select();
+}
+
+async function submitObserverSourceAccount(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const email = $('observerSourceAccountEmail')?.value.trim() || '';
+  const nickname = $('observerSourceAccountNickname')?.value.trim() || '';
+  const password = $('observerSourceAccountPassword')?.value || '';
+  setObserverSourceAccountError();
+  if (!form.checkValidity()) {
+    form.reportValidity();
+    return;
+  }
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
+    setObserverSourceAccountError('密码必须同时包含字母和数字。');
+    $('observerSourceAccountPassword')?.focus();
+    return;
+  }
+  const save = $('saveObserverSourceAccountBtn');
+  const original = save?.innerHTML;
+  const sourceDraftName = $('observerSourceForm')?.querySelector('[name="name"]')?.value || '';
+  try {
+    if (save) { save.disabled = true; save.innerHTML = '<i data-lucide="loader-2" class="spinning-icon"></i>正在创建…'; initIcons(); }
+    const result = await api('/api/ai/admin/observer-source-accounts', { method:'POST', body:{ email, nickname, password } });
+    await loadObserverAdminPanel(true);
+    const sourceForm = $('observerSourceForm');
+    const nameInput = sourceForm?.querySelector('[name="name"]');
+    const accountInput = sourceForm?.querySelector('[name="bridge_user_id"]');
+    if (nameInput) nameInput.value = sourceDraftName;
+    if (accountInput) {
+      accountInput.value = String(result.account.id);
+      accountInput.dispatchEvent(new Event('change'));
+    }
+    closeFormModal($('observerSourceAccountEditor'));
+    toast('桥接源账号已创建并选中，请使用该邮箱和密码登录桥接软件', 'success');
+  } catch (error) {
+    setObserverSourceAccountError(error.message);
+  } finally {
+    if (save) { save.disabled = false; save.innerHTML = original; initIcons(); }
+  }
+}
+
 function observerAudienceText(value) {
   return ({ all:'全部观摩用户', plus:'Plus 用户', pro:'Pro 用户', assigned:'指定用户' })[value] || '未设置';
 }
@@ -8866,7 +8955,7 @@ function renderObserverAdminPanel() {
         <div class="ops-section-heading"><div><span class="ops-kicker">数据连接</span><h2>观摩源</h2><p>每个来源使用一个独立 Pro 源账号连接对应 MT5，不需要管理员权限。</p></div><span class="ops-state-pill ${sources.some(item => item.bridge_online) ? 'running' : 'waiting'}">${sources.filter(item => item.bridge_online).length} 个在线</span></div>
         <form id="observerSourceForm" class="observer-admin-form">
           <label><span>来源名称</span><input class="form-input" name="name" maxlength="80" placeholder="例如：稳健实盘" required></label>
-          <label><span>桥接源账号</span><select class="form-select" name="bridge_user_id" required><option value="">请选择 Pro 源账号</option>${candidateOptions}</select></label>
+          <label><span>桥接源账号</span><div class="observer-source-account-field"><select class="form-select" name="bridge_user_id" required><option value="">请选择专用源账号</option>${candidateOptions}</select><button id="createObserverSourceAccountBtn" class="btn btn-secondary" type="button"><i data-lucide="user-plus" size="15"></i>创建账号</button></div></label>
           <label><span>绑定 MT5 账户</span><select class="form-select" name="trading_account_id"><option value="">自动识别当前账户</option></select></label>
           <button class="btn btn-primary" type="submit"><i data-lucide="plus"></i>添加来源</button>
         </form>
@@ -8905,6 +8994,7 @@ function renderObserverAdminPanel() {
     accountSelect.innerHTML = '<option value="">自动识别当前账户</option>' + (selected?.accounts || []).map(account => `<option value="${Number(account.id)}">${escapeHtml(account.broker_server || 'MT5')} · ${escapeHtml(account.login_account)}</option>`).join('');
   };
   sourceUser?.addEventListener('change', syncAccounts);
+  root.querySelector('#createObserverSourceAccountBtn')?.addEventListener('click', openObserverSourceAccountEditor);
   root.querySelector('#observerSourceForm')?.addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);

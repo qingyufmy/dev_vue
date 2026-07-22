@@ -29,8 +29,8 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260722zl" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260722zl" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260722zm" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260722zm" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -1049,6 +1049,19 @@
       </main>
     </div>
 
+    <div id="observerSourceAccountEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="observerSourceAccountEditorTitle">
+      <section class="workspace-panel form-modal-dialog observer-source-account-dialog" tabindex="-1">
+        <div class="section-heading"><div><span class="ops-kicker">专用桥接身份</span><h2 id="observerSourceAccountEditorTitle">创建桥接源账号</h2><p>该账号固定为 Pro 普通用户，只用于登录桥接软件，不会获得管理员权限。</p></div><button id="cancelObserverSourceAccountBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
+        <form id="observerSourceAccountForm" class="observer-source-account-form" novalidate>
+          <label for="observerSourceAccountEmail"><span>登录邮箱 <em>必填</em></span><input id="observerSourceAccountEmail" class="form-input" type="email" maxlength="255" autocomplete="off" placeholder="例如：source-a@example.com" required><small>用于在对应桥接配置档案中登录。</small></label>
+          <label for="observerSourceAccountNickname"><span>账号名称</span><input id="observerSourceAccountNickname" class="form-input" type="text" maxlength="100" autocomplete="off" placeholder="例如：一号观摩源"><small>仅供管理员识别，不会显示给观摩用户。</small></label>
+          <label for="observerSourceAccountPassword"><span>登录密码 <em>必填</em></span><div class="observer-password-field"><input id="observerSourceAccountPassword" class="form-input" type="password" minlength="8" maxlength="128" autocomplete="new-password" required><button id="toggleObserverSourcePassword" class="btn btn-secondary btn-sm" type="button" aria-pressed="false">显示</button></div><small>至少 8 位，并同时包含字母和数字。请保存好密码，系统不会再次显示。</small></label>
+          <div id="observerSourceAccountError" class="form-inline-error hidden" role="alert"></div>
+          <div class="form-actions form-modal-actions"><button id="generateObserverSourcePassword" class="btn btn-secondary" type="button"><i data-lucide="wand-sparkles" size="15"></i>生成安全密码</button><button id="saveObserverSourceAccountBtn" class="btn btn-primary" type="submit"><i data-lucide="user-plus" size="15"></i>创建并选中</button></div>
+        </form>
+      </section>
+    </div>
+
     <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true">
       <div class="bridge-dialog">
         <div class="bridge-head">
@@ -1160,7 +1173,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260722zl"></script>
+    <script src="/ai/app.js?v=20260722zm"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

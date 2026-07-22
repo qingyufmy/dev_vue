@@ -19,6 +19,7 @@ import { createObserverChannel, createObserverSource, deleteObserverChannel, del
   listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
   replaceObserverChannelAssignments, resolveObserverSourceForUser,
   updateObserverChannel, updateObserverSource } from './observer-channels.js'
+import { createObserverSourceAccount } from './observer-source-accounts.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
@@ -149,9 +150,12 @@ router.get('/ai/admin/observer-sources', async (req, res) => {
 router.get('/ai/admin/observer-source-candidates', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try {
-    const users = await queryAll(`SELECT id, email, nickname, role, plan
+    const users = await queryAll(`SELECT id, email, nickname, role, plan, plan_source
       FROM users WHERE deletion_status = 'active' AND deleted_at IS NULL
-        AND (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())))
+        AND (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())
+          AND (plan_source = 'observer_source' OR EXISTS (
+            SELECT 1 FROM ai_observer_sources sources WHERE sources.bridge_user_id = users.id
+          ))))
       ORDER BY role = 'admin' DESC, id`)
     const userIds = users.map(user => Number(user.id))
     const accounts = userIds.length ? await queryAll(`SELECT id, user_id, login_account, broker_server
@@ -162,6 +166,12 @@ router.get('/ai/admin/observer-source-candidates', async (req, res) => {
       accounts:accounts.filter(account => Number(account.user_id) === Number(user.id)),
     })) })
   } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/admin/observer-source-accounts', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try { res.status(201).json({ ok:true, account:await createObserverSourceAccount(req.user.id, req.body || {}) }) }
+  catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/admin/observer-sources', async (req, res) => {

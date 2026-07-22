@@ -1810,6 +1810,8 @@
 
 @media (max-width: 767px) {
   .observer-admin-form { grid-template-columns:1fr; padding:12px; }
+  .observer-source-account-field { grid-template-columns:1fr; }
+  .observer-source-account-field .btn { width:100%; justify-content:center; }
   .observer-admin-item { grid-template-columns:auto minmax(0,1fr) auto; }
   .observer-admin-item .ops-state-pill { grid-column:2; justify-self:start; }
 }

@@ -742,11 +742,17 @@ describe('route permissions and credential redaction', () => {
   it('gives administrators a responsive observer source and channel workspace', () => {
     expect(app).toContain('data-admin-view="observers"')
     expect(app).toContain("api('/api/ai/admin/observer-source-candidates')")
+    expect(app).toContain("api('/api/ai/admin/observer-source-accounts'")
     expect(app).toContain('id="observerSourceForm"')
     expect(app).toContain('id="observerChannelForm"')
+    expect(html).toContain('id="observerSourceAccountEditor"')
+    expect(html).toContain('id="observerSourceAccountForm"')
     expect(css).toContain('.observer-admin-grid')
+    expect(css).toContain('.observer-source-account-field')
     expect(responsiveCss).toContain('.observer-admin-grid { grid-template-columns: 1fr; }')
+    expect(responsiveCss).toContain('.observer-source-account-field { grid-template-columns:1fr; }')
     expect(routes).toContain("router.get('/ai/admin/observer-source-candidates'")
+    expect(routes).toContain("router.post('/ai/admin/observer-source-accounts'")
   })
 
   it('returns the account metrics rendered by the risk-center status card', () => {

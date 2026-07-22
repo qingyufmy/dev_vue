@@ -6825,6 +6825,17 @@ a.signal-link:hover {
 .observer-admin-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:16px; margin:16px 0; border:1px solid var(--border-subtle); border-radius:12px; background:color-mix(in srgb,var(--bg-input) 72%,transparent); }
 .observer-admin-form label:not(.observer-default-check) { display:grid; gap:7px; min-width:0; color:var(--text-secondary); font-size:12px; font-weight:600; }
 .observer-admin-form .btn { align-self:end; min-height:42px; }
+.observer-source-account-field { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; min-width:0; }
+.observer-source-account-field .btn { min-height:44px; padding-inline:13px; white-space:nowrap; }
+.observer-source-account-dialog { width:min(100%,560px); }
+.observer-source-account-form { display:grid; gap:16px; }
+.observer-source-account-form > label { display:grid; gap:7px; color:var(--text-secondary); font-size:12px; font-weight:650; }
+.observer-source-account-form > label > span { display:flex; align-items:center; gap:7px; }
+.observer-source-account-form > label > span em { color:var(--gold-primary); font-size:10px; font-style:normal; font-weight:750; }
+.observer-source-account-form > label > small { color:var(--text-muted); font-size:11px; font-weight:400; line-height:1.55; }
+.observer-password-field { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; min-width:0; }
+.observer-password-field .btn { min-width:66px; min-height:44px; }
+.form-inline-error { padding:10px 12px; border:1px solid var(--status-danger-border); border-radius:9px; color:var(--status-danger); background:var(--status-danger-bg); font-size:12px; line-height:1.5; }
 .observer-default-check { display:inline-flex; align-items:center; gap:8px; min-height:42px; color:var(--text-secondary); font-size:13px; }
 .observer-default-check input { width:17px; height:17px; accent-color:var(--gold-primary); }
 .observer-admin-list { display:grid; gap:8px; }
