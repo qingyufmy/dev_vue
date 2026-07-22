@@ -6819,6 +6819,24 @@ a.signal-link:hover {
   opacity: .65;
 }
 
+/* 运营中心 · 观摩频道 */
+.observer-admin-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.observer-admin-card { min-width:0; }
+.observer-admin-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:16px; margin:16px 0; border:1px solid var(--border-subtle); border-radius:12px; background:color-mix(in srgb,var(--bg-input) 72%,transparent); }
+.observer-admin-form label:not(.observer-default-check) { display:grid; gap:7px; min-width:0; color:var(--text-secondary); font-size:12px; font-weight:600; }
+.observer-admin-form .btn { align-self:end; min-height:42px; }
+.observer-default-check { display:inline-flex; align-items:center; gap:8px; min-height:42px; color:var(--text-secondary); font-size:13px; }
+.observer-default-check input { width:17px; height:17px; accent-color:var(--gold-primary); }
+.observer-admin-list { display:grid; gap:8px; }
+.observer-admin-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto auto; align-items:center; gap:11px; min-height:64px; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:11px; background:var(--bg-card); }
+.observer-admin-item strong { display:flex; align-items:center; gap:7px; color:var(--text-primary); font-size:13px; }
+.observer-admin-item strong em { padding:2px 6px; border-radius:999px; background:color-mix(in srgb,var(--gold-primary) 14%,transparent); color:var(--gold-primary); font-size:10px; font-style:normal; }
+.observer-admin-item p { overflow:hidden; margin:4px 0 0; color:var(--text-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.observer-source-dot { width:10px; height:10px; border-radius:50%; background:var(--text-muted); box-shadow:0 0 0 5px color-mix(in srgb,var(--text-muted) 10%,transparent); }
+.observer-source-dot.online { background:var(--status-connected); box-shadow:0 0 0 5px color-mix(in srgb,var(--status-connected) 12%,transparent); }
+.observer-channel-icon { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; background:color-mix(in srgb,var(--gold-primary) 11%,transparent); color:var(--gold-primary); }
+.observer-channel-icon svg { width:16px; height:16px; }
+
 .analyst-view-panel[hidden] {
   display: none;
 }

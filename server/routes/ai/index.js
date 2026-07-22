@@ -146,6 +146,24 @@ router.get('/ai/admin/observer-sources', async (req, res) => {
   } catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/admin/observer-source-candidates', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    const users = await queryAll(`SELECT id, email, nickname, role, plan
+      FROM users WHERE deletion_status = 'active' AND deleted_at IS NULL
+        AND (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())))
+      ORDER BY role = 'admin' DESC, id`)
+    const userIds = users.map(user => Number(user.id))
+    const accounts = userIds.length ? await queryAll(`SELECT id, user_id, login_account, broker_server
+      FROM trading_accounts WHERE is_deleted = 0 AND user_id IN (${userIds.map(() => '?').join(',')})
+      ORDER BY user_id, updated_at DESC, id DESC`, userIds) : []
+    res.json({ ok:true, candidates:users.map(user => ({ ...user,
+      bridge_online:isBridgeAlive(Number(user.id)),
+      accounts:accounts.filter(account => Number(account.user_id) === Number(user.id)),
+    })) })
+  } catch (error) { reviewError(res, error) }
+})
+
 router.post('/ai/admin/observer-sources', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try { res.status(201).json({ ok:true, source:await createObserverSource(req.user.id, req.body || {}) }) }

@@ -739,6 +739,16 @@ describe('route permissions and credential redaction', () => {
     expect(responsiveCss).toContain('font-size: 16px')
   })
 
+  it('gives administrators a responsive observer source and channel workspace', () => {
+    expect(app).toContain('data-admin-view="observers"')
+    expect(app).toContain("api('/api/ai/admin/observer-source-candidates')")
+    expect(app).toContain('id="observerSourceForm"')
+    expect(app).toContain('id="observerChannelForm"')
+    expect(css).toContain('.observer-admin-grid')
+    expect(responsiveCss).toContain('.observer-admin-grid { grid-template-columns: 1fr; }')
+    expect(routes).toContain("router.get('/ai/admin/observer-source-candidates'")
+  })
+
   it('returns the account metrics rendered by the risk-center status card', () => {
     const start = routes.indexOf("router.get('/ai/risk-center', authMiddleware")
     const end = routes.indexOf("router.post('/ai/risk-center/refresh'", start)

@@ -36,12 +36,14 @@ function normalizedSlug(value) {
 async function validateBridgeUser(bridgeUserId) {
   const id = Number(bridgeUserId)
   if (!Number.isInteger(id) || id <= 0) throw new Error('invalid_bridge_user_id')
-  const user = await queryOne(`SELECT id, role, email, nickname FROM users
-    WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [id])
+  const user = await queryOne(`SELECT id, role, plan, plan_expires_at, email, nickname,
+      (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS bridge_eligible
+    FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [id])
   if (!user) throw new Error('bridge_user_not_found')
-  // Phase 1 keeps the current JWT bridge authentication intact. Dedicated
-  // non-login source credentials are introduced with the bridge manager.
-  if (String(user.role || '').toLowerCase() !== 'admin') throw new Error('bridge_user_must_be_admin')
+  // A source operator is a dedicated Pro account or an administrator. This
+  // preserves the existing signed Bridge login while avoiding extra admin
+  // accounts for every observation source.
+  if (!Number(user.bridge_eligible)) throw new Error('bridge_user_requires_pro')
   return user
 }
 

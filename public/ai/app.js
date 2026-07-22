@@ -1119,6 +1119,11 @@ const API_ERROR_MESSAGES = {
   admin_only: "仅管理员可以使用此功能",
   observer_channel_access_denied: "当前账号不能查看这个观摩频道",
   observer_source_offline: "当前观摩频道暂时离线，请稍后重试",
+  bridge_user_requires_pro: "观摩源账号必须是管理员或有效的 Pro 账号",
+  bridge_user_not_found: "未找到这个观摩源账号",
+  trading_account_not_owned_by_source: "所选 MT5 账户不属于这个观摩源账号",
+  observer_source_has_channels: "该观摩源仍绑定频道，请先移除相关频道",
+  default_observer_channel_cannot_be_deleted: "默认观摩频道不能删除，请先设置另一个默认频道",
   "symbol required": "请选择交易品种",
   "timeframe required": "请选择 K 线周期",
   "strategy required": "请选择交易策略",
@@ -8552,7 +8557,7 @@ function initAnalysisHistoryScroll() {
 }
 
 // ============ Admin Data Dashboard ============
-const _adminDashState = { charts: {}, loaded: false, activeView:'overview', userList: { page: 1, total: 0, users: [] }, selectedUserId: null, renderUserList:null, refreshTimer: null };
+const _adminDashState = { charts: {}, loaded: false, activeView:'overview', observerLoaded:false, userList: { page: 1, total: 0, users: [] }, selectedUserId: null, renderUserList:null, refreshTimer: null };
 
 async function loadAdminDashboard(force) {
   if (_adminDashState.loaded && !force) return;
@@ -8843,6 +8848,113 @@ function renderAdminAttention(data) {
     </article>`).join('');
 }
 
+let _observerAdminData = { sources:[], channels:[], candidates:[] };
+
+function observerAudienceText(value) {
+  return ({ all:'全部观摩用户', plus:'Plus 用户', pro:'Pro 用户', assigned:'指定用户' })[value] || '未设置';
+}
+
+function renderObserverAdminPanel() {
+  const root = $('observerAdminContent');
+  if (!root) return;
+  const { sources, channels, candidates } = _observerAdminData;
+  const candidateOptions = candidates.map(item => `<option value="${Number(item.id)}">${escapeHtml(item.nickname || item.email || `账号 #${item.id}`)} · ${item.role === 'admin' ? '管理员' : 'Pro'}${item.bridge_online ? ' · 在线' : ' · 离线'}</option>`).join('');
+  const sourceOptions = sources.filter(item => item.status === 'active').map(item => `<option value="${Number(item.id)}">${escapeHtml(item.name)}</option>`).join('');
+  root.innerHTML = `
+    <div class="observer-admin-grid">
+      <section class="ops-section-card observer-admin-card">
+        <div class="ops-section-heading"><div><span class="ops-kicker">数据连接</span><h2>观摩源</h2><p>每个来源使用一个独立 Pro 源账号连接对应 MT5，不需要管理员权限。</p></div><span class="ops-state-pill ${sources.some(item => item.bridge_online) ? 'running' : 'waiting'}">${sources.filter(item => item.bridge_online).length} 个在线</span></div>
+        <form id="observerSourceForm" class="observer-admin-form">
+          <label><span>来源名称</span><input class="form-input" name="name" maxlength="80" placeholder="例如：稳健实盘" required></label>
+          <label><span>桥接源账号</span><select class="form-select" name="bridge_user_id" required><option value="">请选择 Pro 源账号</option>${candidateOptions}</select></label>
+          <label><span>绑定 MT5 账户</span><select class="form-select" name="trading_account_id"><option value="">自动识别当前账户</option></select></label>
+          <button class="btn btn-primary" type="submit"><i data-lucide="plus"></i>添加来源</button>
+        </form>
+        <div class="observer-admin-list">${sources.length ? sources.map(source => `
+          <article class="observer-admin-item">
+            <span class="observer-source-dot ${source.bridge_online ? 'online' : ''}" aria-hidden="true"></span>
+            <div><strong>${escapeHtml(source.name)}</strong><p>${escapeHtml(source.login_account ? `${source.broker_server || 'MT5'} · ${source.login_account}` : source.bridge_user_nickname || source.bridge_user_email || `源账号 #${source.bridge_user_id}`)}</p></div>
+            <span class="ops-state-pill ${source.bridge_online ? 'running' : 'waiting'}">${source.bridge_online ? '已连接' : '离线'}</span>
+            <button class="icon-btn" type="button" data-observer-source-delete="${Number(source.id)}" aria-label="删除观摩源"><i data-lucide="trash-2"></i></button>
+          </article>`).join('') : '<div class="ops-empty-state compact"><strong>尚未配置观摩源</strong><span>先准备一个 Pro 源账号并连接桥接软件。</span></div>'}</div>
+      </section>
+      <section class="ops-section-card observer-admin-card">
+        <div class="ops-section-heading"><div><span class="ops-kicker">用户入口</span><h2>观摩频道</h2><p>频道决定用户能看到哪个账户；默认频道离线时不会静默切换。</p></div><span class="ops-total-users">共 <b class="num">${channels.length}</b> 个</span></div>
+        <form id="observerChannelForm" class="observer-admin-form">
+          <label><span>频道名称</span><input class="form-input" name="name" maxlength="80" placeholder="例如：稳健频道" required></label>
+          <label><span>频道标识</span><input class="form-input" name="slug" maxlength="64" pattern="[a-z0-9][a-z0-9_-]*" placeholder="steady" required></label>
+          <label><span>对应来源</span><select class="form-select" name="source_id" required><option value="">请选择观摩源</option>${sourceOptions}</select></label>
+          <label><span>开放范围</span><select class="form-select" name="audience"><option value="all">全部观摩用户</option><option value="plus">仅 Plus</option><option value="pro">仅 Pro</option></select></label>
+          <label class="observer-default-check"><input type="checkbox" name="is_default"><span>设为默认频道</span></label>
+          <button class="btn btn-primary" type="submit" ${sourceOptions ? '' : 'disabled'}><i data-lucide="plus"></i>添加频道</button>
+        </form>
+        <div class="observer-admin-list">${channels.length ? channels.map(channel => `
+          <article class="observer-admin-item">
+            <span class="observer-channel-icon"><i data-lucide="radio-tower"></i></span>
+            <div><strong>${escapeHtml(channel.name)}${Number(channel.is_default) === 1 ? '<em>默认</em>' : ''}</strong><p>${escapeHtml(channel.source_name || '未绑定来源')} · ${escapeHtml(observerAudienceText(channel.audience))}</p></div>
+            <span class="ops-state-pill ${channel.status === 'active' && channel.source_status === 'active' ? 'running' : 'stopped'}">${channel.status === 'active' ? '已开放' : '已停用'}</span>
+            ${Number(channel.is_default) !== 1 ? `<button class="icon-btn" type="button" data-observer-channel-default="${Number(channel.id)}" title="设为默认"><i data-lucide="star"></i></button><button class="icon-btn" type="button" data-observer-channel-delete="${Number(channel.id)}" aria-label="删除频道"><i data-lucide="trash-2"></i></button>` : ''}
+          </article>`).join('') : '<div class="ops-empty-state compact"><strong>尚未配置观摩频道</strong><span>创建频道后，观摩用户才能选择对应来源。</span></div>'}</div>
+      </section>
+    </div>`;
+  initIcons();
+  const sourceUser = root.querySelector('#observerSourceForm [name="bridge_user_id"]');
+  const accountSelect = root.querySelector('#observerSourceForm [name="trading_account_id"]');
+  const syncAccounts = () => {
+    const selected = candidates.find(item => Number(item.id) === Number(sourceUser?.value));
+    accountSelect.innerHTML = '<option value="">自动识别当前账户</option>' + (selected?.accounts || []).map(account => `<option value="${Number(account.id)}">${escapeHtml(account.broker_server || 'MT5')} · ${escapeHtml(account.login_account)}</option>`).join('');
+  };
+  sourceUser?.addEventListener('change', syncAccounts);
+  root.querySelector('#observerSourceForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    try {
+      button.disabled = true;
+      await api('/api/ai/admin/observer-sources', { method:'POST', body:{ name:form.get('name'), bridge_user_id:Number(form.get('bridge_user_id')), trading_account_id:form.get('trading_account_id') ? Number(form.get('trading_account_id')) : null } });
+      toast('观摩源已添加', 'success'); await loadObserverAdminPanel(true);
+    } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; }
+  });
+  root.querySelector('#observerChannelForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    try {
+      button.disabled = true;
+      await api('/api/ai/admin/observer-channels', { method:'POST', body:{ name:form.get('name'), slug:form.get('slug'), source_id:Number(form.get('source_id')), audience:form.get('audience'), is_default:form.get('is_default') === 'on' } });
+      toast('观摩频道已添加', 'success'); await loadObserverAdminPanel(true);
+    } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; }
+  });
+  root.querySelectorAll('[data-observer-source-delete]').forEach(button => button.addEventListener('click', async () => {
+    if (!confirm('确定删除这个观摩源吗？已绑定频道的来源不能删除。')) return;
+    try { await api(`/api/ai/admin/observer-sources/${button.dataset.observerSourceDelete}`, { method:'DELETE' }); toast('观摩源已删除', 'success'); await loadObserverAdminPanel(true); }
+    catch (error) { toast(error.message, 'error'); }
+  }));
+  root.querySelectorAll('[data-observer-channel-default]').forEach(button => button.addEventListener('click', async () => {
+    try { await api(`/api/ai/admin/observer-channels/${button.dataset.observerChannelDefault}`, { method:'PUT', body:{ is_default:true } }); toast('默认频道已更新', 'success'); await loadObserverAdminPanel(true); }
+    catch (error) { toast(error.message, 'error'); }
+  }));
+  root.querySelectorAll('[data-observer-channel-delete]').forEach(button => button.addEventListener('click', async () => {
+    if (!confirm('确定删除这个观摩频道吗？用户将立即失去该频道入口。')) return;
+    try { await api(`/api/ai/admin/observer-channels/${button.dataset.observerChannelDelete}`, { method:'DELETE' }); toast('观摩频道已删除', 'success'); await loadObserverAdminPanel(true); }
+    catch (error) { toast(error.message, 'error'); }
+  }));
+}
+
+async function loadObserverAdminPanel(force = false) {
+  const root = $('observerAdminContent');
+  if (!root || (_adminDashState.observerLoaded && !force)) return;
+  showLoading(root, '正在读取观摩频道…');
+  try {
+    const [sourceData, channelData, candidateData] = await Promise.all([
+      api('/api/ai/admin/observer-sources'), api('/api/ai/admin/observer-channels'), api('/api/ai/admin/observer-source-candidates'),
+    ]);
+    _observerAdminData = { sources:sourceData.sources || [], channels:channelData.channels || [], candidates:candidateData.candidates || [] };
+    _adminDashState.observerLoaded = true;
+    renderObserverAdminPanel();
+  } catch (error) { showError(root, `观摩频道加载失败：${error.message}`); }
+}
+
 async function renderAdminDashboard(el, d, userListResp) {
   Object.values(_adminDashState.charts).forEach(c => { try { c.destroy() } catch {} });
   _adminDashState.charts = {};
@@ -8865,6 +8977,7 @@ async function renderAdminDashboard(el, d, userListResp) {
       <nav class="ops-view-tabs" aria-label="运营中心视图">
         <button type="button" class="active" data-admin-view="overview" aria-selected="true"><i data-lucide="gauge"></i>运营总览<span class="ops-tab-badge ${healthSummary.tone === 'healthy' ? 'hidden' : ''}" data-field="attentionCount">${healthSummary.modelFailures + healthSummary.schedulerErrors + healthSummary.reviewsFailed + healthSummary.signalErrors}</span></button>
         <button type="button" data-admin-view="users" aria-selected="false"><i data-lucide="users"></i>用户管理<span class="ops-tab-count" data-field="totalUsersTab">${Number(us.total_users || 0)}</span></button>
+        <button type="button" data-admin-view="observers" aria-selected="false"><i data-lucide="radio-tower"></i>观摩频道</button>
         <button type="button" data-admin-view="release" aria-selected="false"><i data-lucide="megaphone"></i>发布管理</button>
       </nav>
 
@@ -8913,6 +9026,10 @@ async function renderAdminDashboard(el, d, userListResp) {
         </div>
       </section>
 
+      <section class="ops-view-panel" data-admin-panel="observers" hidden>
+        <div id="observerAdminContent"><div class="admin-dash-loading"><i data-lucide="loader-2" class="spinning-icon"></i><span>正在读取观摩频道…</span></div></div>
+      </section>
+
       <section class="ops-view-panel" data-admin-panel="release" hidden>
         <div class="ops-release-layout">
           <section class="ops-section-card"><div class="ops-section-heading"><div><span class="ops-kicker">客户端公告</span><h2>发布更新日志</h2><p>保存后将作为当前版本更新内容展示给用户。</p></div></div><div class="ops-release-form"><label for="clVersionInput">版本号</label><input type="number" id="clVersionInput" min="1" inputmode="numeric"><label for="clContentInput">更新内容</label><textarea id="clContentInput" rows="12" placeholder="支持基础 HTML，例如：&#10;<b>本次更新</b>&#10;<ul><li>优化自动分析体验</li></ul>"></textarea><div class="ops-release-actions"><span id="clSaveStatus" role="status" aria-live="polite"></span><button id="clSaveButton" class="btn btn-primary" type="button"><i data-lucide="save"></i>保存并发布</button></div></div></section>
@@ -8923,7 +9040,7 @@ async function renderAdminDashboard(el, d, userListResp) {
   initIcons();
 
   const setAdminView = view => {
-    const target = ['overview', 'users', 'release'].includes(view) ? view : 'overview';
+    const target = ['overview', 'users', 'observers', 'release'].includes(view) ? view : 'overview';
     _adminDashState.activeView = target;
     el.querySelectorAll('[data-admin-view]').forEach(button => {
       const active = button.dataset.adminView === target;
@@ -8935,6 +9052,7 @@ async function renderAdminDashboard(el, d, userListResp) {
       panel.classList.toggle('active', active);
       panel.hidden = !active;
     });
+    if (target === 'observers') loadObserverAdminPanel().catch(error => toast(error.message, 'error'));
   };
   el.querySelectorAll('[data-admin-view]').forEach(button => button.addEventListener('click', () => setAdminView(button.dataset.adminView)));
   el.addEventListener('click', event => {
