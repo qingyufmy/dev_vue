@@ -475,6 +475,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(signalCard).not.toContain('上次信号摘要')
     expect(signalCard).not.toContain('data-tab-jump="signals"')
     expect(css).toContain('.card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-details')
+    expect(css).toContain('.grid-area-signal {\n  grid-area: signal;\n  align-self: start;')
+    expect(css).not.toContain('.signal-generated-meta {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;')
+    expect(css).not.toContain('margin-top: auto;\n  padding-top: var(--space-2);')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
