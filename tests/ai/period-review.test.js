@@ -48,14 +48,16 @@ describe('daily review grouping', () => {
     expect(groups[0].periodKey).toBe('2026-07-17')
   })
 
-  it('keeps strategy versions and accounts isolated', () => {
+  it('aggregates strategy versions while keeping accounts isolated', () => {
     const time = JSON.stringify({ time_utc_msc: Date.parse('2026-07-17T10:00:00Z') })
     const rows = [
       { ...base, id: 1, last_deal_raw_json: time },
       { ...base, id: 2, trading_account_id: 12, last_deal_raw_json: time },
       { ...base, id: 3, strategy_version: 3, last_deal_raw_json: time },
     ]
-    expect(groupDailyReviewOutcomes(rows, { offsetMinutes: 180, asOfUtcMs: Date.parse('2026-07-18T00:00:00Z') })).toHaveLength(3)
+    const groups = groupDailyReviewOutcomes(rows, { offsetMinutes: 180, asOfUtcMs: Date.parse('2026-07-18T00:00:00Z') })
+    expect(groups).toHaveLength(2)
+    expect(groups.find(group => group.tradingAccountId === 11)?.strategyVersions).toEqual([2, 3])
   })
 
   it('preserves platform and private review privacy boundaries', () => {
@@ -248,13 +250,18 @@ describe('period review runtime integration', () => {
     expect(routes).toContain("error:'legacy_trade_review_disabled'")
     expect(periodReview).toContain('recoverExpiredPeriodReviewJobs')
     expect(periodReview).toContain("isAiFeatureEnabled('review_generation_enabled'")
-    expect(periodReview).toContain("status = 'stale'")
-    expect(periodReview).toContain("status = 'revalidation'")
-    expect(periodReview).toContain('source_memory_ids_json')
-    expect(periodReview).toContain("status = 'revoked'")
+    expect(migration).toContain('uk_period_review_compatibility')
+    expect(periodReview).toContain('cases.strategy_compatibility_hash IS NOT NULL')
+    expect(periodReview).toContain('must not silently')
     expect(periodReview).toContain('runPeriodReviewDerivationOnce')
     expect(periodReview).toContain('monthlyReviewSourceHash')
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
+  })
+
+  it('never revokes an approved memory merely because review evidence is rebuilt', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    expect(source).not.toContain("UPDATE platform_strategy_experience_items SET status = 'revoked'")
+    expect(source).not.toContain("UPDATE experience_memory_items SET status = 'stale'")
   })
 })
 

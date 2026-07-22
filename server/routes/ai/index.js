@@ -731,7 +731,7 @@ export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
 export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
   createPlatformExperienceCandidateFromApprovedPeriodReview,
   listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,
-  updatePlatformExperienceItem, retrievePlatformExperience } from './platform-experience.js'
+  updatePlatformExperienceItem, retrievePlatformExperience, attachPlatformExperienceSignal } from './platform-experience.js'
 
 export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatureFlags,
   updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'

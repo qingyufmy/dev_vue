@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
 vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/memory-system.js', () => ({
   sanitizeMemoryText: (value, max = 4000) => String(value || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, max),
+  classifyMemoryText: () => 'market_regime',
 }))
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256: value => `hash:${value}` }))
 
@@ -44,7 +45,10 @@ describe('platform strategy experience boundary', () => {
     db.queryOne
       .mockResolvedValueOnce({ id:21, user_id:1, user_role:'admin', strategy_scope:'platform', strategy_id:3,
         strategy_version:2, period_type:'monthly', period_key:'2026-07', status:'approved', approved_version_id:31 })
-      .mockResolvedValueOnce({ id:31, content_json:JSON.stringify({ period_summary:'月度趋势等待确认', memory_candidates:[] }) })
+      .mockResolvedValueOnce({ id:31, content_json:JSON.stringify({ period_summary:'月度趋势等待确认', memory_candidates:[{
+        lesson:'趋势回调确认后再入场', memory_category:'entry_setup', supporting_period_case_ids:[1, 2],
+        applicability:{ applicable_when:{ symbols:['xauusd'], timeframes:['h1'] }, avoid_when:{} },
+      }] }) })
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id:3 })
       .mockResolvedValueOnce({ id:41, memory_tier:'long' })
@@ -67,14 +71,14 @@ describe('platform strategy experience boundary', () => {
 
   it('shadow mode records selections but never injects them', async () => {
     db.queryOne.mockResolvedValue({ mode:'shadow', max_items:5, runtime_token_budget:800, policy_version:2 })
-    db.queryAll.mockResolvedValue([{ id:4, lesson_text:'等待确认', platform_version:1 }])
+    db.queryAll.mockResolvedValue([{ id:4, lesson_text:'等待确认', platform_version:1,
+      applicability_json:JSON.stringify({ applicable_when:{ symbols:['xauusd'], timeframes:['h1'] } }) }])
     db.queryRun.mockResolvedValue({ changes:1 })
     const result = await retrievePlatformExperience({ strategyId:3, symbol:'XAUUSD', timeframe:'H1' })
     expect(result.mode).toBe('shadow')
     expect(result.promptBlock).toBe('')
     expect(result.selectedItemIds).toEqual([4])
-    expect(db.queryAll.mock.calls[0][0]).toContain("JSON_TYPE(JSON_EXTRACT(context_json, '$.symbol')) = 'NULL'")
-    expect(db.queryAll.mock.calls[0][0]).toContain("JSON_TYPE(JSON_EXTRACT(context_json, '$.timeframe')) = 'NULL'")
+    expect(db.queryAll.mock.calls[0][0]).not.toContain('strategy_version = ?')
   })
 
   it('injects only experiences that pass deterministic market and entry-method matching', async () => {
@@ -102,10 +106,12 @@ describe('platform strategy experience boundary', () => {
       .toMatchObject({ symbol:'XAUUSD', timeframe:'M15', trend_direction:'up', market_regime:'uptrend', volatility_bucket:'normal' })
   })
 
-  it('rejects experience from a different strategy version before prompt injection', () => {
-    const result = platformExperienceApplicability({ context_json:JSON.stringify({ strategy_version:2 }) },
+  it('does not partition experience by strategy version, but still requires contextual applicability', () => {
+    const result = platformExperienceApplicability({ strategy_id:3, context_json:JSON.stringify({ strategy_version:2 }),
+      applicability_json:JSON.stringify({ applicable_when:{ symbols:['xauusd'], timeframes:['m5'] } }) },
       buildPlatformExperienceRetrievalContext({ strategyVersion:3, symbol:'XAUUSD', timeframe:'M5' }))
-    expect(result).toEqual({ eligible:false, score:0, reasons:['strategy_version_mismatch'] })
+    expect(result.eligible).toBe(true)
+    expect(result.reasons).toEqual(expect.arrayContaining(['symbols_match', 'timeframes_match']))
   })
 
   it('requires an explicit strategy binding before platform memory retrieval', async () => {

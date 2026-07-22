@@ -77,11 +77,19 @@ describe('memory retrieval ranking', () => {
     expect(buildPersonalMemoryRetrievalContext({
       sma_distance_pct: 0.2,
       strategy_score: { momentum_alignment: 1, trend_strength: 0.7 },
-    }, 'M5', ['limit'])).toEqual({ direction: 'buy', marketRegime: 'buy_trend', entryMethod: 'limit' })
+    }, 'M5', ['limit'])).toMatchObject({ direction: 'buy', marketRegime: 'buy_trend', entryMethod: 'limit' })
     expect(buildPersonalMemoryRetrievalContext({
       strategy_context: { chan_timeframe_alignment: { direction: 'down' }, timeframes: {} },
       strategy_score: { trend_strength: 0.8 },
-    }, 'H1', ['market', 'stop'])).toEqual({ direction: 'sell', marketRegime: 'sell_trend', entryMethod: null })
+    }, 'H1', ['market', 'stop'])).toMatchObject({ direction: 'sell', marketRegime: 'sell_trend', entryMethod: null })
+  })
+
+  it('derives volatility and Chan dimensions for precise memory matching', () => {
+    expect(buildPersonalMemoryRetrievalContext({ volatility_pct:0.4, chan:{ reliability:'high',
+      trend_state:{ state:'downward_exhaustion', direction:'down' }, current_segment:{ dir:'down' },
+      divergence:{ confirmed:true, type:'bottom' }, current_center:{ status:'broken_down' } } }, 'M5', ['limit']))
+      .toMatchObject({ volatilityBucket:'high', chanReliability:'high', chanTrendState:'downward_exhaustion',
+        chanSegmentDirection:'sell', chanDivergence:'bottom', chanCenterState:'broken_down' })
   })
 })
 
@@ -91,14 +99,15 @@ describe('memory persistence, invalidation and inference boundaries', () => {
   const llm = readFileSync(new URL('../../server/routes/ai/llm.js', import.meta.url), 'utf8')
   const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
 
-  it('links memories to exact approved versions and preserves ancestors and hashes', () => {
+  it('keeps approved-version provenance without partitioning retrieval by strategy version', () => {
     expect(migration).toContain('UNIQUE KEY uk_memory_review_version (review_version_id)')
     expect(migration).toContain('ancestor_memory_ids_json')
     expect(memory).toContain("reviewCase.status !== 'approved'")
     expect(memory).toContain("status = ancestors.length ? 'duplicate_candidate' : 'active'")
     expect(memory).toContain('personal_memory_requires_private_strategy_review')
     expect(memory).toContain("memory_tier = 'short'")
-    expect(memory).toContain('strategy_version = ?')
+    expect(memory).not.toContain('AND strategy_version = ?')
+    expect(migration).toContain('strategy_compatibility_hash')
     expect(memory).toContain('SHORT_MEMORY_TTL_DAYS = 30')
   })
 
@@ -127,7 +136,7 @@ describe('memory persistence, invalidation and inference boundaries', () => {
   it('invalidates summaries immediately after source revocation and falls back to atomic items', () => {
     expect(memory).toContain("SET status = 'stale'")
     expect(memory).toContain('invalidateSummariesForSource')
-    expect(memory).toContain('if (summary && parse(summary.source_memory_ids_json')
+    expect(memory).toContain('getValidSummaries')
     expect(memory).toContain('invalidateLongMemoriesForSource')
     expect(memory).toContain("status = 'revalidation'")
   })
@@ -153,11 +162,11 @@ describe('memory persistence, invalidation and inference boundaries', () => {
     expect(memory).toContain('monthly_memory_has_no_approved_daily_sources')
     expect(memory).toContain("source: 'approved_monthly_review'")
     expect(memory).toContain("reviewCase.status !== 'approved'")
-    expect(memory).toContain("status = 'compressed'")
+    expect(memory).toContain("'archival', NULL, 'monthly_review'")
     expect(memory).toContain("status IN ('active','compressed')")
     expect(migration).toContain('period_review_version_id')
-    expect(migration).toContain('uk_memory_period_review_version')
-    expect(migration).toContain('uk_memory_summary_period_review')
+    expect(migration).toContain('uk_memory_period_review_content')
+    expect(migration).toContain('uk_platform_experience_period_content')
   })
 
   it('stores only paired decision digests and hashes, never review bodies', () => {

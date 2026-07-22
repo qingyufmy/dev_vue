@@ -8,7 +8,7 @@ import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
 import { resolveOwnedModelProfileForRuntime } from './model-profiles.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun, buildPersonalMemoryRetrievalContext } from './memory-system.js'
-import { retrievePlatformExperience } from './platform-experience.js'
+import { attachPlatformExperienceSignal, retrievePlatformExperience } from './platform-experience.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
@@ -663,11 +663,19 @@ export async function handleAnalyze(userId, params) {
       memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), strategyVersion:Number(strategy.version || 1), symbol, timeframe: primaryTf,
         market, allowedEntryMethods:policy.entryMethods })
     } else {
-      const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, policy.entryMethods)
-      memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1),
-        symbol, timeframe: primaryTf, direction: retrievalContext.direction,
-        entryMethod: retrievalContext.entryMethod, marketRegime: retrievalContext.marketRegime,
-        mode: params.memory_mode === 'shadow' ? 'shadow' : 'active' })
+      const subscriptionMode = params.memory_mode || (await queryOne(`SELECT memory_mode FROM strategy_subscriptions
+        WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT 1`,
+      [userId, strategy.id]))?.memory_mode || 'personal'
+      if (subscriptionMode !== 'off' && subscriptionMode !== 'platform_only') {
+        const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, policy.entryMethods)
+        memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1),
+          symbol, timeframe: primaryTf, direction: retrievalContext.direction,
+          entryMethod: retrievalContext.entryMethod, allowedEntryMethods:policy.entryMethods, marketRegime: retrievalContext.marketRegime,
+          volatilityBucket:retrievalContext.volatilityBucket, chanReliability:retrievalContext.chanReliability,
+          chanTrendState:retrievalContext.chanTrendState, chanSegmentDirection:retrievalContext.chanSegmentDirection,
+          chanDivergence:retrievalContext.chanDivergence, chanCenterState:retrievalContext.chanCenterState,
+          mode: subscriptionMode === 'shadow' ? 'shadow' : 'active' })
+      }
     }
   } catch (error) {
     console.error('[Analyze] Experience retrieval failed; continuing without it:', error.message)
@@ -677,6 +685,13 @@ export async function handleAnalyze(userId, params) {
     else config._memoryContext = memory.promptBlock
     config._experienceSelection = { source:strategy.scope === 'platform' ? 'platform' : 'personal',
       selectedItemIds:memory.promptBlock ? (memory.selectedItemIds || []) : [],
+      selectedRefs:memory.promptBlock ? (strategy.scope === 'platform'
+        ? (memory.selectedItemIds || []).map(id => `platform:${Number(id)}`)
+        : [
+            ...(memory.selectedLongMemoryIds || []).map(id => `long:${Number(id)}`),
+            ...(memory.selectedSummaryIds || []).map(id => `summary:${Number(id)}`),
+            ...(memory.selectedItemIds || []).map(id => `short:${Number(id)}`),
+          ]) : [],
       selectionDetails:memory.promptBlock ? (memory.selectionDetails || []) : [] }
     config._memoryMode = strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off')
   }
@@ -733,6 +748,9 @@ export async function handleAnalyze(userId, params) {
   if (strategy.scope === 'private' && memory.logId) {
     try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId) }
     catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
+  } else if (strategy.scope === 'platform' && memory.logId) {
+    try { await attachPlatformExperienceSignal(memory.logId, signal.id, persisted.snapshotId) }
+    catch (error) { console.error('[Analyze] Platform memory attribution failed:', error.message) }
   }
   signal.symbol = symbol
   signal.user_id = userId

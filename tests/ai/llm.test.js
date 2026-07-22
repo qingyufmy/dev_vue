@@ -27,6 +27,13 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.experience_usage.considered_ids).toEqual([7, 9])
     expect(schema.experience_usage.used_ids).toContain('7、9')
   })
+
+  it('supports short, long and compressed memory references without id collisions', () => {
+    const schema = JSON.parse(buildStrategyOutputFormat(null, ['market'], {
+      selectedItemIds:[7], selectedRefs:['short:7', 'long:7', 'summary:3'],
+    }).outputFormat)
+    expect(schema.experience_usage.considered_refs).toEqual(['short:7', 'long:7', 'summary:3'])
+  })
 })
 
 describe('experience usage normalization', () => {
@@ -36,6 +43,14 @@ describe('experience usage normalization', () => {
     { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[7, 8] } },
     { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
     expect(result.experience_usage).toMatchObject({ source:'platform', considered_ids:[7, 8], used_ids:[7], rejected_ids:[8] })
+  })
+
+  it('attributes a uniquely mentioned long-term memory even when the model omits used_refs', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ influence:'本次采用长期记忆 #12，继续等待结构确认' } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'personal', selectedItemIds:[], selectedRefs:['long:12', 'summary:4'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage.used_refs).toEqual(['long:12'])
   })
 })
 

@@ -2091,7 +2091,7 @@ async function loadStrategyCatalog() {
     const memory = item.scope === "private" ? "个人记忆可用" : "使用绑定的平台记忆";
     const linked = subscriptions.filter(sub => Number(sub.strategy_id) === Number(item.id));
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
-    const memoryMode = linked.some(sub => sub.memory_mode === "disabled") ? "部分订阅关闭记忆" : memory;
+    const memoryMode = linked.some(sub => sub.memory_mode === "off") ? "部分订阅关闭记忆" : memory;
     const canEdit = (item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id)) || (item.scope === 'platform' && state.user?.role === 'admin');
     const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动分析已启用' : '自动分析未启用'} · ${escapeHtml(subscriptionTakeProfitModeLabel(sub.take_profit_mode))} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
     const primarySubscription = linked.find(sub => Number(sub.execution_enabled)) || linked[0];
@@ -4448,15 +4448,18 @@ function canViewSignalExperienceUsage(signal, usage = {}) {
 
 function renderExperienceUsage(signal, usage = {}) {
   if (!canViewSignalExperienceUsage(signal, usage)) return "";
-  const considered = Array.isArray(usage.considered_ids) ? usage.considered_ids : [];
+  const consideredRefs = Array.isArray(usage.considered_refs) ? usage.considered_refs : [];
+  const usedRefs = Array.isArray(usage.used_refs) ? usage.used_refs : [];
+  const rejectedRefs = Array.isArray(usage.rejected_refs) ? usage.rejected_refs : [];
+  const considered = consideredRefs.length ? consideredRefs : (Array.isArray(usage.considered_ids) ? usage.considered_ids : []);
   if (!considered.length) return "";
-  const used = Array.isArray(usage.used_ids) ? usage.used_ids : [];
-  const rejected = Array.isArray(usage.rejected_ids) ? usage.rejected_ids : [];
+  const used = consideredRefs.length ? usedRefs : (Array.isArray(usage.used_ids) ? usage.used_ids : []);
+  const rejected = consideredRefs.length ? rejectedRefs : (Array.isArray(usage.rejected_ids) ? usage.rejected_ids : []);
   const source = usage.source === "platform" ? "平台记忆" : "个人记忆";
   return `<section class="analysis-experience-usage">
     <div class="analysis-section-title"><i data-lucide="brain-circuit" size="15"></i><strong>经验采用情况</strong><span>${escapeHtml(source)}</span></div>
     <div class="experience-usage-stats"><span>系统候选 <strong>${considered.length}</strong></span><span class="used">模型采用 <strong>${used.length}</strong></span><span>未采用 <strong>${rejected.length}</strong></span></div>
-    <p>${escapeHtml(userVisibleText(usage.influence, used.length ? `本次采用经验 #${used.join("、#")}` : "模型评估后未采用候选经验。"))}</p>
+    <p>${escapeHtml(userVisibleText(usage.influence, used.length ? "本次采用了与当前行情匹配的记忆。" : "模型评估后未采用候选记忆。"))}</p>
   </section>`;
 }
 

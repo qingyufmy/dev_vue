@@ -13,7 +13,7 @@ import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekl
 import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun, buildPersonalMemoryRetrievalContext } from './memory-system.js'
-import { retrievePlatformExperience } from './platform-experience.js'
+import { attachPlatformExperienceSignal, retrievePlatformExperience } from './platform-experience.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { isSubscriptionScheduleActive } from './subscription-schedule.js'
@@ -1253,7 +1253,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         memory = await retrievePersonalMemory({ userId: inferenceUserId, strategyId: promptTypeId,
           strategyVersion: Number(pt.version || 1), symbol, timeframe: primaryTf,
           direction: retrievalContext.direction, entryMethod: retrievalContext.entryMethod,
-          marketRegime: retrievalContext.marketRegime,
+          allowedEntryMethods:config._allowed_entry_methods,
+          marketRegime:retrievalContext.marketRegime, volatilityBucket:retrievalContext.volatilityBucket,
+          chanReliability:retrievalContext.chanReliability, chanTrendState:retrievalContext.chanTrendState,
+          chanSegmentDirection:retrievalContext.chanSegmentDirection, chanDivergence:retrievalContext.chanDivergence,
+          chanCenterState:retrievalContext.chanCenterState,
           mode: configuredMemoryMode === 'shadow' ? 'shadow' : 'active' })
         config._memoryContext = memory.promptBlock
         config._memoryMode = memory.mode
@@ -1273,6 +1277,13 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
 
     config._experienceSelection = { source:isPrivate ? 'personal' : 'platform',
       selectedItemIds:memory.promptBlock ? (memory.selectedItemIds || []) : [],
+      selectedRefs:memory.promptBlock ? (isPrivate
+        ? [
+            ...(memory.selectedLongMemoryIds || []).map(id => `long:${Number(id)}`),
+            ...(memory.selectedSummaryIds || []).map(id => `summary:${Number(id)}`),
+            ...(memory.selectedItemIds || []).map(id => `short:${Number(id)}`),
+          ]
+        : (memory.selectedItemIds || []).map(id => `platform:${Number(id)}`)) : [],
       selectionDetails:memory.promptBlock ? (memory.selectionDetails || []) : [] }
 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型深度推理', progress_percent: 46 })
@@ -1377,6 +1388,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     if (isPrivate && memory.logId) {
       try { await attachMemoryInjectionSignal(memory.logId, inferenceUserId, signalId) }
       catch (error) { l(`memory attribution failed (${error.message})`) }
+    } else if (!isPrivate && memory.logId) {
+      try { await attachPlatformExperienceSignal(memory.logId, signalId) }
+      catch (error) { l(`platform memory attribution failed (${error.message})`) }
     }
     signal.symbol = symbol
     signal.timeframe = primaryTf

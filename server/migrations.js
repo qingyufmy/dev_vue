@@ -2967,6 +2967,160 @@ const migrations = [
         if (!columns.has(name)) await queryRun(`ALTER TABLE ai_model_usage_logs ADD COLUMN ${name} ${definition}`)
       }
     }
+  },
+  {
+    id: '117_versionless_contextual_memory',
+    async up() {
+      const addColumn = async (table, name, definition) => {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`)
+      }
+      const addIndex = async (table, name, definition, unique = false) => {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`, [table, name])
+        if (!rows.length) await queryRun(`CREATE ${unique ? 'UNIQUE ' : ''}INDEX \`${name}\` ON \`${table}\` (${definition})`)
+      }
+      await addColumn('period_review_cases', 'strategy_versions_json', "strategy_versions_json TEXT DEFAULT NULL AFTER strategy_version")
+      await addColumn('period_review_cases', 'strategy_compatibility_hash', "strategy_compatibility_hash CHAR(64) DEFAULT NULL AFTER strategy_versions_json")
+
+      for (const table of ['experience_memory_items', 'experience_long_term_memories']) {
+        const categoryPosition = table === 'experience_memory_items' ? 'AFTER memory_tier' : 'AFTER strategy_version'
+        await addColumn(table, 'memory_category', `memory_category VARCHAR(32) NOT NULL DEFAULT 'general' ${categoryPosition}`)
+        await addColumn(table, 'applicability_json', "applicability_json LONGTEXT DEFAULT NULL AFTER conditions_json")
+        await addColumn(table, 'avoid_when_json', "avoid_when_json LONGTEXT DEFAULT NULL AFTER applicability_json")
+        await addColumn(table, 'strategy_compatibility_hash', "strategy_compatibility_hash CHAR(64) DEFAULT NULL AFTER avoid_when_json")
+      }
+      await addColumn('experience_memory_summaries', 'strategy_id', 'strategy_id INT DEFAULT NULL AFTER user_id')
+      await addColumn('experience_memory_summaries', 'memory_category', "memory_category VARCHAR(32) NOT NULL DEFAULT 'general' AFTER strategy_id")
+      await addColumn('experience_memory_summaries', 'applicability_json', 'applicability_json LONGTEXT DEFAULT NULL AFTER memory_category')
+      await addColumn('experience_memory_summaries', 'avoid_when_json', 'avoid_when_json LONGTEXT DEFAULT NULL AFTER applicability_json')
+      await addColumn('experience_memory_summaries', 'strategy_compatibility_hash', 'strategy_compatibility_hash CHAR(64) DEFAULT NULL AFTER avoid_when_json')
+
+      await addColumn('platform_strategy_experience_items', 'memory_category', "memory_category VARCHAR(32) NOT NULL DEFAULT 'general' AFTER memory_tier")
+      await addColumn('platform_strategy_experience_items', 'applicability_json', 'applicability_json LONGTEXT DEFAULT NULL AFTER context_json')
+      await addColumn('platform_strategy_experience_items', 'avoid_when_json', 'avoid_when_json LONGTEXT DEFAULT NULL AFTER applicability_json')
+      await addColumn('platform_strategy_experience_items', 'strategy_compatibility_hash', 'strategy_compatibility_hash CHAR(64) DEFAULT NULL AFTER avoid_when_json')
+      await addColumn('platform_strategy_experience_logs', 'signal_id', 'signal_id BIGINT DEFAULT NULL AFTER strategy_id')
+      await addColumn('platform_strategy_experience_logs', 'inference_snapshot_id', 'inference_snapshot_id BIGINT DEFAULT NULL AFTER signal_id')
+
+      await addIndex('experience_memory_items', 'idx_memory_contextual_retrieval', 'user_id, status, strategy_id, memory_category, symbol, timeframe, updated_at')
+      await addIndex('experience_long_term_memories', 'idx_long_memory_contextual_retrieval', 'user_id, status, strategy_id, memory_category, symbol, timeframe, updated_at')
+      await addIndex('experience_memory_summaries', 'idx_memory_summary_contextual', 'user_id, status, strategy_id, memory_category, created_at')
+      await addIndex('platform_strategy_experience_items', 'idx_platform_memory_contextual', 'strategy_id, status, memory_category, updated_at')
+      await addIndex('platform_strategy_experience_logs', 'idx_platform_experience_log_signal', 'signal_id')
+
+      // Preserve every historical case, but nominate one canonical case for
+      // each versionless review scope. NULL hashes leave old duplicates
+      // readable while the unique hash prevents new duplicates.
+      const periodRows = await queryAll(`SELECT id, period_type, period_key, user_id,
+          COALESCE(trading_account_id, 0) AS trading_account_id, strategy_id, status
+        FROM period_review_cases
+        ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC`)
+      const canonicalScopes = new Set()
+      for (const row of periodRows) {
+        const scope = [row.period_type, row.period_key, row.user_id, row.trading_account_id, row.strategy_id].join(':')
+        if (canonicalScopes.has(scope)) continue
+        canonicalScopes.add(scope)
+        await queryRun('UPDATE period_review_cases SET strategy_compatibility_hash = SHA2(?, 256) WHERE id = ?', [scope, row.id])
+      }
+      await addIndex('period_review_cases', 'uk_period_review_compatibility', 'strategy_compatibility_hash', true)
+      await queryRun(`UPDATE period_review_jobs jobs
+        JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+        SET jobs.status = 'skipped', jobs.last_error_code = 'superseded_by_versionless_review',
+          jobs.lease_token = NULL, jobs.lease_expires_at = NULL, jobs.next_attempt_at = NULL, jobs.updated_at = NOW()
+        WHERE cases.strategy_compatibility_hash IS NULL AND jobs.status IN ('queued', 'leased')`)
+      await queryRun(`UPDATE period_review_derivation_jobs jobs
+        JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+        SET jobs.status = 'superseded', jobs.last_error_code = 'superseded_by_versionless_review',
+          jobs.lease_token = NULL, jobs.lease_expires_at = NULL, jobs.next_attempt_at = NULL, jobs.updated_at = NOW()
+        WHERE cases.strategy_compatibility_hash IS NULL AND jobs.status IN ('queued', 'leased', 'paused')`)
+
+      const dropIndexIfExists = async (table, name) => {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`, [table, name])
+        if (rows.length) await queryRun(`ALTER TABLE \`${table}\` DROP INDEX \`${name}\``)
+      }
+      await dropIndexIfExists('experience_memory_items', 'uk_memory_period_review_version')
+      await dropIndexIfExists('platform_strategy_experience_items', 'uk_platform_experience_period_version')
+      await addIndex('experience_memory_items', 'uk_memory_period_review_content', 'period_review_version_id, content_hash', true)
+      await addIndex('platform_strategy_experience_items', 'uk_platform_experience_period_content', 'period_review_version_id, content_hash', true)
+
+      await queryRun(`UPDATE period_review_cases SET strategy_versions_json = JSON_ARRAY(strategy_version)
+        WHERE strategy_versions_json IS NULL`)
+      await queryRun(`UPDATE experience_memory_items SET applicability_json = scope_json
+        WHERE applicability_json IS NULL`)
+      await queryRun(`UPDATE experience_memory_items SET memory_category = CASE
+        WHEN CONCAT_WS(' ', lesson_text, anti_pattern_text) REGEXP '缠论|中枢|线段|背驰|背离|买卖点|分型' THEN 'chan_structure'
+        WHEN CONCAT_WS(' ', lesson_text, anti_pattern_text) REGEXP '挂单|入场|突破|回调|追涨|追空|限价|止损单' THEN 'entry_setup'
+        WHEN CONCAT_WS(' ', lesson_text, anti_pattern_text) REGEXP '趋势|方向|多头|空头|震荡|盘整|反转' THEN 'market_regime'
+        WHEN CONCAT_WS(' ', lesson_text, anti_pattern_text) REGEXP '止损|止盈|风险|仓位|手数|滑点' THEN 'risk_execution'
+        ELSE 'general' END`)
+      await queryRun(`UPDATE experience_long_term_memories SET applicability_json = conditions_json
+        WHERE applicability_json IS NULL`)
+      await queryRun(`UPDATE experience_long_term_memories SET memory_category = CASE
+        WHEN summary_text REGEXP '缠论|中枢|线段|背驰|背离|买卖点|分型' THEN 'chan_structure'
+        WHEN summary_text REGEXP '挂单|入场|突破|回调|追涨|追空|限价|止损单' THEN 'entry_setup'
+        WHEN summary_text REGEXP '趋势|方向|多头|空头|震荡|盘整|反转' THEN 'market_regime'
+        WHEN summary_text REGEXP '止损|止盈|风险|仓位|手数|滑点' THEN 'risk_execution'
+        ELSE 'general' END`)
+      await queryRun(`UPDATE platform_strategy_experience_items SET applicability_json = context_json
+        WHERE applicability_json IS NULL`)
+      await queryRun(`UPDATE platform_strategy_experience_items SET memory_category = CASE
+        WHEN lesson_text REGEXP '缠论|中枢|线段|背驰|背离|买卖点|分型' THEN 'chan_structure'
+        WHEN lesson_text REGEXP '挂单|入场|突破|回调|追涨|追空|限价|止损单' THEN 'entry_setup'
+        WHEN lesson_text REGEXP '趋势|方向|多头|空头|震荡|盘整|反转' THEN 'market_regime'
+        WHEN lesson_text REGEXP '止损|止盈|风险|仓位|手数|滑点' THEN 'risk_execution'
+        ELSE 'general' END`)
+
+      const parseJson = (value, fallback = {}) => { try { return value ? JSON.parse(value) : fallback } catch { return fallback } }
+      const normalizedDirection = value => {
+        const text = String(value || '').toLowerCase()
+        if (text.startsWith('buy') || text === 'up' || text === 'bullish') return 'buy'
+        if (text.startsWith('sell') || text === 'down' || text === 'bearish') return 'sell'
+        return text === 'hold' || text === 'neutral' ? 'hold' : null
+      }
+      const memoryRows = await queryAll(`SELECT memory.id, memory.scope_json, cases.evidence_json
+        FROM experience_memory_items memory
+        LEFT JOIN period_review_cases cases ON cases.id = memory.period_review_case_id`)
+      for (const row of memoryRows) {
+        const scope = parseJson(row.scope_json, {})
+        const evidence = parseJson(row.evidence_json, {})
+        const sources = Array.isArray(evidence.sources) ? evidence.sources : []
+        const values = key => [...new Set(sources.map(source => source?.evidence).map(item => {
+          const signal = item?.inference_time?.signal || {}
+          const order = item?.inference_time?.approved_order || item?.inference_time?.original_order || {}
+          const outcome = item?.post_trade?.outcome || {}
+          if (key === 'symbol') return outcome.symbol || order.symbol
+          if (key === 'timeframe') return signal.timeframe
+          if (key === 'direction') return normalizedDirection(signal.signal_type)
+          if (key === 'entry_method') return order.entry_method || order.action
+          return null
+        }).concat(scope[key]).map(value => String(value || '').trim().toLowerCase()).filter(Boolean))]
+        const applicability = { applicable_when:{ universal:false, symbols:values('symbol'), timeframes:values('timeframe'),
+          directions:values('direction'), entry_methods:values('entry_method'), market_regimes:scope.market_regime ? [String(scope.market_regime).toLowerCase()] : [] }, avoid_when:{} }
+        await queryRun('UPDATE experience_memory_items SET applicability_json = ?, avoid_when_json = ? WHERE id = ?',
+        [JSON.stringify(applicability), '{}', row.id])
+      }
+      const platformRows = await queryAll(`SELECT memory.id, memory.context_json, cases.evidence_json
+        FROM platform_strategy_experience_items memory
+        LEFT JOIN period_review_cases cases ON cases.id = memory.period_review_case_id`)
+      for (const row of platformRows) {
+        const context = parseJson(row.context_json, {})
+        const evidence = parseJson(row.evidence_json, {})
+        const sources = Array.isArray(evidence.sources) ? evidence.sources : []
+        const collect = getter => [...new Set(sources.map(source => getter(source?.evidence || {}))
+          .map(value => String(value || '').trim().toLowerCase()).filter(Boolean))]
+        const applicability = { applicable_when:{ universal:false,
+          symbols:collect(item => item?.post_trade?.outcome?.symbol || item?.inference_time?.approved_order?.symbol).concat(context.symbol ? [String(context.symbol).toLowerCase()] : []),
+          timeframes:collect(item => item?.inference_time?.signal?.timeframe).concat(context.timeframe ? [String(context.timeframe).toLowerCase()] : []),
+          trend_direction:collect(item => normalizedDirection(item?.inference_time?.signal?.signal_type)).concat(context.trend_direction ? [String(context.trend_direction).toLowerCase()] : []),
+          entry_methods:collect(item => item?.inference_time?.approved_order?.entry_method || item?.inference_time?.signal?.entry_method),
+          market_regime:context.market_regime ? [String(context.market_regime).toLowerCase()] : [] }, avoid_when:{} }
+        await queryRun('UPDATE platform_strategy_experience_items SET applicability_json = ?, avoid_when_json = ? WHERE id = ?',
+        [JSON.stringify(applicability), '{}', row.id])
+      }
+    }
   }
 ]
 

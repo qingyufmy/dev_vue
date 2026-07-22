@@ -29,13 +29,24 @@ function experienceUsage(signal) {
   const considered = ids(usage.considered_ids)
   const allowed = new Set(considered)
   const used = ids(usage.used_ids).filter(id => allowed.has(id))
-  return {
+  const refs = value => [...new Set((Array.isArray(value) ? value : []).map(item => String(item || '').trim())
+    .filter(item => /^(?:platform|short|long|summary|item):\d+$/.test(item)))].slice(0, 10)
+  const consideredRefs = refs(usage.considered_refs)
+  const allowedRefs = new Set(consideredRefs)
+  const usedRefs = refs(usage.used_refs).filter(ref => allowedRefs.has(ref))
+  const result = {
     source:usage.source === 'platform' || usage.source === 'personal' ? usage.source : null,
     considered_ids:considered,
     used_ids:used,
     rejected_ids:ids(usage.rejected_ids).filter(id => allowed.has(id) && !used.includes(id)),
     influence:cleanText(usage.influence, 400),
   }
+  if (consideredRefs.length) {
+    result.considered_refs = consideredRefs
+    result.used_refs = usedRefs
+    result.rejected_refs = refs(usage.rejected_refs).filter(ref => allowedRefs.has(ref) && !usedRefs.includes(ref))
+  }
+  return result
 }
 
 function parseJson(value) {
@@ -57,7 +68,8 @@ export function restrictSignalExperienceUsage(signal = {}, { requesterUserId = n
   const canViewPlatform = source === 'platform' && requesterRole === 'admin'
   const canViewPersonal = source === 'personal' && requesterRole !== 'admin'
     && Number(requesterUserId) > 0 && Number(signal.user_id) === Number(requesterUserId)
-  const hasUsageDetails = ['considered_ids', 'used_ids', 'rejected_ids'].some(key => Array.isArray(usage[key]) && usage[key].length)
+  const hasUsageDetails = ['considered_ids', 'used_ids', 'rejected_ids', 'considered_refs', 'used_refs', 'rejected_refs']
+    .some(key => Array.isArray(usage[key]) && usage[key].length)
     || Boolean(String(usage.influence || '').trim())
   if (canViewPlatform || canViewPersonal || (!source && !hasUsageDetails)) return signal
 

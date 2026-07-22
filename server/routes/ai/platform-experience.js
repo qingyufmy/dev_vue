@@ -1,5 +1,5 @@
 import { beijingNow, queryAll, queryOne, queryRun } from '../../db.js'
-import { sanitizeMemoryText } from './memory-system.js'
+import { classifyMemoryText, sanitizeMemoryText } from './memory-system.js'
 import { sha256 } from './inference-snapshots.js'
 
 const VALID_POLICY_MODES = new Set(['off', 'shadow', 'active'])
@@ -29,6 +29,39 @@ function primaryChan(market = {}, timeframe = null) {
     || null
 }
 
+function unique(values) {
+  return [...new Set((values || []).flatMap(value => Array.isArray(value) ? value : [value])
+    .map(value => textValue(value)).filter(Boolean))]
+}
+
+function periodApplicability(reviewCase, evidence = {}) {
+  const contexts = []
+  for (const source of Array.isArray(evidence.sources) ? evidence.sources : []) {
+    const item = source?.evidence || {}
+    const signal = item?.inference_time?.signal || {}
+    const snapshot = item?.inference_time?.snapshot || {}
+    const market = snapshot.market_snapshot || {}
+    const outcome = item?.post_trade?.outcome || {}
+    const symbol = outcome.symbol || market.symbol || null
+    const timeframe = signal.timeframe || market.timeframe || market.strategy_context?.primary_timeframe || null
+    const current = buildPlatformExperienceRetrievalContext({ strategyVersion:Number(snapshot.strategy_version || reviewCase.strategy_version || 1),
+      symbol, timeframe, market, allowedEntryMethods:signal.entry_method ? [signal.entry_method] : [] })
+    contexts.push({ ...current, symbol:textValue(symbol).toUpperCase() || null, timeframe:textValue(timeframe).toUpperCase() || null })
+  }
+  const applicableWhen = {
+    universal:false, symbols:unique(contexts.map(item => item.symbol)), timeframes:unique(contexts.map(item => item.timeframe)),
+    trend_direction:unique(contexts.map(item => item.trend_direction)), market_regime:unique(contexts.map(item => item.market_regime)),
+    volatility_bucket:unique(contexts.map(item => item.volatility_bucket)),
+    entry_methods:unique(contexts.flatMap(item => item.allowed_entry_methods || [])),
+    chan_trend_state:unique(contexts.map(item => item.chan_trend_state)),
+    chan_segment_direction:unique(contexts.map(item => item.chan_segment_direction)),
+    chan_divergence:unique(contexts.map(item => item.chan_divergence)),
+    chan_center_state:unique(contexts.map(item => item.chan_center_state)),
+    chan_reliability:unique(contexts.map(item => item.chan_reliability)),
+  }
+  return { applicable_when:applicableWhen, avoid_when:{} }
+}
+
 export function buildPlatformExperienceRetrievalContext({ strategyVersion = 1, symbol = null, timeframe = null, market = {}, allowedEntryMethods = [] } = {}) {
   const chan = primaryChan(market, timeframe)
   const momentum = Number(market.strategy_score?.momentum_alignment || 0)
@@ -55,25 +88,26 @@ export function buildPlatformExperienceRetrievalContext({ strategyVersion = 1, s
 
 export function platformExperienceApplicability(item, retrievalContext) {
   const context = parse(item.context_json, {}) || {}
-  const applicable = context.applicable_when && typeof context.applicable_when === 'object' ? context.applicable_when : context
-  const avoid = context.avoid_when && typeof context.avoid_when === 'object' ? context.avoid_when : {}
+  const storedApplicability = parse(item.applicability_json, null)
+  const applicableSource = storedApplicability || context
+  const applicable = applicableSource.applicable_when && typeof applicableSource.applicable_when === 'object'
+    ? applicableSource.applicable_when : applicableSource
+  const avoid = parse(item.avoid_when_json, null) || (applicableSource.avoid_when && typeof applicableSource.avoid_when === 'object' ? applicableSource.avoid_when : {})
   const reasons = ['strategy_match']
   let score = 55
-  const expectedStrategyVersion = Number(applicable.strategy_version || 0)
-  if (expectedStrategyVersion && expectedStrategyVersion !== Number(retrievalContext.strategy_version || 1)) {
-    return { eligible:false, score:0, reasons:['strategy_version_mismatch'] }
-  }
-  if (expectedStrategyVersion) { score += 8; reasons.push('strategy_version_match') }
+  const universal = Boolean(applicable.universal)
+  let matchedSpecific = 0
   const scoreField = (field, weight, aliases = []) => {
     let expected = stringList(applicable[field] ?? aliases.map(key => applicable[key]).find(value => value != null))
     if (field === 'trend_direction') expected = expected.map(value => signalDirection(value) || value)
     const actual = textValue(retrievalContext[field])
     if (!expected.length || !actual) return
-    if (expected.includes(actual)) { score += weight; reasons.push(`${field}_match`) }
+    if (expected.includes(actual)) { score += weight; matchedSpecific += 1; reasons.push(`${field}_match`) }
     else { score -= Math.max(3, Math.round(weight * 0.75)); reasons.push(`${field}_mismatch`) }
   }
-  const avoidField = field => {
-    const blocked = stringList(avoid[field])
+  const avoidField = (field, aliases = []) => {
+    let blocked = stringList(avoid[field] ?? aliases.map(key => avoid[key]).find(value => value != null))
+    if (field === 'trend_direction') blocked = blocked.map(value => signalDirection(value) || value)
     const actual = textValue(retrievalContext[field])
     if (actual && blocked.includes(actual)) { score -= 100; reasons.push(`${field}_avoided`) }
   }
@@ -81,17 +115,36 @@ export function platformExperienceApplicability(item, retrievalContext) {
   if (expectedMethods.length) {
     const overlap = expectedMethods.filter(method => retrievalContext.allowed_entry_methods.includes(method))
     if (!overlap.length) return { eligible:false, score:0, reasons:['entry_method_not_allowed'] }
-    score += 6; reasons.push('entry_method_overlap')
+    score += 6; matchedSpecific += 1; reasons.push('entry_method_overlap')
   }
-  scoreField('market_regime', 15)
-  scoreField('trend_direction', 10, ['direction', 'signal_type'])
-  scoreField('volatility_bucket', 6)
-  scoreField('chan_trend_state', 10)
-  scoreField('chan_segment_direction', 8)
-  scoreField('chan_divergence', 10)
-  scoreField('chan_center_state', 6)
-  for (const field of ['market_regime', 'trend_direction', 'volatility_bucket', 'chan_trend_state', 'chan_segment_direction', 'chan_divergence', 'chan_center_state']) avoidField(field)
-  return { eligible:score >= 50, score:Math.max(0, Math.min(100, score)), reasons }
+  const exactField = (field, actual, aliases = []) => {
+    const expected = stringList(applicable[field] ?? aliases.map(key => applicable[key]).find(value => value != null))
+    const normalized = textValue(actual)
+    if (!expected.length) return true
+    if (!normalized || !expected.includes(normalized)) return false
+    score += 10; matchedSpecific += 1; reasons.push(`${field}_match`); return true
+  }
+  if (!exactField('symbols', retrievalContext.symbol, ['symbol'])) return { eligible:false, score:0, reasons:['symbol_mismatch'] }
+  if (!exactField('timeframes', retrievalContext.timeframe, ['timeframe'])) return { eligible:false, score:0, reasons:['timeframe_mismatch'] }
+  scoreField('market_regime', 15, ['market_regimes'])
+  scoreField('trend_direction', 10, ['directions', 'direction', 'signal_type'])
+  scoreField('volatility_bucket', 6, ['volatility_buckets'])
+  scoreField('chan_reliability', 8, ['chan_reliabilities'])
+  scoreField('chan_trend_state', 10, ['chan_trend_states'])
+  scoreField('chan_segment_direction', 8, ['chan_segment_directions'])
+  scoreField('chan_divergence', 10, ['chan_divergences'])
+  scoreField('chan_center_state', 6, ['chan_center_states'])
+  avoidField('market_regime', ['market_regimes'])
+  avoidField('trend_direction', ['directions', 'direction', 'signal_type'])
+  avoidField('volatility_bucket', ['volatility_buckets'])
+  avoidField('chan_reliability', ['chan_reliabilities'])
+  avoidField('chan_trend_state', ['chan_trend_states'])
+  avoidField('chan_segment_direction', ['chan_segment_directions'])
+  avoidField('chan_divergence', ['chan_divergences'])
+  avoidField('chan_center_state', ['chan_center_states'])
+  if (!universal && matchedSpecific === 0) return { eligible:false, score:Math.max(0, Math.min(100, score)), reasons:[...reasons, 'specific_context_required'] }
+  if (universal) { score += 5; reasons.push('universal_strategy_rule') }
+  return { eligible:score >= 60, score:Math.max(0, Math.min(100, score)), reasons }
 }
 
 export function sanitizePlatformExperienceText(value, maxLength = 4000) {
@@ -127,7 +180,13 @@ function buildCandidate(reviewCase, version) {
     chan_center_state: retrievalContext.chan_center_state,
     strategy_version:Number(snapshot.strategy_version || 1),
   }
-  return { strategyId: Number(snapshot.strategy_id), lessonText, context }
+  const applicability = { applicable_when:{ universal:false, symbols:stringList(context.symbol), timeframes:stringList(context.timeframe),
+    trend_direction:stringList(context.trend_direction), market_regime:stringList(context.market_regime),
+    volatility_bucket:stringList(context.volatility_bucket), entry_methods:stringList(context.entry_methods),
+    chan_trend_state:stringList(context.chan_trend_state), chan_segment_direction:stringList(context.chan_segment_direction),
+    chan_divergence:stringList(context.chan_divergence), chan_center_state:stringList(context.chan_center_state) }, avoid_when:{} }
+  return { strategyId: Number(snapshot.strategy_id), lessonText, context,
+    memoryCategory:classifyMemoryText(lessonText), applicability }
 }
 
 export async function createPlatformExperienceCandidateFromApprovedReview(caseId, adminUserId) {
@@ -141,15 +200,15 @@ export async function createPlatformExperienceCandidateFromApprovedReview(caseId
   if (!strategy) return { skipped: true, reason: 'platform_strategy_required' }
   if (!candidate.lessonText) return { skipped: true, reason: 'platform_experience_has_no_market_safe_lesson' }
   const existing = await queryOne('SELECT * FROM platform_strategy_experience_items WHERE review_version_id = ?', [version.id])
-  if (existing) return existing
+  if (existing && reviewCase.period_type !== 'monthly') return existing
   const now = beijingNow()
   const contentHash = sha256(JSON.stringify({ strategy_id: candidate.strategyId, lesson: candidate.lessonText, context: candidate.context }))
   const result = await queryRun(`INSERT INTO platform_strategy_experience_items
-    (strategy_id, memory_tier, review_case_id, review_version_id, source_admin_user_id, lesson_text,
-     context_json, content_hash, status, created_at, updated_at)
-    VALUES (?, 'short', ?, ?, ?, ?, ?, ?, 'candidate', ?, ?)`, [
-    candidate.strategyId, caseId, version.id, adminUserId, candidate.lessonText,
-    JSON.stringify(candidate.context), contentHash, now, now,
+    (strategy_id, memory_tier, memory_category, review_case_id, review_version_id, source_admin_user_id, lesson_text,
+     context_json, applicability_json, avoid_when_json, content_hash, status, created_at, updated_at)
+    VALUES (?, 'short', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate', ?, ?)`, [
+    candidate.strategyId, candidate.memoryCategory, caseId, version.id, adminUserId, candidate.lessonText,
+    JSON.stringify(candidate.context), JSON.stringify(candidate.applicability), JSON.stringify(candidate.applicability.avoid_when), contentHash, now, now,
   ])
   return queryOne('SELECT * FROM platform_strategy_experience_items WHERE id = ?', [result.insertId])
 }
@@ -166,22 +225,37 @@ export async function createPlatformExperienceCandidateFromApprovedPeriodReview(
   const strategy = await queryOne("SELECT id FROM auto_prompt_types WHERE id = ? AND scope = 'platform' AND deleted_at IS NULL", [reviewCase.strategy_id])
   if (!strategy) throw new Error('platform_strategy_required')
   const content = parse(version.content_json, {})
-  const fragments = reviewCase.period_type === 'daily'
-    ? [...(content.daily_lessons || []), ...(content.strengths || [])]
-    : [content.period_summary, ...(content.recurring_patterns || []), ...(content.strengths || []),
-      ...(content.next_month_actions || []), ...(content.memory_candidates || []).map(item => item.lesson)]
-  const lessonText = sanitizePlatformExperienceText(fragments.filter(Boolean).join('。'), 6000)
-  if (!lessonText) return { skipped: true, reason: 'platform_experience_has_no_market_safe_lesson' }
-  const context = { period_type: reviewCase.period_type, period_key: reviewCase.period_key,
-    strategy_version: Number(reviewCase.strategy_version || 1), symbol: null, timeframe: null }
+  const evidence = parse(reviewCase.evidence_json, {}) || {}
   const memoryTier = reviewCase.period_type === 'monthly' ? 'long' : 'short'
+  const commonContext = { period_type: reviewCase.period_type, period_key: reviewCase.period_key,
+    source_strategy_versions:parse(reviewCase.strategy_versions_json, [Number(reviewCase.strategy_version || 1)]) }
+  const candidates = reviewCase.period_type === 'monthly'
+    ? (content.memory_candidates || []).map(candidate => {
+        const lessonText = sanitizePlatformExperienceText([candidate.lesson,
+          candidate.anti_pattern ? `需要避免：${candidate.anti_pattern}` : ''].filter(Boolean).join('。'), 6000)
+        const applicability = candidate.applicability && typeof candidate.applicability === 'object'
+          ? candidate.applicability : { applicable_when:{ universal:false }, avoid_when:{} }
+        if (candidate.avoid_when && typeof candidate.avoid_when === 'object') applicability.avoid_when = candidate.avoid_when
+        return { lessonText, category:String(candidate.memory_category || classifyMemoryText(lessonText)), applicability }
+      })
+    : [{
+        lessonText:sanitizePlatformExperienceText([...(content.daily_lessons || []), ...(content.strengths || [])].filter(Boolean).join('。'), 6000),
+        category:classifyMemoryText([...(content.daily_lessons || []), ...(content.strengths || [])].join('。')),
+        applicability:periodApplicability(reviewCase, evidence),
+      }]
+  const validCandidates = candidates.filter(candidate => candidate.lessonText)
+  if (!validCandidates.length) return { skipped: true, reason: 'platform_experience_has_no_market_safe_lesson' }
   const now = beijingNow()
-  const contentHash = sha256(JSON.stringify({ strategy_id: Number(reviewCase.strategy_id), lesson: lessonText, context }))
-  await queryRun(`INSERT IGNORE INTO platform_strategy_experience_items
-    (strategy_id, memory_tier, review_case_id, review_version_id, period_review_case_id, period_review_version_id,
-     period_key, source_admin_user_id, lesson_text, context_json, content_hash, status, created_at, updated_at)
-    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'candidate', ?, ?)`, [reviewCase.strategy_id, memoryTier,
-    reviewCase.id, version.id, reviewCase.period_key, adminUserId, lessonText, JSON.stringify(context), contentHash, now, now])
+  for (const candidate of validCandidates) {
+    const context = { ...commonContext, memory_category:candidate.category, ...candidate.applicability }
+    const contentHash = sha256(JSON.stringify({ strategy_id: Number(reviewCase.strategy_id), lesson: candidate.lessonText, context }))
+    await queryRun(`INSERT IGNORE INTO platform_strategy_experience_items
+      (strategy_id, memory_tier, memory_category, review_case_id, review_version_id, period_review_case_id, period_review_version_id,
+       period_key, source_admin_user_id, lesson_text, context_json, applicability_json, avoid_when_json, content_hash, status, created_at, updated_at)
+      VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate', ?, ?)`, [reviewCase.strategy_id, memoryTier, candidate.category,
+      reviewCase.id, version.id, reviewCase.period_key, adminUserId, candidate.lessonText, JSON.stringify(context),
+      JSON.stringify(candidate.applicability), JSON.stringify(candidate.applicability.avoid_when || {}), contentHash, now, now])
+  }
   return queryOne('SELECT * FROM platform_strategy_experience_items WHERE period_review_version_id = ?', [version.id])
 }
 
@@ -278,14 +352,8 @@ export async function retrievePlatformExperience({ strategyId, strategyVersion =
   const budget = Number(policy?.runtime_token_budget || 800)
   const items = await queryAll(`SELECT * FROM platform_strategy_experience_items
     WHERE strategy_id = ? AND status = 'active'
-      AND (JSON_EXTRACT(context_json, '$.symbol') IS NULL OR JSON_TYPE(JSON_EXTRACT(context_json, '$.symbol')) = 'NULL'
-        OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.symbol')) = ?)
-      AND (JSON_EXTRACT(context_json, '$.timeframe') IS NULL OR JSON_TYPE(JSON_EXTRACT(context_json, '$.timeframe')) = 'NULL'
-        OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = '' OR JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.timeframe')) = ?)
-      AND (JSON_EXTRACT(context_json, '$.strategy_version') IS NULL OR JSON_TYPE(JSON_EXTRACT(context_json, '$.strategy_version')) = 'NULL'
-        OR CAST(JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.strategy_version')) AS UNSIGNED) = ?)
     ORDER BY CASE WHEN memory_tier = 'long' THEN 0 ELSE 1 END,
-      platform_version DESC, updated_at DESC LIMIT 100`, [boundStrategyId, symbol, timeframe, Number(strategyVersion || 1)])
+      platform_version DESC, updated_at DESC LIMIT 100`, [boundStrategyId])
   const retrievalContext = buildPlatformExperienceRetrievalContext({ strategyVersion, symbol, timeframe, market, allowedEntryMethods })
   const ranked = items.map(item => ({ item, ...platformExperienceApplicability(item, retrievalContext) }))
     .filter(candidate => candidate.eligible)
@@ -294,13 +362,18 @@ export async function retrievePlatformExperience({ strategyId, strategyVersion =
       || String(b.item.updated_at || '').localeCompare(String(a.item.updated_at || '')))
   const selected = []
   const selectionDetails = []
+  let universalCount = 0
   let used = 0
   for (const candidate of ranked) {
     if (selected.length >= maxItems) break
     const item = candidate.item
+    const applicability = parse(item.applicability_json, {}) || {}
+    const universal = Boolean(applicability.applicable_when?.universal || applicability.universal)
+    if (universal && universalCount >= 1) continue
     const cost = estimateTokens(item.lesson_text)
     if (used + cost > budget) continue
     used += cost; selected.push(item)
+    if (universal) universalCount += 1
     selectionDetails.push({ id:Number(item.id), score:candidate.score, reasons:candidate.reasons })
   }
   const selectedIds = selected.map(item => Number(item.id))
@@ -311,13 +384,20 @@ export async function retrievePlatformExperience({ strategyId, strategyVersion =
       return `${index + 1}. [${tier === 'long' ? '长期记忆' : '短期记忆'} #${Number(item.id)} | 匹配度 ${detail.score}] ${sanitizeMemoryText(item.lesson_text, 4000)}`
     }).join('\n')}\n</platform_strategy_experience>`
     : ''
-  await queryRun(`INSERT INTO platform_strategy_experience_logs
+  const log = await queryRun(`INSERT INTO platform_strategy_experience_logs
     (strategy_id, policy_mode, selected_item_ids_json, token_count, symbol, timeframe,
      retrieval_context_json, selection_details_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [boundStrategyId, mode, JSON.stringify(selectedIds), used, symbol, timeframe,
     JSON.stringify(retrievalContext), JSON.stringify(selectionDetails), beijingNow()])
-  return { mode, promptBlock, selectedItemIds: selectedIds, tokenCount: used, policyVersion: Number(policy?.policy_version || 1),
+  return { mode, promptBlock, selectedItemIds: selectedIds, tokenCount: used, logId:Number(log.insertId || 0) || null,
+    policyVersion: Number(policy?.policy_version || 1),
     retrievalContext, selectionDetails }
+}
+
+export async function attachPlatformExperienceSignal(logId, signalId, inferenceSnapshotId = null) {
+  if (!logId) return
+  await queryRun(`UPDATE platform_strategy_experience_logs SET signal_id = ?, inference_snapshot_id = ? WHERE id = ?`,
+  [signalId, inferenceSnapshotId, logId])
 }
 
 function selectedExperienceIds(value) {

@@ -70,10 +70,14 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。`
   schema.recommended_volume = '必须位于输入市场数据 ai_volume_range 的 min、max 范围内，并按 step 对齐；hold 必须返回 0。该值是 AI 的行情建议，不得读取、推测或替代订阅用户的账户手数上限。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
-  schema.experience_usage = experienceIds.length
-    ? { considered_ids:experienceIds, used_ids:`只能填写实际采用的经验编号，且必须来自 ${experienceIds.join('、')}`,
-      rejected_ids:'已评估但不适用于当前行情的经验编号', influence:'中文说明经验对方向、入场方式或观望结论的具体影响；没有影响时说明原因' }
-    : { considered_ids:[], used_ids:[], rejected_ids:[], influence:'本次没有提供经验，必须返回空字符串' }
+  const experienceRefs = [...new Set((experienceSelection?.selectedRefs || experienceIds.map(id => `item:${id}`))
+    .map(value => String(value || '').trim()).filter(Boolean))]
+  schema.experience_usage = experienceRefs.length
+    ? { considered_refs:experienceRefs, used_refs:`只能填写实际采用的记忆引用，且必须来自 ${experienceRefs.join('、')}`,
+      rejected_refs:'已评估但不适用于当前行情的记忆引用', considered_ids:experienceIds,
+      used_ids:`兼容字段；平台记忆填写实际采用的编号，且只能来自 ${experienceIds.join('、') || '空集合'}`,
+      rejected_ids:'兼容字段；平台记忆未采用的编号', influence:'中文说明记忆对方向、入场方式或观望结论的具体影响；used_refs 为空时不得声称采用了任何记忆' }
+    : { considered_refs:[], used_refs:[], rejected_refs:[], considered_ids:[], used_ids:[], rejected_ids:[], influence:'本次没有提供记忆，必须返回空字符串' }
   const hasPending = methods.some(item => item !== 'market')
   if (!hasPending) {
     delete schema.limit_price
@@ -593,17 +597,39 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.risk_factors = cleanList(parsed.risk_factors)
   const availableExperienceIds = [...new Set((config?._experienceSelection?.selectedItemIds || [])
     .map(Number).filter(id => Number.isInteger(id) && id > 0))]
+  const availableExperienceRefs = [...new Set((config?._experienceSelection?.selectedRefs || availableExperienceIds.map(id => `item:${id}`))
+    .map(value => String(value || '').trim()).filter(Boolean))]
   const allowedExperienceIds = new Set(availableExperienceIds)
   const usage = parsed.experience_usage && typeof parsed.experience_usage === 'object' ? parsed.experience_usage : {}
   const validUsageIds = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
     .filter(id => allowedExperienceIds.has(id)))]
   const usedExperienceIds = validUsageIds(usage.used_ids)
+  const allowedExperienceRefs = new Set(availableExperienceRefs)
+  const validUsageRefs = value => [...new Set((Array.isArray(value) ? value : []).map(item => String(item || '').trim())
+    .filter(item => allowedExperienceRefs.has(item)))]
+  let usedExperienceRefs = validUsageRefs(usage.used_refs)
+  let usedIds = usedExperienceIds
+  if (!usedExperienceRefs.length && !usedIds.length && availableExperienceRefs.length && /采用|使用|参考了/.test(String(usage.influence || ''))) {
+    const influenceText = String(usage.influence || '')
+    const directRefs = availableExperienceRefs.filter(ref => influenceText.includes(ref))
+    const mentionedIds = [...influenceText.matchAll(/#\s*(\d+)/g)].map(match => Number(match[1]))
+    const unambiguousRefs = mentionedIds.flatMap(id => {
+      const matches = availableExperienceRefs.filter(ref => Number(ref.split(':').at(-1)) === id)
+      return matches.length === 1 ? matches : []
+    })
+    usedExperienceRefs = [...new Set([...directRefs, ...unambiguousRefs])]
+    usedIds = [...new Set(mentionedIds.filter(id => allowedExperienceIds.has(id)))]
+  }
+  const influence = cleanText(usage.influence, 400)
   parsed.experience_usage = {
     source:config?._experienceSelection?.source || null,
     considered_ids:availableExperienceIds,
-    used_ids:usedExperienceIds,
-    rejected_ids:validUsageIds(usage.rejected_ids).filter(id => !usedExperienceIds.includes(id)),
-    influence:cleanText(usage.influence, 400),
+    used_ids:usedIds,
+    rejected_ids:validUsageIds(usage.rejected_ids).filter(id => !usedIds.includes(id)),
+    considered_refs:availableExperienceRefs,
+    used_refs:usedExperienceRefs,
+    rejected_refs:validUsageRefs(usage.rejected_refs).filter(ref => !usedExperienceRefs.includes(ref)),
+    influence:availableExperienceRefs.length ? influence : '',
   }
   const bullishRaw = Number(parsed.bullish_score)
   const bearishRaw = Number(parsed.bearish_score)

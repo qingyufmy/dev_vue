@@ -200,9 +200,13 @@ export function groupDailyReviewOutcomes(rows, { offsetMinutes = DEFAULT_MT5_OFF
     const periodKey = reviewPeriodKey(closeUtcMs, 'daily', offsetMinutes)
     const bounds = reviewPeriodBounds('daily', periodKey, offsetMinutes)
     if (Number(asOfUtcMs) < bounds.endUtcMs + DAILY_GRACE_MINUTES * 60000) continue
-    const key = [row.user_id, row.trading_account_id, row.strategy_id, Number(row.strategy_version || 1), periodKey].join(':')
-    if (!groups.has(key)) groups.set(key, { periodType: 'daily', periodKey, ...bounds, userId: Number(row.user_id), tradingAccountId: Number(row.trading_account_id), strategyId: Number(row.strategy_id), strategyVersion: Number(row.strategy_version || 1), strategyScope: row.strategy_scope, outcomes: [] })
-    groups.get(key).outcomes.push({ ...row, close_utc_msc: closeUtcMs })
+    const key = [row.user_id, row.trading_account_id, row.strategy_id, periodKey].join(':')
+    if (!groups.has(key)) groups.set(key, { periodType: 'daily', periodKey, ...bounds, userId: Number(row.user_id), tradingAccountId: Number(row.trading_account_id), strategyId: Number(row.strategy_id), strategyVersion: Number(row.strategy_version || 1), strategyVersions:[], strategyScope: row.strategy_scope, outcomes: [] })
+    const group = groups.get(key)
+    const version = Number(row.strategy_version || 1)
+    if (!group.strategyVersions.includes(version)) group.strategyVersions.push(version)
+    group.strategyVersion = Math.max(group.strategyVersion, version)
+    group.outcomes.push({ ...row, close_utc_msc: closeUtcMs })
   }
   return [...groups.values()].sort((a, b) => a.periodKey.localeCompare(b.periodKey) || a.strategyId - b.strategyId)
 }
@@ -236,11 +240,23 @@ export function groupMonthlyReviewCases(rows, { offsetMinutes = DEFAULT_MT5_OFFS
     if (!/^\d{4}-\d{2}$/.test(periodKey)) continue
     const bounds = reviewPeriodBounds('monthly', periodKey, offsetMinutes)
     if (Number(asOfUtcMs) < bounds.endUtcMs + MONTHLY_GRACE_MINUTES * 60000) continue
-    const key = [row.user_id, row.strategy_id, Number(row.strategy_version || 1), periodKey].join(':')
+    const key = [row.user_id, row.strategy_id, periodKey].join(':')
     if (!groups.has(key)) groups.set(key, { periodType: 'monthly', periodKey, ...bounds,
       userId: Number(row.user_id), tradingAccountId: 0, strategyId: Number(row.strategy_id),
-      strategyVersion: Number(row.strategy_version || 1), strategyScope: row.strategy_scope, dailyCases: [] })
-    groups.get(key).dailyCases.push(row)
+      strategyVersion: Number(row.strategy_version || 1), strategyVersions:[], strategyScope: row.strategy_scope, dailyCases: [] })
+    const group = groups.get(key)
+    const versions = parse(row.strategy_versions_json, [Number(row.strategy_version || 1)]) || []
+    for (const version of versions.map(Number).filter(Number.isFinite)) if (!group.strategyVersions.includes(version)) group.strategyVersions.push(version)
+    group.strategyVersion = Math.max(group.strategyVersion, ...group.strategyVersions)
+    const duplicateIndex = group.dailyCases.findIndex(item => String(item.period_key) === String(row.period_key)
+      && Number(item.trading_account_id || 0) === Number(row.trading_account_id || 0))
+    if (duplicateIndex < 0) group.dailyCases.push(row)
+    else {
+      const current = group.dailyCases[duplicateIndex]
+      const preferRow = (row.status === 'approved' && current.status !== 'approved')
+        || (row.status === current.status && Number(row.id) > Number(current.id))
+      if (preferRow) group.dailyCases[duplicateIndex] = row
+    }
   }
   return [...groups.values()].map(group => ({ ...group,
     dailyCases: group.dailyCases.sort((a, b) => String(a.period_key).localeCompare(String(b.period_key)) || Number(a.id) - Number(b.id)) }))
@@ -272,6 +288,11 @@ export function monthlyReviewStatistics(dailyCases) {
 
 const DAILY_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_interpretation', 'strategy_rule', 'none', 'unknown'])
+const MEMORY_CATEGORIES = new Set(['general', 'market_regime', 'entry_setup', 'chan_structure', 'risk_execution'])
+
+function periodCompatibilityHash(group) {
+  return sha256([group.periodType, group.periodKey, group.userId, Number(group.tradingAccountId || 0), group.strategyId].join(':'))
+}
 
 function unwrapReviewContent(input, wrapperKeys) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
@@ -348,7 +369,21 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
   const memoryCandidates = input.memory_candidates.map(item => {
     const support = Array.isArray(item?.supporting_period_case_ids) ? [...new Set(item.supporting_period_case_ids.map(Number))] : []
     if (!String(item?.lesson || '').trim() || support.length < 2 || support.some(id => !known.has(id) || !approved.has(id))) throw new Error('invalid_monthly_memory_candidate')
-    return { lesson: String(item.lesson).trim(), anti_pattern: String(item.anti_pattern || '').trim(),
+    const memoryCategory = MEMORY_CATEGORIES.has(item.memory_category) ? item.memory_category : 'general'
+    const applicability = item.applicability && typeof item.applicability === 'object' ? item.applicability : {}
+    const stringArray = value => [...new Set((Array.isArray(value) ? value : [])
+      .map(value => String(value || '').trim().toLowerCase()).filter(Boolean))].slice(0, 20)
+    const applicableWhen = applicability.applicable_when && typeof applicability.applicable_when === 'object'
+      ? applicability.applicable_when : {}
+    return { lesson: String(item.lesson).trim(), anti_pattern: String(item.anti_pattern || '').trim(), memory_category:memoryCategory,
+      applicability:{ applicable_when:{ universal:Boolean(applicableWhen.universal),
+        symbols:stringArray(applicableWhen.symbols), timeframes:stringArray(applicableWhen.timeframes),
+        directions:stringArray(applicableWhen.directions), entry_methods:stringArray(applicableWhen.entry_methods),
+        market_regimes:stringArray(applicableWhen.market_regimes), volatility_buckets:stringArray(applicableWhen.volatility_buckets),
+        chan_reliabilities:stringArray(applicableWhen.chan_reliabilities), chan_trend_states:stringArray(applicableWhen.chan_trend_states),
+        chan_segment_directions:stringArray(applicableWhen.chan_segment_directions), chan_divergences:stringArray(applicableWhen.chan_divergences),
+        chan_center_states:stringArray(applicableWhen.chan_center_states) },
+      avoid_when:applicability.avoid_when && typeof applicability.avoid_when === 'object' ? applicability.avoid_when : {} },
       supporting_period_case_ids: support, confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
   })
   return {
@@ -427,10 +462,12 @@ export function compactPeriodTradeEvidence(evidence) {
 
 async function upsertDailyGroup(group, clock) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
-    AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND strategy_version = ?`,
-  [group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion])
+    AND user_id = ? AND trading_account_id = ? AND strategy_id = ?
+    ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
+  [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
   let existingSources = []
   if (existingCase) {
+    group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
     existingSources = await queryAll(`SELECT source.outcome_id, source.source_hash,
       review_case.evidence_hash AS current_evidence_hash
       FROM period_review_sources source
@@ -472,7 +509,7 @@ async function upsertDailyGroup(group, clock) {
     period: { type:'daily', key:group.periodKey, aggregation_basis:'fully_closed_at',
       timezone_offset_minutes:group.offsetMinutes, clock_status:clock.status,
       start_utc_msc:group.startUtcMs, end_utc_msc:group.endUtcMs },
-    strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope,
+    strategy: { id: group.strategyId, version: group.strategyVersion, versions:group.strategyVersions, scope: group.strategyScope,
       inference_system_prompt:prepared.find(item => item.evidence?.inference_time?.snapshot?.system_prompt)?.evidence?.inference_time?.snapshot?.system_prompt || null,
       prompt_hashes:[...new Set(prepared.map(item => item.evidence?.inference_time?.snapshot?.prompt_hash).filter(Boolean))] },
     statistics: dailyReviewStatistics(group.outcomes),
@@ -500,24 +537,9 @@ async function upsertDailyGroup(group, clock) {
       const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
       if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id)) throw new Error('period_review_version_conflict')
       const oldVersionId = Number(locked[0].approved_version_id || locked[0].current_version_id)
-      const [sourceMemories] = await run(`SELECT id, user_id FROM experience_memory_items
-        WHERE period_review_version_id = ? AND status IN ('active','compressed','duplicate_candidate') FOR UPDATE`, [oldVersionId])
-      for (const sourceMemory of sourceMemories) {
-        const [derivedMemories] = await run(`SELECT id, source_memory_ids_json FROM experience_long_term_memories
-          WHERE user_id = ? AND status IN ('candidate','active') FOR UPDATE`, [sourceMemory.user_id])
-        const affectedIds = derivedMemories.filter(item => parse(item.source_memory_ids_json, []).map(Number)
-          .includes(Number(sourceMemory.id))).map(item => Number(item.id))
-        if (affectedIds.length) await run(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
-          WHERE id IN (${affectedIds.map(() => '?').join(',')})`, [now, ...affectedIds])
-      }
-      await run(`UPDATE experience_memory_items SET status = 'stale', updated_at = ?
-        WHERE period_review_version_id = ? AND status IN ('active','compressed','duplicate_candidate')`, [now, oldVersionId])
-      await run(`UPDATE experience_memory_summaries SET status = 'stale', invalidated_at = ?
-        WHERE period_review_version_id = ? AND status = 'active'`, [now, oldVersionId])
-      await run(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
-        WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, oldVersionId])
-      await run(`UPDATE platform_strategy_experience_items SET status = 'revoked', revoked_at = ?, updated_at = ?
-        WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, now, oldVersionId])
+      // A confirmed memory is a separately governed artifact. Rebuilding a
+      // review after late trades or a cross-version merge must not silently
+      // revoke a memory that a user or administrator already approved.
       await run(`UPDATE period_review_derivation_jobs SET status = 'superseded', lease_token = NULL,
         lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
         WHERE period_case_id = ? AND period_version_id = ? AND status NOT IN ('superseded')`, [now, existingCase.id, oldVersionId])
@@ -530,22 +552,23 @@ async function upsertDailyGroup(group, clock) {
     })
   }
   await queryRun(`INSERT INTO period_review_cases
-    (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_scope,
+    (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_versions_json, strategy_compatibility_hash, strategy_scope,
      timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
      evidence_reason, evidence_json, evidence_hash, source_count, created_at, updated_at)
-    VALUES ('daily', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES ('daily', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE evidence_status = IF(current_version_id IS NOT NULL, evidence_status, VALUES(evidence_status)),
+      strategy_versions_json = VALUES(strategy_versions_json),
       evidence_reason = IF(current_version_id IS NOT NULL, evidence_reason, VALUES(evidence_reason)),
       evidence_json = IF(current_version_id IS NOT NULL, evidence_json, VALUES(evidence_json)),
       evidence_hash = IF(current_version_id IS NOT NULL, evidence_hash, VALUES(evidence_hash)),
       source_count = IF(current_version_id IS NOT NULL, source_count, VALUES(source_count)),
       status = IF(status IN ('generating','failed','approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
-    group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion, group.strategyScope,
+    group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion, JSON.stringify(group.strategyVersions), periodCompatibilityHash(group), group.strategyScope,
     group.offsetMinutes, group.startUtcMs, group.endUtcMs, complete ? 'ready' : 'incomplete', complete ? 'complete' : 'incomplete',
     reasons.join(',').slice(0, 255) || null, JSON.stringify(evidence), evidenceHash, sourceIds.length, now, now,
   ])
   const periodCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
-    AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND strategy_version = ?`, [group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion])
+    AND user_id = ? AND trading_account_id = ? AND strategy_id = ? ORDER BY id DESC LIMIT 1`, [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
   if (sourceIds.length) await queryRun(`DELETE FROM period_review_sources WHERE period_case_id = ? AND outcome_id IS NOT NULL
     AND outcome_id NOT IN (${sourceIds.map(() => '?').join(',')})`, [periodCase.id, ...sourceIds])
   for (const source of sources) await queryRun(`INSERT INTO period_review_sources
@@ -578,15 +601,18 @@ async function eligibleDailyReviewRows(limit) {
     FROM period_review_cases cases
     JOIN period_review_versions versions ON versions.id = cases.current_version_id
     WHERE cases.period_type = 'daily' AND cases.evidence_status = 'complete'
+      AND cases.strategy_compatibility_hash IS NOT NULL
       AND cases.status IN ('draft','edited','approved','needs_revision','deferred')
     ORDER BY cases.period_key DESC, cases.id DESC LIMIT ?`, [Math.min(3000, Math.max(1, Number(limit || 1000)))])
 }
 
 async function upsertMonthlyGroup(group, clock) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
-    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? AND strategy_version = ?`,
-  [group.periodKey, group.userId, group.strategyId, group.strategyVersion])
+    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ?
+    ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
+  [group.periodKey, group.userId, group.strategyId])
   if (existingCase) {
+    group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
@@ -599,12 +625,8 @@ async function upsertMonthlyGroup(group, clock) {
         const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
         if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id)) throw new Error('period_review_version_conflict')
         const oldVersionId = Number(locked[0].approved_version_id || locked[0].current_version_id)
-        await run(`UPDATE experience_memory_summaries SET status = 'stale', invalidated_at = ?
-          WHERE period_review_version_id = ? AND status = 'active'`, [now, oldVersionId])
-        await run(`UPDATE experience_long_term_memories SET status = 'revalidation', updated_at = ?
-          WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, oldVersionId])
-        await run(`UPDATE platform_strategy_experience_items SET status = 'revoked', revoked_at = ?, updated_at = ?
-          WHERE period_review_version_id = ? AND status IN ('candidate','active')`, [now, now, oldVersionId])
+        // Keep confirmed memories active until they are explicitly replaced
+        // or revoked. Review evidence lifecycle must not mutate memory policy.
         await run(`UPDATE period_review_derivation_jobs SET status = 'superseded', lease_token = NULL,
           lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
           WHERE period_case_id = ? AND period_version_id = ? AND status NOT IN ('superseded')`, [now, existingCase.id, oldVersionId])
@@ -636,7 +658,7 @@ async function upsertMonthlyGroup(group, clock) {
     schema_version: 2,
     period: { type: 'monthly', key: group.periodKey, timezone_offset_minutes: group.offsetMinutes,
       clock_status: clock.status, start_utc_msc: group.startUtcMs, end_utc_msc: group.endUtcMs },
-    strategy: { id: group.strategyId, version: group.strategyVersion, scope: group.strategyScope },
+    strategy: { id: group.strategyId, version: group.strategyVersion, versions:group.strategyVersions, scope: group.strategyScope },
     statistics: monthlyReviewStatistics(group.dailyCases),
     source_quality: { approved_days: sources.filter(item => item.review_status === 'approved').length,
       unconfirmed_days: sources.filter(item => item.review_status !== 'approved').length,
@@ -648,19 +670,19 @@ async function upsertMonthlyGroup(group, clock) {
   const evidenceHash = sha256(JSON.stringify(evidence))
   const now = beijingNow()
   await queryRun(`INSERT INTO period_review_cases
-    (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_scope,
+    (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_versions_json, strategy_compatibility_hash, strategy_scope,
      timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
      evidence_reason, evidence_json, evidence_hash, source_count, created_at, updated_at)
-    VALUES ('monthly', ?, ?, 0, ?, ?, ?, ?, ?, ?, 'ready', 'complete', NULL, ?, ?, ?, ?, ?)
+    VALUES ('monthly', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 'complete', NULL, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE evidence_status = VALUES(evidence_status), evidence_reason = VALUES(evidence_reason),
-      evidence_json = VALUES(evidence_json), evidence_hash = VALUES(evidence_hash), source_count = VALUES(source_count),
+      strategy_versions_json = VALUES(strategy_versions_json), evidence_json = VALUES(evidence_json), evidence_hash = VALUES(evidence_hash), source_count = VALUES(source_count),
       status = IF(status IN ('approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
-    group.periodKey, group.userId, group.strategyId, group.strategyVersion, group.strategyScope,
+    group.periodKey, group.userId, group.strategyId, group.strategyVersion, JSON.stringify(group.strategyVersions), periodCompatibilityHash(group), group.strategyScope,
     group.offsetMinutes, group.startUtcMs, group.endUtcMs, JSON.stringify(evidence), evidenceHash, sources.length, now, now,
   ])
   const periodCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
-    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? AND strategy_version = ?`,
-  [group.periodKey, group.userId, group.strategyId, group.strategyVersion])
+    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? ORDER BY id DESC LIMIT 1`,
+  [group.periodKey, group.userId, group.strategyId])
   if (!periodCase.current_version_id) {
     const sourcePeriodIds = sources.map(source => Number(source.period_case_id))
     if (sourcePeriodIds.length) await queryRun(`DELETE FROM period_review_sources WHERE period_case_id = ? AND source_period_case_id IS NOT NULL
@@ -707,7 +729,8 @@ async function claimDailyReviewJob() {
         AND jobs.job_slot = 0
         AND ((jobs.status = 'queued' AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at <= ?))
           OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
-        AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'daily' AND cases.evidence_status = 'complete'
+        AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'daily'
+        AND cases.strategy_compatibility_hash IS NOT NULL AND cases.evidence_status = 'complete'
       ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow(), beijingNow()])
     if (!rows[0]) return null
     const token = crypto.randomUUID()
@@ -827,7 +850,8 @@ async function claimMonthlyReviewJob() {
         AND jobs.job_slot = 0
         AND ((jobs.status = 'queued' AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at <= ?))
           OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
-        AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'monthly' AND cases.evidence_status = 'complete'
+        AND jobs.attempt_count < jobs.max_attempts AND cases.period_type = 'monthly'
+        AND cases.strategy_compatibility_hash IS NOT NULL AND cases.evidence_status = 'complete'
       ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow(), beijingNow()])
     if (!rows[0]) return null
     const token = crypto.randomUUID()
@@ -851,7 +875,12 @@ async function generateMonthlyReview(job, requestModel) {
     daily_assessments: dailyCaseIds.map(id => ({ period_case_id: id, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
     recurring_patterns: ['string'], strengths: ['string'], risk_observations: ['string'], chan_issue_summary: ['string'],
     next_month_actions: ['string'], memory_candidates: approvedDailyCaseIds.length >= 2
-      ? [{ lesson: 'string', anti_pattern: 'string', supporting_period_case_ids: approvedDailyCaseIds.slice(0, 2), confidence: 0.5 }] : [], confidence: 0.5 }
+      ? [{ lesson: 'string', anti_pattern: 'string', memory_category:'general|market_regime|entry_setup|chan_structure|risk_execution',
+          applicability:{ applicable_when:{ universal:false, symbols:['XAUUSD'], timeframes:['H1'], directions:['buy|sell|hold'],
+            entry_methods:['market|limit|stop|stop_limit'], market_regimes:['trend|range|breakout|pullback|reversal'],
+            volatility_buckets:['low|normal|high'], chan_reliabilities:['low|medium|high'], chan_trend_states:['string'],
+            chan_segment_directions:['buy|sell'], chan_divergences:['string'], chan_center_states:['string'] }, avoid_when:{} },
+          supporting_period_case_ids: approvedDailyCaseIds.slice(0, 2), confidence: 0.5 }] : [], confidence: 0.5 }
   const contract = [
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
     '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。',
@@ -859,6 +888,7 @@ async function generateMonthlyReview(job, requestModel) {
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     `daily_assessments 必须包含 ${dailyCaseIds.length} 项，并且 period_case_id 只能且必须完整覆盖：${dailyCaseIds.join(', ')}。`,
     'memory_candidates 的每项必须至少由两个已确认日复盘支持；不符合条件时必须返回空数组。',
+    '每条记忆候选必须选择 memory_category，并依据证据填写 applicability。除非它确实是同一策略在任何行情下都成立的原则，否则 universal 必须为 false。互相矛盾的行情经验必须拆分。',
     '不得遗漏、合并或虚构日复盘，不得修改系统提供的基础统计。',
   ].join('\n')
   const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
@@ -952,7 +982,8 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
   if (status) { where += ' AND cases.status = ?'; params.push(status) }
   const safeLimit = Math.min(100, Math.max(1, Number(limit || 50)))
   const safeOffset = Math.max(0, Number(offset || 0))
-  params.push(safeLimit, safeOffset)
+  const fetchLimit = Math.min(500, Math.max(safeLimit, (safeOffset + safeLimit) * 4))
+  params.push(fetchLimit, 0)
   const rows = await queryAll(`SELECT cases.id, cases.period_type, cases.period_key, cases.trading_account_id,
       cases.strategy_id, cases.strategy_version, cases.strategy_scope, cases.timezone_offset_minutes,
       cases.status, cases.evidence_status, cases.evidence_reason, cases.source_count,
@@ -969,7 +1000,17 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
       AND derivation.period_version_id = cases.approved_version_id
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id ${where}
     ORDER BY cases.period_start_utc_msc DESC, cases.period_type, cases.id DESC LIMIT ? OFFSET ?`, params)
-  return rows.map(row => {
+  const logicalRows = []
+  const logicalIndexes = new Map()
+  for (const row of rows) {
+    const key = [row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
+    if (!logicalIndexes.has(key)) {
+      logicalIndexes.set(key, logicalRows.length); logicalRows.push(row); continue
+    }
+    const index = logicalIndexes.get(key)
+    if (row.status === 'approved' && logicalRows[index].status !== 'approved') logicalRows[index] = row
+  }
+  return logicalRows.slice(safeOffset, safeOffset + safeLimit).map(row => {
     const evidence = parse(row.evidence_json, {})
     return { ...row, evidence_json: undefined, statistics: evidence.statistics || {}, source_quality: evidence.source_quality || null }
   })
@@ -1006,7 +1047,8 @@ export async function getPeriodReviewCase(periodCaseId, userId) {
 }
 
 export async function getPeriodReviewSummary(userId) {
-  const rows = await queryAll(`SELECT cases.period_type, cases.status, cases.current_version_id,
+  const rows = await queryAll(`SELECT cases.id, cases.period_type, cases.period_key, cases.trading_account_id,
+      cases.strategy_id, cases.status, cases.current_version_id,
       seen.last_seen_version_id, jobs.status AS job_status, derivation.status AS derivation_status
     FROM period_review_cases cases
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id
@@ -1018,7 +1060,14 @@ export async function getPeriodReviewSummary(userId) {
     total:0, daily_total:0, monthly_total:0,
     daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0,
     derivation_pending:0, derivation_failed:0 }
+  const logical = new Map()
   for (const row of rows) {
+    const key = [row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
+    const current = logical.get(key)
+    if (!current || (row.status === 'approved' && current.status !== 'approved')
+      || (row.status === current.status && Number(row.id) > Number(current.id))) logical.set(key, row)
+  }
+  for (const row of logical.values()) {
     summary.total += 1
     summary[row.period_type === 'monthly' ? 'monthly_total' : 'daily_total'] += 1
     const unread = row.current_version_id != null && Number(row.last_seen_version_id || 0) !== Number(row.current_version_id)
@@ -1130,7 +1179,7 @@ async function claimPeriodReviewDerivationJob() {
       JOIN period_review_cases cases ON cases.id = jobs.period_case_id
       WHERE ((jobs.status = 'queued' AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at <= ?))
         OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
-        AND jobs.attempt_count < jobs.max_attempts
+        AND jobs.attempt_count < jobs.max_attempts AND cases.strategy_compatibility_hash IS NOT NULL
       ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [now, now])
     if (!rows[0]) return null
     const token = crypto.randomUUID()
@@ -1151,7 +1200,8 @@ async function pausePeriodReviewDerivationJob(job, reason) {
 export async function resumePeriodReviewDerivationJobs(limit = 100) {
   const rows = await queryAll(`SELECT jobs.id, jobs.user_id, jobs.target_type, cases.period_type
     FROM period_review_derivation_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
-    WHERE jobs.status = 'paused' ORDER BY jobs.updated_at LIMIT ?`, [Math.min(500, Math.max(1, Number(limit || 100)))])
+    WHERE jobs.status = 'paused' AND cases.strategy_compatibility_hash IS NOT NULL
+    ORDER BY jobs.updated_at LIMIT ?`, [Math.min(500, Math.max(1, Number(limit || 100)))])
   let resumed = 0
   for (const row of rows) {
     let enabled = true
