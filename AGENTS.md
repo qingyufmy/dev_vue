@@ -18,7 +18,7 @@ npm test             # 运行全部 Vitest 测试
 npm run test:watch   # 持续运行受影响的测试
 ```
 
-定向测试示例：`npx vitest run tests/ai/strategy.test.js`。构建 Windows 桥接软件使用 `python public/ai/build_nuitka.py`。启动或重启项目时必须使用可见的 PowerShell 控制台，便于观察运行日志和异常。每次重启前必须先检查 3000 端口；若仍有监听进程，先停止并再次确认端口已无监听，再启动新服务。启动后必须检查 `/health`，不得在旧服务尚未退出时直接重复启动。
+定向测试示例：`npx vitest run tests/ai/strategy.test.js`。构建 Windows 桥接软件使用 `python public/ai/build_nuitka.py`。启动或重启项目、桥接软件时必须使用可见的 PowerShell 控制台，便于观察运行日志和异常。重启前不仅要停止对应服务或 Python 进程，还必须关闭承载它的旧显式 PowerShell 控制台，禁止遗留空控制台窗口。项目重启前必须先检查 3000 端口；若仍有监听进程，先停止并再次确认端口已无监听，再启动新服务。启动后必须检查 `/health`，不得在旧服务尚未退出时直接重复启动。
 
 ## 编码与命名规范
 
