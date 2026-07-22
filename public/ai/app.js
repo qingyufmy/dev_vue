@@ -9028,6 +9028,9 @@ async function submitObserverSourceAccount(event) {
     const result = await api('/api/ai/admin/observer-source-accounts', { method:'POST', body:{ email, nickname, password } });
     await loadObserverAdminPanel(true);
     const sourceForm = $('observerSourceForm');
+    const sourceFormToggle = $('toggleObserverSourceForm');
+    if (sourceForm) sourceForm.hidden = false;
+    sourceFormToggle?.setAttribute('aria-expanded', 'true');
     const nameInput = sourceForm?.querySelector('[name="name"]');
     const accountInput = sourceForm?.querySelector('[name="bridge_user_id"]');
     if (nameInput) nameInput.value = sourceDraftName;
@@ -9058,11 +9061,39 @@ function renderObserverAdminPanel() {
     .map(item => `<option value="${Number(item.id)}">${escapeHtml(item.title)}</option>`).join('');
   const sourceStrategyOptions = selectedId => (state.strategies || []).filter(item => item.scope === 'platform' && !item.deleted_at)
     .map(item => `<option value="${Number(item.id)}" ${Number(item.id) === Number(selectedId) ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('');
+  const onlineSourceCount = sources.filter(item => item.bridge_online).length;
+  const autoSourceCount = sources.filter(item => Number(item.auto_inference_enabled) === 1).length;
+  const tradeSourceCount = sources.filter(item => Number(item.trade_send_enabled) === 1).length;
+  const activeChannelCount = channels.filter(item => item.status === 'active' && item.source_status === 'active').length;
   root.innerHTML = `
-    <div class="observer-admin-grid">
-      <section class="ops-section-card observer-admin-card">
-        <div class="ops-section-heading"><div><span class="ops-kicker">数据连接</span><h2>观摩源</h2><p>每个来源使用一个独立 Pro 源账号连接对应 MT5，不需要管理员权限。</p></div><span class="ops-state-pill ${sources.some(item => item.bridge_online) ? 'running' : 'waiting'}">${sources.filter(item => item.bridge_online).length} 个在线</span></div>
-        <form id="observerSourceForm" class="observer-admin-form">
+    <section class="observer-control-shell">
+      <header class="observer-control-hero">
+        <div class="observer-control-intro">
+          <span class="ops-kicker">观摩服务编排</span>
+          <h2>观摩频道</h2>
+          <p>连接观摩账户、控制 AI 运行，再将信号按频道安全分发给用户。</p>
+        </div>
+        <div class="observer-overview-grid" aria-label="观摩服务概览">
+          <div class="observer-overview-item"><span>观摩源</span><strong class="num">${sources.length}</strong><small>${onlineSourceCount} 个在线</small></div>
+          <div class="observer-overview-item"><span>自动推理</span><strong class="num">${autoSourceCount}</strong><small>正在运行</small></div>
+          <div class="observer-overview-item"><span>交易发送</span><strong class="num">${tradeSourceCount}</strong><small>已授权来源</small></div>
+          <div class="observer-overview-item"><span>开放频道</span><strong class="num">${activeChannelCount}</strong><small>用户可访问</small></div>
+        </div>
+      </header>
+
+      <div class="observer-routing-map" aria-label="观摩频道工作流程">
+        <div class="observer-routing-step"><span>1</span><i data-lucide="server"></i><div><strong>观摩源</strong><small>连接独立 MT5 账户</small></div></div>
+        <i class="observer-routing-arrow" data-lucide="arrow-right" aria-hidden="true"></i>
+        <div class="observer-routing-step"><span>2</span><i data-lucide="brain-circuit"></i><div><strong>AI 运行</strong><small>绑定策略并控制执行</small></div></div>
+        <i class="observer-routing-arrow" data-lucide="arrow-right" aria-hidden="true"></i>
+        <div class="observer-routing-step"><span>3</span><i data-lucide="radio-tower"></i><div><strong>频道分发</strong><small>决定用户看到的账户</small></div></div>
+      </div>
+
+      <div class="observer-management-grid">
+      <section class="observer-manage-panel observer-source-panel">
+        <div class="observer-panel-heading"><div><span class="observer-panel-icon"><i data-lucide="server"></i></span><div><h3>观摩源管理</h3><p>一个来源对应一个桥接账号、MT5 账户和固定平台策略。</p></div></div><button id="toggleObserverSourceForm" class="btn btn-secondary" type="button" aria-expanded="${sources.length ? 'false' : 'true'}" aria-controls="observerSourceForm"><i data-lucide="plus"></i>新增观摩源</button></div>
+        <form id="observerSourceForm" class="observer-create-panel" ${sources.length ? 'hidden' : ''}>
+          <div class="observer-create-heading"><div><strong>创建观摩源</strong><span>先准备专用账号，再连接对应的桥接软件。</span></div><button class="icon-btn" type="button" data-observer-panel-close="observerSourceForm" aria-label="收起创建观摩源表单"><i data-lucide="x"></i></button></div>
           <label><span>来源名称</span><input class="form-input" name="name" maxlength="80" placeholder="例如：稳健实盘" required></label>
           <label><span>桥接源账号</span><div class="observer-source-account-field"><select class="form-select" name="bridge_user_id" required><option value="">请选择专用源账号</option>${candidateOptions}</select><button id="createObserverSourceAccountBtn" class="btn btn-secondary" type="button"><i data-lucide="user-plus" size="15"></i>创建账号</button></div></label>
           <label><span>固定平台策略</span><select class="form-select" name="strategy_id" required><option value="">请选择平台策略</option>${strategyOptions}</select><small>只有该策略产生的系统持仓与挂单会进入参考组合。</small></label>
@@ -9072,39 +9103,57 @@ function renderObserverAdminPanel() {
             <label class="observer-runtime-toggle"><input type="checkbox" name="auto_inference_enabled" checked><span><b>自动推理</b><small>按策略持续生成新信号</small></span><i aria-hidden="true"></i></label>
             <label class="observer-runtime-toggle"><input type="checkbox" name="trade_send_enabled" checked><span><b>交易发送</b><small>允许向该源 MT5 发送订单</small></span><i aria-hidden="true"></i></label>
           </fieldset>
-          <button class="btn btn-primary" type="submit"><i data-lucide="plus"></i>添加来源</button>
+          <div class="observer-create-actions"><button class="btn btn-primary" type="submit"><i data-lucide="plus"></i>添加来源</button></div>
         </form>
-        <div class="observer-admin-list">${sources.length ? sources.map(source => `
-          <article class="observer-admin-item observer-source-item">
-            <span class="observer-source-dot ${source.bridge_online ? 'online' : ''}" aria-hidden="true"></span>
-            <div class="observer-source-main"><strong>${escapeHtml(source.name)}</strong><p>${escapeHtml(source.login_account ? `${source.broker_server || 'MT5'} · ${source.login_account}` : source.bridge_user_nickname || source.bridge_user_email || `源账号 #${source.bridge_user_id}`)}</p><div class="observer-source-strategy-editor"><select class="form-select" data-observer-source-strategy="${Number(source.id)}"><option value="">请选择固定策略</option>${sourceStrategyOptions(source.strategy_id)}</select><button class="btn btn-secondary btn-sm" type="button" data-observer-source-strategy-save="${Number(source.id)}">保存策略</button></div><div class="observer-source-runtime" aria-label="观摩源运行控制">
+        <div class="observer-source-list">${sources.length ? sources.map(source => `
+          <article class="observer-source-card" aria-labelledby="observerSourceTitle${Number(source.id)}">
+            <header class="observer-source-card-head">
+              <span class="observer-entity-icon"><i data-lucide="server"></i><b class="observer-source-dot ${source.bridge_online ? 'online' : ''}" aria-hidden="true"></b></span>
+              <div class="observer-source-identity"><div><h4 id="observerSourceTitle${Number(source.id)}">${escapeHtml(source.name)}</h4><span class="ops-state-pill ${source.bridge_online ? 'running' : 'waiting'}">${source.bridge_online ? '桥接在线' : '桥接离线'}</span></div><p>${escapeHtml(source.login_account ? `${source.broker_server || 'MT5'} · ${source.login_account}` : source.bridge_user_nickname || source.bridge_user_email || `源账号 #${source.bridge_user_id}`)}</p></div>
+              <div class="observer-source-card-actions"><span><i data-lucide="radio-tower"></i>${Number(source.channel_count || 0)} 个频道</span><button class="icon-btn danger-subtle" type="button" data-observer-source-delete="${Number(source.id)}" aria-label="删除观摩源 ${escapeHtml(source.name)}"><i data-lucide="trash-2"></i></button></div>
+            </header>
+            <div class="observer-source-strategy"><label for="observerSourceStrategy${Number(source.id)}"><span>固定平台策略</span><small>该来源只按此策略生成共享信号</small></label><div><select id="observerSourceStrategy${Number(source.id)}" class="form-select" data-observer-source-strategy="${Number(source.id)}"><option value="">请选择固定策略</option>${sourceStrategyOptions(source.strategy_id)}</select><button class="btn btn-secondary btn-sm" type="button" data-observer-source-strategy-save="${Number(source.id)}">保存策略</button></div></div>
+            <div class="observer-source-runtime" aria-label="${escapeHtml(source.name)}运行控制">
               <label class="observer-runtime-toggle" title="关闭后，该观摩源绑定的策略停止生成新信号"><input type="checkbox" data-observer-runtime-field="auto_inference_enabled" data-observer-source-id="${Number(source.id)}" ${Number(source.auto_inference_enabled) === 1 ? 'checked' : ''}><span><b>自动推理</b><small>${Number(source.auto_inference_enabled) === 1 ? '持续生成新信号' : '已停止生成信号'}</small></span><i aria-hidden="true"></i></label>
               <label class="observer-runtime-toggle" title="关闭后仍可分析，但不再向该源 MT5 发送或取消订单"><input type="checkbox" data-observer-runtime-field="trade_send_enabled" data-observer-source-id="${Number(source.id)}" ${Number(source.trade_send_enabled) === 1 ? 'checked' : ''}><span><b>交易发送</b><small>${Number(source.trade_send_enabled) === 1 ? '允许发送和取消订单' : '仅分析，不发送订单'}</small></span><i aria-hidden="true"></i></label>
-            </div></div>
-            <span class="ops-state-pill ${source.bridge_online ? 'running' : 'waiting'}">${source.bridge_online ? '已连接' : '离线'}</span>
-            <button class="icon-btn" type="button" data-observer-source-delete="${Number(source.id)}" aria-label="删除观摩源"><i data-lucide="trash-2"></i></button>
+            </div>
           </article>`).join('') : '<div class="ops-empty-state compact"><strong>尚未配置观摩源</strong><span>先准备一个 Pro 源账号并连接桥接软件。</span></div>'}</div>
       </section>
-      <section class="ops-section-card observer-admin-card">
-        <div class="ops-section-heading"><div><span class="ops-kicker">用户入口</span><h2>观摩频道</h2><p>频道决定用户能看到哪个账户；默认频道离线时不会静默切换。</p></div><span class="ops-total-users">共 <b class="num">${channels.length}</b> 个</span></div>
-        <form id="observerChannelForm" class="observer-admin-form">
+      <section class="observer-manage-panel observer-channel-panel">
+        <div class="observer-panel-heading"><div><span class="observer-panel-icon"><i data-lucide="radio-tower"></i></span><div><h3>频道分发</h3><p>将观摩源开放给全部用户、指定套餐或指定用户。</p></div></div><button id="toggleObserverChannelForm" class="btn btn-secondary" type="button" aria-expanded="${channels.length || !sourceOptions ? 'false' : 'true'}" aria-controls="observerChannelForm" ${sourceOptions ? '' : 'disabled'}><i data-lucide="plus"></i>新增频道</button></div>
+        <form id="observerChannelForm" class="observer-create-panel" ${channels.length || !sourceOptions ? 'hidden' : ''}>
+          <div class="observer-create-heading"><div><strong>创建观摩频道</strong><span>频道是用户进入不同观摩账户的入口。</span></div><button class="icon-btn" type="button" data-observer-panel-close="observerChannelForm" aria-label="收起创建观摩频道表单"><i data-lucide="x"></i></button></div>
           <label><span>频道名称</span><input class="form-input" name="name" maxlength="80" placeholder="例如：稳健频道" required></label>
           <label><span>频道标识</span><input class="form-input" name="slug" maxlength="64" pattern="[a-z0-9][a-z0-9_-]*" placeholder="steady" required></label>
           <label><span>对应来源</span><select class="form-select" name="source_id" required><option value="">请选择观摩源</option>${sourceOptions}</select></label>
           <label><span>开放范围</span><select class="form-select" name="audience"><option value="all">全部观摩用户</option><option value="plus">仅 Plus</option><option value="pro">仅 Pro</option></select></label>
           <label class="observer-default-check"><input type="checkbox" name="is_default"><span>设为默认频道</span></label>
-          <button class="btn btn-primary" type="submit" ${sourceOptions ? '' : 'disabled'}><i data-lucide="plus"></i>添加频道</button>
+          <div class="observer-create-actions"><button class="btn btn-primary" type="submit" ${sourceOptions ? '' : 'disabled'}><i data-lucide="plus"></i>添加频道</button></div>
         </form>
-        <div class="observer-admin-list">${channels.length ? channels.map(channel => `
-          <article class="observer-admin-item">
-            <span class="observer-channel-icon"><i data-lucide="radio-tower"></i></span>
-            <div><strong>${escapeHtml(channel.name)}${Number(channel.is_default) === 1 ? '<em>默认</em>' : ''}</strong><p>${escapeHtml(channel.source_name || '未绑定来源')} · ${escapeHtml(observerAudienceText(channel.audience))}</p></div>
-            <span class="ops-state-pill ${channel.status === 'active' && channel.source_status === 'active' ? 'running' : 'stopped'}">${channel.status === 'active' ? '已开放' : '已停用'}</span>
-            ${Number(channel.is_default) !== 1 ? `<button class="icon-btn" type="button" data-observer-channel-default="${Number(channel.id)}" title="设为默认"><i data-lucide="star"></i></button><button class="icon-btn" type="button" data-observer-channel-delete="${Number(channel.id)}" aria-label="删除频道"><i data-lucide="trash-2"></i></button>` : ''}
+        <div class="observer-channel-list">${channels.length ? channels.map(channel => `
+          <article class="observer-channel-card">
+            <header><span class="observer-channel-icon"><i data-lucide="radio-tower"></i></span><div><div><h4>${escapeHtml(channel.name)}</h4>${Number(channel.is_default) === 1 ? '<em>默认频道</em>' : ''}</div><span class="ops-state-pill ${channel.status === 'active' && channel.source_status === 'active' ? 'running' : 'stopped'}">${channel.status === 'active' && channel.source_status === 'active' ? '已开放' : '不可用'}</span></div></header>
+            <div class="observer-channel-route"><div><small>观摩源</small><strong>${escapeHtml(channel.source_name || '未绑定来源')}</strong></div><i data-lucide="arrow-right" aria-hidden="true"></i><div><small>开放范围</small><strong>${escapeHtml(observerAudienceText(channel.audience))}</strong></div></div>
+            ${Number(channel.is_default) !== 1 ? `<footer><button class="btn btn-ghost btn-sm" type="button" data-observer-channel-default="${Number(channel.id)}"><i data-lucide="star"></i>设为默认</button><button class="btn btn-ghost btn-sm danger-subtle" type="button" data-observer-channel-delete="${Number(channel.id)}"><i data-lucide="trash-2"></i>删除</button></footer>` : '<footer><span><i data-lucide="shield-check"></i>默认入口离线时不会自动切换来源</span></footer>'}
           </article>`).join('') : '<div class="ops-empty-state compact"><strong>尚未配置观摩频道</strong><span>创建频道后，观摩用户才能选择对应来源。</span></div>'}</div>
       </section>
-    </div>`;
+      </div>
+    </section>`;
   initIcons();
+  const bindObserverCreatePanel = (triggerId, panelId) => {
+    const trigger = root.querySelector(`#${triggerId}`);
+    const panel = root.querySelector(`#${panelId}`);
+    if (!trigger || !panel) return;
+    const setOpen = open => {
+      panel.hidden = !open;
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) requestAnimationFrame(() => panel.querySelector('input,select')?.focus());
+    };
+    trigger.addEventListener('click', () => setOpen(panel.hidden));
+    root.querySelector(`[data-observer-panel-close="${panelId}"]`)?.addEventListener('click', () => setOpen(false));
+  };
+  bindObserverCreatePanel('toggleObserverSourceForm', 'observerSourceForm');
+  bindObserverCreatePanel('toggleObserverChannelForm', 'observerChannelForm');
   const sourceUser = root.querySelector('#observerSourceForm [name="bridge_user_id"]');
   const accountSelect = root.querySelector('#observerSourceForm [name="trading_account_id"]');
   const syncAccounts = () => {

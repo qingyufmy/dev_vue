@@ -756,9 +756,9 @@ describe('route permissions and credential redaction', () => {
     expect(app).toContain('id="observerChannelForm"')
     expect(html).toContain('id="observerSourceAccountEditor"')
     expect(html).toContain('id="observerSourceAccountForm"')
-    expect(css).toContain('.observer-admin-grid')
+    expect(css).toContain('.observer-management-grid')
     expect(css).toContain('.observer-source-account-field')
-    expect(responsiveCss).toContain('.observer-admin-grid { grid-template-columns: 1fr; }')
+    expect(responsiveCss).toContain('.observer-management-grid { grid-template-columns:1fr; }')
     expect(responsiveCss).toContain('.observer-source-account-field { grid-template-columns:1fr; }')
     expect(routes).toContain("router.get('/ai/admin/observer-source-candidates'")
     expect(routes).toContain("router.post('/ai/admin/observer-source-accounts'")
@@ -773,6 +773,17 @@ describe('route permissions and credential redaction', () => {
     expect(routes).toContain('applyBridgeRuntimeState')
     expect(scheduler).toContain('observer_source.status = \'active\'')
     expect(scheduler).toContain('COALESCE(observer_scheduler.enabled, 0) = 0')
+  })
+
+  it('presents observer routing as a progressive and responsive administration workflow', () => {
+    expect(app).toContain('class="observer-routing-map"')
+    expect(app).toContain('观摩源</strong><small>连接独立 MT5 账户')
+    expect(app).toContain('AI 运行</strong><small>绑定策略并控制执行')
+    expect(app).toContain('频道分发</strong><small>决定用户看到的账户')
+    expect(app).toContain('aria-controls="observerSourceForm"')
+    expect(app).toContain('aria-controls="observerChannelForm"')
+    expect(css).toContain('.observer-create-panel[hidden] { display:none; }')
+    expect(responsiveCss).toContain('@media (max-width: 419px)')
   })
 
   it('returns the account metrics rendered by the risk-center status card', () => {

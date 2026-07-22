@@ -1805,22 +1805,48 @@
   }
 }
 
-@media (max-width: 1023px) {
-  .observer-admin-grid { grid-template-columns: 1fr; }
+@media (max-width: 1279px) {
+  .observer-control-hero { grid-template-columns:1fr; gap:16px; }
+}
+
+@media (max-width: 1099px) {
+  .observer-management-grid { grid-template-columns:1fr; }
 }
 
 @media (max-width: 767px) {
-  .observer-admin-form { grid-template-columns:1fr; padding:12px; }
+  .observer-control-shell { gap:12px; }
+  .observer-control-hero { padding:16px; border-radius:13px; }
+  .observer-control-intro h2 { font-size:21px; }
+  .observer-overview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .observer-overview-item:nth-child(2) { border-right:0; }
+  .observer-overview-item:nth-child(-n+2) { border-bottom:1px solid var(--border-subtle); }
+  .observer-routing-map { grid-template-columns:1fr; gap:7px; padding:12px; }
+  .observer-routing-step { min-height:42px; }
+  .observer-routing-arrow { justify-self:center; transform:rotate(90deg); }
+  .observer-manage-panel { padding:14px; border-radius:13px; }
+  .observer-panel-heading { align-items:stretch; flex-direction:column; gap:12px; }
+  .observer-panel-heading > .btn { width:100%; min-height:44px; justify-content:center; }
+  .observer-create-panel { grid-template-columns:1fr; padding:12px; }
   .observer-source-account-field { grid-template-columns:1fr; }
   .observer-source-account-field .btn { width:100%; justify-content:center; }
-  .observer-admin-item { grid-template-columns:auto minmax(0,1fr) auto; }
-  .observer-admin-item .ops-state-pill { grid-column:2; justify-self:start; }
-  .observer-source-item { grid-template-columns:auto minmax(0,1fr) auto; }
-  .observer-source-item [data-observer-source-delete] { grid-column:3; grid-row:1; }
-  .observer-source-strategy-editor { align-items:stretch; flex-direction:column; }
-  .observer-source-strategy-editor .form-select,
-  .observer-source-strategy-editor .btn { width:100%; }
   .observer-runtime-defaults { display:grid; grid-template-columns:1fr; }
+  .observer-create-actions .btn { width:100%; min-height:44px; }
+  .observer-source-card-head { grid-template-columns:auto minmax(0,1fr); }
+  .observer-source-card-actions { grid-column:2; justify-content:space-between; }
+  .observer-source-strategy { grid-template-columns:1fr; }
+  .observer-source-strategy > div { grid-template-columns:1fr; }
+  .observer-source-strategy .btn { width:100%; min-height:44px; }
   .observer-source-runtime { grid-template-columns:1fr; }
-  .observer-source-item .ops-state-pill { align-self:start; }
+  .observer-channel-card > header > div { align-items:flex-start; flex-direction:column; }
+  .observer-channel-card > header .ops-state-pill { align-self:flex-start; }
+}
+
+@media (max-width: 419px) {
+  .observer-overview-grid { grid-template-columns:1fr; }
+  .observer-overview-item { border-right:0; border-bottom:1px solid var(--border-subtle); }
+  .observer-overview-item:last-child { border-bottom:0; }
+  .observer-channel-route { grid-template-columns:1fr; }
+  .observer-channel-route > svg { justify-self:center; transform:rotate(90deg); }
+  .observer-channel-card footer { align-items:stretch; flex-direction:column; }
+  .observer-channel-card footer .btn { width:100%; min-height:44px; justify-content:center; }
 }
