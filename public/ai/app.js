@@ -2036,10 +2036,6 @@ async function loadPlatformPolicy() {
   const shareControls = [$("shareForManual"), $("shareForAuto"), $("shareForReview"), $("shareForCompression")].filter(Boolean);
   const hasShareableModel = state.modelProfiles.some(profile => profile.status === "active" && profile.has_api_key && profile.share_eligible !== false);
   shareControls.forEach(control => { control.disabled = !hasShareableModel; });
-  const sharingNotice = $("platformSharingProviderNotice");
-  if (sharingNotice) sharingNotice.textContent = hasShareableModel
-    ? "当前默认平台模型可按上方用途选择是否共享；Kimi Code 订阅也遵循相同设置。"
-    : "当前没有已启用且已保存凭据的平台模型，暂时无法开启共享。";
 }
 
 async function savePlatformPolicy() {
