@@ -79,7 +79,7 @@
     grid-column: 2;
   }
 
-  .observer-channel-control:not(.hidden) {
+  .observer-channel-switcher:not(.hidden) {
     grid-column: 1 / -1;
     justify-self: end;
   }
@@ -222,26 +222,22 @@
     gap: 4px;
   }
 
-  .observer-channel-control:not(.hidden) {
+  .observer-channel-switcher:not(.hidden) {
     grid-column: 1 / -1;
     grid-row: 3;
-    display: flex;
     width: 100%;
-    max-width: none;
-    min-height: 44px;
-    padding: 0 12px;
-  }
-
-  .observer-channel-picker {
-    flex: 1;
     max-width: none;
   }
 
-  .observer-channel-control select {
+  .observer-channel-trigger {
     width: 100%;
-    max-width: none;
-    min-height: 42px;
-    font-size: 16px;
+    min-height: 48px;
+  }
+
+  .observer-channel-menu {
+    right: 0;
+    left: 0;
+    width: auto;
   }
 
   .topbar-actions .icon-btn {

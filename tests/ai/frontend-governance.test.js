@@ -731,19 +731,21 @@ describe('subscription schedule modal layout', () => {
 })
 
 describe('route permissions and credential redaction', () => {
-  it('keeps the observer channel selector compact and responsive', () => {
-    expect(html).toContain('id="observerChannelSelect"')
-    expect(html).toContain('class="observer-channel-picker"')
-    expect(html).toContain('<span class="sr-only">选择观摩频道</span>')
-    expect(html).not.toContain('observer-channel-label')
-    expect(css).toContain('.observer-channel-control {')
-    expect(css).toContain('.observer-channel-control:focus-within')
-    expect(css).toContain('appearance: none')
-    expect(css).toContain('background: transparent !important')
-    expect(css).toContain('outline: none !important')
-    expect(css).toContain('box-shadow: none !important')
+  it('uses an accessible custom observer channel switcher instead of a native select', () => {
+    expect(html).toContain('id="observerChannelTrigger"')
+    expect(html).toContain('id="observerChannelMenu"')
+    expect(html).toContain('aria-haspopup="listbox"')
+    expect(html).toContain('role="listbox"')
+    expect(html).not.toContain('id="observerChannelSelect"')
+    expect(css).toContain('.observer-channel-trigger {')
+    expect(css).toContain('.observer-channel-menu {')
+    expect(css).toContain('.observer-channel-option.is-selected')
+    expect(app).toContain('setObserverChannelMenuOpen')
+    expect(app).toContain('data-observer-channel-id')
+    expect(app).toContain('aria-selected=')
     expect(responsiveCss).toContain('grid-row: 3')
-    expect(responsiveCss).toContain('font-size: 16px')
+    expect(responsiveCss).toContain('.observer-channel-trigger {')
+    expect(responsiveCss).toContain('min-height: 48px')
   })
 
   it('gives administrators a responsive observer source and channel workspace', () => {

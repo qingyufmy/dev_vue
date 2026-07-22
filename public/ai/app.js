@@ -4333,18 +4333,47 @@ function syncSelectedObserverChannel(channelId) {
   if (!normalizedId) return;
   state.selectedObserverChannelId = normalizedId;
   localStorage.setItem(observerChannelStorageKey(), String(normalizedId));
-  const select = $("observerChannelSelect");
-  if (select && select.value !== String(normalizedId)) select.value = String(normalizedId);
+  renderObserverChannelControl();
+}
+
+function setObserverChannelMenuOpen(open, { focusSelected = false } = {}) {
+  const trigger = $("observerChannelTrigger");
+  const menu = $("observerChannelMenu");
+  if (!trigger || !menu) return;
+  const shouldOpen = Boolean(open) && !$("observerChannelControl")?.classList.contains("hidden");
+  trigger.setAttribute("aria-expanded", String(shouldOpen));
+  menu.classList.toggle("hidden", !shouldOpen);
+  if (shouldOpen && focusSelected) {
+    requestAnimationFrame(() => (menu.querySelector('[aria-selected="true"]') || menu.querySelector('[role="option"]'))?.focus());
+  }
 }
 
 function renderObserverChannelControl() {
   const control = $("observerChannelControl");
-  const select = $("observerChannelSelect");
-  if (!control || !select) return;
+  const current = $("observerChannelCurrent");
+  const menu = $("observerChannelMenu");
+  const trigger = $("observerChannelTrigger");
+  if (!control || !current || !menu || !trigger) return;
   const channels = state.observerChannels || [];
-  control.classList.toggle("hidden", !isObserverMode() || channels.length < 2);
-  select.innerHTML = channels.map(channel => `<option value="${Number(channel.id)}">${escapeHtml(channel.name)}${channel.online ? '' : ' · 离线'}</option>`).join('');
-  if (state.selectedObserverChannelId) select.value = String(state.selectedObserverChannelId);
+  const visible = isObserverMode() && channels.length >= 2;
+  control.classList.toggle("hidden", !visible);
+  if (!visible) {
+    setObserverChannelMenuOpen(false);
+    return;
+  }
+  const selected = channels.find(channel => Number(channel.id) === Number(state.selectedObserverChannelId)) || channels[0];
+  current.textContent = selected?.name || "选择频道";
+  trigger.title = selected ? `当前观摩频道：${selected.name}` : "选择观摩频道";
+  menu.innerHTML = channels.map(channel => {
+    const selectedChannel = Number(channel.id) === Number(selected?.id);
+    const online = Boolean(channel.online);
+    return `<button type="button" class="observer-channel-option${selectedChannel ? ' is-selected' : ''}" role="option" aria-selected="${selectedChannel}" data-observer-channel-id="${Number(channel.id)}">
+      <span class="observer-channel-option-status ${online ? 'is-online' : 'is-offline'}" aria-hidden="true"></span>
+      <span class="observer-channel-option-copy"><strong>${escapeHtml(channel.name)}</strong><small>${online ? '在线，可正常观摩' : '离线，暂时无法更新'}</small></span>
+      <i class="observer-channel-option-check" data-lucide="check" size="16" aria-hidden="true"></i>
+    </button>`;
+  }).join('');
+  initIcons();
 }
 
 async function loadObserverChannels() {
@@ -7866,15 +7895,45 @@ function bindEvents() {
 
   // Gateway badge click — toggle trade sending
   $("tradeMode")?.addEventListener("click", handleTradeModeClick);
-  $("observerChannelSelect")?.addEventListener("change", event => {
-    const select = event.currentTarget;
-    select.disabled = true;
-    changeObserverChannel(select.value)
+  $("observerChannelTrigger")?.addEventListener("click", () => {
+    const trigger = $("observerChannelTrigger");
+    setObserverChannelMenuOpen(trigger?.getAttribute("aria-expanded") !== "true");
+  });
+  $("observerChannelTrigger")?.addEventListener("keydown", event => {
+    if (!["ArrowDown", "Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    setObserverChannelMenuOpen(true, { focusSelected: true });
+  });
+  $("observerChannelMenu")?.addEventListener("click", event => {
+    const option = event.target.closest("[data-observer-channel-id]");
+    if (!option) return;
+    const trigger = $("observerChannelTrigger");
+    trigger.disabled = true;
+    setObserverChannelMenuOpen(false);
+    changeObserverChannel(option.dataset.observerChannelId)
       .catch(error => {
         renderObserverChannelControl();
         toast(localizeReason(error.message), "error");
       })
-      .finally(() => { select.disabled = false; });
+      .finally(() => {
+        trigger.disabled = false;
+        trigger.focus();
+      });
+  });
+  $("observerChannelMenu")?.addEventListener("keydown", event => {
+    const options = [...event.currentTarget.querySelectorAll('[role="option"]')];
+    const index = options.indexOf(document.activeElement);
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setObserverChannelMenuOpen(false);
+      $("observerChannelTrigger")?.focus();
+    } else if (["ArrowDown", "ArrowUp"].includes(event.key) && options.length) {
+      event.preventDefault();
+      options[(index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length].focus();
+    }
+  });
+  document.addEventListener("click", event => {
+    if (!event.target.closest("#observerChannelControl")) setObserverChannelMenuOpen(false);
   });
 
   // Auto analyze badge — simple toggle on/off

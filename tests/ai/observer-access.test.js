@@ -68,6 +68,7 @@ describe('AI observer access', () => {
     expect(bridgeWs).toContain('Never silently show another')
     expect(bridgeWs).toContain('params.observer_channel_id')
     expect(app).toContain('observer_channel_id = state.selectedObserverChannelId')
-    expect(app).toContain('changeObserverChannel(select.value)')
+    expect(app).toContain('changeObserverChannel(option.dataset.observerChannelId)')
+    expect(app).toContain('setObserverChannelMenuOpen(false)')
   })
 })
