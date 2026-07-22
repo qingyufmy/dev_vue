@@ -9,7 +9,7 @@ import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/config.js'
 import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
-import { getDefaultObserverSource } from './routes/ai/observer-channels.js'
+import { getDefaultObserverSource, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -221,6 +221,25 @@ export async function getActivePlatformBridgeUserId() {
   return rows[0]?.id || null
 }
 
+async function resolveObserverBridgeContext(userId, user, requestedChannelId = null, { strict = true } = {}) {
+  let channel
+  try {
+    channel = await resolveObserverSourceForUser(userId, user?.plan, requestedChannelId)
+  } catch (error) {
+    if (strict) throw error
+    channel = await resolveObserverSourceForUser(userId, user?.plan, null)
+  }
+  if (channel) {
+    const bridgeUserId = Number(channel.bridge_user_id)
+    return {
+      bridgeUserId:bridges.get(bridgeUserId)?.ws?.readyState === 1 ? bridgeUserId : null,
+      channel:{ id:Number(channel.id), name:channel.name, slug:channel.slug,
+        source_id:Number(channel.source_id), source_name:channel.source_name },
+    }
+  }
+  return { bridgeUserId:await getActivePlatformBridgeUserId(), channel:null }
+}
+
 export function getPlatformMarketClockState(userId) {
   const bridge = bridges.get(Number(userId))
   const hb = bridge?._clientHeartbeat || {}
@@ -304,8 +323,10 @@ function handleBrowser(ws, url) {
       // always an observer, even if an old bridge connection still exists.
       const accessUser = await queryOne('SELECT role, plan, plan_expires_at FROM users WHERE id = ?', [userId]).catch(() => null)
       const access = buildAiAccessContext(accessUser, { ownBridgeConnected:isBridgeAlive(userId) })
-      const platformBridgeUserId = access.read_only ? await getActivePlatformBridgeUserId() : null
-      const dataUserId = access.read_only ? platformBridgeUserId : userId
+      const observerContext = access.read_only
+        ? await resolveObserverBridgeContext(userId, accessUser, msg.observer_channel_id, { strict:false })
+        : null
+      const dataUserId = access.read_only ? observerContext.bridgeUserId : userId
       const bridge = dataUserId ? bridges.get(dataUserId) : null
       const usingFallback = access.read_only
       const connected = !!(bridge && bridge.ws.readyState === 1)
@@ -322,6 +343,7 @@ function handleBrowser(ws, url) {
         using_fallback: usingFallback,
         trade_enabled: tradeEnabled,
         auto_reasoning_enabled: autoReasoningEnabled,
+        observer_channel: observerContext?.channel || null,
         access,
       }))
     } else if (msg.type === 'command' && msg.action) {
@@ -823,8 +845,10 @@ async function handleBrowserCommand(ws, userId, msg) {
     if (!observerWsActionAllowed(access, action)) {
       return reply({ status:'error', code:'observer_read_only', message:observerAccessError(access), access })
     }
-    const observerSourceUserId = access.read_only ? await getActivePlatformBridgeUserId() : null
-    const dataUserId = access.read_only ? observerSourceUserId : userId
+    const observerContext = access.read_only
+      ? await resolveObserverBridgeContext(userId, user, params.observer_channel_id)
+      : null
+    const dataUserId = access.read_only ? observerContext.bridgeUserId : userId
     if (access.read_only && action !== 'health' && !dataUserId) {
       return reply({ status:'error', code:'observer_source_offline', message:'管理员观摩账户当前未连接' })
     }
@@ -863,7 +887,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             auto_reasoning_enabled: autoReasoningEnabled,
             using_fallback: usingFallback,
             trade_mode: dataUserId ? await getBridgeTradeMode(dataUserId) : -1,
-            access:{ ...access, observer_source_available:Boolean(observerSourceUserId) },
+            access:{ ...access, observer_source_available:Boolean(dataUserId),
+              observer_channel:observerContext?.channel || null },
           },
         }
         break

@@ -15,6 +15,7 @@ export const OBSERVER_WS_READ_ACTIONS = Object.freeze(new Set([
 
 const PRO_OBSERVER_HTTP_GET_PATTERNS = Object.freeze([
   /^\/ai\/access-context$/,
+  /^\/ai\/observer-channels$/,
   /^\/ai\/strategies(?:\/\d+)?$/,
   /^\/ai\/model-profiles$/,
   /^\/ai\/model-source$/,
@@ -24,6 +25,7 @@ const PRO_OBSERVER_HTTP_GET_PATTERNS = Object.freeze([
 
 const PLUS_OBSERVER_HTTP_GET_PATTERNS = Object.freeze([
   /^\/ai\/access-context$/,
+  /^\/ai\/observer-channels$/,
 ])
 
 export function buildAiAccessContext(user, options = {}) {

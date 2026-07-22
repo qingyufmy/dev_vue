@@ -102,10 +102,11 @@ describe('rollout hardening contract', () => {
     expect(bridge).toContain('Failed to synchronize trade state')
   })
 
-  it('projects administrator account reads in observer mode without routing writes to it', () => {
+  it('projects the authorized observer channel source without routing writes to it', () => {
     expect(bridge).toContain("_source: 'admin_market_fallback'")
     expect(bridge).toContain("const readActions = ['rates', 'symbols', 'quote']")
-    expect(bridge).toContain('const dataUserId = access.read_only ? observerSourceUserId : userId')
+    expect(bridge).toContain('resolveObserverBridgeContext(userId, user, params.observer_channel_id)')
+    expect(bridge).toContain('const dataUserId = access.read_only ? observerContext.bridgeUserId : userId')
     expect(bridge).toContain("observerWsActionAllowed(access, action)")
     expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'account', {}, { noFallback:true })")
     expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'positions', {}, { noFallback:true })")

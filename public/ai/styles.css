@@ -6776,6 +6776,49 @@ a.signal-link:hover {
   font-weight: 500;
 }
 
+.observer-channel-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-input) 88%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.observer-channel-control svg {
+  flex: 0 0 auto;
+  color: var(--gold-primary);
+}
+
+.observer-channel-control select {
+  min-width: 116px;
+  max-width: 190px;
+  min-height: 26px;
+  padding: 2px 24px 2px 7px;
+  border: 0;
+  border-radius: 7px;
+  outline: 0;
+  color: var(--text-primary);
+  background-color: var(--bg-card);
+  font: inherit;
+  cursor: pointer;
+}
+
+.observer-channel-control select:focus-visible {
+  box-shadow: 0 0 0 2px var(--gold-primary);
+}
+
+.observer-channel-control select:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
 .analyst-view-panel[hidden] {
   display: none;
 }

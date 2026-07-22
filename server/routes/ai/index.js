@@ -16,7 +16,8 @@ import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedu
 import { getBridgeDiagnostics, getActivePlatformBridgeUserId, isBridgeAlive } from '../../bridge-ws.js'
 import { buildAiAccessContext, observerAccessError, observerHttpRequestAllowed } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
-  getDefaultObserverSource, listObserverChannels, listObserverSources,
+  listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
+  replaceObserverChannelAssignments, resolveObserverSourceForUser,
   updateObserverChannel, updateObserverSource } from './observer-channels.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
@@ -96,17 +97,31 @@ router.use('/ai', authMiddleware, (req, res, next) => {
 })
 
 router.get('/ai/access-context', async (req, res) => {
-  const [observerSourceUserId, observerSource] = req.aiAccess?.read_only
-    ? await Promise.all([getActivePlatformBridgeUserId(), getDefaultObserverSource().catch(() => null)])
-    : [null, null]
+  const observerSource = req.aiAccess?.read_only
+    ? await resolveObserverSourceForUser(req.user.id, req.user.plan, req.query.channel_id).catch(() => null)
+    : null
+  const observerSourceUserId = observerSource
+    ? (isBridgeAlive(Number(observerSource.bridge_user_id)) ? Number(observerSource.bridge_user_id) : null)
+    : (req.aiAccess?.read_only ? await getActivePlatformBridgeUserId() : null)
   res.json({
     ok:true,
     access:{ ...req.aiAccess, observer_source_available:Boolean(observerSourceUserId),
       observer_channel:observerSource ? {
-        id:Number(observerSource.channel_id), name:observerSource.channel_name,
-        slug:observerSource.channel_slug, source_id:Number(observerSource.source_id),
+        id:Number(observerSource.id), name:observerSource.name,
+        slug:observerSource.slug, source_id:Number(observerSource.source_id),
       } : null },
   })
+})
+
+router.get('/ai/observer-channels', async (req, res) => {
+  try {
+    const channels = await listObserverChannelsForUser(req.user.id, req.user.plan)
+    res.json({ ok:true, channels:channels.map(channel => ({
+      id:Number(channel.id), name:channel.name, slug:channel.slug,
+      description:channel.description, is_default:Boolean(channel.is_default),
+      online:isBridgeAlive(Number(channel.bridge_user_id)),
+    })) })
+  } catch (error) { reviewError(res, error) }
 })
 
 function reviewError(res, error) {
@@ -170,6 +185,20 @@ router.put('/ai/admin/observer-channels/:id', async (req, res) => {
 router.delete('/ai/admin/observer-channels/:id', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try { res.json({ ok:true, deleted:await deleteObserverChannel(req.params.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/observer-channels/:id/assignments', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try { res.json({ ok:true, assignments:await listObserverChannelAssignments(req.params.id) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/observer-channels/:id/assignments', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try { res.json({ ok:true, assignments:await replaceObserverChannelAssignments(
+    req.params.id, req.user.id, req.body?.user_ids,
+  ) }) }
   catch (error) { reviewError(res, error) }
 })
 

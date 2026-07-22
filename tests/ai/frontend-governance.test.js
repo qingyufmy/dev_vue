@@ -731,6 +731,14 @@ describe('subscription schedule modal layout', () => {
 })
 
 describe('route permissions and credential redaction', () => {
+  it('keeps the observer channel selector compact and responsive', () => {
+    expect(html).toContain('id="observerChannelSelect"')
+    expect(css).toContain('.observer-channel-control {')
+    expect(css).toContain('box-shadow: 0 0 0 2px var(--gold-primary)')
+    expect(responsiveCss).toContain('grid-row: 3')
+    expect(responsiveCss).toContain('font-size: 16px')
+  })
+
   it('returns the account metrics rendered by the risk-center status card', () => {
     const start = routes.indexOf("router.get('/ai/risk-center', authMiddleware")
     const end = routes.indexOf("router.post('/ai/risk-center/refresh'", start)

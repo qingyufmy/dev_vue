@@ -3,6 +3,12 @@ import { queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
 const SOURCE_STATUSES = new Set(['active', 'disabled'])
 const CHANNEL_STATUSES = new Set(['active', 'disabled'])
 const CHANNEL_AUDIENCES = new Set(['all', 'plus', 'pro', 'assigned'])
+const viewerChannelCache = new Map()
+const VIEWER_CHANNEL_CACHE_MS = 3000
+
+export function invalidateObserverChannelCache() {
+  viewerChannelCache.clear()
+}
 
 function requiredText(value, code, maxLength) {
   const text = String(value || '').trim()
@@ -59,6 +65,40 @@ export async function getDefaultObserverSource() {
     ORDER BY channels.updated_at DESC, channels.id DESC LIMIT 1`)
 }
 
+export async function listObserverChannelsForUser(userId, plan = 'free') {
+  const viewerId = Number(userId)
+  const normalizedPlan = String(plan || 'free').toLowerCase()
+  const cacheKey = `${viewerId}:${normalizedPlan}`
+  const cached = viewerChannelCache.get(cacheKey)
+  if (cached && cached.expires_at > Date.now()) return cached.channels
+  const channels = await queryAll(`SELECT channels.id, channels.name, channels.slug,
+      channels.description, channels.is_default, channels.sort_order,
+      sources.id AS source_id, sources.name AS source_name,
+      sources.bridge_user_id, sources.trading_account_id
+    FROM ai_observer_channels channels
+    JOIN ai_observer_sources sources ON sources.id = channels.source_id
+    WHERE channels.status = 'active' AND sources.status = 'active'
+      AND (channels.audience = 'all' OR channels.audience = ? OR EXISTS (
+        SELECT 1 FROM ai_observer_channel_assignments assignments
+        WHERE assignments.channel_id = channels.id AND assignments.user_id = ?
+      ))
+    ORDER BY channels.is_default DESC, channels.sort_order, channels.id`, [normalizedPlan, viewerId])
+  viewerChannelCache.set(cacheKey, { expires_at:Date.now() + VIEWER_CHANNEL_CACHE_MS, channels })
+  return channels
+}
+
+export async function resolveObserverSourceForUser(userId, plan, requestedChannelId = null) {
+  const channels = await listObserverChannelsForUser(userId, plan)
+  if (!channels.length) return null
+  if (requestedChannelId !== null && requestedChannelId !== undefined && requestedChannelId !== '') {
+    const requestedId = Number(requestedChannelId)
+    const selected = channels.find(channel => Number(channel.id) === requestedId)
+    if (!selected) throw new Error('observer_channel_access_denied')
+    return selected
+  }
+  return channels.find(channel => Number(channel.is_default) === 1) || channels[0]
+}
+
 export async function listObserverSources() {
   return queryAll(`SELECT sources.id, sources.name, sources.bridge_user_id,
       sources.trading_account_id, sources.status, sources.notes,
@@ -85,6 +125,7 @@ export async function createObserverSource(actorId, input = {}) {
     requiredText(input.name, 'source_name_required', 80), bridgeUser.id, tradingAccountId,
     normalizedStatus(input.status, SOURCE_STATUSES), optionalText(input.notes, 255), Number(actorId),
   ])
+  invalidateObserverChannelCache()
   return queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [result.insertId])
 }
 
@@ -103,6 +144,7 @@ export async function updateObserverSource(id, input = {}) {
     input.status === undefined ? existing.status : normalizedStatus(input.status, SOURCE_STATUSES),
     input.notes === undefined ? existing.notes : optionalText(input.notes, 255), Number(id),
   ])
+  invalidateObserverChannelCache()
   return queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [Number(id)])
 }
 
@@ -113,6 +155,7 @@ export async function deleteObserverSource(id) {
   const usage = await queryOne('SELECT COUNT(*) AS count FROM ai_observer_channels WHERE source_id = ?', [sourceId])
   if (Number(usage?.count || 0) > 0) throw new Error('observer_source_has_channels')
   await queryRun('DELETE FROM ai_observer_sources WHERE id = ?', [sourceId])
+  invalidateObserverChannelCache()
   return { id: sourceId }
 }
 
@@ -141,7 +184,7 @@ export async function createObserverChannel(input = {}) {
   const sourceId = await validateSource(input.source_id)
   const audience = String(input.audience || 'all').toLowerCase()
   if (!CHANNEL_AUDIENCES.has(audience)) throw new Error('invalid_channel_audience')
-  return withTransaction(async run => {
+  const channel = await withTransaction(async run => {
     const [result] = await run(`INSERT INTO ai_observer_channels
       (name, slug, description, source_id, audience, status, is_default, sort_order, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, 0, ?, NOW(), NOW())`, [
@@ -154,6 +197,8 @@ export async function createObserverChannel(input = {}) {
     const [[channel]] = await run('SELECT * FROM ai_observer_channels WHERE id = ?', [result.insertId])
     return channel
   })
+  invalidateObserverChannelCache()
+  return channel
 }
 
 export async function updateObserverChannel(id, input = {}) {
@@ -163,7 +208,7 @@ export async function updateObserverChannel(id, input = {}) {
   const sourceId = await validateSource(input.source_id ?? existing.source_id)
   const audience = String(input.audience ?? existing.audience).toLowerCase()
   if (!CHANNEL_AUDIENCES.has(audience)) throw new Error('invalid_channel_audience')
-  return withTransaction(async run => {
+  const channel = await withTransaction(async run => {
     await run(`UPDATE ai_observer_channels SET name = ?, slug = ?, description = ?,
       source_id = ?, audience = ?, status = ?, sort_order = ?, updated_at = NOW() WHERE id = ?`, [
       input.name === undefined ? existing.name : requiredText(input.name, 'channel_name_required', 80),
@@ -178,6 +223,8 @@ export async function updateObserverChannel(id, input = {}) {
     const [[channel]] = await run('SELECT * FROM ai_observer_channels WHERE id = ?', [channelId])
     return channel
   })
+  invalidateObserverChannelCache()
+  return channel
 }
 
 export async function deleteObserverChannel(id) {
@@ -186,5 +233,40 @@ export async function deleteObserverChannel(id) {
   if (!existing) throw new Error('observer_channel_not_found')
   if (Number(existing.is_default) === 1) throw new Error('default_observer_channel_cannot_be_deleted')
   await queryRun('DELETE FROM ai_observer_channels WHERE id = ?', [channelId])
+  invalidateObserverChannelCache()
   return { id: channelId }
+}
+
+export async function listObserverChannelAssignments(channelId) {
+  const id = Number(channelId)
+  const channel = await queryOne('SELECT id FROM ai_observer_channels WHERE id = ?', [id])
+  if (!channel) throw new Error('observer_channel_not_found')
+  return queryAll(`SELECT assignments.user_id, assignments.created_at,
+      users.email, users.nickname, users.plan
+    FROM ai_observer_channel_assignments assignments
+    JOIN users ON users.id = assignments.user_id
+    WHERE assignments.channel_id = ? ORDER BY users.id`, [id])
+}
+
+export async function replaceObserverChannelAssignments(channelId, actorId, userIds = []) {
+  const id = Number(channelId)
+  const channel = await queryOne('SELECT id FROM ai_observer_channels WHERE id = ?', [id])
+  if (!channel) throw new Error('observer_channel_not_found')
+  const normalizedIds = [...new Set((Array.isArray(userIds) ? userIds : [])
+    .map(Number).filter(userId => Number.isInteger(userId) && userId > 0))]
+  if (normalizedIds.length) {
+    const users = await queryAll(`SELECT id FROM users WHERE deletion_status = 'active'
+      AND deleted_at IS NULL AND id IN (${normalizedIds.map(() => '?').join(',')})`, normalizedIds)
+    if (users.length !== normalizedIds.length) throw new Error('observer_assignment_user_not_found')
+  }
+  await withTransaction(async run => {
+    await run('DELETE FROM ai_observer_channel_assignments WHERE channel_id = ?', [id])
+    for (const userId of normalizedIds) {
+      await run(`INSERT INTO ai_observer_channel_assignments
+        (channel_id, user_id, created_by_user_id, created_at) VALUES (?, ?, ?, NOW())`,
+      [id, userId, Number(actorId)])
+    }
+  })
+  invalidateObserverChannelCache()
+  return listObserverChannelAssignments(id)
 }

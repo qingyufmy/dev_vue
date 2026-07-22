@@ -11,12 +11,15 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   createObserverChannel, createObserverSource, deleteObserverChannel,
-  getDefaultObserverSource, updateObserverSource,
+  getDefaultObserverSource, invalidateObserverChannelCache,
+  listObserverChannelsForUser, replaceObserverChannelAssignments,
+  resolveObserverSourceForUser, updateObserverSource,
 } from '../../server/routes/ai/observer-channels.js'
 
 describe('observer sources and channels', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    invalidateObserverChannelCache()
   })
 
   it('resolves the source through the explicit default channel', async () => {
@@ -74,5 +77,31 @@ describe('observer sources and channels', () => {
     db.queryOne.mockResolvedValue({ id:11, is_default:1 })
     await expect(deleteObserverChannel(11)).rejects.toThrow('default_observer_channel_cannot_be_deleted')
     expect(db.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('lists only channels visible to the viewer and caches the short-lived result', async () => {
+    db.queryAll.mockResolvedValue([{ id:3, audience:'plus', bridge_user_id:7 }])
+    await expect(listObserverChannelsForUser(22, 'plus')).resolves.toHaveLength(1)
+    await expect(listObserverChannelsForUser(22, 'plus')).resolves.toHaveLength(1)
+    expect(db.queryAll).toHaveBeenCalledTimes(1)
+    expect(db.queryAll.mock.calls[0][1]).toEqual(['plus', 22])
+  })
+
+  it('rejects a requested channel outside the viewer visibility set', async () => {
+    db.queryAll.mockResolvedValue([{ id:3, bridge_user_id:7 }])
+    await expect(resolveObserverSourceForUser(22, 'plus', 4))
+      .rejects.toThrow('observer_channel_access_denied')
+  })
+
+  it('replaces explicit channel assignments atomically', async () => {
+    db.queryOne.mockResolvedValue({ id:3 })
+    db.queryAll
+      .mockResolvedValueOnce([{ id:22 }, { id:23 }])
+      .mockResolvedValueOnce([{ user_id:22 }, { user_id:23 }])
+    const run = vi.fn(async () => [{ affectedRows:1 }])
+    db.withTransaction.mockImplementation(callback => callback(run))
+    const assignments = await replaceObserverChannelAssignments(3, 1, [22, 23, 22])
+    expect(assignments).toHaveLength(2)
+    expect(run.mock.calls.filter(([sql]) => sql.includes('INSERT INTO ai_observer_channel_assignments'))).toHaveLength(2)
   })
 })

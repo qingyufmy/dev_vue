@@ -7,6 +7,8 @@ const state = {
   token: localStorage.getItem("authToken") || getCookie("ws_token") || "",
   user: null,
   aiAccess: null,
+  observerChannels: [],
+  selectedObserverChannelId: null,
   symbols: [],
   signals: [],
   selectedSignal: null,
@@ -1115,6 +1117,8 @@ const API_ERROR_MESSAGES = {
   private_strategy_limit_reached: "当前 Pro 账户最多只能创建 1 条自定义策略",
   trading_account_not_active: "当前 MT5 账户不是活动账户，请重新连接具有交易权限的 MT5 账户",
   admin_only: "仅管理员可以使用此功能",
+  observer_channel_access_denied: "当前账号不能查看这个观摩频道",
+  observer_source_offline: "当前观摩频道暂时离线，请稍后重试",
   "symbol required": "请选择交易品种",
   "timeframe required": "请选择 K 线周期",
   "strategy required": "请选择交易策略",
@@ -1291,6 +1295,9 @@ function wsApi(action, params = {}, timeoutOverride) {
     const cmdId = `ws_${++_wsCmdId}`;
     // analyze/auto-inference may take 60-120s
     const requestParams = { ...params };
+    if (isObserverMode() && state.selectedObserverChannelId) {
+      requestParams.observer_channel_id = state.selectedObserverChannelId;
+    }
     const queuedDataAction = ['history', 'history_chart_data', 'rates'].includes(action);
     const timeout = timeoutOverride || requestParams._timeout || (action === 'analyze' ? 120000 : action === 'signals' || action === 'signal-pending-info' ? 30000 : queuedDataAction ? 45000 : 10000);
     delete requestParams._timeout;
@@ -1389,7 +1396,7 @@ function connectBridgeStatusWs(onReady) {
     if (state._hbTimer) clearInterval(state._hbTimer);
     state._hbTimer = setInterval(() => {
       if (ws.readyState === 1) {
-        try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq })); } catch {}
+        try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq, observer_channel_id:state.selectedObserverChannelId || null })); } catch {}
       }
     }, 30000);
     _fireReady();
@@ -1881,6 +1888,7 @@ function flashSignalMonitorUpdate() {
 // Handle heartbeat reply — MT5 connection status
 function handleHeartbeat(msg) {
   syncAiAccess(msg.access);
+  if (msg.observer_channel?.id) syncSelectedObserverChannel(msg.observer_channel.id);
   const isLive = msg.mt5_connected && msg.mt5_alive;
   const usingFallback = msg.using_fallback;
   const wasLive = state._lastGatewayLive;
@@ -3607,6 +3615,7 @@ async function bootstrap() {
     }
     const accessRes = await api("/api/ai/access-context");
     syncAiAccess(accessRes.access);
+    await loadObserverChannels();
     showApp(true);
     checkChangelog();
     // Connect WebSocket FIRST — all data flows through it (with 10s timeout)
@@ -4305,6 +4314,64 @@ function showSidebarObserveHint(html) {
 function hideSidebarObserveHint() {
   const hint = $("sidebarObserveHint");
   if (hint) hint.classList.add("hidden");
+}
+
+function observerChannelStorageKey() {
+  return `ai_observer_channel_${state.user?.id || 'guest'}`;
+}
+
+function syncSelectedObserverChannel(channelId) {
+  const normalizedId = Number(channelId) || null;
+  if (!normalizedId) return;
+  state.selectedObserverChannelId = normalizedId;
+  localStorage.setItem(observerChannelStorageKey(), String(normalizedId));
+  const select = $("observerChannelSelect");
+  if (select && select.value !== String(normalizedId)) select.value = String(normalizedId);
+}
+
+function renderObserverChannelControl() {
+  const control = $("observerChannelControl");
+  const select = $("observerChannelSelect");
+  if (!control || !select) return;
+  const channels = state.observerChannels || [];
+  control.classList.toggle("hidden", !isObserverMode() || channels.length < 2);
+  select.innerHTML = channels.map(channel => `<option value="${Number(channel.id)}">${escapeHtml(channel.name)}${channel.online ? '' : ' · 离线'}</option>`).join('');
+  if (state.selectedObserverChannelId) select.value = String(state.selectedObserverChannelId);
+}
+
+async function loadObserverChannels() {
+  if (!isObserverMode()) {
+    state.observerChannels = [];
+    state.selectedObserverChannelId = null;
+    renderObserverChannelControl();
+    return;
+  }
+  const data = await api('/api/ai/observer-channels');
+  state.observerChannels = Array.isArray(data.channels) ? data.channels : [];
+  const savedId = Number(localStorage.getItem(observerChannelStorageKey()));
+  const accessId = Number(state.aiAccess?.observer_channel?.id);
+  const selected = state.observerChannels.find(channel => Number(channel.id) === savedId)
+    || state.observerChannels.find(channel => Number(channel.id) === accessId)
+    || state.observerChannels.find(channel => channel.is_default)
+    || state.observerChannels[0];
+  state.selectedObserverChannelId = selected ? Number(selected.id) : null;
+  if (selected) localStorage.setItem(observerChannelStorageKey(), String(selected.id));
+  renderObserverChannelControl();
+}
+
+async function changeObserverChannel(channelId) {
+  const nextId = Number(channelId);
+  if (!nextId || nextId === state.selectedObserverChannelId) return;
+  syncSelectedObserverChannel(nextId);
+  _historyCache = null;
+  _historyChartCache = null;
+  state.signals = [];
+  state.positions = [];
+  const accessRes = await api(`/api/ai/access-context?channel_id=${encodeURIComponent(nextId)}`);
+  syncAiAccess(accessRes.access);
+  await refreshAll();
+  const channelName = state.observerChannels.find(channel => Number(channel.id) === nextId)?.name || '观摩频道';
+  toast(`已切换至${channelName}`, 'success');
 }
 
 function setObserverPanelLock(panel, locked) {
@@ -7791,6 +7858,16 @@ function bindEvents() {
 
   // Gateway badge click — toggle trade sending
   $("tradeMode")?.addEventListener("click", handleTradeModeClick);
+  $("observerChannelSelect")?.addEventListener("change", event => {
+    const select = event.currentTarget;
+    select.disabled = true;
+    changeObserverChannel(select.value)
+      .catch(error => {
+        renderObserverChannelControl();
+        toast(localizeReason(error.message), "error");
+      })
+      .finally(() => { select.disabled = false; });
+  });
 
   // Auto analyze badge — simple toggle on/off
   $("autoAnalyzeMode")?.addEventListener("click", handleAutoToggle);
