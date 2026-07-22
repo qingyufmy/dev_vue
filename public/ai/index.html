@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260722b" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260722d" />
   </head>
   <body>
     <!-- Pro-only overlay -->
@@ -54,14 +54,14 @@
 
         <div class="topbar-badges">
           <div class="topbar-primary-status" aria-label="核心运行状态">
-            <span id="gatewayMode" class="status-badge status-neutral clickable-badge" title="点击连接或断开 MT5"><span class="badge-dot"></span>MT5 未连接</span>
+            <button id="gatewayMode" type="button" class="status-badge status-neutral clickable-badge gateway-control" title="打开 MT5 连接设置"><span class="badge-dot" aria-hidden="true"></span>MT5 未连接</button>
             <button id="autoAnalyzeMode" type="button" class="status-badge status-neutral clickable-badge auto-runtime-control" title="点击配置自动分析">
               <span class="badge-dot" aria-hidden="true"></span>
               <span class="auto-runtime-copy"><span class="badge-text">自动分析 --</span><span class="auto-runtime-stage"></span></span>
               <span class="auto-runtime-percent" aria-hidden="true"></span>
               <span class="auto-runtime-track" role="progressbar" aria-label="自动分析进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="auto-runtime-fill"></span></span>
             </button>
-            <span id="tradeMode" class="status-badge status-neutral clickable-badge" title="点击切换自动下单权限"><span class="badge-dot"></span>自动下单 --</span>
+            <button id="tradeMode" type="button" class="status-badge status-neutral clickable-badge trade-permission-control" title="查看或切换交易发送权限" aria-pressed="false"><span class="badge-dot" aria-hidden="true"></span>交易发送 --</button>
           </div>
           <div class="topbar-context-status" aria-label="行情环境">
             <span id="marketStatus" class="status-badge status-neutral" title="市场状态：未知"><span class="badge-dot"></span>市场 --</span>
@@ -93,7 +93,7 @@
           <button class="nav-item admin-only" data-tab="admin-dashboard" data-title="运营中心" style="display:none">
             <i data-lucide="bar-chart-3" size="16"></i>运营中心
           </button>
-          <button class="nav-item active" data-tab="dashboard" data-title="首页">
+          <button class="nav-item active" data-tab="dashboard" data-title="首页" aria-current="page">
             <i data-lucide="layout-dashboard" size="16"></i>首页
           </button>
         </div>
@@ -155,8 +155,8 @@
       <main class="main">
         <section id="dashboard" class="tab-panel active">
           <header class="dashboard-intro calm-page-header">
-            <div><span class="page-eyebrow">账户、行情与最新建议</span><h1>交易首页</h1><p>先确认账户连接和交易状态，再查看 AI 建议与当前持仓。</p></div>
-            <div class="dashboard-quick-actions"><button class="btn btn-secondary" data-tab-jump="ai-analyze"><i data-lucide="scan-search" size="15"></i>查看AI分析</button><button class="btn btn-secondary" data-tab-jump="trading"><i data-lucide="briefcase-business" size="15"></i>管理交易</button></div>
+            <div><span class="page-context-label"><i data-lucide="shield-check" size="13"></i>账户安全与当前行动</span><h1>交易首页</h1><p>先看账户是否安全，再决定是否需要处理最新建议。</p></div>
+            <div class="dashboard-quick-actions"><button class="btn btn-secondary" data-tab-jump="trading"><i data-lucide="briefcase-business" size="15"></i>管理交易</button></div>
           </header>
           <div class="dashboard-grid">
             <div class="card grid-area-account">
@@ -166,13 +166,7 @@
                   <i data-lucide="refresh-cw" size="12"></i>刷新
                 </button>
               </div>
-              <div class="account-stats-row">
-                <div class="stat-item">
-                  <span class="stat-label">余额</span>
-                  <span id="accountBalance" class="stat-value num">--</span>
-                  <span id="accountCurrency" class="stat-unit">USD</span>
-                </div>
-                <div class="stat-divider"></div>
+              <div class="account-stats-row account-primary-stats">
                 <div class="stat-item">
                   <span class="stat-label">净值</span>
                   <span id="accountEquity" class="stat-value num">--</span>
@@ -190,24 +184,21 @@
                   <span id="accountMarginFree" class="stat-value num">--</span>
                   <span class="stat-unit account-currency-unit">USD</span>
                 </div>
-                <div class="stat-divider"></div>
-                <div class="stat-item">
-                  <span class="stat-label">已用保证金</span>
-                  <span id="accountMargin" class="stat-value num">--</span>
-                  <span class="stat-unit account-currency-unit">USD</span>
-                </div>
-                <div class="stat-divider"></div>
-                <div class="stat-item">
-                  <span class="stat-label">杠杆</span>
-                  <span class="stat-value num">1:<span id="accountLeverage">--</span></span>
-                </div>
               </div>
+              <details class="account-more-details">
+                <summary>查看账户详情</summary>
+                <div class="account-secondary-stats">
+                  <div><span>余额</span><strong id="accountBalance" class="num">--</strong><small id="accountCurrency">USD</small></div>
+                  <div><span>已用保证金</span><strong id="accountMargin" class="num">--</strong><small class="account-currency-unit">USD</small></div>
+                  <div><span>账户杠杆</span><strong class="num">1:<span id="accountLeverage">--</span></strong></div>
+                </div>
+              </details>
             </div>
 
-            <div class="card card-gold grid-area-quote">
+            <div class="card grid-area-quote">
               <div class="card-header">
                 <span class="card-title">实时报价</span>
-                <input id="quoteSymbolSelect" class="instrument-select" />
+                <input id="quoteSymbolSelect" class="instrument-select" title="交易品种代码；末尾后缀由经纪商定义" />
               </div>
               <div class="quote-main">
                 <div class="quote-side">
@@ -218,7 +209,7 @@
                 </div>
                 <div class="quote-spread-col">
                   <span class="spread-chip">
-                    <span class="spread-label">点差</span>
+                    <span class="spread-label" title="买卖价差；通常越小，成交成本越低">点差</span>
                     <span id="quoteSpread" class="spread-value num">--</span>
                   </span>
                   <span class="quote-change-block">
@@ -244,13 +235,14 @@
               </div>
               <div class="kline-toolbar">
                 <div class="kline-periods">
-                  <button class="kline-period-btn" data-tf="M1">M1</button>
                   <button class="kline-period-btn active" data-tf="M5">M5</button>
                   <button class="kline-period-btn" data-tf="M15">M15</button>
-                  <button class="kline-period-btn" data-tf="M30">M30</button>
                   <button class="kline-period-btn" data-tf="H1">H1</button>
                   <button class="kline-period-btn" data-tf="H4">H4</button>
-                  <button class="kline-period-btn" data-tf="D1">D1</button>
+                  <details class="kline-more-periods">
+                    <summary>更多周期</summary>
+                    <div><button class="kline-period-btn" data-tf="M1">M1</button><button class="kline-period-btn" data-tf="M30">M30</button><button class="kline-period-btn" data-tf="D1">D1</button></div>
+                  </details>
                 </div>
                 <span id="klineDataSource" class="kline-source-badge" title="K 线数据来源">行情源校验中</span>
                 <span id="klineLastPrice" class="kline-last-price num">--</span>
@@ -283,7 +275,8 @@
                 <p>此建议已过期，等待新一轮 AI 分析</p>
                 <button class="btn btn-primary" data-tab-jump="ai-analyze">查看AI分析</button>
               </div>
-              <div id="latestSignal" class="signal-body" aria-live="polite">
+              <div id="signalAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+              <div id="latestSignal" class="signal-body">
                 <section class="signal-decision-panel" aria-label="信号方向">
                   <div class="signal-meta-row">
                     <span id="sigSymbol" class="signal-symbol num">--</span>
@@ -294,11 +287,10 @@
                       <span class="signal-section-label">当前建议</span>
                       <div class="signal-direction-main">
                         <span id="sigDirectionText" class="signal-direction-text hold">等待信号</span>
-                        <span id="sigDirection" class="signal-direction hold">--</span>
                       </div>
                     </div>
                     <div class="signal-confidence-block">
-                      <span class="signal-confidence-label">模型置信度</span>
+                      <span class="signal-confidence-label" title="模型对本次方向判断的自评，不代表交易胜率">模型置信度</span>
                       <span id="sigConfidence" class="signal-confidence-value num">--</span>
                       <div class="signal-bar-track" aria-hidden="true"><div id="sigBar" class="signal-bar-fill" style="width: 0%"></div></div>
                     </div>
@@ -320,6 +312,8 @@
                     <strong id="sigValidWindow" class="num">--</strong>
                   </div>
                 </section>
+
+                <section id="signalSafetyChain" class="signal-safety-chain" aria-label="建议执行进度"></section>
 
                 <section class="signal-price-grid" aria-label="信号关键价格">
                   <div class="signal-price-item primary"><span>分析参考价</span><strong id="sigReferencePrice" class="num">--</strong></div>
@@ -1013,7 +1007,7 @@
             <p class="bridge-note">内置登录界面，输入账号密码即可使用。</p>
           </div>
           <div class="bridge-options">
-            <button id="downloadExe" class="bridge-option-card" style="border-color: #22c55e;">
+            <button id="downloadExe" class="bridge-option-card bridge-option-recommended">
               <div class="bridge-option-icon"><i data-lucide="monitor" size="32"></i></div>
               <div class="bridge-option-info">
                 <strong>Windows (.exe)</strong>
@@ -1112,7 +1106,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260722b"></script>
+    <script src="/ai/app.js?v=20260722d"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">
@@ -1123,7 +1117,7 @@
         </div>
         <div id="changelogContent" style="max-height:60vh;overflow-y:auto;line-height:1.7;color:var(--text-secondary);font-size:14px"></div>
         <div style="margin-top:20px;text-align:right">
-          <button onclick="closeChangelogModal()" style="padding:8px 24px;border:none;border-radius:6px;background:var(--gold-primary);color:#1a1a2e;cursor:pointer;font-weight:600;font-size:14px">我知道了</button>
+          <button onclick="closeChangelogModal()" class="btn btn-primary">我知道了</button>
         </div>
       </div>
     </div>

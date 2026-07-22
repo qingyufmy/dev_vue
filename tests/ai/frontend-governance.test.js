@@ -483,10 +483,42 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html.indexOf('id="gatewayMode"')).toBeLessThan(html.indexOf('id="autoAnalyzeMode"'))
     expect(html.indexOf('id="autoAnalyzeMode"')).toBeLessThan(html.indexOf('id="tradeMode"'))
     expect(html).toContain('class="dashboard-intro calm-page-header"')
-    expect(html).toContain('账户、行情与最新建议')
-    expect(html).toContain('data-tab-jump="ai-analyze"')
+    expect(html).toContain('账户安全与当前行动')
     expect(html).toContain('data-tab-jump="trading"')
     expect(css).toContain('.topbar-context-status .status-badge')
+  })
+
+  it('makes live-trading permission explicit, confirmed and keyboard accessible', () => {
+    expect(html).toContain('<button id="gatewayMode" type="button"')
+    expect(html).toContain('<button id="tradeMode" type="button"')
+    expect(html).toContain('aria-pressed="false"')
+    expect(app).toContain('function renderTradePermissionBadge(')
+    expect(app).toContain('await showConfirm("开启真实交易发送"')
+    expect(app).toContain('await showConfirm("关闭交易发送"')
+    expect(app).toContain('["服务器风控", "每笔订单发送前强制校验"]')
+    expect(css).toContain('.status-permission')
+  })
+
+  it('shows an explicit AI to risk to MT5 chain without a noisy live region', () => {
+    expect(html).toContain('id="signalSafetyChain"')
+    expect(html).toContain('id="signalAnnouncement"')
+    expect(html).toContain('<div id="latestSignal" class="signal-body">')
+    expect(app).toContain('function signalExecutionStages(signal)')
+    expect(app).toContain('label:"AI 建议"')
+    expect(app).toContain('label:"服务器风控"')
+    expect(app).toContain('label:"MT5 结果"')
+    expect(app).toContain('signal-monitor-safety')
+    expect(app).toContain('analysis-safety-chain')
+    expect(css).toContain('.signal-safety-stages')
+  })
+
+  it('uses progressive disclosure for secondary account data and uncommon chart periods', () => {
+    expect(html).toContain('class="account-stats-row account-primary-stats"')
+    expect(html).toContain('class="account-more-details"')
+    expect(html).toContain('<summary>查看账户详情</summary>')
+    expect(html).toContain('class="kline-more-periods"')
+    expect(html).toContain('<summary>更多周期</summary>')
+    expect(html).not.toContain('card card-gold grid-area-quote')
   })
 
   it('separates order management from manual trading and keeps the active strategy summary focused', () => {

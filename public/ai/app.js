@@ -472,13 +472,29 @@ function setText(id, value) {
 function setBadge(id, text, type, withDot = true) {
   const el = $(id);
   if (!el) return;
-  // Preserve interaction state applied by the role/access layer.
-  const extra = ["clickable-badge", "is-readonly"]
-    .filter(className => el.classList.contains(className))
-    .map(className => ` ${className}`)
-    .join("");
-  el.className = `status-badge status-${type}${extra}`;
-  el.innerHTML = `${withDot ? '<span class="badge-dot"></span>' : ""}${escapeHtml(text)}`;
+  // Only replace the visual state. Semantic control classes and readonly
+  // affordances must survive live status refreshes.
+  [...el.classList].filter(className => className.startsWith("status-")).forEach(className => el.classList.remove(className));
+  el.classList.add("status-badge", `status-${type}`);
+  el.innerHTML = `${withDot ? '<span class="badge-dot" aria-hidden="true"></span>' : ""}${escapeHtml(text)}`;
+}
+
+function timeframeHelp(value) {
+  const timeframe = String(value || "").trim().toUpperCase();
+  const labels = { M1:"1 分钟", M5:"5 分钟", M15:"15 分钟", M30:"30 分钟", H1:"1 小时", H4:"4 小时", D1:"1 天" };
+  return labels[timeframe] ? `${timeframe}：每根 K 线代表 ${labels[timeframe]}` : "策略使用的行情周期";
+}
+
+function renderTradePermissionBadge(enabled, { blocked = false, readonly = isObserverMode(), label = "" } = {}) {
+  const known = typeof enabled === "boolean";
+  const text = label || (known
+    ? `交易发送${enabled ? "开启" : "关闭"}${readonly ? " · 只读" : ""}`
+    : `交易发送状态未知${readonly ? " · 只读" : ""}`);
+  setBadge("tradeMode", text, blocked ? "warning" : enabled ? "permission" : "neutral");
+  const control = $("tradeMode");
+  if (!control) return;
+  control.setAttribute("aria-pressed", String(enabled === true));
+  control.setAttribute("aria-label", `${text}。${readonly ? "当前为观摩模式，不可修改" : "点击可修改交易发送权限"}`);
 }
 
 const AUTO_REASON_LABELS = {
@@ -1111,11 +1127,7 @@ function observerMessage() {
 function renderObserverSwitchStates({ tradeEnabled, autoEnabled } = {}) {
   const tradeKnown = typeof tradeEnabled === 'boolean';
   const autoKnown = typeof autoEnabled === 'boolean';
-  setBadge(
-    "tradeMode",
-    tradeKnown ? `交易发送${tradeEnabled ? "开启" : "关闭"} · 只读` : "交易发送状态未知 · 只读",
-    tradeEnabled === true ? "danger" : "neutral",
-  );
+  renderTradePermissionBadge(tradeKnown ? tradeEnabled : null, { readonly:true });
   setBadge(
     "autoAnalyzeMode",
     autoKnown ? `自动分析${autoEnabled ? "开启" : "关闭"} · 只读` : "自动分析状态未知 · 只读",
@@ -1802,7 +1814,7 @@ function handleHeartbeat(msg) {
       });
     } else {
       const tradeText = msg.trade_enabled ? "交易发送开启" : "交易发送关闭";
-      setBadge("tradeMode", tradeText, msg.trade_enabled ? "danger" : "neutral");
+      renderTradePermissionBadge(msg.trade_enabled, { label:tradeText });
     }
   } else if (!isLive && !usingFallback) {
     setBadge("tradeMode", "请先启动桥接", "neutral");
@@ -3277,7 +3289,12 @@ function setTab(tabId, options = {}) {
   }
   if (tabId !== "review-memory") stopReviewDetailPolling();
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tab === tabId);
+    const active = button.dataset.tab === tabId;
+    button.classList.toggle("active", active);
+    if (button.dataset.tab) {
+      if (active) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
   });
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === tabId);
@@ -3527,6 +3544,7 @@ async function refreshAll() {
 async function loadStatus() {
   const health = await wsApi("health");
   const gateway = health.gateway || {};
+  state.gatewayStatus = gateway;
   syncAiAccess(gateway.access);
   const isLive = gateway.mode === "live";
   const usingFallback = gateway.using_fallback;
@@ -3561,7 +3579,7 @@ async function loadStatus() {
     ? "请先启动桥接"
     : mt5TradeBlocked ? "MT5 自动交易关闭"
     : gateway.live_trading_enabled ? "交易发送开启" : "交易发送关闭";
-  setBadge("tradeMode", tradeText, gateway.live_trading_enabled && !mt5TradeBlocked ? "danger" : "neutral");
+  renderTradePermissionBadge(Boolean(gateway.live_trading_enabled), { blocked:mt5TradeBlocked, label:tradeText });
 
   // Update market status from server (server now detects staleness via tick_time)
   if (typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
@@ -3658,24 +3676,46 @@ async function handleTradeModeClick() {
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
   if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   const health = await wsApi("health").catch(() => null);
+  if (!health?.gateway) {
+    toast("暂时无法核验 MT5 与交易权限，请稍后重试", "error");
+    return;
+  }
   const gateway = health?.gateway || {};
-  const currentlyEnabled = gateway.live_trading_enabled;
+  const currentlyEnabled = gateway.live_trading_enabled === true;
 
   // Turning ON requires MT5 connection
   if (!currentlyEnabled && gateway.mode !== "live") {
-    toast("请先启动桥接脚本", "warning");
+    toast("请先连接 MT5 桥接，再开启真实交易发送", "warning");
     return;
   }
 
-  // Turning OFF requires confirmation
-  if (currentlyEnabled && !await showConfirm("关闭交易发送", "确认关闭交易发送？关闭后将停止向 MT5 发送交易指令。", { confirmText: "关闭", danger: true })) return;
+  const mt5TradeBlocked = gateway.terminal_trade_allowed === false
+    || gateway.account_trade_allowed === false
+    || gateway.account_trade_expert === false;
+  if (!currentlyEnabled && mt5TradeBlocked) {
+    toast("MT5 当前未开放自动交易权限，请先在终端和账户设置中允许自动交易", "warning");
+    return;
+  }
+
+  const account = state.tradingAccounts?.find(item => item.is_active) || state.tradingAccounts?.[0];
+  const subscription = state.strategySubscriptions?.find(item => Number(item.execution_enabled));
+  const detailRows = [
+    ["MT5 账户", account ? `${account.nickname || account.login_account || "当前账户"}${account.broker_server ? ` · ${account.broker_server}` : ""}` : "当前已连接账户"],
+    ["自动运行策略", subscription?.strategy_name || subscription?.prompt_type_name || "按当前订阅设置"],
+    ["服务器风控", "每笔订单发送前强制校验"],
+    ["MT5 权限", mt5TradeBlocked ? "未开放" : "已核验"],
+  ];
+  const confirmed = currentlyEnabled
+    ? await showConfirm("关闭交易发送", "关闭后，AI 仍会分析行情，但不会再向 MT5 发送新订单。", { confirmText:"确认关闭", danger:true, detailRows })
+    : await showConfirm("开启真实交易发送", "开启后，自动分析或人工复核可以向当前 MT5 账户发送真实订单；每笔订单仍须通过服务器风控。", { confirmText:"确认开启", danger:true, detailRows });
+  if (!confirmed) return;
 
   try {
-    const result = await wsApi("toggle_trade", { enable: !currentlyEnabled });
+    await wsApi("toggle_trade", { enable: !currentlyEnabled });
     toast(currentlyEnabled ? "交易发送已关闭" : "交易发送已开启", "success");
     await loadStatus();
   } catch (e) {
-    toast("切换失败: " + e.message, "error");
+    toast("交易发送状态切换失败：" + userVisibleText(apiErrorMessage(e.message), "请稍后重试"), "error");
   }
 }
 
@@ -4195,6 +4235,8 @@ function applyRoleUI() {
   if (gatewayBadge) {
     const canOpenDownload = !observer || state.aiAccess?.can_download_bridge === true;
     gatewayBadge.classList.toggle("clickable-badge", canOpenDownload);
+    gatewayBadge.classList.toggle("is-readonly", !canOpenDownload);
+    gatewayBadge.setAttribute("aria-disabled", String(!canOpenDownload));
     gatewayBadge.title = observer && !canOpenDownload ? "Plus 会员仅可观摩" : "";
   }
 
@@ -4297,6 +4339,7 @@ function renderSignalMonitorDetails(signal) {
       </section>
     </div>
     <aside class="signal-monitor-rail">
+      <section class="monitor-surface signal-monitor-safety">${renderSignalSafetyChain(signal)}</section>
       <section class="monitor-surface signal-monitor-execution ${escapeHtml(advice.state || "review")}">
         <div class="monitor-section-heading"><span>执行状态</span><small>${escapeHtml(confidence.label)} 置信度</small></div>
         <strong>${escapeHtml(advice.title || executionStatus(signal))}</strong>
@@ -4392,9 +4435,7 @@ function updateSignalDisplay(signal, options = {}) {
     card.style.setProperty("--signal-glow", "var(--signal-glow-hold)");
     setText("sigSymbol", "--");
     setText("sigTimeframe", "--");
-    setText("sigDirection", "--");
     setText("sigDirectionText", "等待信号");
-    $("sigDirection").className = "signal-direction hold";
     $("sigDirectionText").className = "signal-direction-text hold";
     setText("sigConfidence", "--");
     updateSignalPriceFields(null);
@@ -4402,6 +4443,7 @@ function updateSignalDisplay(signal, options = {}) {
     setText("sigTime", "等待新信号");
     setText("sigGeneratedAt", "--");
     setText("sigValidWindow", "--");
+    if ($("signalSafetyChain")) $("signalSafetyChain").innerHTML = renderSignalSafetyChain(null);
     renderSignalMonitorDetails(null);
     return;
   }
@@ -4413,7 +4455,7 @@ function updateSignalDisplay(signal, options = {}) {
     buy: { border: "var(--color-positive)", glow: "var(--signal-glow-buy)" },
     sell: { border: "var(--color-negative)", glow: "var(--signal-glow-sell)" },
     hold: { border: "var(--color-warning)", glow: "var(--signal-glow-hold)" },
-    close: { border: "var(--color-info, #63b3ed)", glow: "0 0 15px rgba(99,179,237,0.3)" },
+    close: { border: "var(--color-info)", glow: "var(--color-info-bg)" },
   };
 
   card.dataset.direction = dir;
@@ -4423,9 +4465,9 @@ function updateSignalDisplay(signal, options = {}) {
   card.style.setProperty("--signal-glow", colorMap[dir].glow);
   setText("sigSymbol", signal.symbol || "--");
   setText("sigTimeframe", signal.timeframe || "--");
-  setText("sigDirection", directionText(signal.signal_type));
+  if ($("sigSymbol")) $("sigSymbol").title = "交易品种代码；末尾后缀由经纪商定义";
+  if ($("sigTimeframe")) $("sigTimeframe").title = timeframeHelp(signal.timeframe);
   setText("sigDirectionText", directionText(signal.signal_type));
-  $("sigDirection").className = `signal-direction ${dir}`;
   $("sigDirectionText").className = `signal-direction-text ${dir}`;
   setText("sigConfidence", confidence.label);
   updateSignalPriceFields(signal);
@@ -4433,8 +4475,13 @@ function updateSignalDisplay(signal, options = {}) {
   setText("sigTime", signalDisplayTime(signal));
   setText("sigGeneratedAt", signalDisplayTime(signal));
   setText("sigValidWindow", signalFreshness(signal));
+  if ($("signalSafetyChain")) $("signalSafetyChain").innerHTML = renderSignalSafetyChain(signal);
   renderSignalMonitorDetails(signal);
-  if (options.announceNew && previousSignalId != null && !sameSignalId(previousSignalId, signal.id)) flashSignalMonitorUpdate();
+  if (options.announceNew && previousSignalId != null && !sameSignalId(previousSignalId, signal.id)) {
+    const announcement = $("signalAnnouncement");
+    if (announcement) announcement.textContent = `收到新的 AI 建议：${signal.symbol || "当前品种"}，${directionText(signal.signal_type)}，${signalExecutionAdvice(signal).title}`;
+    flashSignalMonitorUpdate();
+  }
 }
 
 function signalFreshness(signal) {
@@ -4548,10 +4595,26 @@ function renderDirectionBias(decision) {
 }
 
 function signalExecutionAdvice(signal) {
-  if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:"执行结果已记录。", executable:false };
-  if (signalIsStale(signal)) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
+  const presented = signal?.execution_advice;
+  const localizedPresented = presented ? {
+    ...presented,
+    title:userVisibleText(presented.title, "执行状态待确认"),
+    description:userVisibleText(presented.description, "系统未返回具体执行说明"),
+  } : null;
+  if (localizedPresented?.state === "pending") return { ...localizedPresented, executable:false };
   const execution = parseJsonField(signal?.execution_result, {});
   const persistedStatus = String(signal?.execution_status || "").toLowerCase();
+  const pending = Boolean(signal?.pending_ticket)
+    || ["pending", "submitted", "placed"].includes(persistedStatus)
+    || ["pending", "submitted", "placed"].includes(String(execution?.status || "").toLowerCase());
+  if (pending) return {
+    state:"pending",
+    title:"挂单已提交",
+    description:signal?.pending_ticket ? `MT5 挂单 #${signal.pending_ticket} 正在等待触发。` : "挂单已经发送到 MT5，正在等待触发。",
+    executable:false,
+  };
+  if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:"MT5 已确认订单执行结果。", executable:false };
+  if (signalIsStale(signal)) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
   const terminalStatus = ["rejected", "failed", "skipped", "uncertain"].includes(persistedStatus) ? persistedStatus : "";
   const executionStatus = execution?.status || terminalStatus;
   if (executionStatus && executionStatus !== "success") {
@@ -4563,9 +4626,69 @@ function signalExecutionAdvice(signal) {
       executable: false,
     };
   }
-  if (signal?.execution_advice) return signal.execution_advice;
+  if (localizedPresented) return localizedPresented;
   if (signalType(signal?.signal_type) === "hold") return { state:"observe", title:"暂不执行", description:"等待市场条件改善。", executable:false };
   return { state:"review", title:"建议复核后执行", description:"执行前将获取最新报价并由风控计算最终手数。", executable:true };
+}
+
+function signalExecutionStages(signal) {
+  if (!signal) return [
+    { key:"ai", label:"AI 建议", state:"waiting", title:"等待分析", detail:"尚未生成交易建议" },
+    { key:"risk", label:"服务器风控", state:"idle", title:"尚未校验", detail:"收到可执行建议后自动校验" },
+    { key:"mt5", label:"MT5 结果", state:"idle", title:"尚未发送", detail:"仅在风控放行后发送" },
+  ];
+  const advice = signalExecutionAdvice(signal);
+  const dir = signalType(signal.signal_type);
+  const execution = parseJsonField(signal.execution_result, {});
+  const approved = execution?.risk?.approved_order || execution?.approved_order || parseJsonField(signal.approved_order_json, {});
+  const finalVolume = approved?.volume == null ? "" : `最终 ${volumeText(approved.volume)}`;
+  const stages = [{
+    key:"ai", label:"AI 建议", state:"complete", title:dir === "hold" ? "建议观望" : `建议${directionText(signal.signal_type)}`,
+    detail:`${confidenceInfo(signal.confidence).label} 置信度 · ${signalDisplayTime(signal)}`,
+  }];
+  if (dir === "hold") {
+    stages.push(
+      { key:"risk", label:"服务器风控", state:"idle", title:"无需校验", detail:"观望建议不会提交订单" },
+      { key:"mt5", label:"MT5 结果", state:"idle", title:"未发送", detail:"本次没有交易指令" },
+    );
+  } else if (advice.state === "expired") {
+    stages.push(
+      { key:"risk", label:"服务器风控", state:"idle", title:"无需校验", detail:"信号已过有效期，不再提交执行" },
+      { key:"mt5", label:"MT5 结果", state:"idle", title:"未发送", detail:"请等待新的 AI 建议" },
+    );
+  } else if (advice.state === "rejected") {
+    stages.push(
+      { key:"risk", label:"服务器风控", state:"blocked", title:"未放行", detail:advice.description },
+      { key:"mt5", label:"MT5 结果", state:"idle", title:"未发送", detail:"订单在服务器风控阶段被拦截" },
+    );
+  } else if (advice.state === "failed") {
+    const riskPassed = Boolean(approved && Object.keys(approved).length);
+    stages.push(
+      { key:"risk", label:"服务器风控", state:riskPassed ? "complete" : "waiting", title:riskPassed ? "已放行" : "状态待核验", detail:finalVolume || "未获得完整风控结果" },
+      { key:"mt5", label:"MT5 结果", state:"blocked", title:"执行未完成", detail:advice.description },
+    );
+  } else if (advice.state === "pending") {
+    stages.push(
+      { key:"risk", label:"服务器风控", state:"complete", title:"已放行", detail:finalVolume || "订单参数已通过校验" },
+      { key:"mt5", label:"MT5 结果", state:"active", title:"挂单等待触发", detail:advice.description },
+    );
+  } else if (advice.state === "executed") {
+    stages.push(
+      { key:"risk", label:"服务器风控", state:"complete", title:"已放行", detail:finalVolume || "订单参数已通过校验" },
+      { key:"mt5", label:"MT5 结果", state:"complete", title:"执行成功", detail:advice.description },
+    );
+  } else {
+    stages.push(
+      { key:"risk", label:"服务器风控", state:"waiting", title:"等待复核", detail:"提交执行时获取最新报价并计算最终手数" },
+      { key:"mt5", label:"MT5 结果", state:"idle", title:"尚未发送", detail:"风控放行后才会发送" },
+    );
+  }
+  return stages;
+}
+
+function renderSignalSafetyChain(signal) {
+  const icons = { ai:"brain-circuit", risk:"shield-check", mt5:"radio-tower" };
+  return `<div class="signal-safety-chain-head"><strong>执行安全链</strong><span>建议不等于成交</span></div><div class="signal-safety-stages">${signalExecutionStages(signal).map((stage, index) => `<article class="signal-safety-stage ${escapeHtml(stage.state)}"><div class="signal-safety-stage-icon"><i data-lucide="${icons[stage.key]}" size="16"></i></div><div><span>${index + 1} · ${escapeHtml(stage.label)}</span><strong>${escapeHtml(stage.title)}</strong><p>${escapeHtml(userVisibleText(stage.detail, "暂无中文说明"))}</p></div></article>`).join("")}</div>`;
 }
 
 function renderSignalPendingActions(signal) {
@@ -5009,7 +5132,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="analysis-summary-head">
       <div class="analysis-summary-title">
         <span class="analysis-symbol">${escapeHtml(signal.symbol)}</span>
-        <span class="signal-tf-badge">${escapeHtml(signal.timeframe)}</span>
+        <span class="signal-tf-badge" title="${escapeHtml(timeframeHelp(signal.timeframe))}">${escapeHtml(signal.timeframe)}</span>
         <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
       </div>
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
@@ -5019,6 +5142,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div><span>执行建议</span><strong>${escapeHtml(advice.title || executionStatus(signal))}</strong><p>${escapeHtml(advice.description || "")}</p></div>
       <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
     </section>
+    <section class="analysis-safety-chain">${renderSignalSafetyChain(signal)}</section>
     ${renderSignalPendingActions(signal)}
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
     ${renderDirectionBias(decision)}
