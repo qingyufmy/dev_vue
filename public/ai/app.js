@@ -3009,9 +3009,17 @@ function reviewStrategyProvenance(review = {}) {
 async function openPeriodReviewDetail(id, { silent = false } = {}) {
   stopReviewDetailPolling();
   state.selectedReviewId = Number(id); renderReviewCases();
+  const reviewLayout = document.querySelector(".period-review-layout");
+  reviewLayout?.classList.add("has-mobile-detail");
   const detail = $("reviewDetail");
   if (!silent) detail.innerHTML = '<div class="workspace-skeleton"></div>';
-  const data = await api(`/api/ai/period-reviews/${id}`);
+  let data;
+  try {
+    data = await api(`/api/ai/period-reviews/${id}`);
+  } catch (error) {
+    reviewLayout?.classList.remove("has-mobile-detail");
+    throw error;
+  }
   const review = data.review || {};
   const current = (review.versions || []).find(item => Number(item.id) === Number(review.current_version_id)) || review.versions?.at(-1);
   const content = current?.content || {};
@@ -3049,7 +3057,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     ...(content.period_chan_assessment ? [{ ...content.period_chan_assessment, explanation:`整日结构：${content.period_chan_assessment.explanation || '无补充说明'}` }] : []),
     ...(content.chan_diagnoses || []),
   ];
-  detail.innerHTML = `<header class="period-review-detail-header">
+  detail.innerHTML = `<button class="review-mobile-back" type="button" data-review-action="back-list"><i data-lucide="arrow-left" size="16"></i>返回复盘列表</button><header class="period-review-detail-header">
       <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · ${escapeHtml(strategyProvenance)}</p><p class="period-review-period-scope"><i data-lucide="clock-3" size="13"></i>${escapeHtml(periodScope)}</p></div>
       <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
     </header>
@@ -4236,15 +4244,15 @@ function renderPositionRows(positions = [], withAction) {
     return `
       <tr data-ticket="${escapeHtml(position.ticket)}">
         ${ticketCell(position.ticket, tickets)}
-        <td>${escapeHtml(position.symbol)}</td>
-        <td><span class="${directionClass}">${directionLabel}</span></td>
-        <td class="num">${escapeHtml(volumeText(position.volume))}</td>
-        <td class="num">${fmt(position.price_open, priceDigits)}</td>
-        <td class="num">${fmt(position.price_current, priceDigits)}</td>
-        <td class="num">${escapeHtml(formatTime(position.time))}</td>
-        ${withAction ? `<td class="num">${Number(position.sl) ? fmt(position.sl, priceDigits) : "--"}</td><td class="num">${Number(position.tp) ? fmt(position.tp, priceDigits) : "--"}</td>` : ""}
-        <td class="${profitClass(position.profit)}">${fmt(position.profit)}</td>
-        ${withAction ? `<td><button class="btn small" data-close-ticket="${escapeHtml(position.ticket)}"><i data-lucide="x" size="12"></i>平仓</button></td>` : ""}
+        <td data-label="品种">${escapeHtml(position.symbol)}</td>
+        <td data-label="方向"><span class="${directionClass}">${directionLabel}</span></td>
+        <td data-label="手数" class="num">${escapeHtml(volumeText(position.volume))}</td>
+        <td data-label="开仓价" class="num">${fmt(position.price_open, priceDigits)}</td>
+        <td data-label="现价" class="num">${fmt(position.price_current, priceDigits)}</td>
+        <td data-label="开仓时间" class="num">${escapeHtml(formatTime(position.time))}</td>
+        ${withAction ? `<td data-label="止损" class="num">${Number(position.sl) ? fmt(position.sl, priceDigits) : "--"}</td><td data-label="止盈" class="num">${Number(position.tp) ? fmt(position.tp, priceDigits) : "--"}</td>` : ""}
+        <td data-label="浮动盈亏" class="${profitClass(position.profit)}">${fmt(position.profit)}</td>
+        ${withAction ? `<td data-label="操作"><button class="btn small" data-close-ticket="${escapeHtml(position.ticket)}"><i data-lucide="x" size="12"></i>平仓</button></td>` : ""}
       </tr>
     `;
   }).join("");
@@ -4267,9 +4275,9 @@ async function loadCloseSignalTickets() {
 function ticketCell(ticket, signalTickets) {
   const signalId = signalTickets[String(ticket)];
   if (signalId) {
-    return `<td class="num"><a href="#" class="signal-link" onclick="event.preventDefault(); openAnalysisFromHistory(${signalId}, { source:'history', forcePinned:true })">${escapeHtml(ticket)}</a></td>`;
+    return `<td data-label="票号" class="num"><a href="#" class="signal-link" onclick="event.preventDefault(); openAnalysisFromHistory(${signalId}, { source:'history', forcePinned:true })">${escapeHtml(ticket)}</a></td>`;
   }
-  return `<td class="num">${escapeHtml(ticket)}</td>`;
+  return `<td data-label="票号" class="num">${escapeHtml(ticket)}</td>`;
 }
 
 async function loadPositions() {
@@ -6683,17 +6691,17 @@ function renderPendingOrders(orders) {
     const createdAt = parseDate(o.created_at);
     const ticket = String(o.mt5_ticket || o.ticket || o.id);
     return `<tr>
-      <td class="num"><a href="#" class="pending-ticket-link" onclick="event.preventDefault(); navigateToSignalByTicket('${escapeHtml(ticket)}')">${escapeHtml(ticket)}</a></td>
-      <td>${escapeHtml(o.symbol)}</td>
-      <td>${typeLabels[o.pending_type] || o.pending_type || "--"}</td>
-      <td class="num">${Number(o.price).toFixed(2)}</td>
-      <td class="num">${Number(o.volume).toFixed(2)}</td>
-      <td class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
-      <td class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
-      <td class="num">${createdAt || "--"}</td>
-      <td>${validUntil || "永久有效"}</td>
-      <td><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[state] || state}</span></td>
-      <td>${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>` : ""}</td>
+      <td data-label="订单号" class="num"><a href="#" class="pending-ticket-link" onclick="event.preventDefault(); navigateToSignalByTicket('${escapeHtml(ticket)}')">${escapeHtml(ticket)}</a></td>
+      <td data-label="品种">${escapeHtml(o.symbol)}</td>
+      <td data-label="类型">${typeLabels[o.pending_type] || o.pending_type || "--"}</td>
+      <td data-label="挂单价" class="num">${Number(o.price).toFixed(2)}</td>
+      <td data-label="手数" class="num">${Number(o.volume).toFixed(2)}</td>
+      <td data-label="止损" class="num">${o.sl ? Number(o.sl).toFixed(2) : "--"}</td>
+      <td data-label="止盈" class="num">${o.tp ? Number(o.tp).toFixed(2) : "--"}</td>
+      <td data-label="挂单时间" class="num">${createdAt || "--"}</td>
+      <td data-label="有效期">${validUntil || "永久有效"}</td>
+      <td data-label="状态"><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[state] || state}</span></td>
+      <td data-label="操作">${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>` : ""}</td>
     </tr>`;
   }).join("");
 }
@@ -8090,6 +8098,11 @@ function bindEvents() {
     if (reviewCase) { openPeriodReviewDetail(Number(reviewCase.dataset.reviewId)).catch(error => toast(error.message,"error")); return; }
     if (reviewAction) {
       const caseId = state.selectedReviewId, versionId = Number(reviewAction.dataset.versionId || 0), action = reviewAction.dataset.reviewAction;
+      if (action === "back-list") {
+        document.querySelector(".period-review-layout")?.classList.remove("has-mobile-detail");
+        document.querySelector(".review-queue")?.scrollIntoView({ behavior:"smooth", block:"start" });
+        return;
+      }
       try {
         if (action === "retry") {
           reviewAction.disabled = true;

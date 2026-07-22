@@ -653,6 +653,19 @@ describe('AI governance navigation and DOM contract', () => {
     expect(responsiveCss).toContain('.analyst-records-card .data-table {\n    min-width: 860px;')
   })
 
+  it('turns complex trading and review flows into mobile-native views', () => {
+    expect(app).toContain('data-label="浮动盈亏"')
+    expect(app).toContain('data-label="挂单价"')
+    expect(app).toContain('data-review-action="back-list"')
+    expect(app).toContain('reviewLayout?.classList.add("has-mobile-detail")')
+    expect(app).toContain('reviewLayout?.classList.remove("has-mobile-detail")')
+    expect(responsiveCss).toContain('#trading [data-workspace-view="orders"] .data-table tr {')
+    expect(responsiveCss).toContain('content: attr(data-label)')
+    expect(responsiveCss).toContain('.period-review-layout.has-mobile-detail .review-queue')
+    expect(responsiveCss).toContain('.period-review-layout:not(.has-mobile-detail) .review-detail')
+    expect(responsiveCss).toContain('bottom: calc(var(--mobile-nav-height) + var(--safe-bottom))')
+  })
+
   it('uses a readable product type scale across the core AI workspaces', () => {
     for (const token of ['--type-caption', '--type-body', '--type-section', '--type-page']) {
       expect(css).toContain(token)
