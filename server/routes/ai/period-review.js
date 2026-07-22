@@ -75,6 +75,20 @@ export function dailyEvidenceSemanticHash(evidence) {
   return sha256(JSON.stringify(value))
 }
 
+export function shouldUpgradePeriodMarketEvidence(reviewCase, evidence, asOfUtcMs = Date.now()) {
+  // Once a review version exists, its evidence and every derived memory must
+  // remain immutable. Infrastructure/schema upgrades only repair cases that
+  // have never produced a user-visible review version.
+  if (reviewCase?.current_version_id) return false
+  const marketGeneratedAt = Date.parse(evidence?.period_market?.generated_at || '')
+  return Number(evidence?.schema_version || 0) < 2
+    || Number(evidence?.period_market?.schema_version || 0) < 2
+    || Number(evidence?.period_market?.coverage_policy_version || 0) < 2
+    || !evidence?.period_market?.generated_at
+    || (evidence?.period_market?.status !== 'complete'
+      && (!Number.isFinite(marketGeneratedAt) || Number(asOfUtcMs) - marketGeneratedAt >= 3600000))
+}
+
 export function monthlyReviewSourceHash(rows = []) {
   const sources = rows.map(row => ({
     period_case_id:Number(row.id ?? row.period_case_id),
@@ -425,11 +439,7 @@ async function upsertDailyGroup(group, clock) {
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
-    const marketGeneratedAt = Date.parse(existingEvidence.period_market?.generated_at || '')
-    const needsPeriodMarketUpgrade = Number(existingEvidence.schema_version || 0) < 2
-      || Number(existingEvidence.period_market?.schema_version || 0) < 2 || !existingEvidence.period_market?.generated_at
-      || Number(existingEvidence.period_market?.coverage_policy_version || 0) < 2
-      || (existingEvidence.period_market.status !== 'complete' && (!Number.isFinite(marketGeneratedAt) || Date.now() - marketGeneratedAt >= 3600000))
+    const needsPeriodMarketUpgrade = shouldUpgradePeriodMarketEvidence(existingCase, existingEvidence)
     const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources)
     if (!refresh.refresh && !needsPeriodMarketUpgrade) return { id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0),

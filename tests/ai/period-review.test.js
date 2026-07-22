@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   compactPeriodTradeEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
-  monthlyReviewSourceHash, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+  monthlyReviewSourceHash, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, shouldUpgradePeriodMarketEvidence,
+  validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review calendar', () => {
@@ -258,6 +259,14 @@ describe('period review runtime integration', () => {
 })
 
 describe('period market evidence', () => {
+  it('never rebuilds a generated or approved review for a market evidence policy upgrade', () => {
+    const legacyEvidence = { schema_version:2, period_market:{ schema_version:2, coverage_policy_version:1,
+      generated_at:'2026-07-21T00:00:00.000Z', status:'partial' } }
+    expect(shouldUpgradePeriodMarketEvidence({ current_version_id:7, status:'approved' }, legacyEvidence)).toBe(false)
+    expect(shouldUpgradePeriodMarketEvidence({ current_version_id:8, status:'draft' }, legacyEvidence)).toBe(false)
+    expect(shouldUpgradePeriodMarketEvidence({ current_version_id:null, status:'incomplete' }, legacyEvidence)).toBe(true)
+  })
+
   it('requests the complete day plus Chan lookback without exceeding the review ceiling', () => {
     const start = Date.parse('2026-07-16T21:00:00Z')
     const end = Date.parse('2026-07-17T21:00:00Z')
