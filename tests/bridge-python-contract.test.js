@@ -2,6 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 describe('Python Bridge history contract', () => {
+  it('isolates named Bridge profiles for multi-source operation', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('def _resolve_bridge_profile(argv=None):')
+    expect(source).toContain('AURUM_BRIDGE_PROFILE')
+    expect(source).toContain('os.path.join(CONFIG_ROOT, "profiles", BRIDGE_PROFILE)')
+    expect(source).toContain('app = QApplication(QT_ARGV)')
+  })
+
   it('provides a compact incremental risk snapshot without full-history export', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     const start = source.indexOf('def _risk_snapshot')

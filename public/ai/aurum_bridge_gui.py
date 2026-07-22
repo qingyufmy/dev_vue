@@ -6,6 +6,7 @@ AURUM Bridge - MT5 桥接桌面客户端 (PySide6)
 """
 import sys
 import os
+import re
 import ssl
 import json
 import time
@@ -29,7 +30,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
 
-APP_VERSION = "v2.4.0"
+APP_VERSION = "v2.4.1"
 FULL_HISTORY_START = datetime(2000, 1, 1)
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
@@ -39,7 +40,33 @@ SYSTEM_TRADE_MAGIC = 234000
 DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
 MT5_CLOCK_FRESHNESS_TOLERANCE_MS = 30000
 MT5_CLOCK_STALE_AFTER_SEC = 120
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
+def _resolve_bridge_profile(argv=None):
+    """Read --profile without leaking it into Qt and isolate local state."""
+    args = list(argv or sys.argv)
+    cleaned = [args[0]] if args else []
+    requested = os.environ.get("AURUM_BRIDGE_PROFILE", "default")
+    index = 1
+    while index < len(args):
+        item = args[index]
+        if item == "--profile" and index + 1 < len(args):
+            requested = args[index + 1]
+            index += 2
+            continue
+        if item.startswith("--profile="):
+            requested = item.split("=", 1)[1]
+            index += 1
+            continue
+        cleaned.append(item)
+        index += 1
+    profile = re.sub(r"[^a-zA-Z0-9_-]", "-", str(requested or "default").strip())[:40].strip("-_") or "default"
+    return profile.lower(), cleaned
+
+
+BRIDGE_PROFILE, QT_ARGV = _resolve_bridge_profile()
+CONFIG_ROOT = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
+# Keep the legacy directory for the default instance; named instances are
+# completely isolated so multiple source accounts can run on one computer.
+CONFIG_DIR = CONFIG_ROOT if BRIDGE_PROFILE == "default" else os.path.join(CONFIG_ROOT, "profiles", BRIDGE_PROFILE)
 
 # Bundle resource path — compatible with PyInstaller and Nuitka
 if getattr(sys, 'frozen', False):
@@ -3448,10 +3475,13 @@ class SettingsPage(QWidget):
         # Launch updater
         exe_path = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
         import subprocess
+        updater_env = os.environ.copy()
+        updater_env["AURUM_BRIDGE_PROFILE"] = BRIDGE_PROFILE
         subprocess.Popen(
             [updater_tmp, server, exe_path, str(os.getpid())],
             shell=False,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+            env=updater_env,
         )
         QTimer.singleShot(500, lambda: os._exit(0))
 
@@ -3462,7 +3492,7 @@ class SettingsPage(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(APP_NAME if BRIDGE_PROFILE == "default" else f"{APP_NAME} · {BRIDGE_PROFILE}")
         self.setFixedSize(520, 600)
         self._pending_update_data = None
 
@@ -3586,7 +3616,7 @@ class MainWindow(QMainWindow):
         else:
             tray_icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
         self.tray = QSystemTrayIcon(tray_icon, self)
-        self.tray.setToolTip(APP_NAME)
+        self.tray.setToolTip(APP_NAME if BRIDGE_PROFILE == "default" else f"{APP_NAME} · {BRIDGE_PROFILE}")
         tray_menu = QMenu()
         act_show = QAction("打开界面", self)
         act_show.triggered.connect(self._show_from_tray)
@@ -3648,7 +3678,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    app = QApplication(sys.argv)
+    app = QApplication(QT_ARGV)
     app.setStyleSheet(DARK_STYLE)
 
     # Font
