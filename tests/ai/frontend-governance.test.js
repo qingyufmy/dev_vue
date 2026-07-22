@@ -615,8 +615,11 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('max-width: 72ch')
   })
 
-  it('removes decorative side strips, global custom scrollbars and layout-driven progress animation', () => {
-    expect(css).not.toContain('\n::-webkit-scrollbar {')
+  it('uses restrained branded scrollbars, removes decorative side strips and keeps progress transform-based', () => {
+    expect(css).toContain('--scrollbar-thumb: #334155')
+    expect(css).toContain('*::-webkit-scrollbar {')
+    expect(css).toContain('scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track)')
+    expect(css).toContain('*::-webkit-scrollbar-thumb:hover')
     expect(css).toContain('.strategy-card::before {\n  display: none;')
     expect(css).toContain("transform: scaleX(var(--auto-progress-scale))")
     expect(css).toContain("transform:scaleX(var(--compare-progress-scale,0))")
