@@ -2222,6 +2222,10 @@ textarea:focus {
   overflow: hidden !important;
 }
 
+.signal-monitor-fallback-active .main {
+  overflow: hidden !important;
+}
+
 .card-signal.is-signal-monitor:not(:fullscreen) {
   position: fixed;
   inset: 0;
@@ -2235,13 +2239,15 @@ textarea:focus {
   max-width: none;
   flex-direction: column;
   padding: clamp(16px, 1.5vw, 24px);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 0;
   border-radius: 0;
   background: var(--bg-base);
   box-shadow: none;
   animation: none;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor)::backdrop {
@@ -2255,11 +2261,11 @@ textarea:focus {
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-card-header {
-  position: relative;
-  top: auto;
+  position: sticky;
+  top: 0;
   z-index: 12;
   min-height: 56px;
-  margin: calc(clamp(16px, 1.5vw, 24px) * -1) calc(clamp(16px, 1.5vw, 24px) * -1) var(--space-4);
+  margin: calc(clamp(16px, 1.5vw, 24px) * -1) calc(clamp(16px, 1.5vw, 24px) * -1) var(--space-3);
   padding: 10px clamp(16px, 1.5vw, 24px);
   border-bottom-color: var(--border-default);
   background: color-mix(in srgb, var(--bg-base) 94%, transparent);
@@ -2315,20 +2321,20 @@ textarea:focus {
   display: grid;
   flex: 0 0 auto;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding: 0;
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-decision-panel {
   grid-column: span 7;
-  min-height: 150px;
-  padding: clamp(16px, 1.5vw, 24px);
+  min-height: 132px;
+  padding: clamp(14px, 1.25vw, 20px);
   border: 1px solid color-mix(in srgb, var(--signal-border) 32%, var(--border-default));
   background: color-mix(in srgb, var(--signal-border) 7%, var(--bg-card));
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-meta-row {
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-symbol {
@@ -2341,7 +2347,7 @@ textarea:focus {
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-direction-text {
-  font-size: clamp(38px, 3.5vw, 58px);
+  font-size: clamp(36px, 3vw, 50px);
   letter-spacing: -.035em;
 }
 
@@ -2364,7 +2370,7 @@ textarea:focus {
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-strip {
   grid-column: span 5;
   grid-template-columns: 1fr 1fr;
-  min-height: 150px;
+  min-height: 132px;
   align-content: stretch;
 }
 
@@ -2379,7 +2385,7 @@ textarea:focus {
   display: flex;
   justify-content: center;
   flex-direction: column;
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-execution-copy strong {
@@ -2406,10 +2412,10 @@ textarea:focus {
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-price-item {
   display: flex;
-  min-height: 76px;
+  min-height: 64px;
   justify-content: center;
   flex-direction: column;
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
 }
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-price-item strong {
@@ -2422,7 +2428,7 @@ textarea:focus {
   justify-content: center;
   flex-direction: column;
   margin: 0;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-input-softer);
@@ -2434,12 +2440,13 @@ textarea:focus {
 
 .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-details {
   display: grid;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: auto;
+  flex: 0 0 auto;
   grid-template-columns: minmax(0, 1.6fr) minmax(320px, .7fr);
   gap: var(--space-3);
   margin-top: var(--space-3);
-  overflow: hidden;
+  align-items: start;
+  overflow: visible;
 }
 
 .signal-monitor-main,
@@ -2448,10 +2455,8 @@ textarea:focus {
   min-width: 0;
   flex-direction: column;
   gap: var(--space-3);
-  padding-right: 4px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  padding-right: 0;
+  overflow: visible;
 }
 
 .monitor-surface {
@@ -2551,10 +2556,9 @@ textarea:focus {
 }
 
 .signal-monitor-narrative > div:last-child {
-  max-height: min(33vh, 360px);
-  padding-right: var(--space-3);
-  overflow: auto;
-  scrollbar-color: var(--border-gold) transparent;
+  max-height: none;
+  padding-right: 0;
+  overflow: visible;
 }
 
 .signal-monitor-narrative strong {
@@ -2746,13 +2750,8 @@ textarea:focus {
 }
 
 @media (max-width: 1180px) {
-  .card-signal:is(:fullscreen, .is-signal-monitor) {
-    overflow: auto;
-  }
-
   .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-details {
     grid-template-columns: 1fr;
-    overflow: visible;
   }
 
   .card-signal:is(:fullscreen, .is-signal-monitor) .signal-monitor-rail {
@@ -2760,10 +2759,6 @@ textarea:focus {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .signal-monitor-main,
-  .signal-monitor-rail {
-    overflow: visible;
-  }
 }
 
 @media (max-width: 760px) {

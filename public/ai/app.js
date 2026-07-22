@@ -833,19 +833,25 @@ function localizeReason(reason) {
 function userVisibleText(value, fallback = "暂无中文说明") {
   let text = String(value || "").trim();
   if (!text) return fallback;
+  const cleanLocalizedText = input => String(input || "")
+    .replace(/相关条件尚未确认为相关条件尚未确认/g, "线段结构尚不可靠")
+    .replace(/系统提示的相关条件尚未确认显示/g, "系统提示的多周期状态显示");
   const replacements = [
     [/\bwindow_stable\s*=\s*false\b/gi, "结构窗口不稳定"],
     [/\btime_location_reliable\s*=\s*false\b/gi, "结构时间定位不可靠"],
     [/\balignment_with_higher\s*=\s*conflict\b/gi, "与高周期方向冲突"],
     [/\bcontext_status\s*=\s*partial\b/gi, "多周期行情证据不完整"],
-    [/\bstatus\s*=\s*unreliable_segments\b/gi, "线段结构尚不可靠"],
-    [/\bagreement\s*=\s*aligned_up\b/gi, "多周期方向一致偏多"],
-    [/\bagreement\s*=\s*aligned_down\b/gi, "多周期方向一致偏空"],
-    [/\bagreement\s*=\s*mixed\b/gi, "多周期方向存在分歧"],
-    [/\bagreement\s*=\s*insufficient\b/gi, "多周期方向证据不足"],
-    [/\breliability\s*=\s*low\b/gi, "结构可靠性较低"],
-    [/\breliability\s*=\s*(?:medium|normal)\b/gi, "结构可靠性一般"],
-    [/\breliability\s*=\s*high\b/gi, "结构可靠性较高"],
+    [/\bstatus\s*(?:=|为|:|：)\s*unreliable_segments\b/gi, "线段结构尚不可靠"],
+    [/\bagreement\s*(?:=|为|:|：)\s*aligned_up\b/gi, "多周期方向一致偏多"],
+    [/\bagreement\s*(?:=|为|:|：)\s*aligned_down\b/gi, "多周期方向一致偏空"],
+    [/\bagreement\s*(?:=|为|:|：)\s*mixed\b/gi, "多周期方向存在分歧"],
+    [/\bagreement\s*(?:=|为|:|：)\s*insufficient\b/gi, "多周期方向证据不足"],
+    [/\breliability\s*(?:=|为|:|：)\s*low\b/gi, "结构可靠性较低"],
+    [/\breliability\s*(?:=|为|:|：)\s*(?:medium|normal)\b/gi, "结构可靠性一般"],
+    [/\breliability\s*(?:=|为|:|：)\s*high\b/gi, "结构可靠性较高"],
+    [/\breliability\s*(?:为|:|：)?\s*低/gi, "结构可靠性较低"],
+    [/\breliability\s*(?:为|:|：)?\s*(?:中|一般)/gi, "结构可靠性一般"],
+    [/\breliability\s*(?:为|:|：)?\s*高/gi, "结构可靠性较高"],
     [/\bunreliable_segments\b/gi, "线段结构尚不可靠"],
     [/\binsufficient_confirmed_bis\b/gi, "已确认笔数量不足"],
     [/\binsufficient_bis\b/gi, "确认笔数量不足"],
@@ -870,13 +876,13 @@ function userVisibleText(value, fallback = "暂无中文说明") {
     .replace(/\breliability\s*=\s*[a-z_]+\b/gi, "结构可靠性尚未确认")
     .replace(/\b(?:status|trend_state|context_status|alignment_with_higher|window_stable|time_location_reliable)\s*=\s*[a-z_]+\b/gi, "相关结构状态尚未确认");
   const localized = localizeReason(text);
-  if (localized !== text) return localized;
+  if (localized !== text) return cleanLocalizedText(localized);
   const replaced = text.replace(/\b(?:R\d(?:\.[0-9A-Z]+)?_[A-Z0-9._-]+|PX\.[A-Z0-9._-]+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/gi, token => {
     const translated = REASON_MAP[token] || RISK_DECISION_LABELS[token];
     return translated || "相关条件尚未确认";
   });
   if (/[A-Za-z]/.test(replaced) && !/[\u4e00-\u9fff]/.test(replaced)) return fallback;
-  return replaced;
+  return cleanLocalizedText(replaced);
 }
 
 function setSignalFieldClass(id, className = "") {
@@ -4383,11 +4389,18 @@ function renderSignalMonitorDetails(signal) {
   const execution = parseJsonField(signal.execution_result, {});
   const approved = execution?.risk?.approved_order || execution?.approved_order || parseJsonField(signal.approved_order_json, {});
   const finalVolume = approved?.volume;
+  const direction = signalType(signal.signal_type);
   const entryLabels = { market:"市价", limit:"限价", stop:"止损挂单", stop_limit:"止损限价" };
-  const entryMethod = entryLabels[signal.entry_method] || (signalType(signal.signal_type) === "hold" ? "观望" : "待确认");
+  const entryMethod = entryLabels[signal.entry_method] || (direction === "hold" ? "观望" : "待确认");
+  const plannedEntry = direction === "hold" ? null : (signal.limit_price || signal.market_data?.latest_price);
+  const finalVolumeText = direction === "hold"
+    ? "无需计算"
+    : finalVolume == null ? "执行时计算" : volumeText(finalVolume);
   const analysis = userVisibleText(signal.analysis, "暂无行情分析正文");
   const reasoning = userVisibleText(signal.reasoning, "");
   const strategyLabel = signal.prompt_type_name || signal.strategy_name || signal.strategy_title || "当前交易策略";
+  const modelLabel = signal.model_name || signal.model_used || signal.model || "按策略配置";
+  const recommendedTierLabel = takeProfit.recommendedTier ? `AI 推荐 TP${takeProfit.recommendedTier}` : "暂无推荐档位";
 
   host.innerHTML = `
     <div class="signal-monitor-main">
@@ -4402,7 +4415,7 @@ function renderSignalMonitorDetails(signal) {
       </div>
       ${(decision.trigger || decision.invalidation) ? `<section class="signal-monitor-conditions monitor-surface">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</section>` : ""}
       <section class="signal-monitor-narrative monitor-surface">
-        <div class="monitor-section-heading"><span><i data-lucide="file-text" size="16"></i>完整分析</span><small>内容可在本区域滚动查看</small></div>
+        <div class="monitor-section-heading"><span><i data-lucide="file-text" size="16"></i>完整分析</span><small>向下滚动查看全部内容</small></div>
         <div>${analysis ? `<strong>行情分析</strong><p>${escapeHtml(analysis)}</p>` : `<p class="decision-empty">暂无行情分析正文</p>`}${reasoning ? `<strong>分析依据</strong><p>${escapeHtml(reasoning)}</p>` : ""}</div>
       </section>
     </div>
@@ -4411,20 +4424,20 @@ function renderSignalMonitorDetails(signal) {
         <div class="monitor-section-heading"><span><i data-lucide="list-checks" size="16"></i>执行参数</span><small>最终结果以账户风控为准</small></div>
         <div class="signal-monitor-order-grid">
           <div><span>入场方式</span><strong>${escapeHtml(entryMethod)}</strong></div>
-          <div><span>计划入场</span><strong class="num">${escapeHtml(priceDisplay(signal.limit_price || signal.market_data?.latest_price))}</strong></div>
+          <div><span>计划入场</span><strong class="num">${escapeHtml(priceDisplay(plannedEntry))}</strong></div>
           <div><span>AI 建议手数</span><strong class="num">${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
-          <div><span>风控最终手数</span><strong class="num">${finalVolume == null ? "待执行时计算" : escapeHtml(volumeText(finalVolume))}</strong></div>
+          <div><span>风控最终手数</span><strong class="num">${escapeHtml(finalVolumeText)}</strong></div>
         </div>
       </section>
       <section class="monitor-surface signal-monitor-targets">
-        <div class="monitor-section-heading"><span>止盈候选</span><small>AI 推荐 TP${escapeHtml(takeProfit.recommendedTier || "--")}</small></div>
+        <div class="monitor-section-heading"><span>止盈候选</span><small>${escapeHtml(recommendedTierLabel)}</small></div>
         <div>${[1, 2, 3].map(tier => `<span class="${takeProfit.tier === tier ? "selected" : ""} ${takeProfit.recommendedTier === tier ? "recommended" : ""}"><small>TP${tier}</small><strong class="num">${escapeHtml(priceDisplay(signal[`take_profit_${tier}_price`]))}</strong></span>`).join("")}</div>
       </section>
       <section class="monitor-surface signal-monitor-meta">
         <div><span>信号编号</span><strong class="num">#${escapeHtml(signal.id)}</strong></div>
         <div><span>推理策略</span><strong>${escapeHtml(strategyLabel)}</strong></div>
-        <div><span>当前成交参考</span><strong class="num">${escapeHtml(signalCurrentPriceText(signal))}</strong></div>
-        <div><span>剩余有效期</span><strong class="num">${escapeHtml(signalFreshness(signal))}</strong></div>
+        <div><span>分析周期</span><strong class="num">${escapeHtml(signal.timeframe || "--")}</strong></div>
+        <div><span>推理模型</span><strong>${escapeHtml(modelLabel)}</strong></div>
       </section>
     </aside>`;
   initIcons();
@@ -4436,6 +4449,32 @@ function initSignalMonitor() {
   const exitButton = $("signalMonitorExit");
   if (!card || !enterButton || !exitButton) return;
 
+  let restoreFocusTarget = null;
+  let isolatedElements = [];
+
+  const setBackgroundIsolation = active => {
+    if (!active) {
+      isolatedElements.forEach(({ element, inert, ariaHidden }) => {
+        element.inert = inert;
+        if (ariaHidden == null) element.removeAttribute("aria-hidden");
+        else element.setAttribute("aria-hidden", ariaHidden);
+      });
+      isolatedElements = [];
+      return;
+    }
+    if (isolatedElements.length) return;
+    let current = card;
+    while (current?.parentElement && current.parentElement !== document.body) {
+      [...current.parentElement.children].forEach(element => {
+        if (element === current || isolatedElements.some(item => item.element === element)) return;
+        isolatedElements.push({ element, inert: element.inert, ariaHidden: element.getAttribute("aria-hidden") });
+        element.inert = true;
+        element.setAttribute("aria-hidden", "true");
+      });
+      current = current.parentElement;
+    }
+  };
+
   const leaveFallbackMode = () => {
     delete card.dataset.monitorFallback;
     document.body.classList.remove("signal-monitor-fallback-active");
@@ -4444,6 +4483,19 @@ function initSignalMonitor() {
     const active = document.fullscreenElement === card || card.dataset.monitorFallback === "true";
     card.classList.toggle("is-signal-monitor", active);
     enterButton.setAttribute("aria-pressed", String(active));
+    setBackgroundIsolation(active);
+    if (active) {
+      card.setAttribute("role", "dialog");
+      card.setAttribute("aria-modal", "true");
+      card.setAttribute("aria-label", "最新 AI 建议全屏监看");
+      setTimeout(() => exitButton.focus({ preventScroll:true }), 50);
+    } else {
+      card.removeAttribute("role");
+      card.removeAttribute("aria-modal");
+      card.removeAttribute("aria-label");
+      if (restoreFocusTarget?.isConnected) restoreFocusTarget.focus({ preventScroll:true });
+      restoreFocusTarget = null;
+    }
     if (!active) {
       card.classList.remove("signal-monitor-updated");
       const label = $("signalMonitorSync")?.querySelector("span");
@@ -4453,6 +4505,7 @@ function initSignalMonitor() {
   };
 
   enterButton.addEventListener("click", async () => {
+    restoreFocusTarget = document.activeElement;
     try {
       if (state.latestSignalId != null && !sameSignalId(state.dashboardSignal?.id, state.latestSignalId)) {
         await loadDashboardSignal(state.latestSignalId, state.signals.find(item => sameSignalId(item.id, state.latestSignalId)) || null);
@@ -4553,10 +4606,11 @@ function signalFreshness(signal) {
   if (!Number.isFinite(ttl)) return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
   const createdAt = parseBeijingServerTime(signal.created_at);
   if (!createdAt || isNaN(createdAt)) return "--";
-  const age = Math.floor((Date.now() - createdAt) / 1000);
-  const isStale = age > ttl;
-  if (isStale) return "已过期";
-  return `${age}s / ${ttl}s`;
+  const age = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+  const remaining = Math.max(0, Math.ceil(ttl - age));
+  if (remaining <= 0) return "已过期";
+  if (remaining >= 60) return `${Math.floor(remaining / 60)}分${String(remaining % 60).padStart(2, "0")}秒`;
+  return `${remaining}秒`;
 }
 
 function executionStatus(signal) {
