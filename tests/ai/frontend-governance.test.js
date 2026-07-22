@@ -591,6 +591,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("if (document.hidden || activeTabId() !== 'dashboard') return;")
     expect(app).toContain('startKlineVolumeRefreshTimer()')
   })
+
+  it('keeps tablet status controls readable and mobile controls touchable', () => {
+    expect(html).toContain('viewport-fit=cover')
+    expect(css).toContain('@media (min-width: 761px) and (max-width: 1180px)')
+    expect(css).toContain('grid-template-rows: 92px 1fr')
+    expect(css).toContain('.topbar-badges .status-badge')
+    expect(css).toContain('@media (pointer: coarse)')
+    expect(css).toContain('min-height: 44px')
+    expect(css).toContain('env(safe-area-inset-top)')
+  })
 })
 
 describe('take-profit execution clarity', () => {
