@@ -29,7 +29,8 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260722x" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260722za" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260722za" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -152,6 +153,54 @@
           <span id="sidebarObserveHintText">观摩模式</span>
         </div>
       </aside>
+
+      <nav class="mobile-bottom-nav" aria-label="手机主导航">
+        <button class="nav-item active" type="button" data-tab="dashboard" data-title="首页" aria-current="page">
+          <i data-lucide="layout-dashboard" size="20"></i><span>首页</span>
+        </button>
+        <button class="nav-item" type="button" data-tab="ai-analyze" data-title="AI分析师">
+          <i data-lucide="scan-search" size="20"></i><span>分析</span>
+        </button>
+        <button class="nav-item" type="button" data-tab="trading" data-title="AI交易员">
+          <i data-lucide="trending-up" size="20"></i><span>交易</span>
+        </button>
+        <button class="nav-item" type="button" data-tab="risk-center" data-title="AI风控师">
+          <i data-lucide="shield" size="20"></i><span>风控</span>
+        </button>
+        <button id="mobileNavMoreBtn" class="mobile-nav-more" type="button" aria-haspopup="dialog" aria-controls="mobileNavDrawer" aria-expanded="false">
+          <i data-lucide="menu" size="20"></i><span>更多</span>
+        </button>
+      </nav>
+
+      <div id="mobileNavDrawer" class="mobile-nav-drawer" aria-hidden="true">
+        <button class="mobile-nav-scrim" type="button" data-mobile-nav-close aria-label="关闭导航" tabindex="-1"></button>
+        <aside class="mobile-nav-sheet" role="dialog" aria-modal="true" aria-labelledby="mobileNavTitle" tabindex="-1">
+          <header class="mobile-nav-sheet-header">
+            <div><span>功能导航</span><h2 id="mobileNavTitle">AI交易团队</h2></div>
+            <button class="icon-btn" type="button" data-mobile-nav-close aria-label="关闭导航"><i data-lucide="x" size="20"></i></button>
+          </header>
+          <div class="mobile-nav-sheet-body">
+            <section class="mobile-nav-section">
+              <h3>策略与复盘</h3>
+              <button class="nav-item" type="button" data-tab="model-strategy" data-title="AI策略师"><i data-lucide="brain-circuit" size="19"></i><span><strong>AI策略师</strong><small>管理策略、模型和自动运行</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <button class="nav-item" type="button" data-tab="review-memory" data-title="AI复盘师"><i data-lucide="notebook-tabs" size="19"></i><span><strong>AI复盘师</strong><small>确认复盘并沉淀策略记忆</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <button class="nav-item" type="button" data-tab="history" data-title="交易记录"><i data-lucide="clock" size="19"></i><span><strong>交易记录</strong><small>查看历史订单和账户统计</small></span><i data-lucide="chevron-right" size="17"></i></button>
+            </section>
+            <section class="mobile-nav-section admin-only" style="display:none">
+              <h3>平台管理</h3>
+              <button class="nav-item admin-only" type="button" data-tab="admin-dashboard" data-title="运营中心" style="display:none"><i data-lucide="bar-chart-3" size="19"></i><span><strong>运营中心</strong><small>查看平台健康和待处理事项</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <button class="nav-item admin-only" type="button" data-tab="global-risk" data-title="平台风控" style="display:none"><i data-lucide="shield-alert" size="19"></i><span><strong>平台风控</strong><small>管理平台边界和安全规则</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <button class="nav-item admin-only" type="button" data-tab="model-compare" data-title="模型评测" style="display:none"><i data-lucide="git-compare" size="19"></i><span><strong>模型评测</strong><small>比较模型方向判断和稳定性</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <button class="nav-item admin-only" type="button" data-tab="audit" data-title="系统审计" style="display:none"><i data-lucide="shield-check" size="19"></i><span><strong>系统审计</strong><small>追踪风控和执行记录</small></span><i data-lucide="chevron-right" size="17"></i></button>
+            </section>
+            <section class="mobile-nav-section">
+              <h3>帮助</h3>
+              <a class="nav-item" href="/ai/guide.html" target="_blank"><i data-lucide="book-open" size="19"></i><span><strong>使用手册</strong><small>了解平台功能与操作方法</small></span><i data-lucide="external-link" size="17"></i></a>
+              <button class="nav-item" type="button" data-tab="feedback" data-title="需求反馈"><i data-lucide="lightbulb" size="19"></i><span><strong>需求反馈</strong><small>提交建议或报告使用问题</small></span><i data-lucide="chevron-right" size="17"></i></button>
+            </section>
+          </div>
+        </aside>
+      </div>
 
       <main id="aiMainContent" class="main" tabindex="-1">
         <section id="dashboard" class="tab-panel active">
@@ -1105,7 +1154,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260722x"></script>
+    <script src="/ai/app.js?v=20260722za"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

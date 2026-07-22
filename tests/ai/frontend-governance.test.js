@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
+const responsiveCss = readFileSync(new URL('../../public/ai/responsive.css', import.meta.url), 'utf8')
 const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
 const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const profiles = readFileSync(new URL('../../server/routes/ai/model-profiles.js', import.meta.url), 'utf8')
@@ -625,6 +626,22 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.kline-period-btn {\n    min-width: 44px;')
     expect(css).toContain('.account-card details > summary')
     expect(css).toContain('env(safe-area-inset-top)')
+  })
+
+  it('uses adaptive navigation instead of horizontally scrolling the desktop sidebar on phones', () => {
+    expect(html).toContain('class="mobile-bottom-nav" aria-label="手机主导航"')
+    expect(html).toContain('id="mobileNavMoreBtn"')
+    expect(html).toContain('id="mobileNavDrawer"')
+    expect(app).toContain('function openMobileNav()')
+    expect(app).toContain('function closeMobileNav(')
+    expect(app).toContain('handleMobileNavKeydown')
+    expect(app).toContain('const mobilePrimaryTabs = new Set(["dashboard", "ai-analyze", "trading", "risk-center"])')
+    expect(app).toMatch(/function setTab[\s\S]*?mobileMoreActive[\s\S]*?document\.querySelectorAll\("\.tab-panel"\)/)
+    expect(app).not.toMatch(/function setObserverPanelLock[\s\S]*?mobileMoreActive/)
+    expect(responsiveCss).toContain('@media (max-width: 767px)')
+    expect(responsiveCss).toContain('grid-template-columns: repeat(auto-fit, minmax(56px, 1fr))')
+    expect(responsiveCss).toContain('padding-bottom: var(--safe-bottom)')
+    expect(responsiveCss).toContain('min-height: 100dvh')
   })
 
   it('uses a readable product type scale across the core AI workspaces', () => {

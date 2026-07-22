@@ -479,6 +479,50 @@ function setBadge(id, text, type, withDot = true) {
   el.innerHTML = `${withDot ? '<span class="badge-dot" aria-hidden="true"></span>' : ""}${escapeHtml(text)}`;
 }
 
+let mobileNavReturnFocus = null;
+
+function closeMobileNav({ restoreFocus = true } = {}) {
+  const drawer = $("mobileNavDrawer");
+  const trigger = $("mobileNavMoreBtn");
+  if (!drawer) return;
+  drawer.classList.remove("is-open");
+  drawer.setAttribute("aria-hidden", "true");
+  trigger?.setAttribute("aria-expanded", "false");
+  document.body.classList.remove("mobile-nav-open");
+  if (restoreFocus && mobileNavReturnFocus?.isConnected) mobileNavReturnFocus.focus();
+  mobileNavReturnFocus = null;
+}
+
+function openMobileNav() {
+  const drawer = $("mobileNavDrawer");
+  const trigger = $("mobileNavMoreBtn");
+  const sheet = drawer?.querySelector(".mobile-nav-sheet");
+  if (!drawer || !sheet) return;
+  mobileNavReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger;
+  drawer.classList.add("is-open");
+  drawer.setAttribute("aria-hidden", "false");
+  trigger?.setAttribute("aria-expanded", "true");
+  document.body.classList.add("mobile-nav-open");
+  requestAnimationFrame(() => sheet.focus());
+}
+
+function handleMobileNavKeydown(event) {
+  const drawer = $("mobileNavDrawer");
+  if (!drawer?.classList.contains("is-open")) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeMobileNav();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [...drawer.querySelectorAll('button:not([disabled]):not([tabindex="-1"]), a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter(element => element.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
+
 function timeframeHelp(value) {
   const timeframe = String(value || "").trim().toUpperCase();
   const labels = { M1:"1 分钟", M5:"5 分钟", M15:"15 分钟", M30:"30 分钟", H1:"1 小时", H4:"4 小时", D1:"1 天" };
@@ -3342,6 +3386,7 @@ function setTab(tabId, options = {}) {
     if (!options.silent) toast("观摩模式下不可访问该页面", "warning");
     tabId = "dashboard";
   }
+  closeMobileNav({ restoreFocus:false });
   if (tabId !== "dashboard") stopKlineRefreshTimers();
   if (tabId !== "review-memory") stopReviewDetailPolling();
   document.querySelectorAll(".nav-item").forEach((button) => {
@@ -3352,6 +3397,12 @@ function setTab(tabId, options = {}) {
       else button.removeAttribute("aria-current");
     }
   });
+  const mobileMore = $("mobileNavMoreBtn");
+  const mobilePrimaryTabs = new Set(["dashboard", "ai-analyze", "trading", "risk-center"]);
+  const mobileMoreActive = !mobilePrimaryTabs.has(tabId);
+  mobileMore?.classList.toggle("active", mobileMoreActive);
+  if (mobileMoreActive) mobileMore?.setAttribute("aria-current", "page");
+  else mobileMore?.removeAttribute("aria-current");
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === tabId);
   });
@@ -4268,7 +4319,6 @@ function setObserverPanelLock(panel, locked) {
       delete control.dataset.observerTitleBefore;
     }
   });
-
 }
 
 function applyRoleUI() {
@@ -4295,7 +4345,7 @@ function applyRoleUI() {
 
   // Navigation is an explicit capability list in observer mode. Empty groups
   // are removed so the sidebar contains exactly the pages the user can open.
-  document.querySelectorAll('.sidebar .nav-item[data-tab]').forEach(item => {
+  document.querySelectorAll('.sidebar .nav-item[data-tab], .mobile-bottom-nav .nav-item[data-tab], .mobile-nav-drawer .nav-item[data-tab]').forEach(item => {
     const visible = observer
       ? allowedTabs.has(item.dataset.tab)
       : (!item.classList.contains('admin-only') || isAdmin);
@@ -7887,6 +7937,13 @@ function bindEvents() {
       setModelStrategySubtab(tabs[target].dataset.modelStrategyTab);
       tabs[target].focus();
     });
+  });
+
+  $("mobileNavMoreBtn")?.addEventListener("click", openMobileNav);
+  $("mobileNavDrawer")?.addEventListener("keydown", handleMobileNavKeydown);
+  document.querySelectorAll("[data-mobile-nav-close]").forEach(button => button.addEventListener("click", () => closeMobileNav()));
+  window.matchMedia("(min-width: 768px)").addEventListener("change", event => {
+    if (event.matches) closeMobileNav({ restoreFocus:false });
   });
 
   document.querySelectorAll("[data-analyst-view]").forEach(button => {
