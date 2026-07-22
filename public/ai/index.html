@@ -29,9 +29,10 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260722h" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260722i" />
   </head>
   <body>
+    <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
     <!-- Pro-only overlay -->
     <div id="proOverlay" class="pro-overlay hidden">
       <div class="pro-overlay-card">
@@ -152,7 +153,7 @@
         </div>
       </aside>
 
-      <main class="main">
+      <main id="aiMainContent" class="main" tabindex="-1">
         <section id="dashboard" class="tab-panel active">
           <header class="dashboard-intro calm-page-header">
             <div><span class="page-context-label"><i data-lucide="shield-check" size="13"></i>账户安全与当前行动</span><h1>交易首页</h1><p>先看账户是否安全，再决定是否需要处理最新建议。</p></div>
@@ -198,7 +199,7 @@
             <div class="card grid-area-quote">
               <div class="card-header">
                 <span class="card-title">实时报价</span>
-                <input id="quoteSymbolSelect" class="instrument-select" title="交易品种代码；末尾后缀由经纪商定义" />
+                <input id="quoteSymbolSelect" class="instrument-select" aria-label="实时报价交易品种" title="交易品种代码；末尾后缀由经纪商定义" />
               </div>
               <div class="quote-main">
                 <div class="quote-side">
@@ -637,7 +638,7 @@
             <section class="insight-strip review-insight-strip" aria-label="复盘与记忆概览"><div class="insight-item primary"><span>待我处理</span><strong id="reviewPendingStat" class="num">--</strong><small>阅读并确认复盘结论</small></div><div id="reviewJobInsight" class="insight-item"><span>生成任务</span><strong class="review-job-counts"><span id="reviewGeneratingStat" class="num">--</span><em>/</em><span id="reviewFailedStat" class="num">--</span></strong><small>进行中 / 失败</small></div><div class="insight-item"><span id="memoryActiveLabel">有效记忆</span><strong id="memoryActiveStat" class="num">--</strong><small id="memoryActiveHelp">可用于后续分析</small></div></section>
             <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
             <div class="workspace-subtabs" role="tablist" aria-label="AI复盘师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">策略记忆</span></button></div>
-            <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout period-review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>策略复盘</h2></div><span class="review-queue-hint">按日、按月沉淀</span></div><div class="review-period-tabs" role="tablist" aria-label="复盘周期筛选"><button class="active" data-review-period="">全部 <span id="reviewAllCount">0</span></button><button data-review-period="daily">日复盘 <span id="reviewDailyCount">0</span></button><button data-review-period="monthly">月复盘 <span id="reviewMonthlyCount">0</span></button></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" data-review-filter="">全部</button><button data-review-filter="pending">待处理</button><button data-review-filter="draft">待确认</button><button data-review-filter="approved">已确认</button><button data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="calendar-search" size="22"></i></span><strong>选择一个复盘周期</strong><span>查看系统统计、校对 AI 结论，确认后再沉淀为策略记忆。</span></div></aside></div></section>
+            <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout period-review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>策略复盘</h2></div><span class="review-queue-hint">按日、按月沉淀</span></div><div class="review-period-tabs" role="tablist" aria-label="复盘周期筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-period="">全部 <span id="reviewAllCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="daily">日复盘 <span id="reviewDailyCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="monthly">月复盘 <span id="reviewMonthlyCount">0</span></button></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-filter="">全部</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="pending">待处理</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="draft">待确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="approved">已确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="calendar-search" size="22"></i></span><strong>选择一个复盘周期</strong><span>查看系统统计、校对 AI 结论，确认后再沉淀为策略记忆。</span></div></aside></div></section>
             <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
               <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only" style="display:none"></div><div id="platformExperienceEvaluation" class="platform-experience-evaluation admin-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
               <details class="workspace-panel quiet-disclosure settings-disclosure user-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、月度归纳与效果验证</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。高级效果对照会额外调用一次模型。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认记忆用于后续分析</strong><small>只使用你确认且与当前分析环境匹配的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>生成月度摘要与分类压缩</strong><small>按记忆类别和适用条件归纳，减少上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span><strong>高级效果对照实验</strong><small>付费配对实验（额外一次调用）</small></span></label></div></div></details>
@@ -686,17 +687,17 @@
             </div>
             <div class="table-toolbar history-filter-bar">
               <div class="filter-field">
-                <label class="filter-label">开仓时间</label>
-                <input type="date" id="filterEntryFrom" class="filter-date">
+                <span class="filter-label" id="historyEntryRangeLabel">开仓时间</span>
+                <input type="date" id="filterEntryFrom" class="filter-date" aria-label="开仓开始日期">
                 <span class="filter-range-sep">~</span>
-                <input type="date" id="filterEntryTo" class="filter-date">
+                <input type="date" id="filterEntryTo" class="filter-date" aria-label="开仓结束日期">
               </div>
-              <select id="filterDirection" class="filter-select">
+              <select id="filterDirection" class="filter-select" aria-label="交易方向">
                 <option value="">全部方向</option>
                 <option value="BUY">买入</option>
                 <option value="SELL">卖出</option>
               </select>
-              <select id="filterProfit" class="filter-select">
+              <select id="filterProfit" class="filter-select" aria-label="交易盈亏">
                 <option value="">全部盈亏</option>
                 <option value="profit">盈利</option>
                 <option value="loss">亏损</option>
@@ -828,7 +829,7 @@
                 <p id="cmpStatus" class="cmp-status-text" aria-live="polite"></p>
               </aside>
 
-              <main class="compare-main-column">
+              <div class="compare-main-column">
                 <section id="cmpSnapshotPanel" class="workspace-panel compare-snapshot-panel">
                   <div class="section-heading"><div><h2>选择历史信号快照</h2><p>只展示当前管理员账户中已平仓、归因完成且推理证据完整的信号；选择后会锁定同一策略版本。</p></div><span id="cmpSnapshotResultCount" class="cmp-hint">正在读取...</span></div>
                   <div class="compare-snapshot-toolbar">
@@ -860,7 +861,7 @@
                   <i data-lucide="git-compare-arrows" size="24"></i>
                   <div><strong>等待创建对比任务</strong><p>完成左侧条件设置并选择模型后，这里会展示结论、指标和逐次决策差异。</p></div>
                 </section>
-              </main>
+              </div>
             </div>
 
             <section class="workspace-panel compare-history-panel">
@@ -953,19 +954,19 @@
               <span class="field-error" id="errType">请选择反馈类型</span>
 
               <div class="form-group">
-                <label class="form-label">标题</label>
-                <input type="text" id="feedbackTitle" class="form-input" placeholder="简短描述你的需求…" maxlength="200" required>
+                <label class="form-label" for="feedbackTitle">标题</label>
+                <input type="text" id="feedbackTitle" class="form-input" placeholder="简短描述你的需求…" maxlength="200" required aria-describedby="errTitle">
                 <span class="field-error" id="errTitle">请填写标题</span>
               </div>
 
               <div class="form-group">
-                <label class="form-label">详细描述</label>
-                <textarea id="feedbackDesc" class="form-textarea" placeholder="展开描述你的想法或遇到的问题…" maxlength="5000" required></textarea>
+                <label class="form-label" for="feedbackDesc">详细描述</label>
+                <textarea id="feedbackDesc" class="form-textarea" placeholder="展开描述你的想法或遇到的问题…" maxlength="5000" required aria-describedby="errDesc"></textarea>
                 <span class="field-error" id="errDesc">请填写描述</span>
               </div>
 
               <div class="form-group">
-                <label class="form-label">联系方式（选填）</label>
+                <label class="form-label" for="feedbackContact">联系方式（选填）</label>
                 <input type="text" id="feedbackContact" class="form-input" placeholder="邮箱或微信，方便我们回复你">
               </div>
 
@@ -1106,7 +1107,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260722h"></script>
+    <script src="/ai/app.js?v=20260722i"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

@@ -7790,6 +7790,7 @@ function bindEvents() {
       const selected = item === button;
       item.classList.toggle("active", selected);
       item.setAttribute("aria-selected", String(selected));
+      item.tabIndex = selected ? 0 : -1;
     });
     state.reviewFilter = button.dataset.reviewFilter; renderReviewCases();
   }));
@@ -7798,10 +7799,26 @@ function bindEvents() {
       const selected = item === button;
       item.classList.toggle("active", selected);
       item.setAttribute("aria-selected", String(selected));
+      item.tabIndex = selected ? 0 : -1;
     });
     state.reviewPeriodFilter = button.dataset.reviewPeriod; state.selectedReviewId = null;
     loadReviewMemory().catch(error => toast(error.message,"error"));
   }));
+  ["[data-review-filter]", "[data-review-period]"].forEach(selector => {
+    document.querySelectorAll(selector).forEach(button => button.addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = [...document.querySelectorAll(selector)];
+      const current = tabs.indexOf(button);
+      const targetIndex = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? tabs.length - 1
+          : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      tabs[targetIndex].click();
+      tabs[targetIndex].focus();
+    }));
+  });
   document.querySelectorAll("[data-strategy-filter]").forEach(button => button.addEventListener("click", () => {
     state.strategyFilter = button.dataset.strategyFilter || "all";
     document.querySelectorAll("[data-strategy-filter]").forEach(item => item.classList.toggle("active", item === button));

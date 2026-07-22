@@ -566,6 +566,21 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('structure[`${edge}_broker_time`]')
     expect(bridgeWs).toContain('getInferenceVisualizationSnapshot(signalId)')
   })
+
+  it('provides keyboard-operable landmarks, tabs and labelled form controls', () => {
+    expect(html).toContain('class="skip-link" href="#aiMainContent"')
+    expect(html).toContain('<main id="aiMainContent" class="main" tabindex="-1">')
+    expect(html.match(/<main\b/g)).toHaveLength(1)
+    expect(html).toContain('role="tab" aria-selected="true" tabindex="0" data-review-period=""')
+    expect(html).toContain('role="tab" aria-selected="true" tabindex="0" data-review-filter=""')
+    expect(html).toContain('aria-label="开仓开始日期"')
+    expect(html).toContain('aria-label="交易方向"')
+    expect(html).toContain('for="feedbackTitle"')
+    expect(html).toContain('for="feedbackDesc"')
+    expect(app).toContain('["ArrowLeft", "ArrowRight", "Home", "End"]')
+    expect(app).toContain('button.tabIndex = active ? 0 : -1')
+    expect(css).toContain('.skip-link:focus')
+  })
 })
 
 describe('take-profit execution clarity', () => {
