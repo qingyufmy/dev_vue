@@ -467,6 +467,22 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('preserveRuleDrafts = preserveRuleState')
     expect(app).toContain('captureUserRiskEditorState({ includeDrafts:preserveRuleDrafts })')
     expect(app).toContain('loadRiskCenter({ preserveRuleState:true, preserveRuleDrafts:false })')
+    expect(app).toContain('updateUserRiskPreferencePreview(input)')
+  })
+
+  it('explains personal single-trade risk levels and confirms the first move above recommendation', () => {
+    expect(app).toContain('function singleTradeRiskLevel(value, maximum = 2)')
+    expect(app).toContain('标准（推荐）')
+    expect(app).toContain('data-risk-preference-preview')
+    expect(app).toContain('试探仓')
+    expect(app).toContain('轻仓')
+    expect(app).toContain('连续 10 次标准仓止损')
+    expect(app).toContain('data-original-effective-risk')
+    expect(app).toContain('originalRisk <= 1')
+    expect(app).toContain('showConfirm("确认提高单笔风险"')
+    expect(css).toContain('.risk-preference-preview')
+    expect(css).toContain('.risk-group-level.high')
+    expect(responsiveCss).toContain('.risk-tier-impact')
   })
 
   it('keeps the overview signal card focused on the current decision and execution summary', () => {

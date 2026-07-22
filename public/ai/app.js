@@ -2663,6 +2663,76 @@ function formatRiskValue(key, value, meta = {}) {
   return `${Number.isFinite(Number(value)) ? Number(value) : value}${unit ? ` ${unit}` : ""}`;
 }
 
+function singleTradeRiskLevel(value, maximum = 2) {
+  const percentage = Number(value);
+  const platformMaximum = Number(maximum);
+  if (!Number.isFinite(percentage) || percentage <= 0) return { tone:"invalid", label:"等待设置", description:"请输入有效的风险比例" };
+  if (Number.isFinite(platformMaximum) && percentage > platformMaximum) return { tone:"invalid", label:"超出上限", description:`平台允许上限为 ${platformMaximum}%` };
+  if (percentage <= 0.5) return { tone:"steady", label:"稳健", description:"优先控制连续亏损带来的账户回撤" };
+  if (percentage <= 1) return { tone:"standard", label:"标准（推荐）", description:"适合自动执行的常规风险区间" };
+  if (percentage <= 1.5) return { tone:"elevated", label:"偏高", description:"高于平台推荐值，请确认能够承受连续止损" };
+  return { tone:"high", label:"高风险", description:"接近平台允许上限，实际亏损可能因滑点进一步增加" };
+}
+
+function riskPercentageText(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${Number(number.toFixed(3))}%`;
+}
+
+function consecutiveLossDrawdown(value, count = 10) {
+  const percentage = Number(value);
+  return Number.isFinite(percentage) && percentage > 0
+    ? (1 - Math.pow(1 - percentage / 100, count)) * 100
+    : 0;
+}
+
+function renderRiskPreferencePreview(value, maximum = 2, inherited = false) {
+  const percentage = Number(value);
+  const level = singleTradeRiskLevel(percentage, maximum);
+  const probe = percentage * 0.25, light = percentage * 0.5;
+  const warning = level.tone === "elevated" || level.tone === "high"
+    ? `连续 10 次标准仓止损，理论回撤约 ${consecutiveLossDrawdown(percentage).toFixed(1)}%；实际损失可能因滑点或跳空更高。`
+    : level.description;
+  return `<div class="risk-preference-preview ${level.tone}" data-risk-preference-preview role="status" aria-live="polite">
+    <div class="risk-preference-heading"><span><strong data-risk-level-label>${escapeHtml(level.label)}</strong><small data-risk-level-description>${escapeHtml(level.description)}</small></span><b data-risk-level-value>${escapeHtml(riskPercentageText(percentage))}${inherited ? " · 继承平台" : ""}</b></div>
+    <div class="risk-tier-impact" aria-label="不同仓位档位对应的账户风险"><span><em>试探仓</em><strong data-risk-tier="probe">${escapeHtml(riskPercentageText(probe))}</strong></span><span><em>轻仓</em><strong data-risk-tier="light">${escapeHtml(riskPercentageText(light))}</strong></span><span><em>标准仓</em><strong data-risk-tier="standard">${escapeHtml(riskPercentageText(percentage))}</strong></span></div>
+    <p data-risk-level-warning>${escapeHtml(warning)}</p>
+  </div>`;
+}
+
+function updateUserRiskPreferencePreview(input) {
+  if (!input || input.dataset.userRiskField !== "max_risk_per_trade_pct") return;
+  const preview = input.closest(".risk-rule-row")?.querySelector("[data-risk-preference-preview]");
+  if (!preview) return;
+  const inherited = input.value.trim() === "";
+  const percentage = Number(inherited ? input.dataset.inheritedRiskValue : input.value);
+  const minimum = Number(input.min), maximum = Number(input.max);
+  const outsideRange = !Number.isFinite(percentage) || percentage <= 0
+    || (Number.isFinite(minimum) && percentage < minimum)
+    || (Number.isFinite(maximum) && percentage > maximum);
+  const level = outsideRange
+    ? { tone:"invalid", label:"超出范围", description:`允许设置 ${riskPercentageText(minimum)}～${riskPercentageText(maximum)}` }
+    : singleTradeRiskLevel(percentage, maximum);
+  const warning = level.tone === "elevated" || level.tone === "high"
+    ? `连续 10 次标准仓止损，理论回撤约 ${consecutiveLossDrawdown(percentage).toFixed(1)}%；实际损失可能因滑点或跳空更高。`
+    : level.description;
+  preview.className = `risk-preference-preview ${level.tone}`;
+  preview.querySelector("[data-risk-level-label]").textContent = level.label;
+  preview.querySelector("[data-risk-level-description]").textContent = level.description;
+  preview.querySelector("[data-risk-level-value]").textContent = `${riskPercentageText(percentage)}${inherited ? " · 继承平台" : ""}`;
+  preview.querySelector('[data-risk-tier="probe"]').textContent = riskPercentageText(percentage * 0.25);
+  preview.querySelector('[data-risk-tier="light"]').textContent = riskPercentageText(percentage * 0.5);
+  preview.querySelector('[data-risk-tier="standard"]').textContent = riskPercentageText(percentage);
+  preview.querySelector("[data-risk-level-warning]").textContent = warning;
+  input.setAttribute("aria-invalid", String(outsideRange));
+  const groupBadge = input.closest("details.risk-policy-group")?.querySelector(".risk-group-level");
+  if (groupBadge) {
+    groupBadge.className = `risk-group-level ${level.tone}`;
+    groupBadge.textContent = `单笔 ${riskPercentageText(percentage)} · ${level.label}`;
+  }
+}
+
 function riskBoundaryText(key, control, meta = {}) {
   if (control?.locked_value != null) return `平台锁定：${formatRiskValue(key, control.locked_value, meta)}`;
   if (control?.user_editable === false) return "平台管理，不可修改";
@@ -2675,15 +2745,21 @@ function renderRiskPolicyGroup(title, keys, row, metadata) {
   const platform = row.effective?.platformPolicy || {}, controls = row.effective?.controls || {};
   const visibleKeys = keys.filter(key => metadata[key]?.configurable !== false && metadata[key]?.user_editable !== false);
   if (!visibleKeys.length) return "";
-  return `<details class="risk-policy-group" data-risk-policy-group="${escapeHtml(title)}"><summary><span><strong>${escapeHtml(title)}</strong><small>${visibleKeys.length} 项可调规则</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="risk-rule-table"><div class="risk-rule-row risk-rule-head"><span>规则</span><span>我的设置</span><span>平台边界</span><span>最终生效</span></div>${visibleKeys.map(key => {
+  const groupRisk = visibleKeys.includes("max_risk_per_trade_pct") ? Number(policy.max_risk_per_trade_pct) : null;
+  const groupRiskLevel = Number.isFinite(groupRisk) ? singleTradeRiskLevel(groupRisk, controls.max_risk_per_trade_pct?.allowed_max) : null;
+  const groupRiskBadge = groupRiskLevel ? `<span class="risk-group-level ${groupRiskLevel.tone}">单笔 ${escapeHtml(riskPercentageText(groupRisk))} · ${escapeHtml(groupRiskLevel.label)}</span>` : "";
+  return `<details class="risk-policy-group" data-risk-policy-group="${escapeHtml(title)}"><summary><span><strong>${escapeHtml(title)}</strong><span class="risk-group-summary"><small>${visibleKeys.length} 项可调规则</small>${groupRiskBadge}</span></span><i data-lucide="chevron-down" size="15"></i></summary><div class="risk-rule-table"><div class="risk-rule-row risk-rule-head"><span>规则</span><span>我的设置</span><span>平台边界</span><span>最终生效</span></div>${visibleKeys.map(key => {
     const meta = metadata[key] || {}, control = controls[key] || {}, own = accountValues[key];
     const editable = meta.type === "number" && control.user_editable !== false && control.locked_value == null;
     const unit = riskUnit(meta);
+    const isRiskPreference = key === "max_risk_per_trade_pct";
+    const inheritedValue = platform[key] ?? policy[key];
     const ownControl = editable
-      ? `<span class="risk-input-with-unit"><input type="number" step="any" min="${escapeHtml(control.allowed_min ?? meta.allowed_min ?? '')}" max="${escapeHtml(control.allowed_max ?? meta.allowed_max ?? '')}" data-user-risk-field="${key}" value="${own == null ? "" : escapeHtml(own)}" placeholder="继承平台值" aria-label="${escapeHtml(RISK_LABELS[key] || key)}的用户设置"><em>${escapeHtml(unit)}</em></span>`
+      ? `<span class="risk-input-with-unit"><input type="number" step="any" min="${escapeHtml(control.allowed_min ?? meta.allowed_min ?? '')}" max="${escapeHtml(control.allowed_max ?? meta.allowed_max ?? '')}" data-user-risk-field="${key}" ${isRiskPreference ? `data-original-effective-risk="${escapeHtml(policy[key] ?? '')}" data-inherited-risk-value="${escapeHtml(inheritedValue ?? '')}"` : ""} value="${own == null ? "" : escapeHtml(own)}" placeholder="继承平台值" aria-label="${escapeHtml(RISK_LABELS[key] || key)}的用户设置"><em>${escapeHtml(unit)}</em></span>`
       : `<span class="risk-inherited">${own == null ? "不可修改" : escapeHtml(formatRiskValue(key, own, meta))}</span>`;
     const boundary = meta.locked ? `平台强制：${formatRiskValue(key, platform[key], meta)}` : riskBoundaryText(key, control, meta);
-    return `<div class="risk-rule-row"><span class="risk-rule-name"><strong>${escapeHtml(RISK_LABELS[key] || meta.label || key)}</strong><small>${escapeHtml(meta.description || "用户只能设置比平台更严格的值")}</small></span><span>${ownControl}</span><span class="risk-boundary">${escapeHtml(boundary)}</span><strong class="risk-effective">${escapeHtml(formatRiskValue(key, policy[key], meta))}</strong></div>`;
+    const preferencePreview = isRiskPreference ? renderRiskPreferencePreview(policy[key], control.allowed_max ?? meta.allowed_max ?? 2, own == null) : "";
+    return `<div class="risk-rule-row ${isRiskPreference ? "risk-preference-row" : ""}"><span class="risk-rule-name"><strong>${escapeHtml(RISK_LABELS[key] || meta.label || key)}</strong><small>${escapeHtml(meta.description || "用户只能设置比平台更严格的值")}</small></span><span>${ownControl}</span><span class="risk-boundary">${escapeHtml(boundary)}</span><strong class="risk-effective">${escapeHtml(formatRiskValue(key, policy[key], meta))}</strong>${preferencePreview}</div>`;
   }).join("")}</div></details>`;
 }
 
@@ -2719,6 +2795,7 @@ function restoreUserRiskEditorState(snapshot) {
     const accountId = input.closest("[data-risk-account]")?.dataset.riskAccount;
     const key = accountId ? `${accountId}:${input.dataset.userRiskField}` : "";
     if (key && Object.hasOwn(snapshot.drafts, key)) input.value = snapshot.drafts[key];
+    updateUserRiskPreferencePreview(input);
     if (key && key === snapshot.focusKey) {
       input.focus({ preventScroll:true });
       if (snapshot.selectionStart != null) input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd ?? snapshot.selectionStart);
@@ -2741,8 +2818,13 @@ async function loadRiskCenter({ preserveRuleState = true, preserveRuleDrafts = p
   const rows = riskData.accounts || [];
   const haltedRows = rows.filter(row => row.risk_state?.halt_status !== "active");
   const incompleteRows = rows.filter(row => row.risk_state?.data_complete === false || Number(row.risk_state?.data_complete) === 0);
+  const accountRiskPercentages = rows.map(row => Number(row.effective?.policy?.max_risk_per_trade_pct)).filter(Number.isFinite);
+  const highestRiskPercentage = accountRiskPercentages.length ? Math.max(...accountRiskPercentages) : null;
+  const accountRiskMaximums = rows.map(row => Number(row.effective?.controls?.max_risk_per_trade_pct?.allowed_max)).filter(Number.isFinite);
+  const highestRiskMaximum = accountRiskMaximums.length ? Math.max(...accountRiskMaximums) : 2;
+  const highestRiskLevel = highestRiskPercentage == null ? null : singleTradeRiskLevel(highestRiskPercentage, highestRiskMaximum);
   const overview = $("riskOverview");
-  if (overview) overview.innerHTML = `<div class="insight-item ${haltedRows.length ? 'danger' : 'success'}"><span>现在能否交易</span><strong>${haltedRows.length ? `${haltedRows.length} 个账户暂停` : '可以交易'}</strong><small>${haltedRows.length ? '请查看下方具体原因' : '未发现停止新开仓的条件'}</small></div><div class="insight-item ${incompleteRows.length ? 'warning' : ''}"><span>交易账户</span><strong class="num">${rows.length}</strong><small>${incompleteRows.length ? `${incompleteRows.length} 个账户数据异常` : '账户和行情数据正常'}</small></div><div class="insight-item success"><span>修改规则后</span><strong>立即生效</strong><small>下一笔订单直接使用新限制</small></div>`;
+  if (overview) overview.innerHTML = `<div class="insight-item ${haltedRows.length ? 'danger' : 'success'}"><span>现在能否交易</span><strong>${haltedRows.length ? `${haltedRows.length} 个账户暂停` : '可以交易'}</strong><small>${haltedRows.length ? '请查看下方具体原因' : '未发现停止新开仓的条件'}</small></div><div class="insight-item ${incompleteRows.length ? 'warning' : ''}"><span>交易账户</span><strong class="num">${rows.length}</strong><small>${incompleteRows.length ? `${incompleteRows.length} 个账户数据异常` : '账户和行情数据正常'}</small></div><div class="insight-item risk-overview-level ${escapeHtml(highestRiskLevel?.tone || 'standard')}"><span>单笔风险档位</span><strong>${escapeHtml(highestRiskLevel?.label || '等待账户')}</strong><small>${highestRiskPercentage == null ? '连接账户后显示最终生效值' : `最高 ${escapeHtml(riskPercentageText(highestRiskPercentage))} · 平台推荐不超过 1%`}</small></div>`;
   const statusHost = $("riskStatusList");
   if (statusHost) statusHost.innerHTML = rows.length ? rows.map(row => {
     const stateInfo = row.risk_state || {}, active = stateInfo.halt_status === "active", dataComplete = !(stateInfo.data_complete === false || Number(stateInfo.data_complete) === 0);
@@ -8184,6 +8266,8 @@ function bindEvents() {
   });
   document.body.addEventListener("input", event => {
     if (event.target.closest("[data-review-field]")) syncReviewEditorFromFields();
+    const userRiskInput = event.target.closest("[data-user-risk-field]");
+    if (userRiskInput) updateUserRiskPreferencePreview(userRiskInput);
   });
   document.body.addEventListener("change", async event => {
     const riskRollout = event.target.closest("[data-risk-rollout]");
@@ -8446,8 +8530,36 @@ function bindEvents() {
       panel?.querySelectorAll("[data-user-risk-field]").forEach(input => {
         changes[input.dataset.userRiskField] = input.value.trim() === "" ? null : Number(input.value);
       });
+      const riskInput = panel?.querySelector('[data-user-risk-field="max_risk_per_trade_pct"]');
+      if (riskInput) {
+        const nextRisk = Number(riskInput.value.trim() === "" ? riskInput.dataset.inheritedRiskValue : riskInput.value);
+        const originalRisk = Number(riskInput.dataset.originalEffectiveRisk);
+        const minimumRisk = Number(riskInput.min), maximumRisk = Number(riskInput.max);
+        if (!Number.isFinite(nextRisk) || nextRisk < minimumRisk || nextRisk > maximumRisk) {
+          updateUserRiskPreferencePreview(riskInput);
+          riskInput.focus({ preventScroll:true });
+          toast(`单笔最大风险必须在 ${riskPercentageText(minimumRisk)}～${riskPercentageText(maximumRisk)} 之间`, "error");
+          return;
+        }
+        if (nextRisk > 1 && (!Number.isFinite(originalRisk) || originalRisk <= 1)) {
+          const level = singleTradeRiskLevel(nextRisk, maximumRisk);
+          const confirmed = await showConfirm("确认提高单笔风险", "该设置高于平台推荐区间。标准仓止损时会使用完整风险额度，实际损失还可能因滑点或跳空增加。", {
+            confirmText:"确认并保存", cancelText:"返回调整", danger:true,
+            detailRows:[
+              ["风险档位", level.label, level.tone === "high" ? "risk-high" : "warning"],
+              ["单笔最大风险", riskPercentageText(nextRisk), level.tone === "high" ? "risk-high" : "warning"],
+              ["试探仓 / 轻仓", `${riskPercentageText(nextRisk * 0.25)} / ${riskPercentageText(nextRisk * 0.5)}`],
+              ["连续 10 次标准仓止损", `理论回撤约 ${consecutiveLossDrawdown(nextRisk).toFixed(1)}%`, "risk-high"],
+            ],
+          });
+          if (!confirmed) return;
+        }
+      }
+      riskSave.disabled = true;
       try { await api(`/api/ai/risk-center/${Number(riskSave.dataset.riskSave)}`, { method:"PUT", body:{ changes, reason:"用户从风控中心更新" } }); toast("用户风控已立即生效", "success"); await loadRiskCenter({ preserveRuleState:true, preserveRuleDrafts:false }); }
-      catch (error) { toast(error.message,"error"); } return;
+      catch (error) { toast(error.message,"error"); }
+      finally { riskSave.disabled = false; }
+      return;
     }
 
     if (auditResult) {

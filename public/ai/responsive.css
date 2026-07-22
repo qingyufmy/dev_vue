@@ -1205,6 +1205,16 @@
     min-height: 52px;
   }
 
+  .risk-policy-group > summary > span {
+    align-items: flex-start;
+  }
+
+  .risk-policy-group > summary .risk-group-summary {
+    display: grid;
+    justify-items: end;
+    gap: 4px;
+  }
+
   .risk-rule-row {
     grid-template-columns: 1fr;
   }
@@ -1212,6 +1222,34 @@
   .risk-rule-name,
   .risk-rule-row > span,
   .risk-rule-row > strong {
+    grid-column: 1;
+  }
+
+  .risk-preference-preview {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .risk-preference-heading {
+    align-items: flex-start;
+  }
+
+  .risk-tier-impact {
+    grid-template-columns: 1fr;
+  }
+
+  .risk-tier-impact > span {
+    min-height: 36px;
+    border-top: 1px solid var(--border-subtle);
+    border-left: 0;
+  }
+
+  .risk-tier-impact > span:first-child {
+    border-top: 0;
+  }
+
+  .risk-preference-preview > p {
     grid-column: 1;
   }
 
