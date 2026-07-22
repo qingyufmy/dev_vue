@@ -6,10 +6,10 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
-    script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com https://esm.sh;
+    script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:8400 https://cdn.jsdelivr.net https://unpkg.com https://esm.sh;
     style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://fonts.googleapis.com;
     img-src 'self' data: https:;
-    connect-src 'self' https:;
+    connect-src 'self' http://localhost:8400 https:;
     font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net;
     frame-src 'self' http://player.bilibili.com https://player.bilibili.com https://www.youtube.com;
     media-src 'self' https: blob:;
