@@ -1,6 +1,6 @@
 import { auditValueLabel, formatRiskReason } from '../../audit-localization.js'
 
-const SIGNAL_SCHEMA_VERSION = 3
+const SIGNAL_SCHEMA_VERSION = 4
 
 function cleanText(value, maxLength = 240) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
@@ -145,6 +145,7 @@ export function normalizeDecisionFields(signal = {}) {
     position_size_reason:cleanText(signal.position_size_reason, 240),
     position_action:String(signal.position_action || (isHold ? 'observe' : 'open')).toLowerCase(),
     pending_action:String(signal.pending_action || 'none').toLowerCase(),
+    pending_action_reason:cleanText(signal.pending_action_reason, 320),
     management_direction:String(signal.management_direction || 'none').toLowerCase(),
     candidate_entry:candidateEntry(signal),
     experience_usage:experienceUsage(signal),
@@ -162,10 +163,17 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
   const executed = Number(signal.is_executed) === 1 || signal.is_executed === true || execution?.status === 'success'
   const pending = Boolean(signal.pending_ticket) || signal.pending_state === 'pending'
   const stale = Boolean(signal.is_stale)
+  const storedDecision = parseJson(signal.decision_json) || {}
+  const pendingActionReason = cleanText(
+    execution?.details?.pending_action_reason || signal.pending_action_reason || storedDecision.pending_action_reason,
+    320
+  )
 
   if (execution?.status === 'success' && execution?.reason === 'pending_cancelled') return {
     state:'cancelled', title:'旧挂单已取消',
-    description:executionDescription(execution, '策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单。'),
+    description:pendingActionReason
+      ? `撤单依据：${pendingActionReason}`
+      : '策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单。',
     executable:false,
   }
 
@@ -175,7 +183,6 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
     description: executionDescription(execution, pending ? '等待市场触发，系统会继续跟踪状态。' : '执行结果已记录，可前往交易或审计页面查看。'),
     executable: false,
   }
-  const storedDecision = parseJson(signal.decision_json) || {}
   const positionAction = String(signal.position_action || storedDecision.position_action || '').toLowerCase()
   if (positionAction === 'hold_no_add') return {
     state:'observe', title:'继续持有，暂不加仓',

@@ -397,6 +397,19 @@ describe('validateAiSignalResponse', () => {
       ...hold, signal_type: 'buy_limit', entry_method: 'limit', recommended_volume: 0.01,
     }, ['market'])).toThrow('ai_response_invalid_signal_type')
   })
+
+  it('requires a concrete reason when the model cancels an existing pending order', () => {
+    expect(() => validateAiSignalResponse({
+      ...hold, pending_action:'cancel', management_direction:'buy', pending_action_reason:'',
+    }, ['market'])).toThrow('ai_response_pending_action_reason_required')
+
+    const legacy = {
+      ...hold, pending_action:'cancel', management_direction:'buy',
+      cancel_pending:[{ symbol:'XAUUSD', reason:'M15 跌破 4102 支撑，原买入依据已经失效' }],
+    }
+    expect(validateAiSignalResponse(legacy, ['market']).pending_action_reason)
+      .toBe('M15 跌破 4102 支撑，原买入依据已经失效')
+  })
 })
 
 describe('OpenAI-compatible provider URL', () => {
@@ -885,6 +898,20 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     expect(result.entry_method).toBe('observe')
     expect(result.confidence).toBeGreaterThan(0)
     expect(result.normalization_info?.type).not.toBe('l5_schema_hold')
+  })
+
+  it('keeps the localized evidence for an AI pending-order cancellation', () => {
+    const result = normalizeAiSignal({
+      _inference_source:'ai', signal_type:'hold', entry_method:'observe', confidence:0.72,
+      position_size_tier:'observe', position_size_reason:'不新增仓位', position_action:'observe',
+      pending_action:'cancel', management_direction:'buy',
+      pending_action_reason:'M15 已跌破 4102 支撑，原买入挂单的结构前提不再成立',
+      analysis:'短周期结构转弱', reasoning:'原挂单依赖的支撑已经失守',
+    }, config, market)
+    expect(result).toMatchObject({
+      signal_type:'hold', pending_action:'cancel', management_direction:'buy',
+      pending_action_reason:'M15 已跌破 4102 支撑，原买入挂单的结构前提不再成立',
+    })
   })
 
   it('turns a trade-shaped no-add decision into hold while preserving non-executable candidate levels', () => {

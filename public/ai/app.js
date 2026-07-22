@@ -3394,7 +3394,7 @@ function renderPlatformExperienceEvaluation(evaluation = {}) {
   const strategies = evaluation.strategies || [], recent = evaluation.recent_retrievals || [], pairs = paired.recent_runs || [];
   const percent = value => `${Math.round(Math.max(0, Math.min(1, Number(value || 0))) * 100)}%`;
   const modeLabels = { shadow:"影子评估", active:"正式使用", off:"已关闭" };
-  const diffLabels = { signal_type:"信号方向", entry_method:"入场方式", confidence:"置信度", recommended_volume:"旧版建议手数", position_size_tier:"仓位档位", position_action:"持仓处理", pending_action:"挂单处理", stop_loss_price:"止损", take_profit_1_price:"止盈", limit_price:"挂单价格" };
+  const diffLabels = { signal_type:"信号方向", entry_method:"入场方式", confidence:"置信度", recommended_volume:"旧版建议手数", position_size_tier:"仓位档位", position_action:"持仓处理", pending_action:"挂单处理", pending_action_reason:"挂单处理依据", stop_loss_price:"止损", take_profit_1_price:"止盈", limit_price:"挂单价格" };
   const retrievalReasonLabels = { strategy_match:"策略一致", market_regime_match:"市场状态一致", trend_direction_match:"趋势方向一致", volatility_bucket_match:"波动状态一致", chan_reliability_match:"缠论可信度一致", chan_trend_state_match:"缠论趋势一致", chan_segment_direction_match:"线段方向一致", chan_divergence_match:"背驰状态一致", chan_center_state_match:"中枢状态一致", entry_method_overlap:"入场方式适用" };
   const recentRows = recent.slice(0, 10).map(row => {
     const selected = row.selected_items || [];
@@ -5048,7 +5048,8 @@ function signalExecutionAdvice(signal) {
   if (execution?.status === "success" && execution?.reason === "pending_cancelled") return {
     state:"cancelled",
     title:"旧挂单已取消",
-    description:resultRiskReason(execution) || "策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单。",
+    description:userVisibleText(execution?.details?.pending_action_reason || signal?.pending_action_reason || signal?.decision?.pending_action_reason,
+      "策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单。"),
     executable:false,
   };
   const persistedStatus = String(signal?.execution_status || "").toLowerCase();

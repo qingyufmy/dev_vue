@@ -1815,6 +1815,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
     if (['cancel', 'cancel_replace'].includes(pendingAction)) {
+      const pendingActionReason = String(signal.pending_action_reason || '').trim()
       const cancellable = sameDirectionPending.filter(item => Number(item.magic || 0) === 234000)
       if (!cancellable.length) {
         await finishBeforeRisk('skipped', 'reference_pending_not_matched')
@@ -1825,12 +1826,21 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         if (!ticket) continue
         const cancelled = await mt5Bridge(userId, 'cancel_pending', { ticket }, { noFallback:true })
         if (cancelled?.status !== 'success') {
-          await finishBeforeRisk('rejected', 'pending_cancel_failed', { ticket:String(ticket) })
+          await insertAudit(null, userId, 'ai_cancel_pending_failed', symbol,
+            { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), reason:pendingActionReason, error:cancelled?.message },
+            { status:'error', message:cancelled?.message }, 'warning').catch(() => {})
+          await finishBeforeRisk('rejected', 'pending_cancel_failed', { ticket:String(ticket), pending_action_reason:pendingActionReason })
           return
         }
+        await queryRun(
+          "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
+          [String(ticket), userId]).catch(() => {})
+        await insertAudit(null, userId, 'ai_cancel_pending', symbol,
+          { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), pending_type:item.side || item.pending_type || item.order_type || null, reason:pendingActionReason },
+          { status:'cancelled', ticket:String(ticket) }, 'success').catch(() => {})
       }
       if (pendingAction === 'cancel' || signalType === 'hold') {
-        await finishBeforeRisk('success', 'pending_cancelled', { count:cancellable.length })
+        await finishBeforeRisk('success', 'pending_cancelled', { count:cancellable.length, pending_action_reason:pendingActionReason })
         return
       }
     }

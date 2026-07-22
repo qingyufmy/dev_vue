@@ -73,7 +73,7 @@ export function localizeInferenceNarrative(value) {
 }
 
 function localizeAiSignalUserVisibleFields(signal) {
-  for (const key of ['decision_summary', 'trigger_condition', 'invalidation_condition', 'analysis', 'reasoning']) {
+  for (const key of ['decision_summary', 'trigger_condition', 'invalidation_condition', 'position_size_reason', 'pending_action_reason', 'analysis', 'reasoning']) {
     if (typeof signal?.[key] === 'string') signal[key] = localizeInferenceNarrative(signal[key])
   }
   for (const key of ['key_reasons', 'risk_factors']) {
@@ -104,6 +104,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
   position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe。参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；不得建议自动平仓",
   pending_action: "必须字段。仅允许 none | keep | cancel | cancel_replace。参考组合无挂单时返回 none；旧挂单仍符合当前逻辑时返回 keep，禁止无条件替换",
+  pending_action_reason: "中文说明挂单处理依据。pending_action 为 cancel 或 cancel_replace 时必须具体说明原挂单在哪个价格、市场结构或方向依据上已经失效，不得只写‘逻辑失效’，不得使用过期或超时作为原因；其他动作可返回空字符串",
   management_direction: "必须字段。仅允许 buy | sell | none。需要取消或替换挂单时填写被管理挂单方向；其他情况填 none",
   limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
   stop_limit_price: "Stop Limit 触发后挂出的限价，仅buy_stop_limit/sell_stop_limit时必填。limit_price始终是突破触发价：buy_stop_limit 的触发价高于当前价，stop_limit_price不得高于触发价；sell_stop_limit 的触发价低于当前价，stop_limit_price不得低于触发价",
@@ -137,6 +138,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
   schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe。平台参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；暂不支持自动平仓。'
   schema.pending_action = '必须字段。仅允许 none | keep | cancel | cancel_replace。旧挂单仍符合当前行情逻辑时必须 keep，只有逻辑失效或方向反转时才能 cancel 或 cancel_replace。'
+  schema.pending_action_reason = '中文字符串。pending_action 为 cancel 或 cancel_replace 时必须说明可核验的具体依据，例如关键位被突破、原结构被破坏、方向逻辑反转或挂单价格已不符合当前结构；必须包含对应的价格、结构或方向变化，不得只写“逻辑失效”，不得以过期、超时或有效期为理由。其他动作返回空字符串。'
   schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 或 cancel_replace 时填写被管理挂单方向；其他情况填 none。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
   const experienceRefs = [...new Set((experienceSelection?.selectedRefs || experienceIds.map(id => `item:${id}`))
@@ -378,6 +380,7 @@ function adaptLegacyPositionSizing(value) {
   }
   if (!value.position_action) value.position_action = isHold ? 'observe' : 'open'
   if (!value.pending_action) value.pending_action = 'none'
+  if (value.pending_action_reason === undefined) value.pending_action_reason = ''
   if (!value.management_direction) value.management_direction = 'none'
   return value
 }
@@ -418,6 +421,13 @@ export function validateAiSignalResponse(value, allowedEntryMethods) {
   if (!['buy', 'sell', 'none'].includes(managementDirection)) throw new Error('ai_response_invalid_management_direction')
   if (['cancel', 'cancel_replace'].includes(pendingAction) && managementDirection === 'none') {
     throw new Error('ai_response_management_direction_required')
+  }
+  if (['cancel', 'cancel_replace'].includes(pendingAction) && (typeof value.pending_action_reason !== 'string' || !value.pending_action_reason.trim())) {
+    const legacyReason = Array.isArray(value.cancel_pending)
+      ? value.cancel_pending.find(item => item && typeof item === 'object' && String(item.reason || '').trim())?.reason
+      : ''
+    if (legacyReason) value.pending_action_reason = legacyReason
+    else throw new Error('ai_response_pending_action_reason_required')
   }
   if (typeof value.analysis !== 'string' || !value.analysis.trim()) throw new Error('ai_response_analysis_required')
   if (typeof value.reasoning !== 'string' || !value.reasoning.trim()) throw new Error('ai_response_reasoning_required')
@@ -700,6 +710,10 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.trigger_condition = cleanText(parsed.trigger_condition, 240)
   parsed.invalidation_condition = cleanText(parsed.invalidation_condition, 240)
   parsed.position_size_reason = cleanText(parsed.position_size_reason, 240)
+  const legacyPendingReason = Array.isArray(parsed.cancel_pending)
+    ? parsed.cancel_pending.find(item => item && typeof item === 'object' && String(item.reason || '').trim())?.reason
+    : ''
+  parsed.pending_action_reason = cleanText(parsed.pending_action_reason || legacyPendingReason, 320)
   parsed.position_action = String(parsed.position_action || '').trim().toLowerCase()
   parsed.pending_action = String(parsed.pending_action || '').trim().toLowerCase()
   parsed.management_direction = String(parsed.management_direction || 'none').trim().toLowerCase()
@@ -757,7 +771,7 @@ export function normalizeAiSignal(parsed, config, market) {
     ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe',
     recommended_volume: 0, limit_price: null, stop_limit_price: null,
     position_size_tier: 'observe', position_size_factor: 0,
-    position_action:'observe', pending_action:'none',
+    position_action:'observe', pending_action:'none', pending_action_reason:'',
     management_direction:'none',
     recommended_take_profit_tier: null,
     pending_valid_minutes: 0, pending_valid_until: null,
@@ -827,6 +841,8 @@ export function normalizeAiSignal(parsed, config, market) {
   if (signalType === 'hold' && parsed.pending_action === 'cancel_replace') return schemaHold('invalid_hold_cancel_replace')
   if (!['buy', 'sell', 'none'].includes(parsed.management_direction)) return schemaHold('invalid_management_direction')
   if (['cancel', 'cancel_replace'].includes(parsed.pending_action) && parsed.management_direction === 'none') return schemaHold('management_direction_required')
+  if (['cancel', 'cancel_replace'].includes(parsed.pending_action) && !parsed.pending_action_reason) return schemaHold('pending_action_reason_required')
+  if (!['cancel', 'cancel_replace'].includes(parsed.pending_action)) parsed.pending_action_reason = ''
 
   // Limit price validation — reject signal if pending order has no valid price
   let limitPrice = parsed.limit_price ? parseFloat(parsed.limit_price) : null
@@ -969,6 +985,7 @@ export function normalizeAiSignal(parsed, config, market) {
     parsed.position_size_factor = 0
     parsed.position_action = 'observe'
     parsed.pending_action = 'none'
+    parsed.pending_action_reason = ''
     parsed.management_direction = 'none'
     parsed.limit_price = null
     parsed.stop_limit_price = null

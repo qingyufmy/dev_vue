@@ -21,7 +21,7 @@ describe('signal presentation', () => {
   })
   it('normalizes model fields and limits untrusted arrays', () => {
     const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
-    expect(result.schema_version).toBe(3)
+    expect(result.schema_version).toBe(4)
     expect(result.decision_summary).toBe('顺势做多')
     expect(result.key_reasons).toHaveLength(4)
     expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
@@ -89,6 +89,19 @@ describe('signal presentation', () => {
     expect(advice).toMatchObject({ state: 'cancelled', title: '旧挂单已取消', executable: false })
   })
 
+  it('presents the persisted market basis for a pending cancellation', () => {
+    const advice = buildExecutionAdvice({
+      signal_type:'hold',
+      decision_json:JSON.stringify({ pending_action:'cancel', pending_action_reason:'M15 跌破 4102 支撑，原买入挂单的结构依据已经失效' }),
+      execution_result:{ status:'success', reason:'pending_cancelled', details:{ count:1 } },
+    })
+    expect(advice).toMatchObject({
+      state:'cancelled',
+      description:'撤单依据：M15 跌破 4102 支撑，原买入挂单的结构依据已经失效',
+      executable:false,
+    })
+  })
+
   it('uses persisted rejection as the primary execution state', () => {
     const advice = buildExecutionAdvice({ signal_type: 'buy', execution_result: JSON.stringify({ status: 'rejected', message: '超过风险上限' }) })
     expect(advice).toMatchObject({ state: 'rejected', title: '风控未放行', executable: false })
@@ -142,7 +155,7 @@ describe('signal presentation', () => {
 
   it('adapts legacy rows without a decision payload', () => {
     const result = attachSignalPresentation({ id: 1, signal_type: 'sell', entry_method: 'market' })
-    expect(result.decision.schema_version).toBe(3)
+    expect(result.decision.schema_version).toBe(4)
     expect(result.execution_advice.executable).toBe(true)
   })
 })

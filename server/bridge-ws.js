@@ -121,7 +121,7 @@ export function buildSignalPendingActions(rows = [], executionResult = null) {
       pending_type:null,
       status:'cancelled',
       count:Number(execution.details?.count || 0),
-      reason:'策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单',
+      reason:String(execution.details?.pending_action_reason || '').trim() || '策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单',
       message:null,
       created_at:null,
     })

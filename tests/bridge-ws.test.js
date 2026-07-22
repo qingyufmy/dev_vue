@@ -136,6 +136,15 @@ describe('signal pending action presentation', () => {
     ])
   })
 
+  it('keeps the concrete model basis in a delivery-level cancellation fallback', () => {
+    expect(buildSignalPendingActions([], JSON.stringify({
+      status:'success', reason:'pending_cancelled',
+      details:{ count:1, pending_action_reason:'H1 方向转空且价格跌破 4100 支撑' },
+    }))).toEqual([
+      expect.objectContaining({ status:'cancelled', count:1, reason:'H1 方向转空且价格跌破 4100 支撑' }),
+    ])
+  })
+
   it('accepts localized pending-action audit labels', () => {
     expect(buildSignalPendingActions([{
       action:'AI 取消挂单', status:'成功', request_json:JSON.stringify({ ticket:99, reason:'原挂单逻辑失效' }),

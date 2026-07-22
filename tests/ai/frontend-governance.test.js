@@ -441,6 +441,13 @@ describe('AI governance navigation and DOM contract', () => {
     expect(groups).not.toContain('broker_slippage_points')
   })
 
+  it('carries a concrete pending-order cancellation reason through persistence and execution', () => {
+    expect(app).toContain('pending_action_reason:"挂单处理依据"')
+    expect(scheduler).toContain("pending_action_reason:pendingActionReason")
+    expect(scheduler).toContain("'ai_cancel_pending', symbol")
+    expect(bridgeWs).toContain('execution.details?.pending_action_reason')
+  })
+
   it('removes the retired stop-distance, reward ratio, exposure and margin settings', () => {
     const groups = app.slice(app.indexOf('const RISK_GROUPS'), app.indexOf('const RISK_SAFETY_LABELS'))
     expect(groups).not.toContain('sl_atr_max')
