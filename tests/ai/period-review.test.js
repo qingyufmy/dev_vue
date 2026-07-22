@@ -281,6 +281,18 @@ describe('period market evidence', () => {
     const coverage = assessReviewCandleCoverage(missing.map(time_utc_msc => ({ time_utc_msc })), start, end, 'H1')
     expect(coverage).toMatchObject({ complete:false, endpoint_complete:true, internal_gap_count:2 })
 
+    const maintenanceStart = Date.parse('2026-07-20T21:00:00Z')
+    const maintenanceEnd = Date.parse('2026-07-21T21:00:00Z')
+    const m5AfterDailyMaintenance = Array.from({ length:276 }, (_, index) => maintenanceStart + 3600000 + index * 300000)
+    expect(assessReviewCandleCoverage(
+      m5AfterDailyMaintenance.map(time_utc_msc => ({ time_utc_msc })), maintenanceStart, maintenanceEnd, 'M5'
+    )).toMatchObject({ complete:true, endpoint_complete:true, internal_gap_count:0 })
+
+    const firstBarTooLate = maintenanceStart + 3 * 3600000
+    expect(assessReviewCandleCoverage([
+      { time_utc_msc:firstBarTooLate }, { time_utc_msc:maintenanceEnd - 300000 },
+    ], maintenanceStart, maintenanceEnd, 'M5')).toMatchObject({ complete:false, endpoint_complete:false })
+
     const friday = Date.parse('2026-07-17T20:00:00Z')
     const monday = Date.parse('2026-07-20T02:00:00Z')
     expect(assessReviewCandleCoverage([

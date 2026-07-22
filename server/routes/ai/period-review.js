@@ -428,6 +428,7 @@ async function upsertDailyGroup(group, clock) {
     const marketGeneratedAt = Date.parse(existingEvidence.period_market?.generated_at || '')
     const needsPeriodMarketUpgrade = Number(existingEvidence.schema_version || 0) < 2
       || Number(existingEvidence.period_market?.schema_version || 0) < 2 || !existingEvidence.period_market?.generated_at
+      || Number(existingEvidence.period_market?.coverage_policy_version || 0) < 2
       || (existingEvidence.period_market.status !== 'complete' && (!Number.isFinite(marketGeneratedAt) || Date.now() - marketGeneratedAt >= 3600000))
     const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources)
     if (!refresh.refresh && !needsPeriodMarketUpgrade) return { id: Number(existingCase.id), periodKey: group.periodKey,

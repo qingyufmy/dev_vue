@@ -6,6 +6,7 @@ import { sha256 } from './inference-snapshots.js'
 export const REVIEW_TIMEFRAME_MS = { M1:60000, M5:300000, M15:900000, M30:1800000, H1:3600000, H4:14400000, D1:86400000 }
 const MAX_REVIEW_WINDOW_CANDLES = 5000
 const CHAN_LOOKBACK_BARS = 200
+const DAILY_MAINTENANCE_TOLERANCE_MS = 2 * 3600000
 
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const compactRate = rate => ({ t:Number(rate.time_utc_msc), o:Number(rate.open), h:Number(rate.high), l:Number(rate.low), c:Number(rate.close), v:Number(rate.tick_volume || 0) })
@@ -40,9 +41,14 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
     .sort((a, b) => a - b)
     .filter((time, index, values) => index === 0 || time !== values[index - 1])
   if (!interval || !sorted.length) return { complete:false, endpoint_complete:false, internal_gap_count:0, max_gap_ms:0 }
-  const startCovered = sorted[0] <= Number(startUtcMs) + interval
+  // Historical ranges are hydrated directly from MT5 before this check. If
+  // the broker still has no bars near a daily boundary, a short gap is a
+  // trading-session maintenance break rather than a bridge/cache outage.
+  const startTolerance = Math.max(interval, DAILY_MAINTENANCE_TOLERANCE_MS)
+  const endTolerance = Math.max(interval * 2, DAILY_MAINTENANCE_TOLERANCE_MS)
+  const startCovered = sorted[0] <= Number(startUtcMs) + startTolerance
     || crossesWeekend(Number(startUtcMs), sorted[0])
-  const endCovered = sorted.at(-1) >= Number(endUtcMs) - interval * 2
+  const endCovered = sorted.at(-1) >= Number(endUtcMs) - endTolerance
     || crossesWeekend(sorted.at(-1), Number(endUtcMs))
   const endpointComplete = startCovered && endCovered
   // 黄金、外汇每天可能存在短暂维护休市。只把超过两小时且不跨周末的缺口视为异常，
@@ -142,7 +148,7 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
   const timeframes = timeframePlan(strategy, sources)
   const uniqueSymbols = [...new Set((symbols || []).map(stripBrokerSuffix).filter(Boolean))]
   if (!uniqueSymbols.length || !timeframes.length) return { status:'unavailable', reason:'period_market_scope_missing', symbols:{}, hash:null }
-  const result = { schema_version:2, status:'complete', reason:null, generated_at:new Date().toISOString(), uses_full_period_candles:true,
+  const result = { schema_version:2, coverage_policy_version:2, status:'complete', reason:null, generated_at:new Date().toISOString(), uses_full_period_candles:true,
     chan_enabled:Boolean(strategy?.use_chan_analysis), symbols:{} }
   const errors = []
   for (const symbol of uniqueSymbols) {
