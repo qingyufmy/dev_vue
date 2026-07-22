@@ -1702,6 +1702,18 @@ textarea:focus {
   display: none !important;
 }
 
+@media (min-width: 1181px) {
+  .grid-area-signal {
+    align-self: stretch;
+  }
+
+  .kline-chart-container {
+    flex: 0 0 clamp(208px, 20vh, 224px);
+    height: clamp(208px, 20vh, 224px);
+    min-height: 208px;
+  }
+}
+
 /* Market status dot */
 .market-dot {
   display: inline-block;
