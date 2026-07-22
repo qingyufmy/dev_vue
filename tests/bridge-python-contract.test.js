@@ -237,4 +237,17 @@ describe('Python Bridge history contract', () => {
     expect(block).not.toContain('positions_get')
     expect(block).not.toContain('orders_get')
   })
+
+  it('aggregates bounded daily account performance inside the bridge', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const start = source.indexOf('def _performance_daily(self, params):')
+    const end = source.indexOf('\n    def ', start + 10)
+    const block = source.slice(start, end)
+    expect(source).toContain('elif action == "performance_daily":')
+    expect(block).toContain('history_deals_get')
+    expect(block).toContain('performance date range exceeds 31 days')
+    expect(block).toContain('"realized_net"')
+    expect(block).toContain('"source_hash"')
+    expect(block).not.toContain('"deals":')
+  })
 })

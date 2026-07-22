@@ -3518,7 +3518,12 @@ async function loadAdminRiskCenter({ preserveEditorState = true, preserveEditorD
   };
   $("globalRiskEditor").innerHTML = `<div class="global-risk-groups">${RISK_GROUPS.map(([title, keys], index) => { const rows = keys.filter(key => editable.includes(key)); return rows.length ? `<details class="workspace-panel global-risk-group" data-global-risk-group="${escapeHtml(title)}" ${!editorState?.initialized && index === 0 ? 'open' : ''}><summary><span><strong>${escapeHtml(title)}</strong><small>${rows.length} 项平台规则</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="global-risk-group-body">${rows.map(renderGlobalRiskRow).join("")}</div></details>` : ""; }).join("")}</div>`;
   restoreGlobalRiskEditorState(editorState);
-  $("adminRiskAccounts").innerHTML = (data.accounts || []).map(account => `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.nickname || account.login_account)} <span class="status-chip ${account.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(account.halt_status || '未初始化')}</span></div><div class="workspace-row-meta"><span>回撤 ${escapeHtml(account.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(account.consecutive_losses ?? '--')}</span><span>冷却至 ${escapeHtml(account.cooldown_until || '--')}</span><span>Kill Switch ${account.user_kill_switch ? '开启' : '关闭'}</span><span>数据 ${account.data_complete ? '完整' : `不完整：${escapeHtml(riskDataIncompleteText(account.data_incomplete_reason))}`}</span></div></div></article>`).join("") || '<div class="empty-state">暂无账户风险状态</div>';
+  $("adminRiskAccounts").innerHTML = (data.accounts || []).map(account => {
+    const performanceReady = account.cumulative_realized_net != null;
+    const currency = account.account_currency || '';
+    const performance = performanceReady ? `${Number(account.cumulative_realized_net).toFixed(2)} ${currency}` : '同步中';
+    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(account.user_nickname || account.user_email || `用户 #${account.user_id}`)} · ${escapeHtml(account.nickname || account.login_account)} <span class="status-chip ${account.halt_status === 'active' ? 'success' : 'danger'}">${escapeHtml(account.halt_status || '未初始化')}</span></div><div class="workspace-row-meta"><span>接入后累计收益 <strong class="${Number(account.cumulative_realized_net || 0) < 0 ? 'text-danger' : 'text-success'}">${escapeHtml(performance)}</strong></span><span>已平仓 ${escapeHtml(account.cumulative_closed_positions ?? '--')} 笔</span><span>回撤 ${escapeHtml(account.drawdown_pct ?? '--')}%</span><span>连亏 ${escapeHtml(account.consecutive_losses ?? '--')}</span><span>数据 ${account.performance_data_complete && account.data_complete ? '完整' : '同步或校验中'}</span></div></div></article>`;
+  }).join("") || '<div class="empty-state">暂无账户风险状态</div>';
   const global = data.global_control || {}, globalEnabled = Boolean(global.global_kill_switch);
   $("globalKillSwitchBtn").textContent = globalEnabled ? "解除平台紧急停止" : "紧急停止所有新开仓";
   $("globalKillSwitchBtn").dataset.enabled = globalEnabled ? "0" : "1";
@@ -7424,7 +7429,7 @@ function updateHistoryRangeUI() {
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
     all: "包含该 MT5 账户的完整交易、入金、提款和信用记录。",
-    platform: "从当前会员账户在平台注册之日开始。",
+    platform: "从当前 MT5 账户本次接入平台之日开始。",
     custom: "按平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
   setText("historyRangeHint", hints[scope] || hints.all);
@@ -9673,34 +9678,46 @@ async function renderAdminDashboard(el, d, userListResp) {
     _adminDashState.selectedUserId = Number(uid);
     showLoading(detailContainer, "加载用户详情...", "sm");
     try {
-      const resp = await wsApi('admin_user_status', { user_id: uid });
-      if (resp.status !== 'success') throw new Error(resp.message);
-      const d2 = resp.data, u = d2.user, s = d2.settings, sc = d2.scheduler, sig = d2.signals, br = d2.bridge;
-      const signalText = ({ buy:'买入', strong_buy:'强买入', sell:'卖出', strong_sell:'强卖出', hold:'观望', error:'异常' }[String(sig.last_signal_type || '').toLowerCase()] || '--');
-      const statusValue = (active, activeText = '开启', inactiveText = '关闭') => `<span class="ops-detail-status ${active ? 'on' : 'off'}"><i></i>${active ? activeText : inactiveText}</span>`;
-      detailContainer.innerHTML =
-        '<div class="user-detail-card ops-user-detail">' +
-        '<div class="user-detail-header">' +
-        '<div class="user-detail-avatar">' + escapeHtml((u.nickname||u.email||'?')[0].toUpperCase()) + '</div>' +
-        '<div class="user-detail-info"><span class="name">' + escapeHtml(u.nickname||'未设置昵称') + '</span><span class="email">' + escapeHtml(u.phone || u.email) + '</span></div>' +
-        '<button class="user-detail-close" id="adminUserDetailClose" type="button" aria-label="关闭用户详情"><i data-lucide="x"></i></button></div>' +
-        '<div class="user-detail-grid">' +
-        '<div class="user-detail-field"><span class="f-label">MT5 终端</span><span class="f-value">' + (br.connected ? statusValue(br.alive, '在线', '心跳中断') : statusValue(false, '在线', '离线')) + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">交易发送</span><span class="f-value">' + statusValue(s.trade_send_enabled, '已授权', '未授权') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">自动分析</span><span class="f-value">' + statusValue(s.auto_reasoning_enabled, '运行中', '未开启') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">调度订阅</span><span class="f-value">' + statusValue(sc.enabled, '已启用', '未启用') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">分析品种</span><span class="f-value">' + escapeHtml(sc.symbols || '--') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">上次运行</span><span class="f-value">' + (sc.last_run_at ? formatTimeAgo(sc.last_run_at) : '--') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">总信号</span><span class="f-value">' + (sig.total_signals||0) + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">今日信号</span><span class="f-value">' + (sig.today_signals||0) + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">已执行</span><span class="f-value">' + (sig.executed_signals||0) + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">最新信号</span><span class="f-value">' + (sig.last_signal_type ? signalText + ' · ' + (sig.last_signal_at ? formatTimeAgo(sig.last_signal_at) : '--') : '暂无有效信号') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">最后在线</span><span class="f-value">' + (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '--') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">注册时间</span><span class="f-value">' + (u.created_at ? u.created_at.slice(0,10) : '--') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">手机号</span><span class="f-value">' + escapeHtml(u.phone || '--') + '</span></div>' +
-        '<div class="user-detail-field"><span class="f-label">邮箱</span><span class="f-value">' + escapeHtml(u.email) + '</span></div>' +
-        '</div></div>';
+      const d2 = await api(`/api/ai/admin/users/${Number(uid)}/operations-detail`);
+      if (!d2.ok) throw new Error(d2.error || '用户详情加载失败');
+      const u = d2.user, s = d2.settings || {}, accounts = d2.accounts || [], subscriptions = d2.subscriptions || [];
+      const strategies = d2.strategies || [], rules = d2.rule_metadata || {};
+      const strategyOptions = (selectedId) => strategies.map(item => `<option value="${Number(item.id)}" ${Number(item.id) === Number(selectedId) ? 'selected' : ''}>${escapeHtml(item.title)}${item.scope === 'private' ? '（用户私有）' : '（平台）'}</option>`).join('');
+      const accountCards = accounts.map(account => {
+        const currency = account.account_currency || '';
+        const syncReady = account.realized_net != null;
+        const syncLabel = account.ownership_history_id
+          ? (account.performance_sync_status === 'current' ? '数据已校验' : '后台同步中')
+          : (syncReady ? '历史统计已归档' : '暂无归属期统计');
+        const risk = account.effective_risk || {}, own = risk.accountValues || {}, policy = risk.policy || {};
+        const editableRules = Object.entries(rules).filter(([, meta]) => meta.user_editable !== false && !meta.locked && meta.configurable !== false && meta.type === 'number');
+        const riskFields = editableRules.map(([key, meta]) => `<label><span>${escapeHtml(RISK_LABELS[key] || meta.label || key)}<small>当前生效 ${escapeHtml(formatRiskValue(key, policy[key], meta))}</small></span><span class="risk-input-with-unit"><input type="number" step="any" data-admin-risk-field="${escapeHtml(key)}" value="${own[key] == null ? '' : escapeHtml(own[key])}" placeholder="继承平台"><em>${escapeHtml(riskUnit(meta))}</em></span></label>`).join('');
+        return `<article class="ops-account-card" data-admin-account="${Number(account.id)}"><header><div><span class="ops-kicker">MT5 账户</span><h4>${escapeHtml(account.nickname || account.login_account)}</h4><p>${escapeHtml(account.broker_server)} · ${escapeHtml(account.login_account)}</p></div><span class="status-chip ${account.observe_status === 'active' ? 'success' : 'warning'}">${account.observe_status === 'active' ? '当前接入' : '历史账户'}</span></header><div class="ops-account-metrics"><div><span>接入后累计收益</span><strong class="num ${Number(account.realized_net || 0) < 0 ? 'text-danger' : 'text-success'}">${syncReady ? `${Number(account.realized_net).toFixed(2)} ${escapeHtml(currency)}` : '同步中'}</strong><small>仅平仓净收益，不含入金和出金</small></div><div><span>资金净流入</span><strong class="num">${syncReady ? `${Number(account.net_funding || 0).toFixed(2)} ${escapeHtml(currency)}` : '--'}</strong><small>入金－出金＋信用与调整</small></div><div><span>已平仓</span><strong class="num">${account.closed_position_count ?? '--'}</strong><small>胜 ${account.winning_exit_count ?? '--'} · 负 ${account.losing_exit_count ?? '--'}</small></div><div><span>风控状态</span><strong>${account.halt_status === 'active' ? '允许交易' : '暂停新开仓'}</strong><small>回撤 ${account.drawdown_pct ?? '--'}% · 连亏 ${account.consecutive_losses ?? '--'}</small></div></div><div class="ops-account-sync"><span>统计起点 ${escapeHtml(String(account.platform_connected_at || '--').slice(0, 19))}</span><span>同步至 ${escapeHtml(String(account.performance_synced_through_date || '--').slice(0, 10))}</span><span>${syncLabel}</span></div><details class="ops-detail-editor"><summary><span><i data-lucide="shield-check"></i><strong>编辑该账户风控</strong><small>留空表示继承平台规则</small></span><i data-lucide="chevron-down"></i></summary><div class="ops-risk-editor">${riskFields}</div><div class="ops-detail-actions"><button class="btn btn-primary btn-sm" type="button" data-save-admin-risk="${Number(account.id)}">保存账户风控</button></div></details></article>`;
+      }).join('') || '<div class="ops-empty-state"><strong>尚未接入 MT5 账户</strong><span>用户连接桥接软件后，这里会自动出现账户和统计。</span></div>';
+      const subscriptionCards = subscriptions.map(item => `<article class="ops-subscription-row" data-admin-subscription="${Number(item.id)}"><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>${escapeHtml(item.broker_server)} · ${escapeHtml(item.login_account)}</span></div><select data-admin-subscription-strategy aria-label="选择策略">${strategyOptions(item.strategy_id)}</select><label class="ops-inline-switch"><input type="checkbox" data-admin-subscription-enabled ${Number(item.execution_enabled) ? 'checked' : ''}><span>自动分析</span></label><button class="btn btn-secondary btn-sm" type="button" data-save-admin-subscription="${Number(item.id)}">保存</button></article>`).join('') || '<div class="ops-empty-state"><strong>暂无策略订阅</strong><span>用户创建订阅后可在这里查看和调整。</span></div>';
+      detailContainer.innerHTML = `<section class="ops-user-control"><header class="user-detail-header"><div class="user-detail-avatar">${escapeHtml((u.nickname || u.email || '?')[0].toUpperCase())}</div><div class="user-detail-info"><span class="name">${escapeHtml(u.nickname || '未设置昵称')} <small>#${Number(u.id)}</small></span><span class="email">${escapeHtml(u.phone || u.email || '--')} · ${escapeHtml(u.plan || 'free')}</span></div><button class="user-detail-close" id="adminUserDetailClose" type="button" aria-label="关闭用户详情"><i data-lucide="x"></i></button></header><div class="ops-runtime-controls"><div><span class="ops-kicker">实时控制</span><h3>自动分析与交易发送</h3><p>修改后立即写入系统；桥接在线时同步下发，离线时会在下次连接恢复。</p></div><label class="ops-control-switch"><input id="adminUserAutoReasoning" type="checkbox" ${Number(s.auto_reasoning_enabled) ? 'checked' : ''}><span><strong>自动分析</strong><small>${d2.bridge?.connected ? '桥接在线' : '桥接离线，保存为期望状态'}</small></span></label><label class="ops-control-switch danger"><input id="adminUserTradeSend" type="checkbox" ${Number(s.trade_send_enabled) ? 'checked' : ''}><span><strong>交易发送</strong><small>允许系统向该账户发送订单</small></span></label><button class="btn btn-primary btn-sm" id="saveAdminUserRuntime" type="button">保存运行状态</button></div><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">账户与收益</span><h3>接入过的 MT5 账户</h3><p>收益按账户归属期、MT5 平仓时间和账户币种汇总，入出金单独展示。</p></div></div><div class="ops-account-list">${accountCards}</div></section><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">策略运行</span><h3>当前策略订阅</h3><p>管理员可调整绑定策略与自动分析状态，所有修改进入审计。</p></div></div><div class="ops-subscription-list">${subscriptionCards}</div></section></section>`;
       $('adminUserDetailClose')?.addEventListener('click', () => { detailContainer.innerHTML = ''; _adminDashState.selectedUserId = null; });
+      $('saveAdminUserRuntime')?.addEventListener('click', async event => {
+        event.currentTarget.disabled = true;
+        try {
+          await api(`/api/ai/admin/users/${Number(uid)}/runtime`, { method:'PATCH', body:{ auto_reasoning_enabled:$('adminUserAutoReasoning').checked, trade_send_enabled:$('adminUserTradeSend').checked } });
+          toast('用户运行状态已保存', 'success');
+          await showUserDetail(uid);
+        } catch (error) { toast(error.message || '运行状态保存失败', 'error'); event.currentTarget.disabled = false; }
+      });
+      detailContainer.querySelectorAll('[data-save-admin-risk]').forEach(button => button.addEventListener('click', async () => {
+        const card = button.closest('[data-admin-account]'), changes = {};
+        card.querySelectorAll('[data-admin-risk-field]').forEach(input => { changes[input.dataset.adminRiskField] = input.value === '' ? null : Number(input.value); });
+        button.disabled = true;
+        try { await api(`/api/ai/admin/users/${Number(uid)}/accounts/${Number(card.dataset.adminAccount)}/risk`, { method:'PUT', body:{ changes } }); toast('账户风控已保存并立即生效', 'success'); await showUserDetail(uid); }
+        catch (error) { toast(error.message || '账户风控保存失败', 'error'); button.disabled = false; }
+      }));
+      detailContainer.querySelectorAll('[data-save-admin-subscription]').forEach(button => button.addEventListener('click', async () => {
+        const row = button.closest('[data-admin-subscription]');
+        button.disabled = true;
+        try { await api(`/api/ai/admin/users/${Number(uid)}/subscriptions/${Number(row.dataset.adminSubscription)}`, { method:'PUT', body:{ strategy_id:Number(row.querySelector('[data-admin-subscription-strategy]').value), execution_enabled:row.querySelector('[data-admin-subscription-enabled]').checked, replace_active:true } }); toast('策略订阅已保存', 'success'); await showUserDetail(uid); }
+        catch (error) { toast(error.message || '策略订阅保存失败', 'error'); button.disabled = false; }
+      }));
       initIcons();
     } catch (e) {
       detailContainer.innerHTML = '<div class="ops-inline-error"><i data-lucide="circle-alert"></i><span>' + escapeHtml(e.message || '用户详情加载失败') + '</span></div>';

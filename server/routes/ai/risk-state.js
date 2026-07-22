@@ -295,12 +295,28 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       [reviewStatus, observeStatus, anomalyCode, now, matched.id])
       matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
     }
+    await run(`UPDATE mt5_account_ownership_history SET ended_at = ?, end_reason = 'account_transferred', updated_at = ?
+      WHERE broker_server_key = ? AND login_account = ? AND ended_at IS NULL
+        AND (user_id <> ? OR trading_account_id <> ?)`,
+    [now, now, serverKey, login, userId, matched.id])
+    const activeOwnership = await txOne(run, `SELECT id FROM mt5_account_ownership_history
+      WHERE broker_server_key = ? AND login_account = ? AND user_id = ? AND trading_account_id = ?
+        AND ended_at IS NULL FOR UPDATE`, [serverKey, login, userId, matched.id])
+    if (!activeOwnership) {
+      await run(`INSERT INTO mt5_account_ownership_history
+        (broker_server_key, login_account, user_id, trading_account_id, started_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`, [serverKey, login, userId, matched.id, now, now, now])
+    }
     await run(`INSERT INTO mt5_account_bindings
-      (broker_server_key, login_account, current_user_id, current_trading_account_id, last_verified_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      (broker_server_key, login_account, current_user_id, current_trading_account_id, last_verified_at,
+       first_connected_at, last_connected_at, account_currency, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE current_user_id = VALUES(current_user_id),
         current_trading_account_id = VALUES(current_trading_account_id), last_verified_at = VALUES(last_verified_at),
-        updated_at = VALUES(updated_at)`, [serverKey, login, userId, matched.id, now, now, now])
+        first_connected_at = COALESCE(first_connected_at, VALUES(first_connected_at)),
+        last_connected_at = VALUES(last_connected_at), account_currency = COALESCE(VALUES(account_currency), account_currency),
+        updated_at = VALUES(updated_at)`,
+    [serverKey, login, userId, matched.id, now, now, now, String(snapshot?.currency || '').trim().toUpperCase().slice(0, 16) || null, now, now])
     await run(`INSERT INTO risk_account_state (trading_account_id, user_id, halt_status, data_complete, created_at, updated_at)
       VALUES (?, ?, 'active', 0, ?, ?) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id),
         halt_status = CASE WHEN halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED' THEN 'active' ELSE halt_status END,

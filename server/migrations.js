@@ -3183,6 +3183,135 @@ const migrations = [
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_observer_sources' AND INDEX_NAME = 'idx_observer_source_strategy'`)
       if (!indexes.length) await queryRun('CREATE INDEX idx_observer_source_strategy ON ai_observer_sources(strategy_id, status)')
     }
+  },
+  {
+    id: '120_mt5_account_performance',
+    async up() {
+      const bindingColumns = [
+        ['first_connected_at', 'DATETIME DEFAULT NULL'],
+        ['last_connected_at', 'DATETIME DEFAULT NULL'],
+        ['account_currency', 'VARCHAR(16) DEFAULT NULL'],
+      ]
+      for (const [column, definition] of bindingColumns) {
+        const existing = await queryAll(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mt5_account_bindings' AND COLUMN_NAME = ?`, [column])
+        if (!existing.length) await queryRun(`ALTER TABLE mt5_account_bindings ADD COLUMN \`${column}\` ${definition}`)
+      }
+      await queryRun(`UPDATE mt5_account_bindings bindings
+        LEFT JOIN (
+          SELECT UPPER(broker_server) AS broker_server_key, login_account,
+            MIN(COALESCE(first_verified_at, identity_verified_at, created_at)) AS first_connected_at,
+            MAX(COALESCE(identity_verified_at, updated_at, created_at)) AS last_connected_at
+          FROM trading_accounts WHERE broker_server <> '' AND login_account <> ''
+          GROUP BY UPPER(broker_server), login_account
+        ) accounts ON accounts.broker_server_key = bindings.broker_server_key
+          AND accounts.login_account = bindings.login_account
+        SET bindings.first_connected_at = COALESCE(bindings.first_connected_at, accounts.first_connected_at, bindings.created_at),
+          bindings.last_connected_at = COALESCE(bindings.last_connected_at, accounts.last_connected_at, bindings.updated_at)`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS mt5_account_ownership_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        broker_server_key VARCHAR(100) NOT NULL,
+        login_account VARCHAR(50) NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        started_at DATETIME NOT NULL,
+        ended_at DATETIME DEFAULT NULL,
+        end_reason VARCHAR(64) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_mt5_ownership_identity (broker_server_key, login_account, started_at),
+        KEY idx_mt5_ownership_user (user_id, started_at),
+        KEY idx_mt5_ownership_account (trading_account_id, started_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`INSERT INTO mt5_account_ownership_history
+        (broker_server_key, login_account, user_id, trading_account_id, started_at, ended_at, end_reason, created_at, updated_at)
+        SELECT UPPER(ta.broker_server), ta.login_account, ta.user_id, ta.id,
+          COALESCE(ta.first_verified_at, ta.identity_verified_at, ta.created_at),
+          CASE WHEN bindings.current_trading_account_id = ta.id THEN NULL ELSE ta.updated_at END,
+          CASE WHEN bindings.current_trading_account_id = ta.id THEN NULL ELSE 'historical_backfill' END,
+          NOW(), NOW()
+        FROM trading_accounts ta
+        JOIN mt5_account_bindings bindings ON bindings.broker_server_key = UPPER(ta.broker_server)
+          AND bindings.login_account = ta.login_account
+        LEFT JOIN mt5_account_ownership_history history ON history.trading_account_id = ta.id
+          AND history.started_at = COALESCE(ta.first_verified_at, ta.identity_verified_at, ta.created_at)
+        WHERE ta.broker_server <> '' AND ta.login_account <> '' AND history.id IS NULL`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS mt5_account_performance_daily (
+        ownership_history_id BIGINT NOT NULL,
+        trading_account_id INT NOT NULL,
+        business_date DATE NOT NULL,
+        account_currency VARCHAR(16) DEFAULT NULL,
+        trade_profit DECIMAL(20,8) NOT NULL DEFAULT 0,
+        commission DECIMAL(20,8) NOT NULL DEFAULT 0,
+        swap DECIMAL(20,8) NOT NULL DEFAULT 0,
+        fee DECIMAL(20,8) NOT NULL DEFAULT 0,
+        pnl_adjustment DECIMAL(20,8) NOT NULL DEFAULT 0,
+        realized_net DECIMAL(20,8) NOT NULL DEFAULT 0,
+        deposit DECIMAL(20,8) NOT NULL DEFAULT 0,
+        withdrawal DECIMAL(20,8) NOT NULL DEFAULT 0,
+        credit_change DECIMAL(20,8) NOT NULL DEFAULT 0,
+        other_capital_change DECIMAL(20,8) NOT NULL DEFAULT 0,
+        exit_deal_count INT NOT NULL DEFAULT 0,
+        closed_position_count INT NOT NULL DEFAULT 0,
+        winning_exit_count INT NOT NULL DEFAULT 0,
+        losing_exit_count INT NOT NULL DEFAULT 0,
+        closed_volume DECIMAL(20,8) NOT NULL DEFAULT 0,
+        first_deal_time_msc BIGINT NOT NULL DEFAULT 0,
+        last_deal_time_msc BIGINT NOT NULL DEFAULT 0,
+        last_deal_ticket BIGINT NOT NULL DEFAULT 0,
+        source_hash CHAR(64) DEFAULT NULL,
+        data_complete TINYINT NOT NULL DEFAULT 1,
+        data_issue VARCHAR(255) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (ownership_history_id, business_date),
+        KEY idx_mt5_performance_account (trading_account_id, business_date),
+        KEY idx_mt5_performance_date (business_date, trading_account_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS mt5_account_performance_totals (
+        ownership_history_id BIGINT NOT NULL PRIMARY KEY,
+        trading_account_id INT NOT NULL,
+        account_currency VARCHAR(16) DEFAULT NULL,
+        period_start_date DATE DEFAULT NULL,
+        period_end_date DATE DEFAULT NULL,
+        realized_net DECIMAL(20,8) NOT NULL DEFAULT 0,
+        deposit DECIMAL(20,8) NOT NULL DEFAULT 0,
+        withdrawal DECIMAL(20,8) NOT NULL DEFAULT 0,
+        credit_change DECIMAL(20,8) NOT NULL DEFAULT 0,
+        other_capital_change DECIMAL(20,8) NOT NULL DEFAULT 0,
+        net_funding DECIMAL(20,8) NOT NULL DEFAULT 0,
+        net_account_change DECIMAL(20,8) NOT NULL DEFAULT 0,
+        exit_deal_count INT NOT NULL DEFAULT 0,
+        closed_position_count INT NOT NULL DEFAULT 0,
+        winning_exit_count INT NOT NULL DEFAULT 0,
+        losing_exit_count INT NOT NULL DEFAULT 0,
+        closed_volume DECIMAL(20,8) NOT NULL DEFAULT 0,
+        data_complete TINYINT NOT NULL DEFAULT 0,
+        last_synced_at DATETIME DEFAULT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_mt5_performance_totals_account (trading_account_id, period_end_date),
+        KEY idx_mt5_performance_totals_result (realized_net, trading_account_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS mt5_account_performance_sync_state (
+        ownership_history_id BIGINT NOT NULL PRIMARY KEY,
+        trading_account_id INT NOT NULL,
+        sync_from_date DATE NOT NULL,
+        synced_through_date DATE DEFAULT NULL,
+        timezone_offset_minutes INT DEFAULT NULL,
+        sync_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        last_error VARCHAR(255) DEFAULT NULL,
+        last_attempt_at DATETIME DEFAULT NULL,
+        last_success_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_mt5_performance_sync_account (trading_account_id, updated_at),
+        KEY idx_mt5_performance_sync_status (sync_status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

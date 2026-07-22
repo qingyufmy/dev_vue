@@ -17,6 +17,7 @@ import { JWT_SECRET } from './config.js'
 const bridges = new Map()       // userId -> { ws, lastSeen }
 const browsers = new Map()      // userId -> Set<ws>
 const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
+const performanceSyncJobs = new Set()
 let adminUserId = null          // cached admin userId for fallback
 let adminUserIdLastCheck = 0
 const ADMIN_CACHE_TTL = ADMIN_CACHE_TTL_MS
@@ -24,6 +25,75 @@ const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 
 
 let cmdCounter = 0
 let wss = null
+
+const PERFORMANCE_SYNC_INTERVAL_MS = 15 * 60 * 1000
+const PERFORMANCE_SYNC_CHUNKS_PER_RUN = 3
+
+function scheduleAccountPerformanceSync(userId, accountId, { recent = false, delayMs = 0 } = {}) {
+  const bridge = bridges.get(Number(userId))
+  if (!bridge || bridge.ws?.readyState !== 1 || Number(bridge.tradingAccountId || 0) !== Number(accountId)) return
+  if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
+  bridge._performanceSyncTimer = setTimeout(() => {
+    bridge._performanceSyncTimer = null
+    runAccountPerformanceSync(Number(userId), Number(accountId), { recent }).catch(error => {
+      console.warn(`[AccountPerformance] Background sync failed user=${userId} account=${accountId}:`, error.message)
+    })
+  }, Math.max(0, Number(delayMs) || 0))
+}
+
+async function runAccountPerformanceSync(userId, accountId, { recent = false } = {}) {
+  const jobKey = `${userId}:${accountId}`
+  if (performanceSyncJobs.has(jobKey)) return { status:'busy' }
+  performanceSyncJobs.add(jobKey)
+  let processed = 0
+  let caughtUp = false
+  let failed = false
+  try {
+    const ai = await import('./routes/ai/index.js')
+    const maxChunks = recent ? 1 : PERFORMANCE_SYNC_CHUNKS_PER_RUN
+    for (let index = 0; index < maxChunks; index++) {
+      const bridge = bridges.get(userId)
+      if (!bridge || bridge.ws?.readyState !== 1 || Number(bridge.tradingAccountId || 0) !== accountId) break
+      const window = await ai.getAccountPerformanceSyncWindow(userId, accountId, { recent })
+      if (!window) { caughtUp = true; break }
+      try {
+        const result = await sendBridgeCommand(userId, 'performance_daily', {
+          date_from:window.date_from, date_to:window.date_to,
+        }, 30_000, { noFallback:true })
+        if (!result || result.status !== 'success') throw new Error(result?.message || result?.error || 'performance_sync_failed')
+        await ai.saveAccountPerformanceChunk(userId, accountId, result, { advanceCursor:!recent })
+        processed++
+      } catch (error) {
+        failed = true
+        await ai.recordAccountPerformanceSyncFailure(userId, accountId, error).catch(() => {})
+        throw error
+      }
+      if (recent) { caughtUp = true; break }
+    }
+    return { status:'success', processed, caught_up:caughtUp }
+  } catch (error) {
+    if (!failed) {
+      const ai = await import('./routes/ai/index.js')
+      await ai.recordAccountPerformanceSyncFailure(userId, accountId, error).catch(() => {})
+    }
+    failed = true
+    throw error
+  } finally {
+    performanceSyncJobs.delete(jobKey)
+    const bridge = bridges.get(userId)
+    if (bridge?.ws?.readyState === 1 && Number(bridge.tradingAccountId || 0) === accountId) {
+      scheduleAccountPerformanceSync(userId, accountId, failed
+        ? { recent:false, delayMs:5 * 60 * 1000 }
+        : caughtUp
+          ? { recent:true, delayMs:PERFORMANCE_SYNC_INTERVAL_MS }
+          : { recent:false, delayMs:2_000 })
+    }
+  }
+}
+
+export function queueAccountPerformanceSync(userId, accountId, options = {}) {
+  scheduleAccountPerformanceSync(Number(userId), Number(accountId), options)
+}
 
 const TRADE_REF_KEYS = new Set([
   'ticket', 'order', 'order_id', 'order_ticket', 'position', 'position_id',
@@ -437,6 +507,7 @@ async function _initBridge(ws, userId, user) {
   const existing = bridges.get(userId)
   if (existing) {
     if (existing._pingInterval) clearInterval(existing._pingInterval)
+    if (existing._performanceSyncTimer) clearTimeout(existing._performanceSyncTimer)
     if (existing.ws && existing.ws.readyState === 1) {
       try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
     }
@@ -452,6 +523,7 @@ async function _initBridge(ws, userId, user) {
       const current = bridges.get(userId)
       if (current && current.ws === ws) {
         if (current._pingInterval) clearInterval(current._pingInterval)
+        if (current._performanceSyncTimer) clearTimeout(current._performanceSyncTimer)
         bridges.delete(userId)
       }
       sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
@@ -460,6 +532,7 @@ async function _initBridge(ws, userId, user) {
     const bridge = bridges.get(userId)
     if (bridge) {
       if (bridge._pingInterval) clearInterval(bridge._pingInterval)
+      if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
     }
     if (!bridge || bridge.ws !== ws) {
       console.log(`[BridgeWS] stale close user=${userId}, new bridge already connected — skipping cleanup`)
@@ -743,6 +816,7 @@ async function _initBridge(ws, userId, user) {
       const ai = await import('./routes/ai/index.js')
       const identity = await ai.syncTradingAccountIdentity(userId, account)
       if (currentBridge?.ws === ws) currentBridge.tradingAccountId = identity.accountId
+      if (identity.verified) queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
       sendToBrowsers(userId, {
         type: 'account_switched',
         account: { id:identity.accountId, server:account.server, login:account.login },
@@ -791,10 +865,16 @@ async function resolveHistoryRange(userId, params = {}) {
     if (dateFrom && dateTo && dateFrom > dateTo) throw new Error('invalid_history_range')
     return { scope, date_from: dateFrom, date_to: dateTo }
   }
-  const account = await queryOne(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS account_created_date
-    FROM users WHERE id = ? LIMIT 1`, [userId])
-  if (!account?.account_created_date) throw new Error('account_creation_time_unavailable')
-  const dateFrom = account.account_created_date
+  const account = await queryOne(`SELECT DATE_FORMAT(COALESCE(ownership.started_at, ta.first_verified_at), '%Y-%m-%d') AS platform_connected_date
+    FROM trading_accounts ta
+    JOIN mt5_account_bindings bindings ON bindings.current_trading_account_id = ta.id
+      AND bindings.current_user_id = ta.user_id
+    LEFT JOIN mt5_account_ownership_history ownership ON ownership.trading_account_id = ta.id
+      AND ownership.user_id = ta.user_id AND ownership.ended_at IS NULL
+    WHERE ta.user_id = ? AND ta.is_deleted = 0
+    ORDER BY ta.identity_verified_at DESC, ta.id DESC LIMIT 1`, [userId])
+  if (!account?.platform_connected_date) throw new Error('platform_connection_time_unavailable')
+  const dateFrom = account.platform_connected_date
   return { scope, date_from: dateFrom, date_to: null }
 }
 

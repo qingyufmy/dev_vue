@@ -955,6 +955,138 @@ class BridgeWorker(QThread):
         }
         return None, "max retry exceeded"
 
+    def _performance_daily(self, params):
+        """Aggregate a bounded MT5 deal range by broker business date.
+
+        The server receives one compact row per day instead of the account's raw
+        deal history. The requested end date is inclusive and each request is
+        intentionally capped so a large account cannot monopolize the bridge.
+        """
+        import hashlib
+        try:
+            start_date = datetime.strptime(str(params.get("date_from") or "")[:10], "%Y-%m-%d")
+            end_date = datetime.strptime(str(params.get("date_to") or "")[:10], "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "performance date range is required"}
+        if end_date < start_date:
+            return {"status": "error", "message": "performance date range is invalid"}
+        if (end_date - start_date).days > 30:
+            return {"status": "error", "message": "performance date range exceeds 31 days"}
+
+        acc = self.mt5.account_info()
+        if not acc:
+            return {"status": "error", "message": "performance account_info failed"}
+        # Query one broker-wall-clock day around the requested range and filter
+        # locally. This tolerates Python/terminal timezone interpretation
+        # differences while keeping the returned business dates exact.
+        deals = self.mt5.history_deals_get(start_date - timedelta(days=1), end_date + timedelta(days=2))
+        if deals is None:
+            return {"status": "error", "message": f"performance history_deals_get failed: {self.mt5.last_error()}"}
+
+        buy_type = getattr(self.mt5, "DEAL_TYPE_BUY", 0)
+        sell_type = getattr(self.mt5, "DEAL_TYPE_SELL", 1)
+        trade_types = {buy_type, sell_type}
+        balance_type = getattr(self.mt5, "DEAL_TYPE_BALANCE", 2)
+        credit_type = getattr(self.mt5, "DEAL_TYPE_CREDIT", 3)
+        other_capital_types = {
+            getattr(self.mt5, "DEAL_TYPE_CORRECTION", 5), getattr(self.mt5, "DEAL_TYPE_BONUS", 6),
+        }
+        pnl_adjustment_types = {
+            getattr(self.mt5, "DEAL_TYPE_CHARGE", 4), getattr(self.mt5, "DEAL_TYPE_COMMISSION", 7),
+            getattr(self.mt5, "DEAL_TYPE_COMMISSION_DAILY", 8), getattr(self.mt5, "DEAL_TYPE_COMMISSION_MONTHLY", 9),
+            getattr(self.mt5, "DEAL_TYPE_COMMISSION_AGENT_DAILY", 10), getattr(self.mt5, "DEAL_TYPE_COMMISSION_AGENT_MONTHLY", 11),
+            getattr(self.mt5, "DEAL_TYPE_INTEREST", 12), getattr(self.mt5, "DEAL_TYPE_DIVIDEND", 15),
+            getattr(self.mt5, "DEAL_TYPE_DIVIDEND_FRANKED", 16), getattr(self.mt5, "DEAL_TYPE_TAX", 17),
+        }
+        exit_entries = {
+            getattr(self.mt5, "DEAL_ENTRY_OUT", 1), getattr(self.mt5, "DEAL_ENTRY_INOUT", 2),
+            getattr(self.mt5, "DEAL_ENTRY_OUT_BY", 3),
+        }
+
+        def empty_day(day):
+            return {
+                "business_date": day, "trade_profit": 0.0, "commission": 0.0, "swap": 0.0,
+                "fee": 0.0, "pnl_adjustment": 0.0, "realized_net": 0.0,
+                "deposit": 0.0, "withdrawal": 0.0, "credit_change": 0.0,
+                "other_capital_change": 0.0, "exit_deal_count": 0,
+                "closed_position_count": 0, "winning_exit_count": 0, "losing_exit_count": 0,
+                "closed_volume": 0.0, "first_deal_time_msc": 0, "last_deal_time_msc": 0,
+                "last_deal_ticket": 0, "data_complete": True, "data_issues": [], "_positions": set(),
+            }
+
+        daily = {}
+        for item in deals:
+            d = item._asdict()
+            event_ms = int(d.get("time_msc") or int(d.get("time") or 0) * 1000)
+            day = self._mt5_time(event_ms // 1000)[:10]
+            if day < start_date.strftime("%Y-%m-%d") or day > end_date.strftime("%Y-%m-%d"):
+                continue
+            row = daily.setdefault(day, empty_day(day))
+            ticket = int(d.get("ticket") or 0)
+            pair = (event_ms, ticket)
+            if not row["first_deal_time_msc"] or event_ms < row["first_deal_time_msc"]:
+                row["first_deal_time_msc"] = event_ms
+            if pair > (row["last_deal_time_msc"], row["last_deal_ticket"]):
+                row["last_deal_time_msc"], row["last_deal_ticket"] = pair
+
+            deal_type = int(d.get("type") if d.get("type") is not None else -1)
+            profit = float(d.get("profit") or 0)
+            commission = float(d.get("commission") or 0)
+            swap = float(d.get("swap") or 0)
+            fee = float(d.get("fee") or 0)
+            net = profit + commission + swap + fee
+            if deal_type in trade_types:
+                row["trade_profit"] += profit
+                row["commission"] += commission
+                row["swap"] += swap
+                row["fee"] += fee
+                row["realized_net"] += net
+                if d.get("entry") in exit_entries:
+                    row["exit_deal_count"] += 1
+                    row["closed_volume"] += float(d.get("volume") or 0)
+                    position_id = int(d.get("position_id") or 0)
+                    if position_id:
+                        row["_positions"].add(position_id)
+                    if net > 0: row["winning_exit_count"] += 1
+                    elif net < 0: row["losing_exit_count"] += 1
+            elif deal_type == balance_type:
+                if net >= 0: row["deposit"] += net
+                else: row["withdrawal"] += abs(net)
+            elif deal_type == credit_type:
+                row["credit_change"] += net
+            elif deal_type in other_capital_types:
+                row["other_capital_change"] += net
+            elif deal_type in pnl_adjustment_types:
+                row["pnl_adjustment"] += net
+                row["realized_net"] += net
+            else:
+                row["data_complete"] = False
+                row["data_issues"].append(f"unknown_deal_type:{deal_type}")
+
+        rows = []
+        numeric_fields = (
+            "trade_profit", "commission", "swap", "fee", "pnl_adjustment", "realized_net",
+            "deposit", "withdrawal", "credit_change", "other_capital_change", "closed_volume",
+        )
+        for day in sorted(daily):
+            row = daily[day]
+            row["closed_position_count"] = len(row.pop("_positions"))
+            row["data_issues"] = sorted(set(row["data_issues"]))
+            for field in numeric_fields:
+                row[field] = round(float(row[field]), 8)
+            digest_payload = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            row["source_hash"] = hashlib.sha256(digest_payload.encode("utf-8")).hexdigest()
+            rows.append(row)
+
+        return {
+            "status": "success", "performance_version": 1,
+            "date_from": start_date.strftime("%Y-%m-%d"), "date_to": end_date.strftime("%Y-%m-%d"),
+            "timezone_offset_minutes": int(self._mt5_timezone_offset_minutes or 0),
+            "clock_status": self._mt5_clock_status,
+            "account": {"login": int(acc.login), "server": acc.server, "currency": acc.currency},
+            "daily": rows, "scanned_deal_count": len(deals),
+        }
+
     def _order_send_simple_retry(self, req, ct_map=None):
         """简单重试包装器，用于批量平仓/修改等预构建 req 场景。
         对可重试码刷新 tick 重试最多 _MAX_RETRY 次，返回 result 对象。"""
@@ -1439,6 +1571,8 @@ class BridgeWorker(QThread):
                 return {"status": "success", "found": False}
             elif action == "risk_snapshot":
                 return self._risk_snapshot(params)
+            elif action == "performance_daily":
+                return self._performance_daily(params)
             elif action == "history":
                 import math
                 self.log_signal.emit(f"[History] called with params={params}")

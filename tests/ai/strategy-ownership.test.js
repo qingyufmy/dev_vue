@@ -398,6 +398,16 @@ describe('subscription transaction and V1 execution constraint', () => {
     await expect(updateSubscription(20, 2, 'user', { symbols: ['XAUUSD'] })).rejects.toThrow('execution_conflict')
   })
 
+  it('can rebind an existing subscription to another visible strategy', async () => {
+    txRun.mockImplementation((sql, params = []) => {
+      if (sql.includes('FROM auto_prompt_types')) return [[Number(params[0]) === 1 ? PLATFORM : PRIVATE], []]
+      return defaultTx(sql)
+    })
+    await updateSubscription(20, 2, 'user', { strategy_id:1, execution_enabled:false })
+    const update = txRun.mock.calls.find(([sql]) => sql.includes('UPDATE strategy_subscriptions SET strategy_id'))
+    expect(update[1][0]).toBe(1)
+  })
+
   it('rejects a private strategy that does not belong to the subscribing user', async () => {
     txRun.mockImplementation(sql => {
       if (sql.includes('FROM auto_prompt_types')) return [[{ ...PRIVATE, owner_user_id: 9 }], []]

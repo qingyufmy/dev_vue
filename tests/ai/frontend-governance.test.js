@@ -211,16 +211,17 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('<option value="custom">自定义日期</option>')
     expect(app).toContain('history_scope: scope')
     expect(app.match(/\?\.value \|\| "platform"/g)?.length).toBeGreaterThanOrEqual(2)
-    expect(app).toContain('从当前会员账户在平台注册之日开始。')
-    expect(bridgeWs).toContain("DATE_FORMAT(created_at, '%Y-%m-%d') AS account_created_date")
-    expect(bridgeWs).toContain('FROM users WHERE id = ? LIMIT 1')
-    expect(bridgeWs).not.toContain('AS first_verified_date')
+    expect(app).toContain('从当前 MT5 账户本次接入平台之日开始。')
+    expect(bridgeWs).toContain("AS platform_connected_date")
+    expect(bridgeWs).toContain('FROM trading_accounts ta')
+    expect(bridgeWs).toContain('ownership.started_at')
+    expect(bridgeWs).not.toContain("DATE_FORMAT(created_at, '%Y-%m-%d') AS account_created_date")
     expect(html).not.toContain('id="filterCloseFrom"')
     expect(html).not.toContain('id="chartDateFrom"')
   })
 
   it('imports the database helper required by paginated execution decisions', () => {
-    expect(routes).toContain("import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'")
+    expect(routes).toContain("import { queryAll, queryOne, queryRun, withTransaction, beijingNow, logAudit } from '../../db.js'")
     expect(routes).toContain("queryOne('SELECT COUNT(*) AS total FROM order_intents")
   })
 

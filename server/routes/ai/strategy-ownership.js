@@ -578,12 +578,16 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
     if (!account) throw new Error('account_not_found')
     const existing = await txOne(run, 'SELECT * FROM strategy_subscriptions WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [id, actorId])
     if (!existing) throw new Error('subscription_not_found')
-    const strategy = await loadExecutableStrategyTx(run, Number(existing.strategy_id), actorId)
+    const requestedStrategyId = payload.strategy_id === undefined
+      ? Number(existing.strategy_id)
+      : toId(payload.strategy_id, 'strategy_id')
+    const strategy = await loadExecutableStrategyTx(run, requestedStrategyId, actorId)
+    const strategyChanged = requestedStrategyId !== Number(existing.strategy_id)
     const symbolsJson = payload.symbols === undefined
-      ? existing.symbols_json
+      ? (strategyChanged ? null : existing.symbols_json)
       : normalizeRequestedSymbols(payload.symbols, strategy.symbols_json)
     const executionEnabled = payload.execution_enabled === undefined ? Number(existing.execution_enabled) : (payload.execution_enabled ? 1 : 0)
-    const memoryMode = normalizeMemoryMode(strategy, payload.memory_mode ?? existing.memory_mode)
+    const memoryMode = normalizeMemoryMode(strategy, payload.memory_mode ?? (strategyChanged ? null : existing.memory_mode))
     const schedule = normalizeSubscriptionSchedule(payload, existing)
     const takeProfitMode = normalizeTakeProfitMode(payload.take_profit_mode ?? existing.take_profit_mode)
     if (executionEnabled) {

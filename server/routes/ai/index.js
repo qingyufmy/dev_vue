@@ -4,7 +4,7 @@ import { Router } from 'express'
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
+import { queryAll, queryOne, queryRun, withTransaction, beijingNow, logAudit } from '../../db.js'
 import { authMiddleware } from '../../middleware/auth.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
@@ -36,6 +36,7 @@ import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStr
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, normalizePlatformRiskConfig, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
+import { getAccountPerformanceSummary } from './account-performance.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 import { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
@@ -528,7 +529,10 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
       const riskState = await queryAll(`SELECT halt_status, halt_reason, drawdown_pct, consecutive_losses,
         cooldown_until, user_kill_switch, data_complete, data_incomplete_reason, last_risk_snapshot_at
         FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id])
-      rows.push({ account, risk_state: riskState[0] || null, effective: await resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }), subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) })
+      rows.push({ account, risk_state: riskState[0] || null,
+        performance:await getAccountPerformanceSummary(account.id, req.user.id),
+        effective: await resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }),
+        subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) })
     }
     res.json({ ok: true, accounts: rows, rule_metadata: RISK_RULES })
   } catch (error) { reviewError(res, error) }
@@ -584,8 +588,26 @@ router.get('/ai/admin/risk-center', authMiddleware, async (req, res) => {
   try {
     const accounts = await queryAll(`SELECT ta.*, u.nickname AS user_nickname, u.email AS user_email,
       ras.halt_status, ras.halt_reason, ras.drawdown_pct, ras.consecutive_losses, ras.cooldown_until,
-      ras.user_kill_switch, ras.data_complete, ras.data_incomplete_reason, ras.last_risk_snapshot_at FROM trading_accounts ta
-      JOIN users u ON u.id = ta.user_id LEFT JOIN risk_account_state ras ON ras.trading_account_id = ta.id
+      ras.user_kill_switch, ras.data_complete, ras.data_incomplete_reason, ras.last_risk_snapshot_at,
+      ownership.started_at AS platform_connected_at, totals.account_currency,
+      totals.realized_net AS cumulative_realized_net, totals.net_funding AS cumulative_net_funding,
+      totals.net_account_change AS cumulative_account_change, totals.closed_position_count AS cumulative_closed_positions,
+      totals.data_complete AS performance_data_complete, perf_state.sync_status AS performance_sync_status,
+      perf_state.synced_through_date AS performance_synced_through_date
+      FROM trading_accounts ta
+      JOIN users u ON u.id = ta.user_id
+      LEFT JOIN risk_account_state ras ON ras.trading_account_id = ta.id
+      LEFT JOIN mt5_account_ownership_history ownership ON ownership.trading_account_id = ta.id
+        AND ownership.user_id = ta.user_id AND ownership.ended_at IS NULL
+      LEFT JOIN (SELECT totals.trading_account_id, owner.user_id, MAX(totals.account_currency) AS account_currency,
+          SUM(realized_net) AS realized_net, SUM(net_funding) AS net_funding,
+          SUM(net_account_change) AS net_account_change, SUM(closed_position_count) AS closed_position_count,
+          MIN(data_complete) AS data_complete
+        FROM mt5_account_performance_totals totals
+        JOIN mt5_account_ownership_history owner ON owner.id = totals.ownership_history_id
+        GROUP BY totals.trading_account_id, owner.user_id) totals
+        ON totals.trading_account_id = ta.id AND totals.user_id = ta.user_id
+      LEFT JOIN mt5_account_performance_sync_state perf_state ON perf_state.ownership_history_id = ownership.id
       WHERE ta.is_deleted = 0 ORDER BY ta.updated_at DESC LIMIT 500`)
     const exceptions = await queryAll(`SELECT ta.*, u.nickname AS user_nickname, u.email AS user_email
       FROM trading_accounts ta JOIN users u ON u.id = ta.user_id
@@ -598,6 +620,143 @@ router.get('/ai/admin/risk-center', authMiddleware, async (req, res) => {
     let platform = null
     if (set[0]) platform = await queryAll('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1', [set[0].id])
     res.json({ ok: true, accounts, exceptions, global_control: global[0] || null, platform_policy_set: set[0] || null, platform_policy_version: platform?.[0] || null, defaults: DEFAULT_RISK_POLICY, rule_metadata: RISK_RULES })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/users/:userId/operations-detail', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try {
+    const targetUserId = Number(req.params.userId)
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) throw new Error('invalid_user_id')
+    const user = await queryOne(`SELECT id, nickname, email, phone, plan, role, plan_expires_at,
+      last_seen_at, bridge_heartbeat, created_at FROM users WHERE id = ?`, [targetUserId])
+    if (!user) return res.status(404).json({ ok:false, error:'user_not_found' })
+    const [settings, scheduler, accounts, subscriptions, strategies] = await Promise.all([
+      queryOne('SELECT trade_send_enabled, auto_reasoning_enabled, updated_at FROM user_bridge_settings WHERE user_id = ?', [targetUserId]),
+      getUserAutoRuntimeStatus(targetUserId),
+      queryAll(`SELECT ta.*, ras.halt_status, ras.halt_reason, ras.drawdown_pct, ras.consecutive_losses,
+          ras.cooldown_until, ras.user_kill_switch, ras.data_complete, ras.data_incomplete_reason,
+          ownership.id AS ownership_history_id,
+          COALESCE(ownership.started_at, history.first_owned_at) AS platform_connected_at,
+          totals.account_currency, totals.period_start_date, totals.period_end_date, totals.realized_net,
+          totals.deposit, totals.withdrawal, totals.net_funding, totals.net_account_change,
+          totals.closed_position_count, totals.winning_exit_count, totals.losing_exit_count,
+          totals.data_complete AS performance_data_complete, totals.last_synced_at,
+          perf_state.sync_status AS performance_sync_status, perf_state.last_error AS performance_sync_error,
+          perf_state.synced_through_date AS performance_synced_through_date
+        FROM trading_accounts ta
+        LEFT JOIN risk_account_state ras ON ras.trading_account_id = ta.id
+        LEFT JOIN mt5_account_ownership_history ownership ON ownership.trading_account_id = ta.id
+          AND ownership.user_id = ta.user_id AND ownership.ended_at IS NULL
+        LEFT JOIN (SELECT totals.trading_account_id, owner.user_id,
+            MAX(totals.account_currency) AS account_currency,
+            MIN(period_start_date) AS period_start_date, MAX(period_end_date) AS period_end_date,
+            SUM(realized_net) AS realized_net, SUM(deposit) AS deposit, SUM(withdrawal) AS withdrawal,
+            SUM(net_funding) AS net_funding, SUM(net_account_change) AS net_account_change,
+            SUM(closed_position_count) AS closed_position_count, SUM(winning_exit_count) AS winning_exit_count,
+            SUM(losing_exit_count) AS losing_exit_count, MIN(data_complete) AS data_complete,
+            MAX(last_synced_at) AS last_synced_at
+          FROM mt5_account_performance_totals totals
+          JOIN mt5_account_ownership_history owner ON owner.id = totals.ownership_history_id
+          GROUP BY totals.trading_account_id, owner.user_id) totals
+          ON totals.trading_account_id = ta.id AND totals.user_id = ta.user_id
+        LEFT JOIN (SELECT trading_account_id, user_id, MIN(started_at) AS first_owned_at
+          FROM mt5_account_ownership_history GROUP BY trading_account_id, user_id) history
+          ON history.trading_account_id = ta.id AND history.user_id = ta.user_id
+        LEFT JOIN mt5_account_performance_sync_state perf_state ON perf_state.ownership_history_id = ownership.id
+        WHERE ta.user_id = ? AND ta.is_deleted = 0 ORDER BY ta.updated_at DESC`, [targetUserId]),
+      listSubscriptions(req.user.id, req.user.role, { targetUserId }),
+      queryAll(`SELECT apt.id, apt.title, apt.scope, apt.owner_user_id, apt.symbols_json,
+          apt.visibility_status, apt.version
+        FROM auto_prompt_types apt WHERE apt.deleted_at IS NULL AND apt.is_active = 1
+          AND apt.visibility_status = 'active'
+          AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = ?))
+        ORDER BY apt.scope, apt.sort_order, apt.id`, [targetUserId]),
+    ])
+    const accountsWithPolicy = await Promise.all(accounts.map(async account => ({
+      ...account,
+      effective_risk:await resolveEffectiveRiskPolicy({ userId:targetUserId, tradingAccountId:Number(account.id) }),
+    })))
+    const bridge = isBridgeAlive(targetUserId)
+    res.json({ ok:true, user, settings:settings || { trade_send_enabled:0, auto_reasoning_enabled:0 },
+      bridge:{ connected:bridge, diagnostics:getBridgeDiagnostics().find(item => Number(item.userId) === targetUserId) || null }, scheduler,
+      accounts:accountsWithPolicy, subscriptions, strategies, rule_metadata:RISK_RULES })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.patch('/ai/admin/users/:userId/runtime', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try {
+    const targetUserId = Number(req.params.userId)
+    const target = await queryOne('SELECT id, role FROM users WHERE id = ?', [targetUserId])
+    if (!target) return res.status(404).json({ ok:false, error:'user_not_found' })
+    const hasTrade = typeof req.body?.trade_send_enabled === 'boolean'
+    const hasAuto = typeof req.body?.auto_reasoning_enabled === 'boolean'
+    if (!hasTrade && !hasAuto) throw new Error('runtime_setting_required')
+    if (hasAuto) {
+      const enabled = req.body.auto_reasoning_enabled
+      const rows = enabled
+        ? [await queryOne(`SELECT id FROM strategy_subscriptions WHERE user_id = ? AND is_deleted = 0
+            ORDER BY updated_at DESC, id DESC LIMIT 1`, [targetUserId])].filter(Boolean)
+        : await queryAll(`SELECT id FROM strategy_subscriptions WHERE user_id = ? AND is_deleted = 0
+            AND execution_enabled = 1`, [targetUserId])
+      if (enabled && !rows.length) throw new Error('subscription_required_before_auto_reasoning')
+      for (const row of rows) {
+        await updateSubscription(Number(row.id), targetUserId, target.role || 'user', {
+          execution_enabled:enabled, replace_active:true,
+        })
+      }
+      await queryRun(`INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at)
+        VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = VALUES(auto_reasoning_enabled),
+        updated_at = VALUES(updated_at)`, [targetUserId, enabled ? 1 : 0, beijingNow()])
+      await reconcileAutoSchedulers()
+    }
+    if (hasTrade) {
+      await queryRun(`INSERT INTO user_bridge_settings (user_id, trade_send_enabled, updated_at)
+        VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE trade_send_enabled = VALUES(trade_send_enabled),
+        updated_at = VALUES(updated_at)`, [targetUserId, req.body.trade_send_enabled ? 1 : 0, beijingNow()])
+    }
+    const runtime = await applyBridgeRuntimeState(targetUserId, {
+      ...(hasTrade ? { tradeEnabled:req.body.trade_send_enabled } : {}),
+      ...(hasAuto ? { autoReasoningEnabled:req.body.auto_reasoning_enabled } : {}),
+    })
+    await logAudit({ userId:req.user.id, action:'admin_user_runtime_updated', targetType:'user',
+      targetId:targetUserId, detail:JSON.stringify({ ...req.body, runtime }) })
+    res.json({ ok:true, runtime })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/users/:userId/accounts/:accountId/risk', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try {
+    const targetUserId = Number(req.params.userId), accountId = Number(req.params.accountId)
+    const account = await queryOne('SELECT id FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0', [accountId, targetUserId])
+    if (!account) return res.status(404).json({ ok:false, error:'account_not_found' })
+    let set = await queryOne("SELECT id FROM risk_policy_sets WHERE scope = 'account' AND owner_user_id = ? AND trading_account_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1", [targetUserId, accountId])
+    if (!set) {
+      const now = beijingNow()
+      const inserted = await queryRun(`INSERT INTO risk_policy_sets
+        (scope, owner_user_id, trading_account_id, name, status, created_at, updated_at)
+        VALUES ('account', ?, ?, ?, 'active', ?, ?)`, [targetUserId, accountId, `账户 ${accountId} 自定义风控`, now, now])
+      set = { id:inserted.insertId }
+    }
+    const result = await submitRiskPolicyChanges({ policySetId:set.id, actorId:req.user.id,
+      changes:req.body?.changes || {}, reason:req.body?.reason || '管理员在运营中心更新用户风控' })
+    res.json({ ok:true, result })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/users/:userId/subscriptions/:subscriptionId', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try {
+    const targetUserId = Number(req.params.userId), subscriptionId = Number(req.params.subscriptionId)
+    const target = await queryOne('SELECT id, role FROM users WHERE id = ?', [targetUserId])
+    if (!target) return res.status(404).json({ ok:false, error:'user_not_found' })
+    const subscription = await updateSubscription(subscriptionId, targetUserId, target.role || 'user', req.body || {})
+    await reconcileAutoSchedulers()
+    await logAudit({ userId:req.user.id, action:'admin_user_subscription_updated', targetType:'strategy_subscription',
+      targetId:subscriptionId, detail:JSON.stringify({ target_user_id:targetUserId, changes:req.body || {} }) })
+    res.json({ ok:true, subscription })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -848,6 +1007,9 @@ export { RISK_RULES, DEFAULT_RISK_POLICY, resolveEffectiveRiskPolicy, submitRisk
   evaluateCoreRisk } from './risk-policy.js'
 export { calculateAccountRiskMetrics, aggregateClosedPositions,
   setUserKillSwitch, setGlobalKillSwitch, syncTradingAccountIdentity } from './risk-state.js'
+export { normalizePerformanceDay, nextPerformanceWindow, recentPerformanceWindow,
+  getAccountPerformanceSyncWindow, saveAccountPerformanceChunk,
+  recordAccountPerformanceSyncFailure, getAccountPerformanceSummary } from './account-performance.js'
 export { analyzeOutcomeAttribution, resolveOutcomeClosureTransition,
   reconcileSignalOutcomes, startOutcomeMonitor, stopOutcomeMonitor } from './signal-outcomes.js'
 export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome,
