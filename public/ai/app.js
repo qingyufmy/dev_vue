@@ -4379,8 +4379,6 @@ function renderSignalMonitorDetails(signal) {
   }
 
   const decision = signalDecision(signal);
-  const advice = signalExecutionAdvice(signal);
-  const confidence = confidenceInfo(signal.confidence);
   const takeProfit = signalTakeProfitSelection(signal);
   const execution = parseJsonField(signal.execution_result, {});
   const approved = execution?.risk?.approved_order || execution?.approved_order || parseJsonField(signal.approved_order_json, {});
@@ -4390,12 +4388,11 @@ function renderSignalMonitorDetails(signal) {
   const analysis = userVisibleText(signal.analysis, "暂无行情分析正文");
   const reasoning = userVisibleText(signal.reasoning, "");
   const strategyLabel = signal.prompt_type_name || signal.strategy_name || signal.strategy_title || "当前交易策略";
-  const targetPrice = takeProfit.price || (takeProfit.tier ? signal[`take_profit_${takeProfit.tier}_price`] : null) || signalTakeProfit(signal);
 
   host.innerHTML = `
     <div class="signal-monitor-main">
       <section class="signal-monitor-summary monitor-surface">
-        <div class="monitor-section-heading"><span>一句话结论</span><small>#${escapeHtml(signal.id)} · ${escapeHtml(strategyLabel)}</small></div>
+        <div class="monitor-section-heading"><span><i data-lucide="sparkles" size="16"></i>核心结论</span><small>AI 对当前行情的直接判断</small></div>
         <strong>${escapeHtml(decision.summary)}</strong>
         ${renderDirectionBias(decision)}
       </section>
@@ -4410,27 +4407,24 @@ function renderSignalMonitorDetails(signal) {
       </section>
     </div>
     <aside class="signal-monitor-rail">
-      <section class="monitor-surface signal-monitor-execution ${escapeHtml(advice.state || "review")}">
-        <div class="monitor-section-heading"><span>执行状态</span><small>${escapeHtml(confidence.label)} 置信度</small></div>
-        <strong>${escapeHtml(advice.title || executionStatus(signal))}</strong>
-        <p>${escapeHtml(advice.description || "")}</p>
-      </section>
-      <section class="monitor-surface signal-monitor-order-grid">
-        <div><span>入场方式</span><strong>${escapeHtml(entryMethod)}</strong></div>
-        <div><span>计划入场</span><strong class="num">${escapeHtml(priceDisplay(signal.limit_price || signal.market_data?.latest_price))}</strong></div>
-        <div><span>止损保护</span><strong class="num monitor-risk-value">${escapeHtml(priceDisplay(signal.stop_loss_price))}</strong></div>
-        <div><span>执行止盈</span><strong class="num target">${escapeHtml(priceDisplay(targetPrice))}</strong><small>${escapeHtml(takeProfit.sourceLabel)}${takeProfit.tier ? ` · TP${takeProfit.tier}` : ""}</small></div>
-        <div><span>AI 建议手数</span><strong class="num">${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
-        <div><span>风控最终手数</span><strong class="num">${finalVolume == null ? "待执行时计算" : escapeHtml(volumeText(finalVolume))}</strong></div>
+      <section class="monitor-surface signal-monitor-order-card">
+        <div class="monitor-section-heading"><span><i data-lucide="list-checks" size="16"></i>执行参数</span><small>最终结果以账户风控为准</small></div>
+        <div class="signal-monitor-order-grid">
+          <div><span>入场方式</span><strong>${escapeHtml(entryMethod)}</strong></div>
+          <div><span>计划入场</span><strong class="num">${escapeHtml(priceDisplay(signal.limit_price || signal.market_data?.latest_price))}</strong></div>
+          <div><span>AI 建议手数</span><strong class="num">${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
+          <div><span>风控最终手数</span><strong class="num">${finalVolume == null ? "待执行时计算" : escapeHtml(volumeText(finalVolume))}</strong></div>
+        </div>
       </section>
       <section class="monitor-surface signal-monitor-targets">
         <div class="monitor-section-heading"><span>止盈候选</span><small>AI 推荐 TP${escapeHtml(takeProfit.recommendedTier || "--")}</small></div>
         <div>${[1, 2, 3].map(tier => `<span class="${takeProfit.tier === tier ? "selected" : ""} ${takeProfit.recommendedTier === tier ? "recommended" : ""}"><small>TP${tier}</small><strong class="num">${escapeHtml(priceDisplay(signal[`take_profit_${tier}_price`]))}</strong></span>`).join("")}</div>
       </section>
       <section class="monitor-surface signal-monitor-meta">
+        <div><span>信号编号</span><strong class="num">#${escapeHtml(signal.id)}</strong></div>
+        <div><span>推理策略</span><strong>${escapeHtml(strategyLabel)}</strong></div>
         <div><span>当前成交参考</span><strong class="num">${escapeHtml(signalCurrentPriceText(signal))}</strong></div>
         <div><span>剩余有效期</span><strong class="num">${escapeHtml(signalFreshness(signal))}</strong></div>
-        <div><span>生成时间（MT5）</span><strong class="num">${escapeHtml(signalDisplayTime(signal))}</strong></div>
       </section>
     </aside>`;
   initIcons();
