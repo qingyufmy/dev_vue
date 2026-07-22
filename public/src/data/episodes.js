@@ -4,7 +4,7 @@ export const categories = [
   { id: 'indicator', name: '技术指标' },
   { id: 'pattern', name: '形态分析' },
   { id: 'strategy', name: '交易策略' },
-  { id: 'advanced', name: '技术模型' },
+  { id: 'advanced', name: '经济指标' },
 ]
 
 // 卡片渐变背景色

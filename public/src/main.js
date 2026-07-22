@@ -2147,7 +2147,7 @@ function formatTimeAgo(timestamp) {
 
 // Category labels matching homepage tabs
 const COURSE_CATEGORY_IDS = ['morning', 'indicator', 'pattern', 'strategy', 'advanced']
-const CATEGORY_LABELS = { morning: '早盘解读', strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型' }
+const CATEGORY_LABELS = { morning: '早盘解读', strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '经济指标' }
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
 
 function syncVideoAccessState(items = []) {
