@@ -28,6 +28,7 @@ dist_inno/
 dist_nuitka/
 
 __pycache__/
+.venv-bridge/
 .codebuddy/
 .workbuddy/
 public/ai/build/
