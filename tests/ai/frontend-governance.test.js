@@ -599,6 +599,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.topbar-badges .status-badge')
     expect(css).toContain('@media (pointer: coarse)')
     expect(css).toContain('min-height: 44px')
+    expect(css).toContain('.auto-runtime-control.is-progress {\n    min-height: 44px;')
+    expect(css).toContain('.kline-period-btn {\n    min-width: 44px;')
+    expect(css).toContain('.account-card details > summary')
     expect(css).toContain('env(safe-area-inset-top)')
   })
 

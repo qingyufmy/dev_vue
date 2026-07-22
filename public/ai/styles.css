@@ -9538,6 +9538,19 @@ body[data-ai-access-reason="plus_plan"] [data-tab-jump="ai-config"] {
     min-height: 44px;
   }
 
+  .auto-runtime-control.is-progress {
+    min-height: 44px;
+  }
+
+  .kline-period-btn {
+    min-width: 44px;
+  }
+
+  .sym-input,
+  .account-card details > summary {
+    min-height: 44px;
+  }
+
   .btn,
   .btn-sm,
   .icon-btn,
