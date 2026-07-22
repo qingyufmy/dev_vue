@@ -218,7 +218,12 @@ export function formatRiskReason(code, details = {}) {
   const label = auditValueLabel(rawCode)
   const base = label === rawCode ? '风控条件未满足' : label
   if (rawCode === 'R1.9_AI_VOLUME_OUT_OF_RANGE') return `${base}：执行上限 ${displayNumber(details.volume)} 手，允许范围 ${displayNumber(details.minimum)}～${displayNumber(details.maximum)} 手，步进 ${displayNumber(details.step)} 手`
-  if (rawCode === 'R1.9_BELOW_MINIMUM_AFTER_RISK') return `${base}：风险计算后为 ${displayNumber(details.volume)} 手，最低可交易 ${displayNumber(details.minimum)} 手`
+  if (rawCode === 'R1.9_BELOW_MINIMUM_AFTER_RISK') {
+    if (Number.isFinite(Number(details.theoretical_volume)) && Number.isFinite(Number(details.risk_cap)) && Number.isFinite(Number(details.minimum_lot_risk))) {
+      return `${base}：理论手数 ${displayNumber(details.theoretical_volume, 4)}，按 ${displayNumber(details.step)} 手步进向下取整后为 ${displayNumber(details.volume)} 手；本次风险预算 ${displayNumber(details.risk_cap, 2)}，最小 ${displayNumber(details.minimum)} 手预计止损亏损 ${displayNumber(details.minimum_lot_risk, 2)}（均为账户货币），因此未执行`
+    }
+    return `${base}：风险计算后为 ${displayNumber(details.volume)} 手，最低可交易 ${displayNumber(details.minimum)} 手`
+  }
   if (rawCode === 'R1.7_PENDING_DIRECTION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，当前价 ${displayNumber(details.current_price)}`
   if (rawCode === 'R1.7_STOP_LIMIT_RELATION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，触发后限价 ${displayNumber(details.stop_limit_price)}`
   if (rawCode === 'R4.4_QUOTE_STALE') return `${base}：报价年龄 ${displayNumber(details.quote_age_seconds)} 秒，允许上限 ${displayNumber(details.maximum_seconds)} 秒`

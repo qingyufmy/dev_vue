@@ -80,4 +80,11 @@ describe('audit localization', () => {
       result:{ status:'已跳过', reason:'当前账户已有反向持仓，本次不新增仓位', details:{ count:3 } },
     })
   })
+
+  it('explains the full minimum-lot risk calculation in account currency', () => {
+    expect(formatRiskReason('R1.9_BELOW_MINIMUM_AFTER_RISK', {
+      theoretical_volume:0.00822, volume:0, minimum:0.01, step:0.01,
+      risk_cap:24.67, minimum_lot_risk:30,
+    })).toBe('风险调整后手数低于最小可交易手数：理论手数 0.0082，按 0.01 手步进向下取整后为 0 手；本次风险预算 24.67，最小 0.01 手预计止损亏损 30（均为账户货币），因此未执行')
+  })
 })

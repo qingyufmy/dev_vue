@@ -448,6 +448,12 @@ describe('AI governance navigation and DOM contract', () => {
     expect(bridgeWs).toContain('execution.details?.pending_action_reason')
   })
 
+  it('explains a below-minimum risk rejection with theoretical volume and account-currency loss', () => {
+    expect(app).toContain('details.theoretical_volume')
+    expect(app).toContain('最小 ${displayRiskNumber(details.minimum, 3)} 手预计止损亏损')
+    expect(app).toContain('（均为账户货币），因此未执行')
+  })
+
   it('removes the retired stop-distance, reward ratio, exposure and margin settings', () => {
     const groups = app.slice(app.indexOf('const RISK_GROUPS'), app.indexOf('const RISK_SAFETY_LABELS'))
     expect(groups).not.toContain('sl_atr_max')

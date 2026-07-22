@@ -121,6 +121,15 @@ describe('L1/L4/L5 core risk gate', () => {
   it('never increases AI volume when risk arithmetic is below broker minimum', () => {
     const result = run({ request: { volume: 0.01, sl: 1980 }, account: { equity: 100 } })
     expect(result).toMatchObject({ decision_status: 'reject', reject_code: 'R1.9_BELOW_MINIMUM_AFTER_RISK' })
+    expect(result.rule_results.at(-1)).toMatchObject({
+      code:'R1.9_BELOW_MINIMUM_AFTER_RISK',
+      details:{
+        volume:0, theoretical_volume:0.00049505, capped_volume_before_step:0.00049505,
+        minimum:0.01, step:0.01, equity:100, full_risk_cap:1, risk_cap:1,
+        risk_per_lot:2020, minimum_lot_risk:20.2, minimum_lot_risk_pct:20.2,
+        position_size_factor:1, calculation_source:'symbol_tick_metadata',
+      },
+    })
   })
 
   it.each([

@@ -420,9 +420,27 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   approved.position_size_factor = resolvedPositionSizeFactor
   const fullRiskCap = equity * policy.max_risk_per_trade_pct / 100
   const riskCap = fullRiskCap * resolvedPositionSizeFactor
-  volume = floorStep(Math.min(volume, riskCap / riskPerLot), Number(instrument.volume_step))
+  const riskBasedVolume = riskCap / riskPerLot
+  const volumeBeforeStep = Math.min(volume, riskBasedVolume)
+  volume = floorStep(volumeBeforeStep, Number(instrument.volume_step))
   const minimumLot = Number(instrument.volume_min)
-  if (volume + 1e-9 < minimumLot) return fail('R1.9_BELOW_MINIMUM_AFTER_RISK', { volume, minimum: minimumLot })
+  if (volume + 1e-9 < minimumLot) return fail('R1.9_BELOW_MINIMUM_AFTER_RISK', {
+    volume,
+    theoretical_volume:Number(riskBasedVolume.toFixed(8)),
+    capped_volume_before_step:Number(volumeBeforeStep.toFixed(8)),
+    minimum:minimumLot,
+    step:Number(instrument.volume_step),
+    equity,
+    max_risk_per_trade_pct:Number(policy.max_risk_per_trade_pct),
+    full_risk_cap:Number(fullRiskCap.toFixed(8)),
+    risk_cap:Number(riskCap.toFixed(8)),
+    risk_per_lot:Number(riskPerLot.toFixed(8)),
+    minimum_lot_risk:Number((riskPerLot * minimumLot).toFixed(8)),
+    minimum_lot_risk_pct:Number((riskPerLot * minimumLot / equity * 100).toFixed(8)),
+    position_size_factor:resolvedPositionSizeFactor,
+    position_size_tier:approved.position_size_tier || null,
+    calculation_source:calculationSource,
+  })
   if (!hasTierSizing && volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN')
   if (volume !== Number(approved.volume)) adjusted = true
   approved.volume = volume

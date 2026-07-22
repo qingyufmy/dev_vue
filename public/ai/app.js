@@ -2609,13 +2609,19 @@ function riskDataIncompleteText(value) {
   }).join("；");
 }
 function displayRiskNumber(value, digits = 2) {
-  const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits).replace(/\.00$/, "") : "--";
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1") : "--";
 }
 function riskRuleDescription(code, details = {}) {
   const label = riskDecisionLabel(code);
   if (code === "R1.5_RR_TOO_LOW") return `${label}：当前 ${displayRiskNumber(details.rr)}，最低要求 ${displayRiskNumber(details.minimum)}`;
   if (code === "R1.5_TP_TIER_UPGRADED") return `${label}：TP${details.from_tier ?? "?"} → TP${details.to_tier ?? "?"}，调整后盈亏比 ${displayRiskNumber(details.rr)}`;
-  if (code === "R1.9_BELOW_MINIMUM_AFTER_RISK") return `${label}：计算结果 ${displayRiskNumber(details.volume)} 手，最低 ${displayRiskNumber(details.minimum)} 手`;
+  if (code === "R1.9_BELOW_MINIMUM_AFTER_RISK") {
+    if ([details.theoretical_volume, details.risk_cap, details.minimum_lot_risk].every(value => Number.isFinite(Number(value)))) {
+      return `${label}：理论手数 ${displayRiskNumber(details.theoretical_volume, 4)}，按 ${displayRiskNumber(details.step, 3)} 手步进向下取整后为 ${displayRiskNumber(details.volume, 3)} 手；本次风险预算 ${displayRiskNumber(details.risk_cap, 2)}，最小 ${displayRiskNumber(details.minimum, 3)} 手预计止损亏损 ${displayRiskNumber(details.minimum_lot_risk, 2)}（均为账户货币），因此未执行`;
+    }
+    return `${label}：计算结果 ${displayRiskNumber(details.volume)} 手，最低 ${displayRiskNumber(details.minimum)} 手`;
+  }
   if (code === "R4.4_QUOTE_STALE") return `${label}：报价年龄 ${displayRiskNumber(details.quote_age_seconds, 3)} 秒，允许上限 ${displayRiskNumber(details.maximum_seconds)} 秒`;
   if (code === "R1.7_PENDING_DEVIATION") return `${label}：偏离 ${displayRiskNumber(details.deviation)}，允许上限 ${displayRiskNumber(details.maximum)}`;
   if (code === "R4.6_EXECUTION_PRICE_DEVIATION") return `${label}：当前 ${displayRiskNumber(details.current_price)}，允许 ${displayRiskNumber(details.allowed_min)} ～ ${displayRiskNumber(details.allowed_max)}（±${displayRiskNumber(details.maximum_pct, 3)}%）`;
