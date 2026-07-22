@@ -162,6 +162,11 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   return { outputFormat: JSON.stringify(schema, null, 2), hasPending }
 }
 
+function usesNativeJsonMode(provider, protocol) {
+  return (provider === 'deepseek' && protocol !== 'responses')
+    || (provider === 'volcengine_agent_plan' && protocol === 'responses')
+}
+
 function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort }) {
   if (protocol === 'responses') {
     const instructions = messages
@@ -174,6 +179,12 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
       .map(message => ({ role: message.role, content: String(message.content || '') }))
     const body = { model, input, max_output_tokens: maxTokens }
     if (instructions) body.instructions = instructions
+    // Ark Agent Plan follows the Responses API structured-output contract.
+    // Keep this provider-scoped: other Responses-compatible gateways may
+    // reject the field instead of silently ignoring it.
+    if (provider === 'volcengine_agent_plan') {
+      body.text = { format:{ type:'json_object' } }
+    }
     if (thinkingEnabled) {
       body.reasoning = { effort: reasoningEffort === 'max' ? 'high' : (reasoningEffort || 'high') }
     } else {
@@ -183,6 +194,11 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
   }
 
   const body = { model, messages }
+  // DeepSeek's JSON Output contract guarantees syntactically valid JSON when
+  // the prompt also explicitly requests JSON (our inference prompt does).
+  if (provider === 'deepseek') {
+    body.response_format = { type:'json_object' }
+  }
   // Thinking providers have different wire contracts. Kimi Code accepts
   // enabled or disabled inside the thinking object.
   if (thinkingEnabled) {
@@ -201,7 +217,7 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
   return body
 }
 
-function extractLlmContent(data, protocol) {
+function extractLlmContent(data, protocol, expectJson = false) {
   if (protocol === 'responses') {
     if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text
     const chunks = []
@@ -214,7 +230,7 @@ function extractLlmContent(data, protocol) {
   }
 
   const msg = data?.choices?.[0]?.message
-  return msg?.content || msg?.reasoning_content || ''
+  return msg?.content || (expectJson ? '' : msg?.reasoning_content) || ''
 }
 
 function extractTokenCount(data) {
@@ -337,7 +353,26 @@ export async function requestJsonObject({
     url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request', provider, signal,
     onProviderRequest, onProviderUsage,
   })
-  const content = extractLlmContent(data, protocol)
+  const nativeJsonMode = usesNativeJsonMode(provider, protocol)
+  let content = extractLlmContent(data, protocol, nativeJsonMode)
+  if (!content && nativeJsonMode) {
+    signal?.throwIfAborted()
+    await emitModelProgress(onProgress, 'repairing')
+    const emptyRetryMessages = [
+      ...messages,
+      { role:'user', content:'上一次响应正文为空。请重新完成原任务，只返回一个完整、合法的 JSON 对象，不要 Markdown 或解释。' },
+    ]
+    const emptyRetryBody = buildLlmRequestBody({
+      protocol, provider, model, temperature:0, maxTokens, messages:emptyRetryMessages,
+      thinkingEnabled, reasoningEffort,
+    })
+    const emptyRetryEstimate = Math.ceil(JSON.stringify(emptyRetryMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
+    const { data: emptyRetryData } = await trackedModelRequest({
+      url, apiKey, body:emptyRetryBody, timeout, usageContext, estimatedTokens:emptyRetryEstimate,
+      phase:'repair', provider, signal, onProviderRequest, onProviderUsage,
+    })
+    content = extractLlmContent(emptyRetryData, protocol, true)
+  }
   if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
   await emitModelProgress(onProgress, 'validating')
   try {
@@ -360,7 +395,7 @@ export async function requestJsonObject({
       url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate,
       phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
     })
-    const repaired = extractLlmContent(repairedData, protocol)
+    const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
     if (!repaired) throw new Error('LLM repair response content is empty')
     await emitModelProgress(onProgress, 'validating')
     const repairedObject = parseJsonObject(repaired)

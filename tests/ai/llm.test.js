@@ -140,6 +140,61 @@ describe('requestJsonObject', () => {
     expect(mockFetch.mock.calls[0][1].redirect).toBe('error')
   })
 
+  it('DeepSeek 请求默认启用 JSON Object 模式', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"ok":true}' } }] }),
+    })
+
+    await requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', apiKey:'test-key',
+      provider:'deepseek', model:'deepseek-v4-pro', maxTokens:2000,
+      messages:[{ role:'system', content:'只返回 JSON' }, { role:'user', content:'test' }],
+    })
+
+    const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(requestBody.response_format).toEqual({ type:'json_object' })
+  })
+
+  it('DeepSeek JSON Mode 空正文会重试且不会解析思考内容', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok:true, status:200,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'', reasoning_content:'这不是 JSON 正文' } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok:true, status:200,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"status":"ok"}' } }] }),
+      })
+
+    const result = await requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', apiKey:'test-key',
+      provider:'deepseek', model:'deepseek-v4-pro', maxTokens:2000,
+      messages:[{ role:'system', content:'只返回 JSON' }, { role:'user', content:'test' }],
+    })
+
+    expect(result).toEqual({ status:'ok' })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body).response_format).toEqual({ type:'json_object' })
+  })
+
+  it('未知 OpenAI 兼容供应商不会被强塞 JSON Mode 参数', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"ok":true}' } }] }),
+    })
+
+    await requestJsonObject({
+      url:'https://example.test/v1/chat/completions', apiKey:'test-key',
+      provider:'openai_compatible', model:'custom-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }],
+    })
+
+    const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(requestBody).not.toHaveProperty('response_format')
+    expect(requestBody).not.toHaveProperty('text')
+  })
+
   it('JSON 解析失败时尝试修复', async () => {
     // 第一次返回无效 JSON
     mockFetch
@@ -266,6 +321,7 @@ describe('requestJsonObject', () => {
     const result = await requestJsonObject({
       url: 'https://ark.cn-beijing.volces.com/api/plan/v3/responses',
       apiKey: 'test-key',
+      provider: 'volcengine_agent_plan',
       model: 'ark-code-latest',
       temperature: 0.3,
       maxTokens: 2000,
@@ -284,6 +340,7 @@ describe('requestJsonObject', () => {
     expect(requestBody.input).toEqual([{ role: 'user', content: 'test' }])
     expect(requestBody.max_output_tokens).toBe(2000)
     expect(requestBody.reasoning).toEqual({ effort: 'high' })
+    expect(requestBody.text).toEqual({ format:{ type:'json_object' } })
     expect(requestBody).not.toHaveProperty('messages')
     expect(requestBody).not.toHaveProperty('max_tokens')
   })
@@ -303,7 +360,7 @@ describe('requestJsonObject', () => {
 
     const result = await requestJsonObject({
       url: 'https://ark.cn-beijing.volces.com/api/plan/v3/responses',
-      apiKey: 'test-key', model: 'ark-code-latest', temperature: 0.3, maxTokens: 2000,
+      apiKey: 'test-key', provider:'volcengine_agent_plan', model: 'ark-code-latest', temperature: 0.3, maxTokens: 2000,
       messages: [{ role: 'user', content: 'test' }],
       protocol: 'responses', thinkingEnabled: false,
     })
@@ -313,6 +370,7 @@ describe('requestJsonObject', () => {
     const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
     expect(repairBody.input.map(item => item.role)).toEqual(['user', 'assistant', 'user'])
     expect(repairBody.temperature).toBe(0)
+    expect(repairBody.text).toEqual({ format:{ type:'json_object' } })
     expect(repairBody).not.toHaveProperty('messages')
   })
 
