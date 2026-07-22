@@ -6731,7 +6731,9 @@ a.signal-link:hover {
   color: var(--text-muted);
   background: transparent;
   border-color: transparent;
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .analyst-view-panel[hidden] {
@@ -9394,13 +9396,17 @@ body[data-ai-access-reason="plus_plan"] [data-tab-jump="ai-config"] {
 .gateway-control,
 .trade-permission-control {
   appearance: none;
-  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
   line-height: 1.35;
   text-align: left;
 }
 
-.trade-permission-control.status-permission {
-  color: var(--text-primary);
+.trade-permission-control.status-trade-active {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.48);
 }
 
 .clickable-badge::after { display: none; }

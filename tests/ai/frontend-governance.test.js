@@ -496,7 +496,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('await showConfirm("开启真实交易发送"')
     expect(app).toContain('await showConfirm("关闭交易发送"')
     expect(app).toContain('["服务器风控", "每笔订单发送前强制校验"]')
-    expect(css).toContain('.status-permission')
+    expect(css).toContain('.trade-permission-control.status-trade-active')
+    expect(css).toContain('font-family: var(--font-ui)')
   })
 
   it('shows an explicit AI to risk to MT5 chain without a noisy live region', () => {

@@ -490,7 +490,7 @@ function renderTradePermissionBadge(enabled, { blocked = false, readonly = isObs
   const text = label || (known
     ? `交易发送${enabled ? "开启" : "关闭"}${readonly ? " · 只读" : ""}`
     : `交易发送状态未知${readonly ? " · 只读" : ""}`);
-  setBadge("tradeMode", text, blocked ? "warning" : enabled ? "permission" : "neutral");
+  setBadge("tradeMode", text, blocked ? "warning" : enabled ? "trade-active" : "neutral");
   const control = $("tradeMode");
   if (!control) return;
   control.setAttribute("aria-pressed", String(enabled === true));
