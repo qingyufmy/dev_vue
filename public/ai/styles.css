@@ -843,6 +843,7 @@ button {
 .execution-advice-hero.review { border-color:color-mix(in srgb,var(--gold-primary) 45%,var(--border-default)); background:color-mix(in srgb,var(--gold-primary) 7%,var(--bg-input-soft)); }
 .execution-advice-hero.rejected,.execution-advice-hero.failed,.execution-advice-hero.expired { border-color:color-mix(in srgb,var(--status-danger) 45%,var(--border-default)); background:var(--status-danger-bg); }
 .execution-advice-hero.skipped { border-color:var(--color-warning-border); background:var(--color-warning-bg); }
+.execution-advice-hero.cancelled { border-color:color-mix(in srgb,var(--status-connected) 40%,var(--border-default)); background:var(--status-connected-bg); }
 .execution-advice-hero.executed,.execution-advice-hero.pending { border-color:color-mix(in srgb,var(--status-connected) 40%,var(--border-default)); background:var(--status-connected-bg); }
 .execution-advice-icon { display:grid; place-items:center; width:40px; height:40px; border-radius:11px; color:var(--gold-primary); background:color-mix(in srgb,var(--gold-primary) 13%,transparent); }
 .execution-advice-hero > div:nth-child(2) { display:flex; flex-direction:column; gap:3px; min-width:0; }

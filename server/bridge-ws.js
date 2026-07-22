@@ -82,15 +82,23 @@ const SIGNAL_PENDING_ACTIONS = new Set([
   'pending_supersede_failed',
 ])
 
+const SIGNAL_PENDING_ACTION_ALIASES = new Map([
+  ['AI 取消挂单', 'ai_cancel_pending'],
+  ['AI 取消挂单失败', 'ai_cancel_pending_failed'],
+  ['旧挂单已替换', 'pending_superseded'],
+  ['旧挂单替换失败', 'pending_supersede_failed'],
+])
+
 function parseAuditPayload(value) {
   if (!value) return {}
   if (typeof value === 'object') return value
   try { return JSON.parse(value) } catch { return {} }
 }
 
-export function buildSignalPendingActions(rows = []) {
-  return rows
-    .filter(row => SIGNAL_PENDING_ACTIONS.has(String(row?.action || '')))
+export function buildSignalPendingActions(rows = [], executionResult = null) {
+  const actions = rows
+    .map(row => ({ ...row, action:SIGNAL_PENDING_ACTION_ALIASES.get(String(row?.action || '')) || String(row?.action || '') }))
+    .filter(row => SIGNAL_PENDING_ACTIONS.has(row.action))
     .map(row => {
       const request = parseAuditPayload(row.request_json ?? row.request)
       const result = parseAuditPayload(row.result_json ?? row.result)
@@ -105,23 +113,45 @@ export function buildSignalPendingActions(rows = []) {
         created_at: row.created_at || null,
       }
     })
-    .slice(0, 20)
+  const execution = parseAuditPayload(executionResult)
+  const reason = String(execution.reason || '')
+  if (reason === 'pending_cancelled' && !actions.some(action => action.status === 'cancelled')) {
+    actions.push({
+      ticket:null,
+      pending_type:null,
+      status:'cancelled',
+      count:Number(execution.details?.count || 0),
+      reason:'策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单',
+      message:null,
+      created_at:null,
+    })
+  } else if (reason === 'pending_cancel_failed' && !actions.some(action => action.status === 'failed')) {
+    actions.push({
+      ticket:String(execution.details?.ticket || '').trim() || null,
+      pending_type:null,
+      status:'failed',
+      count:0,
+      reason:null,
+      message:'取消当前策略挂单失败，本次未继续执行',
+      created_at:null,
+    })
+  }
+  return actions.slice(0, 20)
 }
 
-async function loadSignalPendingActions(userId, signalId) {
+async function loadSignalPendingActions(userId, signalId, executionResult = null) {
   try {
     const rows = await queryAll(
       `SELECT action, request_json, result_json, status, created_at
        FROM trade_audit_logs
        WHERE user_id = ?
-         AND action IN ('ai_cancel_pending', 'ai_cancel_pending_failed', 'pending_superseded', 'pending_supersede_failed')
          AND JSON_VALID(request_json)
          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(request_json, '$.signal_id')) AS UNSIGNED) = ?
        ORDER BY id ASC
        LIMIT 20`,
       [userId, signalId]
     )
-    return buildSignalPendingActions(rows)
+    return buildSignalPendingActions(rows, executionResult)
   } catch (error) {
     console.warn(`[SignalDetail] Failed to load pending actions for signal ${signalId}:`, error.message)
     return []
@@ -1113,7 +1143,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.delivery_id = delivery.id
             item.prompt_type_id = delivery.prompt_type_id
             item.source = 'auto_shared'
-            item.pending_actions = await loadSignalPendingActions(detailUserId, signalId)
+            item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, delivery.execution_result)
             item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
             if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
             ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
@@ -1134,7 +1164,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
           delete item.market_data_json
           item.is_executed = !!item.is_executed
-          item.pending_actions = await loadSignalPendingActions(detailUserId, signalId)
+          item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, item.execution_result)
           item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
           if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
           ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())

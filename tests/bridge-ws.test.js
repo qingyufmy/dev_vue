@@ -127,6 +127,22 @@ describe('signal pending action presentation', () => {
   it('ignores unrelated audit actions', () => {
     expect(buildSignalPendingActions([{ action: 'ai_auto_execute', request_json: '{}' }])).toEqual([])
   })
+
+  it('presents a delivery-level cancellation even when the audit uses localized labels', () => {
+    expect(buildSignalPendingActions([
+      { action:'AI 自动执行', request_json:JSON.stringify({ signal_id:6104 }) },
+    ], JSON.stringify({ status:'success', reason:'pending_cancelled', details:{ count:1 } }))).toEqual([
+      expect.objectContaining({ status:'cancelled', count:1, reason:expect.stringContaining('系统已取消') }),
+    ])
+  })
+
+  it('accepts localized pending-action audit labels', () => {
+    expect(buildSignalPendingActions([{
+      action:'AI 取消挂单', status:'成功', request_json:JSON.stringify({ ticket:99, reason:'原挂单逻辑失效' }),
+    }])).toEqual([
+      expect.objectContaining({ ticket:'99', status:'cancelled', reason:'原挂单逻辑失效' }),
+    ])
+  })
 })
 
 describe('history export signal association', () => {

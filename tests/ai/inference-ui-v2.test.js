@@ -116,4 +116,10 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('opposite_position_exists:"当前账户已有反向持仓，本次不新增仓位"')
     expect(app).toContain('title: rejected ? "风控未放行" : skipped ? "本次未执行"')
   })
+
+  it('shows completed pending cancellation details in the inference result', () => {
+    expect(app).toContain('execution?.status === "success" && execution?.reason === "pending_cancelled"')
+    expect(app).toContain('title:"旧挂单已取消"')
+    expect(app).toContain('Number(action.count || 0)')
+  })
 })

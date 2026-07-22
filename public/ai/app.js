@@ -4919,6 +4919,12 @@ function signalExecutionAdvice(signal) {
   } : null;
   if (localizedPresented?.state === "pending") return { ...localizedPresented, executable:false };
   const execution = parseJsonField(signal?.execution_result, {});
+  if (execution?.status === "success" && execution?.reason === "pending_cancelled") return {
+    state:"cancelled",
+    title:"旧挂单已取消",
+    description:resultRiskReason(execution) || "策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单。",
+    executable:false,
+  };
   const persistedStatus = String(signal?.execution_status || "").toLowerCase();
   const pending = Boolean(signal?.pending_ticket)
     || ["pending", "submitted", "placed"].includes(persistedStatus)
@@ -4963,9 +4969,10 @@ function renderSignalPendingActions(signal) {
       const detail = action.status === "failed"
         ? userVisibleText(action.message, "系统未返回具体失败原因")
         : userVisibleText(action.reason, action.status === "superseded" ? "为执行新信号，已取消同方向旧挂单" : "原挂单条件已经失效");
+      const countText = !action.ticket && Number(action.count || 0) > 0 ? ` · ${Number(action.count)} 笔` : "";
       return `<article class="signal-pending-action ${escapeHtml(action.status || "cancelled")}">
         <i data-lucide="${actionState.icon}" size="17"></i>
-        <div><strong>${actionState.title}${action.ticket ? ` · #${escapeHtml(action.ticket)}` : ""}</strong><p>${escapeHtml(detail)}</p></div>
+        <div><strong>${actionState.title}${action.ticket ? ` · #${escapeHtml(action.ticket)}` : countText}</strong><p>${escapeHtml(detail)}</p></div>
       </article>`;
     }).join("")}</div>
   </section>`;
