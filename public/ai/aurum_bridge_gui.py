@@ -6,7 +6,6 @@ AURUM Bridge - MT5 桥接桌面客户端 (PySide6)
 """
 import sys
 import os
-import re
 import ssl
 import json
 import time
@@ -29,6 +28,13 @@ from PySide6.QtCore import Qt, Signal, QTimer, QThread, QSize
 from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
+from bridge_source_launcher import NewObserverSourceDialog, launch_bridge_profile
+from bridge_profile_runtime import (
+    acquire_instance_mutex, activate_profile_window, clear_profile_runtime,
+    find_mt5_path_owner, find_source_account_owner, list_bridge_profiles,
+    normalize_profile, profile_config_dir, read_profile_runtime,
+    register_bridge_profile, write_profile_config, write_profile_runtime,
+)
 
 APP_VERSION = "v2.4.1"
 FULL_HISTORY_START = datetime(2000, 1, 1)
@@ -41,7 +47,7 @@ DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
 MT5_CLOCK_FRESHNESS_TOLERANCE_MS = 30000
 MT5_CLOCK_STALE_AFTER_SEC = 120
 def _resolve_bridge_profile(argv=None):
-    """Read --profile without leaking it into Qt and isolate local state."""
+    """Read Bridge-only flags without leaking them into Qt."""
     args = list(argv or sys.argv)
     cleaned = [args[0]] if args else []
     requested = os.environ.get("AURUM_BRIDGE_PROFILE", "default")
@@ -58,15 +64,14 @@ def _resolve_bridge_profile(argv=None):
             continue
         cleaned.append(item)
         index += 1
-    profile = re.sub(r"[^a-zA-Z0-9_-]", "-", str(requested or "default").strip())[:40].strip("-_") or "default"
-    return profile.lower(), cleaned
+    return normalize_profile(requested), cleaned
 
 
 BRIDGE_PROFILE, QT_ARGV = _resolve_bridge_profile()
 CONFIG_ROOT = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "AURUM_Bridge")
 # Keep the legacy directory for the default instance; named instances are
 # completely isolated so multiple source accounts can run on one computer.
-CONFIG_DIR = CONFIG_ROOT if BRIDGE_PROFILE == "default" else os.path.join(CONFIG_ROOT, "profiles", BRIDGE_PROFILE)
+CONFIG_DIR = profile_config_dir(CONFIG_ROOT, BRIDGE_PROFILE)
 
 # Bundle resource path — compatible with PyInstaller and Nuitka
 if getattr(sys, 'frozen', False):
@@ -222,9 +227,12 @@ def _get_ssl_context():
                 "SSL 证书验证不可用。请检查 Python 安装或安装 certifi 包 (pip install certifi)"
             )
 
-def http_get_json(url, timeout=10):
+def http_get_json(url, timeout=10, token=None):
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "AURUM-Bridge/1.0"})
+        headers = {"User-Agent": "AURUM-Bridge/1.0"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
@@ -2046,7 +2054,20 @@ class BridgeWorker(QThread):
             self.status_signal.emit("MT5 未安装", "#ef4444", "请安装MT5终端后重试")
             return
 
-        if not self.mt5.initialize():
+        terminal_path = None
+        if manual_path:
+            for executable in ("terminal64.exe", "terminal.exe"):
+                candidate = os.path.join(manual_path, executable)
+                if os.path.isfile(candidate):
+                    terminal_path = candidate
+                    break
+            if not terminal_path:
+                self.log_signal.emit("MT5 初始化失败: 指定目录中未找到 terminal64.exe 或 terminal.exe")
+                self.status_signal.emit("MT5 路径无效", "#ef4444", "请重新选择独立 MT5 安装目录")
+                return
+        portable = bool(load_config().get("mt5_portable", False))
+        initialized = self.mt5.initialize(terminal_path, portable=portable) if terminal_path else self.mt5.initialize()
+        if not initialized:
             self.log_signal.emit(f"MT5 初始化失败: {self.mt5.last_error()}")
             self.status_signal.emit("未检测到MT5", "#ef4444", "请先运行MT5并登录交易账户")
             return
@@ -2819,6 +2840,8 @@ class LoginPage(QWidget):
             else:
                 cfg.pop("saved_password", None)
             cfg["plan"] = data.get("user", {}).get("plan", "free")
+            cfg["role"] = data.get("user", {}).get("role", "user")
+            cfg["plan_source"] = data.get("user", {}).get("planSource") or data.get("user", {}).get("plan_source")
             save_config(cfg)
 
             self.login_success.emit(email, token)
@@ -2834,6 +2857,7 @@ class LoginPage(QWidget):
 
 class BridgePage(QWidget):
     request_settings = Signal()
+    request_new_observer_source = Signal()
 
     def __init__(self):
         super().__init__()
@@ -2851,6 +2875,12 @@ class BridgePage(QWidget):
         title.setStyleSheet("color: #3b82f6; background: transparent;")
         top_row.addWidget(title)
         top_row.addStretch()
+        self.btn_add_observer_source = QPushButton("＋ 新增观摩源")
+        self.btn_add_observer_source.setProperty("secondary", True)
+        self.btn_add_observer_source.setFixedHeight(32)
+        self.btn_add_observer_source.setVisible(False)
+        self.btn_add_observer_source.clicked.connect(self.request_new_observer_source.emit)
+        top_row.addWidget(self.btn_add_observer_source)
         self.btn_settings = GearButton()
         self.btn_settings.clicked.connect(self.request_settings.emit)
         top_row.addWidget(self.btn_settings)
@@ -3010,6 +3040,10 @@ class BridgePage(QWidget):
         self.btn_start.setText("▶  启动桥接")
         self.btn_start.setStyleSheet("background-color: #3b82f6;")
         self._set_status("已断开", "#6b7280")
+
+    def start_bridge(self):
+        if not self._worker or not self._worker.isRunning():
+            self._toggle_bridge()
 
 # ══════════════════════════════════════════════════════════
 #  Settings Page
@@ -3495,6 +3529,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME if BRIDGE_PROFILE == "default" else f"{APP_NAME} · {BRIDGE_PROFILE}")
         self.setFixedSize(520, 600)
         self._pending_update_data = None
+        self._runtime_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         ico_path = resource_path("aurum_icon.ico")
         if os.path.exists(ico_path):
@@ -3514,6 +3549,7 @@ class MainWindow(QMainWindow):
 
         self.bridge_page = BridgePage()
         self.bridge_page.request_settings.connect(self._show_settings)
+        self.bridge_page.request_new_observer_source.connect(self._open_new_observer_source)
         self.stack.addWidget(self.bridge_page)
 
         self.settings_page = SettingsPage()
@@ -3522,6 +3558,11 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.settings_page)
 
         self._init_tray()
+
+        self._runtime_timer = QTimer(self)
+        self._runtime_timer.timeout.connect(self._refresh_runtime_heartbeat)
+        self._runtime_timer.start(5000)
+        self._refresh_runtime_heartbeat()
 
         cfg = load_config()
         if cfg.get("auto_login") and cfg.get("token"):
@@ -3548,9 +3589,12 @@ class MainWindow(QMainWindow):
 
         # 验证 token
         if token:
-            status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5)
+            status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5, token=token)
             if status_code == 200:
-                cfg["plan"] = data.get("user", data).get("plan", "free")
+                user = data.get("user", data)
+                cfg["plan"] = user.get("plan", "free")
+                cfg["role"] = user.get("role", "user")
+                cfg["plan_source"] = user.get("planSource") or user.get("plan_source")
                 save_config(cfg)
                 self._on_login_success(email, token)
                 return
@@ -3572,6 +3616,11 @@ class MainWindow(QMainWindow):
             self.bridge_page.btn_start.setStyleSheet("background-color: #3b82f6;")
             self.bridge_page._set_status("已断开", "#6b7280")
             self.bridge_page.lbl_update_hint.setVisible(False)
+            cfg = load_config()
+            is_admin_main = cfg.get("role") == "admin" and BRIDGE_PROFILE == "default"
+            self.bridge_page.btn_add_observer_source.setVisible(is_admin_main)
+            if cfg.get("auto_start_bridge"):
+                QTimer.singleShot(700, self.bridge_page.start_bridge)
         except Exception:
             pass
         # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
@@ -3596,11 +3645,89 @@ class MainWindow(QMainWindow):
         self.settings_page.load_settings()
         self.stack.setCurrentIndex(2)
 
+    def _open_new_observer_source(self):
+        if load_config().get("role") != "admin" or BRIDGE_PROFILE != "default":
+            QMessageBox.warning(self, "权限不足", "只有管理员主桥接可以新增观摩源。")
+            return
+        dialog = NewObserverSourceDialog(self)
+        dialog.submit.clicked.connect(lambda: self._create_and_launch_observer_source(dialog))
+        dialog.exec()
+
+    def _create_and_launch_observer_source(self, dialog):
+        values = dialog.values()
+        raw_slug = values["slug"]
+        slug = normalize_profile(raw_slug)
+        if not raw_slug or slug == "default":
+            dialog.show_error("请输入有效的档案标识，仅支持字母、数字、短横线和下划线。")
+            return
+        if any(item["slug"] == slug for item in list_bridge_profiles(CONFIG_ROOT)):
+            dialog.show_error("该配置档案已存在，请更换标识。")
+            return
+        if not values["account"] or not values["password"]:
+            dialog.show_error("请输入网站中创建的专用桥接源账号和密码。")
+            return
+        account_owner = find_source_account_owner(CONFIG_ROOT, values["account"])
+        if account_owner:
+            dialog.show_error(f"该源账号已被“{account_owner.get('name') or account_owner['slug']}”使用，不能重复启动。")
+            return
+        mt5_path = values["mt5_path"]
+        terminal_path = next((os.path.join(mt5_path, name) for name in ("terminal64.exe", "terminal.exe")
+                              if os.path.isfile(os.path.join(mt5_path, name))), None)
+        if not terminal_path:
+            dialog.show_error("所选目录中没有 terminal64.exe 或 terminal.exe。")
+            return
+        owner = find_mt5_path_owner(CONFIG_ROOT, mt5_path)
+        if owner:
+            dialog.show_error(f"该 MT5 目录已被“{owner.get('name') or owner['slug']}”使用。每个观摩源必须使用独立目录。")
+            return
+
+        parent_cfg = load_config()
+        server = parent_cfg.get("server_url", DEFAULT_SERVER)
+        dialog.set_submitting(True)
+        QApplication.processEvents()
+        status_code, data = http_post_json(f"{server.rstrip('/')}/api/login", {
+            "email": values["account"], "password": values["password"],
+        }, timeout=10)
+        user = data.get("user", {}) if isinstance(data, dict) else {}
+        plan_source = user.get("planSource") or user.get("plan_source")
+        if status_code != 200 or not data.get("token"):
+            dialog.show_error(data.get("error", "源账号验证失败，请检查账号和密码。"))
+            return
+        if user.get("role") != "user" or plan_source != "observer_source":
+            dialog.show_error("该账号不是专用桥接源账号，请先在网站运营中心创建。")
+            return
+        try:
+            register_bridge_profile(CONFIG_ROOT, slug, values["name"] or slug)
+            write_profile_config(CONFIG_ROOT, slug, {
+                "server_url": server,
+                "email": values["account"],
+                "token": data["token"],
+                "remember": True,
+                "auto_login": True,
+                "auto_start_bridge": True,
+                "saved_password": encrypt_password(values["password"]),
+                "plan": user.get("plan", "pro"),
+                "role": user.get("role", "user"),
+                "plan_source": plan_source,
+                "mt5_path": mt5_path,
+                "mt5_portable": False,
+            })
+            launch_bridge_profile(
+                sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__),
+                slug, frozen=bool(getattr(sys, "frozen", False)),
+            )
+        except OSError as error:
+            dialog.show_error(f"观摩源启动失败：{error}")
+            return
+        dialog.accept()
+        QMessageBox.information(self, "观摩源已启动", "新的桥接窗口和独立 MT5 进程正在启动。网站运营中心将在连接成功后显示在线。")
+
     def _on_logout(self):
         self._update_timer.stop()
         self._pending_update_data = None
         self.bridge_page.stop_bridge()
         self.bridge_page.lbl_login_user.setText("")
+        self.bridge_page.btn_add_observer_source.setVisible(False)
         self.bridge_page.lbl_update_hint.setVisible(False)
         self.login_page.load_config()
         self.login_page.lbl_status.setText("")
@@ -3637,7 +3764,17 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.activateWindow()
 
+    def _refresh_runtime_heartbeat(self):
+        try:
+            write_profile_runtime(
+                CONFIG_ROOT, BRIDGE_PROFILE, APP_VERSION,
+                self._runtime_started_at, self.windowTitle(),
+            )
+        except OSError as error:
+            log_warn(f"运行状态写入失败: {error}")
+
     def _do_quit(self):
+        self._runtime_timer.stop()
         self.bridge_page.stop_bridge()
         self.tray.hide()
         QTimer.singleShot(200, QApplication.quit)
@@ -3652,26 +3789,6 @@ class MainWindow(QMainWindow):
 # ══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Single instance check (temporarily disabled to allow multiple Bridges).
-    # _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\AURUM_Bridge_SingleInstance")
-    # if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-    #     import ctypes.wintypes
-    #     # Find and activate existing window
-    #     EnumWindows = ctypes.windll.user32.EnumWindows
-    #     WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-    #     def _activate_existing(hwnd, _):
-    #         length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-    #         if length > 0:
-    #             buf = ctypes.create_unicode_buffer(length + 1)
-    #             ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-    #             if APP_NAME in buf.value:
-    #                 ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-    #                 ctypes.windll.user32.SetForegroundWindow(hwnd)
-    #                 return False
-    #         return True
-    #     EnumWindows(WNDENUMPROC(_activate_existing), 0)
-    #     sys.exit(0)
-
     # DPI awareness
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -3686,6 +3803,13 @@ if __name__ == "__main__":
     font.setStyleStrategy(QFont.PreferAntialias)
     app.setFont(font)
 
+    _instance_mutex = None
+    _instance_mutex, acquired = acquire_instance_mutex(f"profile-{BRIDGE_PROFILE}")
+    if not acquired:
+        runtime = read_profile_runtime(CONFIG_ROOT, BRIDGE_PROFILE)
+        activate_profile_window(runtime.get("pid"))
+        sys.exit(0)
     win = MainWindow()
+    app.aboutToQuit.connect(lambda: clear_profile_runtime(CONFIG_ROOT, BRIDGE_PROFILE, os.getpid()))
     win.show()
     sys.exit(app.exec())

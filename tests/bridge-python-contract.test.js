@@ -6,8 +6,34 @@ describe('Python Bridge history contract', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     expect(source).toContain('def _resolve_bridge_profile(argv=None):')
     expect(source).toContain('AURUM_BRIDGE_PROFILE')
-    expect(source).toContain('os.path.join(CONFIG_ROOT, "profiles", BRIDGE_PROFILE)')
+    expect(source).toContain('profile_config_dir(CONFIG_ROOT, BRIDGE_PROFILE)')
     expect(source).toContain('app = QApplication(QT_ARGV)')
+  })
+
+  it('manages one runtime per profile without restoring a global single-instance lock', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const runtime = readFileSync(new URL('../public/ai/bridge_profile_runtime.py', import.meta.url), 'utf8')
+    const launcher = readFileSync(new URL('../public/ai/bridge_source_launcher.py', import.meta.url), 'utf8')
+    expect(source).toContain('BRIDGE_PROFILE, QT_ARGV')
+    expect(source).toContain('acquire_instance_mutex(f"profile-{BRIDGE_PROFILE}")')
+    expect(source).toContain('write_profile_runtime')
+    expect(runtime).toContain('profile_registry.json')
+    expect(launcher).toContain('class NewObserverSourceDialog(QDialog)')
+    expect(launcher).toContain('CREATE_NEW_CONSOLE')
+    expect(source).not.toContain('BridgeProfileManager')
+  })
+
+  it('lets only the administrator main Bridge provision a dedicated observer source and MT5 process', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('self.btn_add_observer_source = QPushButton("＋ 新增观摩源")')
+    expect(source).toContain('cfg.get("role") == "admin" and BRIDGE_PROFILE == "default"')
+    expect(source).toContain('plan_source != "observer_source"')
+    expect(source).toContain('find_mt5_path_owner(CONFIG_ROOT, mt5_path)')
+    expect(source).toContain('find_source_account_owner(CONFIG_ROOT, values["account"])')
+    expect(source).toContain('"auto_start_bridge": True')
+    expect(source).toContain('"mt5_portable": False')
+    expect(source).toContain('self.mt5.initialize(terminal_path, portable=portable)')
+    expect(source).toContain('http_get_json(f"{server.rstrip(\'/\')}/api/auth/me", timeout=5, token=token)')
   })
 
   it('provides a compact incremental risk snapshot without full-history export', () => {
