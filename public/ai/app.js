@@ -1738,7 +1738,17 @@ function stopUiTimer() {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) { stopUiTimer(); } else { startUiTimer(); }
+  if (document.hidden) {
+    stopUiTimer();
+    stopKlineRefreshTimers();
+  } else {
+    startUiTimer();
+    if (activeTabId() === "dashboard") {
+      loadKlineData().catch(() => {});
+      startKlineRefreshTimer();
+      startKlineVolumeRefreshTimer();
+    }
+  }
 });
 
 startUiTimer();
@@ -3323,6 +3333,7 @@ function setTab(tabId, options = {}) {
     if (!options.silent) toast("观摩模式下不可访问该页面", "warning");
     tabId = "dashboard";
   }
+  if (tabId !== "dashboard") stopKlineRefreshTimers();
   if (tabId !== "review-memory") stopReviewDetailPolling();
   document.querySelectorAll(".nav-item").forEach((button) => {
     const active = button.dataset.tab === tabId;
@@ -4000,9 +4011,8 @@ function _createKlineChart(container) {
     btn.addEventListener('click', () => switchKlineTimeframe(btn.dataset.tf));
   });
 
-  // Volume refresh every 5 seconds (was 1s, reduced for performance)
-  clearInterval(_klineVolRefreshTimer);
-  _klineVolRefreshTimer = setInterval(refreshKlineVolume, 5000);
+  // Volume refresh only while the dashboard is visible.
+  startKlineVolumeRefreshTimer();
 
   // Zoom limit: don't allow zooming out beyond all loaded data
   _klineChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
@@ -4017,6 +4027,7 @@ function _createKlineChart(container) {
 }
 
 async function loadKlineData() {
+  if (document.hidden || activeTabId() !== 'dashboard') return;
   if (!_klineSeries) return; // Chart not initialized yet (e.g. admin on dashboard tab)
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   try {
@@ -4067,8 +4078,9 @@ async function loadKlineData() {
   }
 }
 
-// Lightweight: fetch only the last bar's volume every second
+// Lightweight: fetch only the last bar's volume while the dashboard is visible.
 async function refreshKlineVolume() {
+  if (document.hidden || activeTabId() !== 'dashboard') return;
   if (state.marketTradeMode === 0 || !_klineVolumeSeries || !_klineLastBar) return;
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   try {
@@ -4114,8 +4126,28 @@ function updateKlineTick(bid, ask, quote = {}) {
 
 // Periodic refresh for higher timeframes (H4/D1 don't change on every M5 bar)
 let _klineRefreshTimer = null;
+function stopKlineRefreshTimers() {
+  if (_klineRefreshTimer) {
+    clearInterval(_klineRefreshTimer);
+    _klineRefreshTimer = null;
+  }
+  if (_klineVolRefreshTimer) {
+    clearInterval(_klineVolRefreshTimer);
+    _klineVolRefreshTimer = null;
+  }
+}
+
+function startKlineVolumeRefreshTimer() {
+  if (_klineVolRefreshTimer) clearInterval(_klineVolRefreshTimer);
+  _klineVolRefreshTimer = null;
+  if (document.hidden || activeTabId() !== 'dashboard') return;
+  _klineVolRefreshTimer = setInterval(refreshKlineVolume, 5000);
+}
+
 function startKlineRefreshTimer() {
-  clearInterval(_klineRefreshTimer);
+  if (_klineRefreshTimer) clearInterval(_klineRefreshTimer);
+  _klineRefreshTimer = null;
+  if (document.hidden || activeTabId() !== 'dashboard') return;
   const intervalMs = { M1: 30000, M5: 30000, M15: 60000, M30: 60000, H1: 120000, H4: 300000, D1: 600000 }[_klineTimeframe] || 60000;
   _klineRefreshTimer = setInterval(() => { loadKlineData().catch(() => {}); }, intervalMs);
 }

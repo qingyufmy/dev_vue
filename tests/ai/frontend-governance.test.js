@@ -8,6 +8,7 @@ const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.me
 const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const profiles = readFileSync(new URL('../../server/routes/ai/model-profiles.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
+const serverIndex = readFileSync(new URL('../../server/index.js', import.meta.url), 'utf8')
 
 describe('AI governance navigation and DOM contract', () => {
   it('renders automatic inference as an accessible live progress control', () => {
@@ -580,6 +581,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('["ArrowLeft", "ArrowRight", "Home", "End"]')
     expect(app).toContain('button.tabIndex = active ? 0 : -1')
     expect(css).toContain('.skip-link:focus')
+  })
+
+  it('compresses large responses and suspends dashboard K-line polling off screen', () => {
+    expect(serverIndex).toContain("import compression from 'compression'")
+    expect(serverIndex).toContain('app.use(compression({ threshold: 1024 }))')
+    expect(app).toContain('function stopKlineRefreshTimers()')
+    expect(app).toContain("if (tabId !== \"dashboard\") stopKlineRefreshTimers()")
+    expect(app).toContain("if (document.hidden || activeTabId() !== 'dashboard') return;")
+    expect(app).toContain('startKlineVolumeRefreshTimer()')
   })
 })
 

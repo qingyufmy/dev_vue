@@ -1,4 +1,5 @@
 import express from 'express'
+import compression from 'compression'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import multer from 'multer'
@@ -71,6 +72,9 @@ app.use(express.urlencoded({ extended: true }))
 
 // Security headers (embedding restrictions intentionally disabled).
 app.use(securityHeaders)
+// Compress text assets and JSON responses. Large AI frontend bundles otherwise
+// consume unnecessary bandwidth on every cold load.
+app.use(compression({ threshold: 1024 }))
 
 // Rate limiting — prevent brute force and DoS
 const AUTH_RATE_LIMIT_PATHS = new Set([
