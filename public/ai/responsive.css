@@ -1706,22 +1706,6 @@
   .compare-summary-grid {
     grid-template-columns: 1fr;
   }
-
-  #history .data-table tr:not(.empty-row),
-  #audit .data-table tr:not(.empty-row) {
-    grid-template-columns: 1fr;
-  }
-
-  #history .data-table tr:not(.empty-row) td,
-  #audit .data-table tr:not(.empty-row) td {
-    border-left: 0 !important;
-  }
-
-  #history .data-table .comment-cell,
-  #audit .data-table .audit-result-cell,
-  #audit .data-table td:last-child {
-    grid-column: 1;
-  }
 }
 
 @keyframes mobile-sheet-enter {
