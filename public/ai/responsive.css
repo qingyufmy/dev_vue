@@ -282,7 +282,10 @@
     background: color-mix(in srgb, var(--color-warning-bg) 42%, transparent);
   }
 
-  .topbar-primary-status .status-trade-active,
+  .topbar-primary-status .status-trade-active {
+    background: color-mix(in srgb, var(--status-trading-bg) 72%, transparent);
+  }
+
   .topbar-primary-status .status-danger {
     background: color-mix(in srgb, var(--status-danger-bg) 54%, transparent);
   }

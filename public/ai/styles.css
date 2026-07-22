@@ -46,6 +46,10 @@
   --status-connected: #10b981;
   --status-connected-bg: rgba(16, 185, 129, 0.1);
   --status-connected-border: rgba(16, 185, 129, 0.35);
+  --status-trading: #7dd3fc;
+  --status-trading-dot: #38bdf8;
+  --status-trading-bg: rgba(56, 189, 248, 0.09);
+  --status-trading-border: rgba(56, 189, 248, 0.34);
   --status-danger: #ef4444;
   --status-danger-bg: rgba(239, 68, 68, 0.1);
   --status-danger-border: rgba(239, 68, 68, 0.35);
@@ -328,16 +332,26 @@ button {
 }
 
 .status-trade-active {
-  color: var(--status-danger);
-  background: var(--status-danger-bg);
-  border-color: var(--status-danger-border);
+  color: var(--status-trading);
+  background: var(--status-trading-bg);
+  border-color: var(--status-trading-border);
 }
 
-.status-trade-active .badge-dot,
+.status-trade-active .badge-dot {
+  background: var(--status-trading-dot);
+  box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.28);
+  animation: pulse-dot-trading 2s ease-in-out infinite;
+}
+
 .status-danger .badge-dot {
   background: var(--status-danger);
   box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35);
   animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot-trading {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+  50% { box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.12); }
 }
 
 .status-danger {
@@ -9430,9 +9444,9 @@ body[data-ai-access-reason="plus_plan"] [data-tab-jump="ai-config"] {
 }
 
 .trade-permission-control.status-trade-active {
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.14);
-  border-color: rgba(239, 68, 68, 0.48);
+  color: var(--status-trading);
+  background: var(--status-trading-bg);
+  border-color: var(--status-trading-border);
 }
 
 .clickable-badge::after { display: none; }
