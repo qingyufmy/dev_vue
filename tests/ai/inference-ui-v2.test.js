@@ -98,7 +98,7 @@ describe('inference workspace V2 contract', () => {
 
   it('keeps revoked platform experience out of the active library and exposes a collapsed archive', () => {
     expect(app).toContain('const currentItems = visibleItems.filter(item => item.status !== "revoked")')
-    expect(app).toContain('data-memory-tier="long"')
+    expect(app).toContain("tab('long', '长期记忆'")
     expect(app).toContain('class="platform-experience-archive"')
     expect(app).toContain('data-platform-experience-action="delete"')
     expect(app).toContain('method:"DELETE"')

@@ -47,6 +47,11 @@ const state = {
   reviewFilter: "",
   reviewPeriodFilter: "",
   memoryTierFilter: "all",
+  memoryItems: [],
+  memorySummaries: [],
+  memorySettings: {},
+  platformMemoryPolicies: [],
+  platformMemoryEvaluation: {},
   selectedReviewId: null,
   globalRiskSnapshot: null,
   autoProgressCycles: {},
@@ -2665,6 +2670,11 @@ async function loadReviewMemory() {
     ? await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
     : await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
   state.reviewCases = reviewData.cases || [];
+  state.memoryItems = memoryData.items || [];
+  state.memorySummaries = memoryData.summaries || [];
+  state.memorySettings = memoryData.settings || {};
+  state.platformMemoryPolicies = memoryData.policies || [];
+  state.platformMemoryEvaluation = memoryData.evaluation || {};
   await loadReviewSummary({ announce:false });
   $("sharedCredentialNotice")?.classList.toggle("hidden", isAdmin || (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
   const userFlags = featureData.flags?.user || {};
@@ -2675,15 +2685,19 @@ async function loadReviewMemory() {
     $(id).checked = key === "paired_experiment_enabled" ? userFlags[key] === true : userFlags[key] ?? true;
   }
   renderReviewCases();
-  if (isAdmin) renderPlatformExperience(memoryData.items || [], memoryData.policies || [], memoryData.evaluation || {});
-  else renderMemoryItems(memoryData.items || [], memoryData.settings || {}, memoryData.summaries || []);
+  renderCachedMemoryWorkspace();
+}
+
+function renderCachedMemoryWorkspace() {
+  if (state.user?.role === "admin") renderPlatformExperience(state.memoryItems, state.platformMemoryPolicies, state.platformMemoryEvaluation);
+  else renderMemoryItems(state.memoryItems, state.memorySettings, state.memorySummaries);
 }
 
 async function saveUserFeatureFlags() {
   await api("/api/ai/feature-flags", { method:"PUT", body:{ review_generation_enabled:$("userReviewGenerationFlag").checked,
     experience_memory_enabled:$("userExperienceMemoryFlag").checked, memory_compression_enabled:$("userMemoryCompressionFlag").checked,
     retrieval_shadow_enabled:$("userRetrievalShadowFlag").checked, paired_experiment_enabled:$("userPairedExperimentFlag").checked } });
-  toast("个人灰度开关已保存", "success"); await loadReviewMemory();
+  toast("个人复盘与记忆设置已保存", "success"); await loadReviewMemory();
 }
 
 function renderReviewCases() {
@@ -2691,12 +2705,6 @@ function renderReviewCases() {
   const statusClass = status => status === "approved" ? "success" : ["failed", "incomplete", "needs_revision"].includes(status) ? "danger" : "warning";
   const pending = new Set(["evidence_pending", "incomplete", "ready", "generating", "failed"]);
   const items = state.reviewCases.filter(item => !state.reviewFilter || (state.reviewFilter === "pending" ? pending.has(item.status) : item.status === state.reviewFilter));
-  const dailyVersionSets = new Map();
-  for (const item of state.reviewCases.filter(row => row.period_type === "daily")) {
-    const key = [item.period_key, item.trading_account_id, item.strategy_id].join(":");
-    if (!dailyVersionSets.has(key)) dailyVersionSets.set(key, new Set());
-    dailyVersionSets.get(key).add(Number(item.strategy_version || 1));
-  }
   host.innerHTML = items.length ? items.map(item => {
     const selected = Number(item.id) === Number(state.selectedReviewId);
     const effectiveStatus = periodReviewEffectiveStatus(item);
@@ -2704,15 +2712,12 @@ function renderReviewCases() {
     const stats = item.statistics || {};
     const isMonthly = item.period_type === "monthly";
     const profit = Number(stats.net_profit || 0);
-    const versionKey = [item.period_key, item.trading_account_id, item.strategy_id].join(":");
-    const hasVersionSplit = !isMonthly && (dailyVersionSets.get(versionKey)?.size || 0) > 1;
-    return `<button class="review-case-button ${selected ? 'selected' : ''} ${Number(item.is_unread) ? 'is-unread' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}" aria-label="打开${isMonthly ? '月' : '日'}复盘 ${escapeHtml(item.period_key)}，策略版本 v${Number(item.strategy_version || 1)}，${escapeHtml(reviewStatusLabel(effectiveStatus))}">
+    return `<button class="review-case-button ${selected ? 'selected' : ''} ${Number(item.is_unread) ? 'is-unread' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}" aria-label="打开${isMonthly ? '月' : '日'}复盘 ${escapeHtml(item.period_key)}，${escapeHtml(reviewStatusLabel(effectiveStatus))}">
       <span class="review-unread-dot ${Number(item.is_unread) ? '' : 'hidden'}" aria-label="未读复盘"></span>
       <span class="review-case-leading ${statusClass(item.status)}"><i data-lucide="${icon}" size="16"></i></span>
       <span class="review-case-main">
-        <span class="review-case-head"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="review-version-badge">v${Number(item.strategy_version || 1)}</span><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
+        <span class="review-case-head"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
         <span class="review-case-strategy">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</span>
-        ${hasVersionSplit ? '<span class="review-version-split-note"><i data-lucide="git-branch" size="12"></i>当天策略升级，按版本分别复盘</span>' : ''}
         <span class="review-case-metrics"><span><small>${isMonthly ? '交易日' : '交易数量'}</small><strong>${isMonthly ? Number(stats.trading_days || 0) : Number(stats.trade_count || item.source_count || 0)}${isMonthly ? ' 天' : ' 笔'}</strong></span><span><small>净收益</small><strong class="${profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''}">${fmt(profit, 2)}</strong></span></span>
       </span>
       <span class="review-case-arrow" aria-hidden="true"><i data-lucide="chevron-right" size="16"></i></span>
@@ -2880,6 +2885,16 @@ function periodReviewListBlock(title, values, icon = "list-checks") {
   return `<section class="period-review-evidence-card"><header><i data-lucide="${icon}" size="15"></i><strong>${escapeHtml(title)}</strong><span>${items.length}</span></header>${items.length ? `<ul>${items.map(item => `<li>${escapeHtml(userVisibleText(item, "系统未提供中文说明"))}</li>`).join("")}</ul>` : '<p>本周期未记录相关问题</p>'}</section>`;
 }
 
+function reviewStrategyVersions(review = {}) {
+  const raw = review.strategy_versions ?? parseJsonField(review.strategy_versions_json, review.strategy_version ? [review.strategy_version] : []);
+  return [...new Set((Array.isArray(raw) ? raw : [raw]).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+}
+
+function reviewStrategyProvenance(review = {}) {
+  const versions = reviewStrategyVersions(review);
+  return versions.length > 1 ? `覆盖 ${versions.length} 个兼容策略版本` : "策略配置来源已记录";
+}
+
 async function openPeriodReviewDetail(id, { silent = false } = {}) {
   stopReviewDetailPolling();
   state.selectedReviewId = Number(id); renderReviewCases();
@@ -2904,6 +2919,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     ? `MT5 时间 ${review.period_key || '--'} 全月 · 月末结算后生成`
     : `MT5 时间 ${review.period_key || '--'} 00:00–24:00 · 已结束周期`;
   const nextPeriodHint = isMonthly ? "本月结束后的交易将进入下月复盘" : "本周期结束后的平仓将进入下一份日复盘";
+  const strategyProvenance = reviewStrategyProvenance(review);
   const derivationLabels = { queued:"经验等待处理", leased:"正在沉淀经验", paused:"经验处理已暂停", failed:"经验处理失败", succeeded:"经验已沉淀" };
   const derivationStatus = review.derivation_status || "";
   const derivationClass = derivationStatus === "succeeded" ? "complete" : derivationStatus === "failed" ? "warning" : "";
@@ -2923,7 +2939,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     ...(content.chan_diagnoses || []),
   ];
   detail.innerHTML = `<header class="period-review-detail-header">
-      <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · 策略版本 v${Number(review.strategy_version || 1)}</p><p class="period-review-period-scope"><i data-lucide="clock-3" size="13"></i>${escapeHtml(periodScope)}</p></div>
+      <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · ${escapeHtml(strategyProvenance)}</p><p class="period-review-period-scope"><i data-lucide="clock-3" size="13"></i>${escapeHtml(periodScope)}</p></div>
       <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
     </header>
     ${periodReviewProgressHtml(review)}
@@ -2936,7 +2952,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     <div class="period-review-source ${review.evidence_status === 'complete' ? 'complete' : 'warning'}"><i data-lucide="${review.evidence_status === 'complete' ? 'shield-check' : 'triangle-alert'}" size="16"></i><div><strong>${sourceLabel}</strong><span>${escapeHtml(sourceDetail)}；${escapeHtml(nextPeriodHint)}</span></div></div>
     ${review.status === 'approved' && derivationStatus ? `<div class="period-review-source ${derivationClass}"><i data-lucide="${derivationStatus === 'succeeded' ? 'brain-circuit' : derivationStatus === 'failed' ? 'circle-alert' : 'loader-circle'}" size="16"></i><div><strong>${escapeHtml(derivationLabels[derivationStatus] || derivationStatus)}</strong><span>${escapeHtml(derivationDetail)}</span></div>${derivationStatus === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry-derivation">重试经验处理</button>' : ''}</div>` : ''}
     ${current ? `<section class="period-review-editor">
-      <div class="period-review-section-heading"><div><span class="review-section-kicker">核心结论</span><h3>${isMonthly ? '本月策略表现' : '当日策略表现'}</h3></div><span>版本 ${Number(current.version_no || 1)}</span></div>
+      <div class="period-review-section-heading"><div><span class="review-section-kicker">核心结论</span><h3>${isMonthly ? '本月策略表现' : '当日策略表现'}</h3></div><span>第 ${Number(current.version_no || 1)} 次修订</span></div>
       <label class="review-field"><span>复盘摘要</span><textarea data-period-review-field="period_summary" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(userVisibleText(content.period_summary, "暂无复盘摘要"))}</textarea></label>
       <div class="period-review-decision-row"><label class="review-field"><span>决策质量</span><select data-period-review-field="decision_quality" ${editable ? '' : 'disabled'}>${Object.entries(periodDecisionLabels).map(([value,label]) => `<option value="${value}" ${content.decision_quality === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="review-field"><span>结论置信度</span><div class="confidence-input"><input data-period-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${editable ? '' : 'disabled'}><small>0 到 1</small></div></label></div>
       <div class="period-review-edit-grid">${editableGroups.map(([key,label]) => `<label class="review-field"><span>${label}</span><textarea data-period-review-field="${key}" data-field-type="lines" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(periodReviewLines(content[key]))}</textarea><small>每行一条，保持简短且可执行</small></label>`).join('')}</div>
@@ -2946,7 +2962,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       ${periodReviewListBlock(isMonthly ? '跨日模式' : '逐笔判断', assessments.map(item => `${isMonthly ? item.period_case_id : item.outcome_id} · ${periodDecisionLabels[item.decision_quality] || item.decision_quality}：${item.summary || ''}`), isMonthly ? 'calendar-range' : 'receipt-text')}
       ${isMonthly ? periodReviewListBlock('长期记忆候选', (content.memory_candidates || []).map(item => item.lesson), 'brain-circuit') : periodReviewListBlock('缠论结构诊断', diagnostics.map(item => `${chanIssueLabels[item.issue_source] || item.issue_source}：${item.explanation || '无补充说明'}`), 'git-branch')}
     </section>
-    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>UTC${Number(review.timezone_offset_minutes || 0) >= 0 ? '+' : ''}${fmt(Number(review.timezone_offset_minutes || 0) / 60, 1)}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(current.created_at || '--')}</strong></div></div></div></details>
+    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>UTC${Number(review.timezone_offset_minutes || 0) >= 0 ? '+' : ''}${fmt(Number(review.timezone_offset_minutes || 0) / 60, 1)}</strong></div><div><span>来源策略配置</span><strong>${escapeHtml(reviewStrategyVersions(review).length ? reviewStrategyVersions(review).map(value => `v${value}`).join('、') : '已记录')}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(current.created_at || '--')}</strong></div></div></div></details>
     <footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认后才会进入记忆体系</strong><small>${isMonthly ? '月复盘负责压缩跨日模式并产生长期记忆候选' : '日复盘先形成短期策略记忆，月底再统一压缩'}</small></span></div>${editable ? `<div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">标记有问题</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>确认并沉淀经验</button></div>` : '<span class="status-chip success">内容已锁定</span>'}</footer>` : ''}`;
   initIcons();
   if (current && Number(review.is_unread)) {
@@ -2960,25 +2976,66 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   schedulePeriodReviewDetailPoll(review);
 }
 
-function renderMemoryItemsLegacy(items, settings) {
-  const memoryEnabled = settings.enabled !== false;
-  if ($("memoryEnabled")) $("memoryEnabled").checked = memoryEnabled;
-  const activeCount = items.filter(item => item.status === "active").length;
-  const pendingCount = items.filter(item => ["duplicate_candidate", "stale"].includes(item.status)).length;
-  const revokedCount = items.filter(item => item.status === "revoked").length;
-  setText("memoryActiveStat", activeCount);
-  const host = $("memoryItemsList"); if (!host) return;
-  const statusLabels = { active:"正在使用", duplicate_candidate:"待确认", revoked:"已撤销", stale:"待更新" };
-  host.innerHTML = `<section class="personal-memory-section ${memoryEnabled ? '' : 'is-disabled'}">
-    <header class="personal-memory-header"><div class="personal-memory-title"><span class="personal-memory-main-icon"><i data-lucide="brain" size="19"></i></span><div><span class="review-section-kicker">个人经验</span><h3>我的记忆库</h3><p>系统只会把你确认过、且状态为“正在使用”的经验带入后续推理。</p></div></div><div class="personal-memory-stats"><span><strong>${activeCount}</strong> 正在使用</span><span><strong>${pendingCount}</strong> 等待处理</span><span><strong>${revokedCount}</strong> 已撤销</span></div></header>
-    <div class="personal-memory-state ${memoryEnabled ? 'is-on' : 'is-off'}"><i data-lucide="${memoryEnabled ? 'shield-check' : 'shield-off'}" size="15"></i><span>${memoryEnabled ? '<strong>个人记忆已启用</strong>，正在使用的经验会参与后续推理。' : '<strong>个人记忆已关闭</strong>，现有经验仍会保留，但不会注入推理。'}</span></div>
-    <div class="personal-memory-grid">${items.length ? items.map(item => {
-      const statusClass = item.status === 'active' ? 'success' : item.status === 'revoked' ? 'danger' : 'warning';
-      const icon = item.status === 'active' ? 'lightbulb' : item.status === 'revoked' ? 'archive-x' : item.status === 'stale' ? 'refresh-cw' : 'circle-help';
-      return `<article class="personal-memory-card is-${escapeHtml(item.status)}"><header><span class="personal-memory-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.symbol || '通用经验')}</strong><span>${escapeHtml(item.timeframe || '全周期')} · 记忆 #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(statusLabels[item.status] || item.status)}</span></header><div class="personal-memory-lesson"><span>经验内容</span><p>${escapeHtml(item.lesson_text)}</p></div><footer><div class="personal-memory-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(item.review_version_id || '--')}</span><span><i data-lucide="braces" size="13"></i>${Number(item.token_count || 0)} tokens</span></div><div class="personal-memory-actions">${item.status === 'duplicate_candidate' ? `<button class="btn btn-primary btn-sm" data-memory-action="activate" data-memory-id="${item.id}"><i data-lucide="check" size="14"></i>确认使用</button>` : ''}${item.status !== 'revoked' ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button>` : ''}</div></footer></article>`;
-    }).join("") : '<div class="personal-memory-empty empty-state"><span class="review-empty-icon"><i data-lucide="brain" size="20"></i></span><strong>还没有个人经验</strong><span>确认一条交易复盘后，系统会在这里生成可管理的个人记忆。</span></div>'}</div>
-  </section>`;
-  initIcons();
+const memoryCategoryLabels = {
+  general:"通用原则", market_regime:"行情状态", entry_setup:"入场条件", chan_structure:"缠论结构", risk_execution:"风控执行",
+};
+
+const memoryContextFieldLabels = {
+  symbols:"品种", timeframes:"周期", directions:"方向", trend_direction:"方向", entry_methods:"入场方式",
+  market_regimes:"行情", volatility_buckets:"波动", chan_reliabilities:"缠论可信度", chan_trend_states:"缠论趋势",
+  chan_segment_directions:"线段方向", chan_divergences:"背驰", chan_center_states:"中枢",
+};
+
+function memoryContextValues(value) {
+  return [...new Set((Array.isArray(value) ? value : value == null || value === "" ? [] : [value]).map(item => String(item).trim()).filter(Boolean))];
+}
+
+function memoryContextValueLabel(field, value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const labels = {
+    buy:"做多", long:"做多", bullish:"偏多", up:"向上", sell:"做空", short:"做空", bearish:"偏空", down:"向下", hold:"观望",
+    market:"市价", limit:"限价", stop:"止损挂单", stop_limit:"止损限价",
+    trend:"趋势", trending:"趋势", range:"震荡", ranging:"震荡", sideways:"横盘", breakout:"突破", reversal:"反转", mixed:"混合行情",
+    low:"低", medium:"中", normal:"正常", high:"高", reliable:"可靠", unreliable:"不可靠", none:"无", confirmed:"已确认", forming:"形成中",
+  };
+  if (field === "symbols" || field === "timeframes") return String(value).toUpperCase();
+  return labels[normalized] || userVisibleText(value, "未说明");
+}
+
+function memoryApplicabilityView(item = {}) {
+  const stored = parseJsonField(item.applicability_json, null);
+  const fallback = parseJsonField(item.conditions_json, parseJsonField(item.context_json, {})) || {};
+  const source = stored && typeof stored === "object" ? stored : fallback;
+  const applicable = source.applicable_when && typeof source.applicable_when === "object" ? source.applicable_when : source;
+  const avoid = parseJsonField(item.avoid_when_json, null) || (source.avoid_when && typeof source.avoid_when === "object" ? source.avoid_when : {});
+  const aliases = {
+    symbols:["symbols","symbol"], timeframes:["timeframes","timeframe"], directions:["directions","direction","trend_direction"],
+    entry_methods:["entry_methods","entry_method","allowed_entry_methods"], market_regimes:["market_regimes","market_regime"],
+    volatility_buckets:["volatility_buckets","volatility_bucket"], chan_reliabilities:["chan_reliabilities","chan_reliability"],
+    chan_trend_states:["chan_trend_states","chan_trend_state"], chan_segment_directions:["chan_segment_directions","chan_segment_direction"],
+    chan_divergences:["chan_divergences","chan_divergence"], chan_center_states:["chan_center_states","chan_center_state"],
+  };
+  const entries = (record) => Object.entries(aliases).flatMap(([field, keys]) => {
+    const value = keys.map(key => record?.[key]).find(candidate => candidate != null);
+    const values = memoryContextValues(value);
+    return values.length ? [{ field, label:memoryContextFieldLabels[field], values:values.map(itemValue => memoryContextValueLabel(field, itemValue)) }] : [];
+  });
+  return { universal:Boolean(applicable?.universal), applicable:entries(applicable), avoid:entries(avoid) };
+}
+
+function memoryContextHtml(item = {}) {
+  const category = memoryCategoryLabels[String(item.memory_category || "general").toLowerCase()] || "通用原则";
+  const context = memoryApplicabilityView(item);
+  const applicable = context.universal && !context.applicable.length
+    ? '<span class="memory-context-chip universal">适用于该策略的通用原则</span>'
+    : context.applicable.map(entry => `<span class="memory-context-chip"><strong>${escapeHtml(entry.label)}</strong>${escapeHtml(entry.values.join('、'))}</span>`).join("");
+  const avoid = context.avoid.map(entry => `<span class="memory-context-chip avoid"><strong>避开${escapeHtml(entry.label)}</strong>${escapeHtml(entry.values.join('、'))}</span>`).join("");
+  return `<div class="memory-context"><div class="memory-context-heading"><span class="memory-category-chip">${escapeHtml(category)}</span><span>${context.universal ? '通用规则' : '按当前分析环境精确匹配'}</span></div><div class="memory-context-chips">${applicable || '<span class="memory-context-chip pending">适用条件待补充</span>'}${avoid}</div></div>`;
+}
+
+function memoryTierTabsHtml({ includeSummary = false, shortCount = 0, summaryCount = 0, longCount = 0 } = {}) {
+  const tab = (value, label, count) => `<button type="button" role="tab" aria-selected="${state.memoryTierFilter === value}" class="${state.memoryTierFilter === value ? 'active' : ''}" data-memory-tier="${value}">${label}${count == null ? '' : ` ${Number(count)}`}</button>`;
+  return `<div class="memory-tier-tabs" role="tablist" aria-label="记忆层级筛选">${tab('all', '全部', null)}${tab('short', '短期记忆', shortCount)}${includeSummary ? tab('summary', '月度摘要', summaryCount) : ''}${tab('long', '长期记忆', longCount)}</div>`;
 }
 
 function renderMemoryItems(items, settings, summaries = []) {
@@ -2988,38 +3045,47 @@ function renderMemoryItems(items, settings, summaries = []) {
   const longItems = items.filter(item => item.memory_tier === "long");
   const activeShort = shortItems.filter(item => item.status === "active").length;
   const activeLong = longItems.filter(item => item.status === "active").length;
+  const activeSummaries = summaries.filter(item => item.status === "active").length;
   const longCandidates = longItems.filter(item => item.status === "candidate").length;
-  setText("memoryActiveStat", activeShort + activeLong);
+  setText("memoryActiveStat", activeShort + activeLong + activeSummaries);
   const host = $("memoryItemsList"); if (!host) return;
-  const statusLabels = { active:"正在使用", candidate:"待确认长期使用", duplicate_candidate:"待确认重复经验", revoked:"已撤销", stale:"待更新", expired:"已到期", revalidation:"待重新验证" };
-  const visibleItems = state.memoryTierFilter === "all" ? items : items.filter(item => item.memory_tier === state.memoryTierFilter);
-  const cards = visibleItems.map(item => {
+  const statusLabels = { active:"正在使用", candidate:"待确认长期使用", duplicate_candidate:"待确认重复经验", revoked:"已撤销", stale:"待更新", expired:"已到期", revalidation:"待重新验证", archival:"已归档" };
+  const visibleItems = (state.memoryTierFilter === "all" ? items : items.filter(item => item.memory_tier === state.memoryTierFilter));
+  const archivedItems = visibleItems.filter(item => ["revoked","expired","archival"].includes(item.status));
+  const currentItems = visibleItems.filter(item => !["revoked","expired","archival"].includes(item.status));
+  const cards = currentItems.map(item => {
     const isLong = item.memory_tier === "long";
-    const statusClass = item.status === "active" ? "success" : item.status === "revoked" || item.status === "expired" ? "danger" : "warning";
-    const icon = isLong ? "book-marked" : item.status === "active" ? "zap" : item.status === "revoked" ? "archive-x" : "circle-help";
-    const content = isLong ? item.summary_text : item.lesson_text;
-    const scope = `策略 #${Number(item.strategy_id || 0)} · v${Number(item.strategy_version || 1)} · ${item.symbol || "通用品种"} · ${item.timeframe || "全周期"}`;
+    const statusClass = item.status === "active" ? "success" : "warning";
+    const icon = isLong ? "book-marked" : item.status === "active" ? "zap" : "circle-help";
+    const content = isLong ? (item.summary_text || item.lesson_text) : item.lesson_text;
+    const scope = `策略 #${Number(item.strategy_id || 0)} · ${item.symbol || "通用品种"} · ${item.timeframe || "全周期"}`;
     const lifecycle = isLong
       ? `${Number(item.support_count || 0)} 次复盘支持 · 已匹配 ${Number(item.match_count || 0)} 次`
-      : `${item.expires_at ? `有效至 ${escapeHtml(item.expires_at)}` : "无到期时间"} · 已匹配 ${Number(item.match_count || 0)} 次`;
+      : `${item.expires_at ? `有效至 ${item.expires_at}` : "持续有效"} · 已匹配 ${Number(item.match_count || 0)} 次`;
     const actions = isLong
       ? `${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-memory-action="confirm-long" data-memory-id="${item.id}"><i data-lucide="check" size="14"></i>确认长期使用</button>` : ""}${!['revoked'].includes(item.status) ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke-long" data-memory-id="${item.id}">撤销</button>` : ""}`
       : `${item.status === "duplicate_candidate" ? `<button class="btn btn-primary btn-sm" data-memory-action="activate" data-memory-id="${item.id}">确认使用</button>` : ""}${!['revoked','expired'].includes(item.status) ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}">撤销</button>` : ""}`;
     return `<article class="personal-memory-card memory-tier-${isLong ? 'long' : 'short'} is-${escapeHtml(item.status)}">
-      <header><span class="personal-memory-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${isLong ? "长期记忆" : "短期记忆"} #${Number(item.id)}</strong><span>${escapeHtml(scope)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(statusLabels[item.status] || item.status)}</span></header>
-      <div class="personal-memory-lesson"><span>${isLong ? "稳定经验" : "近期复盘经验"}</span><p>${escapeHtml(content || "暂无内容")}</p>${item.candidate_reason ? `<small>${escapeHtml(item.candidate_reason)}</small>` : ""}</div>
-      <footer><div class="personal-memory-meta"><span><i data-lucide="clock-3" size="13"></i>${lifecycle}</span><span><i data-lucide="braces" size="13"></i>${Number(item.token_count || 0)} tokens</span></div><div class="personal-memory-actions">${actions}</div></footer>
+      <header><span class="personal-memory-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${isLong ? "长期记忆" : "短期记忆"} #${Number(item.id)}</strong><span>${escapeHtml(scope)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(statusLabels[item.status] || '状态待确认')}</span></header>
+      <div class="personal-memory-lesson"><span>${isLong ? "稳定经验" : "近期复盘经验"}</span><p>${escapeHtml(content || "暂无内容")}</p>${item.candidate_reason ? `<small>${escapeHtml(userVisibleText(item.candidate_reason, "等待进一步验证"))}</small>` : ""}</div>
+      ${memoryContextHtml(item)}
+      <footer><div class="personal-memory-meta"><span><i data-lucide="clock-3" size="13"></i>${escapeHtml(lifecycle)}</span><span><i data-lucide="braces" size="13"></i>约 ${Number(item.token_count || 0)} 个上下文词元</span><span><i data-lucide="git-branch" size="13"></i>来源配置 v${Number(item.strategy_version || 1)}</span></div><div class="personal-memory-actions">${actions}</div></footer>
     </article>`;
   }).join("");
-  const summaryCards = (state.memoryTierFilter === "all" || state.memoryTierFilter === "summary") ? summaries.map(item => `<article class="personal-memory-card memory-tier-summary is-${escapeHtml(item.status)}">
-    <header><span class="personal-memory-icon ${item.status === 'active' ? 'success' : 'warning'}"><i data-lucide="file-stack" size="17"></i></span><div><strong>月度记忆摘要 · ${escapeHtml(item.period_key || `版本 ${item.version_no}`)}</strong><span>${escapeHtml(item.scope_key)} · 摘要 #${Number(item.id)}</span></div><span class="status-chip ${item.status === 'active' ? 'success' : 'warning'}">${item.status === 'active' ? '正在使用' : item.status === 'stale' ? '已失效' : escapeHtml(item.status)}</span></header>
-    <div class="personal-memory-lesson"><span>跨日压缩结论</span><p>${escapeHtml(item.summary_text || '暂无内容')}</p></div><footer><div class="personal-memory-meta"><span><i data-lucide="calendar-range" size="13"></i>${escapeHtml(item.period_key || '自动压缩')}</span><span><i data-lucide="braces" size="13"></i>${Number(item.token_count || 0)} tokens</span></div></footer>
-  </article>`).join("") : "";
+  const visibleSummaries = (state.memoryTierFilter === "all" || state.memoryTierFilter === "summary") ? summaries : [];
+  const archivedSummaries = visibleSummaries.filter(item => ["stale","revoked","archival"].includes(item.status));
+  const summaryCards = visibleSummaries.filter(item => !["stale","revoked","archival"].includes(item.status)).map(item => `<article class="personal-memory-card memory-tier-summary is-${escapeHtml(item.status)}">
+    <header><span class="personal-memory-icon ${item.status === 'active' ? 'success' : 'warning'}"><i data-lucide="file-stack" size="17"></i></span><div><strong>月度记忆摘要 · ${escapeHtml(item.period_key || `第 ${item.version_no} 次压缩`)}</strong><span>策略 #${Number(item.strategy_id || 0)} · 摘要 #${Number(item.id)}</span></div><span class="status-chip ${item.status === 'active' ? 'success' : 'warning'}">${item.status === 'active' ? '正在使用' : '状态待确认'}</span></header>
+    <div class="personal-memory-lesson"><span>分类压缩结论</span><p>${escapeHtml(item.summary_text || '暂无内容')}</p></div>${memoryContextHtml(item)}<footer><div class="personal-memory-meta"><span><i data-lucide="calendar-range" size="13"></i>${escapeHtml(item.period_key || '自动压缩')}</span><span><i data-lucide="braces" size="13"></i>约 ${Number(item.token_count || 0)} 个上下文词元</span></div></footer>
+  </article>`).join("");
+  const archived = [...archivedItems.map(item => ({ ...item, display_text:item.summary_text || item.lesson_text, display_type:item.memory_tier === 'long' ? '长期记忆' : '短期记忆' })),
+    ...archivedSummaries.map(item => ({ ...item, display_text:item.summary_text, display_type:'月度摘要' }))];
+  const archiveHtml = archived.length ? `<details class="personal-memory-archive"><summary><span><i data-lucide="archive" size="15"></i><strong>已失效与已撤销记录</strong><small>${archived.length} 条，仅用于追溯</small></span><i data-lucide="chevron-down" size="15"></i></summary><div>${archived.map(item => `<article class="personal-memory-archive-row"><div><strong>${escapeHtml(item.display_type)} #${Number(item.id)}</strong><span>${escapeHtml(statusLabels[item.status] || '已归档')}</span><p>${escapeHtml(item.display_text || '暂无内容')}</p></div></article>`).join('')}</div></details>` : '';
   host.innerHTML = `<section class="personal-memory-section ${memoryEnabled ? "" : "is-disabled"}">
-    <header class="personal-memory-header"><div class="personal-memory-title"><span class="personal-memory-main-icon"><i data-lucide="brain-circuit" size="19"></i></span><div><span class="review-section-kicker">分层经验</span><h3>我的策略记忆</h3><p>短期记忆保留近期复盘，反复验证后由你确认升级为长期记忆；策略版本变化时不会跨版本注入。</p></div></div><div class="personal-memory-stats"><span><strong>${activeLong}</strong> 长期有效</span><span><strong>${activeShort}</strong> 短期有效</span><span><strong>${longCandidates}</strong> 待确认</span></div></header>
-    <div class="personal-memory-state ${memoryEnabled ? "is-on" : "is-off"}"><i data-lucide="${memoryEnabled ? 'shield-check' : 'shield-off'}" size="15"></i><span><strong>个人记忆${memoryEnabled ? '已启用' : '已关闭'}</strong> · 检索时优先长期经验，再补充与当前策略版本一致的近期经验。</span></div>
-    <div class="memory-tier-tabs" role="tablist" aria-label="记忆层级筛选"><button class="${state.memoryTierFilter === 'all' ? 'active' : ''}" data-memory-tier="all">全部</button><button class="${state.memoryTierFilter === 'short' ? 'active' : ''}" data-memory-tier="short">短期记忆</button><button class="${state.memoryTierFilter === 'summary' ? 'active' : ''}" data-memory-tier="summary">月度摘要</button><button class="${state.memoryTierFilter === 'long' ? 'active' : ''}" data-memory-tier="long">长期记忆</button></div>
-    <div class="personal-memory-grid">${summaryCards}${cards}${!summaryCards && !cards ? '<div class="personal-memory-empty empty-state"><span class="review-empty-icon"><i data-lucide="brain" size="20"></i></span><strong>当前层级还没有记忆</strong><span>日复盘确认后形成短期记忆，月复盘确认后形成月度摘要与长期候选。</span></div>' : ''}</div>
+    <header class="personal-memory-header"><div class="personal-memory-title"><span class="personal-memory-main-icon"><i data-lucide="brain-circuit" size="19"></i></span><div><span class="review-section-kicker">分层经验</span><h3>我的策略记忆</h3><p>短期、长期和月度摘要都绑定策略，并按当前品种、周期、方向、行情与缠论结构精确匹配。</p></div></div><div class="personal-memory-stats"><span><strong>${activeLong}</strong> 长期有效</span><span><strong>${activeShort}</strong> 短期有效</span><span><strong>${activeSummaries}</strong> 摘要有效</span><span><strong>${longCandidates}</strong> 待确认</span></div></header>
+    <div class="personal-memory-state ${memoryEnabled ? "is-on" : "is-off"}"><i data-lucide="${memoryEnabled ? 'shield-check' : 'shield-off'}" size="15"></i><span><strong>个人记忆${memoryEnabled ? '已启用' : '已关闭'}</strong> · 系统按当前分析环境精确匹配，不会因为策略正常升级而自动失效。</span></div>
+    ${memoryTierTabsHtml({ includeSummary:true, shortCount:shortItems.filter(item => !['revoked','expired','archival'].includes(item.status)).length, summaryCount:summaries.filter(item => !['stale','revoked','archival'].includes(item.status)).length, longCount:longItems.filter(item => !['revoked','expired','archival'].includes(item.status)).length })}
+    <div class="personal-memory-grid">${summaryCards}${cards}${!summaryCards && !cards ? '<div class="personal-memory-empty empty-state"><span class="review-empty-icon"><i data-lucide="brain" size="20"></i></span><strong>当前层级还没有可用记忆</strong><span>日复盘确认后形成短期记忆，月复盘确认后形成分类摘要与长期候选。</span></div>' : ''}</div>${archiveHtml}
   </section>`;
   initIcons();
 }
@@ -3031,7 +3097,7 @@ function renderPlatformExperienceEvaluation(evaluation = {}) {
   const percent = value => `${Math.round(Math.max(0, Math.min(1, Number(value || 0))) * 100)}%`;
   const modeLabels = { shadow:"影子评估", active:"正式使用", off:"已关闭" };
   const diffLabels = { signal_type:"信号方向", entry_method:"入场方式", confidence:"置信度", recommended_volume:"建议手数", stop_loss_price:"止损", take_profit_1_price:"止盈", limit_price:"挂单价格" };
-  const retrievalReasonLabels = { market_regime_match:"市场状态", trend_direction_match:"趋势方向", volatility_bucket_match:"波动状态", chan_trend_state_match:"缠论趋势", chan_segment_direction_match:"线段方向", chan_divergence_match:"背驰状态", chan_center_state_match:"中枢状态", entry_method_overlap:"入场方式" };
+  const retrievalReasonLabels = { strategy_match:"策略一致", market_regime_match:"市场状态一致", trend_direction_match:"趋势方向一致", volatility_bucket_match:"波动状态一致", chan_reliability_match:"缠论可信度一致", chan_trend_state_match:"缠论趋势一致", chan_segment_direction_match:"线段方向一致", chan_divergence_match:"背驰状态一致", chan_center_state_match:"中枢状态一致", entry_method_overlap:"入场方式适用" };
   const recentRows = recent.slice(0, 10).map(row => {
     const selected = row.selected_items || [];
     const details = Array.isArray(row.selection_details) ? row.selection_details : [];
@@ -3060,7 +3126,7 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
       <header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="route" size="18"></i></span><div><span class="review-section-kicker">策略控制</span><h3>记忆运行模式</h3><p>每条平台记忆只允许被其绑定的策略检索和使用。</p></div></div><div class="platform-section-stats"><span><strong>${activePolicies}</strong> 正式启用</span><span><strong>${shadowPolicies}</strong> 影子评估</span><span><strong>${policies.length}</strong> 个策略</span></div></header>
       <div class="platform-mode-notice"><i data-lucide="info" size="15"></i><span><strong>影子评估</strong>只验证记忆匹配效果，不注入正式推理；选择<strong>正式启用</strong>后才会参与对应的平台策略。</span></div>
       <div class="platform-policy-grid">${policies.length ? policies.map(policy => `<article class="platform-experience-policy" data-platform-policy-strategy="${Number(policy.strategy_id)}">
-        <div class="platform-policy-head"><span class="platform-policy-icon"><i data-lucide="brain-circuit" size="17"></i></span><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>策略记忆配置 · 版本 ${Number(policy.policy_version || 1)}</small></div><span class="status-chip ${modeClasses[policy.mode] || 'neutral'}">${escapeHtml(modeLabels[policy.mode] || policy.mode)}</span></div>
+        <div class="platform-policy-head"><span class="platform-policy-icon"><i data-lucide="brain-circuit" size="17"></i></span><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>策略记忆配置 · 第 ${Number(policy.policy_version || 1)} 次修订</small></div><span class="status-chip ${modeClasses[policy.mode] || 'neutral'}">${escapeHtml(modeLabels[policy.mode] || '状态待确认')}</span></div>
         <div class="platform-policy-controls"><label><span>记忆模式</span><select aria-label="${escapeHtml(policy.strategy_title)}的平台记忆模式" data-platform-policy-mode><option value="off" ${policy.mode === 'off' ? 'selected' : ''}>关闭</option><option value="shadow" ${policy.mode === 'shadow' ? 'selected' : ''}>影子评估</option><option value="active" ${policy.mode === 'active' ? 'selected' : ''}>正式启用</option></select></label><button class="btn btn-secondary btn-sm" data-platform-policy-save><i data-lucide="save" size="14"></i>保存模式</button></div>
       </article>`).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="route-off" size="20"></i></span><strong>暂无平台策略</strong><span>创建平台策略后，可以在这里配置策略记忆。</span></div>'}</div>
     </section>`;
@@ -3080,11 +3146,11 @@ function renderPlatformExperience(items, policies, evaluation = {}) {
     const icon = item.status === "active" ? "badge-check" : "sparkles";
     const sourceVersion = item.period_review_version_id || item.review_version_id || "--";
     const tierLabel = item.memory_tier === "long" ? "长期记忆" : "短期记忆";
-    return `<article class="platform-experience-card memory-tier-${item.memory_tier === "long" ? "long" : "short"} is-${escapeHtml(item.status)}"><header><span class="platform-experience-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>${tierLabel} #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(labels[item.status] || item.status)}</span></header><p class="platform-experience-lesson">${escapeHtml(item.lesson_text)}</p><footer><div class="platform-experience-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘版本 #${escapeHtml(sourceVersion)}</span>${item.platform_version ? `<span><i data-lucide="git-branch" size="13"></i>平台版本 ${Number(item.platform_version)}</span>` : '<span><i data-lucide="circle-dashed" size="13"></i>尚未生成平台版本</span>'}</div><div class="platform-experience-actions">${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}"><i data-lucide="send" size="14"></i>发布记忆</button>` : ""}<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button></div></footer></article>`;
+    return `<article class="platform-experience-card memory-tier-${item.memory_tier === "long" ? "long" : "short"} is-${escapeHtml(item.status)}"><header><span class="platform-experience-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>${tierLabel} #${Number(item.id)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(labels[item.status] || '状态待确认')}</span></header><p class="platform-experience-lesson">${escapeHtml(item.lesson_text)}</p>${memoryContextHtml(item)}<footer><div class="platform-experience-meta"><span><i data-lucide="clipboard-check" size="13"></i>来源复盘修订 #${escapeHtml(sourceVersion)}</span>${item.platform_version ? `<span><i data-lucide="git-branch" size="13"></i>发布批次 ${Number(item.platform_version)}</span>` : '<span><i data-lucide="circle-dashed" size="13"></i>尚未发布</span>'}</div><div class="platform-experience-actions">${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${item.id}"><i data-lucide="send" size="14"></i>发布记忆</button>` : ""}<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${item.id}"><i data-lucide="archive" size="14"></i>撤销</button></div></footer></article>`;
   };
   const archiveHtml = revokedItems.length ? `<details class="platform-experience-archive"><summary><span><i data-lucide="archive" size="15"></i><strong>已撤销归档</strong><small>${revokedItems.length} 条记录，仅用于追溯</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="platform-experience-archive-list">${revokedItems.map(item => `<article class="platform-experience-archive-row"><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} · 经验 #${Number(item.id)}</strong><span>${escapeHtml(item.revoked_at || item.updated_at || "--")}</span><p>${escapeHtml(item.lesson_text)}</p></div><button class="btn btn-secondary btn-sm" data-platform-experience-action="delete" data-platform-experience-id="${item.id}"><i data-lucide="trash-2" size="14"></i>删除记录</button></article>`).join("")}</div></details>` : "";
   host.innerHTML = `<section class="platform-library-section"><header class="platform-section-header"><div class="platform-section-title"><span class="platform-section-icon"><i data-lucide="library-big" size="18"></i></span><div><span class="review-section-kicker">记忆内容</span><h3>平台记忆库</h3><p>日复盘形成短期记忆，月复盘形成长期记忆；发布后仅供绑定策略读取。</p></div></div><div class="platform-section-stats"><span><strong>${candidateCount}</strong> 待发布</span><span><strong>${activeCount}</strong> 已发布</span></div></header>
-    <div class="memory-tier-tabs" role="tablist" aria-label="平台记忆层级筛选"><button class="${state.memoryTierFilter === 'all' ? 'active' : ''}" data-memory-tier="all">全部</button><button class="${state.memoryTierFilter === 'short' ? 'active' : ''}" data-memory-tier="short">短期记忆 ${shortCount}</button><button class="${state.memoryTierFilter === 'long' ? 'active' : ''}" data-memory-tier="long">长期记忆 ${longCount}</button></div>
+    ${memoryTierTabsHtml({ shortCount, longCount })}
     <div class="platform-experience-list">${currentItems.length ? currentItems.map(renderCurrentItem).join("") : '<div class="platform-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="library" size="20"></i></span><strong>当前层级暂无平台记忆</strong><span>确认平台策略复盘后，记忆会先进入待发布区；撤销记录保留在归档中。</span></div>'}</div>${archiveHtml}</section>`;
   initIcons();
 }
@@ -4446,6 +4512,13 @@ function canViewSignalExperienceUsage(signal, usage = {}) {
   return false;
 }
 
+function experienceRefLabel(value) {
+  const match = String(value || "").match(/^(platform|short|long|summary|item):(\d+)$/);
+  if (!match) return "记忆条目";
+  const labels = { platform:"平台记忆", short:"短期记忆", long:"长期记忆", summary:"月度摘要", item:"记忆" };
+  return `${labels[match[1]] || '记忆'} #${Number(match[2])}`;
+}
+
 function renderExperienceUsage(signal, usage = {}) {
   if (!canViewSignalExperienceUsage(signal, usage)) return "";
   const consideredRefs = Array.isArray(usage.considered_refs) ? usage.considered_refs : [];
@@ -4456,9 +4529,11 @@ function renderExperienceUsage(signal, usage = {}) {
   const used = consideredRefs.length ? usedRefs : (Array.isArray(usage.used_ids) ? usage.used_ids : []);
   const rejected = consideredRefs.length ? rejectedRefs : (Array.isArray(usage.rejected_ids) ? usage.rejected_ids : []);
   const source = usage.source === "platform" ? "平台记忆" : "个人记忆";
+  const adopted = (consideredRefs.length ? usedRefs : used.map(id => `item:${Number(id)}`)).map(experienceRefLabel);
   return `<section class="analysis-experience-usage">
     <div class="analysis-section-title"><i data-lucide="brain-circuit" size="15"></i><strong>经验采用情况</strong><span>${escapeHtml(source)}</span></div>
     <div class="experience-usage-stats"><span>系统候选 <strong>${considered.length}</strong></span><span class="used">模型采用 <strong>${used.length}</strong></span><span>未采用 <strong>${rejected.length}</strong></span></div>
+    ${adopted.length ? `<div class="experience-used-list"><span>本次采用</span>${adopted.map(label => `<strong>${escapeHtml(label)}</strong>`).join('')}</div>` : ''}
     <p>${escapeHtml(userVisibleText(usage.influence, used.length ? "本次采用了与当前行情匹配的记忆。" : "模型评估后未采用候选记忆。"))}</p>
   </section>`;
 }
@@ -7654,7 +7729,7 @@ function bindEvents() {
 
     if (memoryTier) {
       state.memoryTierFilter = memoryTier.dataset.memoryTier || "all";
-      await loadReviewMemory();
+      renderCachedMemoryWorkspace();
       return;
     }
 
