@@ -65,6 +65,13 @@
   --font-ui: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "Roboto Mono", Consolas, monospace;
 
+  /* Product type scale: caption / body / section / page. */
+  --type-caption: 0.857rem;
+  --type-body: 1rem;
+  --type-section: 1.214rem;
+  --type-page: 1.714rem;
+  --type-kpi: 1.286rem;
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -9581,6 +9588,88 @@ body[data-ai-access-reason="plus_plan"] [data-tab-jump="ai-config"] {
   .icon-btn {
     min-width: 44px;
   }
+}
+
+/* Core workspace typography: important guidance never falls below the caption tier. */
+.brand-copy small {
+  font-size: var(--type-caption);
+}
+
+.topbar-time span:last-child {
+  color: var(--gold-light);
+  font-size: var(--type-caption);
+  transform: none;
+}
+
+:is(#model-strategy, #ai-analyze, #risk-center, #review-memory, #global-risk, #model-compare) .calm-page-header h1 {
+  font-size: var(--type-page);
+  line-height: 1.25;
+}
+
+:is(#model-strategy, #ai-analyze, #risk-center, #review-memory, #global-risk, #model-compare) .calm-page-header p {
+  font-size: var(--type-body);
+}
+
+:is(#model-strategy, #ai-analyze, #risk-center, #review-memory, #global-risk, #model-compare) :is(.page-eyebrow, .eyebrow, .section-kicker, .review-section-kicker) {
+  font-family: var(--font-ui);
+  font-size: var(--type-caption);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+#ai-analyze .card-title {
+  font-size: var(--type-body);
+  font-weight: 700;
+}
+
+#ai-analyze :is(.signal-safety-stage span, .signal-safety-stage p, .signal-price-item span, .execution-targets > div > span, .take-profit-heading small, .take-profit-chip b, .analysis-experience-usage .analysis-section-title > span, .experience-usage-stats > span, .experience-used-list > span, .experience-used-list > strong) {
+  font-family: var(--font-ui);
+  font-size: var(--type-caption);
+  line-height: 1.5;
+}
+
+#ai-analyze :is(.execution-targets strong, .take-profit-chip strong) {
+  font-size: var(--type-body);
+}
+
+#risk-center :is(.risk-rule-name small, .risk-inherited, .risk-boundary, .risk-system-note strong, .risk-system-note small),
+#global-risk :is(.global-risk-row label, .global-risk-name small, .global-risk-fields label > span:first-child strong, .global-risk-fields label > span:first-child small) {
+  font-size: var(--type-caption);
+  line-height: 1.5;
+}
+
+#review-memory :is(.review-queue-hint, .review-queue .review-status-tabs button, .review-case-head .status-chip, .review-case-strategy, .review-case-metrics small, .review-case-metrics strong, .review-detail-header p, .review-outcome-strip small, .review-form-heading > small, .review-field > span, .review-confidence-field small, .review-action-context strong, .review-action-context small) {
+  font-size: var(--type-caption);
+  line-height: 1.5;
+}
+
+#review-memory .review-case-metrics strong {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+#review-memory :is(.platform-section-title p, .platform-policy-head > div small, .platform-policy-controls label > span, .evaluation-window, .experience-evaluation-metrics small, .experience-list-heading strong, .experience-list-heading span, .experience-strategy-row, .experience-strategy-row > div span, .experience-evaluation-details > summary small, .experience-evaluation-row > div > span, .experience-evaluation-row time, .platform-experience-card > header > div span, .platform-experience-meta, .platform-experience-archive > summary small, .platform-experience-archive-row strong, .platform-experience-archive-row span, .platform-experience-archive-row p, .personal-memory-title p, .personal-memory-lesson small, .personal-memory-card > header > div span, .personal-memory-lesson > span, .memory-context-heading, .memory-context-chip, .personal-memory-meta, .personal-memory-archive > summary small, .personal-memory-archive-row strong, .personal-memory-archive-row span, .personal-memory-archive-row p) {
+  font-size: var(--type-caption);
+  line-height: 1.5;
+}
+
+#model-compare :is(.compare-card-provider, .compare-method-badge small, .compare-field > small, .compare-mode-options strong, .compare-mode-options small, .compare-mode-field > p, .compare-snapshot-summary span, .compare-snapshot-main small, .compare-snapshot-meta, .compare-snapshot-version, .compare-simulation-settings summary small, .compare-simulation-settings > p, .compare-range-presets button, .compare-config-card .cmp-status-text, .compare-model-copy small, .compare-model-state, .compare-sample-warning small, .compare-progress-head span, .compare-stage-list span, .compare-result-scope, .compare-summary-grid span, .compare-summary-grid small, .compare-method-note, .compare-equity-legend-item strong) {
+  font-size: var(--type-caption);
+  line-height: 1.5;
+}
+
+#model-compare :is(.compare-model-copy strong, .compare-field select, .compare-field input, .compare-readonly-value) {
+  font-size: var(--type-body);
+}
+
+#model-compare .compare-result-header h2 {
+  font-size: var(--type-section);
+}
+
+#model-compare .compare-method-note p {
+  max-width: 72ch;
+  font-size: var(--type-body);
+  line-height: 1.65;
 }
 
 @media (prefers-reduced-motion: reduce) {

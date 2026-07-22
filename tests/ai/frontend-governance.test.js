@@ -601,6 +601,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('min-height: 44px')
     expect(css).toContain('env(safe-area-inset-top)')
   })
+
+  it('uses a readable product type scale across the core AI workspaces', () => {
+    for (const token of ['--type-caption', '--type-body', '--type-section', '--type-page']) {
+      expect(css).toContain(token)
+    }
+    expect(css).toContain('.topbar-time span:last-child')
+    expect(css).toContain('#review-memory .review-case-metrics strong')
+    expect(css).toContain('#model-compare .compare-method-note p')
+    expect(css).toContain('max-width: 72ch')
+  })
 })
 
 describe('take-profit execution clarity', () => {
