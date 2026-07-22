@@ -6779,13 +6779,15 @@ a.signal-link:hover {
 .observer-channel-control {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 0 10px;
+  gap: 10px;
+  min-width: 176px;
+  max-width: 224px;
+  min-height: 40px;
+  padding: 0 12px;
   border: 1px solid var(--border-default);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   color: var(--text-muted);
-  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  background: var(--bg-input-soft);
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
@@ -6799,8 +6801,8 @@ a.signal-link:hover {
 }
 
 .observer-channel-control:hover {
-  border-color: color-mix(in srgb, var(--gold-primary) 48%, var(--border-default));
-  background: var(--bg-card-hover);
+  border-color: var(--border-gold);
+  background: var(--bg-input);
 }
 
 .observer-channel-control:focus-within {
@@ -6808,16 +6810,12 @@ a.signal-link:hover {
   box-shadow: 0 0 0 2px var(--gold-glow);
 }
 
-.observer-channel-label {
-  color: var(--text-muted);
-}
-
 .observer-channel-picker {
   position: relative;
   display: inline-flex;
+  flex: 1;
   align-items: center;
-  min-width: 112px;
-  max-width: 190px;
+  min-width: 0;
 }
 
 .observer-channel-picker > svg {
@@ -6830,20 +6828,24 @@ a.signal-link:hover {
 .observer-channel-control select {
   width: 100%;
   min-width: 0;
-  min-height: 36px;
+  min-height: 38px;
   padding: 0 22px 0 0;
   border: 0;
+  border-radius: 0;
   outline: 0;
   color: var(--text-primary);
-  background: transparent;
+  background: transparent !important;
   font: inherit;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
 }
 
+.observer-channel-control select:focus,
 .observer-channel-control select:focus-visible {
+  border: 0;
   box-shadow: none;
 }
 
