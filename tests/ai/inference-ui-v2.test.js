@@ -28,9 +28,9 @@ describe('inference workspace V2 contract', () => {
     expect(app).not.toContain('_analysisCancelled')
   })
 
-  it('renders execution advice and separates AI and risk volume', () => {
+  it('renders execution advice and separates the AI risk tier from final volume', () => {
     expect(app).toContain('执行建议')
-    expect(app).toContain('AI 建议手数')
+    expect(app).toContain('AI 仓位档位')
     expect(app).toContain('风控最终手数')
     expect(app).not.toContain('当前持仓数 <em class="market-unit">笔</em>')
     expect(html).toContain('<span class="card-title">执行建议</span>')

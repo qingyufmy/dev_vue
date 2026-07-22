@@ -3166,6 +3166,23 @@ const migrations = [
         KEY idx_observer_assignment_user (user_id, channel_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '119_position_sizing_and_reference_strategy',
+    async up() {
+      const addColumn = async (table, column, definition) => {
+        const existing = await queryAll(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, column])
+        if (!existing.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`)
+      }
+      await addColumn('ai_signals', 'position_size_tier', 'position_size_tier VARCHAR(16) DEFAULT NULL AFTER recommended_volume')
+      await addColumn('ai_signals', 'position_size_factor', 'position_size_factor DOUBLE DEFAULT NULL AFTER position_size_tier')
+      await addColumn('ai_signals', 'position_size_reason', 'position_size_reason VARCHAR(255) DEFAULT NULL AFTER position_size_factor')
+      await addColumn('ai_observer_sources', 'strategy_id', 'strategy_id INT DEFAULT NULL AFTER trading_account_id')
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_observer_sources' AND INDEX_NAME = 'idx_observer_source_strategy'`)
+      if (!indexes.length) await queryRun('CREATE INDEX idx_observer_source_strategy ON ai_observer_sources(strategy_id, status)')
+    }
   }
 ]
 

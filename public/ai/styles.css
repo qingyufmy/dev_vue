@@ -6975,6 +6975,9 @@ a.signal-link:hover {
 .observer-admin-item strong { display:flex; align-items:center; gap:7px; color:var(--text-primary); font-size:13px; }
 .observer-admin-item strong em { padding:2px 6px; border-radius:999px; background:color-mix(in srgb,var(--gold-primary) 14%,transparent); color:var(--gold-primary); font-size:10px; font-style:normal; }
 .observer-admin-item p { overflow:hidden; margin:4px 0 0; color:var(--text-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.observer-source-strategy-editor { display:flex; align-items:center; gap:7px; margin-top:7px; }
+.observer-source-strategy-editor .form-select { width:min(100%,240px); min-height:34px; padding-block:5px; font-size:11px; }
+.observer-source-strategy-editor .btn { min-height:34px; white-space:nowrap; }
 .observer-source-dot { width:10px; height:10px; border-radius:50%; background:var(--text-muted); box-shadow:0 0 0 5px color-mix(in srgb,var(--text-muted) 10%,transparent); }
 .observer-source-dot.online { background:var(--status-connected); box-shadow:0 0 0 5px color-mix(in srgb,var(--status-connected) 12%,transparent); }
 .observer-channel-icon { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; background:color-mix(in srgb,var(--gold-primary) 11%,transparent); color:var(--gold-primary); }

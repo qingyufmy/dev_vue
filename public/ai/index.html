@@ -29,8 +29,8 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260722zp" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260722zp" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260722zq" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260722zq" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -366,8 +366,8 @@
                     <p id="sigActionHint">等待策略生成新的分析结果</p>
                   </div>
                   <div class="signal-compact-metric">
-                    <span>建议手数</span>
-                    <strong id="sigVolume" class="num">--</strong>
+                    <span>AI 仓位档位</span>
+                    <strong id="sigVolume">--</strong>
                   </div>
                   <div class="signal-compact-metric">
                     <span>剩余有效期</span>
@@ -587,7 +587,7 @@
                   <select id="signalFilterTimeframe" class="filter-select" aria-label="筛选分析周期"><option value="">全部周期</option><option value="M1">M1</option><option value="M5">M5</option><option value="M15">M15</option><option value="M30">M30</option><option value="H1">H1</option><option value="H4">H4</option><option value="D1">D1</option></select>
                   <span id="signalCount" class="record-count">--</span>
                 </div>
-                <div class="table-wrap"><table class="data-table"><thead><tr><th>ID</th><th>时间(MT5)</th><th>品种</th><th>周期</th><th>判断</th><th>置信度</th><th>建议手数</th><th>状态</th><th>止损</th><th>TP1</th><th>TP2 / TP3</th></tr></thead><tbody id="signalsBody"></tbody></table></div>
+                <div class="table-wrap"><table class="data-table"><thead><tr><th>ID</th><th>时间(MT5)</th><th>品种</th><th>周期</th><th>判断</th><th>置信度</th><th>AI 仓位档位</th><th>状态</th><th>止损</th><th>TP1</th><th>TP2 / TP3</th></tr></thead><tbody id="signalsBody"></tbody></table></div>
                 <div id="signalPager" class="pager"></div>
               </div>
             </section>
@@ -1179,7 +1179,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260722zp"></script>
+    <script src="/ai/app.js?v=20260722zq"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

@@ -24,7 +24,7 @@ describe('shared market inference boundary', () => {
     expect(first).not.toHaveProperty('positions')
     expect(first).not.toHaveProperty('pending_orders')
     expect(first).not.toHaveProperty('chan')
-    expect(first.ai_volume_range).toEqual({ min:0.01, max:0.05, step:0.01 })
+    expect(first).not.toHaveProperty('ai_volume_range')
     expect(first.strategy_context.timeframes.M5.summary).toEqual({ rsi_14: 50, chan: { divergence: { type: 'top' } } })
   })
 

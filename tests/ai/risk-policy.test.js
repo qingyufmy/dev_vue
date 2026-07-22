@@ -52,6 +52,32 @@ describe('L1/L4/L5 core risk gate', () => {
     }))
   })
 
+  it('turns a fixed AI tier into a deterministic fraction of the user risk budget', () => {
+    const result = run({
+      request:{ volume:1, position_size_tier:'probe', position_size_factor:0.25 },
+      policy:{ max_position_size:1, max_risk_per_trade_pct:1 },
+    })
+    expect(result.decision_status).toBe('adjust')
+    expect(result.approved_order.volume).toBe(0.02)
+    expect(result.rule_results).toContainEqual(expect.objectContaining({
+      code:'R1.10_REAL_RISK',
+      details:expect.objectContaining({ full_risk_cap:100, risk_cap:25, position_size_factor:0.25, position_size_tier:'probe' }),
+    }))
+  })
+
+  it('uses the current user position limit instead of a legacy AI lot placeholder', () => {
+    const result = run({
+      request:{ volume:0.03, position_size_tier:'standard', position_size_factor:0.25 },
+      policy:{ max_position_size:0.5, max_risk_per_trade_pct:1 },
+    })
+    expect(result.decision_status).toBe('adjust')
+    expect(result.approved_order).toMatchObject({ volume:0.09, position_size_tier:'standard', position_size_factor:1 })
+    expect(result.rule_results).toContainEqual(expect.objectContaining({
+      code:'R1.10_REAL_RISK',
+      details:expect.objectContaining({ position_limit_lots:0.5, full_risk_cap:100, risk_cap:100 }),
+    }))
+  })
+
   it('preserves the AI stop loss and reuses the matching MT5 native loss calculation', () => {
     const result = run({ request: { sl: 1995 }, brokerCalculation: {
       symbol: 'XAUUSD.a', order_type: 'buy', volume: 0.03,

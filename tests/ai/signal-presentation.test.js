@@ -21,7 +21,7 @@ describe('signal presentation', () => {
   })
   it('normalizes model fields and limits untrusted arrays', () => {
     const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
-    expect(result.schema_version).toBe(2)
+    expect(result.schema_version).toBe(3)
     expect(result.decision_summary).toBe('顺势做多')
     expect(result.key_reasons).toHaveLength(4)
     expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
@@ -52,6 +52,14 @@ describe('signal presentation', () => {
     expect(advice).toMatchObject({ state: 'pending', executable: false })
   })
 
+  it('presents a successful pending cancellation as cancelled instead of executed', () => {
+    const advice = buildExecutionAdvice({
+      signal_type: 'hold',
+      execution_result: { status: 'success', reason: 'pending_cancelled' },
+    })
+    expect(advice).toMatchObject({ state: 'cancelled', title: '旧挂单已取消', executable: false })
+  })
+
   it('uses persisted rejection as the primary execution state', () => {
     const advice = buildExecutionAdvice({ signal_type: 'buy', execution_result: JSON.stringify({ status: 'rejected', message: '超过风险上限' }) })
     expect(advice).toMatchObject({ state: 'rejected', title: '风控未放行', executable: false })
@@ -68,7 +76,7 @@ describe('signal presentation', () => {
     const advice = buildExecutionAdvice({ signal_type:'buy', execution_result:{ status:'rejected', details:{ rules:[{
       code:'R1.9_AI_VOLUME_OUT_OF_RANGE', outcome:'reject', details:{ volume:0.3, minimum:0.01, maximum:0.05, step:0.01 },
     }] } } })
-    expect(advice.description).toBe('AI 建议手数超出平台允许范围：AI 建议 0.3 手，允许范围 0.01～0.05 手，步进 0.01 手')
+    expect(advice.description).toBe('订单执行上限不符合 MT5 品种手数规则：执行上限 0.3 手，允许范围 0.01～0.05 手，步进 0.01 手')
     expect(advice.description).not.toContain('R1.9')
   })
 
@@ -93,7 +101,7 @@ describe('signal presentation', () => {
 
   it('adapts legacy rows without a decision payload', () => {
     const result = attachSignalPresentation({ id: 1, signal_type: 'sell', entry_method: 'market' })
-    expect(result.decision.schema_version).toBe(2)
+    expect(result.decision.schema_version).toBe(3)
     expect(result.execution_advice.executable).toBe(true)
   })
 })

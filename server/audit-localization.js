@@ -105,6 +105,15 @@ const VALUE_LABELS = {
   pending_supersede_incomplete: '同方向旧挂单尚未完全替换',
   pending_limit_reached: '当前品种的挂单数量已达到限制',
   private_portfolio_context_unavailable: '无法获取私有策略所需的持仓与挂单数据',
+  portfolio_state_unavailable: '无法读取当前账户的持仓与挂单，本次未执行',
+  opposite_position_exists: '当前账户已有反向持仓，本次不新增仓位',
+  existing_position_no_add: '当前账户已有同向持仓，策略未建议加仓',
+  reference_position_not_matched: '账户实际持仓与平台参考组合不一致，本次不跟随加仓',
+  existing_pending_kept: '当前策略的原挂单仍然有效，继续保留',
+  reference_pending_not_matched: '账户中未找到平台策略要管理的对应挂单',
+  existing_pending_no_replace: '当前策略已有同向挂单，未收到替换指令',
+  pending_cancel_failed: '策略挂单取消失败，本次未继续执行',
+  pending_cancelled: '策略旧挂单已取消',
   subscription_inactive: '策略订阅当前未启用',
   outside_schedule: '当前不在自动推理运行时段内',
   system_execution_exception: '系统执行异常，详细信息已记录',
@@ -134,6 +143,7 @@ const VALUE_LABELS = {
   'Invalid price': 'MT5 挂单价格无效',
   'Invalid stops': 'MT5 止损或止盈价格无效',
   'R5_SCHEMA_STOP_LIMIT_PRICE': 'Stop Limit 触发后限价无效',
+  'R5_SCHEMA_AI_POSITION_SIZE_TIER': 'AI 返回的仓位档位无效',
   'R1.7_STOP_LIMIT_RELATION': 'Stop Limit 触发价与触发后限价关系错误',
   'R3.4_MARGIN_DATA_INCOMPLETE': 'MT5 无法计算本次订单所需保证金',
   'R3.4_PROJECTED_MARGIN_LEVEL': '下单后的预计保证金水平低于要求',
@@ -143,8 +153,8 @@ const VALUE_LABELS = {
   'R1.2_STOP_LOSS_REQUIRED': '订单缺少有效止损',
   'R1.5_TAKE_PROFIT_REQUIRED': '订单缺少有效止盈',
   'R1.6_SL_TP_DIRECTION': '止损或止盈价格方向错误',
-  'R1.9_AI_VOLUME_OUT_OF_RANGE': 'AI 建议手数超出平台允许范围',
-  'R1.9_VOLUME_INCREASE_FORBIDDEN': '风控禁止放大 AI 建议手数',
+  'R1.9_AI_VOLUME_OUT_OF_RANGE': '订单执行上限不符合 MT5 品种手数规则',
+  'R1.9_VOLUME_INCREASE_FORBIDDEN': '风控禁止超过账户单笔手数上限',
   'R1.9_VOLUME_INVALID': '订单手数不符合品种交易规则',
   'R1.10_RISK_DATA_INVALID': '账户或品种风险数据无效',
   'R2.2_MIN_OPEN_INTERVAL': '距离上次开仓时间过短',
@@ -206,7 +216,7 @@ export function formatRiskReason(code, details = {}) {
   const rawCode = String(code || '').trim()
   const label = auditValueLabel(rawCode)
   const base = label === rawCode ? '风控条件未满足' : label
-  if (rawCode === 'R1.9_AI_VOLUME_OUT_OF_RANGE') return `${base}：AI 建议 ${displayNumber(details.volume)} 手，允许范围 ${displayNumber(details.minimum)}～${displayNumber(details.maximum)} 手，步进 ${displayNumber(details.step)} 手`
+  if (rawCode === 'R1.9_AI_VOLUME_OUT_OF_RANGE') return `${base}：执行上限 ${displayNumber(details.volume)} 手，允许范围 ${displayNumber(details.minimum)}～${displayNumber(details.maximum)} 手，步进 ${displayNumber(details.step)} 手`
   if (rawCode === 'R1.9_BELOW_MINIMUM_AFTER_RISK') return `${base}：风险计算后为 ${displayNumber(details.volume)} 手，最低可交易 ${displayNumber(details.minimum)} 手`
   if (rawCode === 'R1.7_PENDING_DIRECTION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，当前价 ${displayNumber(details.current_price)}`
   if (rawCode === 'R1.7_STOP_LIMIT_RELATION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，触发后限价 ${displayNumber(details.stop_limit_price)}`

@@ -686,7 +686,7 @@ describe('maybeAiSignal', () => {
     }
     await maybeAiSignal(null, config, market)
     expect(evidence.systemPrompt).toContain('共享市场推理边界')
-    expect(evidence.userPrompt).toContain('"ai_volume_range"')
+    expect(evidence.userPrompt).not.toContain('"ai_volume_range"')
     expect(evidence.userPrompt).not.toContain('account')
     expect(evidence.userPrompt).not.toContain('positions')
     expect(JSON.stringify(evidence)).not.toContain('must-not-leak')
@@ -821,7 +821,8 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
       stop_loss_price: 3975, take_profit_1_price: 4000
     }, config, market)
     expect(result.stop_loss_price).toBe(3975)
-    expect(result.recommended_volume).toBe(0.03)
+    expect(result.recommended_volume).toBe(0.05)
+    expect(result.position_size_tier).toBe('light')
     expect(result.normalization_info?.type).not.toBe('sl_widened')
   })
 
@@ -835,12 +836,12 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
 
   it('模型给出的远止损保留给版本化风控判断', () => {
     const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3940, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.03, stop_loss_price:3940 })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.05, position_size_tier:'light', stop_loss_price:3940 })
   })
 
   it('不会因为模型止损较近而改写手数或降级观望', () => {
     const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3996, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.03, stop_loss_price:3996 })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.05, position_size_tier:'light', stop_loss_price:3996 })
   })
 
   it('小时级ATR不可用时失败关闭', () => {
@@ -905,12 +906,13 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     })
   })
 
-  it('out-of-platform AI volume degrades to hold without clamping', () => {
+  it('ignores a legacy absolute model volume and uses the configured execution ceiling', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
       recommended_volume: 0.06, stop_loss_price: 1990, take_profit_1_price: 2020,
+      recommended_take_profit_tier: 1,
     }, config, market)
-    expect(result).toMatchObject({ signal_type: 'hold', recommended_volume: 0, normalization_info: { reason: 'ai_volume_out_of_platform_range' } })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume:0.05, position_size_tier:'light', position_size_factor:0.5 })
   })
 
   it('uses the configured platform volume range instead of a hard-coded maximum', () => {
@@ -919,16 +921,16 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       recommended_volume: 0.08, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.08 })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.1, position_size_tier:'light', position_size_factor:0.5 })
   })
 
-  it('rejects a volume that is not aligned to the configured platform step', () => {
+  it('does not let a legacy absolute volume control the new risk-tier contract', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
       recommended_volume: 0.07, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
-    expect(result).toMatchObject({ signal_type: 'hold', normalization_info: { reason: 'ai_volume_out_of_platform_range' } })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume:0.1, position_size_tier:'light', position_size_factor:0.5 })
   })
 
   it('requires an explicit AI take-profit recommendation for executable signals', () => {

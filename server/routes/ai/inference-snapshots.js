@@ -52,6 +52,7 @@ export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, v
     'momentum_3_pct', 'momentum_10_pct', 'momentum_20_pct', 'volatility_pct', 'macd', 'rsi_14',
     'bollinger', 'atr_14', 'atr_14_closed', 'atr_anchor', 'atr_anchor_tf', 'support_resistance',
     'kline_patterns', 'volume', 'strategy_score', 'kline_count', 'strategy_context',
+    'strategy_reference_portfolio',
     'primary_timeframe', 'requested_timeframes', 'used_timeframes', 'missing_timeframes',
   ]
   const result = {
@@ -59,9 +60,13 @@ export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, v
     symbol: stripBrokerSuffix(String(standardSymbol || market?.symbol || '')).toUpperCase(),
     timeframe: market?.timeframe,
     market_source: marketSource,
-    ai_volume_range: { min: Number(volumeMin), max: Number(volumeMax), step: Number(volumeStep) },
   }
-  for (const key of technicalFields) if (market?.[key] !== undefined) result[key] = stripAccountPrivateData(clean(market[key]))
+  for (const key of technicalFields) {
+    if (market?.[key] === undefined) continue
+    result[key] = key === 'strategy_reference_portfolio'
+      ? clean(market[key])
+      : stripAccountPrivateData(clean(market[key]))
+  }
   const visualizationKlines = market?.strategy_context?.visualization_klines
   if (visualizationKlines && result.strategy_context) {
     Object.defineProperty(result.strategy_context, 'visualization_klines', { value: visualizationKlines, enumerable: false })

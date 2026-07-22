@@ -1,6 +1,6 @@
 import { auditValueLabel, formatRiskReason } from '../../audit-localization.js'
 
-const SIGNAL_SCHEMA_VERSION = 2
+const SIGNAL_SCHEMA_VERSION = 3
 
 function cleanText(value, maxLength = 240) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
@@ -115,6 +115,12 @@ export function normalizeDecisionFields(signal = {}) {
     invalidation_condition: cleanText(signal.invalidation_condition, 240),
     key_reasons: cleanList(signal.key_reasons),
     risk_factors: cleanList(signal.risk_factors),
+    position_size_tier:String(signal.position_size_tier || (isHold ? 'observe' : 'light')).toLowerCase(),
+    position_size_factor:Number(signal.position_size_factor || 0),
+    position_size_reason:cleanText(signal.position_size_reason, 240),
+    position_action:String(signal.position_action || (isHold ? 'observe' : 'open')).toLowerCase(),
+    pending_action:String(signal.pending_action || 'none').toLowerCase(),
+    management_direction:String(signal.management_direction || 'none').toLowerCase(),
     experience_usage:experienceUsage(signal),
     ...directionScores(signal),
   }
@@ -130,6 +136,12 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
   const executed = Number(signal.is_executed) === 1 || signal.is_executed === true || execution?.status === 'success'
   const pending = Boolean(signal.pending_ticket) || signal.pending_state === 'pending'
   const stale = Boolean(signal.is_stale)
+
+  if (execution?.status === 'success' && execution?.reason === 'pending_cancelled') return {
+    state:'cancelled', title:'旧挂单已取消',
+    description:executionDescription(execution, '策略判断原挂单逻辑已经失效，系统已取消当前策略对应的挂单。'),
+    executable:false,
+  }
 
   if (executed || pending) return {
     state: pending ? 'pending' : 'executed',

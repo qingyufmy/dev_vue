@@ -18,6 +18,8 @@ import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } 
 import { resolveAiTaskModel } from './model-profiles.js'
 import { isSubscriptionScheduleActive } from './subscription-schedule.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
+import { getObserverSourceForStrategy } from './observer-channels.js'
+import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -362,9 +364,9 @@ export async function getUserAutoRuntimeStatus(userId) {
 
   const redis = getRedis()
   const redisAvailable = !!redis && isRedisAvailable()
-  const adminUserId = promptType?.scope === 'private' ? null : await getActiveAdminBridgeUserId()
-  const marketBridgeUserId = promptType?.scope === 'private' ? Number(promptType.owner_user_id) : adminUserId
-  const adminBridgeOnline = !!adminUserId
+  const marketBridge = promptType ? await resolveStrategyMarketBridge(promptType) : { userId:null, source:null }
+  const marketBridgeUserId = marketBridge.userId
+  const adminBridgeOnline = promptType?.scope === 'private' ? false : !!marketBridgeUserId && isBridgeAlive(marketBridgeUserId)
   const marketBridgeOnline = !!marketBridgeUserId && isBridgeAlive(marketBridgeUserId)
   const marketState = marketBridgeOnline ? getOwnBridgeMarketState(marketBridgeUserId) : { alive: false, isOpen: false, tradeMode: -1, reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null }
 
@@ -620,6 +622,15 @@ async function broadcastAutoProgress(promptTypeId, symbol, progress) {
   for (const uid of st.subscribers) {
     try { sendToBrowsers(uid, payload) } catch (e) { console.warn('[Scheduler] Failed to send progress to browser:', e.message) }
   }
+}
+
+async function resolveStrategyMarketBridge(promptType) {
+  if (promptType?.scope === 'private') {
+    return { userId:Number(promptType.owner_user_id), source:null, configured:true }
+  }
+  const source = promptType?.id ? await getObserverSourceForStrategy(promptType.id) : null
+  if (source) return { userId:Number(source.bridge_user_id), source, configured:true }
+  return { userId:await getActiveAdminBridgeUserId(), source:null, configured:false }
 }
 
 const SCHEDULER_WAIT_LOG_HEARTBEAT_MS = 30 * 60_000
@@ -882,8 +893,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
-    const platformBridgeUserId = ptRow.scope === 'private' ? null : await getActiveAdminBridgeUserId()
-    const marketUserId = ptRow.scope === 'private' ? Number(ptRow.owner_user_id) : platformBridgeUserId
+    const marketBridge = await resolveStrategyMarketBridge(ptRow)
+    const marketUserId = marketBridge.userId
     if (!marketUserId || !isBridgeAlive(marketUserId)) {
       st._waitCount = (st._waitCount || 0) + 1
       st.lastError = null
@@ -1157,10 +1168,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
 
   const isPrivate = pt.scope === 'private'
   const preflightUserId = Number(preflight.inferenceUserId)
-  const platformBridgeUserId = isPrivate || preflightUserId > 0 ? null : await getActiveAdminBridgeUserId()
+  const fallbackBridge = preflightUserId > 0 ? null : await resolveStrategyMarketBridge(pt)
   const inferenceUserId = preflightUserId > 0
     ? preflightUserId
-    : isPrivate ? Number(pt.owner_user_id) : platformBridgeUserId
+    : Number(fallbackBridge?.userId || 0)
   const signalSource = isPrivate ? 'auto_private' : 'auto_shared'
   if (!inferenceUserId || !isBridgeAlive(inferenceUserId)) {
     return { status: 'blocked', reason: isPrivate ? 'owner_bridge_offline' : 'admin_bridge_offline' }
@@ -1235,6 +1246,23 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     market.requested_timeframes = market.strategy_context.required_timeframes || usedTimeframes
     market.used_timeframes = market.strategy_context.used_timeframes || Object.keys(market.strategy_context?.timeframes || {})
     market.missing_timeframes = market.strategy_context.missing_timeframes || market.requested_timeframes.filter(tf => !market.used_timeframes.includes(tf))
+    if (!isPrivate) {
+      const referenceSource = await getObserverSourceForStrategy(promptTypeId)
+      if (referenceSource && Number(referenceSource.bridge_user_id) === Number(inferenceUserId)) {
+        try {
+          market.strategy_reference_portfolio = await loadPlatformReferencePortfolio({
+            strategyId:promptTypeId, sourceUserId:inferenceUserId, symbol,
+          })
+        } catch (error) {
+          l(`reference portfolio unavailable (${error.message})`)
+          market.strategy_reference_portfolio = {
+            role:'platform_strategy_reference_portfolio', strategy_id:Number(promptTypeId),
+            symbol:stripBrokerSuffix(symbol).toUpperCase(), status:'unavailable',
+            positions:[], pending_orders:[], position_count:0, pending_count:0,
+          }
+        }
+      }
+    }
     if (!includePortfolioContext) {
       market = buildSharedMarketSnapshot(market, {
         standardSymbol: symbol,
@@ -1335,13 +1363,15 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     const signalId = await withTransaction(async run => {
       const [signalResult] = await run(`
         INSERT INTO ai_signals(user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
-          recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price,
+          recommended_volume, position_size_tier, position_size_factor, position_size_reason,
+          analysis, reasoning, stop_loss_price, take_profit_1_price,
           take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at,
           entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
       `, [
         isPrivate ? inferenceUserId : 0, 0, promptTypeId, signalSource, signalSource, symbol, primaryTf,
         signal.signal_type, signal.confidence, signal.recommended_volume,
+        signal.position_size_tier || null, signal.position_size_factor ?? null, signal.position_size_reason || null,
         signal.analysis, signal.reasoning, signal.stop_loss_price,
         signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price, signal.recommended_take_profit_tier || null,
         marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
@@ -1442,7 +1472,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       l('BLOCKED: lock lost before cancel_pending')
       return { status: 'error', reason: 'lock_lost' }
     }
-    if (Array.isArray(signal.cancel_pending) && signal.cancel_pending.length > 0) {
+    if (isPrivate && Array.isArray(signal.cancel_pending) && signal.cancel_pending.length > 0) {
       // Normalize conditions and filter to valid ones
       const validConds = []
       for (const cond of signal.cancel_pending) {
@@ -1555,7 +1585,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       l('BLOCKED: lock lost before auto-trade')
       return { status: 'error', reason: 'lock_lost' }
     }
-    if (signal.signal_type !== 'hold' && aiSource === 'ai' && !signal.is_stale) {
+    if ((signal.signal_type !== 'hold' || signal.pending_action === 'cancel') && aiSource === 'ai' && !signal.is_stale) {
       // Single JOIN query instead of N+1 per subscriber
       const onlineUserIds = [...onlineSubscribers]
       let eligibleSubs = []
@@ -1700,7 +1730,82 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
-    const order = signalOrderPayload(signal, riskConfig, market, true)
+    const [positionsResponse, pendingResponse, strategyDeliveries] = await Promise.all([
+      mt5Bridge(userId, 'positions', { symbol }, { noFallback:true }),
+      mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true }),
+      queryAll(`SELECT pending_ticket, trade_ticket FROM auto_signal_deliveries
+        WHERE user_id = ? AND prompt_type_id = ? AND (pending_ticket IS NOT NULL OR trade_ticket IS NOT NULL)
+        ORDER BY id DESC LIMIT 200`, [userId, promptTypeId]),
+    ])
+    const positions = Array.isArray(positionsResponse?.positions) ? positionsResponse.positions : null
+    const pendingOrders = pendingResponse?.orders ?? pendingResponse?.pending_list
+    if (!positions || !Array.isArray(pendingOrders)) {
+      await setTerminalStatus('rejected', 'portfolio_state_unavailable')
+      return
+    }
+    const signalType = String(signal.signal_type || '').toLowerCase()
+    const isTradeSignal = signalType.startsWith('buy') || signalType.startsWith('sell')
+    const signalIsBuy = signalType.startsWith('buy')
+    const symbolPositions = positions.filter(item => stripBrokerSuffix(String(item.symbol || '')) === stripBrokerSuffix(symbol))
+    const sameDirectionPositions = symbolPositions.filter(item => String(item.type || '').toLowerCase().startsWith(signalIsBuy ? 'buy' : 'sell'))
+    const oppositePositions = symbolPositions.filter(item => !sameDirectionPositions.includes(item))
+    const positionAction = String(signal.position_action || (sameDirectionPositions.length ? 'hold_no_add' : 'open')).toLowerCase()
+    if (isTradeSignal && oppositePositions.length) {
+      await setTerminalStatus('skipped', 'opposite_position_exists', { count:oppositePositions.length })
+      return
+    }
+    if (isTradeSignal && sameDirectionPositions.length && positionAction !== 'allow_add') {
+      await setTerminalStatus('skipped', 'existing_position_no_add', { count:sameDirectionPositions.length })
+      return
+    }
+    if (isTradeSignal && !sameDirectionPositions.length && ['allow_add', 'hold_no_add'].includes(positionAction)) {
+      await setTerminalStatus('skipped', 'reference_position_not_matched')
+      return
+    }
+
+    const pendingAction = String(signal.pending_action || 'none').toLowerCase()
+    const managementDirection = String(signal.management_direction || (isTradeSignal ? (signalIsBuy ? 'buy' : 'sell') : 'none')).toLowerCase()
+    const managementIsBuy = managementDirection === 'buy'
+    const strategyPendingTickets = new Set(strategyDeliveries.map(item => String(item.pending_ticket || '')).filter(Boolean))
+    const sameDirectionPending = pendingOrders.filter(item => {
+      if (stripBrokerSuffix(String(item.symbol || '')) !== stripBrokerSuffix(symbol)) return false
+      if (!strategyPendingTickets.has(String(item.ticket ?? item.mt5_ticket ?? ''))) return false
+      const pendingSide = String(item.side || item.pending_type || item.order_type || '').toLowerCase()
+      return managementDirection !== 'none' && pendingSide.startsWith(managementIsBuy ? 'buy' : 'sell')
+    })
+    if (pendingAction === 'keep') {
+      await setTerminalStatus('skipped', sameDirectionPending.length ? 'existing_pending_kept' : 'reference_pending_not_matched')
+      return
+    }
+    if (sameDirectionPending.length && pendingAction === 'none') {
+      await setTerminalStatus('skipped', 'existing_pending_no_replace', { count:sameDirectionPending.length })
+      return
+    }
+    if (['cancel', 'cancel_replace'].includes(pendingAction)) {
+      const cancellable = sameDirectionPending.filter(item => Number(item.magic || 0) === 234000)
+      if (!cancellable.length) {
+        await setTerminalStatus('skipped', 'reference_pending_not_matched')
+        return
+      }
+      for (const item of cancellable) {
+        const ticket = item.ticket ?? item.mt5_ticket
+        if (!ticket) continue
+        const cancelled = await mt5Bridge(userId, 'cancel_pending', { ticket }, { noFallback:true })
+        if (cancelled?.status !== 'success') {
+          await setTerminalStatus('rejected', 'pending_cancel_failed', { ticket:String(ticket) })
+          return
+        }
+      }
+      if (pendingAction === 'cancel' || signalType === 'hold') {
+        await setTerminalStatus('success', 'pending_cancelled', { count:cancellable.length })
+        return
+      }
+    }
+
+    const executionSignal = positionAction === 'allow_add'
+      ? { ...signal, position_size_tier:'probe', position_size_factor:0.25 }
+      : signal
+    const order = signalOrderPayload(executionSignal, riskConfig, market, true)
     // TP/SL validation: strict fail-closed (Fix 5)
     const isBuyOrder = order.order_type === 'buy'
     // Get user's own quote — fail-closed if unavailable
@@ -1792,6 +1897,11 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           const poIsBuy = poType.startsWith('buy')
           const newIsBuy = newOrderDirection === 'buy'
           if (poIsBuy !== newIsBuy) continue // skip opposite direction
+          // Existing orders are preserved by default. Replacement must be an
+          // explicit model management decision and may only touch orders
+          // created by AI Trading Lab itself.
+          if (pendingAction !== 'cancel_replace' || Number(po.magic || 0) !== 234000
+            || !strategyPendingTickets.has(String(po.ticket ?? po.mt5_ticket ?? ''))) continue
           if (isWeeklyFlattenWindow()) {
             l('skipped: weekly flatten window began before supersede cancel')
             await setTerminalStatus('skipped', 'weekly_flatten_window').catch(() => {})

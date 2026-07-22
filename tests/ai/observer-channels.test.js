@@ -30,30 +30,41 @@ describe('observer sources and channels', () => {
   })
 
   it('creates a source for an eligible bridge account and its own trading account', async () => {
-    db.queryOne
-      .mockResolvedValueOnce({ id:7, role:'admin', bridge_eligible:1, email:'admin@example.com' })
-      .mockResolvedValueOnce({ id:12 })
-      .mockResolvedValueOnce({ id:5, name:'稳健账户', bridge_user_id:7, trading_account_id:12 })
+    db.queryOne.mockImplementation(async sql => {
+      if (sql.includes('FROM users')) return { id:7, role:'admin', bridge_eligible:1, email:'admin@example.com' }
+      if (sql.includes('FROM trading_accounts')) return { id:12 }
+      if (sql.includes('FROM auto_prompt_types')) return { id:3, title:'稳健策略' }
+      if (sql.includes('strategy_id = ?')) return null
+      if (sql.includes('WHERE id = ?')) return { id:5, name:'稳健账户', bridge_user_id:7, trading_account_id:12, strategy_id:3 }
+      return null
+    })
     db.queryRun.mockResolvedValue({ insertId:5 })
     const source = await createObserverSource(1, {
-      name:'稳健账户', bridge_user_id:7, trading_account_id:12, notes:'主观摩源',
+      name:'稳健账户', bridge_user_id:7, trading_account_id:12, strategy_id:3, notes:'主观摩源',
     })
-    expect(source).toMatchObject({ id:5, bridge_user_id:7, trading_account_id:12 })
-    expect(db.queryRun.mock.calls[0][1]).toEqual(expect.arrayContaining(['稳健账户', 7, 12, 'active', '主观摩源', 1]))
+    expect(source).toMatchObject({ id:5, bridge_user_id:7, trading_account_id:12, strategy_id:3 })
+    expect(db.queryRun.mock.calls[0][1]).toEqual(expect.arrayContaining(['稳健账户', 7, 12, 3, 'active', '主观摩源', 1]))
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO auto_scheduler'))).toBe(true)
   })
 
   it('accepts a dedicated Pro account without granting administrator role', async () => {
-    db.queryOne
-      .mockResolvedValueOnce({ id:8, role:'user', plan:'pro', bridge_eligible:1 })
-      .mockResolvedValueOnce({ id:6, name:'二号观摩源', bridge_user_id:8, trading_account_id:null })
+    db.queryOne.mockImplementation(async sql => {
+      if (sql.includes('FROM users')) return { id:8, role:'user', plan:'pro', bridge_eligible:1 }
+      if (sql.includes('FROM trading_accounts')) return { id:14 }
+      if (sql.includes('FROM auto_prompt_types')) return { id:4, title:'趋势策略' }
+      if (sql.includes('strategy_id = ?')) return null
+      if (sql.includes('WHERE id = ?')) return { id:6, name:'二号观摩源', bridge_user_id:8, trading_account_id:null, strategy_id:4 }
+      return null
+    })
     db.queryRun.mockResolvedValue({ insertId:6 })
-    await expect(createObserverSource(1, { name:'二号观摩源', bridge_user_id:8 }))
+    await expect(createObserverSource(1, { name:'二号观摩源', bridge_user_id:8, strategy_id:4 }))
       .resolves.toMatchObject({ id:6, bridge_user_id:8 })
   })
 
   it('rejects a source account without active Pro access', async () => {
     db.queryOne.mockResolvedValue({ id:8, role:'user', plan:'plus', bridge_eligible:0 })
-    await expect(createObserverSource(1, { name:'错误来源', bridge_user_id:8 }))
+    await expect(createObserverSource(1, { name:'错误来源', bridge_user_id:8, strategy_id:4 }))
       .rejects.toThrow('bridge_user_requires_pro')
     expect(db.queryRun).not.toHaveBeenCalled()
   })

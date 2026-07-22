@@ -481,6 +481,24 @@ function setBadge(id, text, type, withDot = true) {
   el.innerHTML = `${withDot ? '<span class="badge-dot" aria-hidden="true"></span>' : ""}${escapeHtml(text)}`;
 }
 
+function positionSizeAdvice(signal) {
+  const tier = String(signal?.position_size_tier || signal?.decision?.position_size_tier || "").toLowerCase();
+  const tiers = {
+    observe: { label:"不建仓", factor:0 },
+    probe: { label:"试探仓", factor:25 },
+    light: { label:"轻仓", factor:50 },
+    standard: { label:"标准仓", factor:100 },
+  };
+  const selected = tiers[tier];
+  if (selected) return {
+    tier, label:selected.label,
+    text:tier === "observe" ? selected.label : `${selected.label} · ${selected.factor}% 风险额度`,
+    factor:selected.factor,
+    reason:signal?.position_size_reason || signal?.decision?.position_size_reason || "",
+  };
+  return { tier:"legacy", label:"旧版手数", text:volumeText(signal?.recommended_volume), factor:null, reason:"" };
+}
+
 let mobileNavReturnFocus = null;
 
 function closeMobileNav({ restoreFocus = true } = {}) {
@@ -979,7 +997,7 @@ function updateSignalPriceFields(signal) {
   setText("sigCurrentPrice", signalCurrentPriceText(signal));
   setText("sigStopLoss", priceDisplay(signal?.stop_loss_price));
   setText("sigTakeProfit", priceDisplay(signalTakeProfit(signal)));
-  setText("sigVolume", volumeText(signal?.recommended_volume));
+  setText("sigVolume", positionSizeAdvice(signal).text);
   setText("sigExecutionState", advice?.title || executionStatus(signal) || "暂无信号");
   setText("sigActionHint", advice?.description || "等待策略生成新的推理结果");
   setSignalFieldClass("sigExecutionState", `signal-execution-state ${advice?.state || "empty"}`);
@@ -1122,7 +1140,11 @@ const API_ERROR_MESSAGES = {
   bridge_user_requires_pro: "观摩源账号必须是管理员或有效的 Pro 账号",
   bridge_user_not_found: "未找到这个观摩源账号",
   trading_account_not_owned_by_source: "所选 MT5 账户不属于这个观摩源账号",
+  observer_source_trading_account_required: "请先让该桥接源连接 MT5，再选择它当前的交易账户",
   observer_source_has_channels: "该观摩源仍绑定频道，请先移除相关频道",
+  observer_source_strategy_required: "请选择这个观摩源固定运行的平台策略",
+  observer_source_strategy_invalid: "所选平台策略不存在或已删除",
+  observer_source_strategy_in_use: "该平台策略已绑定其他启用中的观摩源",
   default_observer_channel_cannot_be_deleted: "默认观摩频道不能删除，请先设置另一个默认频道",
   observer_source_email_invalid: "请输入有效的桥接源登录邮箱",
   observer_source_email_exists: "该邮箱已存在，请直接从桥接源账号中选择",
@@ -1195,7 +1217,7 @@ const API_ERROR_MESSAGES = {
   invalid_stop_loss_direction: "止损价格与交易方向不符",
   invalid_take_profit_direction: "止盈价格与交易方向不符",
   invalid_recommended_take_profit_tier: "AI 推荐的止盈档位无效",
-  ai_volume_out_of_platform_range: "AI 建议手数超出平台范围",
+  ai_volume_out_of_platform_range: "订单执行上限不符合 MT5 手数规则",
   confidence_below_risk_threshold: "置信度低于策略风险阈值",
   atr_anchor_unavailable_hold: "缺少可靠 ATR 锚点",
   sl_widen_min_lot_hold: "扩大止损后所需手数低于最小值",
@@ -2530,7 +2552,7 @@ function riskRolloutLabel(code) { return RISK_ROLLOUT_LABELS[code] || "未命名
 const RISK_DECISION_LABELS = {
   "R5_SCHEMA_SYMBOL":"缺少交易品种", "R5_SCHEMA_ORDER_TYPE":"订单方向无效", "R5_SCHEMA_ENTRY_METHOD":"入场方式无效",
   "R5_SCHEMA_AI_REQUIRED":"AI 订单必要字段不完整", "R5_SCHEMA_PENDING_PRICE":"挂单价格无效",
-  "R5_SCHEMA_STOP_LIMIT_PRICE":"Stop Limit 触发后限价无效",
+  "R5_SCHEMA_STOP_LIMIT_PRICE":"Stop Limit 触发后限价无效", "R5_SCHEMA_AI_POSITION_SIZE_TIER":"AI 返回的仓位档位无效",
   "R1_INSTRUMENT_DATA_INCOMPLETE":"品种交易参数不完整", "R1_SYMBOL_TRADE_DISABLED":"品种当前禁止交易",
   "R1.1_SYMBOL_NOT_ALLOWED":"品种不在允许范围", "R1.2_STOP_LOSS_REQUIRED":"缺少止损",
   "R1.3_SL_WIDEN_VOLUME_DOWN":"扩大止损并同步降低手数", "R1.4_STOP_LOSS_TOO_FAR":"止损距离超过上限",
@@ -2539,8 +2561,8 @@ const RISK_DECISION_LABELS = {
   "R1.7_PENDING_DEVIATION":"挂单价格偏离当前报价过大", "R1.7_PENDING_DIRECTION":"挂单触发价方向与当前价格关系错误",
   "R1.7_PENDING_PRICE_ABNORMAL":"挂单触发价明显异常",
   "R1.7_STOP_LIMIT_RELATION":"Stop Limit 触发价与触发后限价关系错误",
-  "R1.8_PENDING_TTL_DEFAULT":"使用默认挂单有效期", "R1.9_AI_VOLUME_OUT_OF_RANGE":"AI 建议手数超出平台范围",
-  "R1.9_BELOW_MINIMUM_AFTER_RISK":"风险调整后手数低于最小可交易手数", "R1.9_VOLUME_INCREASE_FORBIDDEN":"风控禁止放大 AI 建议手数",
+  "R1.8_PENDING_TTL_DEFAULT":"使用默认挂单有效期", "R1.9_AI_VOLUME_OUT_OF_RANGE":"订单执行上限不符合 MT5 手数规则",
+  "R1.9_BELOW_MINIMUM_AFTER_RISK":"风险调整后手数低于最小可交易手数", "R1.9_VOLUME_INCREASE_FORBIDDEN":"风控禁止超过账户单笔手数上限",
   "R1.9_VOLUME_INVALID":"订单手数无效", "R1.10_RISK_DATA_INVALID":"账户或品种风险数据无效",
   "R1.10_REAL_RISK":"单笔实际风险校验通过", "R4_QUOTE_INVALID":"当前报价无效",
   "R4.2_WEEKEND_PROTECTION":"周末保护时段禁止开仓", "R4.3_SIGNAL_EXPIRED":"推理信号已过期",
@@ -2590,7 +2612,7 @@ function riskRuleDescription(code, details = {}) {
   if (code === "R4.6_EXECUTION_PRICE_DEVIATION") return `${label}：当前 ${displayRiskNumber(details.current_price)}，允许 ${displayRiskNumber(details.allowed_min)} ～ ${displayRiskNumber(details.allowed_max)}（±${displayRiskNumber(details.maximum_pct, 3)}%）`;
   if (code === "PX.3_EXECUTION_PRICE_TOLERANCE") return `${label}：剩余 ${displayRiskNumber(details.remaining_price, 3)}，发送 ${displayRiskNumber(details.mt5_points, 0)} MT5 点`;
   if (code === "R1.3_SL_WIDEN_VOLUME_DOWN") return `${label}：止损 ${displayRiskNumber(details.from_sl)} → ${displayRiskNumber(details.to_sl)}，手数 ${displayRiskNumber(details.from_volume)} → ${displayRiskNumber(details.to_volume)}`;
-  if (code === "R1.9_AI_VOLUME_OUT_OF_RANGE") return `${label}：AI 建议 ${displayRiskNumber(details.volume)} 手，允许 ${displayRiskNumber(details.minimum)} ～ ${displayRiskNumber(details.maximum)} 手，步进 ${displayRiskNumber(details.step)} 手`;
+  if (code === "R1.9_AI_VOLUME_OUT_OF_RANGE") return `${label}：执行上限 ${displayRiskNumber(details.volume)} 手，允许 ${displayRiskNumber(details.minimum)} ～ ${displayRiskNumber(details.maximum)} 手，步进 ${displayRiskNumber(details.step)} 手`;
   if (code === "R1.7_PENDING_DIRECTION") return `${label}：触发价 ${displayRiskNumber(details.trigger_price)}，当前价 ${displayRiskNumber(details.current_price)}`;
   if (code === "R1.7_STOP_LIMIT_RELATION") return `${label}：触发价 ${displayRiskNumber(details.trigger_price)}，触发后限价 ${displayRiskNumber(details.stop_limit_price)}`;
   if (code === "R4.5_SPREAD_TOO_WIDE") return `${label}：当前点差 ${displayRiskNumber(details.spread_points)} 点`;
@@ -2694,7 +2716,8 @@ function renderExecutionDecisions(rows, pagination = {}) {
   state.executionFilters.total = Number(pagination.total || rows.length);
   host.innerHTML = rows.length ? rows.map(row => {
     const original = parseJsonField(row.original_order_json, {}), approved = parseJsonField(row.approved_order_json, {}), result = parseJsonField(row.result_json, {}), rules = parseJsonField(row.rule_results_json, []);
-    const aiVolume = original.volume ?? original.lot ?? "--", finalVolume = approved.volume ?? approved.lot ?? "--";
+    const finalVolume = approved.volume ?? approved.lot ?? "--";
+    const tierAdvice = positionSizeAdvice(original);
     const refPrice = approved.reference_price ?? original.reference_price ?? original.price ?? "--", actual = result.price ?? result.price_open ?? "--";
     const adjustmentRules = rules.filter(rule => rule.outcome === "adjust" || rule.adjusted);
     const adjustments = adjustmentRules.map(rule => riskRuleDescription(rule.code, rule.details || {})).join("；") || "无";
@@ -2702,12 +2725,13 @@ function renderExecutionDecisions(rows, pagination = {}) {
     const reason = rejectedRule ? riskRuleDescription(rejectedRule.code, rejectedRule.details || {}) : riskDecisionLabel(result.error || result.message || "");
     const riskPass = rules.find(rule => rule.code === "R1.10_REAL_RISK");
     const riskCap = riskPass?.details?.risk_cap ?? approved.risk_volume_cap ?? "--";
+    const executionCeiling = riskPass?.details?.position_limit_lots ?? original.volume ?? original.lot ?? "--";
     const executionStatus = row.status || "unknown";
     const riskStatus = row.decision_status || "unknown";
     const decisionText = ({ succeeded:"执行成功", rejected:"执行被拒绝", failed:"执行失败", uncertain:"执行待确认", awaiting_confirmation:"等待确认", preparing:"准备执行", prepared:"等待发送", bridge_sending:"正在发送" })[executionStatus] || "未完成";
     const decisionClass = executionStatus === "succeeded" ? "success" : ["rejected","failed"].includes(executionStatus) ? "danger" : "warning";
     const riskText = ({ pass:"通过", adjust:"调整后通过", reject:"拒绝" })[riskStatus] || "未完成";
-    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">#${row.id} ${escapeHtml(row.symbol || '')} <span class="status-chip ${decisionClass}">${escapeHtml(decisionText)}</span></div>${reason && reason !== "未说明原因" ? `<div class="execution-reason">${escapeHtml(reason)}</div>` : ''}<div class="workspace-row-meta"><span>风控 ${escapeHtml(riskText)}</span><span>AI 建议 ${escapeHtml(aiVolume)} 手</span><span>风险上限 ${escapeHtml(riskCap)}</span><span>最终 ${escapeHtml(finalVolume)} 手</span><span>规则调整：${escapeHtml(adjustments)}</span><span>参考价 ${escapeHtml(refPrice)}</span><span>实际价 ${escapeHtml(actual)}</span></div></div></article>`;
+    return `<article class="workspace-row"><div class="workspace-row-main"><div class="workspace-row-title">#${row.id} ${escapeHtml(row.symbol || '')} <span class="status-chip ${decisionClass}">${escapeHtml(decisionText)}</span></div>${reason && reason !== "未说明原因" ? `<div class="execution-reason">${escapeHtml(reason)}</div>` : ''}<div class="workspace-row-meta"><span>风控 ${escapeHtml(riskText)}</span><span>仓位档位 ${escapeHtml(tierAdvice.text)}</span><span>账户执行上限 ${escapeHtml(executionCeiling)} 手</span><span>风险额度 ${escapeHtml(riskCap)}</span><span>最终 ${escapeHtml(finalVolume)} 手</span><span>规则调整：${escapeHtml(adjustments)}</span><span>参考价 ${escapeHtml(refPrice)}</span><span>实际价 ${escapeHtml(actual)}</span></div></div></article>`;
   }).join("") : '<div class="empty-state"><strong>暂无执行决策</strong><span>通过风控闸门的下单请求会在这里留下完整对照。</span></div>';
   renderPager("executionDecisionPager", state.executionFilters.page, state.executionFilters.pageSize, state.executionFilters.total, "executions");
 }
@@ -3231,7 +3255,7 @@ function renderPlatformExperienceEvaluation(evaluation = {}) {
   const strategies = evaluation.strategies || [], recent = evaluation.recent_retrievals || [], pairs = paired.recent_runs || [];
   const percent = value => `${Math.round(Math.max(0, Math.min(1, Number(value || 0))) * 100)}%`;
   const modeLabels = { shadow:"影子评估", active:"正式使用", off:"已关闭" };
-  const diffLabels = { signal_type:"信号方向", entry_method:"入场方式", confidence:"置信度", recommended_volume:"建议手数", stop_loss_price:"止损", take_profit_1_price:"止盈", limit_price:"挂单价格" };
+  const diffLabels = { signal_type:"信号方向", entry_method:"入场方式", confidence:"置信度", recommended_volume:"旧版建议手数", position_size_tier:"仓位档位", position_action:"持仓处理", pending_action:"挂单处理", stop_loss_price:"止损", take_profit_1_price:"止盈", limit_price:"挂单价格" };
   const retrievalReasonLabels = { strategy_match:"策略一致", market_regime_match:"市场状态一致", trend_direction_match:"趋势方向一致", volatility_bucket_match:"波动状态一致", chan_reliability_match:"缠论可信度一致", chan_trend_state_match:"缠论趋势一致", chan_segment_direction_match:"线段方向一致", chan_divergence_match:"背驰状态一致", chan_center_state_match:"中枢状态一致", entry_method_overlap:"入场方式适用" };
   const recentRows = recent.slice(0, 10).map(row => {
     const selected = row.selected_items || [];
@@ -4587,7 +4611,7 @@ function renderSignalMonitorDetails(signal) {
         <div class="signal-monitor-order-grid">
           <div><span>入场方式</span><strong>${escapeHtml(entryMethod)}</strong></div>
           <div><span>计划入场</span><strong class="num">${escapeHtml(priceDisplay(plannedEntry))}</strong></div>
-          <div><span>AI 建议手数</span><strong class="num">${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
+          <div><span>AI 仓位档位</span><strong>${escapeHtml(positionSizeAdvice(signal).text)}</strong></div>
           <div><span>风控最终手数</span><strong class="num">${escapeHtml(finalVolumeText)}</strong></div>
         </div>
       </section>
@@ -5365,7 +5389,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     ${renderDirectionBias(decision)}
     <div class="analysis-status-strip">
       <div><span>置信度</span><strong>${confidence.label}</strong></div>
-      <div><span>AI 建议手数</span><strong>${escapeHtml(volumeText(signal.recommended_volume))}</strong></div>
+      <div><span>AI 仓位档位</span><strong>${escapeHtml(positionSizeAdvice(signal).text)}</strong></div>
       <div><span>风控最终手数</span><strong>${finalVolume == null ? "待执行时计算" : escapeHtml(volumeText(finalVolume))}</strong></div>
       <div><span>有效期</span><strong id="analysisValidity" class="status-tag ${freshnessClass}">${escapeHtml(signalFreshness(signal))}</strong></div>
       <div><span>执行状态</span><strong class="status-tag ${freshnessClass}">${escapeHtml(executionStatus(signal))}</strong></div>
@@ -7093,7 +7117,7 @@ function renderSignalRows() {
             <span class="num">${confidence.label}</span>
           </div>
         </td>
-        <td class="num">${escapeHtml(volumeText(signal.recommended_volume))}</td>
+        <td>${escapeHtml(positionSizeAdvice(signal).text)}</td>
         <td><span class="row-status ${rowStatus}">${escapeHtml(signalStatusLabel(signal))}</span></td>
         <td class="num">${escapeHtml(signal.stop_loss_price || "--")}</td>
         <td class="num">${escapeHtml(signal.take_profit_1_price || "--")}</td>
@@ -9008,6 +9032,10 @@ function renderObserverAdminPanel() {
   const { sources, channels, candidates } = _observerAdminData;
   const candidateOptions = candidates.map(item => `<option value="${Number(item.id)}">${escapeHtml(item.nickname || item.email || `账号 #${item.id}`)} · ${item.role === 'admin' ? '管理员' : 'Pro'}${item.bridge_online ? ' · 在线' : ' · 离线'}</option>`).join('');
   const sourceOptions = sources.filter(item => item.status === 'active').map(item => `<option value="${Number(item.id)}">${escapeHtml(item.name)}</option>`).join('');
+  const strategyOptions = (state.strategies || []).filter(item => item.scope === 'platform' && Number(item.is_active) === 1 && !item.deleted_at)
+    .map(item => `<option value="${Number(item.id)}">${escapeHtml(item.title)}</option>`).join('');
+  const sourceStrategyOptions = selectedId => (state.strategies || []).filter(item => item.scope === 'platform' && !item.deleted_at)
+    .map(item => `<option value="${Number(item.id)}" ${Number(item.id) === Number(selectedId) ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('');
   root.innerHTML = `
     <div class="observer-admin-grid">
       <section class="ops-section-card observer-admin-card">
@@ -9015,13 +9043,14 @@ function renderObserverAdminPanel() {
         <form id="observerSourceForm" class="observer-admin-form">
           <label><span>来源名称</span><input class="form-input" name="name" maxlength="80" placeholder="例如：稳健实盘" required></label>
           <label><span>桥接源账号</span><div class="observer-source-account-field"><select class="form-select" name="bridge_user_id" required><option value="">请选择专用源账号</option>${candidateOptions}</select><button id="createObserverSourceAccountBtn" class="btn btn-secondary" type="button"><i data-lucide="user-plus" size="15"></i>创建账号</button></div></label>
+          <label><span>固定平台策略</span><select class="form-select" name="strategy_id" required><option value="">请选择平台策略</option>${strategyOptions}</select><small>只有该策略产生的系统持仓与挂单会进入参考组合。</small></label>
           <label><span>绑定 MT5 账户</span><select class="form-select" name="trading_account_id"><option value="">自动识别当前账户</option></select></label>
           <button class="btn btn-primary" type="submit"><i data-lucide="plus"></i>添加来源</button>
         </form>
         <div class="observer-admin-list">${sources.length ? sources.map(source => `
           <article class="observer-admin-item">
             <span class="observer-source-dot ${source.bridge_online ? 'online' : ''}" aria-hidden="true"></span>
-            <div><strong>${escapeHtml(source.name)}</strong><p>${escapeHtml(source.login_account ? `${source.broker_server || 'MT5'} · ${source.login_account}` : source.bridge_user_nickname || source.bridge_user_email || `源账号 #${source.bridge_user_id}`)}</p></div>
+            <div><strong>${escapeHtml(source.name)}</strong><p>${escapeHtml(source.login_account ? `${source.broker_server || 'MT5'} · ${source.login_account}` : source.bridge_user_nickname || source.bridge_user_email || `源账号 #${source.bridge_user_id}`)}</p><div class="observer-source-strategy-editor"><select class="form-select" data-observer-source-strategy="${Number(source.id)}"><option value="">请选择固定策略</option>${sourceStrategyOptions(source.strategy_id)}</select><button class="btn btn-secondary btn-sm" type="button" data-observer-source-strategy-save="${Number(source.id)}">保存策略</button></div></div>
             <span class="ops-state-pill ${source.bridge_online ? 'running' : 'waiting'}">${source.bridge_online ? '已连接' : '离线'}</span>
             <button class="icon-btn" type="button" data-observer-source-delete="${Number(source.id)}" aria-label="删除观摩源"><i data-lucide="trash-2"></i></button>
           </article>`).join('') : '<div class="ops-empty-state compact"><strong>尚未配置观摩源</strong><span>先准备一个 Pro 源账号并连接桥接软件。</span></div>'}</div>
@@ -9060,7 +9089,7 @@ function renderObserverAdminPanel() {
     const button = event.currentTarget.querySelector('button[type="submit"]');
     try {
       button.disabled = true;
-      await api('/api/ai/admin/observer-sources', { method:'POST', body:{ name:form.get('name'), bridge_user_id:Number(form.get('bridge_user_id')), trading_account_id:form.get('trading_account_id') ? Number(form.get('trading_account_id')) : null } });
+      await api('/api/ai/admin/observer-sources', { method:'POST', body:{ name:form.get('name'), bridge_user_id:Number(form.get('bridge_user_id')), trading_account_id:form.get('trading_account_id') ? Number(form.get('trading_account_id')) : null, strategy_id:Number(form.get('strategy_id')) } });
       toast('观摩源已添加', 'success'); await loadObserverAdminPanel(true);
     } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; }
   });
@@ -9079,6 +9108,18 @@ function renderObserverAdminPanel() {
     try { await api(`/api/ai/admin/observer-sources/${button.dataset.observerSourceDelete}`, { method:'DELETE' }); toast('观摩源已删除', 'success'); await loadObserverAdminPanel(true); }
     catch (error) { toast(error.message, 'error'); }
   }));
+  root.querySelectorAll('[data-observer-source-strategy-save]').forEach(button => button.addEventListener('click', async () => {
+    const sourceId = Number(button.dataset.observerSourceStrategySave);
+    const select = root.querySelector(`[data-observer-source-strategy="${sourceId}"]`);
+    const strategyId = Number(select?.value || 0);
+    if (!strategyId) return toast('请选择固定运行的平台策略', 'error');
+    try {
+      button.disabled = true;
+      await api(`/api/ai/admin/observer-sources/${sourceId}`, { method:'PUT', body:{ strategy_id:strategyId } });
+      toast('观摩源固定策略已更新', 'success');
+      await loadObserverAdminPanel(true);
+    } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; }
+  }));
   root.querySelectorAll('[data-observer-channel-default]').forEach(button => button.addEventListener('click', async () => {
     try { await api(`/api/ai/admin/observer-channels/${button.dataset.observerChannelDefault}`, { method:'PUT', body:{ is_default:true } }); toast('默认频道已更新', 'success'); await loadObserverAdminPanel(true); }
     catch (error) { toast(error.message, 'error'); }
@@ -9095,9 +9136,11 @@ async function loadObserverAdminPanel(force = false) {
   if (!root || (_adminDashState.observerLoaded && !force)) return;
   showLoading(root, '正在读取观摩频道…');
   try {
-    const [sourceData, channelData, candidateData] = await Promise.all([
+    const [sourceData, channelData, candidateData, strategyData] = await Promise.all([
       api('/api/ai/admin/observer-sources'), api('/api/ai/admin/observer-channels'), api('/api/ai/admin/observer-source-candidates'),
+      api('/api/ai/strategies?include_inactive=1'),
     ]);
+    state.strategies = strategyData.strategies || state.strategies || [];
     _observerAdminData = { sources:sourceData.sources || [], channels:channelData.channels || [], candidates:candidateData.candidates || [] };
     _adminDashState.observerLoaded = true;
     renderObserverAdminPanel();

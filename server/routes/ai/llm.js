@@ -7,8 +7,9 @@ import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { beginModelUsage, finishModelUsage } from './model-profiles.js'
 import { KIMI_CODE_CLIENT_IDENTITY, MODEL_PROVIDER_DEFAULTS, isKimiCodeRequest, modelProviderProtocol } from './model-providers.js'
 import { assertSafeModelEndpoint } from './model-endpoint-security.js'
-import { sha256 } from './inference-snapshots.js'
+import { buildSharedMarketSnapshot, sha256 } from './inference-snapshots.js'
 import { normalizeEntryMethods, signalTypesForEntryMethods } from './strategy-policy.js'
+import { normalizePositionSizeTier, positionSizeFactor, resolvePositionSizeTier } from './position-sizing.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
@@ -99,7 +100,11 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   confidence: "0.00-1.00，动态估算，禁止固定值。按趋势强度、位置结构、波动噪音、风险状态综合评估。BUY/SELL弱优势0.52-0.62，中等0.63-0.74，强共振>0.75。HOLD时0.55-0.68，明确回避风险可>0.70。hold时也不得为0",
   bullish_score: "0-100，市场偏多倾向分。必须与bearish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
   bearish_score: "0-100，市场偏空倾向分。必须与bullish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
-  recommended_volume: "必须位于输入市场数据 ai_volume_range 的 min、max 范围内，并按 step 对齐。应根据行情风险与止损距离合理建议；hold时返回0。不得读取或猜测订阅用户的账户手数上限",
+  position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
+  position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
+  position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe。参考组合已有同向持仓时默认 hold_no_add；只有明确延续信号才可 allow_add；不得建议自动平仓",
+  pending_action: "必须字段。仅允许 none | keep | cancel | cancel_replace。参考组合无挂单时返回 none；旧挂单仍符合当前逻辑时返回 keep，禁止无条件替换",
+  management_direction: "必须字段。仅允许 buy | sell | none。需要取消或替换挂单时填写被管理挂单方向；其他情况填 none",
   limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
   stop_limit_price: "Stop Limit 触发后挂出的限价，仅buy_stop_limit/sell_stop_limit时必填。limit_price始终是突破触发价：buy_stop_limit 的触发价高于当前价，stop_limit_price不得高于触发价；sell_stop_limit 的触发价低于当前价，stop_limit_price不得低于触发价",
   pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
@@ -127,7 +132,12 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   const labels = { market: '市价', limit: '限价挂单', stop: '突破挂单', stop_limit: '突破限价挂单' }
   schema.signal_type = `仅允许 ${signalTypes.join(' | ')}。hold 表示观望；本策略支持的入场方式：${methods.map(item => labels[item]).join('、')}。禁止输出未列出的信号类型。`
   schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。`
-  schema.recommended_volume = '必须位于输入市场数据 ai_volume_range 的 min、max 范围内，并按 step 对齐；hold 必须返回 0。该值是 AI 的行情建议，不得读取、推测或替代订阅用户的账户手数上限。'
+  delete schema.recommended_volume
+  schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
+  schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
+  schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe。平台参考组合已有同向持仓时默认 hold_no_add；只有明确延续信号才可 allow_add；暂不支持自动平仓。'
+  schema.pending_action = '必须字段。仅允许 none | keep | cancel | cancel_replace。旧挂单仍符合当前行情逻辑时必须 keep，只有逻辑失效或方向反转时才能 cancel 或 cancel_replace。'
+  schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 或 cancel_replace 时填写被管理挂单方向；其他情况填 none。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
   const experienceRefs = [...new Set((experienceSelection?.selectedRefs || experienceIds.map(id => `item:${id}`))
     .map(value => String(value || '').trim()).filter(Boolean))]
@@ -356,9 +366,26 @@ export async function requestJsonObject({
   }
 }
 
+function adaptLegacyPositionSizing(value) {
+  if (!value || typeof value !== 'object') return value
+  const signalType = String(value.signal_type || 'hold').toLowerCase()
+  const isHold = signalType === 'hold'
+  if (!value.position_size_tier) value.position_size_tier = isHold ? 'observe' : 'light'
+  if (!String(value.position_size_reason || '').trim()) {
+    value.position_size_reason = isHold
+      ? '当前不满足建仓条件'
+      : '旧版结果未提供仓位档位，系统按中性档位交由风控精算'
+  }
+  if (!value.position_action) value.position_action = isHold ? 'observe' : 'open'
+  if (!value.pending_action) value.pending_action = 'none'
+  if (!value.management_direction) value.management_direction = 'none'
+  return value
+}
+
 export function validateAiSignalResponse(value, allowedEntryMethods) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('ai_response_not_object')
-  const required = ['signal_type', 'entry_method', 'confidence', 'recommended_volume', 'analysis', 'reasoning']
+  adaptLegacyPositionSizing(value)
+  const required = ['signal_type', 'entry_method', 'confidence', 'position_size_tier', 'position_size_reason', 'position_action', 'pending_action', 'management_direction', 'analysis', 'reasoning']
   const missing = required.filter(key => !(key in value))
   if (missing.length) throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
 
@@ -375,11 +402,23 @@ export function validateAiSignalResponse(value, allowedEntryMethods) {
   if (entryMethod !== 'observe' && !methods.includes(entryMethod)) throw new Error(`ai_response_entry_method_not_allowed:${entryMethod}`)
 
   const confidence = Number(value.confidence)
-  const volume = Number(value.recommended_volume)
   if (!Number.isFinite(confidence) || confidence <= 0 || confidence > 1) throw new Error('ai_response_invalid_confidence')
-  if (!Number.isFinite(volume) || volume < 0) throw new Error('ai_response_invalid_recommended_volume')
-  if (signalType === 'hold' && volume !== 0) throw new Error('ai_response_hold_volume_must_be_zero')
-  if (signalType !== 'hold' && volume <= 0) throw new Error('ai_response_trade_volume_required')
+  const positionTier = normalizePositionSizeTier(value.position_size_tier, signalType)
+  if (!positionTier) throw new Error('ai_response_invalid_position_size_tier')
+  if (signalType === 'hold' && String(value.position_size_tier).toLowerCase() !== 'observe') throw new Error('ai_response_hold_position_tier_must_be_observe')
+  if (typeof value.position_size_reason !== 'string' || !value.position_size_reason.trim()) throw new Error('ai_response_position_size_reason_required')
+  const positionAction = String(value.position_action || '').toLowerCase()
+  const pendingAction = String(value.pending_action || '').toLowerCase()
+  if (!['open', 'hold_no_add', 'allow_add', 'observe'].includes(positionAction)) throw new Error('ai_response_invalid_position_action')
+  if (signalType === 'hold' && !['observe', 'hold_no_add'].includes(positionAction)) throw new Error('ai_response_hold_position_action_invalid')
+  if (signalType !== 'hold' && !['open', 'hold_no_add', 'allow_add'].includes(positionAction)) throw new Error('ai_response_trade_position_action_invalid')
+  if (!['none', 'keep', 'cancel', 'cancel_replace'].includes(pendingAction)) throw new Error('ai_response_invalid_pending_action')
+  if (signalType === 'hold' && pendingAction === 'cancel_replace') throw new Error('ai_response_hold_cancel_replace_invalid')
+  const managementDirection = String(value.management_direction || '').toLowerCase()
+  if (!['buy', 'sell', 'none'].includes(managementDirection)) throw new Error('ai_response_invalid_management_direction')
+  if (['cancel', 'cancel_replace'].includes(pendingAction) && managementDirection === 'none') {
+    throw new Error('ai_response_management_direction_required')
+  }
   if (typeof value.analysis !== 'string' || !value.analysis.trim()) throw new Error('ai_response_analysis_required')
   if (typeof value.reasoning !== 'string' || !value.reasoning.trim()) throw new Error('ai_response_reasoning_required')
   return value
@@ -419,7 +458,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
     const marketOnlyRule = config._market_only
-      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线和技术指标。输入不包含任何账户、余额、权益、持仓、挂单或个人风控信息；禁止推测这些信息。手数建议只能处于 ai_volume_range 的上下限内，账户相关调整由独立风控完成。'
+      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线、技术指标和 platform_strategy_reference_portfolio。该参考组合仅表示本平台策略已经产生的持仓与挂单，不代表任何订阅用户的真实账户。禁止推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。你只能选择不建仓、试探仓、轻仓或标准仓，不得返回绝对手数；用户实际手数由独立风控根据净值、真实止损亏损和 MT5 合约规格计算。参考组合已有同向持仓时，除非行情形成明确的延续加仓机会，否则 position_action 必须为 hold_no_add；即使允许加仓，系统也会限制为试探仓。参考挂单仍符合当前逻辑时必须 keep，只有原逻辑失效时才能 cancel，方向反转且新挂单成立时才能 cancel_replace。暂不建议自动平仓。'
+      : ''
+    const privatePortfolioRule = !config._market_only && config._include_portfolio_context
+      ? '\n\n## 私有策略账户上下文\n输入中的 positions 与 pending_orders 是当前用户账户的实时数据。请结合它们判断 position_action 与 pending_action，但不得把余额或现有手数直接复制成新订单手数；新订单仍只返回固定仓位档位，实际手数由风控精算。暂不建议自动平仓。'
       : ''
     // Personal memory is untrusted data, never a higher-priority instruction.
     // Shared platform inference is market-only and is structurally barred from it.
@@ -431,7 +473,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const platformExperience = config._market_only && typeof config._platformExperienceContext === 'string'
       ? config._platformExperienceContext : ''
     const pendingRule = strategySchema.hasPending ? `\n\n${PENDING_LIFECYCLE_RULE}` : ''
-    const fullPrompt = prompt + marketOnlyRule + platformExperience + personalMemory + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + pendingRule
+    const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + platformExperience + personalMemory + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + pendingRule
 
     // Check if prompt wants Chan theory data
     const useChan = config._use_chan_analysis === undefined
@@ -444,7 +486,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const cleanPrompt = replaySystemPrompt || promptWithChanRules.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
     console.log(`[LLM] Chan analysis: ${useChan ? 'enabled' : 'disabled'}`)
 
-    const aiPayload = config._market_only ? { ...market } : {
+    const aiPayload = config._market_only ? buildSharedMarketSnapshot(market, {
+      standardSymbol:market.standard_symbol || market.symbol,
+      marketSource:market.market_source,
+    }) : {
       symbol: market.symbol, timeframe: market.timeframe, timestamp: market.timestamp,
       latest_price: market.latest_price, price_change: market.price_change,
       price_change_pct: market.price_change_pct, account: market.account,
@@ -452,13 +497,6 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       kline_count: market.kline_count,
       atr_anchor: market.atr_anchor,
       atr_anchor_tf: market.atr_anchor_tf,
-      risk_level: (config || {}).risk_level || 'medium',
-      max_position_size: parseFloat((config || {}).max_position_size || DEFAULT_MAX_POSITION_SIZE),
-      ai_volume_range: {
-        min: Number(config?._ai_volume_min ?? market?.ai_volume_range?.min ?? 0.01),
-        max: Number(config?._ai_volume_max ?? market?.ai_volume_range?.max ?? config?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE),
-        step: Number(config?._ai_volume_step ?? market?.ai_volume_range?.step ?? 0.01),
-      },
     }
     if (market.strategy_context) {
       const ctx = { ...market.strategy_context }
@@ -622,6 +660,12 @@ export function buildModelComparisonSignal(raw, normalized, config = {}, market 
     entry_method:isTrade ? entryMethod : 'observe',
     confidence,
     recommended_volume:isTrade ? (numberOrNull(raw?.recommended_volume) || 0) : 0,
+    position_size_tier:isTrade ? (normalizePositionSizeTier(raw?.position_size_tier, signalType) || 'light') : 'observe',
+    position_size_factor:isTrade ? positionSizeFactor(normalizePositionSizeTier(raw?.position_size_tier, signalType) || 'light') : 0,
+    position_size_reason:localizeInferenceNarrative(String(raw?.position_size_reason || normalized?.position_size_reason || '')).slice(0, 240),
+    position_action:String(raw?.position_action || (isTrade ? 'open' : 'observe')).toLowerCase(),
+    pending_action:String(raw?.pending_action || 'none').toLowerCase(),
+    management_direction:String(raw?.management_direction || 'none').toLowerCase(),
     limit_price:isTrade ? limitPrice : null,
     stop_limit_price:isTrade ? stopLimitPrice : null,
     pending_valid_minutes:pendingValidMinutes,
@@ -646,6 +690,7 @@ export function buildModelComparisonSignal(raw, normalized, config = {}, market 
 
 export function normalizeAiSignal(parsed, config, market) {
   const strictInference = parsed?._inference_source === 'ai'
+  adaptLegacyPositionSizing(parsed)
   localizeAiSignalUserVisibleFields(parsed)
   const cleanText = (value, maxLength) => typeof value === 'string' ? localizeInferenceNarrative(value).slice(0, maxLength) : ''
   const cleanList = value => Array.isArray(value)
@@ -654,6 +699,10 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.decision_summary = cleanText(parsed.decision_summary, 200)
   parsed.trigger_condition = cleanText(parsed.trigger_condition, 240)
   parsed.invalidation_condition = cleanText(parsed.invalidation_condition, 240)
+  parsed.position_size_reason = cleanText(parsed.position_size_reason, 240)
+  parsed.position_action = String(parsed.position_action || '').trim().toLowerCase()
+  parsed.pending_action = String(parsed.pending_action || '').trim().toLowerCase()
+  parsed.management_direction = String(parsed.management_direction || 'none').trim().toLowerCase()
   parsed.key_reasons = cleanList(parsed.key_reasons)
   parsed.risk_factors = cleanList(parsed.risk_factors)
   parsed.analysis = cleanText(parsed.analysis, 4000)
@@ -707,6 +756,9 @@ export function normalizeAiSignal(parsed, config, market) {
   const schemaHold = reason => ({
     ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe',
     recommended_volume: 0, limit_price: null, stop_limit_price: null,
+    position_size_tier: 'observe', position_size_factor: 0,
+    position_action:'observe', pending_action:'none',
+    management_direction:'none',
     recommended_take_profit_tier: null,
     pending_valid_minutes: 0, pending_valid_until: null,
     normalization_info: {
@@ -743,7 +795,7 @@ export function normalizeAiSignal(parsed, config, market) {
     signalType = 'hold'
   }
   if (strictInference) {
-    const strictRequired = ['signal_type', 'entry_method', 'recommended_volume']
+    const strictRequired = ['signal_type', 'entry_method', 'position_size_tier', 'position_size_reason', 'position_action', 'pending_action', 'management_direction']
     if (signalType !== 'hold') strictRequired.push('stop_loss_price', 'take_profit_1_price')
     const missing = strictRequired.filter(key => parsed[key] === undefined || parsed[key] === null || parsed[key] === '')
     if (missing.length) return schemaHold(`missing:${missing.join(',')}`)
@@ -766,6 +818,15 @@ export function normalizeAiSignal(parsed, config, market) {
   if (strictInference && signalType !== 'hold' && !allowedEntryMethods.has(entryMethod)) return schemaHold('entry_method_not_allowed_by_strategy')
   if (signalType === 'hold') entryMethod = 'observe'
   if (entryMethod === 'observe') { signalType = 'hold'; }
+  const requestedPositionTier = normalizePositionSizeTier(parsed.position_size_tier, signalType)
+  if (!requestedPositionTier) return schemaHold('invalid_position_size_tier')
+  if (!['open', 'hold_no_add', 'allow_add', 'observe'].includes(parsed.position_action)) return schemaHold('invalid_position_action')
+  if (signalType === 'hold' && !['observe', 'hold_no_add'].includes(parsed.position_action)) return schemaHold('invalid_hold_position_action')
+  if (signalType !== 'hold' && !['open', 'hold_no_add', 'allow_add'].includes(parsed.position_action)) return schemaHold('invalid_trade_position_action')
+  if (!['none', 'keep', 'cancel', 'cancel_replace'].includes(parsed.pending_action)) return schemaHold('invalid_pending_action')
+  if (signalType === 'hold' && parsed.pending_action === 'cancel_replace') return schemaHold('invalid_hold_cancel_replace')
+  if (!['buy', 'sell', 'none'].includes(parsed.management_direction)) return schemaHold('invalid_management_direction')
+  if (['cancel', 'cancel_replace'].includes(parsed.pending_action) && parsed.management_direction === 'none') return schemaHold('management_direction_required')
 
   // Limit price validation — reject signal if pending order has no valid price
   let limitPrice = parsed.limit_price ? parseFloat(parsed.limit_price) : null
@@ -825,18 +886,12 @@ export function normalizeAiSignal(parsed, config, market) {
 
   const configuredMinPosition = Number(config?._ai_volume_min ?? market?.ai_volume_range?.min ?? 0.01)
   const configuredMaxPosition = Number(config?._ai_volume_max ?? market?.ai_volume_range?.max ?? config?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE)
-  const configuredVolumeStep = Number(config?._ai_volume_step ?? market?.ai_volume_range?.step ?? 0.01)
   const minPosition = Number.isFinite(configuredMinPosition) && configuredMinPosition > 0 ? configuredMinPosition : 0.01
   const maxPosition = Number.isFinite(configuredMaxPosition) && configuredMaxPosition >= minPosition ? configuredMaxPosition : minPosition
-  const volumeStep = Number.isFinite(configuredVolumeStep) && configuredVolumeStep > 0 ? configuredVolumeStep : 0.01
-  const rawVolume = parseFloat(parsed.recommended_volume || 0)
-  const volumeSteps = (rawVolume - minPosition) / volumeStep
-  if (strictInference && signalType !== 'hold' && (!Number.isFinite(rawVolume) || rawVolume < minPosition || rawVolume > maxPosition || Math.abs(volumeSteps - Math.round(volumeSteps)) > 1e-7)) {
-    return schemaHold('ai_volume_out_of_platform_range')
-  }
-  const boundedVolume = Math.max(minPosition, Math.min(Number.isFinite(rawVolume) ? rawVolume : minPosition, maxPosition))
-  let recommendedVolume = signalType === 'hold' ? 0 : Math.floor((boundedVolume - minPosition + 1e-9) / volumeStep) * volumeStep + minPosition
-  recommendedVolume = Number(recommendedVolume.toFixed(8))
+  // New signals do not accept an absolute lot recommendation from the model.
+  // Keep this legacy database field as an internal execution ceiling; the
+  // deterministic risk gate derives the real lot size from stop-loss risk.
+  let recommendedVolume = signalType === 'hold' ? 0 : maxPosition
 
   let rawConfidence = parseFloat(parsed.confidence)
   if (!Number.isFinite(rawConfidence)) rawConfidence = 0
@@ -864,6 +919,11 @@ export function normalizeAiSignal(parsed, config, market) {
     parsed.signal_type = 'hold'
     parsed.recommended_volume = 0
     parsed.entry_method = 'observe'
+    parsed.position_size_tier = 'observe'
+    parsed.position_size_factor = 0
+    parsed.position_action = 'observe'
+    parsed.pending_action = 'none'
+    parsed.management_direction = 'none'
     parsed.limit_price = null
     parsed.stop_limit_price = null
     parsed.pending_valid_until = null
@@ -875,6 +935,26 @@ export function normalizeAiSignal(parsed, config, market) {
       minimum_confidence:risk.minConfidence,
     }
     return parsed
+  }
+
+  const context = market?.strategy_context || {}
+  const alignment = context?.chan_timeframe_alignment || {}
+  const missingFrames = Array.isArray(context.missing_timeframes) ? context.missing_timeframes.length
+    : Array.isArray(market?.missing_timeframes) ? market.missing_timeframes.length : 0
+  let evidenceCap = parsed.confidence >= 0.75 ? 'standard' : parsed.confidence >= 0.62 ? 'light' : 'probe'
+  if (missingFrames > 0 || context.context_status === 'partial') evidenceCap = 'probe'
+  if (['mixed', 'insufficient'].includes(String(alignment.agreement || '').toLowerCase())) evidenceCap = 'probe'
+  const positionSizing = resolvePositionSizeTier({ requestedTier:requestedPositionTier, signalType, evidenceCap })
+  if (!positionSizing) return schemaHold('invalid_position_size_tier')
+  parsed.position_size_tier = positionSizing.tier
+  parsed.position_size_factor = positionSizing.factor
+  if (positionSizing.downgraded) {
+    parsed.normalization_info = {
+      ...(parsed.normalization_info || {}),
+      position_size_tier_requested:requestedPositionTier,
+      position_size_tier_used:positionSizing.tier,
+      position_size_tier_downgraded:true,
+    }
   }
 
   parsed.signal_type = signalType
@@ -967,6 +1047,8 @@ export function normalizeAiSignal(parsed, config, market) {
   // Attach pending order fields
   parsed.entry_method = entryMethod
   parsed.recommended_volume = recommendedVolume
+  parsed.position_size_tier = signalType === 'hold' ? 'observe' : parsed.position_size_tier
+  parsed.position_size_factor = signalType === 'hold' ? 0 : positionSizeFactor(parsed.position_size_tier)
   parsed.limit_price = limitPrice
   parsed.stop_limit_price = stopLimitPrice
   parsed.pending_valid_until = pendingValidUntil

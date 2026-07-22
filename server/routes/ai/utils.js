@@ -133,6 +133,12 @@ export function aiFailureHold(market, reason) {
     // valid 50% HOLD conclusion.
     confidence: 0,
     recommended_volume: 0.0,
+    position_size_tier: 'observe',
+    position_size_factor: 0,
+    position_size_reason: '模型未形成可执行仓位建议',
+    position_action: 'observe',
+    pending_action: 'none',
+    management_direction: 'none',
     entry_method: 'observe',
     limit_price: null,
     stop_limit_price: null,

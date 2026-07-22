@@ -3,6 +3,7 @@
 import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
 import { riskRuleIsEnforced } from './rollout-governance.js'
+import { normalizePositionSizeTier, positionSizeFactor } from './position-sizing.js'
 
 const rule = (code, type, unit, safety, value, min, max, locked, label, options = {}) => ({
   code, type, unit, unit_label: options.unit_label || unit, safety_direction: safety,
@@ -372,12 +373,18 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   if ((side === 'buy' && !(sl < entry && tp > entry)) || (side === 'sell' && !(sl > entry && tp < entry))) return fail('R1.6_SL_TP_DIRECTION', { entry, sl, tp })
   const atr = finite(approved.atr_anchor)
   if (!(atr > 0)) return fail('R1_ATR_REQUIRED')
-  let volume = finite(approved.volume)
-  if (!(volume > 0)) return fail('R1.9_VOLUME_INVALID')
   const brokerMinVolume = Number(instrument.volume_min), brokerMaxVolume = Number(instrument.volume_max), brokerVolumeStep = Number(instrument.volume_step)
+  const hasTierSizing = ai && approved.position_size_tier !== null && approved.position_size_tier !== undefined && approved.position_size_tier !== ''
+  const normalizedTier = hasTierSizing ? normalizePositionSizeTier(approved.position_size_tier, approved.signal_type) : null
+  if (hasTierSizing && !normalizedTier) return fail('R5_SCHEMA_AI_POSITION_SIZE_TIER', { position_size_tier:approved.position_size_tier })
+  let volume = hasTierSizing
+    ? floorStep(Math.min(Number(policy.max_position_size), brokerMaxVolume), brokerVolumeStep)
+    : finite(approved.volume)
+  if (!(volume > 0)) return fail('R1.9_VOLUME_INVALID')
   if (volume < brokerMinVolume || volume > brokerMaxVolume || !aligned(volume, brokerVolumeStep, brokerMinVolume)) {
     return fail('R1.9_AI_VOLUME_OUT_OF_RANGE', { volume, minimum:brokerMinVolume, maximum:brokerMaxVolume, step:brokerVolumeStep, source:'mt5_symbol' })
   }
+  approved.volume = volume
   let adjusted = false
   // The gate must not move an AI stop loss because that changes the trading
   // thesis. Broker minimum stop distance remains an execution-layer check.
@@ -401,14 +408,31 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
     : finalDistance / Number(instrument.tick_size) * Number(instrument.tick_value)
   const equity = finite(account?.equity)
   if (!(equity > 0) || !(riskPerLot > 0)) return fail('R1.10_RISK_DATA_INVALID')
-  const riskCap = equity * policy.max_risk_per_trade_pct / 100
+  const requestedRiskFactor = approved.position_size_factor === null || approved.position_size_factor === undefined || approved.position_size_factor === ''
+    ? null
+    : finite(approved.position_size_factor)
+  const resolvedPositionSizeFactor = normalizedTier
+    ? positionSizeFactor(normalizedTier)
+    : ai
+      ? Math.max(0.25, Math.min(1, requestedRiskFactor == null ? 1 : requestedRiskFactor))
+    : 1
+  approved.position_size_tier = normalizedTier || approved.position_size_tier || null
+  approved.position_size_factor = resolvedPositionSizeFactor
+  const fullRiskCap = equity * policy.max_risk_per_trade_pct / 100
+  const riskCap = fullRiskCap * resolvedPositionSizeFactor
   volume = floorStep(Math.min(volume, riskCap / riskPerLot), Number(instrument.volume_step))
   const minimumLot = Number(instrument.volume_min)
   if (volume + 1e-9 < minimumLot) return fail('R1.9_BELOW_MINIMUM_AFTER_RISK', { volume, minimum: minimumLot })
-  if (volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN')
+  if (!hasTierSizing && volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN')
   if (volume !== Number(approved.volume)) adjusted = true
   approved.volume = volume
-  pass(rules, 'R1.10_REAL_RISK', { risk_amount: Number((riskPerLot * volume).toFixed(8)), risk_cap: riskCap, calculation_source: calculationSource })
+  pass(rules, 'R1.10_REAL_RISK', {
+    risk_amount: Number((riskPerLot * volume).toFixed(8)), risk_cap: riskCap,
+    full_risk_cap: fullRiskCap, position_size_factor:resolvedPositionSizeFactor,
+    position_size_tier:approved.position_size_tier || null,
+    position_limit_lots:Number(policy.max_position_size),
+    calculation_source: calculationSource,
+  })
   if (method !== 'market') {
     const current = side === 'buy' ? ask : bid
     const pendingRatio = entry / current

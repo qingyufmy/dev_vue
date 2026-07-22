@@ -721,11 +721,13 @@ export async function handleAnalyze(userId, params) {
   if (!renderedEvidence) throw new Error('inference_evidence_missing')
   const persisted = await withTransaction(async run => {
     const [result] = await run(`INSERT INTO ai_signals(user_id, prompt_type_id, source, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
+      position_size_tier, position_size_factor, position_size_reason,
       analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier,
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
       entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, Number(strategy.id), session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
+        signal.position_size_tier || null, signal.position_size_factor ?? null, signal.position_size_reason || null,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
         signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
         signal.recommended_take_profit_tier || null,

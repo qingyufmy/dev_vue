@@ -9,6 +9,7 @@ import { isEncryptionAvailable } from '../../ai-credential.js'
 import { resolveAiTaskModel, upsertDefaultModelProfileFromLegacyInput } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
 import { DEFAULT_AI_VOLUME_STEP, evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy, resolvePlatformAiVolumeRange } from './risk-policy.js'
+import { normalizePositionSizeTier, positionSizeFactor } from './position-sizing.js'
 import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
 import { getRiskRuleRolloutModes } from './rollout-governance.js'
 import { getInferencePreference } from './inference-preferences.js'
@@ -364,11 +365,19 @@ export function signalOrderPayload(signal, config, market, confirm) {
   const st = String(signal.signal_type || '').toLowerCase()
   const baseOrderType = st.startsWith('buy') ? 'buy' : st.startsWith('sell') ? 'sell' : st
   const entryMethod = signal.entry_method || (st.includes('stop_limit') ? 'stop_limit' : st.includes('limit') ? 'limit' : st.includes('stop') ? 'stop' : 'market')
+  const positionSizeTier = normalizePositionSizeTier(signal.position_size_tier, st)
+  const legacyVolume = Number(signal.recommended_volume)
+  const executionCeiling = Number(config?.max_position_size)
 
   const payload = {
     symbol: signal.symbol,
     order_type: baseOrderType,
-    volume: parseFloat(signal.recommended_volume),
+    volume: positionSizeTier && Number.isFinite(executionCeiling) && executionCeiling > 0
+      ? executionCeiling
+      : legacyVolume,
+    position_size_tier: positionSizeTier || null,
+    position_size_factor: positionSizeTier ? positionSizeFactor(positionSizeTier) : 1,
+    position_size_reason: signal.position_size_reason || '',
     sl: signal.stop_loss_price,
     tp: usedTier ? requestedPrice : null,
     tp_selection_mode: takeProfitMode,
