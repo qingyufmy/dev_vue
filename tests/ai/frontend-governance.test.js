@@ -506,17 +506,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).not.toContain('return translated || "系统内部状态"')
   })
 
-  it('shows an explicit AI to risk to MT5 chain without a noisy live region', () => {
-    expect(html).toContain('id="signalSafetyChain"')
+  it('keeps execution state concise without duplicating the internal safety chain', () => {
+    expect(html).not.toContain('id="signalSafetyChain"')
     expect(html).toContain('id="signalAnnouncement"')
     expect(html).toContain('<div id="latestSignal" class="signal-body">')
-    expect(app).toContain('function signalExecutionStages(signal)')
-    expect(app).toContain('label:"AI 建议"')
-    expect(app).toContain('label:"服务器风控"')
-    expect(app).toContain('label:"MT5 结果"')
-    expect(app).toContain('signal-monitor-safety')
-    expect(app).toContain('analysis-safety-chain')
-    expect(css).toContain('.signal-safety-stages')
+    expect(app).not.toContain('function signalExecutionStages(signal)')
+    expect(app).not.toContain('renderSignalSafetyChain(')
+    expect(app).not.toContain('signal-monitor-safety')
+    expect(app).not.toContain('analysis-safety-chain')
+    expect(css).not.toContain('.signal-safety-stages')
   })
 
   it('uses progressive disclosure for secondary account data and uncommon chart periods', () => {
