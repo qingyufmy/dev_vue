@@ -20,7 +20,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('estimatedAutoProgress')
     expect(app).toContain('displayedAutoProgress')
     expect(css).toContain('.auto-runtime-control.is-progress')
-    expect(css).toContain('transition: width 900ms linear')
+    expect(css).toContain('transition: transform 900ms linear')
     expect(css).not.toContain('@keyframes auto-runtime-scan')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
@@ -610,6 +610,15 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('#review-memory .review-case-metrics strong')
     expect(css).toContain('#model-compare .compare-method-note p')
     expect(css).toContain('max-width: 72ch')
+  })
+
+  it('removes decorative side strips, global custom scrollbars and layout-driven progress animation', () => {
+    expect(css).not.toContain('\n::-webkit-scrollbar {')
+    expect(css).toContain('.strategy-card::before {\n  display: none;')
+    expect(css).toContain("transform: scaleX(var(--auto-progress-scale))")
+    expect(css).toContain("transform:scaleX(var(--compare-progress-scale,0))")
+    expect(app).toContain(".replace(/^\\s*>\\s?/gm, \"\")")
+    expect(app).toContain("--signal-confidence-scale")
   })
 })
 

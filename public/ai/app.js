@@ -595,7 +595,7 @@ function applyAutoBadge(label, type, title, visual = {}) {
     track.setAttribute('aria-valuenow', String(progress));
     track.setAttribute('aria-valuetext', visual.stage ? `${visual.stage}，${progress}%` : `${progress}%`);
   }
-  el.style.setProperty('--auto-progress', `${progress}%`);
+  el.style.setProperty('--auto-progress-scale', String(progress / 100));
   el.setAttribute('aria-label', visual.mode ? `${label}，${visual.stage || ''}，${progress}%` : label);
 
   if (!_autoBadgeHovering) {
@@ -2164,7 +2164,10 @@ async function loadStrategyCatalog() {
     const canSubscribe = item.scope === 'platform' || Number(item.owner_user_id) === Number(state.user?.id);
     const visibilityLabel = ({ active:"上线", draft:"草稿", archived:"归档" })[item.visibility_status] || item.visibility_status;
     const subscriptionsBlock = linked.length ? `<section class="strategy-subscriptions"><div class="strategy-subscriptions-head"><span><i data-lucide="radio-tower" size="15"></i>执行订阅</span><small>${linked.length} 个</small></div>${subRows}</section>` : '<div class="quiet-empty">还没有执行订阅</div>';
-    const description = item.description || (item.scope === "private" ? "我的自定义分析策略" : "平台提供的分析策略");
+    const fallbackDescription = item.scope === "private" ? "我的自定义分析策略" : "平台提供的分析策略";
+    const description = String(item.description || fallbackDescription)
+      .replace(/^\s*>\s?/gm, "")
+      .trim() || fallbackDescription;
     return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>技术分析</small><strong>${escapeHtml(chanText)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>账户上下文</small><strong>${escapeHtml(portfolioText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
   }).join("") : '<div class="empty-state"><strong>当前筛选下没有策略</strong><span>切换筛选条件，或新建一套自己的交易策略。</span></div>';
   populateManualStrategySelector();
@@ -4507,7 +4510,7 @@ function updateSignalDisplay(signal, options = {}) {
     $("sigDirectionText").className = "signal-direction-text hold";
     setText("sigConfidence", "--");
     updateSignalPriceFields(null);
-    $("sigBar").style.width = "0%";
+    $("sigBar").style.setProperty('--signal-confidence-scale', '0');
     setText("sigTime", "等待新信号");
     setText("sigGeneratedAt", "--");
     setText("sigValidWindow", "--");
@@ -4539,7 +4542,7 @@ function updateSignalDisplay(signal, options = {}) {
   $("sigDirectionText").className = `signal-direction-text ${dir}`;
   setText("sigConfidence", confidence.label);
   updateSignalPriceFields(signal);
-  $("sigBar").style.width = `${confidence.value}%`;
+  $("sigBar").style.setProperty('--signal-confidence-scale', String(confidence.value / 100));
   setText("sigTime", signalDisplayTime(signal));
   setText("sigGeneratedAt", signalDisplayTime(signal));
   setText("sigValidWindow", signalFreshness(signal));
@@ -5711,7 +5714,7 @@ function updateHistoryCompareReadiness() {
 
 function setHistoryCompareProgress(job) {
   const progress = Math.max(0, Math.min(100, Number(job?.progress_percent || 0)));
-  if ($("cmpProgressFill")) $("cmpProgressFill").style.width = `${progress}%`;
+  if ($("cmpProgressFill")) $("cmpProgressFill").style.setProperty('--compare-progress-scale', String(progress / 100));
   if ($("cmpProgressPercent")) $("cmpProgressPercent").textContent = `${progress}%`;
   const snapshotMode = job?.params?.data_source === "snapshots";
   const stageLabels = {
@@ -5771,7 +5774,7 @@ async function monitorHistoryCompareJob(jobId, initialJob = null) {
       }
     }
     if (job?.status === "succeeded" && job.result?.status === "success") {
-      if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "100%";
+      if ($("cmpProgressFill")) $("cmpProgressFill").style.setProperty('--compare-progress-scale', '1');
       if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = job.params?.evaluation_mode === "continuous"
         ? "连续回测完成"
         : "快速抽样完成";
@@ -5849,7 +5852,7 @@ async function runHistoryCompare() {
   }
   $("cmpProgressBar")?.classList.remove("hidden");
   $("cmpEmptyState")?.classList.add("hidden");
-  if ($("cmpProgressFill")) $("cmpProgressFill").style.width = "2%";
+  if ($("cmpProgressFill")) $("cmpProgressFill").style.setProperty('--compare-progress-scale', '0.02');
   if ($("cmpProgressLabel")) $("cmpProgressLabel").textContent = "正在提交对比任务...";
   try {
     const data = await api("/api/ai/model-compare/history", {
