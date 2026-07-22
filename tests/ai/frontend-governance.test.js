@@ -500,6 +500,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('font-family: var(--font-ui)')
     expect(css).toContain('flex: 1 1 320px')
     expect(css).toContain('height: clamp(280px, 34vh, 380px)')
+    expect(app).toContain('多周期方向证据不足')
+    expect(app).toContain('线段结构尚不可靠')
+    expect(app).not.toContain('return translated || "系统内部状态"')
   })
 
   it('shows an explicit AI to risk to MT5 chain without a noisy live region', () => {

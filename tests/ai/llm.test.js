@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative } from '../../server/routes/ai/llm.js'
 
 describe('buildStrategyOutputFormat', () => {
   it('removes all pending-order fields from a market-only strategy', () => {
@@ -37,6 +37,21 @@ describe('buildStrategyOutputFormat', () => {
 })
 
 describe('experience usage normalization', () => {
+  it('converts internal Chan enums into direct Chinese explanations', () => {
+    expect(localizeInferenceNarrative('agreement=insufficient；H1 为 unreliable_segments，reliability=low'))
+      .toBe('多周期方向证据不足；H1 为 线段结构尚不可靠，结构可靠性较低')
+    const result = normalizeAiSignal({
+      signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      analysis:'H1缠论趋势为“unreliable_segments”，方向不明确。',
+      reasoning:'agreement=insufficient，4H reliability=low。',
+    }, { _allowed_entry_methods:['market'] }, { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.analysis).toContain('H1 尚未形成可靠的确认线段')
+    expect(result.reasoning).toBe('多周期方向证据不足，4H 结构可靠性较低。')
+    expect(`${result.analysis}${result.reasoning}`).not.toMatch(/agreement|insufficient|unreliable_segments|reliability=/i)
+    expect(localizeInferenceNarrative('H4 status=unreliable_segments，window_stable=false，alignment_with_higher=conflict'))
+      .toBe('H4 线段结构尚不可靠，结构窗口不稳定，与高周期方向冲突')
+  })
+
   it('drops hallucinated experience ids from model output', () => {
     const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
       experience_usage:{ used_ids:[7, 999], rejected_ids:[8, 998], influence:'经验支持继续等待' } },

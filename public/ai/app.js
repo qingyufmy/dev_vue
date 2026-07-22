@@ -831,13 +831,49 @@ function localizeReason(reason) {
 }
 
 function userVisibleText(value, fallback = "暂无中文说明") {
-  const text = String(value || "").trim();
+  let text = String(value || "").trim();
   if (!text) return fallback;
+  const replacements = [
+    [/\bwindow_stable\s*=\s*false\b/gi, "结构窗口不稳定"],
+    [/\btime_location_reliable\s*=\s*false\b/gi, "结构时间定位不可靠"],
+    [/\balignment_with_higher\s*=\s*conflict\b/gi, "与高周期方向冲突"],
+    [/\bcontext_status\s*=\s*partial\b/gi, "多周期行情证据不完整"],
+    [/\bstatus\s*=\s*unreliable_segments\b/gi, "线段结构尚不可靠"],
+    [/\bagreement\s*=\s*aligned_up\b/gi, "多周期方向一致偏多"],
+    [/\bagreement\s*=\s*aligned_down\b/gi, "多周期方向一致偏空"],
+    [/\bagreement\s*=\s*mixed\b/gi, "多周期方向存在分歧"],
+    [/\bagreement\s*=\s*insufficient\b/gi, "多周期方向证据不足"],
+    [/\breliability\s*=\s*low\b/gi, "结构可靠性较低"],
+    [/\breliability\s*=\s*(?:medium|normal)\b/gi, "结构可靠性一般"],
+    [/\breliability\s*=\s*high\b/gi, "结构可靠性较高"],
+    [/\bunreliable_segments\b/gi, "线段结构尚不可靠"],
+    [/\binsufficient_confirmed_bis\b/gi, "已确认笔数量不足"],
+    [/\binsufficient_bis\b/gi, "确认笔数量不足"],
+    [/\binsufficient_klines\b/gi, "K线数据不足"],
+    [/\bsegments_not_confirmed\b/gi, "线段尚未确认"],
+    [/\bno_valid_center\b/gi, "尚未形成有效中枢"],
+    [/\bupward_breakout_pending\b/gi, "向上突破仍待结构确认"],
+    [/\bdownward_breakout_pending\b/gi, "向下突破仍待结构确认"],
+    [/\baligned_up\b/gi, "方向一致偏多"],
+    [/\baligned_down\b/gi, "方向一致偏空"],
+    [/\bmixed\b/gi, "方向存在分歧"],
+    [/\bpartial\b/gi, "结构证据不完整"],
+    [/\binsufficient\b/gi, "证据不足"],
+    [/\bsystem internal status\b/gi, "当前结构尚未确认"],
+    [/系统内部状态/g, "当前结构尚未确认"],
+  ];
+  for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement);
+  text = text.replace(/\b((?:M|H|D)\d+|\d+H)\s*缠论趋势?为[“"]线段结构尚不可靠[”"]/gi, "$1 尚未形成可靠的确认线段")
+    .replace(/\b((?:M|H|D)\d+|\d+H)\s*缠论为[“"]线段结构尚不可靠[”"]/gi, "$1 尚未形成可靠的确认线段")
+    .replace(/可靠性低/g, "结构可靠性较低")
+    .replace(/\bagreement\s*=\s*[a-z_]+\b/gi, "多周期方向状态尚未确认")
+    .replace(/\breliability\s*=\s*[a-z_]+\b/gi, "结构可靠性尚未确认")
+    .replace(/\b(?:status|trend_state|context_status|alignment_with_higher|window_stable|time_location_reliable)\s*=\s*[a-z_]+\b/gi, "相关结构状态尚未确认");
   const localized = localizeReason(text);
   if (localized !== text) return localized;
   const replaced = text.replace(/\b(?:R\d(?:\.[0-9A-Z]+)?_[A-Z0-9._-]+|PX\.[A-Z0-9._-]+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/gi, token => {
     const translated = REASON_MAP[token] || RISK_DECISION_LABELS[token];
-    return translated || "系统内部状态";
+    return translated || "相关条件尚未确认";
   });
   if (/[A-Za-z]/.test(replaced) && !/[\u4e00-\u9fff]/.test(replaced)) return fallback;
   return replaced;

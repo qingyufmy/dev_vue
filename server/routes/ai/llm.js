@@ -28,7 +28,66 @@ chan.divergence 仅表示最新确认线段的背驰判断；只有 type 为 top
 
 const USER_VISIBLE_CHINESE_RULE = `
 ## 用户可见语言规则
-所有用户可见文本必须使用简体中文，包括一句话结论、触发条件、失效条件、关键依据、风险因素、行情分析、分析依据、经验影响和取消原因。禁止输出内部错误码、英文状态值或整句英文。品种代码、周期、价格以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。`
+所有用户可见文本必须使用简体中文，包括一句话结论、触发条件、失效条件、关键依据、风险因素、行情分析、分析依据、经验影响和取消原因。禁止输出内部错误码、英文状态值或整句英文。品种代码、周期、价格以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。
+不得写 agreement=insufficient、reliability=low、unreliable_segments、partial 等内部字段或枚举，也不得用“系统内部状态”代替解释。必须直接说明用户能理解的中文含义，例如：agreement=insufficient 写成“多周期方向证据不足”；unreliable_segments 写成“线段结构尚不可靠”；reliability=low 写成“结构可靠性较低”。当某周期结构不可用时，应说明原因和影响，例如“H1 尚未形成可靠的确认线段，当前方向证据不足”或“H4 结构可靠性较低，暂不能作为多头依据”。`
+
+const INFERENCE_NARRATIVE_REPLACEMENTS = [
+  [/\bwindow_stable\s*=\s*false\b/gi, '结构窗口不稳定'],
+  [/\btime_location_reliable\s*=\s*false\b/gi, '结构时间定位不可靠'],
+  [/\balignment_with_higher\s*=\s*conflict\b/gi, '与高周期方向冲突'],
+  [/\bcontext_status\s*=\s*partial\b/gi, '多周期行情证据不完整'],
+  [/\bstatus\s*=\s*unreliable_segments\b/gi, '线段结构尚不可靠'],
+  [/\bagreement\s*=\s*aligned_up\b/gi, '多周期方向一致偏多'],
+  [/\bagreement\s*=\s*aligned_down\b/gi, '多周期方向一致偏空'],
+  [/\bagreement\s*=\s*mixed\b/gi, '多周期方向存在分歧'],
+  [/\bagreement\s*=\s*insufficient\b/gi, '多周期方向证据不足'],
+  [/\breliability\s*=\s*low\b/gi, '结构可靠性较低'],
+  [/\breliability\s*=\s*(?:medium|normal)\b/gi, '结构可靠性一般'],
+  [/\breliability\s*=\s*high\b/gi, '结构可靠性较高'],
+  [/\bunreliable_segments\b/gi, '线段结构尚不可靠'],
+  [/\binsufficient_confirmed_bis\b/gi, '已确认笔数量不足'],
+  [/\binsufficient_bis\b/gi, '确认笔数量不足'],
+  [/\binsufficient_klines\b/gi, 'K线数据不足'],
+  [/\bsegments_not_confirmed\b/gi, '线段尚未确认'],
+  [/\bno_valid_center\b/gi, '尚未形成有效中枢'],
+  [/\bupward_breakout_pending\b/gi, '向上突破仍待结构确认'],
+  [/\bdownward_breakout_pending\b/gi, '向下突破仍待结构确认'],
+  [/\baligned_up\b/gi, '方向一致偏多'],
+  [/\baligned_down\b/gi, '方向一致偏空'],
+  [/\bmixed\b/gi, '方向存在分歧'],
+  [/\bpartial\b/gi, '结构证据不完整'],
+  [/\binsufficient\b/gi, '证据不足'],
+  [/\bsystem internal status\b/gi, '当前结构尚未确认'],
+]
+
+export function localizeInferenceNarrative(value) {
+  let text = typeof value === 'string' ? value.trim() : ''
+  for (const [pattern, replacement] of INFERENCE_NARRATIVE_REPLACEMENTS) text = text.replace(pattern, replacement)
+  return text.replace(/\b((?:M|H|D)\d+|\d+H)\s*缠论趋势?为[“"]线段结构尚不可靠[”"]/gi, '$1 尚未形成可靠的确认线段')
+    .replace(/\b((?:M|H|D)\d+|\d+H)\s*缠论为[“"]线段结构尚不可靠[”"]/gi, '$1 尚未形成可靠的确认线段')
+    .replace(/可靠性低/g, '结构可靠性较低')
+    .replace(/\bagreement\s*=\s*[a-z_]+\b/gi, '多周期方向状态尚未确认')
+    .replace(/\breliability\s*=\s*[a-z_]+\b/gi, '结构可靠性尚未确认')
+    .replace(/\b(?:status|trend_state|context_status|alignment_with_higher|window_stable|time_location_reliable)\s*=\s*[a-z_]+\b/gi, '相关结构状态尚未确认')
+}
+
+function localizeAiSignalUserVisibleFields(signal) {
+  for (const key of ['decision_summary', 'trigger_condition', 'invalidation_condition', 'analysis', 'reasoning']) {
+    if (typeof signal?.[key] === 'string') signal[key] = localizeInferenceNarrative(signal[key])
+  }
+  for (const key of ['key_reasons', 'risk_factors']) {
+    if (Array.isArray(signal?.[key])) signal[key] = signal[key].map(localizeInferenceNarrative).filter(Boolean)
+  }
+  if (signal?.experience_usage && typeof signal.experience_usage === 'object' && typeof signal.experience_usage.influence === 'string') {
+    signal.experience_usage.influence = localizeInferenceNarrative(signal.experience_usage.influence)
+  }
+  if (Array.isArray(signal?.cancel_pending)) {
+    signal.cancel_pending = signal.cancel_pending.map(item => item && typeof item === 'object'
+      ? { ...item, reason:localizeInferenceNarrative(item.reason) }
+      : item)
+  }
+  return signal
+}
 
 let _schemaCache = null
 let _schemaCacheTs = 0
@@ -465,6 +524,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       validateObject: value => validateAiSignalResponse(value, config._allowed_entry_methods),
     })
     parsed._inference_source = 'ai'
+    localizeAiSignalUserVisibleFields(parsed)
     const comparisonRaw = config?._comparison_mode ? structuredClone(parsed) : null
     const normalized = normalizeAiSignal(parsed, config, market)
     return comparisonRaw
@@ -586,7 +646,8 @@ export function buildModelComparisonSignal(raw, normalized, config = {}, market 
 
 export function normalizeAiSignal(parsed, config, market) {
   const strictInference = parsed?._inference_source === 'ai'
-  const cleanText = (value, maxLength) => typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
+  localizeAiSignalUserVisibleFields(parsed)
+  const cleanText = (value, maxLength) => typeof value === 'string' ? localizeInferenceNarrative(value).slice(0, maxLength) : ''
   const cleanList = value => Array.isArray(value)
     ? value.map(item => cleanText(item, 160)).filter(Boolean).slice(0, 4)
     : []
@@ -595,6 +656,8 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.invalidation_condition = cleanText(parsed.invalidation_condition, 240)
   parsed.key_reasons = cleanList(parsed.key_reasons)
   parsed.risk_factors = cleanList(parsed.risk_factors)
+  parsed.analysis = cleanText(parsed.analysis, 4000)
+  parsed.reasoning = cleanText(parsed.reasoning, 4000)
   const availableExperienceIds = [...new Set((config?._experienceSelection?.selectedItemIds || [])
     .map(Number).filter(id => Number.isInteger(id) && id > 0))]
   const availableExperienceRefs = [...new Set((config?._experienceSelection?.selectedRefs || availableExperienceIds.map(id => `item:${id}`))
