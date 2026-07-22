@@ -66,6 +66,18 @@ describe('signal presentation', () => {
     expect(advice.description).toContain('风险上限')
   })
 
+  it('shows the concrete pre-risk portfolio alignment reason and count', () => {
+    const advice = buildExecutionAdvice({
+      signal_type:'buy_limit', execution_status:'skipped',
+      execution_result:{ status:'skipped', reason:'opposite_position_exists', details:{ count:3 } },
+    })
+    expect(advice).toEqual({
+      state:'skipped', title:'本次未执行',
+      description:'当前账户已有反向持仓，本次不新增仓位：检测到 3 个反向持仓',
+      executable:false,
+    })
+  })
+
   it('shows a Chinese risk reason instead of exposing an internal rule code', () => {
     const advice = buildExecutionAdvice({ signal_type: 'sell_stop', execution_result: JSON.stringify({ status: 'rejected', message: 'R1.7_PENDING_DEVIATION' }) })
     expect(advice).toMatchObject({ state: 'rejected', description: '挂单价格偏离当前报价过大' })

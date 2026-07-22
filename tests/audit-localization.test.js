@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatRiskReason,
   localizeAuditRow,
   prepareAuditRecord,
   shouldSkipHoldAudit,
@@ -66,5 +67,17 @@ describe('audit localization', () => {
       .toMatchObject({ status:'已开始', result:{ status:'已开始' } })
     expect(prepareAuditRecord('pending_superseded', {}, { status:'superseded' }, 'success').result.status)
       .toBe('已被替换')
+  })
+
+  it('formats portfolio alignment outcomes with concrete counts', () => {
+    expect(formatRiskReason('opposite_position_exists', { count:3 }))
+      .toBe('当前账户已有反向持仓，本次不新增仓位：检测到 3 个反向持仓')
+    expect(prepareAuditRecord('ai_auto_execute_skipped', { stage:'portfolio_alignment' }, {
+      status:'skipped', reason:'opposite_position_exists', details:{ count:3 },
+    }, 'info')).toMatchObject({
+      action:'AI 自动执行跳过',
+      request:{ stage:'持仓与挂单对齐' },
+      result:{ status:'已跳过', reason:'当前账户已有反向持仓，本次不新增仓位', details:{ count:3 } },
+    })
   })
 })

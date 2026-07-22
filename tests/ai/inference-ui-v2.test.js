@@ -110,4 +110,10 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('${renderSignalPendingActions(signal)}')
     expect(app).toContain('userVisibleText(action.message')
   })
+
+  it('keeps concrete execution outcomes visible even after the signal expires', () => {
+    expect(app.indexOf('if (executionStatus && executionStatus !== "success")')).toBeLessThan(app.indexOf('if (signalIsStale(signal)) return { state:"expired"'))
+    expect(app).toContain('opposite_position_exists:"当前账户已有反向持仓，本次不新增仓位"')
+    expect(app).toContain('title: rejected ? "风控未放行" : skipped ? "本次未执行"')
+  })
 })

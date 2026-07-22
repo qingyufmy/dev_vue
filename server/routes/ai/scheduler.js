@@ -1669,6 +1669,20 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
   const setTerminalStatus = (status, reason, details = {}) => queryRun(
     'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
     [status, JSON.stringify({ status, reason, details }), signalId, userId])
+  const finishBeforeRisk = async (status, reason, details = {}) => {
+    await setTerminalStatus(status, reason, details)
+    const action = status === 'rejected' ? 'ai_auto_execute_rejected'
+      : status === 'success' ? 'ai_auto_execute' : 'ai_auto_execute_skipped'
+    const severity = status === 'rejected' ? 'warning' : status === 'success' ? 'success' : 'info'
+    try {
+      await insertAudit(null, userId, action, symbol,
+        { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId, stage:'portfolio_alignment', reason, details },
+        { status, reason, details }, severity)
+    } catch (error) {
+      l(`pre-risk audit failed: ${error.message}`)
+    }
+    sendToBrowsers(userId, { type:'signal_execution_updated', signal_id:signalId, status, reason, details })
+  }
   try {
     if (isWeeklyFlattenWindow()) {
       await setTerminalStatus('skipped', 'weekly_flatten_window')
@@ -1740,7 +1754,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const positions = Array.isArray(positionsResponse?.positions) ? positionsResponse.positions : null
     const pendingOrders = pendingResponse?.orders ?? pendingResponse?.pending_list
     if (!positions || !Array.isArray(pendingOrders)) {
-      await setTerminalStatus('rejected', 'portfolio_state_unavailable')
+      await finishBeforeRisk('rejected', 'portfolio_state_unavailable')
       return
     }
     const signalType = String(signal.signal_type || '').toLowerCase()
@@ -1751,15 +1765,15 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const oppositePositions = symbolPositions.filter(item => !sameDirectionPositions.includes(item))
     const positionAction = String(signal.position_action || (sameDirectionPositions.length ? 'hold_no_add' : 'open')).toLowerCase()
     if (isTradeSignal && oppositePositions.length) {
-      await setTerminalStatus('skipped', 'opposite_position_exists', { count:oppositePositions.length })
+      await finishBeforeRisk('skipped', 'opposite_position_exists', { count:oppositePositions.length })
       return
     }
     if (isTradeSignal && sameDirectionPositions.length && positionAction !== 'allow_add') {
-      await setTerminalStatus('skipped', 'existing_position_no_add', { count:sameDirectionPositions.length })
+      await finishBeforeRisk('skipped', 'existing_position_no_add', { count:sameDirectionPositions.length })
       return
     }
     if (isTradeSignal && !sameDirectionPositions.length && ['allow_add', 'hold_no_add'].includes(positionAction)) {
-      await setTerminalStatus('skipped', 'reference_position_not_matched')
+      await finishBeforeRisk('skipped', 'reference_position_not_matched')
       return
     }
 
@@ -1774,17 +1788,18 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return managementDirection !== 'none' && pendingSide.startsWith(managementIsBuy ? 'buy' : 'sell')
     })
     if (pendingAction === 'keep') {
-      await setTerminalStatus('skipped', sameDirectionPending.length ? 'existing_pending_kept' : 'reference_pending_not_matched')
+      await finishBeforeRisk('skipped', sameDirectionPending.length ? 'existing_pending_kept' : 'reference_pending_not_matched',
+        { count:sameDirectionPending.length })
       return
     }
     if (sameDirectionPending.length && pendingAction === 'none') {
-      await setTerminalStatus('skipped', 'existing_pending_no_replace', { count:sameDirectionPending.length })
+      await finishBeforeRisk('skipped', 'existing_pending_no_replace', { count:sameDirectionPending.length })
       return
     }
     if (['cancel', 'cancel_replace'].includes(pendingAction)) {
       const cancellable = sameDirectionPending.filter(item => Number(item.magic || 0) === 234000)
       if (!cancellable.length) {
-        await setTerminalStatus('skipped', 'reference_pending_not_matched')
+        await finishBeforeRisk('skipped', 'reference_pending_not_matched')
         return
       }
       for (const item of cancellable) {
@@ -1792,12 +1807,12 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         if (!ticket) continue
         const cancelled = await mt5Bridge(userId, 'cancel_pending', { ticket }, { noFallback:true })
         if (cancelled?.status !== 'success') {
-          await setTerminalStatus('rejected', 'pending_cancel_failed', { ticket:String(ticket) })
+          await finishBeforeRisk('rejected', 'pending_cancel_failed', { ticket:String(ticket) })
           return
         }
       }
       if (pendingAction === 'cancel' || signalType === 'hold') {
-        await setTerminalStatus('success', 'pending_cancelled', { count:cancellable.length })
+        await finishBeforeRisk('success', 'pending_cancelled', { count:cancellable.length })
         return
       }
     }

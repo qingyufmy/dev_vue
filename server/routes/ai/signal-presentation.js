@@ -150,8 +150,8 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
     executable: false,
   }
   if (execution && execution.status && execution.status !== 'success') return {
-    state: execution.status === 'rejected' ? 'rejected' : 'failed',
-    title: execution.status === 'rejected' ? '风控未放行' : '执行未完成',
+    state: execution.status === 'rejected' ? 'rejected' : execution.status === 'skipped' ? 'skipped' : 'failed',
+    title: execution.status === 'rejected' ? '风控未放行' : execution.status === 'skipped' ? '本次未执行' : '执行未完成',
     description: executionDescription(execution, '请查看风控中心中的具体决策原因。'),
     executable: false,
   }

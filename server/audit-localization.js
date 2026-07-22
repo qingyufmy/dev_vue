@@ -65,6 +65,7 @@ const VALUE_LABELS = {
   position: '持仓',
   inventory: '交易清单获取',
   verification: '执行结果复核',
+  portfolio_alignment: '持仓与挂单对齐',
   timer: '定时调度',
   ai: 'AI 推理',
   manual: '手动操作',
@@ -232,6 +233,11 @@ export function formatRiskReason(code, details = {}) {
   if (rawCode === 'invalid_take_profit_direction') return `${base}：止盈 ${displayNumber(details.take_profit)}，入场参考价 ${displayNumber(details.entry_price)}`
   if (rawCode === 'pending_supersede_incomplete') return `${base}：仍有 ${displayNumber(details.remaining_same_direction, 0)} 个同向挂单未取消`
   if (rawCode === 'pending_limit_reached') return `${base}：当前 ${displayNumber(details.remaining, 0)} 个，上限 ${displayNumber(details.maximum, 0)} 个`
+  if (rawCode === 'opposite_position_exists') return `${base}：检测到 ${displayNumber(details.count, 0)} 个反向持仓`
+  if (rawCode === 'existing_position_no_add') return `${base}：当前已有 ${displayNumber(details.count, 0)} 个同向持仓`
+  if (rawCode === 'existing_pending_kept') return `${base}：继续保留 ${displayNumber(details.count, 0)} 个当前策略挂单`
+  if (rawCode === 'existing_pending_no_replace') return `${base}：当前已有 ${displayNumber(details.count, 0)} 个同向挂单`
+  if (rawCode === 'pending_cancelled') return `${base}：已取消 ${displayNumber(details.count, 0)} 个当前策略挂单`
   if ((rawCode === 'R6_GLOBAL_KILL_SWITCH' || rawCode === 'R6_USER_KILL_SWITCH') && details.reason) return `${base}：${details.reason}`
   return base
 }

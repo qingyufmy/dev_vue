@@ -2579,6 +2579,15 @@ const RISK_DECISION_LABELS = {
   "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_ACCOUNT_TRANSFERRED":"MT5账户已切换到其他平台账号",
   "R6_ACCOUNT_TRADE_PERMISSION_REQUIRED":"MT5账户没有完整交易权限", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
   "R6_USER_KILL_SWITCH":"账户紧急停止已开启", "R6.4_OBSERVATION_BELOW_MINIMUM":"观察期手数低于最小可交易手数",
+  portfolio_state_unavailable:"无法读取当前账户的持仓与挂单，本次未执行",
+  opposite_position_exists:"当前账户已有反向持仓，本次不新增仓位",
+  existing_position_no_add:"当前账户已有同向持仓，策略未建议加仓",
+  reference_position_not_matched:"账户实际持仓与平台参考组合不一致，本次不跟随加仓",
+  existing_pending_kept:"当前策略的原挂单仍然有效，继续保留",
+  reference_pending_not_matched:"账户中未找到平台策略要管理的对应挂单",
+  existing_pending_no_replace:"当前策略已有同向挂单，未收到替换指令",
+  pending_cancel_failed:"取消当前策略挂单失败，本次未继续执行",
+  pending_cancelled:"旧挂单已取消",
   "PX.3_BROKER_SLIPPAGE":"已应用旧版下单价格偏差",
   "PX.3_EXECUTION_PRICE_TOLERANCE":"已按百分比换算 MT5 下单偏差",
 };
@@ -2626,6 +2635,11 @@ function riskRuleDescription(code, details = {}) {
   if (code === "invalid_take_profit_direction") return `${label}：止盈 ${displayRiskNumber(details.take_profit)}，入场参考价 ${displayRiskNumber(details.entry_price)}`;
   if (code === "pending_supersede_incomplete") return `${label}：仍有 ${displayRiskNumber(details.remaining_same_direction, 0)} 个同向挂单未取消`;
   if (code === "pending_limit_reached") return `${label}：当前 ${displayRiskNumber(details.remaining, 0)} 个，上限 ${displayRiskNumber(details.maximum, 0)} 个`;
+  if (code === "opposite_position_exists") return `${label}：检测到 ${displayRiskNumber(details.count, 0)} 个反向持仓`;
+  if (code === "existing_position_no_add") return `${label}：当前已有 ${displayRiskNumber(details.count, 0)} 个同向持仓`;
+  if (code === "existing_pending_kept") return `${label}：继续保留 ${displayRiskNumber(details.count, 0)} 个当前策略挂单`;
+  if (code === "existing_pending_no_replace") return `${label}：当前已有 ${displayRiskNumber(details.count, 0)} 个同向挂单`;
+  if (code === "pending_cancelled") return `${label}：已取消 ${displayRiskNumber(details.count, 0)} 个当前策略挂单`;
   if ((code === "R6_GLOBAL_KILL_SWITCH" || code === "R6_USER_KILL_SWITCH") && details.reason) return `${label}：${userVisibleText(details.reason, "未填写补充原因")}`;
   return label;
 }
@@ -4916,18 +4930,19 @@ function signalExecutionAdvice(signal) {
     executable:false,
   };
   if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:"MT5 已确认订单执行结果。", executable:false };
-  if (signalIsStale(signal)) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
   const terminalStatus = ["rejected", "failed", "skipped", "uncertain"].includes(persistedStatus) ? persistedStatus : "";
   const executionStatus = execution?.status || terminalStatus;
   if (executionStatus && executionStatus !== "success") {
     const rejected = executionStatus === "rejected";
+    const skipped = executionStatus === "skipped";
     return {
-      state: rejected ? "rejected" : "failed",
-      title: rejected ? "风控未放行" : "执行未完成",
+      state: rejected ? "rejected" : skipped ? "skipped" : "failed",
+      title: rejected ? "风控未放行" : skipped ? "本次未执行" : "执行未完成",
       description: resultRiskReason(execution) || userVisibleText(execution.message || execution.reason || execution.error, "系统未返回具体原因，请查看风控执行记录"),
       executable: false,
     };
   }
+  if (signalIsStale(signal)) return { state:"expired", title:"信号已过期", description:"请重新推理后再执行。", executable:false };
   if (localizedPresented) return localizedPresented;
   if (signalType(signal?.signal_type) === "hold") return { state:"observe", title:"暂不执行", description:"等待市场条件改善。", executable:false };
   return { state:"review", title:"建议复核后执行", description:"执行前将获取最新报价并由风控计算最终手数。", executable:true };
